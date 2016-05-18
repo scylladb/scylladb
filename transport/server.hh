@@ -137,6 +137,12 @@ private:
             UNINITIALIZED, AUTHENTICATION, READY
         };
 
+        enum class tracing_request_type : uint8_t {
+            not_requested,
+            no_flush_on_close,
+            flush_on_close
+        };
+
         state _state = state::UNINITIALIZED;
         ::shared_ptr<auth::authenticator::sasl_challenge> _sasl_challenge;
     public:
@@ -146,7 +152,7 @@ private:
         future<> process_request();
         future<> shutdown();
     private:
-        future<response_type> process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state);
+        future<response_type> process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request);
         unsigned frame_size() const;
         unsigned pick_request_cpu();
         cql_binary_frame_v3 parse_frame(temporary_buffer<char> buf);

@@ -459,8 +459,15 @@ cql_server::connection::read_frame() {
 }
 
 future<response_type>
-cql_server::connection::process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state) {
+    cql_server::connection::process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request) {
     auto cqlop = static_cast<cql_binary_opcode>(op);
+
+    if (tracing_request != tracing_request_type::not_requested) {
+        if (cqlop == cql_binary_opcode::QUERY) {
+            client_state.create_tracing_session(tracing::trace_type::QUERY, tracing_request == tracing_request_type::flush_on_close);
+        }
+    }
+
     return make_ready_future<>().then([this, cqlop, stream, buf = std::move(buf), client_state] () mutable {
         // When using authentication, we need to ensure we are doing proper state transitions,
         // i.e. we cannot simply accept any query/exec ops unless auth is complete
@@ -608,6 +615,12 @@ future<> cql_server::connection::process_request() {
         }
 
         auto& f = *maybe_frame;
+        tracing_request_type tracing_requested = tracing_request_type::not_requested;
+        if (f.flags & cql_frame_flags::tracing) {
+            // If tracing is requested for a specific CQL command - flush
+            // tracing info right after the command is over.
+            tracing_requested = tracing_request_type::flush_on_close;
+        }
 
         auto op = f.opcode;
         auto stream = f.stream;
@@ -619,17 +632,21 @@ future<> cql_server::connection::process_request() {
                     f.length, mem_estimate, _server._max_request_size));
         }
 
-        return with_semaphore(_server._memory_available, mem_estimate, [this, length = f.length, flags = f.flags, op, stream] {
-          return read_and_decompress_frame(length, flags).then([this, flags, op, stream] (temporary_buffer<char> buf) {
+        return with_semaphore(_server._memory_available, mem_estimate, [this, length = f.length, flags = f.flags, op, stream, tracing_requested] {
+          return read_and_decompress_frame(length, flags).then([this, flags, op, stream, tracing_requested] (temporary_buffer<char> buf) {
 
             ++_server._requests_served;
             ++_server._requests_serving;
 
-            with_gate(_pending_requests_gate, [this, flags, op, stream, buf = std::move(buf)] () mutable {
+            with_gate(_pending_requests_gate, [this, flags, op, stream, buf = std::move(buf), tracing_requested] () mutable {
                 auto bv = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
                 auto cpu = pick_request_cpu();
-                return smp::submit_to(cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state] () mutable {
-                    return this->process_request_one(bv, op, stream, std::move(client_state)).then([] (auto&& response) {
+                return smp::submit_to(cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state, tracing_requested] () mutable {
+                    return this->process_request_one(bv, op, stream, std::move(client_state), tracing_requested).then([](auto&& response) {
+                        auto& tracing_session_id_ptr = response.second.tracing_session_id_ptr();
+                        if (tracing_session_id_ptr) {
+                            response.first->set_tracing_id(*tracing_session_id_ptr);
+                        }
                         return std::make_pair(make_foreign(response.first), response.second);
                     });
                 }).then([this, flags] (auto&& response) {
@@ -735,9 +752,12 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, byt
     auto query = read_long_string_view(buf);
     auto q_state = std::make_unique<cql_query_state>(client_state);
     auto& query_state = q_state->query_state;
+    query_state.begin_tracing(query.to_string(), query_state.get_client_state().get_client_address(), {});
     q_state->options = read_options(buf);
+    query_state.trace("Done reading options");
     auto& options = *q_state->options;
     return _server._query_processor.local().process(query, query_state, options).then([this, stream, buf = std::move(buf), &query_state] (auto msg) {
+         query_state.trace("Done processing - preparing a result");
          return this->make_result(stream, msg);
     }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
         /* Keep q_state alive. */

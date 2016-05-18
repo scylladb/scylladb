@@ -49,6 +49,8 @@
 #include "auth/authenticated_user.hh"
 #include "auth/authenticator.hh"
 #include "auth/permission.hh"
+#include "tracing/tracing.hh"
+#include "tracing/trace_state.hh"
 
 namespace service {
 
@@ -58,6 +60,8 @@ namespace service {
 class client_state {
 private:
     sstring _keyspace;
+    tracing::trace_state_ptr _trace_state_ptr;
+    lw_shared_ptr<utils::UUID> _tracing_session_id;
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(ClientState.class);
     public static final SemanticVersion DEFAULT_CQL_VERSION = org.apache.cassandra.cql3.QueryProcessor.CQL_VERSION;
@@ -98,6 +102,23 @@ private:
 public:
     struct internal_tag {};
     struct external_tag {};
+
+    void create_tracing_session(tracing::trace_type type, bool flush_on_close) {
+        _trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(type, flush_on_close);
+        // store a session ID separately because its lifetime is not always
+        // coupled with the trace_state because the trace_state may already be
+        // destroyed when we need a session ID for a response to a client (e.g.
+        // in case of errors).
+        _tracing_session_id = make_lw_shared<utils::UUID>(_trace_state_ptr->get_session_id());
+    }
+
+    tracing::trace_state_ptr& trace_state_ptr() {
+        return _trace_state_ptr;
+    }
+
+    lw_shared_ptr<utils::UUID>& tracing_session_id_ptr() {
+        return _tracing_session_id;
+    }
 
     client_state(external_tag, const socket_address& remote_address = socket_address())
             : _is_internal(false)

@@ -24,19 +24,33 @@
 #define SERVICE_QUERY_STATE_HH
 
 #include "service/client_state.hh"
+#include "tracing/tracing.hh"
 
 namespace service {
 
 class query_state final {
 private:
     client_state _client_state;
+    tracing::trace_state_ptr _trace_state_ptr;
+
 public:
     query_state(client_state client_state)
         : _client_state(client_state)
+        , _trace_state_ptr(_client_state.trace_state_ptr())
     { }
+
+    void begin_tracing(sstring request, gms::inet_address client, std::unordered_map<sstring, sstring> params) {
+        tracing::begin(_trace_state_ptr, std::move(request), client, std::move(params));
+    }
+
+    void trace(const sstring& message) {
+        tracing::trace(_trace_state_ptr, std::move(message));
+    }
+
     client_state& get_client_state() {
         return _client_state;
     }
+
     const client_state& get_client_state() const {
         return _client_state;
     }

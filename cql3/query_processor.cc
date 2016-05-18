@@ -115,6 +115,7 @@ future<::shared_ptr<result_message>>
 query_processor::process(const sstring_view& query_string, service::query_state& query_state, query_options& options)
 {
     log.trace("process: \"{}\"", query_string);
+    query_state.trace("Parsing a statement");
     auto p = get_statement(query_string, query_state.get_client_state());
     options.prepare(p->bound_names);
     auto cql_statement = p->statement;
@@ -127,6 +128,7 @@ query_processor::process(const sstring_view& query_string, service::query_state&
         if (!queryState.getClientState().isInternal)
             metrics.regularStatementsExecuted.inc();
 #endif
+    query_state.trace("Processing a statement");
     return process_statement(std::move(cql_statement), query_state, options);
 }
 
