@@ -550,8 +550,11 @@ auto send_message_timeout_and_retry(messaging_service* ms, messaging_verb verb, 
                                      vb, id, retry);
                         throw;
                     }
-                    return sleep(wait).then([] {
+                    return sleep_abortable(wait).then([] {
                         return make_ready_future<stdx::optional<MsgInTuple>>(stdx::nullopt);
+                    }).handle_exception([vb, id, retry] (std::exception_ptr ep) {
+                        logger.debug("Retry verb={} to {}, retry={}: stop retrying: {}", vb, id, retry, ep);
+                        return make_exception_future<stdx::optional<MsgInTuple>>(ep);
                     });
                 } catch (...) {
                     throw;
