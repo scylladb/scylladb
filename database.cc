@@ -1122,7 +1122,12 @@ future<> column_family::populate(sstring sstdir) {
     return do_with(std::vector<future<>>(), [this, sstdir, verifier, descriptor] (std::vector<future<>>& futures) {
         return lister::scan_dir(sstdir, { directory_entry_type::regular }, [this, sstdir, verifier, descriptor, &futures] (directory_entry de) {
             // FIXME: The secondary indexes are in this level, but with a directory type, (starting with ".")
-            auto f = probe_file(sstdir, de.name).then([verifier, descriptor] (auto entry) {
+            auto f = probe_file(sstdir, de.name).then([verifier, descriptor, sstdir] (auto entry) {
+                if (entry.component == sstables::sstable::component_type::TemporaryStatistics) {
+                    return remove_file(sstables::sstable::filename(sstdir, entry.ks, entry.cf, entry.version, entry.generation,
+                        entry.format, sstables::sstable::component_type::TemporaryStatistics));
+                }
+
                 if (verifier->count(entry.generation)) {
                     if (verifier->at(entry.generation) == status::has_toc_file) {
                         if (entry.component == sstables::sstable::component_type::TOC) {
@@ -1152,6 +1157,7 @@ future<> column_family::populate(sstring sstdir) {
                 if (!descriptor->format) {
                     descriptor->format = entry.format;
                 }
+                return make_ready_future<>();
             });
 
             // push future returned by probe_file into an array of futures,

@@ -124,6 +124,7 @@ public:
         Filter,
         Statistics,
         TemporaryTOC,
+        TemporaryStatistics,
     };
     enum class version_types { ka, la };
     enum class format_types { big };
@@ -415,6 +416,9 @@ private:
 
     future<> read_statistics(const io_priority_class& pc);
     void write_statistics(const io_priority_class& pc);
+    // Rewrite statistics component by creating a temporary Statistics and
+    // renaming it into place of existing one.
+    void rewrite_statistics(const io_priority_class& pc);
 
     future<> create_data();
 
