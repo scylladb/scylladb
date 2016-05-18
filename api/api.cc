@@ -83,6 +83,10 @@ future<> set_server_storage_service(http_context& ctx) {
     return register_api(ctx, "storage_service", "The storage service API", set_storage_service);
 }
 
+future<> set_server_snitch(http_context& ctx) {
+    return register_api(ctx, "endpoint_snitch_info", "The endpoint snitch info API", set_endpoint_snitch);
+}
+
 future<> set_server_gossip(http_context& ctx) {
     return register_api(ctx, "gossiper",
                 "The gossiper API", set_gossiper);
@@ -118,10 +122,6 @@ future<> set_server_gossip_settle(http_context& ctx) {
         rb->register_function(r, "cache_service",
                 "The cache service API");
         set_cache_service(ctx,r);
-
-        rb->register_function(r, "endpoint_snitch_info",
-                "The endpoint snitch info API");
-        set_endpoint_snitch(ctx, r);
     });
 }
 

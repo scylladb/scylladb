@@ -38,6 +38,7 @@ struct http_context {
 };
 
 future<> set_server_init(http_context& ctx);
+future<> set_server_snitch(http_context& ctx);
 future<> set_server_storage_service(http_context& ctx);
 future<> set_server_gossip(http_context& ctx);
 future<> set_server_load_sstable(http_context& ctx);
