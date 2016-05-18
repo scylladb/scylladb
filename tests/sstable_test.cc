@@ -915,3 +915,22 @@ SEASTAR_TEST_CASE(reshuffle) {
         });
     }, "tests/sstables/generation");
 }
+
+SEASTAR_TEST_CASE(statistics_rewrite) {
+    return test_setup::do_with_test_directory([] {
+        return reusable_sst("tests/sstables/uncompressed", 1).then([] (auto sstp) {
+            return sstp->create_links("tests/sstables/generation").then([sstp] {});
+        }).then([] {
+            return test_sstable_exists("tests/sstables/generation", 1, true);
+        }).then([] {
+            return reusable_sst("tests/sstables/generation", 1).then([] (auto sstp) {
+                // mutate_sstable_level results in statistics rewrite
+                return sstp->mutate_sstable_level(10).then([sstp] {});
+            });
+        }).then([] {
+            return reusable_sst("tests/sstables/generation", 1).then([] (auto sstp) {
+                BOOST_REQUIRE(sstp->get_sstable_level() == 10);
+            });
+        });
+    }, "tests/sstables/generation");
+}
