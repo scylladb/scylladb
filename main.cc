@@ -49,6 +49,7 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 #include "disk-error-handler.hh"
+#include "tracing/tracing.hh"
 
 #ifdef HAVE_LIBSYSTEMD
 #include <systemd/sd-daemon.h>
@@ -579,6 +580,8 @@ int main(int ac, char** av) {
             engine().at_exit([lb = std::move(lb)] () mutable { return lb->stop_broadcasting(); });
             gms::get_local_gossiper().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx).get();
+            supervisor_notify("starting tracing");
+            tracing::tracing::create_tracing("trace_keyspace_helper").get();
             supervisor_notify("starting native transport");
             service::get_local_storage_service().start_native_transport().get();
             if (start_thrift) {
@@ -600,6 +603,11 @@ int main(int ac, char** av) {
             engine().at_exit([] {
                 return service::get_local_storage_service().drain_on_shutdown();
             });
+
+            engine().at_exit([&db] {
+                return tracing::tracing::tracing_instance().stop();
+            });
+
             engine().at_exit([&db] {
                 return db.invoke_on_all([](auto& db) {
                     return db.get_compaction_manager().stop();
