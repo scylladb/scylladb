@@ -8,11 +8,12 @@ if [ "`id -u`" -ne 0 ]; then
 fi
 
 print_usage() {
-    echo "scylla_setup --disks /dev/hda,/dev/hdb... --nic eth0 --ntp-domain centos --ami --developer-mode --no-kernel-check --no-verify-package --no-enable-service --no-selinux-setup --no-bootparam-setup --no-ntp-setup --no-raid-setup --no-coredump-setup --no-sysconfig-setup"
+    echo "scylla_setup --disks /dev/hda,/dev/hdb... --nic eth0 --ntp-domain centos --ami --setup-nic --developer-mode --no-kernel-check --no-verify-package --no-enable-service --no-selinux-setup --no-bootparam-setup --no-ntp-setup --no-raid-setup --no-coredump-setup --no-sysconfig-setup"
     echo "  --disks			specify disks for RAID"
     echo "  --nic				specify NIC"
     echo "  --ntp-domain			specify NTP domain"
     echo "  --ami				setup AMI instance"
+    echo "  --setup-nic				optimize NIC queue"
     echo "  --developer-mode			enable developer mode"
     echo "  --no-kernel-check           skip kernel version check"
     echo "  --no-verify-package          skip verifying packages"
@@ -56,6 +57,7 @@ verify_package() {
 }
 
 AMI=0
+SET_NIC=0
 DEV_MODE=0
 KERNEL_CHECK=1
 VERIFY_PACKAGE=1
@@ -90,6 +92,10 @@ while [ $# -gt 0 ]; do
             ;;
         "--ami")
             AMI=1
+            shift 1
+            ;;
+        "--setup-nic")
+            SET_NIC=1
             shift 1
             ;;
         "--developer-mode")
@@ -285,10 +291,16 @@ if [ $INTERACTIVE -eq 1 ]; then
                 fi
             done
         fi
+        interactive_ask_service "Do you want to optimize NIC queue settings?" &&:
+        SET_NIC=$?
     fi
 fi
 if [ $SYSCONFIG_SETUP -eq 1 ]; then
-    /usr/lib/scylla/scylla_sysconfig_setup --nic $NIC
+    SETUP_ARGS=
+    if [ $SET_NIC -eq 1 ]; then
+        SETUP_ARGS="--setup-nic"
+    fi
+    /usr/lib/scylla/scylla_sysconfig_setup --nic $NIC $SETUP_ARGS
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
