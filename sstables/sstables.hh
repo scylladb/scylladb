@@ -640,4 +640,7 @@ public:
 // futures complete (with an atomic_deletion_cancelled exception).
 void cancel_atomic_deletions();
 
+// Read toc content and delete all components found in it.
+future<> remove_by_toc_name(sstring sstable_toc_name);
+
 }
