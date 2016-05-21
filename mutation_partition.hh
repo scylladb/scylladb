@@ -574,6 +574,7 @@ public:
 public:
     void apply(tombstone t) { _tombstone.apply(t); }
     void apply_delete(const schema& schema, const exploded_clustering_prefix& prefix, tombstone t);
+    void apply_delete(const schema& schema, const exploded_clustering_prefix& start, const exploded_clustering_prefix& end, tombstone t);
     void apply_delete(const schema& schema, clustering_key&& key, tombstone t);
     void apply_delete(const schema& schema, clustering_key_view key, tombstone t);
     // Equivalent to applying a mutation with an empty row, created with given timestamp

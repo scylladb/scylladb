@@ -370,6 +370,25 @@ mutation_partition::apply_delete(const schema& schema, const exploded_clustering
 }
 
 void
+mutation_partition::apply_delete(const schema& schema,
+        const exploded_clustering_prefix& start,
+        const exploded_clustering_prefix& end,
+        tombstone t) {
+    if (start.is_full(schema)) {
+        auto start_ckey = clustering_key::from_clustering_prefix(schema, start);
+        auto end_ckey = clustering_key::from_clustering_prefix(schema, end);
+        if (start_ckey.equal(schema, end_ckey)) {
+            apply_delete(schema, std::move(start_ckey), t);
+            return;
+        }
+    }
+    apply_row_tombstone(schema, range_tombstone(
+                clustering_key::from_clustering_prefix(schema, start),
+                clustering_key::from_clustering_prefix(schema, end),
+                t));
+}
+
+void
 mutation_partition::apply_delete(const schema& schema, clustering_key&& key, tombstone t) {
     clustered_row(schema, std::move(key)).apply(t);
 }

@@ -480,47 +480,6 @@ SEASTAR_TEST_CASE(broken_ranges_collection) {
     });
 }
 
-// Scylla does not currently support generic range-tombstone - only ranges
-// which are a complete clustering-key prefix are supported because our
-// row_tombstone only works on whole rows. This is good enough because
-// in Cassandra 2 (whose sstables we support) there is no way using CQL to
-// create a generic range, because the DELETE and UPDATE statement's "WHERE"
-// only takes the "=" operator, leading to a deletion of entire rows.
-//
-// However, in one imporant case the sstable written by Cassandra might look
-// like it has generic range tombstone: consider two overlapping tombstones,
-// one deleting a bigger prefix than the other:
-//
-//     create COLUMNFAMILY tab (pk text, ck1 text, ck2 text, data text, primary key(pk, ck1, ck2));
-//     delete from tab where pk = 'pk' and ck1 = 'aaa';
-//     delete from tab where pk = 'pk' and ck1 = 'aaa' and ck2 = 'bbb';
-//
-// The first deletion covers the second, but nevertheless we cannot drop the
-// smaller one because the two deletions have different timestamps. But while
-// it is not allowed to drop the smaller deletion, it is possible to split the
-// the larger range to three ranges where one of them is the the smaller range
-// and then we have two range tombstones with identical ranges - and can keep
-// only the newer one. This splitting is what Cassandra does: Cassandra does
-// not want to have overlapping range tombstones, so it converts them (see
-// RangeTombstoneList.java) into non-overlapping range-tombstones, as describe
-// above. In the above example, the resulting sstable is (sstable2json format)
-//
-//     {"key": "pk",
-//      "cells": [["aaa:_","aaa:bbb:_",1459334681228103,"t",1459334681],
-//                ["aaa:bbb:_","aaa:bbb:!",1459334681244989,"t",1459334681],
-//                ["aaa:bbb:!","aaa:!",1459334681228103,"t",1459334681]]}
-//               ]
-//
-// Note that the middle tombstone has a different timestamp than the other.
-//
-// In this sstable, the first and third tombstones look like "generic" ranges,
-// not covering an entire prefix, so we cannot represent these three
-// tombstones in our in-memory data structure. Instead, we need to convert the
-// three non-overlapping tombstones to two overlapping whole-prefix tombstones,
-// the two we started with.
-// That is what this test tests - we read an sstable as above and verify that
-// our sstable reading code converted it to two overlapping tombstones.
-
 static schema_ptr tombstone_overlap_schema() {
     static thread_local auto s = [] {
         schema_builder builder(make_lw_shared(schema(generate_legacy_id("try1", "tab"), "try1", "tab",
@@ -551,6 +510,12 @@ static future<sstable_ptr> ka_sst(sstring ks, sstring cf, sstring dir, unsigned 
     });
 }
 
+//  Considering the schema above, the sstable looks like:
+//     {"key": "pk",
+//      "cells": [["aaa:_","aaa:bbb:_",1459334681228103,"t",1459334681],
+//                ["aaa:bbb:_","aaa:bbb:!",1459334681244989,"t",1459334681],
+//                ["aaa:bbb:!","aaa:!",1459334681228103,"t",1459334681]]}
+//               ]
 SEASTAR_TEST_CASE(tombstone_in_tombstone) {
     return ka_sst("try1", "tab", "tests/sstables/tombstone_overlap", 1).then([] (auto sstp) {
         auto s = tombstone_overlap_schema();
@@ -572,17 +537,25 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone) {
                         return clustering_key::from_deeply_exploded(*s, std::move(v));
                     };
                     BOOST_REQUIRE(mut->key().equal(*s, make_pkey("pk")));
-                    // We expect to see two overlapping deletions, as explained
-                    // above. Somewhat counterintuitively, scylla represents
+                    // Somewhat counterintuitively, scylla represents
                     // deleting a small row with all clustering keys set - not
                     // as a "row tombstone" but rather as a deleted clustering row.
-                    // So we expect to see one row tombstone and one deleted row.
                     auto& rts = mut->partition().row_tombstones();
-                    BOOST_REQUIRE(rts.size() == 1);
-                    for (auto e : rts) {
-                        BOOST_REQUIRE(e.start.equal(*s, make_ckey("aaa")));
-                        BOOST_REQUIRE(e.tomb.timestamp == 1459334681228103LL);
-                    }
+                    BOOST_REQUIRE(rts.size() == 2);
+                    auto it = rts.begin();
+                    BOOST_REQUIRE(it->equal(*s, range_tombstone(
+                                    make_ckey("aaa"),
+                                    bound_kind::incl_start,
+                                    make_ckey("aaa", "bbb"),
+                                    bound_kind::incl_end,
+                                    tombstone(1459334681228103LL, it->tomb.deletion_time))));
+                    ++it;
+                    BOOST_REQUIRE(it->equal(*s, range_tombstone(
+                                    make_ckey("aaa", "bbb"),
+                                    bound_kind::excl_start,
+                                    make_ckey("aaa"),
+                                    bound_kind::incl_end,
+                                    tombstone(1459334681228103LL, it->tomb.deletion_time))));
                     auto& rows = mut->partition().clustered_rows();
                     BOOST_REQUIRE(rows.size() == 1);
                     for (auto e : rows) {
@@ -597,8 +570,6 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone) {
     });
 }
 
-// This is another test for the necessary merging of sstable range tombstones
-// into Scylla's internal representation of row tombstones.
 //  Same schema as above, the sstable looks like:
 //    {"key": "pk",
 //     "cells": [["aaa:_","aaa:bbb:_",1459334681228103,"t",1459334681],
@@ -607,11 +578,8 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone) {
 //               ["aaa:ddd:!","aaa:!",1459334681228103,"t",1459334681]]}
 //
 // We're not sure how this sort of sstable can be generated with Cassandra 2's
-// CQL, but we saw a similar thing is a real use case. In this example, all
-// the different ranges can be merged into one deletion of the prefix "aaa"
-// (note that all the timestamps are identical), so this is what Scylla should
-// do when reading this sstable - rather than fail.
-SEASTAR_TEST_CASE(tombstone_merging) {
+// CQL, but we saw a similar thing is a real use case.
+SEASTAR_TEST_CASE(range_tombstone_reading) {
     return ka_sst("try1", "tab", "tests/sstables/tombstone_overlap", 4).then([] (auto sstp) {
         auto s = tombstone_overlap_schema();
         return do_with(sstp->read_rows(s), [sstp, s] (auto& reader) {
@@ -632,14 +600,36 @@ SEASTAR_TEST_CASE(tombstone_merging) {
                         return clustering_key::from_deeply_exploded(*s, std::move(v));
                     };
                     BOOST_REQUIRE(mut->key().equal(*s, make_pkey("pk")));
-                    // We expect to see that all 4 tombstones have been
-                    // merged into one.
                     auto& rts = mut->partition().row_tombstones();
-                    BOOST_REQUIRE(rts.size() == 1);
-                    for (auto e : rts) {
-                        BOOST_REQUIRE(e.start.equal(*s, make_ckey("aaa")));
-                        BOOST_REQUIRE(e.tomb.timestamp == 1459334681228103LL);
-                    }
+                    BOOST_REQUIRE(rts.size() == 4);
+                    auto it = rts.begin();
+                    BOOST_REQUIRE(it->equal(*s, range_tombstone(
+                                    make_ckey("aaa"),
+                                    bound_kind::incl_start,
+                                    make_ckey("aaa", "bbb"),
+                                    bound_kind::incl_end,
+                                    tombstone(1459334681228103LL, it->tomb.deletion_time))));
+                    ++it;
+                    BOOST_REQUIRE(it->equal(*s, range_tombstone(
+                                    make_ckey("aaa", "bbb"),
+                                    bound_kind::excl_start,
+                                    make_ckey("aaa", "ccc"),
+                                    bound_kind::incl_end,
+                                    tombstone(1459334681228103LL, it->tomb.deletion_time))));
+                    ++it;
+                    BOOST_REQUIRE(it->equal(*s, range_tombstone(
+                                    make_ckey("aaa", "ccc"),
+                                    bound_kind::excl_start,
+                                    make_ckey("aaa", "ddd"),
+                                    bound_kind::incl_end,
+                                    tombstone(1459334681228103LL, it->tomb.deletion_time))));
+                    ++it;
+                    BOOST_REQUIRE(it->equal(*s, range_tombstone(
+                                    make_ckey("aaa", "ddd"),
+                                    bound_kind::excl_start,
+                                    make_ckey("aaa"),
+                                    bound_kind::incl_end,
+                                    tombstone(1459334681228103LL, it->tomb.deletion_time))));
                     auto& rows = mut->partition().clustered_rows();
                     BOOST_REQUIRE(rows.size() == 0);
                     return stop_iteration::no;
@@ -649,9 +639,7 @@ SEASTAR_TEST_CASE(tombstone_merging) {
     });
 }
 
-// This is yet another test for merging of sstable range tombstones into
-// Scylla's internal representation of row tombstones. In this test case
-// we have *three* levels of of tombstones:
+// In this test case we have *three* levels of of tombstones:
 //     create COLUMNFAMILY tab2 (pk text, ck1 text, ck2 text, ck3 text, data text, primary key(pk, ck1, ck2, ck3));
 //     delete from tab2 where pk = 'pk' and ck1 = 'aaa';
 //     delete from tab2 where pk = 'pk' and ck1 = 'aaa' and ck2 = 'bbb';
@@ -669,7 +657,6 @@ SEASTAR_TEST_CASE(tombstone_merging) {
 //        ["aaa:bbb:ccc:!","aaa:bbb:ddd:!",1459438519950348,"t",1459438519],
 //        ["aaa:bbb:ddd:!","aaa:bbb:!",1459438519950348,"t",1459438519],
 //        ["aaa:bbb:!","aaa:!",1459438519943668,"t",1459438519]]}
-// We expect our sstable code to recover the three original row tombstones.
 static schema_ptr tombstone_overlap_schema2() {
     static thread_local auto s = [] {
         schema_builder builder(make_lw_shared(schema(generate_legacy_id("try1", "tab"), "try1", "tab",
@@ -714,17 +701,31 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
                         return clustering_key::from_deeply_exploded(*s, std::move(v));
                     };
                     BOOST_REQUIRE(mut->key().equal(*s, make_pkey("pk")));
-                    // We expect to see three overlapping deletions, as explained
-                    // above.
                     auto& rows = mut->partition().clustered_rows();
                     auto& rts = mut->partition().row_tombstones();
 
                     auto it = rts.begin();
                     BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa"), bound_kind::incl_start)));
+                    BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa", "bba"), bound_kind::incl_end)));
+                    BOOST_REQUIRE(it->tomb.timestamp == 1459438519943668L);
+                    ++it;
+                    BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa", "bba"), bound_kind::excl_start)));
                     BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa", "bbb"), bound_kind::excl_end)));
                     BOOST_REQUIRE(it->tomb.timestamp == 1459438519943668L);
                     ++it;
                     BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa", "bbb"), bound_kind::incl_start)));
+                    BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa", "bbb", "ccb"), bound_kind::incl_end)));
+                    BOOST_REQUIRE(it->tomb.timestamp == 1459438519950348L);
+                    ++it;
+                    BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa", "bbb", "ccb"), bound_kind::excl_start)));
+                    BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa", "bbb", "ccc"), bound_kind::incl_end)));
+                    BOOST_REQUIRE(it->tomb.timestamp == 1459438519950348L);
+                    ++it;
+                    BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa", "bbb", "ccc"), bound_kind::excl_start)));
+                    BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa", "bbb", "ddd"), bound_kind::incl_end)));
+                    BOOST_REQUIRE(it->tomb.timestamp == 1459438519950348L);
+                    ++it;
+                    BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa", "bbb", "ddd"), bound_kind::excl_start)));
                     BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa", "bbb"), bound_kind::incl_end)));
                     BOOST_REQUIRE(it->tomb.timestamp == 1459438519950348L);
                     ++it;

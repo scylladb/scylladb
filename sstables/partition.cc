@@ -254,108 +254,6 @@ class mp_row_consumer : public row_consumer {
         }
     }
 
-    class open_tombstone {
-        bytes _prefix;
-        sstables::deletion_time _deletion_time;
-    public:
-        bytes&& get() {
-            return std::move(_prefix);
-        }
-        sstables::deletion_time deltime() const {
-            return _deletion_time;
-        }
-        bool ends_with(bytes_view candidate) {
-            bytes_view my_start(_prefix);
-            // TODO: Maybe check that the suffixes are as expected (_prefix
-            // has the null or start EOC, candidate has end EOC)?
-            my_start.remove_suffix(1);
-            candidate.remove_suffix(1);
-            return my_start == candidate;
-        }
-        open_tombstone(bytes_view start, sstables::deletion_time d)
-            : _prefix(to_bytes(start))
-            , _deletion_time(d) {}
-        explicit operator sstring() const {
-            return sprint("%s deletion (%x,%lx)", _prefix,
-                    _deletion_time.local_deletion_time,
-                    _deletion_time.marked_for_delete_at);
-        }
-        friend std::ostream& operator<<(std::ostream& out, const open_tombstone& o) {
-            return out << sstring(o);
-        }
-
-    };
-
-    // Variables for tracking tombstone merging in consume_range_tombstone().
-    std::stack<open_tombstone> _open_tombstones;
-    bytes _end_contiguous_delete;
-
-    void verify_no_open_tombstones() {
-        // Verify that we have no range tombstone was left "open" (waiting to
-        // be merged into deletion of entire rows, which scylla supports).
-        // Should be called at the end of a row.
-        if (!_open_tombstones.empty()) {
-            auto msg = sstring("RANGE DELETE not implemented. Tried to merge, but row finished before we could finish the merge. Starts found: (");
-            while (!_open_tombstones.empty()) {
-                msg += sstring(_open_tombstones.top());
-                _open_tombstones.pop();
-                if (!_open_tombstones.empty()) {
-                    msg += sstring(" , ");
-                }
-            }
-            msg += sstring(")");
-            throw malformed_sstable_exception(msg);
-        }
-    }
-
-    bytes update_open_tombstones(bytes_view _start, bytes_view end,
-                                        sstables::deletion_time deltime) {
-        if (!_open_tombstones.empty()) {
-            // If the range tombstones are the result of Cassandra's splitting
-            // overlapping tombstones into disjoint tombstones, they cannot
-            // have a gap. If there is a gap while we're merging, it is
-            // probably a bona-fide range delete, which we don't support.
-            if (_end_contiguous_delete != _start) {
-                throw malformed_sstable_exception(sprint(
-                        "RANGE DELETE not implemented. Tried to merge but "
-                        "found gap between %s and %s.",
-                        _end_contiguous_delete, _start));
-            }
-        }
-        if (_open_tombstones.empty() ||
-                deltime.marked_for_delete_at > _open_tombstones.top().deltime().marked_for_delete_at) {
-            _open_tombstones.push(open_tombstone(_start, deltime));
-        } else if (deltime.marked_for_delete_at < _open_tombstones.top().deltime().marked_for_delete_at) {
-            // If the new range has an *earlier* timestamp than the open
-            // tombstone it is supposedly covering, then our representation
-            // as two overlapping tombstones would not be identical to the
-            // two disjoint tombstones.
-            throw malformed_sstable_exception(sprint(
-                    "RANGE DELETE not implemented. Tried to merge but "
-                    "found range starting at %s which cannot close a "
-                    " row because of decreasing timestamp %d.",
-                    _open_tombstones.top(), deltime.marked_for_delete_at));
-        } else if (deltime.local_deletion_time != _open_tombstones.top().deltime().local_deletion_time) {
-            // marked_for_delete_at is equal, but local_delection_time not
-            throw malformed_sstable_exception(sprint(
-                    "RANGE DELETE not implemented. Couldn't merge range "
-                    "%s,%s into row %s. Both had same timestamp %s but "
-                    "different local_deletion_time %s.",
-                    _start, end, _open_tombstones.top(),
-                    deltime.marked_for_delete_at,
-                    deltime.local_deletion_time));
-        }
-        bytes ret;
-        if (_open_tombstones.top().ends_with(end)) {
-            ret = _open_tombstones.top().get();
-            _open_tombstones.pop();
-        }
-        if (!_open_tombstones.empty()) {
-            _end_contiguous_delete = to_bytes(end);
-        }
-        return ret;
-    }
-
 public:
     mutation_opt mut;
 
@@ -499,7 +397,6 @@ public:
         }
     }
     virtual proceed consume_row_end() override {
-        verify_no_open_tombstones();
         if (mut) {
             flush_pending_collection(*_schema, *mut);
         }
@@ -518,47 +415,6 @@ public:
         }
     }
 
-    // Partial support for range tombstones read from sstables:
-    //
-    // Currently, Scylla does not support generic range tombstones: Only
-    // ranges which are a complete clustering-key prefix are supported because
-    // our in-memory data structure only allows deleted rows (prefixes).
-    // In principle, this is good enough because in Cassandra 2 (whose
-    // sstables we support) and using only CQL, there is no way to delete a
-    // generic range, because the DELETE and UPDATE statement's "WHERE" only
-    // takes the "=" operator, leading to a deletion of entire rows.
-    //
-    // However, in one important case the sstable written by Cassandra does
-    // have a generic range tombstone, which we can and must handle:
-    // Consider two tombstones, one deleting a bigger prefix than the other:
-    //
-    //     create table tab (pk text, ck1 text, ck2 text, data text, primary key(pk, ck1, ck2));
-    //     delete from tab where pk = 'pk' and ck1 = 'aaa';
-    //     delete from tab where pk = 'pk' and ck1 = 'aaa' and ck2 = 'bbb';
-    //
-    // The first deletion covers the second, but nevertheless we cannot drop the
-    // smaller one because the two deletions have different timestamps.
-    // Currently in Scylla, we simply keep both tombstones separately.
-    // But Cassandra does something different: Cassandra does not want to have
-    // overlapping range tombstones, so it converts them into non-overlapping
-    // range tombstones (see RangeTombstoneList.java). In the above example,
-    // the resulting sstable is (sstable2json format)
-    //
-    //     {"key": "pk",
-    //      "cells": [["aaa:_","aaa:bbb:_",1459334681228103,"t",1459334681],
-    //                ["aaa:bbb:_","aaa:bbb:!",1459334681244989,"t",1459334681],
-    //                ["aaa:bbb:!","aaa:!",1459334681228103,"t",1459334681]]}
-    //               ]
-    //
-    // In this sstable, the first and third tombstones look like "generic" ranges,
-    // not covering an entire prefix, so we cannot represent these three
-    // tombstones in our in-memory data structure. Instead, we need to convert the
-    // three non-overlapping tombstones to two overlapping whole-prefix tombstones,
-    // the two we started with in the "delete" commands above.
-    // This is what the code below does. If after trying to recombine split
-    // tombstones we are still left with a generic range we cannot represent,
-    // we fail the read.
-
     virtual void consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,
             sstables::deletion_time deltime) override {
@@ -567,19 +423,12 @@ public:
         // incorrect. start_col may have composite_marker::none in sstables
         // from older versions of Cassandra (see CASSANDRA-7593) and we also
         // saw composite_marker::none in end_col. Also, when a larger range
-        // tombstone was split (see explanation above), we can have a
-        // start_range in end_col or end_range in start_col.
-        // So we don't check the markers' content at all here, only if they
-        // are sane.
+        // tombstone is split, we can have a start_range in end_col or
+        // end_range in start_col. So we don't check the markers' content at
+        // all here, only if they are sane.
         check_marker(start_col);
         check_marker(end_col);
 
-        bytes new_start = {};
-        new_start = update_open_tombstones(start_col, end_col, deltime);
-        if (new_start.empty()) {
-            return;
-        }
-        start_col = bytes_view(new_start);
         auto start = composite_view(column::fix_static_name(start_col)).explode();
 
         // Note how this is slightly different from the check in is_collection. Collection tombstones
@@ -588,7 +437,8 @@ public:
         // Still, it is enough to check if we're dealing with a collection, since any other tombstone
         // won't have a full clustering prefix (otherwise it isn't a range)
         if (start.size() <= _schema->clustering_key_size()) {
-            mut->partition().apply_delete(*_schema, exploded_clustering_prefix(std::move(start)), tombstone(deltime));
+            auto end = composite_view(column::fix_static_name(end_col)).explode();
+            mut->partition().apply_delete(*_schema, std::move(start), std::move(end), tombstone(deltime));
         } else {
             auto&& column = pop_back(start);
             auto cdef = _schema->get_column_definition(column);
