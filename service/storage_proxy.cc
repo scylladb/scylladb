@@ -1563,7 +1563,7 @@ public:
             got_response(from);
         }
     }
-    void add_digest(gms::inet_address from, query::result_digest digest) {
+    void add_digest(gms::inet_address from, query::result_digest digest, api::timestamp_type) {
         if (!_timedout) {
             _digest_results.emplace_back(std::move(digest));
             got_response(from);
@@ -1909,13 +1909,15 @@ protected:
             });
         }
     }
-    future<query::result_digest> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
+    future<query::result_digest, api::timestamp_type> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->_stats.digest_read_attempts.get_ep_stat(ep);
         if (is_me(ep)) {
             return _proxy->query_singular_local_digest(_schema, _cmd, _partition_range);
         } else {
             auto& ms = net::get_local_messaging_service();
-            return ms.send_read_digest(net::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range);
+            return ms.send_read_digest(net::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range).then([] (query::result_digest d, rpc::optional<api::timestamp_type> t) {
+                return make_ready_future<query::result_digest, api::timestamp_type>(d, t ? t.value() : api::missing_timestamp);
+            });
         }
     }
     future<> make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
@@ -1946,9 +1948,10 @@ protected:
     }
     future<> make_digest_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         return parallel_for_each(begin, end, [this, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
-            return make_digest_request(ep, timeout).then_wrapped([this, resolver, ep] (future<query::result_digest> f) {
+            return make_digest_request(ep, timeout).then_wrapped([this, resolver, ep] (future<query::result_digest, api::timestamp_type> f) {
                 try {
-                    resolver->add_digest(ep, f.get0());
+                    auto v = f.get();
+                    resolver->add_digest(ep, std::get<0>(v), std::get<1>(v));
                     ++_proxy->_stats.digest_read_completed.get_ep_stat(ep);
                 } catch(...) {
                     ++_proxy->_stats.digest_read_errors.get_ep_stat(ep);
@@ -2205,10 +2208,10 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     }
 }
 
-future<query::result_digest>
+future<query::result_digest, api::timestamp_type>
 storage_proxy::query_singular_local_digest(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr) {
     return query_singular_local(std::move(s), std::move(cmd), pr, query::result_request::only_digest).then([] (foreign_ptr<lw_shared_ptr<query::result>> result) {
-        return *result->digest();
+        return make_ready_future<query::result_digest, api::timestamp_type>(*result->digest(), result->last_modified());
     });
 }
 

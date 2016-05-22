@@ -212,7 +212,7 @@ private:
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl);
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr,
                                                                            query::result_request request = query::result_request::result_and_digest);
-    future<query::result_digest> query_singular_local_digest(schema_ptr, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr);
+    future<query::result_digest, api::timestamp_type> query_singular_local_digest(schema_ptr, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr);
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_partition_key_range(lw_shared_ptr<query::read_command> cmd, query::partition_range&& range, db::consistency_level cl);
     std::vector<query::partition_range> get_restricted_ranges(keyspace& ks, const schema& s, query::partition_range range);
     float estimate_result_rows_per_range(lw_shared_ptr<query::read_command> cmd, keyspace& ks);
