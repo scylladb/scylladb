@@ -29,6 +29,7 @@
 #include "enum_set.hh"
 #include "range.hh"
 #include "clustering_key_filter.hh"
+#include "tracing/tracing.hh"
 
 namespace query {
 
@@ -156,6 +157,7 @@ public:
     partition_slice slice;
     uint32_t row_limit;
     gc_clock::time_point timestamp;
+    std::experimental::optional<tracing::trace_info> trace_info;
     api::timestamp_type read_timestamp; // not serialized
 public:
     read_command(utils::UUID cf_id,
@@ -163,12 +165,14 @@ public:
                  partition_slice slice,
                  uint32_t row_limit = max_rows,
                  gc_clock::time_point now = gc_clock::now(),
+                 std::experimental::optional<tracing::trace_info> ti = std::experimental::nullopt,
                  api::timestamp_type rt = api::missing_timestamp)
         : cf_id(std::move(cf_id))
         , schema_version(std::move(schema_version))
         , slice(std::move(slice))
         , row_limit(row_limit)
         , timestamp(now)
+        , trace_info(ti)
         , read_timestamp(rt)
     { }
 
