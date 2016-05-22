@@ -3000,9 +3000,19 @@ void storage_proxy::init_messaging_service() {
         });
     });
     ms.register_read_data([] (const rpc::client_info& cinfo, query::read_command cmd, query::partition_range pr) {
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr, shared_ptr<storage_proxy>& p) {
+        tracing::trace_state_ptr trace_state_ptr;
+        if (cmd.trace_info) {
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(cmd.trace_info->type, cmd.trace_info->flush_on_close, cmd.trace_info->session_id);
+            auto msg = sprint("message received from /%s", net::messaging_service::get_source(cinfo).addr);
+            tracing::begin(trace_state_ptr);
+            tracing::trace(trace_state_ptr, std::move(msg));
+        }
+
+        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) {
             return get_schema_for_read(cmd->schema_version, net::messaging_service::get_source(cinfo)).then([cmd, &pr, &p] (schema_ptr s) {
                 return p->query_singular_local(std::move(s), cmd, pr);
+            }).finally([&trace_state_ptr] () mutable {
+                tracing::trace(trace_state_ptr, "read_data handling is done");
             });
         });
     });
