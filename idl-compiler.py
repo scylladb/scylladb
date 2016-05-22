@@ -877,7 +877,7 @@ $name$temp_param serializer<$name$temp_param>::read(Input& buf) {""").substitute
             continue
         local_param = "__local_" + str(index)
         if "attribute" in param:
-            deflt = param["default"][0] if "default" in param else param["type"] + "()"
+            deflt = param["default"][0] if "default" in param else param_type(param["type"]) + "()"
             fprintln(cout, Template("""  $typ $local = (in.size()>0) ?
     $func(in, boost::type<$typ>()) : $default;""").substitute({'func' : DESERIALIZER, 'typ': param_type(param["type"]), 'local' : local_param, 'default': deflt}))
         else:
