@@ -51,6 +51,7 @@ class result::partition_writer {
     md5_hasher& _digest;
     md5_hasher _digest_pos;
     uint32_t& _row_count;
+    api::timestamp_type& _last_modified;
 public:
     partition_writer(
         result_request request,
@@ -60,7 +61,8 @@ public:
         ser::vector_position pos,
         ser::after_qr_partition__key w,
         md5_hasher& digest,
-        uint32_t& row_count)
+        uint32_t& row_count,
+        api::timestamp_type& last_modified)
         : _request(request)
         , _w(std::move(w))
         , _slice(slice)
@@ -70,6 +72,7 @@ public:
         , _digest(digest)
         , _digest_pos(digest)
         , _row_count(row_count)
+        , _last_modified(last_modified)
     { }
 
     bool requested_digest() const {
@@ -104,6 +107,10 @@ public:
     uint32_t& row_count() {
         return _row_count;
     }
+    api::timestamp_type& last_modified() {
+        return _last_modified;
+    }
+
 };
 
 class result::builder {
@@ -113,6 +120,7 @@ class result::builder {
     ser::query_result__partitions _w;
     result_request _request;
     uint32_t _row_count = 0;
+    api::timestamp_type _last_modified = api::missing_timestamp;
 public:
     builder(const partition_slice& slice, result_request request)
         : _slice(slice)
@@ -137,7 +145,7 @@ public:
         if (_request != result_request::only_result) {
             key.feed_hash(_digest, s);
         }
-        return partition_writer(_request, _slice, ranges, _w, std::move(pos), std::move(after_key), _digest, _row_count);
+        return partition_writer(_request, _slice, ranges, _w, std::move(pos), std::move(after_key), _digest, _row_count, _last_modified);
     }
 
     result build() {

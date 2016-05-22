@@ -1859,6 +1859,25 @@ bool collection_type_impl::is_any_live(collection_mutation_view cm, tombstone to
     return false;
 }
 
+api::timestamp_type collection_type_impl::last_update(collection_mutation_view cm) const {
+    auto&& in = cm.data;
+    api::timestamp_type max = api::missing_timestamp;
+    auto has_tomb = read_simple<bool>(in);
+    if (has_tomb) {
+        max = std::max(max, read_simple<api::timestamp_type>(in));
+        (void)read_simple<gc_clock::duration::rep>(in);
+    }
+    auto nr = read_simple<uint32_t>(in);
+    for (uint32_t i = 0; i != nr; ++i) {
+        auto ksize = read_simple<uint32_t>(in);
+        in.remove_prefix(ksize);
+        auto vsize = read_simple<uint32_t>(in);
+        auto value = atomic_cell_view::from_bytes(read_simple_bytes(in, vsize));
+        max = std::max(value.timestamp(), max);
+    }
+    return max;
+}
+
 template <typename Iterator>
 collection_mutation
 do_serialize_mutation_form(

@@ -575,12 +575,14 @@ void write_cell(RowWriter& w, const query::partition_slice& slice, const data_ty
         .end_qr_cell();
 }
 
-static void hash_row_slice(md5_hasher& hasher,
+// returns the timestamp of a latest update to the row
+static api::timestamp_type hash_row_slice(md5_hasher& hasher,
     const schema& s,
     column_kind kind,
     const row& cells,
     const std::vector<column_id>& columns)
 {
+    api::timestamp_type max = api::missing_timestamp;
     for (auto id : columns) {
         const atomic_cell_or_collection* cell = cells.find_cell(id);
         if (!cell) {
@@ -590,10 +592,15 @@ static void hash_row_slice(md5_hasher& hasher,
         auto&& def = s.column_at(kind, id);
         if (def.is_atomic()) {
             feed_hash(hasher, cell->as_atomic_cell());
+            max = std::max(max, cell->as_atomic_cell().timestamp());
         } else {
-            feed_hash(hasher, cell->as_collection_mutation());
+            auto&& cm = cell->as_collection_mutation();
+            feed_hash(hasher, cm);
+            auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
+            max = std::max(max, ctype->last_update(cm));
         }
     }
+    return max;
 }
 
 template<typename RowWriter>
@@ -677,8 +684,10 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
             get_compacted_row_slice(s, slice, column_kind::static_column, static_row(), slice.static_columns, static_cells_wr);
         }
         if (pw.requested_digest()) {
-            ::feed_hash(pw.digest(), partition_tombstone());
-            hash_row_slice(pw.digest(), s, column_kind::static_column, static_row(), slice.static_columns);
+            auto pt = partition_tombstone();
+            ::feed_hash(pw.digest(), pt);
+            auto t = hash_row_slice(pw.digest(), s, column_kind::static_column, static_row(), slice.static_columns);
+            pw.last_modified() = std::max({pw.last_modified(), pt.timestamp, t});
         }
     }
 
@@ -697,7 +706,8 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
         if (pw.requested_digest()) {
             e.key().feed_hash(pw.digest(), s);
             ::feed_hash(pw.digest(), row_tombstone);
-            hash_row_slice(pw.digest(), s, column_kind::regular_column, row.cells(), slice.regular_columns);
+            auto t = hash_row_slice(pw.digest(), s, column_kind::regular_column, row.cells(), slice.regular_columns);
+            pw.last_modified() = std::max({pw.last_modified(), row_tombstone.timestamp, t});
         }
 
         if (row.is_live(s)) {
