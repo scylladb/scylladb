@@ -83,6 +83,20 @@ inline gc_clock::duration ttl_by_type(const trace_type t) {
     }
 }
 
+class trace_info {
+public:
+    utils::UUID session_id;
+    trace_type type;
+    bool flush_on_close;
+
+public:
+    trace_info(utils::UUID sid, trace_type t, bool f_o_c)
+        : session_id(std::move(sid))
+        , type(t)
+        , flush_on_close(f_o_c)
+    { }
+};
+
 struct i_tracing_backend_helper {
     virtual ~i_tracing_backend_helper() {}
     virtual future<> start() = 0;
