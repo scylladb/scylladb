@@ -1,5 +1,24 @@
 #!/bin/bash -e
 
+print_usage() {
+    echo "build_deb.sh --rebuild-dep"
+    echo "  --rebuild-dep  rebuild dependency packages"
+    exit 1
+}
+REBUILD=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        "--rebuild-dep")
+            REBUILD=1
+            shift 1
+            ;;
+        *)
+            print_usage
+            ;;
+    esac
+done
+
+
 if [ ! -e dist/ubuntu/build_deb.sh ]; then
     echo "run build_deb.sh in top of scylla dir"
     exit 1
@@ -68,7 +87,17 @@ fi
 cp dist/common/systemd/scylla-server.service.in debian/scylla-server.service
 sed -i -e "s#@@SYSCONFDIR@@#/etc/default#g" debian/scylla-server.service
 
-./dist/ubuntu/dep/build_dependency.sh
+if [ "$RELEASE" = "14.04" ] && [ $REBUILD -eq 0 ]; then
+    if [ ! -f /etc/apt/sources.list.d/scylla-3rdparty-trusty.list ]; then
+        cd /etc/apt/sources.list.d
+        sudo wget https://s3.amazonaws.com/downloads.scylladb.com/deb/3rdparty/ubuntu/scylla-3rdparty-trusty.list
+        cd -
+    fi
+    sudo apt-get -y update
+    sudo apt-get -y --allow-unauthenticated install antlr3 antlr3-c++-dev libthrift-dev libthrift0 thrift-compiler
+else
+    ./dist/ubuntu/dep/build_dependency.sh
+fi
 
 if [ "$RELEASE" = "14.04" ]; then
     sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
