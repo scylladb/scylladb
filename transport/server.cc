@@ -503,7 +503,7 @@ cql_server::connection::connection(cql_server& server, connected_socket&& fd, so
     , _fd(std::move(fd))
     , _read_buf(_fd.input())
     , _write_buf(_fd.output())
-    , _client_state(service::client_state::for_external_calls()) {
+    , _client_state(service::client_state::external_tag{}, addr) {
     ++_server._total_connections;
     ++_server._current_connections;
     _server._connections_list.push_back(*this);

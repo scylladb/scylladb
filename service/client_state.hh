@@ -92,16 +92,23 @@ private:
     bool _dirty = false;
     bool _thrift = false; // TODO: maybe use/set?
 
+    // Address of a client
+    socket_address _remote_address;
+
 public:
     struct internal_tag {};
     struct external_tag {};
 
-    // Note: Origin passes here a RemoteAddress parameter, but it doesn't seem to be used
-    // anywhere so I didn't bother converting it.
-    client_state(external_tag) : _is_internal(false) {
+    client_state(external_tag, const socket_address& remote_address = socket_address())
+            : _is_internal(false)
+            , _remote_address(remote_address) {
         if (!auth::authenticator::get().require_authentication()) {
             _user = ::make_shared<auth::authenticated_user>();
         }
+    }
+
+    gms::inet_address get_client_address() const {
+        return gms::inet_address(_remote_address);
     }
 
     client_state(internal_tag) : _keyspace("system"), _is_internal(true) {}
