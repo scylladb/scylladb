@@ -144,7 +144,7 @@ query_processor::process_statement(::shared_ptr<cql_statement> statement, servic
         statement->validate(_proxy, client_state);
 
         future<::shared_ptr<transport::messages::result_message>> fut = make_ready_future<::shared_ptr<transport::messages::result_message>>();
-        if (client_state._is_internal) {
+        if (client_state.is_internal()) {
             fut = statement->execute_internal(_proxy, query_state, options);
         } else  {
             fut = statement->execute(_proxy, query_state, options);

@@ -81,9 +81,6 @@ private:
     private volatile String keyspace;
 #endif
     ::shared_ptr<auth::authenticated_user> _user;
-public:
-    struct internal_tag {};
-    struct external_tag {};
 
     // isInternal is used to mark ClientState as used by some internal component
     // that should have an ability to modify system keyspace.
@@ -94,6 +91,10 @@ public:
 
     bool _dirty = false;
     bool _thrift = false; // TODO: maybe use/set?
+
+public:
+    struct internal_tag {};
+    struct external_tag {};
 
     // Note: Origin passes here a RemoteAddress parameter, but it doesn't seem to be used
     // anywhere so I didn't bother converting it.
@@ -109,6 +110,10 @@ public:
 
     bool is_thrift() const {
         return _thrift;
+    }
+
+    bool is_internal() const {
+        return _is_internal;
     }
 
     /**
