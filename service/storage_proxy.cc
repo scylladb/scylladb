@@ -432,6 +432,11 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
+                , "total_operations", "global_read_repairs_canceled_due_to_concurrent_write")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.global_read_repairs_canceled_due_to_concurrent_write)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
                 , "total_operations", "write timeouts")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.write_timeouts)
         ),
@@ -1539,6 +1544,7 @@ class digest_read_resolver : public abstract_read_resolver {
     bool _cl_reported = false;
     foreign_ptr<lw_shared_ptr<query::result>> _data_result;
     std::vector<query::result_digest> _digest_results;
+    api::timestamp_type _last_modified = api::missing_timestamp;
 
     virtual void on_timeout() override {
         if (!_cl_reported) {
@@ -1557,15 +1563,17 @@ public:
         if (!_timedout) {
             // if only one target was queried digest_check() will be skipped so we can also skip digest calculation
             _digest_results.emplace_back(_targets_count == 1 ? query::result_digest() : *result->digest());
+            _last_modified = std::max(_last_modified, result->last_modified());
             if (!_data_result) {
                 _data_result = std::move(result);
             }
             got_response(from);
         }
     }
-    void add_digest(gms::inet_address from, query::result_digest digest, api::timestamp_type) {
+    void add_digest(gms::inet_address from, query::result_digest digest, api::timestamp_type last_modified) {
         if (!_timedout) {
             _digest_results.emplace_back(std::move(digest));
+            _last_modified = std::max(_last_modified, last_modified);
             got_response(from);
         }
     }
@@ -1606,6 +1614,9 @@ public:
     }
     bool is_completed() {
         return response_count() == _targets_count;
+    }
+    api::timestamp_type last_modified() const {
+        return _last_modified;
     }
 };
 
@@ -2042,7 +2053,18 @@ public:
                     if (exec->_block_for < exec->_targets.size()) { // if there are more targets then needed for cl, check digest in background
                         background_repair_check = true;
                     }
-                } else { // digest missmatch
+                } else { // digest mismatch
+                    if (is_datacenter_local(exec->_cl)) {
+                        auto write_timeout = exec->_proxy->_db.local().get_config().write_request_timeout_in_ms() * 1000;
+                        auto delta = __int128_t(digest_resolver->last_modified()) - __int128_t(exec->_cmd->read_timestamp);
+                        if (std::abs(delta) <= write_timeout) {
+                            print("HERE %d\n", int64_t(delta));
+                            exec->_proxy->_stats.global_read_repairs_canceled_due_to_concurrent_write++;
+                            // if CL is local and non matching data is modified less then write_timeout ms ago do only local repair
+                            auto i = boost::range::remove_if(exec->_targets, std::not1(std::cref(db::is_local)));
+                            exec->_targets.erase(i, exec->_targets.end());
+                        }
+                    }
                     exec->reconcile(exec->_cl, timeout);
                     exec->_proxy->_stats.read_repair_repaired_blocking++;
                 }
