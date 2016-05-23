@@ -42,6 +42,15 @@ public:
     }
     inet_address(net::ipv4_address&& addr) : _addr(std::move(addr)) {}
 
+    inet_address(const socket_address& sa) {
+        if (sa.u.in.sin_family == AF_INET) {
+            _addr = net::ipv4_address(ipv4_addr(sa));
+        } else {
+            // Not supported
+            throw std::invalid_argument("IPv6 socket addresses are not supported.");
+        }
+    }
+
     const net::ipv4_address& addr() const {
         return _addr;
     }
