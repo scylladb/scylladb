@@ -393,22 +393,19 @@ private:
     query::clustering_key_filtering_context _ck_filtering;
 
     future<mutation_opt> filter(mutation_opt&& mut) {
-        while (mut && !mut->partition().empty()) {
-            const query::clustering_row_ranges& ck_ranges = _ck_filtering.get_ranges(mut->key());
-            mutation_partition filtered_partition = mutation_partition(mut->partition(), *(mut->schema()), ck_ranges);
-
-            if (!filtered_partition.empty()) {
-                mut->partition() = std::move(filtered_partition);
-                return make_ready_future<mutation_opt>(std::move(mut));
-            }
-
-            future<mutation_opt> next = _underlying();
-            if (!next.available()) {
-                return next.then([this] (mutation_opt&& mut) { return filter(std::move(mut)); });
-            }
-            mut = std::move(next.get0());
+        if (!mut) {
+            return make_ready_future<mutation_opt>();
         }
-        return make_ready_future<mutation_opt>(std::move(mut));
+
+        const query::clustering_row_ranges& ck_ranges = _ck_filtering.get_ranges(mut->key());
+        mutation_partition filtered_partition = mutation_partition(mut->partition(), *(mut->schema()), ck_ranges);
+
+        if (!filtered_partition.empty()) {
+            mut->partition() = std::move(filtered_partition);
+            return make_ready_future<mutation_opt>(std::move(mut));
+        }
+
+        return operator()();
     }
 
 public:
