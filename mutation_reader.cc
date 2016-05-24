@@ -28,11 +28,18 @@
 
 namespace stdx = std::experimental;
 
+template<typename T>
+T move_and_clear(T& obj) {
+    T x = std::move(obj);
+    obj = T();
+    return x;
+}
+
 // Combines multiple mutation_readers into one.
 class combined_reader final : public mutation_reader::impl {
     std::vector<mutation_reader> _readers;
     struct mutation_and_reader {
-        mutation m;
+        streamed_mutation m;
         mutation_reader* read;
     };
     std::vector<mutation_and_reader> _ptables;
@@ -42,7 +49,7 @@ class combined_reader final : public mutation_reader::impl {
         // order of comparison is inverted, because heaps produce greatest value first
         return b.m.decorated_key().less_compare(*s, a.m.decorated_key());
     }
-    mutation_opt _current;
+    std::vector<streamed_mutation> _current;
     bool _inited = false;
 private:
     // Produces next mutation or disengaged optional if there are no more.
@@ -50,23 +57,26 @@ private:
     // Entry conditions:
     //  - either _ptables is empty or_ptables.back() is the next item to be consumed.
     //  - the _ptables heap is in invalid state (if not empty), waiting for pop_back or push_heap.
-    future<mutation_opt> next() {
+    future<streamed_mutation_opt> next() {
         if (_ptables.empty()) {
-            return make_ready_future<mutation_opt>(move_and_disengage(_current));
+            if (_current.empty()) {
+                return make_ready_future<streamed_mutation_opt>();
+            }
+            return make_ready_future<streamed_mutation_opt>(merge_mutations(move_and_clear(_current)));
         };
 
 
         auto& candidate = _ptables.back();
-        mutation& m = candidate.m;
+        streamed_mutation& m = candidate.m;
 
-        if (_current && !_current->decorated_key().equal(*m.schema(), m.decorated_key())) {
+        if (!_current.empty() && !_current.back().decorated_key().equal(*m.schema(), m.decorated_key())) {
             // key has changed, so emit accumulated mutation
-            return make_ready_future<mutation_opt>(move_and_disengage(_current));
+            return make_ready_future<streamed_mutation_opt>(merge_mutations(move_and_clear(_current)));
         }
 
-        apply(_current, std::move(m));
+        _current.emplace_back(std::move(m));
 
-        return (*candidate.read)().then([this] (mutation_opt&& more) {
+        return (*candidate.read)().then([this] (streamed_mutation_opt&& more) {
             // Restore heap to valid state
             if (!more) {
                 _ptables.pop_back();
@@ -84,10 +94,10 @@ public:
         : _readers(std::move(readers))
     { }
 
-    virtual future<mutation_opt> operator()() override {
+    virtual future<streamed_mutation_opt> operator()() override {
         if (!_inited) {
             return parallel_for_each(_readers, [this] (mutation_reader& reader) {
-                return reader().then([this, &reader](mutation_opt&& m) {
+                return reader().then([this, &reader](streamed_mutation_opt&& m) {
                     if (m) {
                         _ptables.push_back({std::move(*m), &reader});
                     }
@@ -119,50 +129,63 @@ make_combined_reader(mutation_reader&& a, mutation_reader&& b) {
 }
 
 class reader_returning final : public mutation_reader::impl {
-    mutation _m;
+    streamed_mutation _m;
     bool _done = false;
 public:
-    reader_returning(mutation m) : _m(std::move(m)) {
+    reader_returning(streamed_mutation m) : _m(std::move(m)) {
     }
-    virtual future<mutation_opt> operator()() override {
+    virtual future<streamed_mutation_opt> operator()() override {
         if (_done) {
-            return make_ready_future<mutation_opt>();
+            return make_ready_future<streamed_mutation_opt>();
         } else {
             _done = true;
-            return make_ready_future<mutation_opt>(std::move(_m));
+            return make_ready_future<streamed_mutation_opt>(std::move(_m));
         }
     }
 };
 
 mutation_reader make_reader_returning(mutation m) {
+    return make_mutation_reader<reader_returning>(streamed_mutation_from_mutation(std::move(m)));
+}
+
+mutation_reader make_reader_returning(streamed_mutation m) {
     return make_mutation_reader<reader_returning>(std::move(m));
 }
 
 class reader_returning_many final : public mutation_reader::impl {
-    std::vector<mutation> _m;
+    std::vector<streamed_mutation> _m;
     bool _done = false;
 public:
-    reader_returning_many(std::vector<mutation> m) : _m(std::move(m)) {
+    reader_returning_many(std::vector<streamed_mutation> m) : _m(std::move(m)) {
         boost::range::reverse(_m);
     }
-    virtual future<mutation_opt> operator()() override {
+    virtual future<streamed_mutation_opt> operator()() override {
         if (_m.empty()) {
-            return make_ready_future<mutation_opt>();
+            return make_ready_future<streamed_mutation_opt>();
         }
         auto m = std::move(_m.back());
         _m.pop_back();
-        return make_ready_future<mutation_opt>(std::move(m));
+        return make_ready_future<streamed_mutation_opt>(std::move(m));
     }
 };
 
 mutation_reader make_reader_returning_many(std::vector<mutation> mutations) {
+    std::vector<streamed_mutation> streamed_mutations;
+    streamed_mutations.reserve(mutations.size());
+    for (auto& m : mutations) {
+        streamed_mutations.emplace_back(streamed_mutation_from_mutation(std::move(m)));
+    }
+    return make_mutation_reader<reader_returning_many>(std::move(streamed_mutations));
+}
+
+mutation_reader make_reader_returning_many(std::vector<streamed_mutation> mutations) {
     return make_mutation_reader<reader_returning_many>(std::move(mutations));
 }
 
 class empty_reader final : public mutation_reader::impl {
 public:
-    virtual future<mutation_opt> operator()() override {
-        return make_ready_future<mutation_opt>();
+    virtual future<streamed_mutation_opt> operator()() override {
+        return make_ready_future<streamed_mutation_opt>();
     }
 };
 

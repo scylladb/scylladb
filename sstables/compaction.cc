@@ -73,11 +73,16 @@ public:
             : _sst(std::move(sst))
             , _reader(_sst->read_rows(schema, service::get_local_compaction_priority()))
             {}
-    virtual future<mutation_opt> operator()() override {
+    virtual future<streamed_mutation_opt> operator()() override {
         return _reader.read().handle_exception([sst = _sst] (auto ep) {
             logger.error("Compaction found an exception when reading sstable {} : {}",
                     sst->get_filename(), ep);
             return make_exception_future<mutation_opt>(ep);
+        }).then([] (auto mo) -> streamed_mutation_opt {
+            if (!mo) {
+                return { };
+            }
+            return streamed_mutation_from_mutation(std::move(*mo));
         });
     }
 };
@@ -201,10 +206,12 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
             , _cleanup(cleanup)
         { }
 
-        virtual future<mutation_opt> operator()() override {
-            return _reader().then([this] (mutation_opt m) {
+        virtual future<streamed_mutation_opt> operator()() override {
+            return _reader().then([] (auto sm) {
+                return mutation_from_streamed_mutation(std::move(sm));
+            }).then([this] (mutation_opt m) {
                 if (!bool(m)) {
-                    return make_ready_future<mutation_opt>(std::move(m));
+                    return make_ready_future<streamed_mutation_opt>();
                 }
                 // Filter out mutation that doesn't belong to current shard.
                 if (dht::shard_of(m->token()) != engine().cpu_id()) {
@@ -216,7 +223,7 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
                 auto max_purgeable = get_max_purgeable_timestamp(_schema, _not_compacted_sstables, m->decorated_key());
                 m->partition().compact_for_compaction(*_schema, max_purgeable, _now);
                 if (!m->partition().empty()) {
-                    return make_ready_future<mutation_opt>(std::move(m));
+                    return make_ready_future<streamed_mutation_opt>(streamed_mutation_from_mutation(std::move(*m)));
                 }
                 return operator()();
             });
@@ -249,7 +256,9 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
             // Compaction manager will catch this exception and re-schedule the compaction.
             throw compaction_stop_exception(info->ks, info->cf, info->stop_requested);
         }
-        return reader().then([output_writer, info] (auto mopt) {
+        return reader().then([] (auto sm) {
+            return mutation_from_streamed_mutation(std::move(sm));
+        }).then([output_writer, info] (auto mopt) {
             if (mopt) {
                 info->total_keys_written++;
                 return output_writer->write(std::move(*mopt)).then([] {
@@ -264,9 +273,12 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
     struct queue_reader final : public ::mutation_reader::impl {
         lw_shared_ptr<seastar::pipe_reader<mutation>> pr;
         queue_reader(lw_shared_ptr<seastar::pipe_reader<mutation>> pr) : pr(std::move(pr)) {}
-        virtual future<mutation_opt> operator()() override {
+        virtual future<streamed_mutation_opt> operator()() override {
             return pr->read().then([] (std::experimental::optional<mutation> m) mutable {
-                return make_ready_future<mutation_opt>(std::move(m));
+                if (!m) {
+                    return streamed_mutation_opt();
+                }
+                return streamed_mutation_opt(streamed_mutation_from_mutation(std::move(*m)));
             });
         }
     };

@@ -122,7 +122,7 @@ class key_from_mutation_reader final : public key_reader::impl {
 public:
     key_from_mutation_reader(mutation_reader&& reader) : _reader(std::move(reader)) { }
     virtual future<dht::decorated_key_opt> operator()() override {
-        return _reader().then([] (mutation_opt&& mo) {
+        return _reader().then([] (streamed_mutation_opt&& mo) {
             if (mo) {
                 return dht::decorated_key_opt(std::move(mo->decorated_key()));
             } else {

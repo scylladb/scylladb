@@ -161,7 +161,7 @@ public:
         , _ck_filtering(ck_filtering)
     { }
 
-    virtual future<mutation_opt> operator()() override {
+    virtual future<streamed_mutation_opt> operator()() override {
         if (_delegate_range) {
             return _delegate();
         }
@@ -181,13 +181,13 @@ public:
         managed_bytes::linearization_context_guard lcg;
         update_iterators();
         if (_i == _end) {
-            return make_ready_future<mutation_opt>(stdx::nullopt);
+            return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
         }
         partition_entry& e = *_i;
         ++_i;
         _last = e.key();
         _memtable->upgrade_entry(e);
-        return make_ready_future<mutation_opt>(e.read(_schema, _ck_filtering));
+        return make_ready_future<streamed_mutation_opt>(streamed_mutation_from_mutation(e.read(_schema, _ck_filtering)));
     }
 };
 

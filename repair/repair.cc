@@ -334,7 +334,9 @@ static future<partition_checksum> checksum_range_shard(database &db,
         return do_with(std::move(reader), partition_checksum(),
             [] (auto& reader, auto& checksum) {
             return repeat([&reader, &checksum] () {
-                return reader().then([&checksum] (auto mopt) {
+                return reader().then([] (auto sm) {
+                    return mutation_from_streamed_mutation(std::move(sm));
+                }).then([&checksum] (auto mopt) {
                     if (mopt) {
                         checksum.add(partition_checksum(*mopt));
                         return stop_iteration::no;

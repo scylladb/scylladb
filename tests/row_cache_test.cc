@@ -434,7 +434,7 @@ SEASTAR_TEST_CASE(test_update_failure) {
         // verify that there are no stale partitions
         auto reader = cache.make_reader(s, query::partition_range::make_open_ended_both_sides());
         for (int i = 0; i < partition_count; i++) {
-            auto mopt = reader().get0();
+            auto mopt = mutation_from_streamed_mutation(reader().get0()).get0();
             if (!mopt) {
                 break;
             }
@@ -498,7 +498,7 @@ private:
                     , _reader(std::move(r))
             {}
 
-            virtual future<mutation_opt> operator()() override {
+            virtual future<streamed_mutation_opt> operator()() override {
                 return _reader().finally([this] () {
                     return _throttle.enter();
                 });

@@ -44,12 +44,12 @@ public:
     class impl {
     public:
         virtual ~impl() {}
-        virtual future<mutation_opt> operator()() = 0;
+        virtual future<streamed_mutation_opt> operator()() = 0;
     };
 private:
     class null_impl final : public impl {
     public:
-        virtual future<mutation_opt> operator()() override { throw std::bad_function_call(); }
+        virtual future<streamed_mutation_opt> operator()() override { throw std::bad_function_call(); }
     };
 private:
     std::unique_ptr<impl> _impl;
@@ -60,7 +60,7 @@ public:
     mutation_reader(const mutation_reader&) = delete;
     mutation_reader& operator=(mutation_reader&&) = default;
     mutation_reader& operator=(const mutation_reader&) = delete;
-    future<mutation_opt> operator()() { return _impl->operator()(); }
+    future<streamed_mutation_opt> operator()() { return _impl->operator()(); }
 };
 
 // Impl: derived from mutation_reader::impl; Args/args: arguments for Impl's constructor
@@ -78,22 +78,32 @@ mutation_reader make_combined_reader(std::vector<mutation_reader>);
 mutation_reader make_combined_reader(mutation_reader&& a, mutation_reader&& b);
 // reads from the input readers, in order
 mutation_reader make_reader_returning(mutation);
+mutation_reader make_reader_returning(streamed_mutation);
 mutation_reader make_reader_returning_many(std::vector<mutation>);
+mutation_reader make_reader_returning_many(std::vector<streamed_mutation>);
 mutation_reader make_empty_reader();
 
+/*
+template<typename T>
+concept bool StreamedMutationFilter() {
+    return requires(T t, const streamed_mutation& sm) {
+        { t(sm) } -> bool;
+    };
+}
+*/
 template <typename MutationFilter>
 class filtering_reader : public mutation_reader::impl {
     mutation_reader _rd;
     MutationFilter _filter;
-    mutation_opt _current;
-    static_assert(std::is_same<bool, std::result_of_t<MutationFilter(const mutation&)>>::value, "bad MutationFilter signature");
+    streamed_mutation_opt _current;
+    static_assert(std::is_same<bool, std::result_of_t<MutationFilter(const streamed_mutation&)>>::value, "bad MutationFilter signature");
 public:
     filtering_reader(mutation_reader rd, MutationFilter&& filter)
             : _rd(std::move(rd)), _filter(std::forward<MutationFilter>(filter)) {
     }
-    virtual future<mutation_opt> operator()() override {\
+    virtual future<streamed_mutation_opt> operator()() override {\
         return repeat([this] {
-            return _rd().then([this] (mutation_opt&& mo) mutable {
+            return _rd().then([this] (streamed_mutation_opt&& mo) mutable {
                 if (!mo) {
                     _current = std::move(mo);
                     return stop_iteration::yes;
@@ -106,7 +116,7 @@ public:
                 }
             });
         }).then([this] {
-            return make_ready_future<mutation_opt>(std::move(_current));
+            return make_ready_future<streamed_mutation_opt>(std::move(_current));
         });
     };
 };
@@ -133,7 +143,9 @@ future<> consume(mutation_reader& reader, Consumer consumer) {
 
     return do_with(std::move(consumer), [&reader] (Consumer& c) -> future<> {
         return repeat([&reader, &c] () {
-            return reader().then([&c] (mutation_opt&& mo) -> future<stop_iteration> {
+            return reader().then([] (auto sm) {
+                return mutation_from_streamed_mutation(std::move(sm));
+            }).then([&c] (mutation_opt&& mo) -> future<stop_iteration> {
                 if (!mo) {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }

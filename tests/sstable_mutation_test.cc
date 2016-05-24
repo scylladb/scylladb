@@ -481,7 +481,9 @@ SEASTAR_TEST_CASE(broken_ranges_collection) {
         auto s = peers_schema();
         auto reader = make_lw_shared<::mutation_reader>(as_mutation_reader(sstp, sstp->read_rows(s)));
         return repeat([s, reader] {
-            return (*reader)().then([s, reader] (mutation_opt mut) {
+            return (*reader)().then([] (auto sm) {
+                return mutation_from_streamed_mutation(std::move(sm));
+            }).then([s, reader] (mutation_opt mut) {
                 auto key_equal = [s, &mut] (sstring ip) {
                     return mut->key().equal(*s, partition_key::from_deeply_exploded(*s, { net::ipv4_address(ip) }));
                 };

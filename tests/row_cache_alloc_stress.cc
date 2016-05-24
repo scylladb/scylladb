@@ -193,7 +193,7 @@ int main(int argc, char** argv) {
             for (auto&& key : keys) {
                 auto range = query::partition_range::make_singular(key);
                 auto reader = cache.make_reader(s, range);
-                auto mo = reader().get0();
+                auto mo = mutation_from_streamed_mutation(reader().get0()).get0();
                 assert(mo);
                 assert(mo->partition().live_row_count(*s) ==
                        row_count + 1 /* one row was already in cache before update()*/);
