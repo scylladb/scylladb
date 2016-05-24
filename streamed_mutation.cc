@@ -138,3 +138,79 @@ std::ostream& operator<<(std::ostream& os, const streamed_mutation& sm) {
     fprint(os, "{%s.%s key %s streamed mutation}", s.ks_name(), s.cf_name(), sm.decorated_key());
     return os;
 }
+
+streamed_mutation streamed_mutation_from_mutation(mutation m)
+{
+    class reader final : public streamed_mutation::impl {
+        mutation _mutation;
+        bound_view::compare _cmp;
+        bool _static_row_done = false;
+        range_tombstone::container_type::const_iterator _rt_it;
+        range_tombstone::container_type::const_iterator _rt_end;
+        mutation_partition::rows_type::const_iterator _cr_it;
+        mutation_partition::rows_type::const_iterator _cr_end;
+        stdx::optional<range_tombstone_end> _range_tombstone_end;
+    private:
+        mutation_fragment_opt read_next() {
+            if (_cr_it != _cr_end) {
+                bool return_ck = true;
+                if (_range_tombstone_end) {
+                    return_ck = _cmp(_cr_it->key(), _range_tombstone_end->bound());
+                } else if (_rt_it != _rt_end) {
+                    return_ck = _cmp(_cr_it->key(), _rt_it->start_bound());
+                }
+                if (return_ck) {
+                    return mutation_fragment(std::move(*_cr_it++));
+                }
+            }
+            if (_range_tombstone_end) {
+                auto mf = mutation_fragment(std::move(*_range_tombstone_end));
+                _range_tombstone_end = { };
+                return mf;
+            } else if (_rt_it != _rt_end) {
+                auto rt = std::move(*_rt_it++);
+                _range_tombstone_end = range_tombstone_end(std::move(rt.end), rt.end_kind);
+                mutation_fragment mf = range_tombstone_begin(std::move(rt.start), rt.start_kind, rt.tomb);
+                return mf;
+            }
+            return { };
+        }
+    private:
+        void do_fill_buffer() {
+            if (!_static_row_done) {
+                _static_row_done = true;
+                if (!_mutation.partition().static_row().empty()) {
+                    push_mutation_fragment(static_row(std::move(_mutation.partition().static_row())));
+                }
+            }
+            while (!is_end_of_stream() && !is_buffer_full()) {
+                auto mfopt = read_next();
+                if (mfopt) {
+                    push_mutation_fragment(std::move(*mfopt));
+                } else {
+                    _end_of_stream = true;
+                }
+            }
+        }
+    public:
+        explicit reader(mutation m)
+            : streamed_mutation::impl(m.schema(), m.decorated_key(), m.partition().partition_tombstone())
+            , _mutation(std::move(m))
+            , _cmp(*_mutation.schema())
+        {
+            _rt_it = _mutation.partition().row_tombstones().begin();
+            _cr_it = _mutation.partition().clustered_rows().begin();
+            _rt_end = _mutation.partition().row_tombstones().end();
+            _cr_end = _mutation.partition().clustered_rows().end();
+
+            do_fill_buffer();
+        }
+
+        virtual future<> fill_buffer() override {
+            do_fill_buffer();
+            return make_ready_future<>();
+        }
+    };
+
+    return make_streamed_mutation<reader>(std::move(m));
+}

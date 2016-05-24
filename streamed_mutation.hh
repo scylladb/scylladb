@@ -532,3 +532,7 @@ auto consume(streamed_mutation& m, Consumer consumer) {
         });
     });
 }
+
+class mutation;
+
+streamed_mutation streamed_mutation_from_mutation(mutation);
