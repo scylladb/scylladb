@@ -293,9 +293,7 @@ void verify_does_not_have(row_cache& cache, const dht::decorated_key& key) {
 void verify_has(row_cache& cache, const mutation& m) {
     auto range = query::partition_range::make_singular(m.decorated_key());
     auto reader = cache.make_reader(cache.schema(), range);
-    auto mo = reader().get0();
-    BOOST_REQUIRE(bool(mo));
-    assert_that(*mo).is_equal_to(m);
+    assert_that(reader().get0()).has_mutation().is_equal_to(m);
 }
 
 SEASTAR_TEST_CASE(test_update) {
