@@ -221,7 +221,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy, service::q
     auto now = db_clock::now();
 
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
-        make_partition_slice(options), limit, to_gc_clock(now));
+        make_partition_slice(options), limit, to_gc_clock(now), options.get_timestamp(state));
 
     int32_t page_size = options.get_page_size();
 
@@ -313,7 +313,7 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy, s
     int32_t limit = get_limit(options);
     auto now = db_clock::now();
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
-        make_partition_slice(options), limit);
+        make_partition_slice(options), limit, to_gc_clock(now), options.get_timestamp(state));
     auto partition_ranges = _restrictions->get_partition_key_ranges(options);
 
     if (needs_post_query_ordering() && _limit) {
