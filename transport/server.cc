@@ -39,6 +39,7 @@
 #include "database.hh"
 #include "net/byteorder.hh"
 #include <seastar/core/scollectd.hh>
+#include <seastar/net/byteorder.hh>
 
 #include "enum_set.hh"
 #include "service/query_state.hh"
@@ -215,8 +216,32 @@ public:
         return _opcode;
     }
 private:
-    sstring make_frame(uint8_t version, uint8_t flags, size_t length);
     std::vector<char> compress(const std::vector<char>& body);
+
+    template <typename CqlFrameHeaderType>
+    sstring make_frame_one(uint8_t version, uint8_t flags, size_t length) {
+        sstring frame_buf(sstring::initialized_later(), sizeof(CqlFrameHeaderType));
+        auto* frame = reinterpret_cast<CqlFrameHeaderType*>(frame_buf.begin());
+        frame->version = version | 0x80;
+        frame->flags   = flags;
+        frame->opcode  = static_cast<uint8_t>(_opcode);
+        frame->length  = htonl(length);
+        frame->stream = net::hton((decltype(frame->stream))_stream);
+
+        return frame_buf;
+    }
+
+    sstring make_frame(uint8_t version, uint8_t flags, size_t length) {
+        if (version > 0x04) {
+            throw exceptions::protocol_exception(sprint("Invalid or unsupported protocol version: %d", version));
+        }
+
+        if (version > 0x02) {
+            return make_frame_one<cql_binary_frame_v3>(version, flags, length);
+        } else {
+            return make_frame_one<cql_binary_frame_v1>(version, flags, length);
+        }
+    }
 };
 
 cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb)
@@ -1366,36 +1391,6 @@ void cql_server::response::serialize(const event::schema_change& event, uint8_t 
                 write_string("");
             }
         }
-    }
-}
-
-sstring cql_server::response::make_frame(uint8_t version, uint8_t flags, size_t length)
-{
-    switch (version) {
-    case 0x01:
-    case 0x02: {
-        sstring frame_buf(sstring::initialized_later(), sizeof(cql_binary_frame_v1));
-        auto* frame = reinterpret_cast<cql_binary_frame_v1*>(frame_buf.begin());
-        frame->version = version | 0x80;
-        frame->flags   = flags;
-        frame->stream  = _stream;
-        frame->opcode  = static_cast<uint8_t>(_opcode);
-        frame->length  = htonl(length);
-        return frame_buf;
-    }
-    case 0x03:
-    case 0x04: {
-        sstring frame_buf(sstring::initialized_later(), sizeof(cql_binary_frame_v3));
-        auto* frame = reinterpret_cast<cql_binary_frame_v3*>(frame_buf.begin());
-        frame->version = version | 0x80;
-        frame->flags   = flags;
-        frame->stream  = htons(_stream);
-        frame->opcode  = static_cast<uint8_t>(_opcode);
-        frame->length  = htonl(length);
-        return frame_buf;
-    }
-    default:
-        throw exceptions::protocol_exception(sprint("Invalid or unsupported protocol version: %d", version));
     }
 }
 
