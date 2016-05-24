@@ -50,6 +50,8 @@
 #include <cassert>
 #include <string>
 
+#include <lz4.h>
+
 namespace transport {
 
 static logging::logger logger("cql_server");
@@ -207,13 +209,14 @@ public:
     void write_value(bytes_opt value);
     void write(const cql3::metadata& m);
     void write(const cql3::prepared_metadata& m, uint8_t version);
-    future<> output(output_stream<char>& out, uint8_t version);
+    future<> output(output_stream<char>& out, uint8_t version, bool compression);
 
     cql_binary_opcode opcode() const {
         return _opcode;
     }
 private:
-    sstring make_frame(uint8_t version, size_t length);
+    sstring make_frame(uint8_t version, uint8_t flags, size_t length);
+    std::vector<char> compress(const std::vector<char>& body);
 };
 
 cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb)
@@ -561,11 +564,6 @@ future<> cql_server::connection::process_request() {
 
         auto& f = *maybe_frame;
 
-        // FIXME: compression
-        if (f.flags & 0x01) {
-            throw std::runtime_error("CQL frame compression is not supported");
-        }
-
         auto op = f.opcode;
         auto stream = f.stream;
         auto mem_estimate = f.length * 2 + 8000; // Allow for extra copies and bookkeeping
@@ -576,22 +574,23 @@ future<> cql_server::connection::process_request() {
                     f.length, mem_estimate, _server._max_request_size));
         }
 
-        return with_semaphore(_server._memory_available, mem_estimate, [this, length = f.length, op, stream] {
-          return _read_buf.read_exactly(length).then([this, op, stream] (temporary_buffer<char> buf) {
+        return with_semaphore(_server._memory_available, mem_estimate, [this, length = f.length, flags = f.flags, op, stream] {
+          return read_and_decompress_frame(length, flags).then([this, flags, op, stream] (temporary_buffer<char> buf) {
 
             ++_server._requests_served;
             ++_server._requests_serving;
 
-            with_gate(_pending_requests_gate, [this, op, stream, buf = std::move(buf)] () mutable {
+            with_gate(_pending_requests_gate, [this, flags, op, stream, buf = std::move(buf)] () mutable {
                 auto bv = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
                 auto cpu = pick_request_cpu();
                 return smp::submit_to(cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state] () mutable {
                     return this->process_request_one(bv, op, stream, std::move(client_state)).then([] (auto&& response) {
                         return std::make_pair(make_foreign(response.first), response.second);
                     });
-                }).then([this] (auto&& response) {
+                }).then([this, flags] (auto&& response) {
                     _client_state.merge(response.second);
-                    return this->write_response(std::move(response.first));
+                    bool compression = flags & cql_frame_flags::compression;
+                    return this->write_response(std::move(response.first), compression);
                 }).then([buf = std::move(buf)] {
                     // Keep buf alive.
                 });
@@ -603,6 +602,40 @@ future<> cql_server::connection::process_request() {
           });
         });
     });
+}
+
+static inline bytes_view to_bytes_view(temporary_buffer<char>& b)
+{
+    using byte = bytes_view::value_type;
+    return bytes_view(reinterpret_cast<const byte*>(b.get()), b.size());
+}
+
+future<temporary_buffer<char>> cql_server::connection::read_and_decompress_frame(size_t length, uint8_t flags)
+{
+    if (flags & cql_frame_flags::compression) {
+        if (length < 4) {
+            throw std::runtime_error("Truncated frame");
+        }
+        return _read_buf.read_exactly(length).then([this] (temporary_buffer<char> buf) {
+            auto view = to_bytes_view(buf);
+            int32_t uncomp_len = read_int(view);
+            if (uncomp_len < 0) {
+                throw std::runtime_error("CQL frame uncompressed length is negative: " + std::to_string(uncomp_len));
+            }
+            buf.trim_front(4);
+            temporary_buffer<char> uncomp{size_t(uncomp_len)};
+            const char* input = buf.get();
+            size_t input_len = buf.size();
+            char *output = uncomp.get_write();
+            size_t output_len = uncomp_len;
+            auto ret = LZ4_decompress_safe(input, output, input_len, output_len);
+            if (ret < 0) {
+                throw std::runtime_error("CQL frame LZ4 uncompression failure");
+            }
+            return make_ready_future<temporary_buffer<char>>(std::move(uncomp));
+        });
+    }
+    return _read_buf.read_exactly(length);
 }
 
 unsigned cql_server::connection::pick_request_cpu()
@@ -892,7 +925,7 @@ shared_ptr<cql_server::response> cql_server::connection::make_supported(int16_t 
 {
     std::multimap<sstring, sstring> opts;
     opts.insert({"CQL_VERSION", cql3::query_processor::CQL_VERSION});
-    opts.insert({"COMPRESSION", "snappy"});
+    opts.insert({"COMPRESSION", "lz4"});
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::SUPPORTED);
     response->write_string_multimap(opts);
     return response;
@@ -992,11 +1025,11 @@ cql_server::connection::make_schema_change_event(const event::schema_change& eve
     return response;
 }
 
-future<> cql_server::connection::write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response)
+future<> cql_server::connection::write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response, bool compression)
 {
-    _ready_to_respond = _ready_to_respond.then([this, response = std::move(response)] () mutable {
-        return do_with(std::move(response), [this] (auto& response) {
-            return response->output(_write_buf, _version).then([this] {
+    _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response)] () mutable {
+        return do_with(std::move(response), [this, compression] (auto& response) {
+            return response->output(_write_buf, _version, compression).then([this] {
                 return _write_buf.flush();
             });
         });
@@ -1266,21 +1299,46 @@ bytes_view_opt cql_server::connection::read_value_view(bytes_view& buf) {
 scattered_message<char> cql_server::response::make_message(uint8_t version) {
     scattered_message<char> msg;
     sstring body{_body.data(), _body.size()};
-    sstring frame = make_frame(version, body.size());
+    sstring frame = make_frame(version, 0x00, body.size());
     msg.append(std::move(frame));
     msg.append(std::move(body));
     return msg;
 }
 
 future<>
-cql_server::response::output(output_stream<char>& out, uint8_t version) {
-    auto frame = make_frame(version, _body.size());
+cql_server::response::output(output_stream<char>& out, uint8_t version, bool compression) {
+    uint8_t flags = 0;
+    if (compression) {
+        flags |= cql_frame_flags::compression;
+        _body = compress(_body);
+    }
+    auto frame = make_frame(version, flags, _body.size());
     auto tmp = temporary_buffer<char>(frame.size());
     std::copy_n(frame.begin(), frame.size(), tmp.get_write());
     auto f = out.write(tmp.get(), tmp.size());
     return f.then([this, &out, tmp = std::move(tmp)] {
         return out.write(_body.data(), _body.size());
     });
+}
+
+std::vector<char> cql_server::response::compress(const std::vector<char>& body)
+{
+    const char* input = body.data();
+    size_t input_len = body.size();
+    std::vector<char> comp;
+    comp.resize(LZ4_COMPRESSBOUND(input_len) + 4);
+    char *output = comp.data();
+    output[0] = (input_len >> 24) & 0xFF;
+    output[1] = (input_len >> 16) & 0xFF;
+    output[2] = (input_len >> 8) & 0xFF;
+    output[3] = input_len & 0xFF;
+    auto ret = LZ4_compress(input, output + 4, input_len);
+    if (ret == 0) {
+        throw std::runtime_error("CQL frame LZ4 compression failure");
+    }
+    size_t output_len = ret + 4;
+    comp.resize(output_len);
+    return comp;
 }
 
 void cql_server::response::serialize(const event::schema_change& event, uint8_t version)
@@ -1311,7 +1369,7 @@ void cql_server::response::serialize(const event::schema_change& event, uint8_t 
     }
 }
 
-sstring cql_server::response::make_frame(uint8_t version, size_t length)
+sstring cql_server::response::make_frame(uint8_t version, uint8_t flags, size_t length)
 {
     switch (version) {
     case 0x01:
@@ -1319,7 +1377,7 @@ sstring cql_server::response::make_frame(uint8_t version, size_t length)
         sstring frame_buf(sstring::initialized_later(), sizeof(cql_binary_frame_v1));
         auto* frame = reinterpret_cast<cql_binary_frame_v1*>(frame_buf.begin());
         frame->version = version | 0x80;
-        frame->flags   = 0x00;
+        frame->flags   = flags;
         frame->stream  = _stream;
         frame->opcode  = static_cast<uint8_t>(_opcode);
         frame->length  = htonl(length);
@@ -1330,7 +1388,7 @@ sstring cql_server::response::make_frame(uint8_t version, size_t length)
         sstring frame_buf(sstring::initialized_later(), sizeof(cql_binary_frame_v3));
         auto* frame = reinterpret_cast<cql_binary_frame_v3*>(frame_buf.begin());
         frame->version = version | 0x80;
-        frame->flags   = 0x00;
+        frame->flags   = flags;
         frame->stream  = htons(_stream);
         frame->opcode  = static_cast<uint8_t>(_opcode);
         frame->length  = htonl(length);

@@ -43,6 +43,10 @@ class database;
 
 namespace transport {
 
+enum cql_frame_flags {
+    compression = 0x01,
+};
+
 struct [[gnu::packed]] cql_binary_frame_v1 {
     uint8_t  version;
     uint8_t  flags;
@@ -145,6 +149,7 @@ private:
         unsigned frame_size() const;
         unsigned pick_request_cpu();
         cql_binary_frame_v3 parse_frame(temporary_buffer<char> buf);
+        future<temporary_buffer<char>> read_and_decompress_frame(size_t length, uint8_t flags);
         future<std::experimental::optional<cql_binary_frame_v3>> read_frame();
         future<response_type> process_startup(uint16_t stream, bytes_view buf, service::client_state client_state);
         future<response_type> process_auth_response(uint16_t stream, bytes_view buf, service::client_state client_state);
@@ -171,7 +176,7 @@ private:
         shared_ptr<cql_server::response> make_auth_success(int16_t, bytes);
         shared_ptr<cql_server::response> make_auth_challenge(int16_t, bytes);
 
-        future<> write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response);
+        future<> write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response, bool compression = false);
 
         void check_room(bytes_view& buf, size_t n);
         void validate_utf8(sstring_view s);
