@@ -771,8 +771,8 @@ column_family::start() {
 
 future<>
 column_family::stop() {
-    _memtables->seal_active_memtable();
-    _streaming_memtables->seal_active_memtable();
+    seal_active_memtable();
+    seal_active_streaming_memtable();
     return _compaction_manager.remove(this).then([this] {
         // Nest, instead of using when_all, so we don't lose any exceptions.
         return _flush_queue->close().then([this] {
