@@ -1,15 +1,17 @@
 #!/usr/bin/env python
 import argparse
-import curses
+import threading
 import pprint
 import logging
 import collectd
 import metric
+import fake
 import livedata
 import views.simple
 import views.aggregate
 import userinput
 import signal
+import urwid
 
 
 def halt(* args):
@@ -26,24 +28,28 @@ def shell():
         logging.error('shell mode requires IPython to be installed')
 
 
-def main(screen, metricPatterns, interval, collectd):
-    curses.curs_set(0)
+def main(metricPatterns, interval, collectd):
+    aggregateView = views.aggregate.Aggregate()
+    simpleView = views.simple.Simple()
+    userInput = userinput.UserInput()
+    loop = urwid.MainLoop(aggregateView.widget(), unhandled_input=userInput)
+    userInput.setLoop(loop)
+    userInput.setMap(M=aggregateView, S=simpleView)
     liveData = livedata.LiveData(metricPatterns, interval, collectd)
-    simpleView = views.simple.Simple(screen)
-    aggregateView = views.aggregate.Aggregate(screen)
     liveData.addView(simpleView)
     liveData.addView(aggregateView)
-    aggregateView.onTop()
-    userinput.UserInput(liveData, screen, simpleView, aggregateView)
-    liveData.go()
+    liveDataThread = threading.Thread(target=lambda: liveData.go(loop))
+    liveDataThread.daemon = True
+    liveDataThread.start()
+    loop.run()
 
 if __name__ == '__main__':
     description = '\n'.join(['A top-like tool for scylladb collectd metrics.',
-                            'Keyborad shortcuts: S - simple view, M - aggregate over multiple cores, Q -quits',
-                            '',
-                            'You need to configure the unix-sock plugin for collectd'
-                            'before you can use this, use the --print-config option to give you a configuration example',
-                            'enjoy!'])
+                             'Keyborad shortcuts: S - simple view, M - aggregate over multiple cores, Q -quits',
+                             '',
+                             'You need to configure the unix-sock plugin for collectd'
+                             'before you can use this, use the --print-config option to give you a configuration example',
+                             'enjoy!'])
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument(
         '-v',
@@ -61,6 +67,7 @@ if __name__ == '__main__':
     parser.add_argument('-L', '--logfile', default='scyllatop.log',
                         help="specify path for log file")
     parser.add_argument('-S', '--shell', action='store_true', help="uses IPython to enter a debug shell, usefull for development")
+    parser.add_argument('-F', '--fake', action='store_true', help="fake metric updates - this is for developers only")
     arguments = parser.parse_args()
     stream_log = logging.StreamHandler()
     stream_log.setLevel(logging.ERROR)
@@ -77,6 +84,9 @@ if __name__ == '__main__':
     if arguments.print_config:
         print(collectd.COLLECTD_EXAMPLE_CONFIGURATION.format(socket=arguments.socket))
         quit()
+
+    if arguments.fake:
+        fake.fake()
     collectd = collectd.Collectd(arguments.socket)
     if arguments.shell:
         shell()
@@ -85,4 +95,4 @@ if __name__ == '__main__':
         pprint.pprint([m.symbol for m in metric.Metric.discover(collectd)])
         quit()
 
-    curses.wrapper(main, arguments.metricPattern, arguments.interval, collectd)
+    main(arguments.metricPattern, arguments.interval, collectd)

@@ -7,10 +7,9 @@ class Simple(base.Base):
     def update(self, liveData):
         self.clearScreen()
         self.writeStatusLine(liveData.measurements)
-        visible = liveData.measurements[:self.availableLines()]
-        tableForm = self._prepareTable(visible)
-        for index, row in enumerate(tableForm.rows()):
-            self.writeLine(row, index + 1)
+        tableForm = self._prepareTable(liveData.measurements)
+        for row in tableForm.rows():
+            self.writeLine(row)
         self.refresh()
 
     def _prepareTable(self, measurements):

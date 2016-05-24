@@ -4,7 +4,7 @@ Homepage: http://scylladb.com
 Section: database
 Priority: optional
 Standards-Version: 3.9.5
-Build-Depends: debhelper (>= 9), libyaml-cpp-dev, liblz4-dev, libsnappy-dev, libcrypto++-dev, libjsoncpp-dev, libaio-dev, libthrift-dev, thrift-compiler, antlr3, antlr3-c++-dev, ragel, ninja-build, git, libboost-program-options1.55-dev | libboost-program-options-dev, libboost-filesystem1.55-dev | libboost-filesystem-dev, libboost-system1.55-dev | libboost-system-dev, libboost-thread1.55-dev | libboost-thread-dev, libboost-test1.55-dev | libboost-test-dev, libgnutls28-dev, libhwloc-dev, libnuma-dev, libpciaccess-dev, xfslibs-dev, python3-pyparsing, libxml2-dev, libsctp-dev, @@BUILD_DEPENDS@@
+Build-Depends: debhelper (>= 9), libyaml-cpp-dev, liblz4-dev, libsnappy-dev, libcrypto++-dev, libjsoncpp-dev, libaio-dev, libthrift-dev, thrift-compiler, antlr3, antlr3-c++-dev, ragel, ninja-build, git, libboost-program-options1.55-dev | libboost-program-options-dev, libboost-filesystem1.55-dev | libboost-filesystem-dev, libboost-system1.55-dev | libboost-system-dev, libboost-thread1.55-dev | libboost-thread-dev, libboost-test1.55-dev | libboost-test-dev, libgnutls28-dev, libhwloc-dev, libnuma-dev, libpciaccess-dev, xfslibs-dev, python3-pyparsing, libxml2-dev, libsctp-dev, python-urwid, @@BUILD_DEPENDS@@
 
 Package: scylla-conf
 Architecture: any
@@ -16,7 +16,7 @@ Conflicts: scylla-server (<< 1.1)
 
 Package: scylla-server
 Architecture: amd64
-Depends: ${shlibs:Depends}, ${misc:Depends}, adduser, hwloc-nox, collectd, scylla-conf, python-yaml, @@DEPENDS@@
+Depends: ${shlibs:Depends}, ${misc:Depends}, adduser, hwloc-nox, collectd, scylla-conf, python-yaml, python-urwid, @@DEPENDS@@
 Description: Scylla database server binaries 
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.

@@ -9,10 +9,10 @@ class Aggregate(base.Base):
         self.clearScreen()
         self.writeStatusLine(liveData.measurements)
         metricGroups = groups.Groups(liveData.measurements)
-        visible = metricGroups.all()[:self.availableLines()]
+        visible = metricGroups.all()
         tableForm = self._prepareTable(visible)
-        for index, row in enumerate(tableForm.rows()):
-            self.writeLine(row, index + 1)
+        for row in tableForm.rows():
+            self.writeLine(row)
 
         self.refresh()
 
@@ -22,7 +22,7 @@ class Aggregate(base.Base):
         result = table.Table('lr')
         for group in groups:
             formatted = 'avg[{0}] tot[{1}]'.format(
-                helpers.formatValues(group.aggregate(mean)), 
+                helpers.formatValues(group.aggregate(mean)),
                 helpers.formatValues(group.aggregate(_sum)))
             result.add(self._label(group), formatted)
         return result

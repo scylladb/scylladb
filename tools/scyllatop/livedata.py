@@ -44,7 +44,7 @@ class LiveData(object):
                 return True
         return False
 
-    def go(self):
+    def go(self, mainLoop):
         while not self._stop:
             for metric in self._measurements:
                 self._update(metric)
@@ -52,6 +52,7 @@ class LiveData(object):
             for view in self._views:
                 view.update(self)
             time.sleep(self._interval)
+            mainLoop.draw_screen()
 
     def _update(self, metric):
         try:

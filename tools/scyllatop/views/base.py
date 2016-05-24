@@ -1,48 +1,31 @@
 import time
-import curses
-import curses.panel
-import logging
+import urwid
 
 
 class Base(object):
-    def __init__(self, window):
-        lines, columns = window.getmaxyx()
-        self._window = curses.newwin(lines, columns)
-        self._panel = curses.panel.new_panel(self._window)
+    def __init__(self):
+        self._items = []
+        self._widgets = {}
+        self._box = urwid.ListBox(urwid.SimpleFocusListWalker([]))
+
+    def widget(self):
+        return self._box
 
     def writeStatusLine(self, measurements):
-        line = 'time: {0}| {1} measurements, at most {2} visible'.format(time.asctime(), len(measurements), self.availableLines())
-        columns = self.dimensions()['columns']
-        line = line[:columns]
-        self._window.addstr(0, 0, line.ljust(columns), curses.A_REVERSE)
-
-    def availableLines(self):
-        STATUS_LINE = 1
-        return self.dimensions()['lines'] - STATUS_LINE
+        line = '*** time: {0}| {1} measurements ***'.format(time.asctime(), len(measurements))
+        self._items = [line]
 
     def refresh(self):
-        curses.panel.update_panels()
-        curses.doupdate()
-
-    def onTop(self):
-        logging.info('put {0} view on top'.format(self.__class__.__name__))
-        self._panel.top()
-        curses.panel.update_panels()
-        curses.doupdate()
+        for i, text in enumerate(self._items):
+            if i not in self._widgets:
+                self._widgets[i] = urwid.Button(text)
+                self._box.body.append(self._widgets[i])
+            else:
+                self._widgets[i].set_label(text)
 
     def clearScreen(self):
-        self._window.erase()
-        self._window.move(0, 0)
+        self._items = []
+        return
 
-    def writeLine(self, thing, line):
-        columns = self.dimensions()['columns']
-        lines = self.dimensions()['lines']
-        if line == lines - 1:
-            output = str(thing)[:columns - 1]
-        else:
-            output = str(thing)
-        self._window.addstr(line, 0, output)
-
-    def dimensions(self):
-        lines, columns = self._window.getmaxyx()
-        return {'lines': lines, 'columns': columns}
+    def writeLine(self, thing):
+        self._items.append(str(thing))
