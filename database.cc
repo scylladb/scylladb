@@ -1001,6 +1001,10 @@ column_family::load_new_sstables(std::vector<sstables::entry_descriptor> new_tab
             }
             return make_ready_future<>();
         });
+    }).then([this] {
+        // Drop entire cache for this column family because it may be populated
+        // with stale data.
+        get_row_cache().clear();
     });
 }
 
