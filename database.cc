@@ -1837,7 +1837,7 @@ column_family::query(schema_ptr s, const query::read_command& cmd, query::result
         }).finally([lc, this]() mutable {
         _stats.reads.mark(lc);
         if (lc.is_start()) {
-            _stats.estimated_read.add(lc.latency(), _stats.reads.count);
+            _stats.estimated_read.add(lc.latency(), _stats.reads.hist.count);
         }
         });
     }
@@ -1941,7 +1941,7 @@ column_family::apply(const mutation& m, const db::replay_position& rp) {
     _memtables->seal_on_overflow();
     _stats.writes.mark(lc);
     if (lc.is_start()) {
-        _stats.estimated_write.add(lc.latency(), _stats.writes.count);
+        _stats.estimated_write.add(lc.latency(), _stats.writes.hist.count);
     }
 }
 
@@ -1954,7 +1954,7 @@ column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const
     _memtables->seal_on_overflow();
     _stats.writes.mark(lc);
     if (lc.is_start()) {
-        _stats.estimated_write.add(lc.latency(), _stats.writes.count);
+        _stats.estimated_write.add(lc.latency(), _stats.writes.hist.count);
     }
 }
 

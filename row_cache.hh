@@ -32,6 +32,7 @@
 #include "utils/logalloc.hh"
 #include "key_reader.hh"
 #include "utils/phased_barrier.hh"
+#include "utils/histogram.hh"
 
 namespace scollectd {
 
@@ -172,8 +173,8 @@ public:
     friend class populating_reader;
 public:
     struct stats {
-        uint64_t hits;
-        uint64_t misses;
+        utils::timed_rate_moving_average hits;
+        utils::timed_rate_moving_average misses;
     };
 private:
     cache_tracker& _tracker;

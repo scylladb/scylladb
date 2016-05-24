@@ -488,6 +488,36 @@
       ]
     },
     {
+      "path": "/cache_service/metrics/row/hits_moving_avrage",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get row hits moving avrage",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_row_hits_moving_avrage",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/row/requests_moving_avrage",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get row requests moving avrage",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_row_requests_moving_avrage",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
       "path": "/cache_service/metrics/row/size",
       "operations": [
         {

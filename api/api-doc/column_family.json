@@ -1094,7 +1094,7 @@
                "method":"GET",
                "summary":"Get read latency histogram",
                "$ref": "#/utils/histogram",
-               "nickname":"get_read_latency_histogram",
+               "nickname":"get_read_latency_histogram_depricated",
                "produces":[
                   "application/json"
                ],
@@ -1120,6 +1120,49 @@
                "type":"array",
                "items":{
                   "$ref": "#/utils/histogram"
+               },
+               "nickname":"get_all_read_latency_histogram_depricated",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/read_latency/moving_average_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get read latency moving avrage histogram",
+               "$ref": "#/utils/rate_moving_average_and_histogram",
+               "nickname":"get_read_latency_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keysspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/read_latency/moving_average_histogram/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get read latency moving avrage histogram from all column family",
+               "type":"array",
+               "items":{
+                  "$ref": "#/utils/rate_moving_average_and_histogram"
                },
                "nickname":"get_all_read_latency_histogram",
                "produces":[
@@ -1260,7 +1303,7 @@
                "method":"GET",
                "summary":"Get write latency histogram",
                "$ref": "#/utils/histogram",
-               "nickname":"get_write_latency_histogram",
+               "nickname":"get_write_latency_histogram_depricated",
                "produces":[
                   "application/json"
                ],
@@ -1286,6 +1329,49 @@
                "type":"array",
                "items":{
                   "$ref": "#/utils/histogram"
+               },
+               "nickname":"get_all_write_latency_histogram_depricated",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/write_latency/moving_average_histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get write latency moving average histogram",
+               "$ref": "#/utils/rate_moving_average_and_histogram",
+               "nickname":"get_write_latency_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keysspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/write_latency/moving_average_histogram/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get write latency moving average histogram of all column family",
+               "type":"array",
+               "items":{
+                  "$ref": "#/utils/rate_moving_average_and_histogram"
                },
                "nickname":"get_all_write_latency_histogram",
                "produces":[

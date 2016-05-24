@@ -188,12 +188,12 @@ public:
 };
 
 void row_cache::on_hit() {
-    ++_stats.hits;
+    _stats.hits.mark();
     _tracker.on_hit();
 }
 
 void row_cache::on_miss() {
-    ++_stats.misses;
+    _stats.misses.mark();
     _tracker.on_miss();
 }
 

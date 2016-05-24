@@ -111,12 +111,12 @@ public:
     };
 
     struct stats {
-        uint64_t read_timeouts = 0;
-        uint64_t read_unavailables = 0;
-        uint64_t range_slice_timeouts = 0;
-        uint64_t range_slice_unavailables = 0;
-        uint64_t write_timeouts = 0;
-        uint64_t write_unavailables = 0;
+        utils::timed_rate_moving_average read_timeouts;
+        utils::timed_rate_moving_average read_unavailables;
+        utils::timed_rate_moving_average range_slice_timeouts;
+        utils::timed_rate_moving_average range_slice_unavailables;
+        utils::timed_rate_moving_average write_timeouts;
+        utils::timed_rate_moving_average write_unavailables;
 
         // total write attempts
         split_stats writes_attempts;
@@ -136,9 +136,9 @@ public:
         uint64_t forwarded_mutations = 0;
         uint64_t forwarding_errors = 0;
 
-        utils::ihistogram read;
-        utils::ihistogram write;
-        utils::ihistogram range;
+        utils::timed_rate_moving_average_and_histogram read;
+        utils::timed_rate_moving_average_and_histogram write;
+        utils::timed_rate_moving_average_and_histogram range;
         sstables::estimated_histogram estimated_read;
         sstables::estimated_histogram estimated_write;
         sstables::estimated_histogram estimated_range;

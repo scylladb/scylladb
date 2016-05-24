@@ -717,13 +717,43 @@
       ]
     },
     {
+      "path": "/storage_proxy/metrics/read/timeouts_rates",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get read metrics rates",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_read_metrics_timeouts_rates",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/read/unavailables_rates",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get read metrics rates",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_read_metrics_unavailables_rates",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
       "path": "/storage_proxy/metrics/read/histogram",
       "operations": [
         {
           "method": "GET",
           "summary": "Get read metrics",
           "$ref": "#/utils/histogram",
-          "nickname": "get_read_metrics_latency_histogram",
+          "nickname": "get_read_metrics_latency_histogram_depricated",
           "produces": [
             "application/json"
           ],
@@ -738,6 +768,36 @@
           "method": "GET",
           "summary": "Get range metrics",
           "$ref": "#/utils/histogram",
+          "nickname": "get_range_metrics_latency_histogram_depricated",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/read/moving_avrage_histogram",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get read metrics",
+          "$ref": "#/utils/rate_moving_average_and_histogram",
+          "nickname": "get_read_metrics_latency_histogram",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/range/moving_avrage_histogram",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get range metrics rate and histogram",
+          "$ref": "#/utils/rate_moving_average_and_histogram",
           "nickname": "get_range_metrics_latency_histogram",
           "produces": [
             "application/json"
@@ -777,6 +837,36 @@
       ]
     },
     {
+      "path": "/storage_proxy/metrics/range/timeouts_rates",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get range metrics rates",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_range_metrics_timeouts_rates",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/range/unavailables_rates",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get range metrics rates",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_range_metrics_unavailables_rates",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
       "path": "/storage_proxy/metrics/write/timeouts",
       "operations": [
         {
@@ -807,12 +897,57 @@
       ]
     },
     {
+      "path": "/storage_proxy/metrics/write/timeouts_rates",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get write metrics rates",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_write_metrics_timeouts_rates",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/write/unavailables_rates",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get write metrics rates",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_write_metrics_unavailables_rates",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
       "path": "/storage_proxy/metrics/write/histogram",
       "operations": [
         {
           "method": "GET",
           "summary": "Get write metrics",
           "$ref": "#/utils/histogram",
+          "nickname": "get_write_metrics_latency_histogram_depricated",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/write/moving_avrage_histogram",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get write metrics",
+          "$ref": "#/utils/rate_moving_average_and_histogram",
           "nickname": "get_write_metrics_latency_histogram",
           "produces": [
             "application/json"
