@@ -1373,7 +1373,7 @@ row::row() {
     new (&_storage.vector) vector_storage;
 }
 
-row::row(row&& other)
+row::row(row&& other) noexcept
     : _type(other._type), _size(other._size) {
     if (_type == storage_type::vector) {
         new (&_storage.vector) vector_storage(std::move(other._storage.vector));
@@ -1382,7 +1382,7 @@ row::row(row&& other)
     }
 }
 
-row& row::operator=(row&& other) {
+row& row::operator=(row&& other) noexcept {
     if (this != &other) {
         this->~row();
         new (this) row(std::move(other));
@@ -1403,6 +1403,34 @@ void row::apply_reversibly(const schema& s, column_kind kind, row& other) {
         apply_reversibly(s.column_at(kind, id), cell);
     }, [&] (column_id id, atomic_cell_or_collection& cell) noexcept {
         revert(s.column_at(kind, id), cell);
+    });
+}
+
+void row::apply(const schema& s, column_kind kind, const row& other) {
+    if (other.empty()) {
+        return;
+    }
+    if (other._type == storage_type::vector) {
+        reserve(other._storage.vector.v.size() - 1);
+    } else {
+        reserve(other._storage.set.rbegin()->id());
+    }
+    other.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+        apply(s.column_at(kind, id), cell);
+    });
+}
+
+void row::apply(const schema& s, column_kind kind, row&& other) {
+    if (other.empty()) {
+        return;
+    }
+    if (other._type == storage_type::vector) {
+        reserve(other._storage.vector.v.size() - 1);
+    } else {
+        reserve(other._storage.set.rbegin()->id());
+    }
+    other.for_each_cell([&] (column_id id, atomic_cell_or_collection& cell) {
+        apply(s.column_at(kind, id), std::move(cell));
     });
 }
 

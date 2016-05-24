@@ -117,8 +117,8 @@ public:
     row();
     ~row();
     row(const row&);
-    row(row&& other);
-    row& operator=(row&& other);
+    row(row&& other) noexcept;
+    row& operator=(row&& other) noexcept;
     size_t size() const { return _size; }
     bool empty() const { return _size == 0; }
 
@@ -242,6 +242,9 @@ public:
 
     // Adds cell to the row. The column must not be already set.
     void append_cell(column_id id, atomic_cell_or_collection cell);
+
+    void apply(const schema&, column_kind, const row& src);
+    void apply(const schema&, column_kind, row&& src);
 
     // See reversibly_mergeable.hh
     void apply_reversibly(const schema&, column_kind, row& src);
