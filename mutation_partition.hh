@@ -529,8 +529,8 @@ template<typename T>
 class serializer;
 }
 
-
 class mutation_partition final {
+public:
     // FIXME: using boost::intrusive because gcc's std::set<> does not support heterogeneous lookup yet
     using rows_type = boost::intrusive::set<rows_entry,
         boost::intrusive::member_hook<rows_entry, boost::intrusive::set_member_hook<>, &rows_entry::_link>,
