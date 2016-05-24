@@ -183,12 +183,18 @@ cql_load_balance parse_load_balance(sstring value)
 class cql_server::response {
     int16_t           _stream;
     cql_binary_opcode _opcode;
+    std::experimental::optional<utils::UUID> _tracing_id;
     std::vector<char> _body;
 public:
     response(int16_t stream, cql_binary_opcode opcode)
         : _stream{stream}
         , _opcode{opcode}
     { }
+
+    void set_tracing_id(const utils::UUID& id) {
+        _tracing_id = id;
+    }
+
     scattered_message<char> make_message(uint8_t version);
     void serialize(const event::schema_change& event, uint8_t version);
     void write_byte(uint8_t b);
@@ -220,13 +226,27 @@ private:
 
     template <typename CqlFrameHeaderType>
     sstring make_frame_one(uint8_t version, uint8_t flags, size_t length) {
-        sstring frame_buf(sstring::initialized_later(), sizeof(CqlFrameHeaderType));
+        size_t extra_len = 0;
+
+        // If tracing was requested the response should contain a "tracing
+        // session ID" which is a 16 bytes UUID.
+        if (_tracing_id) {
+            extra_len += 16;
+            flags |= cql_frame_flags::tracing;
+        }
+
+        sstring frame_buf(sstring::initialized_later(), sizeof(CqlFrameHeaderType) + extra_len);
         auto* frame = reinterpret_cast<CqlFrameHeaderType*>(frame_buf.begin());
         frame->version = version | 0x80;
         frame->flags   = flags;
         frame->opcode  = static_cast<uint8_t>(_opcode);
-        frame->length  = htonl(length);
+        frame->length  = htonl(length + extra_len);
         frame->stream = net::hton((decltype(frame->stream))_stream);
+
+        // Tracing session ID should be the first thing in the responce "body".
+        if (_tracing_id) {
+            std::memcpy(frame_buf.data() + sizeof(CqlFrameHeaderType), _tracing_id->to_bytes().data(), 16);
+        }
 
         return frame_buf;
     }

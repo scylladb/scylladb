@@ -45,6 +45,7 @@ namespace transport {
 
 enum cql_frame_flags {
     compression = 0x01,
+    tracing     = 0x02,
 };
 
 struct [[gnu::packed]] cql_binary_frame_v1 {
