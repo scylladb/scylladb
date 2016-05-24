@@ -477,21 +477,9 @@ SEASTAR_TEST_CASE(compact_storage_dense_read) {
 //
 // Make sure we don't regress on that.
 SEASTAR_TEST_CASE(broken_ranges_collection) {
-    class sstable_range_wrapping_reader final : public ::mutation_reader::impl {
-        sstable_ptr _sst;
-        sstables::mutation_reader _smr;
-    public:
-        sstable_range_wrapping_reader(sstable_ptr sst, schema_ptr s)
-                : _sst(sst)
-                , _smr(sst->read_rows(std::move(s))) {}
-        virtual future<mutation_opt> operator()() override {
-            return _smr.read();
-        }
-    };
-
     return reusable_sst("tests/sstables/broken_ranges", 2).then([] (auto sstp) {
         auto s = peers_schema();
-        auto reader = make_lw_shared<::mutation_reader>(make_mutation_reader<sstable_range_wrapping_reader>(sstp, s));
+        auto reader = make_lw_shared<::mutation_reader>(as_mutation_reader(sstp, sstp->read_rows(s)));
         return repeat([s, reader] {
             return (*reader)().then([s, reader] (mutation_opt mut) {
                 auto key_equal = [s, &mut] (sstring ip) {
