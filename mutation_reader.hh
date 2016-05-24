@@ -77,13 +77,9 @@ make_mutation_reader(Args&&... args) {
 mutation_reader make_combined_reader(std::vector<mutation_reader>);
 mutation_reader make_combined_reader(mutation_reader&& a, mutation_reader&& b);
 // reads from the input readers, in order
-mutation_reader make_joining_reader(std::vector<mutation_reader> readers);
 mutation_reader make_reader_returning(mutation);
 mutation_reader make_reader_returning_many(std::vector<mutation>);
 mutation_reader make_empty_reader();
-// Returns a reader that is lazily constructed on the first call.  Useful
-// when creating the reader involves disk I/O or a shard call
-mutation_reader make_lazy_reader(std::function<mutation_reader ()> make_reader);
 
 template <typename MutationFilter>
 class filtering_reader : public mutation_reader::impl {

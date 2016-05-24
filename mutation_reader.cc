@@ -109,30 +109,6 @@ make_combined_reader(std::vector<mutation_reader> readers) {
     return make_mutation_reader<combined_reader>(std::move(readers));
 }
 
-class joining_reader final : public mutation_reader::impl {
-    std::vector<mutation_reader> _readers;
-    std::vector<mutation_reader>::iterator _current;
-public:
-    joining_reader(std::vector<mutation_reader> readers)
-            : _readers(std::move(readers))
-            , _current(_readers.begin()) {
-    }
-    joining_reader(joining_reader&&) = default;
-    virtual future<mutation_opt> operator()() override {
-        if (_current == _readers.end()) {
-            return make_ready_future<mutation_opt>(stdx::nullopt);
-        }
-        return (*_current)().then([this] (mutation_opt m) {
-            if (!m) {
-                ++_current;
-                return operator()();
-            } else {
-                return make_ready_future<mutation_opt>(std::move(m));
-            }
-        });
-    }
-};
-
 mutation_reader
 make_combined_reader(mutation_reader&& a, mutation_reader&& b) {
     std::vector<mutation_reader> v;
@@ -140,31 +116,6 @@ make_combined_reader(mutation_reader&& a, mutation_reader&& b) {
     v.push_back(std::move(a));
     v.push_back(std::move(b));
     return make_combined_reader(std::move(v));
-}
-
-mutation_reader
-make_joining_reader(std::vector<mutation_reader> readers) {
-    return make_mutation_reader<joining_reader>(std::move(readers));
-}
-
-class lazy_reader final : public mutation_reader::impl {
-    std::function<mutation_reader ()> _make_reader;
-    stdx::optional<mutation_reader> _reader;
-public:
-    lazy_reader(std::function<mutation_reader ()> make_reader)
-            : _make_reader(std::move(make_reader)) {
-    }
-    virtual future<mutation_opt> operator()() override {
-        if (!_reader) {
-            _reader = _make_reader();
-        }
-        return (*_reader)();
-    }
-};
-
-mutation_reader
-make_lazy_reader(std::function<mutation_reader ()> make_reader) {
-    return make_mutation_reader<lazy_reader>(std::move(make_reader));
 }
 
 class reader_returning final : public mutation_reader::impl {
