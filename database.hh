@@ -490,6 +490,17 @@ public:
         return std::chrono::steady_clock::now() - _sstable_writes_disabled_at;
     }
 
+    // This function will iterate through upload directory in column family,
+    // and will do the following for each sstable found:
+    // 1) Mutate sstable level to 0.
+    // 2) Create hard links to its components in column family dir.
+    // 3) Remove all of its components in upload directory.
+    // At the end, it's expected that upload dir is empty and all of its
+    // previous content was moved to column family dir.
+    //
+    // Return a vector containing descriptor of sstables to be loaded.
+    future<std::vector<sstables::entry_descriptor>> flush_upload_dir();
+
     // Make sure the generation numbers are sequential, starting from "start".
     // Generations before "start" are left untouched.
     //

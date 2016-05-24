@@ -783,6 +783,51 @@ column_family::stop() {
     });
 }
 
+future<std::vector<sstables::entry_descriptor>> column_family::flush_upload_dir() {
+    struct work {
+        sstable_list sstables;
+        std::unordered_map<int64_t, sstables::entry_descriptor> descriptors;
+        std::vector<sstables::entry_descriptor> flushed;
+    };
+
+    return do_with(work(), [this] (work& work) {
+        return lister::scan_dir(_config.datadir + "/upload/", { directory_entry_type::regular },
+                [this, &work] (directory_entry de) {
+            auto comps = sstables::entry_descriptor::make_descriptor(de.name);
+            if (comps.component != sstables::sstable::component_type::TOC) {
+                return make_ready_future<>();
+            }
+            auto sst = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(),
+                                                        _config.datadir + "/upload", comps.generation,
+                                                        comps.version, comps.format);
+            work.sstables.emplace(comps.generation, std::move(sst));
+            work.descriptors.emplace(comps.generation, std::move(comps));
+            return make_ready_future<>();
+        }, &manifest_json_filter).then([this, &work] {
+            work.flushed.reserve(work.descriptors.size());
+
+            return do_for_each(work.sstables, [this, &work] (auto& pair) {
+                auto gen = this->calculate_generation_for_new_table();
+                auto& sst = pair.second;
+
+                auto&& comps = std::move(work.descriptors.at(pair.first));
+                comps.generation = gen;
+                work.flushed.push_back(std::move(comps));
+
+                // Read toc content as it will be needed for moving and deleting a sstable.
+                return sst->read_toc().then([&sst] {
+                    return sst->mutate_sstable_level(0);
+                }).then([this, &sst, gen] {
+                    return sst->create_links(_config.datadir, gen);
+                }).then([&sst] {
+                    return sstables::remove_by_toc_name(sst->toc_filename());
+                });
+            });
+        }).then([&work] {
+            return make_ready_future<std::vector<sstables::entry_descriptor>>(std::move(work.flushed));
+        });
+    });
+}
 
 future<std::vector<sstables::entry_descriptor>>
 column_family::reshuffle_sstables(std::set<int64_t> all_generations, int64_t start) {
@@ -1126,7 +1171,12 @@ future<> column_family::populate(sstring sstdir) {
     return do_with(std::vector<future<>>(), [this, sstdir, verifier, descriptor] (std::vector<future<>>& futures) {
         return lister::scan_dir(sstdir, { directory_entry_type::regular }, [this, sstdir, verifier, descriptor, &futures] (directory_entry de) {
             // FIXME: The secondary indexes are in this level, but with a directory type, (starting with ".")
-            auto f = probe_file(sstdir, de.name).then([verifier, descriptor] (auto entry) {
+            auto f = probe_file(sstdir, de.name).then([verifier, descriptor, sstdir] (auto entry) {
+                if (entry.component == sstables::sstable::component_type::TemporaryStatistics) {
+                    return remove_file(sstables::sstable::filename(sstdir, entry.ks, entry.cf, entry.version, entry.generation,
+                        entry.format, sstables::sstable::component_type::TemporaryStatistics));
+                }
+
                 if (verifier->count(entry.generation)) {
                     if (verifier->at(entry.generation) == status::has_toc_file) {
                         if (entry.component == sstables::sstable::component_type::TOC) {
@@ -1156,6 +1206,7 @@ future<> column_family::populate(sstring sstdir) {
                 if (!descriptor->format) {
                     descriptor->format = entry.format;
                 }
+                return make_ready_future<>();
             });
 
             // push future returned by probe_file into an array of futures,
@@ -1665,7 +1716,11 @@ keyspace::column_family_directory(const sstring& name, utils::UUID uuid) const {
 
 future<>
 keyspace::make_directory_for_column_family(const sstring& name, utils::UUID uuid) {
-    return io_check(touch_directory, column_family_directory(name, uuid));
+    auto cfdir = column_family_directory(name, uuid);
+    return seastar::async([cfdir = std::move(cfdir)] {
+        io_check(touch_directory, cfdir).get();
+        io_check(touch_directory, cfdir + "/upload").get();
+    });
 }
 
 no_such_keyspace::no_such_keyspace(const sstring& ks_name)

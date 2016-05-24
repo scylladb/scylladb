@@ -124,6 +124,7 @@ public:
         Filter,
         Statistics,
         TemporaryTOC,
+        TemporaryStatistics,
     };
     enum class version_types { ka, la };
     enum class format_types { big };
@@ -415,6 +416,9 @@ private:
 
     future<> read_statistics(const io_priority_class& pc);
     void write_statistics(const io_priority_class& pc);
+    // Rewrite statistics component by creating a temporary Statistics and
+    // renaming it into place of existing one.
+    void rewrite_statistics(const io_priority_class& pc);
 
     future<> create_data();
 
@@ -635,5 +639,8 @@ public:
 // Cancel any deletions scheduled by delete_atomically() and make their
 // futures complete (with an atomic_deletion_cancelled exception).
 void cancel_atomic_deletions();
+
+// Read toc content and delete all components found in it.
+future<> remove_by_toc_name(sstring sstable_toc_name);
 
 }

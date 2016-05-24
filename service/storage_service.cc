@@ -2604,6 +2604,20 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
             return make_ready_future<std::vector<sstables::entry_descriptor>>(std::move(new_tables));
         });
     }).then([this, ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables) {
+        auto shard = std::hash<sstring>()(cf_name) % smp::count;
+        return _db.invoke_on(shard, [ks_name, cf_name] (database& db) {
+            auto& cf = db.find_column_family(ks_name, cf_name);
+            return cf.flush_upload_dir();
+        }).then([new_tables = std::move(new_tables), ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables_from_upload) mutable {
+            if (new_tables_from_upload.empty()) {
+                logger.info("No new SSTables were found for {}.{} in upload directory", ks_name, cf_name);
+            } else {
+                // merge new sstables found in both column family and upload directories.
+                new_tables.insert(new_tables.end(), new_tables_from_upload.begin(), new_tables_from_upload.end());
+            }
+            return make_ready_future<std::vector<sstables::entry_descriptor>>(std::move(new_tables));
+        });
+    }).then([this, ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables) {
         return _db.invoke_on_all([ks_name = std::move(ks_name), cf_name = std::move(cf_name), new_tables = std::move(new_tables)] (database& db) {
             auto& cf = db.find_column_family(ks_name, cf_name);
             return cf.load_new_sstables(new_tables).then([ks_name = std::move(ks_name), cf_name = std::move(cf_name)] {
