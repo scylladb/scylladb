@@ -536,3 +536,6 @@ auto consume(streamed_mutation& m, Consumer consumer) {
 class mutation;
 
 streamed_mutation streamed_mutation_from_mutation(mutation);
+
+//Requires all streamed_mutations to have the same schema.
+streamed_mutation merge_mutations(std::vector<streamed_mutation>);
