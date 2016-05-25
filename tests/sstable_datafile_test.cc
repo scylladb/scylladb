@@ -2518,3 +2518,94 @@ SEASTAR_TEST_CASE(test_sliced_mutation_reads) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
+    // create table wrong_range_tombstone_order (
+    //        p int,
+    //        a int,
+    //        b int,
+    //        c int,
+    //        r int,
+    //        primary key (p,a,b,c)
+    // ) with compact storage;
+    //
+    // delete from wrong_range_tombstone_order where p = 0 and a = 0;
+    // insert into wrong_range_tombstone_order (p,a,r) values (0,1,1);
+    // insert into wrong_range_tombstone_order (p,a,b,r) values (0,1,1,2);
+    // insert into wrong_range_tombstone_order (p,a,b,r) values (0,1,2,3);
+    // insert into wrong_range_tombstone_order (p,a,b,c,r) values (0,1,2,3,4);
+    // delete from wrong_range_tombstone_order where p = 0 and a = 1 and b = 3;
+    // insert into wrong_range_tombstone_order (p,a,b,r) values (0,1,3,5);
+    // insert into wrong_range_tombstone_order (p,a,b,c,r) values (0,1,3,4,6);
+    // insert into wrong_range_tombstone_order (p,a,b,r) values (0,1,4,7);
+    // delete from wrong_range_tombstone_order where p = 0 and a = 1 and b = 4 and c = 0;
+    // delete from wrong_range_tombstone_order where p = 0 and a = 2;
+    // delete from wrong_range_tombstone_order where p = 0 and a = 2 and b = 1;
+    // delete from wrong_range_tombstone_order where p = 0 and a = 2 and b = 2;
+
+    return seastar::async([] {
+        auto s = schema_builder("ks", "wrong_range_tombstone_order")
+            .with(schema_builder::compact_storage::yes)
+            .with_column("p", int32_type, column_kind::partition_key)
+            .with_column("a", int32_type, column_kind::clustering_key)
+            .with_column("b", int32_type, column_kind::clustering_key)
+            .with_column("c", int32_type, column_kind::clustering_key)
+            .with_column("r", int32_type)
+            .build();
+        clustering_key::equality ck_eq(*s);
+
+        auto sst = make_lw_shared<sstable>("ks", "wrong_range_tombstone_order", "tests/sstables/wrong_range_tombstone_order", 1, sstables::sstable::version_types::ka, big);
+        sst->load().get0();
+        auto reader = sstable_reader(sst, s);
+
+        auto smopt = reader().get0();
+        BOOST_REQUIRE(smopt);
+        auto& sm = *smopt;
+        
+        using kind = mutation_fragment::kind;
+        auto then_expect = [&] (kind k, std::vector<int> ck_elems) {
+            std::vector<bytes> ck_bytes;
+            for (auto&& e : ck_elems) {
+                ck_bytes.emplace_back(int32_type->decompose(e));
+            }
+            auto ck = clustering_key_prefix::from_exploded(*s, std::move(ck_bytes));
+
+            auto mfopt = sm().get0();
+            BOOST_REQUIRE(mfopt);
+            if (mfopt->mutation_fragment_kind() != k) {
+                abort();
+            }
+            BOOST_REQUIRE(mfopt->mutation_fragment_kind() == k);
+            BOOST_REQUIRE(ck_eq(mfopt->key(), ck));
+        };
+
+        then_expect(kind::range_tombstone_begin, { 0 });
+        then_expect(kind::range_tombstone_end, { 0 });
+        then_expect(kind::clustering_row, { 1 });
+        then_expect(kind::clustering_row, { 1, 1 });
+        then_expect(kind::clustering_row, { 1, 2 });
+        then_expect(kind::clustering_row, { 1, 2, 3 });
+        then_expect(kind::range_tombstone_begin, { 1, 3 });
+        then_expect(kind::clustering_row, { 1, 3 });
+        then_expect(kind::clustering_row, { 1, 3, 4 });
+        then_expect(kind::range_tombstone_end, { 1, 3 });
+        then_expect(kind::clustering_row, { 1, 4 });
+        then_expect(kind::clustering_row, { 1, 4, 0 });
+        then_expect(kind::range_tombstone_begin, { 2 });
+        then_expect(kind::range_tombstone_end, { 2, 1 });
+        then_expect(kind::range_tombstone_begin, { 2, 1 });
+        then_expect(kind::range_tombstone_end, { 2, 1 });
+        then_expect(kind::range_tombstone_begin, { 2, 1 });
+        then_expect(kind::range_tombstone_end, { 2, 2 });
+        then_expect(kind::range_tombstone_begin, { 2, 2 });
+        then_expect(kind::range_tombstone_end, { 2, 2 });
+        then_expect(kind::range_tombstone_begin, { 2, 2 });
+        then_expect(kind::range_tombstone_end, { 2 });
+
+        auto mfopt = sm().get0();
+        BOOST_REQUIRE(!mfopt);
+
+        smopt = reader().get0();
+        BOOST_REQUIRE(!smopt);
+    });
+}
