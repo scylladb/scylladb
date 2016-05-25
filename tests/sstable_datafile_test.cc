@@ -39,6 +39,7 @@
 #include "tmpdir.hh"
 #include "dht/i_partitioner.hh"
 #include "range.hh"
+#include "partition_slice_builder.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -2376,5 +2377,128 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
                 });
             }).then([cm, cf] {});
         }).then([sst, mt, s] {});
+    });
+}
+
+void test_sliced_read_row_presence(shared_sstable sst, schema_ptr s, const query::partition_slice& ps,
+    std::vector<std::pair<partition_key, std::vector<clustering_key>>> expected)
+{
+    auto ck_filtering = query::clustering_key_filtering_context::create(s, ps);
+    auto reader = make_mutation_reader<test_mutation_reader>(sst,
+                    sst->read_range_rows(s, query::full_partition_range, std::move(ck_filtering)));
+
+    partition_key::equality pk_eq(*s);
+    clustering_key::equality ck_eq(*s);
+
+    auto smopt = reader().get0();
+    while (smopt) {
+        auto it = std::find_if(expected.begin(), expected.end(), [&] (auto&& x) {
+            return pk_eq(x.first, smopt->key());
+        });
+        BOOST_REQUIRE(it != expected.end());
+        auto expected_cr = std::move(it->second);
+        expected.erase(it);
+
+        auto mfopt = (*smopt)().get0();
+        while (mfopt) {
+            if (mfopt->is_clustering_row()) {
+                auto& cr = mfopt->as_clustering_row();
+                auto it = std::find_if(expected_cr.begin(), expected_cr.end(), [&] (auto&& x) {
+                    return ck_eq(x, cr.key());
+                });
+                if (it == expected_cr.end()) {
+                    std::cout << "unexpected clustering row: " << cr.key() << "\n";
+                }
+                BOOST_REQUIRE(it != expected_cr.end());
+                expected_cr.erase(it);
+            }
+            mfopt = (*smopt)().get0();
+        }
+        BOOST_REQUIRE(expected_cr.empty());
+
+        smopt = reader().get0();
+    }
+    BOOST_REQUIRE(expected.empty());
+}
+
+SEASTAR_TEST_CASE(test_sliced_mutation_reads) {
+    // CREATE TABLE sliced_mutation_reads_test (
+    //        pk int,
+    //        ck int,
+    //        v1 int,
+    //        v2 set<int>,
+    //        PRIMARY KEY (pk, ck)
+    //);
+    //
+    // insert into sliced_mutation_reads_test (pk, ck, v1) values (0, 0, 1);
+    // insert into sliced_mutation_reads_test (pk, ck, v2) values (0, 1, { 0, 1 });
+    // update sliced_mutation_reads_test set v1 = 3 where pk = 0 and ck = 2;
+    // insert into sliced_mutation_reads_test (pk, ck, v1) values (0, 3, null);
+    // insert into sliced_mutation_reads_test (pk, ck, v2) values (0, 4, null);
+    // insert into sliced_mutation_reads_test (pk, ck, v1) values (1, 1, 1);
+    // insert into sliced_mutation_reads_test (pk, ck, v1) values (1, 3, 1);
+    // insert into sliced_mutation_reads_test (pk, ck, v1) values (1, 5, 1);
+    return seastar::async([] {
+        auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
+        auto builder = schema_builder("ks", "sliced_mutation_reads_test")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("v1", int32_type)
+            .with_column("v2", set_of_ints_type);
+        auto s = builder.build();
+
+        auto sst = make_lw_shared<sstable>("ks", "sliced_mutation_reads_test", "tests/sstables/sliced_mutation_reads", 1, sstables::sstable::version_types::ka, big);
+        sst->load().get0();
+
+        {
+            auto ps = partition_slice_builder(*s)
+                          .with_range(query::clustering_range::make_singular(
+                              clustering_key_prefix::from_single_value(*s, int32_type->decompose(0))))
+                          .with_range(query::clustering_range::make_singular(
+                              clustering_key_prefix::from_single_value(*s, int32_type->decompose(5))))
+                          .build();
+            test_sliced_read_row_presence(sst, s, ps, {
+                std::make_pair(partition_key::from_single_value(*s, int32_type->decompose(0)),
+                    std::vector<clustering_key> { clustering_key_prefix::from_single_value(*s, int32_type->decompose(0)) }),
+                std::make_pair(partition_key::from_single_value(*s, int32_type->decompose(1)),
+                    std::vector<clustering_key> { clustering_key_prefix::from_single_value(*s, int32_type->decompose(5)) }),
+            });
+        }
+        {
+            auto ps = partition_slice_builder(*s)
+                          .with_range(query::clustering_range {
+                             query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(0)) },
+                             query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(3)), false },
+                          }).build();
+            test_sliced_read_row_presence(sst, s, ps, {
+                std::make_pair(partition_key::from_single_value(*s, int32_type->decompose(0)),
+                    std::vector<clustering_key> {
+                        clustering_key_prefix::from_single_value(*s, int32_type->decompose(0)),
+                        clustering_key_prefix::from_single_value(*s, int32_type->decompose(1)),
+                        clustering_key_prefix::from_single_value(*s, int32_type->decompose(2)),
+                    }),
+                std::make_pair(partition_key::from_single_value(*s, int32_type->decompose(1)),
+                    std::vector<clustering_key> { clustering_key_prefix::from_single_value(*s, int32_type->decompose(1)) }),
+            });
+        }
+        {
+            auto ps = partition_slice_builder(*s)
+                          .with_range(query::clustering_range {
+                             query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(3)) },
+                             query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(9)) },
+                          }).build();
+            test_sliced_read_row_presence(sst, s, ps, {
+                std::make_pair(partition_key::from_single_value(*s, int32_type->decompose(0)),
+                    std::vector<clustering_key> {
+                        clustering_key_prefix::from_single_value(*s, int32_type->decompose(3)),
+                        clustering_key_prefix::from_single_value(*s, int32_type->decompose(4)),
+                    }),
+                std::make_pair(partition_key::from_single_value(*s, int32_type->decompose(1)),
+                    std::vector<clustering_key> {
+                        clustering_key_prefix::from_single_value(*s, int32_type->decompose(3)),
+                        clustering_key_prefix::from_single_value(*s, int32_type->decompose(5)),
+                    }),
+            });
+        }
     });
 }
