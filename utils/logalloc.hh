@@ -60,7 +60,7 @@ public:
             _parent->add(this);
         }
     }
-    region_group(region_group&& o) noexcept;
+    region_group(region_group&& o) = delete;
     region_group(const region_group&) = delete;
     ~region_group() {
         if (_parent) {
