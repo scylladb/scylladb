@@ -1125,7 +1125,10 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
     local_state.mark_alive();
     local_state.update_timestamp(); // prevents do_status_check from racing us and evicting if it was down > A_VERY_LONG_TIME
     _live_endpoints.insert(addr);
-    _live_endpoints_just_added.push_back(addr);
+    auto it = std::find(_live_endpoints_just_added.begin(), _live_endpoints_just_added.end(), addr);
+    if (it == _live_endpoints_just_added.end()) {
+        _live_endpoints_just_added.push_back(addr);
+    }
     _unreachable_endpoints.erase(addr);
     _expire_time_endpoint_map.erase(addr);
     logger.debug("removing expire time for endpoint : {}", addr);
