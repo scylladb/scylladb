@@ -353,14 +353,15 @@ public:
     int count_deleted_cell = 0;
     int count_range_tombstone = 0;
     int count_row_end = 0;
-    virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
+    virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         BOOST_REQUIRE(bytes_view(key) == as_bytes("vinna"));
         BOOST_REQUIRE(deltime.local_deletion_time == std::numeric_limits<int32_t>::max());
         BOOST_REQUIRE(deltime.marked_for_delete_at == std::numeric_limits<int64_t>::min());
         count_row_start++;
+        return proceed::yes;
     }
 
-    virtual void consume_cell(bytes_view col_name, bytes_view value,
+    virtual proceed consume_cell(bytes_view col_name, bytes_view value,
             int64_t timestamp, int32_t ttl, int32_t expiration) override {
         BOOST_REQUIRE(ttl == 0);
         BOOST_REQUIRE(expiration == 0);
@@ -390,16 +391,19 @@ public:
             break;
         }
         count_cell++;
+        return proceed::yes;
     }
 
-    virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
+    virtual proceed consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
         count_deleted_cell++;
+        return proceed::yes;
     }
 
-    virtual void consume_range_tombstone(
+    virtual proceed consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,
             sstables::deletion_time deltime) override {
         count_range_tombstone++;
+        return proceed::yes;
     }
     virtual proceed consume_row_end() override {
         count_row_end++;
@@ -483,24 +487,28 @@ public:
     int count_deleted_cell = 0;
     int count_row_end = 0;
     int count_range_tombstone = 0;
-    virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
+    virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         count_row_start++;
+        return proceed::yes;
     }
-    virtual void consume_cell(bytes_view col_name, bytes_view value,
+    virtual proceed consume_cell(bytes_view col_name, bytes_view value,
             int64_t timestamp, int32_t ttl, int32_t expiration) override {
         count_cell++;
+        return proceed::yes;
     }
-    virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
+    virtual proceed consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
         count_deleted_cell++;
+        return proceed::yes;
     }
     virtual proceed consume_row_end() override {
         count_row_end++;
         return proceed::yes;
     }
-    virtual void consume_range_tombstone(
+    virtual proceed consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,
             sstables::deletion_time deltime) override {
         count_range_tombstone++;
+        return proceed::yes;
     }
     virtual const io_priority_class& io_priority() override {
         return default_priority_class();
@@ -584,7 +592,7 @@ SEASTAR_TEST_CASE(pausable_uncompressed_rows_read_all) {
 // Test reading range tombstone (which we we have in collections such as set)
 class set_consumer : public count_row_consumer {
 public:
-    virtual void consume_range_tombstone(
+    virtual proceed consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,
             sstables::deletion_time deltime) override {
         count_row_consumer::consume_range_tombstone(start_col, end_col, deltime);
@@ -595,6 +603,7 @@ public:
         // Note the range tombstone have an interesting, not default, deltime.
         BOOST_REQUIRE(deltime.local_deletion_time == 1428855312U);
         BOOST_REQUIRE(deltime.marked_for_delete_at == 1428855312063524UL);
+        return proceed::yes;
     }
 };
 
@@ -619,14 +628,15 @@ class ttl_row_consumer : public count_row_consumer {
 public:
     const int64_t desired_timestamp;
     ttl_row_consumer(int64_t t) : desired_timestamp(t) { }
-    virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
+    virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         count_row_consumer::consume_row_start(key, deltime);
         BOOST_REQUIRE(bytes_view(key) == as_bytes("nadav"));
         BOOST_REQUIRE(deltime.local_deletion_time == std::numeric_limits<int32_t>::max());
         BOOST_REQUIRE(deltime.marked_for_delete_at == std::numeric_limits<int64_t>::min());
+        return proceed::yes;
     }
 
-    virtual void consume_cell(bytes_view col_name, bytes_view value,
+    virtual proceed consume_cell(bytes_view col_name, bytes_view value,
             int64_t timestamp, int32_t ttl, int32_t expiration) override {
         switch (count_cell) {
         case 0:
@@ -650,6 +660,7 @@ public:
             break;
         }
         count_row_consumer::consume_cell(col_name, value, timestamp, ttl, expiration);
+        return proceed::yes;
     }
 };
 
@@ -672,14 +683,15 @@ SEASTAR_TEST_CASE(ttl_read) {
 
 class deleted_cell_row_consumer : public count_row_consumer {
 public:
-    virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
+    virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         count_row_consumer::consume_row_start(key, deltime);
         BOOST_REQUIRE(bytes_view(key) == as_bytes("nadav"));
         BOOST_REQUIRE(deltime.local_deletion_time == std::numeric_limits<int32_t>::max());
         BOOST_REQUIRE(deltime.marked_for_delete_at == std::numeric_limits<int64_t>::min());
+        return proceed::yes;
     }
 
-    virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
+    virtual proceed consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
         count_row_consumer::consume_deleted_cell(col_name, deltime);
         BOOST_REQUIRE(col_name.size() == 6 && col_name[0] == 0 &&
                 col_name[1] == 3 && col_name[2] == 'a' &&
@@ -687,6 +699,7 @@ public:
                 col_name[5] == '\0');
         BOOST_REQUIRE(deltime.local_deletion_time == 1430200516);
         BOOST_REQUIRE(deltime.marked_for_delete_at == 1430200516937621UL);
+        return proceed::yes;
     }
 };
 
