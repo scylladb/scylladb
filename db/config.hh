@@ -712,17 +712,17 @@ public:
     val(api_ui_dir, sstring, "swagger-ui/dist/", Used, "The directory location of the API GUI") \
     val(api_doc_dir, sstring, "api/api-doc/", Used, "The API definition file directory") \
     val(load_balance, sstring, "none", Used, "CQL request load balancing: 'none' or round-robin'") \
-    val(consistent_rangemovement, bool, true, Used, "When set to true, range movements will be consistent. It means: 1) it will refuse to bootstrapp a new node if other bootstrapping/leaving/moving nodes detected. 2) data will be streamed to a new node only from the node which is no longer responsible for the token range. Same as -Dcassandra.consistent.rangemovement in cassandra") \
+    val(consistent_rangemovement, bool, true, Used, "When set to true, range movements will be consistent. It means: 1) it will refuse to bootstrap a new node if other bootstrapping/leaving/moving nodes detected. 2) data will be streamed to a new node only from the node which is no longer responsible for the token range. Same as -Dcassandra.consistent.rangemovement in cassandra") \
     val(join_ring, bool, true, Used, "When set to true, a node will join the token ring. When set to false, a node will not join the token ring. User can use nodetool join to initiate ring joinging later. Same as -Dcassandra.join_ring in cassandra.") \
     val(load_ring_state, bool, true, Used, "When set to true, load tokens and host_ids previously saved. Same as -Dcassandra.load_ring_state in cassandra.") \
     val(replace_node, sstring, "", Used, "The UUID of the node to replace. Same as -Dcassandra.replace_node in cssandra.") \
     val(replace_token, sstring, "", Used, "The tokens of the node to replace. Same as -Dcassandra.replace_token in cassandra.") \
     val(replace_address, sstring, "", Used, "The listen_address or broadcast_address of the dead node to replace. Same as -Dcassandra.replace_address.") \
-    val(replace_address_first_boot, sstring, "", Used, "Like replace_address option, but if the node has been bootstrapped sucessfully it will be ignored. Same as -Dcassandra.replace_address_first_boot.") \
+    val(replace_address_first_boot, sstring, "", Used, "Like replace_address option, but if the node has been bootstrapped successfully it will be ignored. Same as -Dcassandra.replace_address_first_boot.") \
     val(override_decommission, bool, false, Used, "Set true to force a decommissioned node to join the cluster") \
     val(ring_delay_ms, uint32_t, 30 * 1000, Used, "Time a node waits to hear from other nodes before joining the ring in milliseconds. Same as -Dcassandra.ring_delay_ms in cassandra.") \
     val(shutdown_announce_in_ms, uint32_t, 2 * 1000, Used, "Time a node waits after sending gossip shutdown message in milliseconds. Same as -Dcassandra.shutdown_announce_in_ms in cassandra.") \
-    val(developer_mode, bool, false, Used, "Relax environement checks. Setting to true can reduce performance and reliability significantly.") \
+    val(developer_mode, bool, false, Used, "Relax environment checks. Setting to true can reduce performance and reliability significantly.") \
     val(skip_wait_for_gossip_to_settle, int32_t, -1, Used, "An integer to configure the wait for gossip to settle. -1: wait normally, 0: do not wait at all, n: wait for at most n polls. Same as -Dcassandra.skip_wait_for_gossip_to_settle in cassandra.") \
     val(experimental, bool, false, Used, "Set to true to unlock experimental features.") \
     /* done! */
