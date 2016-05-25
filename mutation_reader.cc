@@ -50,66 +50,60 @@ class combined_reader final : public mutation_reader::impl {
         return b.m.decorated_key().less_compare(*s, a.m.decorated_key());
     }
     std::vector<streamed_mutation> _current;
-    bool _inited = false;
+    std::vector<mutation_reader*> _next;
 private:
+    future<> prepare_next() {
+        return parallel_for_each(_next, [this] (mutation_reader* mr) {
+            return (*mr)().then([this, mr] (streamed_mutation_opt next) {
+                if (next) {
+                    _ptables.emplace_back(mutation_and_reader { std::move(*next), mr });
+                    boost::range::push_heap(_ptables, &heap_compare);
+                }
+            });
+        }).then([this] {
+            _next.clear();
+        });
+    }
     // Produces next mutation or disengaged optional if there are no more.
-    //
-    // Entry conditions:
-    //  - either _ptables is empty or_ptables.back() is the next item to be consumed.
-    //  - the _ptables heap is in invalid state (if not empty), waiting for pop_back or push_heap.
     future<streamed_mutation_opt> next() {
+        if (_current.empty() && !_next.empty()) {
+            return prepare_next().then([this] { return next(); });
+        }
         if (_ptables.empty()) {
-            if (_current.empty()) {
-                return make_ready_future<streamed_mutation_opt>();
-            }
-            return make_ready_future<streamed_mutation_opt>(merge_mutations(move_and_clear(_current)));
+            return make_ready_future<streamed_mutation_opt>();
         };
 
+        while (!_ptables.empty()) {
+            boost::range::pop_heap(_ptables, &heap_compare);
+            auto& candidate = _ptables.back();
+            streamed_mutation& m = candidate.m;
 
-        auto& candidate = _ptables.back();
-        streamed_mutation& m = candidate.m;
-
-        if (!_current.empty() && !_current.back().decorated_key().equal(*m.schema(), m.decorated_key())) {
-            // key has changed, so emit accumulated mutation
-            return make_ready_future<streamed_mutation_opt>(merge_mutations(move_and_clear(_current)));
-        }
-
-        _current.emplace_back(std::move(m));
-
-        return (*candidate.read)().then([this] (streamed_mutation_opt&& more) {
-            // Restore heap to valid state
-            if (!more) {
-                _ptables.pop_back();
-            } else {
-                _ptables.back().m = std::move(*more);
+            if (!_current.empty() && !_current.back().decorated_key().equal(*m.schema(), m.decorated_key())) {
+                // key has changed, so emit accumulated mutation
                 boost::range::push_heap(_ptables, &heap_compare);
+                return make_ready_future<streamed_mutation_opt>(merge_mutations(move_and_clear(_current)));
             }
 
-            boost::range::pop_heap(_ptables, &heap_compare);
-            return next();
-        });
+            _current.emplace_back(std::move(m));
+            _next.emplace_back(candidate.read);
+            _ptables.pop_back();
+        }
+        return make_ready_future<streamed_mutation_opt>(merge_mutations(move_and_clear(_current)));
     }
 public:
     combined_reader(std::vector<mutation_reader> readers)
         : _readers(std::move(readers))
-    { }
+    {
+        _next.reserve(_readers.size());
+        _current.reserve(_readers.size());
+        _ptables.reserve(_readers.size());
+
+        for (auto&& r : _readers) {
+            _next.emplace_back(&r);
+        }
+    }
 
     virtual future<streamed_mutation_opt> operator()() override {
-        if (!_inited) {
-            return parallel_for_each(_readers, [this] (mutation_reader& reader) {
-                return reader().then([this, &reader](streamed_mutation_opt&& m) {
-                    if (m) {
-                        _ptables.push_back({std::move(*m), &reader});
-                    }
-                });
-            }).then([this] {
-                boost::range::make_heap(_ptables, &heap_compare);
-                boost::range::pop_heap(_ptables, &heap_compare);
-                _inited = true;
-                return next();
-            });
-        }
-
         return next();
     }
 };
