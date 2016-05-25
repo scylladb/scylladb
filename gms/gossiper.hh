@@ -48,6 +48,7 @@
 #include "gms/versioned_value.hh"
 #include "gms/application_state.hh"
 #include "gms/endpoint_state.hh"
+#include "gms/feature.hh"
 #include "message/messaging_service.hh"
 #include <boost/algorithm/string.hpp>
 #include <experimental/optional>
@@ -517,6 +518,8 @@ private:
     bool _gossiped_to_seed = false;
 private:
     condition_variable _features_condvar;
+    std::unordered_map<sstring, std::vector<feature*>> _registered_features;
+    friend class feature;
 public:
     // Get features supported by a particular node
     std::set<sstring> get_supported_features(inet_address endpoint) const;
@@ -526,6 +529,10 @@ public:
     future<> wait_for_feature_on_all_node(std::set<sstring> features);
     // Wait for features are available on a particular node
     future<> wait_for_feature_on_node(std::set<sstring> features, inet_address endpoint);
+private:
+    void register_feature(feature* f);
+    void unregister_feature(feature* f);
+    void maybe_enable_features();
 };
 
 extern distributed<gossiper> _the_gossiper;
