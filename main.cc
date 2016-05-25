@@ -584,6 +584,13 @@ int main(int ac, char** av) {
             if (start_thrift) {
                 service::get_local_storage_service().start_rpc_server().get();
             }
+            if (cfg->compact_on_idle()) {
+                smp::invoke_on_all([] () {
+                    engine().set_idle_cpu_handler([] (reactor::work_waiting_on_reactor check_for_work) {
+                        return logalloc::shard_tracker().compact_on_idle(check_for_work);
+                    });
+                }).get();
+            }
             api::set_server_done(ctx).get();
             supervisor_notify("serving");
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first

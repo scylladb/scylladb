@@ -24,6 +24,7 @@
 #include <bits/unique_ptr.h>
 #include <seastar/core/scollectd.hh>
 #include <seastar/core/memory.hh>
+#include <seastar/core/reactor.hh>
 #include <seastar/core/shared_ptr.hh>
 #include "allocation_strategy.hh"
 
@@ -108,6 +109,10 @@ public:
     // Invalidates references to objects in all compactible and evictable regions.
     //
     size_t reclaim(size_t bytes);
+
+    // Compacts one segment at a time from sparsest segment to least sparse until work_waiting_on_reactor returns true
+    // or there are no more segments to compact.
+    reactor::idle_cpu_handler_result compact_on_idle(reactor::work_waiting_on_reactor);
 
     // Compacts as much as possible. Very expensive, mainly for testing.
     // Invalidates references to objects in all compactible and evictable regions.

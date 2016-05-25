@@ -84,6 +84,7 @@ public:
     void register_region(region::impl*);
     void unregister_region(region::impl*);
     size_t reclaim(size_t bytes);
+    reactor::idle_cpu_handler_result compact_on_idle(reactor::work_waiting_on_reactor check_for_work);
     size_t compact_and_evict(size_t bytes);
     void full_compaction();
     void reclaim_all_free_segments();
@@ -111,6 +112,10 @@ tracker::~tracker() {
 
 size_t tracker::reclaim(size_t bytes) {
     return _impl->reclaim(bytes);
+}
+
+reactor::idle_cpu_handler_result tracker::compact_on_idle(reactor::work_waiting_on_reactor check_for_work) {
+    return _impl->compact_on_idle(check_for_work);
 }
 
 occupancy_stats tracker::region_occupancy() {
@@ -947,6 +952,7 @@ segment::heap_handle() {
 //
 class region_impl : public allocation_strategy {
     static constexpr float max_occupancy_for_compaction = 0.85; // FIXME: make configurable
+    static constexpr float max_occupancy_for_compaction_on_idle = 0.93; // FIXME: make configurable
     static constexpr size_t max_managed_object_size = segment::size * 0.1;
 
     // single-byte flags
@@ -1262,6 +1268,13 @@ public:
             && (_segments.top()->occupancy().free_space() >= max_managed_object_size);
     }
 
+    bool is_idle_compactible() {
+        return _reclaiming_enabled
+            && (_closed_occupancy.free_space() >= 2 * segment::size)
+            && (_closed_occupancy.used_fraction() < max_occupancy_for_compaction_on_idle)
+            && (_segments.top()->occupancy().free_space() >= max_managed_object_size);
+    }
+
     virtual void* alloc(allocation_strategy::migrate_fn migrator, size_t size, size_t alignment) override {
         compaction_lock _(*this);
         if (size > max_managed_object_size) {
@@ -1376,13 +1389,23 @@ public:
         auto in_use = shard_segment_pool.segments_in_use();
 
         while (shard_segment_pool.segments_in_use() >= in_use) {
-            segment* seg = _segments.top();
-            logger.debug("Compacting segment {} from region {}, {}", seg, id(), seg->occupancy());
-            _segments.pop();
-            _closed_occupancy -= seg->occupancy();
-            compact(seg);
-            shard_segment_pool.on_segment_compaction();
+            compact_single_segment_locked();
         }
+    }
+
+    void compact_single_segment_locked() {
+        segment* seg = _segments.top();
+        logger.debug("Compacting segment {} from region {}, {}", seg, id(), seg->occupancy());
+        _segments.pop();
+        _closed_occupancy -= seg->occupancy();
+        compact(seg);
+        shard_segment_pool.on_segment_compaction();
+    }
+
+    // Compacts only a single segment
+    void compact_on_idle() {
+        compaction_lock _(*this);
+        compact_single_segment_locked();
     }
 
     void migrate_segment(segment* src, segment* dst) {
@@ -1623,6 +1646,40 @@ struct reclaim_timer {
         }
     }
 };
+
+reactor::idle_cpu_handler_result tracker::impl::compact_on_idle(reactor::work_waiting_on_reactor check_for_work) {
+    if (!_reclaiming_enabled) {
+        return reactor::idle_cpu_handler_result::no_more_work;
+    }
+    reclaiming_lock rl(*this);
+    if (_regions.empty()) {
+        return reactor::idle_cpu_handler_result::no_more_work;
+    }
+    segment_pool::reservation_goal open_emergency_pool(shard_segment_pool, 0);
+
+    auto cmp = [] (region::impl* c1, region::impl* c2) {
+        if (c1->is_idle_compactible() != c2->is_idle_compactible()) {
+            return !c1->is_idle_compactible();
+        }
+        return c2->min_occupancy() < c1->min_occupancy();
+    };
+
+    boost::range::make_heap(_regions, cmp);
+
+    while (!check_for_work()) {
+        boost::range::pop_heap(_regions, cmp);
+        region::impl* r = _regions.back();
+
+        if (!r->is_idle_compactible()) {
+            return reactor::idle_cpu_handler_result::no_more_work;
+        }
+
+        r->compact_on_idle();
+
+        boost::range::push_heap(_regions, cmp);
+    }
+    return reactor::idle_cpu_handler_result::interrupted_by_higher_priority_task;
+}
 
 size_t tracker::impl::reclaim(size_t memory_to_release) {
     // Reclamation steps:
