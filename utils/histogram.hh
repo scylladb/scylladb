@@ -178,6 +178,7 @@ public:
                     + (o.variance + pow2(o.mean - mean)) * b;
             mean = m;
             count += o.count;
+            total += o.total;
             for (auto i : o.sample) {
                 sample.push_back(i);
             }
