@@ -179,6 +179,13 @@ class mp_row_consumer : public row_consumer {
         }
     };
 
+    void maybe_new_clustering_row(const clustering_key_prefix& ck) {
+        if (!_last_clustering_key || !_clustering_key_equality(ck, *_last_clustering_key)) {
+            _last_clustering_key = ck;
+            _last_clustering_key_filter_result = _filter(ck);
+        }
+    }
+
     // Notes for collection mutation:
     //
     // While we could in theory generate the mutation for the elements as they
@@ -210,7 +217,7 @@ class mp_row_consumer : public row_consumer {
             return false;
         };
 
-        void flush(const schema& s, mutation& mut) {
+        void flush(mp_row_consumer& c, const schema& s, mutation& mut) {
             if (!_cdef) {
                 return;
             }
@@ -220,7 +227,10 @@ class mp_row_consumer : public row_consumer {
                 mut.set_static_cell(*_cdef, std::move(ac));
             } else {
                 auto ckey = clustering_key::from_clustering_prefix(s, _clustering_prefix);
-                mut.set_clustered_cell(ckey, *_cdef, std::move(ac));
+                c.maybe_new_clustering_row(ckey);
+                if (c._last_clustering_key_filter_result) {
+                    mut.set_clustered_cell(ckey, *_cdef, std::move(ac));
+                }
             }
         }
     };
@@ -249,7 +259,7 @@ class mp_row_consumer : public row_consumer {
 
     void flush_pending_collection(const schema& s, mutation& mut) {
         if (_pending_collection) {
-            _pending_collection->flush(s, mut);
+            _pending_collection->flush(*this, s, mut);
             _pending_collection = {};
         }
     }
@@ -319,9 +329,12 @@ public:
 
         if (col.cell.size() == 0) {
             auto clustering_key = clustering_key::from_clustering_prefix(*_schema, clustering_prefix);
-            auto& dr = mut->partition().clustered_row(clustering_key);
-            row_marker rm(timestamp, gc_clock::duration(ttl), gc_clock::time_point(gc_clock::duration(expiration)));
-            dr.apply(rm);
+            maybe_new_clustering_row(clustering_key);
+            if (_last_clustering_key_filter_result) {
+                auto& dr = mut->partition().clustered_row(clustering_key);
+                row_marker rm(timestamp, gc_clock::duration(ttl), gc_clock::time_point(gc_clock::duration(expiration)));
+                dr.apply(rm);
+            }
             return;
         }
 
@@ -345,10 +358,7 @@ public:
             return;
         }
         auto clustering_key = clustering_key::from_clustering_prefix(*_schema, clustering_prefix);
-        if (!_last_clustering_key || !_clustering_key_equality(clustering_key, *_last_clustering_key)) {
-            _last_clustering_key = clustering_key;
-            _last_clustering_key_filter_result = _filter(clustering_key);
-        }
+        maybe_new_clustering_row(clustering_key);
         if (_last_clustering_key_filter_result) {
             mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
         }
@@ -365,9 +375,12 @@ public:
         auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
         if (col.cell.size() == 0) {
             auto clustering_key = clustering_key::from_clustering_prefix(*_schema, clustering_prefix);
-            auto& dr = mut->partition().clustered_row(clustering_key);
-            row_marker rm(tombstone(timestamp, ttl));
-            dr.apply(rm);
+            maybe_new_clustering_row(clustering_key);
+            if (_last_clustering_key_filter_result) {
+                auto& dr = mut->partition().clustered_row(clustering_key);
+                row_marker rm(tombstone(timestamp, ttl));
+                dr.apply(rm);
+            }
             return;
         }
         if (!col.is_present(timestamp)) {
@@ -387,10 +400,7 @@ public:
             mut->set_static_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
         } else {
             auto clustering_key = clustering_key::from_clustering_prefix(*_schema, clustering_prefix);
-            if (!_last_clustering_key || !_clustering_key_equality(clustering_key, *_last_clustering_key)) {
-                _last_clustering_key = clustering_key;
-                _last_clustering_key_filter_result = _filter(clustering_key);
-            }
+            maybe_new_clustering_row(clustering_key);
             if (_last_clustering_key_filter_result) {
                 mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
             }
