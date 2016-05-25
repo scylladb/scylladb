@@ -513,7 +513,7 @@ future<uint64_t> sstables::sstable::data_end_position(uint64_t summary_idx, cons
     });
 }
 
-future<mutation_opt>
+future<streamed_mutation_opt>
 sstables::sstable::read_row(schema_ptr schema,
                             const sstables::key& key,
                             query::clustering_key_filtering_context ck_filtering,
@@ -522,7 +522,7 @@ sstables::sstable::read_row(schema_ptr schema,
     assert(schema);
 
     if (!filter_has_key(key)) {
-        return make_ready_future<mutation_opt>();
+        return make_ready_future<streamed_mutation_opt>();
     }
 
     auto& partitioner = dht::global_partitioner();
@@ -533,20 +533,20 @@ sstables::sstable::read_row(schema_ptr schema,
     if (token < partitioner.get_token(key_view(summary.first_key.value))
             || token > partitioner.get_token(key_view(summary.last_key.value))) {
         _filter_tracker.add_false_positive();
-        return make_ready_future<mutation_opt>();
+        return make_ready_future<streamed_mutation_opt>();
     }
 
     auto summary_idx = adjust_binary_search_index(binary_search(summary.entries, key, token));
     if (summary_idx < 0) {
         _filter_tracker.add_false_positive();
-        return make_ready_future<mutation_opt>();
+        return make_ready_future<streamed_mutation_opt>();
     }
 
     return read_indexes(summary_idx, pc).then([this, schema, ck_filtering, &key, token, summary_idx, &pc] (auto index_list) {
         auto index_idx = this->binary_search(index_list, key, token);
         if (index_idx < 0) {
             _filter_tracker.add_false_positive();
-            return make_ready_future<mutation_opt>();
+            return make_ready_future<streamed_mutation_opt>();
         }
         _filter_tracker.add_true_positive();
 
@@ -554,7 +554,10 @@ sstables::sstable::read_row(schema_ptr schema,
         return this->data_end_position(summary_idx, index_idx, index_list, pc).then([&key, schema, ck_filtering, this, position, &pc] (uint64_t end) {
             return do_with(mp_row_consumer(key, schema, ck_filtering, pc), [this, position, end] (auto& c) {
                 return this->data_consume_rows_at_once(c, position, end).then([&c] {
-                    return make_ready_future<mutation_opt>(std::move(c.mut));
+                    if (!c.mut) {
+                        return make_ready_future<streamed_mutation_opt>();
+                    }
+                    return make_ready_future<streamed_mutation_opt>(streamed_mutation_from_mutation(std::move(*c.mut)));
                 });
             });
         });
@@ -599,10 +602,10 @@ public:
     impl(impl&&) = delete;
     impl(const impl&) = delete;
 
-    future<mutation_opt> read() {
+    future<streamed_mutation_opt> read() {
         if (!_get_context) {
             // empty mutation reader returns EOF immediately
-            return make_ready_future<mutation_opt>();
+            return make_ready_future<streamed_mutation_opt>();
         }
 
         if (_context) {
@@ -614,14 +617,17 @@ public:
         });
     }
 private:
-    future<mutation_opt> do_read() {
-        return _context->read().then([this] {
+    future<streamed_mutation_opt> do_read() {
+        return _context->read().then([this] () -> streamed_mutation_opt {
             // We want after returning a mutation that _consumer.mut()
             // will be left in unengaged state (so on EOF we return an
             // unengaged optional). Moving _consumer.mut is *not* enough.
             auto ret = std::move(_consumer.mut);
             _consumer.mut = {};
-            return std::move(ret);
+            if (!ret) {
+                return { };
+            }
+            return streamed_mutation_from_mutation(std::move(*ret));
         });
     }
 };
@@ -631,7 +637,7 @@ mutation_reader::mutation_reader(mutation_reader&&) = default;
 mutation_reader& mutation_reader::operator=(mutation_reader&&) = default;
 mutation_reader::mutation_reader(std::unique_ptr<impl> p)
     : _pimpl(std::move(p)) { }
-future<mutation_opt> mutation_reader::read() {
+future<streamed_mutation_opt> mutation_reader::read() {
     return _pimpl->read();
 }
 

@@ -586,12 +586,7 @@ public:
     test_mutation_reader(sstables::shared_sstable sst, sstables::mutation_reader rd)
             : _sst(std::move(sst)), _rd(std::move(rd)) {}
     virtual future<streamed_mutation_opt> operator()() override {
-        return _rd.read().then([] (auto m) -> streamed_mutation_opt {
-            if (!m) {
-                return { };
-            }
-            return streamed_mutation_from_mutation(std::move(*m));
-        });
+        return _rd.read();
     }
 };
 

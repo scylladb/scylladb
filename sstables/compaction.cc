@@ -77,12 +77,7 @@ public:
         return _reader.read().handle_exception([sst = _sst] (auto ep) {
             logger.error("Compaction found an exception when reading sstable {} : {}",
                     sst->get_filename(), ep);
-            return make_exception_future<mutation_opt>(ep);
-        }).then([] (auto mo) -> streamed_mutation_opt {
-            if (!mo) {
-                return { };
-            }
-            return streamed_mutation_from_mutation(std::move(*mo));
+            return make_exception_future<streamed_mutation_opt>(ep);
         });
     }
 };

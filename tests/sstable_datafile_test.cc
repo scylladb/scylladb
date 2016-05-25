@@ -789,7 +789,9 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
         return sst->write_components(*mt).then([s, sst, mt, verifier, tomb, &static_set_col] {
             return reusable_sst("tests/sstables/tests-temporary", 11).then([s, verifier, tomb, &static_set_col] (auto sstp) mutable {
                 return do_with(sstables::key("key1"), [sstp, s, verifier, tomb, &static_set_col] (auto& key) {
-                    return sstp->read_row(s, key).then([sstp, s, verifier, tomb, &static_set_col] (auto mutation) {
+                    return sstp->read_row(s, key).then([] (auto sm) {
+                        return mutation_from_streamed_mutation(std::move(sm));
+                    }).then([sstp, s, verifier, tomb, &static_set_col] (auto mutation) {
                         auto verify_set = [&tomb] (auto m) {
                             BOOST_REQUIRE(bool(m.tomb) == true);
                             BOOST_REQUIRE(m.tomb == tomb);
@@ -816,7 +818,9 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
                     });
                 }).then([sstp, s, verifier] {
                     return do_with(sstables::key("key2"), [sstp, s, verifier] (auto& key) {
-                        return sstp->read_row(s, key).then([sstp, s, verifier] (auto mutation) {
+                        return sstp->read_row(s, key).then([] (auto sm) {
+                            return mutation_from_streamed_mutation(std::move(sm));
+                        }).then([sstp, s, verifier] (auto mutation) {
                             auto m = verifier(mutation);
                             BOOST_REQUIRE(!m.tomb);
                             BOOST_REQUIRE(m.cells.size() == 1);
@@ -848,7 +852,9 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
         return sst->write_components(*mt).then([s, tomb] {
             return reusable_sst("tests/sstables/tests-temporary", 12).then([s, tomb] (auto sstp) mutable {
                 return do_with(sstables::key("key1"), [sstp, s, tomb] (auto& key) {
-                    return sstp->read_row(s, key).then([sstp, s, tomb] (auto mutation) {
+                    return sstp->read_row(s, key).then([] (auto sm) {
+                        return mutation_from_streamed_mutation(std::move(sm));
+                    }).then([sstp, s, tomb] (auto mutation) {
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.row_tombstones().size() == 1);
                         for (auto& rt: mp.row_tombstones()) {
@@ -883,7 +889,9 @@ static future<> sstable_compression_test(compressor c, unsigned generation) {
         return sst->write_components(*mtp).then([s, tomb, generation] {
             return reusable_sst("tests/sstables/tests-temporary", generation).then([s, tomb] (auto sstp) mutable {
                 return do_with(sstables::key("key1"), [sstp, s, tomb] (auto& key) {
-                    return sstp->read_row(s, key).then([sstp, s, tomb] (auto mutation) {
+                    return sstp->read_row(s, key).then([] (auto sm) {
+                            return mutation_from_streamed_mutation(std::move(sm));
+                        }).then([sstp, s, tomb] (auto mutation) {
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.row_tombstones().size() == 1);
                         for (auto& rt: mp.row_tombstones()) {
@@ -1360,7 +1368,9 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
         return sst->write_components(*mtp).then([s] {
             return reusable_sst("tests/sstables/tests-temporary", 37).then([s] (auto sstp) {
                 return do_with(sstables::key("key1"), [sstp, s] (auto& key) {
-                    return sstp->read_row(s, key).then([sstp, s] (auto mutation) {
+                    return sstp->read_row(s, key).then([] (auto sm) {
+                        return mutation_from_streamed_mutation(std::move(sm));
+                    }).then([sstp, s] (auto mutation) {
                         auto& mp = mutation->partition();
 
                         auto exploded = exploded_clustering_prefix({"cl1"});
@@ -1396,7 +1406,9 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
         return sst->write_components(*mtp).then([s] {
             return reusable_sst("tests/sstables/tests-temporary", 38).then([s] (auto sstp) {
                 return do_with(sstables::key("key1"), [sstp, s] (auto& key) {
-                    return sstp->read_row(s, key).then([sstp, s] (auto mutation) {
+                    return sstp->read_row(s, key).then([] (auto sm) {
+                        return mutation_from_streamed_mutation(std::move(sm));
+                    }).then([sstp, s] (auto mutation) {
                         auto& mp = mutation->partition();
                         auto exploded = exploded_clustering_prefix({"cl1", "cl2"});
                         auto clustering = clustering_key::from_clustering_prefix(*s, exploded);
@@ -1432,7 +1444,9 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
         return sst->write_components(*mtp).then([s] {
             return reusable_sst("tests/sstables/tests-temporary", 39).then([s] (auto sstp) {
                 return do_with(sstables::key("key1"), [sstp, s] (auto& key) {
-                    return sstp->read_row(s, key).then([sstp, s] (auto mutation) {
+                    return sstp->read_row(s, key).then([] (auto sm) {
+                        return mutation_from_streamed_mutation(std::move(sm));
+                    }).then([sstp, s] (auto mutation) {
                         auto& mp = mutation->partition();
                         auto row = mp.clustered_row(clustering_key::make_empty());
                         match_live_cell(row.cells(), *s, "cl1", data_value(data_value(to_bytes("cl1"))));
@@ -1526,7 +1540,9 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
         return sst->write_components(*mt).then([s, tomb] {
             return reusable_sst("tests/sstables/tests-temporary", 41).then([s, tomb] (auto sstp) mutable {
                 return do_with(sstables::key("key1"), [sstp, s, tomb] (auto& key) {
-                    return sstp->read_row(s, key).then([sstp, s, tomb] (auto mutation) {
+                    return sstp->read_row(s, key).then([] (auto sm) {
+                        return mutation_from_streamed_mutation(std::move(sm));
+                    }).then([sstp, s, tomb] (auto mutation) {
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.clustered_rows().size() == 1);
                         auto c_row = *(mp.clustered_rows().begin());

@@ -58,7 +58,9 @@ future<> test_no_clustered(bytes&& key, std::unordered_map<bytes, data_value> &&
     return reusable_sst("tests/sstables/uncompressed", 1).then([k = std::move(key), map = std::move(map)] (auto sstp) mutable {
         return do_with(sstables::key(std::move(k)), [sstp, map = std::move(map)] (auto& key) {
             auto s = uncompressed_schema();
-            return sstp->read_row(s, key).then([sstp, s, &key, map = std::move(map)] (auto mutation) {
+            return sstp->read_row(s, key).then([] (auto sm) {
+                return mutation_from_streamed_mutation(std::move(sm));
+            }).then([sstp, s, &key, map = std::move(map)] (auto mutation) {
                 BOOST_REQUIRE(mutation);
                 auto& mp = mutation->partition();
                 for (auto&& e : mp.range(*s, query::range<clustering_key_prefix>())) {
@@ -124,7 +126,9 @@ future<mutation> generate_clustered(bytes&& key) {
     return reusable_sst("tests/sstables/complex", Generation).then([k = std::move(key)] (auto sstp) mutable {
         return do_with(sstables::key(std::move(k)), [sstp] (auto& key) {
             auto s = complex_schema();
-            return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
+            return sstp->read_row(s, key).then([] (auto sm) {
+                return mutation_from_streamed_mutation(std::move(sm));
+            }).then([sstp, s, &key] (auto mutation) {
                 BOOST_REQUIRE(mutation);
                 return std::move(*mutation);
             });
@@ -313,7 +317,7 @@ future<> test_range_reads(const dht::token& min, const dht::token& max, std::vec
                 // "mutations", continues to live until after the last
                 // iteration's future completes, so its lifetime is safe.
                 [sstp, mutations = std::move(mutations), &expected, expected_size, count, stop] () mutable {
-                    return mutations.read().then([&expected, expected_size, count, stop] (mutation_opt mutation) mutable {
+                    return mutations.read().then([&expected, expected_size, count, stop] (streamed_mutation_opt mutation) mutable {
                         if (mutation) {
                             BOOST_REQUIRE(*count < expected_size);
                             BOOST_REQUIRE(std::vector<bytes>({expected.back()}) == mutation->key().explode());
@@ -407,7 +411,9 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
                 sstables::sstable::format_types::big);
         sst.write_components(*mt).get();
         sst.load().get();
-        auto mut = sst.read_rows(s).read().get0();
+        auto mr = sst.read_rows(s);
+        auto sm = mr.read().get0();
+        auto mut = mutation_from_streamed_mutation(std::move(sm)).get0();
         BOOST_REQUIRE(bool(mut));
         auto& rts = mut->partition().row_tombstones();
         BOOST_REQUIRE(rts.size() == 1);
@@ -425,7 +431,9 @@ SEASTAR_TEST_CASE(compact_storage_sparse_read) {
     return reusable_sst("tests/sstables/compact_sparse", 1).then([] (auto sstp) {
         return do_with(sstables::key("first_row"), [sstp] (auto& key) {
             auto s = compact_sparse_schema();
-            return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
+            return sstp->read_row(s, key).then([] (auto sm) {
+                return mutation_from_streamed_mutation(std::move(sm));
+            }).then([sstp, s, &key] (auto mutation) {
                 auto& mp = mutation->partition();
                 auto row = mp.clustered_row(clustering_key::make_empty());
                 match_live_cell(row.cells(), *s, "cl1", data_value(to_bytes("cl1")));
@@ -440,7 +448,9 @@ SEASTAR_TEST_CASE(compact_storage_simple_dense_read) {
     return reusable_sst("tests/sstables/compact_simple_dense", 1).then([] (auto sstp) {
         return do_with(sstables::key("first_row"), [sstp] (auto& key) {
             auto s = compact_simple_dense_schema();
-            return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
+            return sstp->read_row(s, key).then([] (auto sm) {
+                return mutation_from_streamed_mutation(std::move(sm));
+            }).then([sstp, s, &key] (auto mutation) {
                 auto& mp = mutation->partition();
 
                 auto exploded = exploded_clustering_prefix({"cl1"});
@@ -458,7 +468,9 @@ SEASTAR_TEST_CASE(compact_storage_dense_read) {
     return reusable_sst("tests/sstables/compact_dense", 1).then([] (auto sstp) {
         return do_with(sstables::key("first_row"), [sstp] (auto& key) {
             auto s = compact_dense_schema();
-            return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
+            return sstp->read_row(s, key).then([] (auto sm) {
+                return mutation_from_streamed_mutation(std::move(sm));
+            }).then([sstp, s, &key] (auto mutation) {
                 auto& mp = mutation->partition();
 
                 auto exploded = exploded_clustering_prefix({"cl1", "cl2"});
@@ -549,7 +561,9 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone) {
         auto s = tombstone_overlap_schema();
         return do_with(sstp->read_rows(s), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
-                return reader.read().then([s] (mutation_opt mut) {
+                return reader.read().then([] (auto sm) {
+                    return mutation_from_streamed_mutation(std::move(sm));
+                }).then([s] (mutation_opt mut) {
                     if (!mut) {
                         return stop_iteration::yes;
                     }
@@ -612,7 +626,9 @@ SEASTAR_TEST_CASE(range_tombstone_reading) {
         auto s = tombstone_overlap_schema();
         return do_with(sstp->read_rows(s), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
-                return reader.read().then([s] (mutation_opt mut) {
+                return reader.read().then([] (auto sm) {
+                    return mutation_from_streamed_mutation(std::move(sm));
+                }).then([s] (mutation_opt mut) {
                     if (!mut) {
                         return stop_iteration::yes;
                     }
@@ -710,7 +726,9 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
         auto s = tombstone_overlap_schema2();
         return do_with(sstp->read_rows(s), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
-                return reader.read().then([s] (mutation_opt mut) {
+                return reader.read().then([] (auto sm) {
+                    return mutation_from_streamed_mutation(std::move(sm));
+                }).then([s] (mutation_opt mut) {
                     if (!mut) {
                         return stop_iteration::yes;
                     }

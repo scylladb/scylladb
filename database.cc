@@ -209,7 +209,7 @@ public:
 class single_key_sstable_reader final : public mutation_reader::impl {
     schema_ptr _schema;
     sstables::key _key;
-    mutation_opt _m;
+    std::vector<streamed_mutation> _mutations;
     bool _done = false;
     lw_shared_ptr<sstable_list> _sstables;
     // Use a pointer instead of copying, so we don't need to regenerate the reader if
@@ -235,16 +235,17 @@ public:
         }
         return parallel_for_each(*_sstables | boost::adaptors::map_values,
             [this](const lw_shared_ptr<sstables::sstable>& sstable) {
-                return sstable->read_row(_schema, _key, _ck_filtering, _pc)
-                    .then([this](mutation_opt mo) {
-                        apply(_m, std::move(mo));
+                return sstable->read_row(_schema, _key, _ck_filtering, _pc).then([this](auto smo) {
+                    if (smo) {
+                        _mutations.emplace_back(std::move(*smo));
+                    }
                 });
-        }).then([this] {
+        }).then([this] () -> streamed_mutation_opt {
             _done = true;
-            if (!_m) {
-                return streamed_mutation_opt();
+            if (_mutations.empty()) {
+                return { };
             }
-            return streamed_mutation_opt(streamed_mutation_from_mutation(std::move(*_m)));
+            return merge_mutations(std::move(_mutations));
         });
     }
 };

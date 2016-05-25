@@ -36,11 +36,6 @@ public:
         , _smr(sst->read_range_rows(std::move(s), pr, ck_filtering, pc)) {
     }
     virtual future<streamed_mutation_opt> operator()() override {
-        return _smr.read().then([] (auto mopt) -> streamed_mutation_opt {
-            if (!mopt) {
-                return { };
-            }
-            return streamed_mutation_from_mutation(std::move(*mopt));
-        });
+        return _smr.read();
     }
 };
