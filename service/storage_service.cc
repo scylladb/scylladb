@@ -1316,6 +1316,10 @@ future<std::unordered_set<token>> storage_service::prepare_replacement_info() {
 
     // if (!MessagingService.instance().isListening())
     //     MessagingService.instance().listen(FBUtilities.getLocalAddress());
+    auto seeds = gms::get_local_gossiper().get_seeds();
+    if (seeds.size() == 1 && seeds.count(replace_address)) {
+        throw std::runtime_error(sprint("Cannot replace_address %s because no seed node is up", replace_address));
+    }
 
     // make magic happen
     return gms::get_local_gossiper().do_shadow_round().then([this, replace_address] {
