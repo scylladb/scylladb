@@ -771,6 +771,12 @@ column_family::start() {
 
 future<>
 column_family::stop() {
+    // Please note that in here, we shouldn't use the implicit seal function in each memtable's
+    // list. The reason is that for the streaming memtables, the memtable_list's seal function does
+    // not guarantee anything to be immediately flushed, and will set a timer instead (so we can
+    // coalesce writes). During stop, we need to force flushing behavior so we call
+    // seal_active_streaming_memtable() instead. That problem does not exist for memtables and we
+    // could call _memtables->seal_active_memtable() here. We don't, for consistency with streaming.
     seal_active_memtable();
     seal_active_streaming_memtable();
     return _compaction_manager.remove(this).then([this] {
