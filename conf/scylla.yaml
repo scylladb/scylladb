@@ -805,3 +805,11 @@ commitlog_total_space_in_mb: -1
 # true: relaxed environment checks; performance and reliability may degraade.
 #
 # developer_mode: false
+
+
+# Idle-time background processing
+#
+# Scylla can perform certain jobs in the background while the system is otherwise idle,
+# freeing processor resources when there is other work to be done.
+#
+# defragment_memory_on_idle: true
