@@ -1976,6 +1976,10 @@ void tracker::impl::register_collectd_metrics() {
     });
 }
 
+uint64_t region_group::top_region_evictable_space() const {
+    return _regions.empty() ? 0 : _regions.top()->evictable_occupancy().total_space();
+}
+
 void region_group::do_release_requests() noexcept {
     // The later() statement is here  to avoid executing the function in update() context. But
     // also guarantees that we won't dominate the CPU if we have many requests to release.
@@ -2008,13 +2012,13 @@ void region_group::do_release_requests() noexcept {
 
 void
 region_group::add(region_group* child) {
-    _subgroups.push_back(child);
+    child->_subgroup_heap_handle = _subgroups.push(child);
     update(child->_total_memory);
 }
 
 void
 region_group::del(region_group* child) {
-    _subgroups.erase(boost::range::remove(_subgroups, child), _subgroups.end());
+    _subgroups.erase(child->_subgroup_heap_handle);
     update(-child->_total_memory);
 }
 
