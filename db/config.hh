@@ -324,7 +324,7 @@ public:
     val(sstable_preemptive_open_interval_in_mb, uint32_t, 50, Unused,     \
             "When compacting, the replacement opens SSTables before they are completely written and uses in place of the prior SSTables for any range previously written. This setting helps to smoothly transfer reads between the SSTables by reducing page cache churn and keeps hot rows hot."  \
     )                                                   \
-    val(compact_on_idle, bool, true, Used, "Set to true to run compaction when the cpu is idle.") \
+    val(defragment_memory_on_idle, bool, true, Used, "Set to true to defragment memory when the cpu is idle.  This reduces the amount of work Scylla performs when processing client requests.") \
     /* Memtable settings */ \
     val(memtable_allocation_type, sstring, "heap_buffers", Invalid,     \
             "Specify the way Cassandra allocates and manages memtable memory. See Off-heap memtables in Cassandra 2.1. Options are:\n"  \

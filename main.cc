@@ -584,7 +584,7 @@ int main(int ac, char** av) {
             if (start_thrift) {
                 service::get_local_storage_service().start_rpc_server().get();
             }
-            if (cfg->compact_on_idle()) {
+            if (cfg->defragment_memory_on_idle()) {
                 smp::invoke_on_all([] () {
                     engine().set_idle_cpu_handler([] (reactor::work_waiting_on_reactor check_for_work) {
                         return logalloc::shard_tracker().compact_on_idle(check_for_work);
