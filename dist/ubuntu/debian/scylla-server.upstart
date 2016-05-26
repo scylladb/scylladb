@@ -41,7 +41,7 @@ script
         fi
         . "$i"
     done
-    exec /usr/bin/scylla $SCYLLA_ARGS $SEASTAR_IO $DEV_MODE
+    exec /usr/bin/scylla $SCYLLA_ARGS $SEASTAR_IO $DEV_MODE $CPUSET
 end script
 
 post-stop script

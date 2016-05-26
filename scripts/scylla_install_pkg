@@ -49,11 +49,12 @@ if [ "$ID" = "ubuntu" ]; then
     fi
     apt-get update
     if [ "$LOCAL_PKG" = "" ]; then
-        apt-get install -y --force-yes scylla-server scylla-jmx scylla-tools
+        apt-get install -y --force-yes scylla
     else
         if [ ! -f /usr/bin/gdebi ]; then
             apt-get install -y --force-yes gdebi-core
         fi
+        echo Y | gdebi $LOCAL_PKG/scylla-conf*.deb
         echo Y | gdebi $LOCAL_PKG/scylla-server*.deb
         echo Y | gdebi $LOCAL_PKG/scylla-jmx*.deb
         echo Y | gdebi $LOCAL_PKG/scylla-tools*.deb
@@ -80,8 +81,8 @@ else
     fi
 
     if [ "$LOCAL_PKG" = "" ]; then
-        yum install -y scylla-server scylla-server-debuginfo scylla-jmx scylla-tools
+        yum install -y scylla
     else
-        yum install -y $LOCAL_PKG/scylla-server*.x86_64.rpm $LOCAL_PKG/scylla-jmx*.noarch.rpm $LOCAL_PKG/scylla-tools*.noarch.rpm
+        yum install -y $LOCAL_PKG/scylla-conf*.x86_64.rpm $LOCAL_PKG/scylla-server*.x86_64.rpm $LOCAL_PKG/scylla-jmx*.noarch.rpm $LOCAL_PKG/scylla-tools*.noarch.rpm
     fi
 fi
