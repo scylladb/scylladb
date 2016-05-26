@@ -207,8 +207,8 @@ void register_handler(messaging_service* ms, messaging_verb verb, Func&& func) {
     ms->rpc()->register_handler(verb, std::move(func));
 }
 
-messaging_service::messaging_service(gms::inet_address ip, uint16_t port)
-    : messaging_service(std::move(ip), port, encrypt_what::none, 0, nullptr)
+messaging_service::messaging_service(gms::inet_address ip, uint16_t port, bool listen_now)
+    : messaging_service(std::move(ip), port, encrypt_what::none, 0, nullptr, listen_now)
 {}
 
 static
@@ -221,31 +221,41 @@ rpc_resource_limits() {
     return limits;
 }
 
+void messaging_service::start_listen() {
+    if (!_server) {
+        auto addr = ipv4_addr{_listen_address.raw_addr(), _port};
+        _server = std::unique_ptr<rpc_protocol_server_wrapper>(new rpc_protocol_server_wrapper(*_rpc,
+                addr, rpc_resource_limits()));
+    }
+
+    if (!_server_tls) {
+        _server_tls = std::unique_ptr<rpc_protocol_server_wrapper>(
+            [this] () -> std::unique_ptr<rpc_protocol_server_wrapper>{
+                if (_encrypt_what == encrypt_what::none) {
+                    return nullptr;
+                }
+                listen_options lo;
+                lo.reuse_address = true;
+                auto addr = make_ipv4_address(ipv4_addr{_listen_address.raw_addr(), _ssl_port});
+                return std::make_unique<rpc_protocol_server_wrapper>(*_rpc,
+                        seastar::tls::listen(_credentials, addr, lo));
+        }());
+    }
+}
+
 messaging_service::messaging_service(gms::inet_address ip
         , uint16_t port
         , encrypt_what ew
         , uint16_t ssl_port
         , std::shared_ptr<seastar::tls::credentials_builder> credentials
+        , bool listen_now
         )
     : _listen_address(ip)
     , _port(port)
     , _ssl_port(ssl_port)
     , _encrypt_what(ew)
     , _rpc(new rpc_protocol_wrapper(serializer { }))
-    , _server(new rpc_protocol_server_wrapper(*_rpc, ipv4_addr { _listen_address.raw_addr(), _port }, rpc_resource_limits()))
     , _credentials(credentials ? credentials->build_server_credentials() : nullptr)
-    , _server_tls([this]() -> std::unique_ptr<rpc_protocol_server_wrapper>{
-        if (_encrypt_what == encrypt_what::none) {
-            return nullptr;
-        }
-        listen_options lo;
-        lo.reuse_address = true;
-        return std::make_unique<rpc_protocol_server_wrapper>(*_rpc,
-                        seastar::tls::listen(_credentials
-                                        , make_ipv4_address(ipv4_addr {_listen_address.raw_addr(), _ssl_port})
-                                        , lo)
-        );
-    }())
 {
     _rpc->set_logger([] (const sstring& log) {
             rpc_logger.info("{}", log);
@@ -255,6 +265,11 @@ messaging_service::messaging_service(gms::inet_address ip
         ci.attach_auxiliary("src_cpu_id", src_cpu_id);
         return rpc::no_wait;
     });
+
+    if (listen_now) {
+        start_listen();
+    }
+
     // Do this on just cpu 0, to avoid duplicate logs.
     if (engine().cpu_id() == 0) {
         if (_server_tls) {

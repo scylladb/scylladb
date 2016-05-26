@@ -79,7 +79,9 @@ void init_ms_fd_gossiper(sstring listen_address
     }
 
     // Init messaging_service
-    net::get_messaging_service().start(listen, storage_port, ew, ssl_storage_port, creds).get();
+    // Delay listening messaging_service until gossip message handlers are registered
+    bool listen_now = false;
+    net::get_messaging_service().start(listen, storage_port, ew, ssl_storage_port, creds, listen_now).get();
 
     // #293 - do not stop anything
     //engine().at_exit([] { return net::get_messaging_service().stop(); });

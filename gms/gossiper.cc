@@ -313,6 +313,9 @@ void gossiper::init_messaging_service_handler() {
         });
         return messaging_service::no_wait();
     });
+
+    // Start listening messaging_service after gossip message handlers are registered
+    ms().start_listen();
 }
 
 void gossiper::uninit_messaging_service_handler() {

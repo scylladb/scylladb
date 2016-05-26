@@ -184,11 +184,14 @@ private:
 public:
     using clock_type = std::chrono::steady_clock;
 public:
-    messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"), uint16_t port = 7000);
+    messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"),
+            uint16_t port = 7000, bool listen_now = true);
     messaging_service(gms::inet_address ip, uint16_t port, encrypt_what,
-            uint16_t ssl_port, std::shared_ptr<seastar::tls::credentials_builder>);
+            uint16_t ssl_port, std::shared_ptr<seastar::tls::credentials_builder>,
+            bool listen_now = true);
     ~messaging_service();
 public:
+    void start_listen();
     uint16_t port();
     gms::inet_address listen_address();
     future<> stop();
