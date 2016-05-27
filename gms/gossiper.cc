@@ -534,7 +534,7 @@ void gossiper::run() {
             // We don't care about heart_beat change on other CPUs - so ingnore this
             // specific change.
             //
-            shadow_endpoint_state_map[br_addr].set_heart_beat_state(hbs);
+            shadow_endpoint_state_map[br_addr].get_heart_beat_state() = hbs;
 
             logger.trace("My heartbeat is now {}", endpoint_state_map[br_addr].get_heart_beat_state().get_heart_beat_version());
             std::vector<gossip_digest> g_digests;
