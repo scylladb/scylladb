@@ -104,7 +104,7 @@ static mutation make_cs_mutation() {
     auto s = cassandra_stress_schema();
     mutation m(partition_key::from_single_value(*s, bytes_type->from_string("4b343050393536353531")), s);
     for (auto&& col : s->regular_columns()) {
-        m.set_clustered_cell(clustering_key::make_empty(*s), col,
+        m.set_clustered_cell(clustering_key::make_empty(), col,
             atomic_cell::make_live(1, bytes_type->from_string("8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a")));
     }
     return m;

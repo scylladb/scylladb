@@ -918,7 +918,7 @@ SEASTAR_TEST_CASE(datafile_generation_16) {
             auto key = partition_key::from_exploded(*s, {to_bytes(k)});
             mutation m(key, s);
 
-            auto c_key = clustering_key::make_empty(*s);
+            auto c_key = clustering_key::make_empty();
             m.set_clustered_cell(c_key, to_bytes("col2"), i, api::max_timestamp);
             mtp->apply(std::move(m));
         }
@@ -1411,7 +1411,7 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         mutation m(key, s);
 
-        auto c_key = clustering_key::make_empty(*s);
+        auto c_key = clustering_key::make_empty();
 
         const column_definition& cl1 = *s->get_column_definition("cl1");
         m.set_clustered_cell(c_key, cl1, make_atomic_cell(bytes_type->decompose(data_value(to_bytes("cl1")))));
@@ -1425,7 +1425,7 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
                 return do_with(sstables::key("key1"), [sstp, s] (auto& key) {
                     return sstp->read_row(s, key).then([sstp, s] (auto mutation) {
                         auto& mp = mutation->partition();
-                        auto row = mp.clustered_row(clustering_key::make_empty(*s));
+                        auto row = mp.clustered_row(clustering_key::make_empty());
                         match_live_cell(row.cells(), *s, "cl1", data_value(data_value(to_bytes("cl1"))));
                         match_live_cell(row.cells(), *s, "cl2", data_value(data_value(to_bytes("cl2"))));
                         return make_ready_future<>();
@@ -2177,7 +2177,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
         auto key = partition_key::from_exploded(*s, {to_bytes(key_value)});
         mutation m(key, s);
         const column_definition& col = *s->get_column_definition("value");
-        m.set_clustered_cell(clustering_key::make_empty(*s), col, make_atomic_cell(int32_type->decompose(1)));
+        m.set_clustered_cell(clustering_key::make_empty(), col, make_atomic_cell(int32_type->decompose(1)));
         mt1->apply(std::move(m));
     };
     insert_data("alpha");

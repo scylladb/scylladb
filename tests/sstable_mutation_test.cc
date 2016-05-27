@@ -389,7 +389,7 @@ SEASTAR_TEST_CASE(compact_storage_sparse_read) {
             auto s = compact_sparse_schema();
             return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
                 auto& mp = mutation->partition();
-                auto row = mp.clustered_row(clustering_key::make_empty(*s));
+                auto row = mp.clustered_row(clustering_key::make_empty());
                 match_live_cell(row.cells(), *s, "cl1", data_value(to_bytes("cl1")));
                 match_live_cell(row.cells(), *s, "cl2", data_value(to_bytes("cl2")));
                 return make_ready_future<>();
@@ -463,10 +463,10 @@ SEASTAR_TEST_CASE(broken_ranges_collection) {
                 if (!mut) {
                     return stop_iteration::yes;
                 } else if (key_equal("127.0.0.1")) {
-                    auto row = mut->partition().clustered_row(clustering_key::make_empty(*s));
+                    auto row = mut->partition().clustered_row(clustering_key::make_empty());
                     match_absent(row.cells(), *s, "tokens");
                 } else if (key_equal("127.0.0.3")) {
-                    auto row = mut->partition().clustered_row(clustering_key::make_empty(*s));
+                    auto row = mut->partition().clustered_row(clustering_key::make_empty());
                     auto tokens = match_collection(row.cells(), *s, "tokens", tombstone(deletion_time{0x55E5F2D5, 0x051EB3FC99715Dl }));
                     match_collection_element<status::live>(tokens.cells[0], to_bytes("-8180144272884242102"), bytes_opt{});
                 } else {

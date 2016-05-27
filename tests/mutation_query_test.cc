@@ -422,16 +422,16 @@ SEASTAR_TEST_CASE(test_partitions_with_only_expired_tombstones_are_dropped) {
 
         std::vector<mutation> ring = make_ring(4);
 
-        ring[0].set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v")), api::new_timestamp());
+        ring[0].set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v")), api::new_timestamp());
 
         {
             auto ts = api::new_timestamp();
             ring[1].partition().apply(tombstone(ts, now));
-            ring[1].set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v")), ts);
+            ring[1].set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v")), ts);
         }
 
         ring[2].partition().apply(tombstone(api::new_timestamp(), now));
-        ring[3].set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v")), api::new_timestamp());
+        ring[3].set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v")), api::new_timestamp());
 
         auto src = make_source(ring);
         auto slice = make_full_slice(*s);
