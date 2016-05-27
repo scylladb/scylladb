@@ -272,7 +272,7 @@ public:
             ++_it;
             _last = ce.key();
             _cache.upgrade_entry(ce);
-            return make_ready_future<streamed_mutation_opt>(streamed_mutation_from_mutation(ce.read(_schema)));
+            return make_ready_future<streamed_mutation_opt>(ce.read(_cache, _schema));
           });
         });
     }
@@ -446,7 +446,7 @@ row_cache::make_reader(schema_ptr s,
                 _tracker.touch(e);
                 on_hit();
                 upgrade_entry(e);
-                return make_reader_returning(e.read(s, ck_filtering));
+                return make_reader_returning(e.read(*this, s, ck_filtering));
             } else {
                 on_miss();
                 return make_mutation_reader<slicing_reader>(
@@ -661,7 +661,7 @@ row_cache::row_cache(schema_ptr s, mutation_source fallback_factory, key_source 
 cache_entry::cache_entry(cache_entry&& o) noexcept
     : _schema(std::move(o._schema))
     , _key(std::move(o._key))
-    , _p(std::move(o._p))
+    , _pe(std::move(o._pe))
     , _lru_link()
     , _cache_link()
 {
@@ -682,22 +682,20 @@ void row_cache::set_schema(schema_ptr new_schema) noexcept {
     _schema = std::move(new_schema);
 }
 
-mutation cache_entry::read(const schema_ptr& s) {
-    auto m = mutation(_schema, _key, _p);
-    if (_schema != s) {
-        m.upgrade(s);
-    }
-    return m;
+streamed_mutation cache_entry::read(row_cache& rc, const schema_ptr& s) {
+    return read(rc, s, query::no_clustering_key_filtering);
 }
 
-mutation cache_entry::read(const schema_ptr& s, query::clustering_key_filtering_context ck_filtering) {
-    const query::clustering_row_ranges& ck_ranges = ck_filtering.get_ranges(_key.key());
-    mutation_partition filtered_partition = mutation_partition(_p, *_schema, ck_ranges);
-    auto m = mutation(_schema, _key, std::move(filtered_partition));
-    if (_schema != s) {
-        m.upgrade(s);
+streamed_mutation cache_entry::read(row_cache& rc, const schema_ptr& s, query::clustering_key_filtering_context ck_filtering) {
+    if (_schema->version() != s->version()) {
+        const query::clustering_row_ranges& ck_ranges = ck_filtering.get_ranges(_key.key());
+        auto mp = mutation_partition(_pe.squashed(_schema, s), *s, ck_ranges);
+        auto m = mutation(s, _key, std::move(mp));
+        return streamed_mutation_from_mutation(std::move(m));
     }
-    return m;
+    auto& ckr = ck_filtering.get_ranges(_key.key());
+    auto snp = _pe.read(_schema);
+    return make_partition_snapshot_reader(_schema, _key, ck_filtering, ckr, snp, rc._tracker.region(), rc._read_section, { });
 }
 
 const schema_ptr& row_cache::schema() const {
@@ -710,7 +708,7 @@ void row_cache::upgrade_entry(cache_entry& e) {
         assert(!r.reclaiming_enabled());
         with_allocator(r.allocator(), [this, &e] {
           with_linearized_managed_bytes([&] {
-            e._p.upgrade(*e._schema, *_schema);
+            e.partition().upgrade(e._schema, _schema);
             e._schema = _schema;
           });
         });

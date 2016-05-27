@@ -33,6 +33,7 @@
 #include "key_reader.hh"
 #include "utils/phased_barrier.hh"
 #include "utils/histogram.hh"
+#include "partition_version.hh"
 
 namespace scollectd {
 
@@ -41,6 +42,8 @@ struct registrations;
 }
 
 namespace bi = boost::intrusive;
+
+class row_cache;
 
 // Intrusive set entry which holds partition data.
 //
@@ -57,7 +60,7 @@ class cache_entry {
 
     schema_ptr _schema;
     dht::decorated_key _key;
-    mutation_partition _p;
+    partition_entry _pe;
     lru_link_type _lru_link;
     cache_link_type _cache_link;
     friend class size_calculator;
@@ -68,24 +71,30 @@ public:
     cache_entry(schema_ptr s, const dht::decorated_key& key, const mutation_partition& p)
         : _schema(std::move(s))
         , _key(key)
-        , _p(p)
+        , _pe(p)
     { }
 
     cache_entry(schema_ptr s, dht::decorated_key&& key, mutation_partition&& p) noexcept
         : _schema(std::move(s))
         , _key(std::move(key))
-        , _p(std::move(p))
+        , _pe(std::move(p))
+    { }
+
+    cache_entry(schema_ptr s, dht::decorated_key&& key, partition_entry&& pe) noexcept
+        : _schema(std::move(s))
+        , _key(std::move(key))
+        , _pe(std::move(pe))
     { }
 
     cache_entry(cache_entry&&) noexcept;
 
     const dht::decorated_key& key() const { return _key; }
-    const mutation_partition& partition() const { return _p; }
-    mutation_partition& partition() { return _p; }
+    const partition_entry& partition() const { return _pe; }
+    partition_entry& partition() { return _pe; }
     const schema_ptr& schema() const { return _schema; }
     schema_ptr& schema() { return _schema; }
-    mutation read(const schema_ptr&);
-    mutation read(const schema_ptr&, query::clustering_key_filtering_context);
+    streamed_mutation read(row_cache&, const schema_ptr&);
+    streamed_mutation read(row_cache&, const schema_ptr&, query::clustering_key_filtering_context);
 
     struct compare {
         dht::decorated_key::less_comparator _c;
@@ -173,6 +182,7 @@ public:
         bi::constant_time_size<false>, // we need this to have bi::auto_unlink on hooks
         bi::compare<cache_entry::compare>>;
     friend class populating_reader;
+    friend class cache_entry;
 public:
     struct stats {
         utils::timed_rate_moving_average hits;
