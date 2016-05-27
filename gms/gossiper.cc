@@ -1225,7 +1225,7 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
     // don't assert here, since if the node restarts the version will go back to zero
     //int oldVersion = local_state.get_heart_beat_state().get_heart_beat_version();
 
-    local_state.set_heart_beat_state(remote_state.get_heart_beat_state());
+    local_state.set_heart_beat_state_and_update_timestamp(remote_state.get_heart_beat_state());
     // if (logger.isTraceEnabled()) {
     //     logger.trace("Updating heartbeat state version to {} from {} for {} ...",
     //     local_state.get_heart_beat_state().get_heart_beat_version(), oldVersion, addr);
@@ -1442,7 +1442,7 @@ void gossiper::add_saved_endpoint(inet_address ep) {
     if (it != endpoint_state_map.end()) {
         ep_state = it->second;
         logger.debug("not replacing a previous ep_state for {}, but reusing it: {}", ep, ep_state);
-        ep_state.set_heart_beat_state(heart_beat_state(0));
+        ep_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(0));
     }
     ep_state.mark_dead();
     endpoint_state_map[ep] = ep_state;

@@ -97,7 +97,7 @@ public:
         return _heart_beat_state;
     }
 
-    void set_heart_beat_state(heart_beat_state hbs) {
+    void set_heart_beat_state_and_update_timestamp(heart_beat_state hbs) {
         update_timestamp();
         _heart_beat_state = hbs;
     }
