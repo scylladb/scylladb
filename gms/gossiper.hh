@@ -48,12 +48,14 @@
 #include "gms/versioned_value.hh"
 #include "gms/application_state.hh"
 #include "gms/endpoint_state.hh"
+#include "gms/feature.hh"
 #include "message/messaging_service.hh"
 #include <boost/algorithm/string.hpp>
 #include <experimental/optional>
 #include <algorithm>
 #include <chrono>
 #include <set>
+#include <seastar/core/condition-variable.hh>
 
 namespace gms {
 
@@ -514,17 +516,23 @@ private:
     uint64_t _nr_run = 0;
     bool _ms_registered = false;
     bool _gossiped_to_seed = false;
+private:
+    condition_variable _features_condvar;
+    std::unordered_map<sstring, std::vector<feature*>> _registered_features;
+    friend class feature;
 public:
     // Get features supported by a particular node
     std::set<sstring> get_supported_features(inet_address endpoint) const;
     // Get features supported by all the nodes this node knows about
     std::set<sstring> get_supported_features() const;
     // Wait for features are available on all nodes this node knows about
-    future<> wait_for_feature_on_all_node(std::set<sstring> features,
-            std::chrono::seconds timeout = std::chrono::seconds(300)) const;
+    future<> wait_for_feature_on_all_node(std::set<sstring> features);
     // Wait for features are available on a particular node
-    future<> wait_for_feature_on_node(std::set<sstring> features, inet_address endpoint,
-            std::chrono::seconds timeout = std::chrono::seconds(300)) const;
+    future<> wait_for_feature_on_node(std::set<sstring> features, inet_address endpoint);
+private:
+    void register_feature(feature* f);
+    void unregister_feature(feature* f);
+    void maybe_enable_features();
 };
 
 extern distributed<gossiper> _the_gossiper;
