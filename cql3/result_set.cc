@@ -180,9 +180,12 @@ const std::deque<std::vector<bytes_opt>>& result_set::rows() const {
 
 shared_ptr<const cql3::metadata>
 make_empty_metadata() {
-    auto result = ::make_shared<metadata>(std::vector<::shared_ptr<cql3::column_specification>>{});
-    result->set_skip_metadata();
-    return result;
+    static thread_local shared_ptr<const metadata> empty_metadata_cache = [] {
+        auto result = ::make_shared<metadata>(std::vector<::shared_ptr<cql3::column_specification>>{});
+        result->set_skip_metadata();
+        return result;
+    }();
+    return empty_metadata_cache;
 }
 
 }
