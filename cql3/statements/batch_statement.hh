@@ -60,7 +60,7 @@ namespace statements {
  * A <code>BATCH</code> statement parsed from a CQL query.
  *
  */
-class batch_statement : public cql_statement {
+class batch_statement : public cql_statement_no_metadata {
     static logging::logger _logger;
 public:
     enum class type {

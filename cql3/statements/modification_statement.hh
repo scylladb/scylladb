@@ -69,7 +69,7 @@ namespace statements {
 /*
  * Abstract parent class of individual modifications, i.e. INSERT, UPDATE and DELETE.
  */
-class modification_statement : public cql_statement {
+class modification_statement : public cql_statement_no_metadata {
 private:
     static thread_local const ::shared_ptr<column_identifier> CAS_RESULT_COLUMN;
 

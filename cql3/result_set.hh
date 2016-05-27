@@ -106,12 +106,7 @@ public:
     const std::vector<::shared_ptr<column_specification>>& get_names() const;
 };
 
-inline ::shared_ptr<cql3::metadata> make_empty_metadata()
-{
-    auto result = ::make_shared<cql3::metadata>(std::vector<::shared_ptr<cql3::column_specification>>{});
-    result->set_skip_metadata();
-    return result;
-}
+::shared_ptr<cql3::metadata> make_empty_metadata();
 
 class prepared_metadata {
 public:

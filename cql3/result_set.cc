@@ -178,4 +178,11 @@ const std::deque<std::vector<bytes_opt>>& result_set::rows() const {
     return _rows;
 }
 
+shared_ptr<cql3::metadata>
+make_empty_metadata() {
+    auto result = ::make_shared<metadata>(std::vector<::shared_ptr<cql3::column_specification>>{});
+    result->set_skip_metadata();
+    return result;
+}
+
 }

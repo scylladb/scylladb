@@ -24,7 +24,6 @@
 
 #include "cql3/result_set.hh"
 #include "cql3/statements/prepared_statement.hh"
-#include "cql3/statements/select_statement.hh"
 
 #include "transport/messages/result_message_base.hh"
 #include "transport/event.hh"
@@ -114,11 +113,7 @@ public:
     }
 private:
     static ::shared_ptr<cql3::metadata> extract_result_metadata(::shared_ptr<cql3::cql_statement> statement) {
-        auto select_stmt = dynamic_cast<cql3::statements::select_statement*>(statement.get());
-        if (!select_stmt) {
-            return cql3::make_empty_metadata();
-        }
-        return select_stmt->get_result_metadata();
+        return statement->get_result_metadata();
     }
 };
 

@@ -50,7 +50,7 @@ namespace cql3 {
 
 namespace statements {
 
-class use_statement : public raw::parsed_statement, public cql_statement, public ::enable_shared_from_this<use_statement> {
+class use_statement : public raw::parsed_statement, public cql_statement_no_metadata, public ::enable_shared_from_this<use_statement> {
 private:
     const sstring _keyspace;
 
