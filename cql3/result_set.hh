@@ -85,7 +85,7 @@ public:
             ::shared_ptr<const service::pager::paging_state> paging_state);
 
     // The maximum number of values that the ResultSet can hold. This can be bigger than columnCount due to CASSANDRA-4911
-    uint32_t value_count();
+    uint32_t value_count() const;
 
     void add_non_serialized_column(::shared_ptr<column_specification> name);
 
@@ -106,7 +106,7 @@ public:
     const std::vector<::shared_ptr<column_specification>>& get_names() const;
 };
 
-::shared_ptr<cql3::metadata> make_empty_metadata();
+::shared_ptr<const cql3::metadata> make_empty_metadata();
 
 class prepared_metadata {
 public:

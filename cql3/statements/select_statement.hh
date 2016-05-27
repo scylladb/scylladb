@@ -107,7 +107,7 @@ public:
     static ::shared_ptr<select_statement> for_selection(
         schema_ptr schema, ::shared_ptr<selection::selection> selection);
 
-    virtual ::shared_ptr<cql3::metadata> get_result_metadata() const override;
+    virtual ::shared_ptr<const cql3::metadata> get_result_metadata() const override;
     virtual uint32_t get_bound_terms() override;
     virtual future<> check_access(const service::client_state& state) override;
     virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;

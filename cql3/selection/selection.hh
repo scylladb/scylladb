@@ -161,7 +161,7 @@ public:
         return std::find(_columns.begin(), _columns.end(), &def) != _columns.end();
     }
 
-    ::shared_ptr<metadata> get_result_metadata() const {
+    ::shared_ptr<const metadata> get_result_metadata() const {
         return _metadata;
     }
 

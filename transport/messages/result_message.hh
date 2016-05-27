@@ -82,7 +82,7 @@ private:
     bytes _id;
     ::shared_ptr<cql3::statements::prepared_statement> _prepared;
     ::shared_ptr<cql3::prepared_metadata> _metadata;
-    ::shared_ptr<cql3::metadata> _result_metadata;
+    ::shared_ptr<const cql3::metadata> _result_metadata;
 public:
     prepared(const bytes& id, ::shared_ptr<cql3::statements::prepared_statement> prepared)
         : _id{id}
@@ -104,7 +104,7 @@ public:
         return _metadata;
     }
 
-    ::shared_ptr<cql3::metadata> result_metadata() const {
+    ::shared_ptr<const cql3::metadata> result_metadata() const {
         return _result_metadata;
     }
 
@@ -112,7 +112,7 @@ public:
         v.visit(*this);
     }
 private:
-    static ::shared_ptr<cql3::metadata> extract_result_metadata(::shared_ptr<cql3::cql_statement> statement) {
+    static ::shared_ptr<const cql3::metadata> extract_result_metadata(::shared_ptr<cql3::cql_statement> statement) {
         return statement->get_result_metadata();
     }
 };

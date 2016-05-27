@@ -59,7 +59,7 @@ class result_message;
 namespace cql3 {
 
 class metadata;
-shared_ptr<metadata> make_empty_metadata();
+shared_ptr<const metadata> make_empty_metadata();
 
 class cql_statement {
 public:
@@ -106,12 +106,12 @@ public:
 
     virtual bool depends_on_column_family(const sstring& cf_name) const = 0;
 
-    virtual shared_ptr<metadata> get_result_metadata() const = 0;
+    virtual shared_ptr<const metadata> get_result_metadata() const = 0;
 };
 
 class cql_statement_no_metadata : public cql_statement {
 public:
-    virtual shared_ptr<metadata> get_result_metadata() const override {
+    virtual shared_ptr<const metadata> get_result_metadata() const override {
         return make_empty_metadata();
     }
 };

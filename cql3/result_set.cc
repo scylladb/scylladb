@@ -56,7 +56,7 @@ metadata::metadata(flag_enum_set flags, std::vector<::shared_ptr<column_specific
 { }
 
 // The maximum number of values that the ResultSet can hold. This can be bigger than columnCount due to CASSANDRA-4911
-uint32_t metadata::value_count() {
+uint32_t metadata::value_count() const {
     return _flags.contains<flag::NO_METADATA>() ? _column_count : names.size();
 }
 
@@ -178,7 +178,7 @@ const std::deque<std::vector<bytes_opt>>& result_set::rows() const {
     return _rows;
 }
 
-shared_ptr<cql3::metadata>
+shared_ptr<const cql3::metadata>
 make_empty_metadata() {
     auto result = ::make_shared<metadata>(std::vector<::shared_ptr<cql3::column_specification>>{});
     result->set_skip_metadata();
