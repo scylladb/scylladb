@@ -36,7 +36,7 @@ class frozen_mutation;
 
 namespace bi = boost::intrusive;
 
-class partition_entry {
+class memtable_entry {
     bi::set_member_hook<> _link;
     schema_ptr _schema;
     dht::decorated_key _key;
@@ -44,13 +44,13 @@ class partition_entry {
 public:
     friend class memtable;
 
-    partition_entry(schema_ptr s, dht::decorated_key key, mutation_partition p)
+    memtable_entry(schema_ptr s, dht::decorated_key key, mutation_partition p)
         : _schema(std::move(s))
         , _key(std::move(key))
         , _p(std::move(p))
     { }
 
-    partition_entry(partition_entry&& o) noexcept;
+    memtable_entry(memtable_entry&& o) noexcept;
 
     const dht::decorated_key& key() const { return _key; }
     dht::decorated_key& key() { return _key; }
@@ -67,23 +67,23 @@ public:
             : _c(std::move(s))
         {}
 
-        bool operator()(const dht::decorated_key& k1, const partition_entry& k2) const {
+        bool operator()(const dht::decorated_key& k1, const memtable_entry& k2) const {
             return _c(k1, k2._key);
         }
 
-        bool operator()(const partition_entry& k1, const partition_entry& k2) const {
+        bool operator()(const memtable_entry& k1, const memtable_entry& k2) const {
             return _c(k1._key, k2._key);
         }
 
-        bool operator()(const partition_entry& k1, const dht::decorated_key& k2) const {
+        bool operator()(const memtable_entry& k1, const dht::decorated_key& k2) const {
             return _c(k1._key, k2);
         }
 
-        bool operator()(const partition_entry& k1, const dht::ring_position& k2) const {
+        bool operator()(const memtable_entry& k1, const dht::ring_position& k2) const {
             return _c(k1._key, k2);
         }
 
-        bool operator()(const dht::ring_position& k1, const partition_entry& k2) const {
+        bool operator()(const dht::ring_position& k1, const memtable_entry& k2) const {
             return _c(k1, k2._key);
         }
     };
@@ -92,9 +92,9 @@ public:
 // Managed by lw_shared_ptr<>.
 class memtable final : public enable_lw_shared_from_this<memtable> {
 public:
-    using partitions_type = bi::set<partition_entry,
-        bi::member_hook<partition_entry, bi::set_member_hook<>, &partition_entry::_link>,
-        bi::compare<partition_entry::compare>>;
+    using partitions_type = bi::set<memtable_entry,
+        bi::member_hook<memtable_entry, bi::set_member_hook<>, &memtable_entry::_link>,
+        bi::compare<memtable_entry::compare>>;
 private:
     schema_ptr _schema;
     logalloc::allocating_section _read_section;
@@ -109,7 +109,7 @@ private:
     boost::iterator_range<partitions_type::const_iterator> slice(const query::partition_range& r) const;
     mutation_partition& find_or_create_partition(const dht::decorated_key& key);
     mutation_partition& find_or_create_partition_slow(partition_key_view key);
-    void upgrade_entry(partition_entry&);
+    void upgrade_entry(memtable_entry&);
 public:
     explicit memtable(schema_ptr schema, logalloc::region_group* dirty_memory_region_group = nullptr);
     ~memtable();

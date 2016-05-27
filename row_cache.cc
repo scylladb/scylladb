@@ -509,7 +509,7 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                 bool blow_cache = false;
                 // Note: clear_and_dispose() ought not to look up any keys, so it doesn't require
                 // with_linearized_managed_bytes(), but invalidate() does.
-                m.partitions.clear_and_dispose([this, deleter = current_deleter<partition_entry>(), &blow_cache] (partition_entry* entry) {
+                m.partitions.clear_and_dispose([this, deleter = current_deleter<memtable_entry>(), &blow_cache] (memtable_entry* entry) {
                   with_linearized_managed_bytes([&] {
                    try {
                     invalidate_locked(entry->key());
@@ -537,7 +537,7 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                         while (i != m.partitions.end() && quota) {
                           with_linearized_managed_bytes([&] {
                            {
-                            partition_entry& mem_e = *i;
+                            memtable_entry& mem_e = *i;
                             // FIXME: Optimize knowing we lookup in-order.
                             auto cache_i = _partitions.lower_bound(mem_e.key(), cmp);
                             // If cache doesn't contain the entry we cannot insert it because the mutation may be incomplete.
