@@ -801,3 +801,88 @@ SEASTAR_TEST_CASE(test_invalidate_works_with_wrap_arounds) {
         verify_does_not_have(cache, ring[7].decorated_key());
     });
 }
+
+SEASTAR_TEST_CASE(test_mvcc) {
+    return seastar::async([] {
+        auto no_difference = [] (auto& m1, auto& m2) {
+            return m1.partition().difference(m1.schema(), m2.partition()).empty()
+                && m2.partition().difference(m1.schema(), m1.partition()).empty();
+        };
+
+        for_each_mutation_pair([&] (const mutation& m1, const mutation& m2_, are_equal) {
+            if (m1.schema() != m2_.schema()) {
+                return;
+            }
+            if (m1.partition().empty() || m2_.partition().empty()) {
+                return;
+            }
+
+            auto s = m1.schema();
+
+            auto m2 = mutation(m1.decorated_key(), s);
+            m2.partition().apply(*s, m2_.partition(), *s);
+
+            auto mt = make_lw_shared<memtable>(s);
+            partition_key::equality eq(*s);
+
+            cache_tracker tracker;
+            row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
+
+            auto pk = m1.key();
+            cache.populate(m1);
+
+            auto sm1 = cache.make_reader(s)().get0();
+            BOOST_REQUIRE(sm1);
+            BOOST_REQUIRE(eq(sm1->key(), pk));
+
+            auto sm2 = cache.make_reader(s)().get0();
+            BOOST_REQUIRE(sm2);
+            BOOST_REQUIRE(eq(sm2->key(), pk));
+
+            auto mt1 = make_lw_shared<memtable>(s);
+            mt1->apply(m2);
+
+            auto m12 = m1;
+            m12.apply(m2);
+
+            cache.update(*mt1, make_default_partition_presence_checker());
+            auto sm3 = cache.make_reader(s)().get0();
+            BOOST_REQUIRE(sm3);
+            BOOST_REQUIRE(eq(sm3->key(), pk));
+
+            auto sm4 = cache.make_reader(s)().get0();
+            BOOST_REQUIRE(sm4);
+            BOOST_REQUIRE(eq(sm4->key(), pk));
+
+            auto sm5 = cache.make_reader(s)().get0();
+            BOOST_REQUIRE(sm5);
+            BOOST_REQUIRE(eq(sm5->key(), pk));
+
+            stdx::optional<position_in_partition> previous;
+            position_in_partition::less_compare cmp(*sm3->schema());
+            auto mf = (*sm3)().get0();
+            while (mf) {
+                if (previous) {
+                    BOOST_REQUIRE(cmp(*previous, *mf));
+                }
+                previous = mf->position();
+                mf = (*sm3)().get0();
+            }
+            sm3 = { };
+
+            auto m_4 = mutation_from_streamed_mutation(std::move(sm4)).get0();
+            BOOST_REQUIRE(no_difference(m12, *m_4));
+
+            auto m_1 = mutation_from_streamed_mutation(std::move(sm1)).get0();
+            BOOST_REQUIRE(no_difference(m1, *m_1));
+
+            cache.clear().get0();
+
+            auto m_2 = mutation_from_streamed_mutation(std::move(sm2)).get0();
+            BOOST_REQUIRE(no_difference(m1, *m_2));
+
+            auto m_5 = mutation_from_streamed_mutation(std::move(sm5)).get0();
+            BOOST_REQUIRE(no_difference(m12, *m_5));
+        });
+    });
+}
