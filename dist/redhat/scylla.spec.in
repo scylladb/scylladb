@@ -7,7 +7,7 @@ Group:          Applications/Databases
 License:        AGPLv3
 URL:            http://www.scylladb.com/
 Source0:        %{name}-@@VERSION@@-@@RELEASE@@.tar
-Requires:       scylla-server scylla-jmx scylla-tools
+Requires:       scylla-server scylla-jmx scylla-tools scylla-kernel-conf
 Obsoletes:	scylla-server < 1.1
 
 %description
@@ -62,6 +62,7 @@ mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sudoers.d/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/collectd.d/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/scylla.d/
+mkdir -p $RPM_BUILD_ROOT%{_sysctldir}/
 mkdir -p $RPM_BUILD_ROOT%{_docdir}/scylla/
 mkdir -p $RPM_BUILD_ROOT%{_unitdir}
 mkdir -p $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
@@ -71,6 +72,7 @@ install -m644 dist/common/limits.d/scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/sec
 install -m644 dist/common/sudoers.d/scylla $RPM_BUILD_ROOT%{_sysconfdir}/sudoers.d/
 install -m644 dist/common/collectd.d/scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/collectd.d/
 install -m644 dist/common/scylla.d/*.conf $RPM_BUILD_ROOT%{_sysconfdir}/scylla.d/
+install -m644 dist/common/sysctl.d/*.conf $RPM_BUILD_ROOT%{_sysctldir}/
 install -d -m755 $RPM_BUILD_ROOT%{_sysconfdir}/scylla
 install -m644 conf/scylla.yaml $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
 install -m644 conf/cassandra-rackdc.properties $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
@@ -200,6 +202,23 @@ mv /tmp/scylla.yaml /etc/scylla/scylla.yaml
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla
 %config(noreplace) %{_sysconfdir}/scylla/scylla.yaml
 %config(noreplace) %{_sysconfdir}/scylla/cassandra-rackdc.properties
+
+%package kernel-conf
+Group:          Applications/Databases
+Summary:        Scylla configuration package for the Linux kernel
+License:        AGPLv3
+URL:            http://www.scylladb.com/
+
+%description kernel-conf
+This package contains Linux kernel configuration changes for the Scylla database.  Install this package
+if Scylla is the main application on your server and you wish to optimize its latency and throughput.
+
+%post kernel-conf
+%sysctl_apply 99-scylla-sched.conf
+
+%files kernel-conf
+%defattr(-,root,root)
+%{_sysctldir}/*.conf
 
 %changelog
 * Tue Jul 21 2015 Takuya ASADA <syuu@cloudius-systems.com>

@@ -31,10 +31,16 @@ Description: debugging symbols for scylla-server
  partitioned row DB.
  This package contains the debugging symbols for scylla-server.
 
+Package: scylla-kernel-conf
+Architecture: any
+Description: Scylla kernel tuning configuration
+ Scylla is a highly scalable, eventually consistent, distributed,
+ partitioned row DB.
+
 Package: scylla
 Section: metapackages
 Architecture: any
-Depends: scylla-server, scylla-jmx, scylla-tools
+Depends: scylla-server, scylla-jmx, scylla-tools, scylla-kernel-conf
 Description: Scylla database metapackage
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
