@@ -42,12 +42,47 @@
 
 #include <vector>
 #include <atomic>
+#include <seastar/core/sharded.hh>
 #include <seastar/core/sstring.hh>
 #include "gc_clock.hh"
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
 
 namespace tracing {
+
+class trace_state;
+
+enum class trace_type : uint8_t {
+    NONE,
+    QUERY,
+    REPAIR,
+};
+
+extern std::vector<sstring> trace_type_names;
+
+inline const sstring& type_to_string(trace_type t) {
+    return trace_type_names.at(static_cast<int>(t));
+}
+
+/**
+ * Returns a TTL for a given trace type
+ * @param t trace type
+ *
+ * @return TTL
+ */
+inline gc_clock::duration ttl_by_type(const trace_type t) {
+    switch (t) {
+    case trace_type::NONE:
+    case trace_type::QUERY:
+        return gc_clock::duration(86400);  // 1 day
+    case trace_type::REPAIR:
+        return gc_clock::duration(604800); // 7 days
+    default:
+        // unknown type value - must be a SW bug
+        throw std::invalid_argument("unknown trace type: " + std::to_string(int(t)));
+    }
+}
+
 struct i_tracing_backend_helper {
     virtual ~i_tracing_backend_helper() {}
     virtual future<> start() = 0;
@@ -88,6 +123,75 @@ struct i_tracing_backend_helper {
                                     int elapsed,
                                     gc_clock::duration ttl) = 0;
 
+    /**
+     * Commit all pending tracing records to the underlying storage.
+     */
     virtual void flush() = 0;
+};
+
+using trace_state_ptr = lw_shared_ptr<trace_state>;
+
+class tracing {
+public:
+    static constexpr int max_pending_sessions = 100;
+    static constexpr int max_trace_events_per_session = 30;
+    // Number of max threshold XXX hits when an info message is printed
+    static constexpr int max_threshold_hits_warning_period = 10000;
+
+    struct stats {
+        uint64_t max_sessions_threshold_hits = 0;
+        uint64_t max_traces_threshold_hits = 0;
+        uint64_t trace_events_count = 0;
+    } stats;
+
+private:
+    uint64_t _pending_sessions = 0;
+    std::unique_ptr<i_tracing_backend_helper> _tracing_backend_helper_ptr;
+    sstring _thread_name;
+    scollectd::registrations _registrations;
+
+public:
+    i_tracing_backend_helper& backend_helper() {
+        return *_tracing_backend_helper_ptr;
+    }
+
+    const sstring& get_thread_name() const {
+        return _thread_name;
+    }
+
+    static seastar::sharded<tracing>& tracing_instance() {
+        // FIXME: leaked intentionally to avoid shutdown problems, see #293
+        static seastar::sharded<tracing>* tracing_inst = new seastar::sharded<tracing>();
+
+        return *tracing_inst;
+    }
+
+    static tracing& get_local_tracing_instance() {
+        return tracing_instance().local();
+    }
+
+    static future<> create_tracing(const sstring& tracing_backend_helper_class_name);
+    tracing(const sstring& tracing_backend_helper_class_name);
+
+    // Initialize a tracing backend (e.g. tracing_keyspace or logstash)
+    future<> start() { return _tracing_backend_helper_ptr->start(); }
+
+    // waits until all active tracing sessions are over.
+    future<> stop();
+
+    /**
+     * Create a new tracing session.
+     *
+     * @param type a tracing session type
+     * @param flush_on_close flush a backend before closing the session
+     * @param session_id a session ID to create a (secondary) session with
+     *
+     * @return tracing state handle
+     */
+    trace_state_ptr create_session(trace_type type, bool flush_on_close, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt);
+
+    void end_session() {
+        --_pending_sessions;
+    }
 };
 }

@@ -473,7 +473,9 @@ scylla_core = (['database.cc',
                  'auth/data_resource.cc',
                  'auth/password_authenticator.cc',
                  'auth/permission.cc',
+                 'tracing/tracing.cc',
                  'tracing/trace_keyspace_helper.cc',
+                 'tracing/trace_state.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
