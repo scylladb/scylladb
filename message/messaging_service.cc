@@ -776,14 +776,14 @@ future<reconcilable_result> messaging_service::send_read_mutation_data(msg_addr 
     return send_message_timeout<reconcilable_result>(this, messaging_verb::READ_MUTATION_DATA, std::move(id), timeout, cmd, pr);
 }
 
-void messaging_service::register_read_digest(std::function<future<query::result_digest> (const rpc::client_info&, query::read_command cmd, query::partition_range pr)>&& func) {
+void messaging_service::register_read_digest(std::function<future<query::result_digest, api::timestamp_type> (const rpc::client_info&, query::read_command cmd, query::partition_range pr)>&& func) {
     register_handler(this, net::messaging_verb::READ_DIGEST, std::move(func));
 }
 void messaging_service::unregister_read_digest() {
     _rpc->unregister_handler(net::messaging_verb::READ_DIGEST);
 }
-future<query::result_digest> messaging_service::send_read_digest(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const query::partition_range& pr) {
-    return send_message_timeout<query::result_digest>(this, net::messaging_verb::READ_DIGEST, std::move(id), timeout, cmd, pr);
+future<query::result_digest, rpc::optional<api::timestamp_type>> messaging_service::send_read_digest(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const query::partition_range& pr) {
+    return send_message_timeout<future<query::result_digest, rpc::optional<api::timestamp_type>>>(this, net::messaging_verb::READ_DIGEST, std::move(id), timeout, cmd, pr);
 }
 
 // Wrapper for TRUNCATE

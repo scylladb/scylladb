@@ -97,6 +97,7 @@ class result {
     bytes_ostream _w;
     stdx::optional<result_digest> _digest;
     stdx::optional<uint32_t> _row_count;
+    api::timestamp_type _last_modified = api::missing_timestamp;
 
 public:
     class builder;
@@ -105,7 +106,7 @@ public:
 
     result();
     result(bytes_ostream&& w, stdx::optional<uint32_t> c = {}) : _w(std::move(w)), _row_count(c) {}
-    result(bytes_ostream&& w, stdx::optional<result_digest> d, stdx::optional<uint32_t> c = {}) : _w(std::move(w)), _digest(d), _row_count(c) {}
+    result(bytes_ostream&& w, stdx::optional<result_digest> d, api::timestamp_type last_modified, stdx::optional<uint32_t> c = {}) : _w(std::move(w)), _digest(d), _row_count(c), _last_modified(last_modified) {}
     result(result&&) = default;
     result(const result&) = default;
     result& operator=(result&&) = default;
@@ -121,6 +122,10 @@ public:
 
     const stdx::optional<uint32_t>& row_count() const {
         return _row_count;
+    }
+
+    const api::timestamp_type last_modified() const {
+        return _last_modified;
     }
 
     uint32_t calculate_row_count(const query::partition_slice&);

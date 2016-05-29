@@ -156,17 +156,20 @@ public:
     partition_slice slice;
     uint32_t row_limit;
     gc_clock::time_point timestamp;
+    api::timestamp_type read_timestamp; // not serialized
 public:
     read_command(utils::UUID cf_id,
                  table_schema_version schema_version,
                  partition_slice slice,
                  uint32_t row_limit = max_rows,
-                 gc_clock::time_point now = gc_clock::now())
+                 gc_clock::time_point now = gc_clock::now(),
+                 api::timestamp_type rt = api::missing_timestamp)
         : cf_id(std::move(cf_id))
         , schema_version(std::move(schema_version))
         , slice(std::move(slice))
         , row_limit(row_limit)
         , timestamp(now)
+        , read_timestamp(rt)
     { }
 
     friend std::ostream& operator<<(std::ostream& out, const read_command& r);
