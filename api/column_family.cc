@@ -201,6 +201,49 @@ static ratio_holder mean_row_size(column_family& cf) {
     return res;
 }
 
+static std::unordered_map<sstring, uint64_t> merge_maps(std::unordered_map<sstring, uint64_t> a,
+        const std::unordered_map<sstring, uint64_t>& b) {
+    a.insert(b.begin(), b.end());
+    return a;
+}
+
+static json::json_return_type sum_map(const std::unordered_map<sstring, uint64_t>& val) {
+    uint64_t res = 0;
+    for (auto i : val) {
+        res += i.second;
+    }
+    return res;
+}
+
+static future<json::json_return_type>  sum_sstable(http_context& ctx, const sstring name, bool total) {
+    auto uuid = get_uuid(name, ctx.db.local());
+    return ctx.db.map_reduce0([uuid, total](database& db) {
+        std::unordered_map<sstring, uint64_t> m;
+        for (auto t :*((total) ? db.find_column_family(uuid).get_sstables_including_compacted_undeleted() :
+                db.find_column_family(uuid).get_sstables()).get()) {
+            m[t.second->get_filename()] = t.second->bytes_on_disk();
+        }
+        return m;
+    }, std::unordered_map<sstring, uint64_t>(), merge_maps).
+            then([](const std::unordered_map<sstring, uint64_t>& val) {
+        return sum_map(val);
+    });
+}
+
+
+static future<json::json_return_type> sum_sstable(http_context& ctx, bool total) {
+    return map_reduce_cf_raw(ctx, std::unordered_map<sstring, uint64_t>(), [total](column_family& cf) {
+        std::unordered_map<sstring, uint64_t> m;
+        for (auto t :*((total) ? cf.get_sstables_including_compacted_undeleted() :
+                cf.get_sstables()).get()) {
+            m[t.second->get_filename()] = t.second->bytes_on_disk();
+        }
+        return m;
+    },merge_maps).then([](const std::unordered_map<sstring, uint64_t>& val) {
+        return sum_map(val);
+    });
+}
+
 template <typename T>
 class sum_ratio {
     uint64_t _n = 0;
@@ -473,19 +516,19 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_live_disk_space_used.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return get_cf_stats(ctx, req->param["name"], &column_family::stats::live_disk_space_used);
+        return sum_sstable(ctx, req->param["name"], false);
     });
 
     cf::get_all_live_disk_space_used.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return get_cf_stats(ctx, &column_family::stats::live_disk_space_used);
+        return sum_sstable(ctx, false);
     });
 
     cf::get_total_disk_space_used.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return get_cf_stats(ctx, req->param["name"], &column_family::stats::total_disk_space_used);
+        return sum_sstable(ctx, req->param["name"], true);
     });
 
     cf::get_all_total_disk_space_used.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return get_cf_stats(ctx, &column_family::stats::total_disk_space_used);
+        return sum_sstable(ctx, true);
     });
 
     cf::get_min_row_size.set(r, [&ctx] (std::unique_ptr<request> req) {
