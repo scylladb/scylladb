@@ -237,6 +237,40 @@ mutation_partition::mutation_partition(const mutation_partition& x, const schema
     }
 }
 
+mutation_partition::mutation_partition(mutation_partition&& x, const schema& schema,
+    const query::clustering_row_ranges& ck_ranges)
+    : _tombstone(x._tombstone)
+    , _static_row(std::move(x._static_row))
+    , _rows(std::move(x._rows))
+    , _row_tombstones(std::move(x._row_tombstones))
+{
+    auto deleter = current_deleter<rows_entry>();
+    if (ck_ranges.empty()) {
+        _rows.clear_and_dispose(deleter);
+        return;
+    }
+
+    auto range = ck_ranges.begin();
+    auto it = _rows.begin();
+    auto it_end = lower_bound(schema, *range);
+
+    _rows.erase_and_dispose(it, it_end, deleter);
+
+    auto next_range = std::next(range);
+    while (next_range != ck_ranges.end()) {
+        it = upper_bound(schema, *range);
+        it_end = lower_bound(schema, *next_range);
+        _rows.erase_and_dispose(it, it_end, deleter);
+
+        range = next_range;
+        next_range = std::next(range);
+    }
+
+    it = upper_bound(schema, *range);
+    it_end = _rows.end();
+    _rows.erase_and_dispose(it, it_end, deleter);
+}
+
 mutation_partition::~mutation_partition() {
     _rows.clear_and_dispose(current_deleter<rows_entry>());
 }
