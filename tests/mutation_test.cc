@@ -1317,3 +1317,79 @@ SEASTAR_TEST_CASE(test_tombstone_purge) {
 
     return make_ready_future<>();
 }
+
+SEASTAR_TEST_CASE(test_slicing_mutation) {
+    auto s = schema_builder("ks", "cf")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("v", int32_type)
+        .build();
+
+    auto pk = partition_key::from_exploded(*s, { int32_type->decompose(0) });
+    mutation m(pk, s);
+    constexpr auto row_count = 8;
+    for (auto i = 0; i < row_count; i++) {
+        m.set_clustered_cell(clustering_key_prefix::from_single_value(*s, int32_type->decompose(i)),
+                             to_bytes("v"), data_value(i), api::new_timestamp());
+    }
+
+    auto verify_rows = [&] (mutation_partition& mp, std::vector<int> rows) {
+        std::deque<clustering_key> cks;
+        for (auto&& cr : rows) {
+            cks.emplace_back(clustering_key_prefix::from_single_value(*s, int32_type->decompose(cr)));
+        }
+        clustering_key::equality ck_eq(*s);
+        for (auto&& cr : mp.clustered_rows()) {
+            BOOST_REQUIRE(ck_eq(cr.key(), cks.front()));
+            cks.pop_front();
+        }
+    };
+
+    auto test_slicing = [&] (query::clustering_row_ranges ranges, std::vector<int> expected_rows) {
+        mutation_partition mp1(m.partition(), *s, ranges);
+        auto mp_temp = m.partition();
+        mutation_partition mp2(std::move(mp_temp), *s, ranges);
+
+        BOOST_REQUIRE(mp1.equal(*s, mp2));
+        verify_rows(mp1, expected_rows);
+    };
+
+    test_slicing(query::clustering_row_ranges {
+            query::clustering_range {
+                { },
+                query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(2)), false },
+            },
+            clustering_key_prefix::from_single_value(*s, int32_type->decompose(5)),
+            query::clustering_range {
+                query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(7)) },
+                query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(10)) },
+            },
+        },
+        std::vector<int> { 0, 1, 5, 7 });
+
+    test_slicing(query::clustering_row_ranges {
+            query::clustering_range {
+                query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(1)) },
+                query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(2)) },
+            },
+            query::clustering_range {
+                query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(4)), false },
+                query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(6)) },
+            },
+            query::clustering_range {
+                query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(7)), false },
+                { },
+            },
+        },
+        std::vector<int> { 1, 2, 5, 6 });
+
+    test_slicing(query::clustering_row_ranges {
+            query::clustering_range {
+                { },
+                { },
+            },
+        },
+        std::vector<int> { 0, 1, 2, 3, 4, 5, 6, 7 });
+
+    return make_ready_future<>();
+}
