@@ -72,12 +72,14 @@ static mutation_partition get_partition(memtable& mt, const partition_key& key) 
 template <typename Func>
 future<>
 with_column_family(schema_ptr s, column_family::config cfg, Func func) {
+    auto dir = make_lw_shared<tmpdir>();
+    cfg.datadir = { dir->path };
     auto cm = make_lw_shared<compaction_manager>();
     auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm);
     cf->mark_ready_for_writes();
     return func(*cf).then([cf, cm] {
         return cf->stop();
-    }).finally([cf, cm] {});
+    }).finally([cf, cm, dir] {});
 }
 
 SEASTAR_TEST_CASE(test_mutation_is_applied) {
@@ -330,11 +332,9 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
         .with_column("v", bytes_type)
         .build();
 
-    auto dir = make_lw_shared<tmpdir>();
     auto cf_stats = make_lw_shared<::cf_stats>();
 
     column_family::config cfg;
-    cfg.datadir = { dir->path };
     cfg.enable_disk_reads = true;
     cfg.enable_disk_writes = true;
     cfg.enable_cache = true;
@@ -402,7 +402,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
 
             flushed.get();
         });
-    }).then([dir, cf_stats] {});
+    }).then([cf_stats] {});
 }
 
 SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
