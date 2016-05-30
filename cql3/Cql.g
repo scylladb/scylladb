@@ -33,6 +33,7 @@ options {
 @parser::includes {
 #include "cql3/selection/writetime_or_ttl.hh"
 #include "cql3/statements/raw/parsed_statement.hh"
+#include "cql3/statements/raw/select_statement.hh"
 #include "cql3/statements/alter_keyspace_statement.hh"
 #include "cql3/statements/alter_table_statement.hh"
 #include "cql3/statements/create_keyspace_statement.hh"
@@ -45,7 +46,6 @@ options {
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/drop_table_statement.hh"
 #include "cql3/statements/truncate_statement.hh"
-#include "cql3/statements/select_statement.hh"
 #include "cql3/statements/update_statement.hh"
 #include "cql3/statements/delete_statement.hh"
 #include "cql3/statements/index_prop_defs.hh"
@@ -354,11 +354,11 @@ useStatement returns [::shared_ptr<use_statement> stmt]
  * WHERE KEY = "key1" AND COL > 1 AND COL < 100
  * LIMIT <NUMBER>;
  */
-selectStatement returns [shared_ptr<select_statement::raw_statement> expr]
+selectStatement returns [shared_ptr<raw::select_statement> expr]
     @init {
         bool is_distinct = false;
         ::shared_ptr<cql3::term::raw> limit;
-        select_statement::parameters::orderings_type orderings;
+        raw::select_statement::parameters::orderings_type orderings;
         bool allow_filtering = false;
     }
     : K_SELECT ( ( K_DISTINCT { is_distinct = true; } )?
@@ -371,8 +371,8 @@ selectStatement returns [shared_ptr<select_statement::raw_statement> expr]
       ( K_LIMIT rows=intValue { limit = rows; } )?
       ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
       {
-          auto params = ::make_shared<select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering);
-          $expr = ::make_shared<select_statement::raw_statement>(std::move(cf), std::move(params),
+          auto params = ::make_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering);
+          $expr = ::make_shared<raw::select_statement>(std::move(cf), std::move(params),
             std::move(sclause), std::move(wclause), std::move(limit));
       }
     ;
@@ -426,7 +426,7 @@ whereClause returns [std::vector<cql3::relation_ptr> clause]
     : relation[$clause] (K_AND relation[$clause])*
     ;
 
-orderByClause[select_statement::parameters::orderings_type& orderings]
+orderByClause[raw::select_statement::parameters::orderings_type& orderings]
     @init{
         bool reversed = false;
     }

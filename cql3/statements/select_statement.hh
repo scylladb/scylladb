@@ -42,6 +42,7 @@
 #pragma once
 
 #include "cql3/statements/raw/cf_statement.hh"
+#include "cql3/statements/raw/select_statement.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/raw_selector.hh"
@@ -64,22 +65,7 @@ namespace statements {
  */
 class select_statement : public cql_statement {
 public:
-    class parameters final {
-    public:
-        using orderings_type = std::vector<std::pair<shared_ptr<column_identifier::raw>, bool>>;
-    private:
-        const orderings_type _orderings;
-        const bool _is_distinct;
-        const bool _allow_filtering;
-    public:
-        parameters();
-        parameters(orderings_type orderings,
-            bool is_distinct,
-            bool allow_filtering);
-        bool is_distinct();
-        bool allow_filtering();
-        orderings_type const& orderings();
-    };
+    using parameters = raw::select_statement::parameters;
 private:
     static constexpr int DEFAULT_COUNT_PAGE_SIZE = 10000;
     static thread_local const ::shared_ptr<parameters> _default_parameters;
@@ -92,10 +78,10 @@ private:
     ::shared_ptr<term> _limit;
 
     template<typename T>
-    using compare_fn = std::function<bool(const T&, const T&)>;
+    using compare_fn = raw::select_statement::compare_fn<T>;
 
-    using result_row_type = std::vector<bytes_opt>;
-    using ordering_comparator_type = compare_fn<result_row_type>;
+    using result_row_type = raw::select_statement::result_row_type;
+    using ordering_comparator_type = raw::select_statement::ordering_comparator_type;
 
     /**
      * The comparator used to orders results when multiple keys are selected (using IN).
@@ -429,69 +415,6 @@ private:
 
         result.add(row.getColumn(def.name));
     }
-#endif
-
-public:
-    class raw_statement;
-};
-
-class select_statement::raw_statement : public raw::cf_statement
-{
-private:
-    ::shared_ptr<parameters> _parameters;
-    std::vector<::shared_ptr<selection::raw_selector>> _select_clause;
-    std::vector<::shared_ptr<relation>> _where_clause;
-    ::shared_ptr<term::raw> _limit;
-public:
-    raw_statement(::shared_ptr<cf_name> cf_name,
-            ::shared_ptr<parameters> parameters,
-            std::vector<::shared_ptr<selection::raw_selector>> select_clause,
-            std::vector<::shared_ptr<relation>> where_clause,
-            ::shared_ptr<term::raw> limit);
-
-    virtual ::shared_ptr<prepared> prepare(database& db) override;
-private:
-    ::shared_ptr<restrictions::statement_restrictions> prepare_restrictions(
-        database& db,
-        schema_ptr schema,
-        ::shared_ptr<variable_specifications> bound_names,
-        ::shared_ptr<selection::selection> selection);
-
-    /** Returns a ::shared_ptr<term> for the limit or null if no limit is set */
-    ::shared_ptr<term> prepare_limit(database& db, ::shared_ptr<variable_specifications> bound_names);
-
-    static void verify_ordering_is_allowed(::shared_ptr<restrictions::statement_restrictions> restrictions);
-
-    static void validate_distinct_selection(schema_ptr schema,
-        ::shared_ptr<selection::selection> selection,
-        ::shared_ptr<restrictions::statement_restrictions> restrictions);
-
-    void handle_unrecognized_ordering_column(::shared_ptr<column_identifier> column);
-
-    select_statement::ordering_comparator_type get_ordering_comparator(schema_ptr schema,
-        ::shared_ptr<selection::selection> selection,
-        ::shared_ptr<restrictions::statement_restrictions> restrictions);
-
-    bool is_reversed(schema_ptr schema);
-
-    /** If ALLOW FILTERING was not specified, this verifies that it is not needed */
-    void check_needs_filtering(::shared_ptr<restrictions::statement_restrictions> restrictions);
-
-    bool contains_alias(::shared_ptr<column_identifier> name);
-
-    ::shared_ptr<column_specification> limit_receiver();
-
-#if 0
-    public:
-        virtual sstring to_string() override {
-            return sstring("raw_statement(")
-                + "name=" + cf_name->to_string()
-                + ", selectClause=" + to_string(_select_clause)
-                + ", whereClause=" + to_string(_where_clause)
-                + ", isDistinct=" + to_string(_parameters->is_distinct())
-                + ")";
-        }
-    };
 #endif
 };
 
