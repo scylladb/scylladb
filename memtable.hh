@@ -30,6 +30,7 @@
 #include "db/commitlog/replay_position.hh"
 #include "utils/logalloc.hh"
 #include "sstables/sstables.hh"
+#include "partition_version.hh"
 
 class frozen_mutation;
 
@@ -40,25 +41,25 @@ class memtable_entry {
     bi::set_member_hook<> _link;
     schema_ptr _schema;
     dht::decorated_key _key;
-    mutation_partition _p;
+    partition_entry _pe;
 public:
     friend class memtable;
 
     memtable_entry(schema_ptr s, dht::decorated_key key, mutation_partition p)
         : _schema(std::move(s))
         , _key(std::move(key))
-        , _p(std::move(p))
+        , _pe(std::move(p))
     { }
 
     memtable_entry(memtable_entry&& o) noexcept;
 
     const dht::decorated_key& key() const { return _key; }
     dht::decorated_key& key() { return _key; }
-    const mutation_partition& partition() const { return _p; }
-    mutation_partition& partition() { return _p; }
+    const partition_entry& partition() const { return _pe; }
+    partition_entry& partition() { return _pe; }
     const schema_ptr& schema() const { return _schema; }
     schema_ptr& schema() { return _schema; }
-    mutation read(const schema_ptr&, const query::clustering_key_filtering_context&);
+    streamed_mutation read(lw_shared_ptr<memtable> mtbl, const schema_ptr&, const query::clustering_key_filtering_context&);
 
     struct compare {
         dht::decorated_key::less_comparator _c;
@@ -105,10 +106,11 @@ private:
     lw_shared_ptr<sstables::sstable> _sstable;
     void update(const db::replay_position&);
     friend class row_cache;
+    friend class memtable_entry;
 private:
     boost::iterator_range<partitions_type::const_iterator> slice(const query::partition_range& r) const;
-    mutation_partition& find_or_create_partition(const dht::decorated_key& key);
-    mutation_partition& find_or_create_partition_slow(partition_key_view key);
+    partition_entry& find_or_create_partition(const dht::decorated_key& key);
+    partition_entry& find_or_create_partition_slow(partition_key_view key);
     void upgrade_entry(memtable_entry&);
 public:
     explicit memtable(schema_ptr schema, logalloc::region_group* dirty_memory_region_group = nullptr);

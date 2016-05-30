@@ -37,7 +37,7 @@ memtable::~memtable() {
     });
 }
 
-mutation_partition&
+partition_entry&
 memtable::find_or_create_partition_slow(partition_key_view key) {
     assert(!_region.reclaiming_enabled());
 
@@ -47,17 +47,17 @@ memtable::find_or_create_partition_slow(partition_key_view key) {
     // partitions doesn't support heterogeneous lookup.
     // We could switch to boost::intrusive_map<> similar to what we have for row keys.
     auto& outer = current_allocator();
-    return with_allocator(standard_allocator(), [&, this] () -> mutation_partition& {
+    return with_allocator(standard_allocator(), [&, this] () -> partition_entry& {
         auto dk = dht::global_partitioner().decorate_key(*_schema, key);
-        return with_allocator(outer, [&dk, this] () -> mutation_partition& {
-          return with_linearized_managed_bytes([&] () -> mutation_partition& {
+        return with_allocator(outer, [&dk, this] () -> partition_entry& {
+          return with_linearized_managed_bytes([&] () -> partition_entry& {
             return find_or_create_partition(dk);
           });
         });
     });
 }
 
-mutation_partition&
+partition_entry&
 memtable::find_or_create_partition(const dht::decorated_key& key) {
     assert(!_region.reclaiming_enabled());
 
@@ -187,7 +187,7 @@ public:
         ++_i;
         _last = e.key();
         _memtable->upgrade_entry(e);
-        return make_ready_future<streamed_mutation_opt>(streamed_mutation_from_mutation(e.read(_schema, _ck_filtering)));
+        return make_ready_future<streamed_mutation_opt>(e.read(_memtable, _schema, _ck_filtering));
     }
 };
 
@@ -207,7 +207,7 @@ memtable::make_reader(schema_ptr s,
         auto i = partitions.find(pos, memtable_entry::compare(_schema));
         if (i != partitions.end()) {
             upgrade_entry(*i);
-            return make_reader_returning(i->read(s, ck_filtering));
+            return make_reader_returning(i->read(shared_from_this(), s, ck_filtering));
         } else {
             return make_empty_reader();
         }
@@ -239,7 +239,7 @@ memtable::apply(const mutation& m, const db::replay_position& rp) {
     with_allocator(_region.allocator(), [this, &m] {
         _allocating_section(_region, [&, this] {
           with_linearized_managed_bytes([&] {
-            mutation_partition& p = find_or_create_partition(m.decorated_key());
+            auto& p = find_or_create_partition(m.decorated_key());
             p.apply(*_schema, m.partition(), *m.schema());
           });
         });
@@ -252,7 +252,7 @@ memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::
     with_allocator(_region.allocator(), [this, &m, &m_schema] {
         _allocating_section(_region, [&, this] {
           with_linearized_managed_bytes([&] {
-            mutation_partition& p = find_or_create_partition_slow(m.key(*_schema));
+            auto& p = find_or_create_partition_slow(m.key(*_schema));
             p.apply(*_schema, m.partition(), *m_schema);
           });
         });
@@ -284,7 +284,7 @@ memtable_entry::memtable_entry(memtable_entry&& o) noexcept
     : _link()
     , _schema(std::move(o._schema))
     , _key(std::move(o._key))
-    , _p(std::move(o._p))
+    , _pe(std::move(o._pe))
 {
     using container_type = memtable::partitions_type;
     container_type::node_algorithms::replace_node(o._link.this_ptr(), _link.this_ptr());
@@ -299,11 +299,16 @@ bool memtable::is_flushed() const {
     return bool(_sstable);
 }
 
-mutation
-memtable_entry::read(const schema_ptr& target_schema, const query::clustering_key_filtering_context& ck_filtering) {
-    mutation m = mutation(_schema, _key, mutation_partition(_p, *_schema, ck_filtering.get_ranges(_key.key())));
-    m.upgrade(target_schema);
-    return m;
+streamed_mutation
+memtable_entry::read(lw_shared_ptr<memtable> mtbl, const schema_ptr& target_schema, const query::clustering_key_filtering_context& ck_filtering) {
+    if (_schema->version() != target_schema->version()) {
+        auto mp = mutation_partition(_pe.squashed(_schema, target_schema), *target_schema, ck_filtering.get_ranges(_key.key()));
+        mutation m = mutation(target_schema, _key, std::move(mp));
+        return streamed_mutation_from_mutation(std::move(m));
+    }
+    auto& cr = ck_filtering.get_ranges(_key.key());
+    auto snp = _pe.read(_schema);
+    return make_partition_snapshot_reader(_schema, _key, ck_filtering, cr, snp, mtbl->_region, mtbl->_read_section, mtbl);
 }
 
 void memtable::upgrade_entry(memtable_entry& e) {
@@ -311,7 +316,7 @@ void memtable::upgrade_entry(memtable_entry& e) {
         assert(!_region.reclaiming_enabled());
         with_allocator(_region.allocator(), [this, &e] {
           with_linearized_managed_bytes([&] {
-            e._p.upgrade(*e._schema, *_schema);
+            e.partition().upgrade(e._schema, _schema);
             e._schema = _schema;
           });
         });
