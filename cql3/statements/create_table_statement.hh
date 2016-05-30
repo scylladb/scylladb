@@ -43,7 +43,7 @@
 
 #include "cql3/statements/schema_altering_statement.hh"
 #include "cql3/statements/cf_prop_defs.hh"
-#include "cql3/statements/cf_statement.hh"
+#include "cql3/statements/raw/cf_statement.hh"
 #include "cql3/cql3_type.hh"
 
 #include "service/migration_manager.hh"
@@ -116,7 +116,7 @@ private:
     void add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, const std::vector<data_type>& types, column_kind kind);
 };
 
-class create_table_statement::raw_statement : public cf_statement {
+class create_table_statement::raw_statement : public raw::cf_statement {
 private:
     using defs_type = std::unordered_map<::shared_ptr<column_identifier>,
                                          ::shared_ptr<cql3_type::raw>,

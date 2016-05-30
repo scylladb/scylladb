@@ -45,17 +45,20 @@
 
 #include <experimental/optional>
 
-#include "prepared_statement.hh"
-#include "raw/parsed_statement.hh"
+#include "parsed_statement.hh"
+
+namespace service { class client_state; }
 
 namespace cql3 {
 
 namespace statements {
 
+namespace raw {
+
 /**
  * Abstract class for statements that apply on a given column family.
  */
-class cf_statement : public raw::parsed_statement {
+class cf_statement : public parsed_statement {
 protected:
     ::shared_ptr<cf_name> _cf_name;
 
@@ -70,6 +73,8 @@ public:
 
     virtual const sstring& column_family() const;
 };
+
+}
 
 }
 

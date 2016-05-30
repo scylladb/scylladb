@@ -47,7 +47,7 @@
 #include "authorizer.hh"
 #include "database.hh"
 #include "cql3/query_processor.hh"
-#include "cql3/statements/cf_statement.hh"
+#include "cql3/statements/raw/cf_statement.hh"
 #include "cql3/statements/create_table_statement.hh"
 #include "db/config.hh"
 #include "service/migration_manager.hh"
@@ -348,8 +348,8 @@ future<> auth::auth::setup_table(const sstring& name, const sstring& cql) {
         return make_ready_future();
     }
 
-    ::shared_ptr<cql3::statements::cf_statement> parsed = static_pointer_cast<
-                    cql3::statements::cf_statement>(cql3::query_processor::parse_statement(cql));
+    ::shared_ptr<cql3::statements::raw::cf_statement> parsed = static_pointer_cast<
+                    cql3::statements::raw::cf_statement>(cql3::query_processor::parse_statement(cql));
     parsed->prepare_keyspace(AUTH_KS);
     ::shared_ptr<cql3::statements::create_table_statement> statement =
                     static_pointer_cast<cql3::statements::create_table_statement>(

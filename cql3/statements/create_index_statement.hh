@@ -44,7 +44,7 @@
 #include "schema_altering_statement.hh"
 #include "index_prop_defs.hh"
 #include "index_target.hh"
-#include "cf_statement.hh"
+#include "raw/cf_statement.hh"
 
 #include "cql3/index_name.hh"
 #include "cql3/cql3_type.hh"

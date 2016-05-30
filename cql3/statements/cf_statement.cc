@@ -39,11 +39,14 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "cql3/statements/cf_statement.hh"
+#include "raw/cf_statement.hh"
+#include "service/client_state.hh"
 
 namespace cql3 {
 
 namespace statements {
+
+namespace raw {
 
 cf_statement::cf_statement(::shared_ptr<cf_name> cf_name)
     : _cf_name(std::move(cf_name))
@@ -76,6 +79,8 @@ const sstring& cf_statement::keyspace() const
 const sstring& cf_statement::column_family() const
 {
     return _cf_name->get_column_family();
+}
+
 }
 
 }

@@ -265,7 +265,7 @@ query_processor::get_statement(const sstring_view& query, const service::client_
     ::shared_ptr<raw::parsed_statement> statement = parse_statement(query);
 
     // Set keyspace for statement that require login
-    auto cf_stmt = dynamic_pointer_cast<cf_statement>(statement);
+    auto cf_stmt = dynamic_pointer_cast<raw::cf_statement>(statement);
     if (cf_stmt) {
         cf_stmt->prepare_keyspace(client_state);
     }

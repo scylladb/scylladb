@@ -48,7 +48,7 @@
 #include "exceptions/exceptions.hh"
 #include "cql3/query_options.hh"
 #include "cql3/statements/raw/parsed_statement.hh"
-#include "cql3/statements/cf_statement.hh"
+#include "cql3/statements/raw/cf_statement.hh"
 #include "service/migration_manager.hh"
 #include "service/query_state.hh"
 #include "log.hh"

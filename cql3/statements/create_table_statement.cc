@@ -47,6 +47,7 @@
 #include <boost/range/algorithm/adjacent_find.hpp>
 
 #include "cql3/statements/create_table_statement.hh"
+#include "cql3/statements/prepared_statement.hh"
 
 #include "schema_builder.hh"
 

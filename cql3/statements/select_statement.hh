@@ -41,7 +41,7 @@
 
 #pragma once
 
-#include "cql3/statements/cf_statement.hh"
+#include "cql3/statements/raw/cf_statement.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/raw_selector.hh"
@@ -435,7 +435,7 @@ public:
     class raw_statement;
 };
 
-class select_statement::raw_statement : public cf_statement
+class select_statement::raw_statement : public raw::cf_statement
 {
 private:
     ::shared_ptr<parameters> _parameters;

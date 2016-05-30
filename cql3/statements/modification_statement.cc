@@ -40,6 +40,7 @@
  */
 
 #include "cql3/statements/modification_statement.hh"
+#include "cql3/statements/prepared_statement.hh"
 #include "cql3/restrictions/single_column_restriction.hh"
 #include "cql3/single_column_relation.hh"
 #include "validation.hh"

@@ -42,7 +42,7 @@
 #pragma once
 
 #include "cql3/restrictions/restriction.hh"
-#include "cql3/statements/cf_statement.hh"
+#include "cql3/statements/raw/cf_statement.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/update_parameters.hh"
 #include "cql3/column_condition.hh"
@@ -347,7 +347,7 @@ protected:
     virtual void validate_where_clause_for_conditions();
 
 public:
-    class parsed : public cf_statement {
+    class parsed : public raw::cf_statement {
     public:
         using conditions_vector = std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<column_condition::raw>>>;
     protected:

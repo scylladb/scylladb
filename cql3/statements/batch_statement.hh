@@ -318,7 +318,7 @@ public:
     }
 #endif
 
-    class parsed : public cf_statement {
+    class parsed : public raw::cf_statement {
         type _type;
         shared_ptr<attributes::raw> _attrs;
         std::vector<shared_ptr<modification_statement::parsed>> _parsed_statements;
