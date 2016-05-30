@@ -1814,7 +1814,10 @@ feature::feature(sstring name, bool enabled)
 
 feature::~feature() {
     if (!_enabled) {
-        get_local_gossiper().unregister_feature(this);
+        auto& gossiper = get_gossiper();
+        if (gossiper.local_is_initialized()) {
+            gossiper.local().unregister_feature(this);
+        }
     }
 }
 
