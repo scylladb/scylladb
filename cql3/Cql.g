@@ -32,6 +32,7 @@ options {
 
 @parser::includes {
 #include "cql3/selection/writetime_or_ttl.hh"
+#include "cql3/statements/raw/parsed_statement.hh"
 #include "cql3/statements/alter_keyspace_statement.hh"
 #include "cql3/statements/alter_table_statement.hh"
 #include "cql3/statements/create_keyspace_statement.hh"
@@ -295,11 +296,11 @@ struct uninitialized {
 
 /** STATEMENTS **/
 
-query returns [shared_ptr<parsed_statement> stmnt]
+query returns [shared_ptr<raw::parsed_statement> stmnt]
     : st=cqlStatement (';')* EOF { $stmnt = st; }
     ;
 
-cqlStatement returns [shared_ptr<parsed_statement> stmt]
+cqlStatement returns [shared_ptr<raw::parsed_statement> stmt]
     @after{ if (stmt) { stmt->set_bound_variables(_bind_variables); } }
     : st1= selectStatement             { $stmt = st1; }
     | st2= insertStatement             { $stmt = st2; }

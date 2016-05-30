@@ -86,9 +86,9 @@ void schema_altering_statement::prepare_keyspace(const service::client_state& st
     }
 }
 
-::shared_ptr<parsed_statement::prepared> schema_altering_statement::prepare(database& db)
+::shared_ptr<prepared_statement> schema_altering_statement::prepare(database& db)
 {
-    return ::make_shared<parsed_statement::prepared>(this->shared_from_this());
+    return ::make_shared<prepared>(this->shared_from_this());
 }
 
 future<::shared_ptr<messages::result_message>>

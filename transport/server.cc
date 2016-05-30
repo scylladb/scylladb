@@ -769,7 +769,7 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
     for ([[gnu::unused]] auto i : boost::irange(0u, n)) {
         const auto kind = read_byte(buf);
 
-        ::shared_ptr<cql3::statements::parsed_statement::prepared> ps;
+        ::shared_ptr<cql3::statements::prepared_statement> ps;
 
         switch (kind) {
         case 0: {

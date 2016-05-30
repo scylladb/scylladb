@@ -560,11 +560,11 @@ modification_statement::process_where_clause(database& db, std::vector<relation_
     }
 }
 
-::shared_ptr<parsed_statement::prepared>
+::shared_ptr<prepared_statement>
 modification_statement::parsed::prepare(database& db) {
     auto bound_names = get_bound_variables();
     auto statement = prepare(db, bound_names);
-    return ::make_shared<parsed_statement::prepared>(std::move(statement), *bound_names);
+    return ::make_shared<prepared>(std::move(statement), *bound_names);
 }
 
 ::shared_ptr<modification_statement>

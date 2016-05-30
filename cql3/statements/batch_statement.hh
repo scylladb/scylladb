@@ -339,7 +339,7 @@ public:
             }
         }
 
-        virtual shared_ptr<parsed_statement::prepared> prepare(database& db) override {
+        virtual shared_ptr<prepared> prepare(database& db) override {
             auto&& bound_names = get_bound_variables();
 
             std::vector<shared_ptr<modification_statement>> statements;
@@ -353,7 +353,7 @@ public:
             batch_statement batch_statement_(bound_names->size(), _type, std::move(statements), std::move(prep_attrs));
             batch_statement_.validate();
 
-            return ::make_shared<parsed_statement::prepared>(make_shared(std::move(batch_statement_)),
+            return ::make_shared<prepared>(make_shared(std::move(batch_statement_)),
                                                              bound_names->get_specifications());
         }
     };

@@ -17,7 +17,7 @@
  */
 
 /*
- * Copyright 2016 ScyllaDB
+ * Copyright (C) 2016 ScyllaDB
  *
  * Modified by ScyllaDB
  */
@@ -41,40 +41,32 @@
 
 #pragma once
 
+#include "cql3/variable_specifications.hh"
+#include "cql3/column_specification.hh"
+#include "cql3/column_identifier.hh"
 #include "cql3/cql_statement.hh"
-#include "prepared_statement.hh"
-#include "raw/parsed_statement.hh"
-#include "transport/messages_fwd.hh"
 
-namespace auth {
-class data_resource;
-}
+#include "core/shared_ptr.hh"
+
+#include <experimental/optional>
+#include <vector>
 
 namespace cql3 {
 
 namespace statements {
 
-class authorization_statement : public raw::parsed_statement, public cql_statement, public ::enable_shared_from_this<authorization_statement> {
+class prepared_statement {
 public:
-    uint32_t get_bound_terms() override;
+    const ::shared_ptr<cql_statement> statement;
+    const std::vector<::shared_ptr<column_specification>> bound_names;
 
-    ::shared_ptr<prepared> prepare(database& db) override;
+    prepared_statement(::shared_ptr<cql_statement> statement_, std::vector<::shared_ptr<column_specification>> bound_names_);
 
-    bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
+    prepared_statement(::shared_ptr<cql_statement> statement_, const variable_specifications& names);
 
-    bool depends_on_keyspace(const sstring& ks_name) const override;
+    prepared_statement(::shared_ptr<cql_statement> statement_, variable_specifications&& names);
 
-    bool depends_on_column_family(const sstring& cf_name) const override;
-
-    future<> check_access(const service::client_state& state) override;
-
-    void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
-
-    future<::shared_ptr<transport::messages::result_message>>
-    execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;
-
-protected:
-    static void mayme_correct_resource(auth::data_resource&, const service::client_state&);
+    prepared_statement(::shared_ptr<cql_statement>&& statement_);
 };
 
 }

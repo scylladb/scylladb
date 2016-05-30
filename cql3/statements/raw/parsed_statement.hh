@@ -17,7 +17,7 @@
  */
 
 /*
- * Copyright (C) 2014 ScyllaDB
+ * Copyright (C) 2016 ScyllaDB
  *
  * Modified by ScyllaDB
  */
@@ -44,9 +44,8 @@
 #include "cql3/variable_specifications.hh"
 #include "cql3/column_specification.hh"
 #include "cql3/column_identifier.hh"
-#include "cql3/cql_statement.hh"
 
-#include "core/shared_ptr.hh"
+#include <seastar/core/shared_ptr.hh>
 
 #include <experimental/optional>
 #include <vector>
@@ -55,35 +54,28 @@ namespace cql3 {
 
 namespace statements {
 
+class prepared_statement;
+
+namespace raw {
+
 class parsed_statement {
 private:
     ::shared_ptr<variable_specifications> _variables;
 
 public:
+    using prepared = statements::prepared_statement;
     virtual ~parsed_statement();
 
     shared_ptr<variable_specifications> get_bound_variables();
 
     void set_bound_variables(const std::vector<::shared_ptr<column_identifier>>& bound_names);
 
-    class prepared {
-    public:
-        const ::shared_ptr<cql_statement> statement;
-        const std::vector<::shared_ptr<column_specification>> bound_names;
-
-        prepared(::shared_ptr<cql_statement> statement_, std::vector<::shared_ptr<column_specification>> bound_names_);
-
-        prepared(::shared_ptr<cql_statement> statement_, const variable_specifications& names);
-
-        prepared(::shared_ptr<cql_statement> statement_, variable_specifications&& names);
-
-        prepared(::shared_ptr<cql_statement>&& statement_);
-    };
-
     virtual ::shared_ptr<prepared> prepare(database& db) = 0;
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const;
 };
+
+}
 
 }
 

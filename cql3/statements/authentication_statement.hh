@@ -41,15 +41,16 @@
 
 #pragma once
 
-#include "parsed_statement.hh"
 #include "cql3/cql_statement.hh"
+#include "prepared_statement.hh"
+#include "raw/parsed_statement.hh"
 #include "transport/messages_fwd.hh"
 
 namespace cql3 {
 
 namespace statements {
 
-class authentication_statement : public parsed_statement, public cql_statement, public ::enable_shared_from_this<authentication_statement> {
+class authentication_statement : public raw::parsed_statement, public cql_statement, public ::enable_shared_from_this<authentication_statement> {
 public:
     uint32_t get_bound_terms() override;
 

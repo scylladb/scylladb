@@ -57,9 +57,9 @@ uint32_t use_statement::get_bound_terms()
     return 0;
 }
 
-::shared_ptr<parsed_statement::prepared> use_statement::prepare(database& db)
+::shared_ptr<prepared_statement> use_statement::prepare(database& db)
 {
-    return ::make_shared<parsed_statement::prepared>(this->shared_from_this());
+    return ::make_shared<prepared>(this->shared_from_this());
 }
 
 bool use_statement::uses_function(const sstring& ks_name, const sstring& function_name) const

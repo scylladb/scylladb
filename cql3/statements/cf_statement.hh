@@ -41,10 +41,12 @@
 
 #pragma once
 
-#include "cql3/statements/parsed_statement.hh"
 #include "cql3/cf_name.hh"
 
 #include <experimental/optional>
+
+#include "prepared_statement.hh"
+#include "raw/parsed_statement.hh"
 
 namespace cql3 {
 
@@ -53,7 +55,7 @@ namespace statements {
 /**
  * Abstract class for statements that apply on a given column family.
  */
-class cf_statement : public parsed_statement {
+class cf_statement : public raw::parsed_statement {
 protected:
     ::shared_ptr<cf_name> _cf_name;
 

@@ -23,7 +23,7 @@
 #pragma once
 
 #include "cql3/result_set.hh"
-#include "cql3/statements/parsed_statement.hh"
+#include "cql3/statements/prepared_statement.hh"
 #include "cql3/statements/select_statement.hh"
 
 #include "transport/messages/result_message_base.hh"
@@ -81,11 +81,11 @@ public:
 class result_message::prepared : public result_message {
 private:
     bytes _id;
-    ::shared_ptr<cql3::statements::parsed_statement::prepared> _prepared;
+    ::shared_ptr<cql3::statements::prepared_statement> _prepared;
     ::shared_ptr<cql3::prepared_metadata> _metadata;
     ::shared_ptr<cql3::metadata> _result_metadata;
 public:
-    prepared(const bytes& id, ::shared_ptr<cql3::statements::parsed_statement::prepared> prepared)
+    prepared(const bytes& id, ::shared_ptr<cql3::statements::prepared_statement> prepared)
         : _id{id}
         , _prepared{prepared}
         // FIXME: Populate partition key bind indices for prepared_metadata.
@@ -97,7 +97,7 @@ public:
         return _id;
     }
 
-    const ::shared_ptr<cql3::statements::parsed_statement::prepared>& get_prepared() const {
+    const ::shared_ptr<cql3::statements::prepared_statement>& get_prepared() const {
         return _prepared;
     }
 

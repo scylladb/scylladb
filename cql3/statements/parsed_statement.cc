@@ -39,11 +39,15 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "cql3/statements/parsed_statement.hh"
+#include "raw/parsed_statement.hh"
+
+#include "prepared_statement.hh"
 
 namespace cql3 {
 
 namespace statements {
+
+namespace raw {
 
 parsed_statement::~parsed_statement()
 { }
@@ -61,21 +65,23 @@ bool parsed_statement::uses_function(const sstring& ks_name, const sstring& func
     return false;
 }
 
-parsed_statement::prepared::prepared(::shared_ptr<cql_statement> statement_, std::vector<::shared_ptr<column_specification>> bound_names_)
+}
+
+prepared_statement::prepared_statement(::shared_ptr<cql_statement> statement_, std::vector<::shared_ptr<column_specification>> bound_names_)
     : statement(std::move(statement_))
     , bound_names(std::move(bound_names_))
 { }
 
-parsed_statement::prepared::prepared(::shared_ptr<cql_statement> statement_, const variable_specifications& names)
-    : prepared(statement_, names.get_specifications())
+prepared_statement::prepared_statement(::shared_ptr<cql_statement> statement_, const variable_specifications& names)
+    : prepared_statement(statement_, names.get_specifications())
 { }
 
-parsed_statement::prepared::prepared(::shared_ptr<cql_statement> statement_, variable_specifications&& names)
-    : prepared(statement_, std::move(names).get_specifications())
+prepared_statement::prepared_statement(::shared_ptr<cql_statement> statement_, variable_specifications&& names)
+    : prepared_statement(statement_, std::move(names).get_specifications())
 { }
 
-parsed_statement::prepared::prepared(::shared_ptr<cql_statement>&& statement_)
-    : prepared(statement_, std::vector<::shared_ptr<column_specification>>())
+prepared_statement::prepared_statement(::shared_ptr<cql_statement>&& statement_)
+    : prepared_statement(statement_, std::vector<::shared_ptr<column_specification>>())
 { }
 
 }

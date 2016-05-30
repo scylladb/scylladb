@@ -47,11 +47,13 @@
 #include "core/shared_ptr.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/query_options.hh"
+#include "cql3/statements/raw/parsed_statement.hh"
 #include "cql3/statements/cf_statement.hh"
 #include "service/migration_manager.hh"
 #include "service/query_state.hh"
 #include "log.hh"
 #include "core/distributed.hh"
+#include "statements/prepared_statement.hh"
 #include "transport/messages/result_message.hh"
 #include "untyped_result_set.hh"
 
@@ -118,8 +120,8 @@ private:
     };
 #endif
 
-    std::unordered_map<bytes, ::shared_ptr<statements::parsed_statement::prepared>> _prepared_statements;
-    std::unordered_map<sstring, ::shared_ptr<statements::parsed_statement::prepared>> _internal_statements;
+    std::unordered_map<bytes, ::shared_ptr<statements::prepared_statement>> _prepared_statements;
+    std::unordered_map<sstring, ::shared_ptr<statements::prepared_statement>> _internal_statements;
 #if 0
     private static final ConcurrentLinkedHashMap<Integer, ParsedStatement.Prepared> thriftPreparedStatements;
 
@@ -211,10 +213,10 @@ private:
     }
 #endif
 public:
-    ::shared_ptr<statements::parsed_statement::prepared> get_prepared(const bytes& id) {
+    ::shared_ptr<statements::prepared_statement> get_prepared(const bytes& id) {
         auto it = _prepared_statements.find(id);
         if (it == _prepared_statements.end()) {
-            return ::shared_ptr<statements::parsed_statement::prepared>{};
+            return ::shared_ptr<statements::prepared_statement>{};
         }
         return it->second;
     }
@@ -328,23 +330,23 @@ public:
     }
 #endif
 private:
-    query_options make_internal_options(::shared_ptr<statements::parsed_statement::prepared>, const std::initializer_list<data_value>&, db::consistency_level = db::consistency_level::ONE);
+    query_options make_internal_options(::shared_ptr<statements::prepared_statement>, const std::initializer_list<data_value>&, db::consistency_level = db::consistency_level::ONE);
 public:
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const sstring& query_string,
             const std::initializer_list<data_value>& = { });
 
-    ::shared_ptr<statements::parsed_statement::prepared> prepare_internal(const sstring& query);
+    ::shared_ptr<statements::prepared_statement> prepare_internal(const sstring& query);
 
     future<::shared_ptr<untyped_result_set>> execute_internal(
-            ::shared_ptr<statements::parsed_statement::prepared>,
+            ::shared_ptr<statements::prepared_statement>,
             const std::initializer_list<data_value>& = { });
 
     future<::shared_ptr<untyped_result_set>> process(
                     const sstring& query_string,
                     db::consistency_level, const std::initializer_list<data_value>& = { }, bool cache = false);
     future<::shared_ptr<untyped_result_set>> process(
-                    ::shared_ptr<statements::parsed_statement::prepared>,
+                    ::shared_ptr<statements::prepared_statement>,
                     db::consistency_level, const std::initializer_list<data_value>& = { });
 
     /*
@@ -442,7 +444,7 @@ private:
     get_stored_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, bool for_thrift);
 
     future<::shared_ptr<transport::messages::result_message::prepared>>
-    store_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, ::shared_ptr<statements::parsed_statement::prepared> prepared, bool for_thrift);
+    store_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, ::shared_ptr<statements::prepared_statement> prepared, bool for_thrift);
 
     void invalidate_prepared_statement(bytes statement_id);
 
@@ -475,9 +477,9 @@ public:
     future<::shared_ptr<transport::messages::result_message>> process_batch(::shared_ptr<statements::batch_statement>,
             service::query_state& query_state, query_options& options);
 
-    ::shared_ptr<statements::parsed_statement::prepared> get_statement(const std::experimental::string_view& query,
+    ::shared_ptr<statements::prepared_statement> get_statement(const std::experimental::string_view& query,
             const service::client_state& client_state);
-    static ::shared_ptr<statements::parsed_statement> parse_statement(const std::experimental::string_view& query);
+    static ::shared_ptr<statements::raw::parsed_statement> parse_statement(const std::experimental::string_view& query);
 
 #if 0
     private static long measure(Object key)

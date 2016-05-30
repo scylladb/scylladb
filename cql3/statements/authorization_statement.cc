@@ -46,7 +46,7 @@ uint32_t cql3::statements::authorization_statement::get_bound_terms() {
     return 0;
 }
 
-::shared_ptr<cql3::statements::parsed_statement::prepared> cql3::statements::authorization_statement::prepare(
+::shared_ptr<cql3::statements::prepared_statement> cql3::statements::authorization_statement::prepare(
                 database& db) {
     return ::make_shared<parsed_statement::prepared>(this->shared_from_this());
 }

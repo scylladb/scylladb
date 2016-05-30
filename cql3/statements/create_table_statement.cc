@@ -160,7 +160,7 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
     , _if_not_exists{if_not_exists}
 { }
 
-::shared_ptr<parsed_statement::prepared> create_table_statement::raw_statement::prepare(database& db) {
+::shared_ptr<prepared_statement> create_table_statement::raw_statement::prepare(database& db) {
     // Column family name
     const sstring& cf_name = _cf_name->get_column_family();
     std::regex name_regex("\\w+");
@@ -347,7 +347,7 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
         }
     }
 
-    return ::make_shared<parsed_statement::prepared>(stmt);
+    return ::make_shared<prepared>(stmt);
 }
 
 data_type create_table_statement::raw_statement::get_type_and_remove(column_map_type& columns, ::shared_ptr<column_identifier> t)

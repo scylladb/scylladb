@@ -41,15 +41,16 @@
 
 #pragma once
 
-#include "cql3/statements/parsed_statement.hh"
 #include "transport/messages_fwd.hh"
 #include "cql3/cql_statement.hh"
+#include "cql3/statements/raw/parsed_statement.hh"
+#include "prepared_statement.hh"
 
 namespace cql3 {
 
 namespace statements {
 
-class use_statement : public parsed_statement, public cql_statement, public ::enable_shared_from_this<use_statement> {
+class use_statement : public raw::parsed_statement, public cql_statement, public ::enable_shared_from_this<use_statement> {
 private:
     const sstring _keyspace;
 
