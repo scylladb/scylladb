@@ -211,7 +211,8 @@ private:
     logalloc::allocating_section _read_section;
     mutation_reader make_scanning_reader(schema_ptr,
                                          const query::partition_range&,
-                                         const io_priority_class& pc);
+                                         const io_priority_class& pc,
+                                         query::clustering_key_filtering_context ck_filtering);
     void on_hit();
     void on_miss();
     void upgrade_entry(cache_entry&);

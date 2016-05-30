@@ -182,11 +182,13 @@ class populating_reader final : public mutation_reader::impl {
     schema_ptr _schema;
     row_cache& _cache;
     mutation_reader _delegate;
+    query::clustering_key_filtering_context _ck_filtering;
 public:
-    populating_reader(schema_ptr s, row_cache& cache, mutation_reader delegate)
+    populating_reader(schema_ptr s, row_cache& cache, mutation_reader delegate, query::clustering_key_filtering_context ck_filtering)
         : _schema(std::move(s))
         , _cache(cache)
         , _delegate(std::move(delegate))
+        , _ck_filtering(ck_filtering)
     { }
 
     virtual future<streamed_mutation_opt> operator()() override {
@@ -196,6 +198,9 @@ public:
             if (mo) {
                 _cache.populate(*mo);
                 mo->upgrade(_schema);
+                auto& ck_ranges = _ck_filtering.get_ranges(mo->key());
+                auto filtered_partition = mutation_partition(std::move(mo->partition()), *(mo->schema()), ck_ranges);
+                mo->partition() = std::move(filtered_partition);
                 return streamed_mutation_from_mutation(std::move(*mo));
             }
             return { };
@@ -222,6 +227,7 @@ class just_cache_scanning_reader final : public mutation_reader::impl {
     stdx::optional<dht::decorated_key> _last;
     uint64_t _last_reclaim_count;
     size_t _last_modification_count;
+    query::clustering_key_filtering_context _ck_filtering;
 private:
     void update_iterators() {
         auto cmp = cache_entry::compare(_cache._schema);
@@ -258,8 +264,8 @@ private:
         _last_modification_count = modification_count;
     }
 public:
-    just_cache_scanning_reader(schema_ptr s, row_cache& cache, const query::partition_range& range)
-        : _schema(std::move(s)), _cache(cache), _range(range)
+    just_cache_scanning_reader(schema_ptr s, row_cache& cache, const query::partition_range& range, query::clustering_key_filtering_context ck_filtering)
+        : _schema(std::move(s)), _cache(cache), _range(range), _ck_filtering(ck_filtering)
     { }
     virtual future<streamed_mutation_opt> operator()() override {
         return _cache._read_section(_cache._tracker.region(), [this] {
@@ -272,7 +278,7 @@ public:
             ++_it;
             _last = ce.key();
             _cache.upgrade_entry(ce);
-            return make_ready_future<streamed_mutation_opt>(ce.read(_cache, _schema));
+            return make_ready_future<streamed_mutation_opt>(ce.read(_cache, _schema, _ck_filtering));
           });
         });
     }
@@ -294,16 +300,19 @@ class scanning_and_populating_reader final : public mutation_reader::impl {
     dht::decorated_key_opt _next_key;
     dht::decorated_key_opt _last_secondary_key;
     const io_priority_class _pc;
+    query::clustering_key_filtering_context _ck_filtering;
 public:
     scanning_and_populating_reader(schema_ptr s,
                                    row_cache& cache,
                                    const query::partition_range& range,
-                                   const io_priority_class& pc)
+                                   const io_priority_class& pc,
+                                   query::clustering_key_filtering_context ck_filtering)
         : _cache(cache), _schema(s),
-          _primary(make_mutation_reader<just_cache_scanning_reader>(s, cache, range)),
+          _primary(make_mutation_reader<just_cache_scanning_reader>(s, cache, range, ck_filtering)),
           _underlying(cache._underlying), _original_range(range), _underlying_keys(cache._underlying_keys),
           _keys(_underlying_keys(range, pc)),
-          _pc(pc)
+          _pc(pc),
+          _ck_filtering(ck_filtering)
     { }
     virtual future<streamed_mutation_opt> operator()() override {
         // FIXME: store in cache information whether the immediate successor
@@ -369,6 +378,9 @@ private:
                 _cache.populate(*mo);
                 mo->upgrade(_schema);
                 _last_secondary_key = mo->decorated_key();
+                auto& ck_ranges = _ck_filtering.get_ranges(mo->key());
+                auto filtered_partition = mutation_partition(std::move(mo->partition()), *(mo->schema()), ck_ranges);
+                mo->partition() = std::move(filtered_partition);
                 return streamed_mutation_from_mutation(std::move(*mo));
             }
             return { };
@@ -385,45 +397,14 @@ private:
 mutation_reader
 row_cache::make_scanning_reader(schema_ptr s,
                                 const query::partition_range& range,
-                                const io_priority_class& pc) {
+                                const io_priority_class& pc,
+                                query::clustering_key_filtering_context ck_filtering) {
     if (range.is_wrap_around(dht::ring_position_comparator(*s))) {
         warn(unimplemented::cause::WRAP_AROUND);
         throw std::runtime_error("row_cache doesn't support wrap-around ranges");
     }
-    return make_mutation_reader<scanning_and_populating_reader>(std::move(s), *this, range, pc);
+    return make_mutation_reader<scanning_and_populating_reader>(std::move(s), *this, range, pc, ck_filtering);
 }
-
-class slicing_reader : public mutation_reader::impl {
-private:
-    mutation_reader _underlying;
-    query::clustering_key_filtering_context _ck_filtering;
-
-    future<streamed_mutation_opt> filter(mutation_opt&& mut) {
-        if (!mut) {
-            return make_ready_future<streamed_mutation_opt>();
-        }
-
-        const query::clustering_row_ranges& ck_ranges = _ck_filtering.get_ranges(mut->key());
-        mutation_partition filtered_partition = mutation_partition(mut->partition(), *(mut->schema()), ck_ranges);
-
-        if (!filtered_partition.empty()) {
-            mut->partition() = std::move(filtered_partition);
-            return make_ready_future<streamed_mutation_opt>(streamed_mutation_from_mutation(std::move(*mut)));
-        }
-
-        return operator()();
-    }
-
-public:
-    slicing_reader(mutation_reader&& reader, query::clustering_key_filtering_context ck_filtering)
-        : _underlying(std::move(reader)), _ck_filtering(std::move(ck_filtering)) {}
-
-    virtual future<streamed_mutation_opt> operator()() override {
-        return _underlying().then([] (auto sm) {
-            return mutation_from_streamed_mutation(std::move(sm));
-        }).then([this] (mutation_opt&& mut) { return filter(std::move(mut)); });
-    }
-};
 
 mutation_reader
 row_cache::make_reader(schema_ptr s,
@@ -434,7 +415,7 @@ row_cache::make_reader(schema_ptr s,
         const query::ring_position& pos = range.start()->value();
 
         if (!pos.has_key()) {
-            return make_mutation_reader<slicing_reader>(make_scanning_reader(std::move(s), range, pc), ck_filtering);
+            return make_scanning_reader(std::move(s), range, pc, ck_filtering);
         }
 
         return _read_section(_tracker.region(), [&] {
@@ -449,15 +430,15 @@ row_cache::make_reader(schema_ptr s,
                 return make_reader_returning(e.read(*this, s, ck_filtering));
             } else {
                 on_miss();
-                return make_mutation_reader<slicing_reader>(
-                    make_mutation_reader<populating_reader>(s, *this, _underlying(_schema, range, query::no_clustering_key_filtering, pc)),
+                return make_mutation_reader<populating_reader>(s, *this,
+                    _underlying(_schema, range, query::no_clustering_key_filtering, pc),
                     ck_filtering);
             }
           });
         });
     }
 
-    return make_mutation_reader<slicing_reader>(make_scanning_reader(std::move(s), range, pc), ck_filtering);
+    return make_scanning_reader(std::move(s), range, pc, ck_filtering);
 }
 
 row_cache::~row_cache() {
