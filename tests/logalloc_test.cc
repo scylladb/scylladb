@@ -22,6 +22,7 @@
 #define BOOST_TEST_DYN_LINK
 
 #include <boost/test/unit_test.hpp>
+#include <boost/intrusive/parent_from_member.hpp>
 #include <algorithm>
 #include <chrono>
 
@@ -809,5 +810,231 @@ SEASTAR_TEST_CASE(test_region_groups_tree_hierarchy_throttling_leaf_alloc) {
         second_leaf.reset();
         third_leaf.reset();
         quiesce(when_all(std::move(fut_1), std::move(fut_2), std::move(fut_3)));
+    });
+}
+
+// Helper for all async reclaim tests.
+class test_async_reclaim_region {
+    logalloc::region _region;
+    std::vector<managed_bytes> _alloc;
+    size_t _alloc_size;
+    // Make sure we don't reclaim the same region more than once. It is supposed to be empty
+    // after the first reclaim
+    int _reclaim_counter = 0;
+    region_group& _rg;
+public:
+    test_async_reclaim_region(region_group& rg, size_t alloc_size)
+            : _region(rg)
+            , _alloc_size(alloc_size)
+            , _rg(rg)
+    {
+        with_allocator(_region.allocator(), [this] {
+            _alloc.push_back(bytes(bytes::initialized_later(), this->_alloc_size));
+        });
+
+    }
+
+    ~test_async_reclaim_region() {
+        with_allocator(_region.allocator(), [this] {
+            std::vector<managed_bytes>().swap(_alloc);
+        });
+    }
+
+    size_t evict() {
+        BOOST_REQUIRE_EQUAL(_reclaim_counter++, 0);
+        with_allocator(_region.allocator(), [this] {
+            std::vector<managed_bytes>().swap(_alloc);
+        });
+        _region = logalloc::region(_rg);
+        return this->_alloc_size;
+    }
+    static test_async_reclaim_region& from_region(region* region_ptr) {
+        auto aptr = boost::intrusive::get_parent_from_member(region_ptr, &test_async_reclaim_region::_region);
+        return *aptr;
+    }
+};
+
+class test_reclaimer: public region_group_reclaimer {
+    size_t _threshold;
+    test_reclaimer *_result_accumulator;
+    region_group _rg;
+    std::vector<size_t> _reclaim_sizes;
+    bool _shutdown = false;
+public:
+    virtual void start_reclaiming() override {
+        while (this->under_pressure()) {
+            size_t reclaimed = test_async_reclaim_region::from_region(_rg.get_largest_region()).evict();
+            _result_accumulator->_reclaim_sizes.push_back(reclaimed);
+        }
+    }
+
+    ~test_reclaimer() {
+        _rg.shutdown().get();
+    }
+
+    std::vector<size_t>& reclaim_sizes() {
+        return _reclaim_sizes;
+    }
+
+    region_group& rg() {
+        return _rg;
+    }
+
+    test_reclaimer(size_t threshold) : region_group_reclaimer(threshold), _result_accumulator(this), _rg(*this) {}
+    test_reclaimer(test_reclaimer& parent, size_t threshold) : region_group_reclaimer(threshold), _result_accumulator(&parent), _rg(&parent._rg, *this) {}
+};
+
+SEASTAR_TEST_CASE(test_region_groups_basic_throttling_simple_active_reclaim) {
+    return seastar::async([] {
+        // allocate a single region to exhaustion, and make sure active reclaim is activated.
+        test_reclaimer simple(logalloc::segment_size);
+        test_async_reclaim_region simple_region(simple.rg(), logalloc::segment_size);
+
+        // Can't run this function until we have reclaimed something
+        auto fut = simple.rg().run_when_memory_available([] {});
+
+        // Initially not available
+        BOOST_REQUIRE_EQUAL(fut.available(), false);
+        quiesce(std::move(fut));
+
+        BOOST_REQUIRE_EQUAL(simple.reclaim_sizes().size(), 1);
+    });
+}
+
+SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_worst_offender) {
+    return seastar::async([] {
+        // allocate three regions with three different sizes (segment boundary must be used due to
+        // LSA granularity).
+        //
+        // The function can only be executed when all three are freed - which exercises continous
+        // reclaim, but they must be freed in descending order of their sizes
+        test_reclaimer simple(logalloc::segment_size);
+
+        test_async_reclaim_region small_region(simple.rg(), logalloc::segment_size);
+        test_async_reclaim_region medium_region(simple.rg(), 2 * logalloc::segment_size);
+        test_async_reclaim_region big_region(simple.rg(), 3 * logalloc::segment_size);
+
+        // Can't run this function until we have reclaimed
+        auto fut = simple.rg().run_when_memory_available([&simple] {
+            BOOST_REQUIRE_EQUAL(simple.reclaim_sizes().size(), 3);
+        });
+
+        // Initially not available
+        BOOST_REQUIRE_EQUAL(fut.available(), false);
+        quiesce(std::move(fut));
+
+        // Test if the ordering is the one we have expected
+        BOOST_REQUIRE_EQUAL(simple.reclaim_sizes()[2], logalloc::segment_size);
+        BOOST_REQUIRE_EQUAL(simple.reclaim_sizes()[1], 2 * logalloc::segment_size);
+        BOOST_REQUIRE_EQUAL(simple.reclaim_sizes()[0], 3 * logalloc::segment_size);
+    });
+}
+
+SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_leaf_offender) {
+    return seastar::async([] {
+        // allocate a parent region group (A) with two leaf region groups (B and C), so that B has
+        // the largest size, then A, then C. Make sure that the freeing happens in descending order.
+        // of their sizes regardless of the topology
+        test_reclaimer root(logalloc::segment_size);
+        test_reclaimer large_leaf(root, logalloc::segment_size);
+        test_reclaimer small_leaf(root, logalloc::segment_size);
+
+        test_async_reclaim_region small_region(small_leaf.rg(), logalloc::segment_size);
+        test_async_reclaim_region medium_region(root.rg(), 2 * logalloc::segment_size);
+        test_async_reclaim_region big_region(large_leaf.rg(), 3 * logalloc::segment_size);
+
+        // Can't run this function until we have reclaimed. Try at the root, and we'll make sure
+        // that the leaves are forced correctly.
+        auto fut = root.rg().run_when_memory_available([&root] {
+            BOOST_REQUIRE_EQUAL(root.reclaim_sizes().size(), 3);
+        });
+
+        // Initially not available
+        BOOST_REQUIRE_EQUAL(fut.available(), false);
+        quiesce(std::move(fut));
+
+        // Test if the ordering is the one we have expected
+        BOOST_REQUIRE_EQUAL(root.reclaim_sizes()[2], logalloc::segment_size);
+        BOOST_REQUIRE_EQUAL(root.reclaim_sizes()[1], 2 * logalloc::segment_size);
+        BOOST_REQUIRE_EQUAL(root.reclaim_sizes()[0], 3 * logalloc::segment_size);
+    });
+}
+
+SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_ancestor_block) {
+    return seastar::async([] {
+        // allocate a parent region group (A) with a leaf region group (B)
+        // Make sure that active reclaim still works when we block at an ancestor
+        test_reclaimer root(logalloc::segment_size);
+        test_reclaimer leaf(root, logalloc::segment_size);
+
+        test_async_reclaim_region root_region(root.rg(), logalloc::segment_size);
+
+        // Can't run this function until we have reclaimed. Try at the leaf, and we'll make sure
+        // that the root reclaims
+        auto fut = leaf.rg().run_when_memory_available([&root] {
+            BOOST_REQUIRE_EQUAL(root.reclaim_sizes().size(), 1);
+        });
+
+        // Initially not available
+        BOOST_REQUIRE_EQUAL(fut.available(), false);
+        quiesce(std::move(fut));
+
+        BOOST_REQUIRE_EQUAL(root.reclaim_sizes()[0], logalloc::segment_size);
+    });
+}
+
+SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_big_region_goes_first) {
+    return seastar::async([] {
+        // allocate a parent region group (A) with a leaf region group (B). B's usage is higher, but
+        // due to multiple small regions. Make sure we reclaim from A first.
+        test_reclaimer root(logalloc::segment_size);
+        test_reclaimer leaf(root, logalloc::segment_size);
+
+        test_async_reclaim_region root_region(root.rg(), 4 * logalloc::segment_size);
+        test_async_reclaim_region big_leaf_region(leaf.rg(), 3 * logalloc::segment_size);
+        test_async_reclaim_region small_leaf_region(leaf.rg(), 2 * logalloc::segment_size);
+
+        auto fut = root.rg().run_when_memory_available([&root] {
+            BOOST_REQUIRE_EQUAL(root.reclaim_sizes().size(), 3);
+        });
+
+        // Initially not available
+        BOOST_REQUIRE_EQUAL(fut.available(), false);
+        quiesce(std::move(fut));
+
+        BOOST_REQUIRE_EQUAL(root.reclaim_sizes()[2], 2 * logalloc::segment_size);
+        BOOST_REQUIRE_EQUAL(root.reclaim_sizes()[1], 3 * logalloc::segment_size);
+        BOOST_REQUIRE_EQUAL(root.reclaim_sizes()[0], 4 * logalloc::segment_size);
+    });
+}
+
+SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_no_double_reclaim) {
+    return seastar::async([] {
+        // allocate a parent region group (A) with a leaf region group (B), and let B go over limit.
+        // Both A and B try to execute requests, and we need to make sure that doesn't cause B's
+        // region eviction function to be called more than once. Node that test_async_reclaim_region
+        // will already make sure that we don't have double calls, so all we have to do is to
+        // generate a situation in which a double call would happen
+        test_reclaimer root(logalloc::segment_size);
+        test_reclaimer leaf(root, logalloc::segment_size);
+
+        test_async_reclaim_region leaf_region(leaf.rg(), logalloc::segment_size);
+
+        auto fut_root = root.rg().run_when_memory_available([&root] {
+            BOOST_REQUIRE_EQUAL(root.reclaim_sizes().size(), 1);
+        });
+
+        auto fut_leaf = leaf.rg().run_when_memory_available([&root] {
+            BOOST_REQUIRE_EQUAL(root.reclaim_sizes().size(), 1);
+        });
+
+        // Initially not available
+        BOOST_REQUIRE_EQUAL(fut_root.available(), false);
+        BOOST_REQUIRE_EQUAL(fut_leaf.available(), false);
+        quiesce(std::move(fut_root));
+        quiesce(std::move(fut_leaf));
+
+        BOOST_REQUIRE_EQUAL(root.reclaim_sizes().size(), 1);
+        BOOST_REQUIRE_EQUAL(root.reclaim_sizes()[0], logalloc::segment_size);
     });
 }
