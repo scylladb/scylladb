@@ -40,6 +40,8 @@
  */
 
 #include "update_statement.hh"
+#include "raw/update_statement.hh"
+#include "raw/insert_statement.hh"
 #include "unimplemented.hh"
 
 #include "cql3/operation_impl.hh"
@@ -108,7 +110,9 @@ void update_statement::add_update_for_key(mutation& m, const exploded_clustering
 #endif
 }
 
-update_statement::parsed_insert::parsed_insert(::shared_ptr<cf_name> name,
+namespace raw {
+
+insert_statement::insert_statement(            ::shared_ptr<cf_name> name,
                                                ::shared_ptr<attributes::raw> attrs,
                                                std::vector<::shared_ptr<column_identifier::raw>> column_names,
                                                std::vector<::shared_ptr<term::raw>> column_values,
@@ -118,11 +122,12 @@ update_statement::parsed_insert::parsed_insert(::shared_ptr<cf_name> name,
     , _column_values{std::move(column_values)}
 { }
 
-::shared_ptr<modification_statement>
-update_statement::parsed_insert::prepare_internal(database& db, schema_ptr schema,
+::shared_ptr<cql3::statements::modification_statement>
+insert_statement::prepare_internal(database& db, schema_ptr schema,
     ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs)
 {
-    auto stmt = ::make_shared<update_statement>(statement_type::INSERT, bound_names->size(), schema, std::move(attrs));
+    using statement_type = cql3::statements::modification_statement::statement_type;
+    auto stmt = ::make_shared<cql3::statements::update_statement>(statement_type::INSERT, bound_names->size(), schema, std::move(attrs));
 
     // Created from an INSERT
     if (stmt->is_counter()) {
@@ -164,21 +169,22 @@ update_statement::parsed_insert::prepare_internal(database& db, schema_ptr schem
     return stmt;
 }
 
-update_statement::parsed_update::parsed_update(::shared_ptr<cf_name> name,
+update_statement::update_statement(            ::shared_ptr<cf_name> name,
                                                ::shared_ptr<attributes::raw> attrs,
                                                std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> updates,
                                                std::vector<relation_ptr> where_clause,
                                                conditions_vector conditions)
-    : modification_statement(std::move(name), std::move(attrs), std::move(conditions), false, false)
+    : raw::modification_statement(std::move(name), std::move(attrs), std::move(conditions), false, false)
     , _updates(std::move(updates))
     , _where_clause(std::move(where_clause))
 { }
 
-::shared_ptr<modification_statement>
-update_statement::parsed_update::prepare_internal(database& db, schema_ptr schema,
+::shared_ptr<cql3::statements::modification_statement>
+update_statement::prepare_internal(database& db, schema_ptr schema,
     ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs)
 {
-    auto stmt = ::make_shared<update_statement>(statement_type::UPDATE, bound_names->size(), schema, std::move(attrs));
+    using statement_type = cql3::statements::modification_statement::statement_type;
+    auto stmt = ::make_shared<cql3::statements::update_statement>(statement_type::UPDATE, bound_names->size(), schema, std::move(attrs));
 
     for (auto&& entry : _updates) {
         auto id = entry.first->prepare_column_identifier(schema);
@@ -198,6 +204,8 @@ update_statement::parsed_update::prepare_internal(database& db, schema_ptr schem
 
     stmt->process_where_clause(db, _where_clause, bound_names);
     return stmt;
+}
+
 }
 
 }

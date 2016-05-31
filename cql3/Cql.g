@@ -46,7 +46,8 @@ options {
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/drop_table_statement.hh"
 #include "cql3/statements/truncate_statement.hh"
-#include "cql3/statements/update_statement.hh"
+#include "cql3/statements/raw/update_statement.hh"
+#include "cql3/statements/raw/insert_statement.hh"
 #include "cql3/statements/delete_statement.hh"
 #include "cql3/statements/index_prop_defs.hh"
 #include "cql3/statements/use_statement.hh"
@@ -439,7 +440,7 @@ orderByClause[raw::select_statement::parameters::orderings_type& orderings]
  * USING TIMESTAMP <long>;
  *
  */
-insertStatement returns [::shared_ptr<update_statement::parsed_insert> expr]
+insertStatement returns [::shared_ptr<raw::insert_statement> expr]
     @init {
         auto attrs = ::make_shared<cql3::attributes::raw>();
         std::vector<::shared_ptr<cql3::column_identifier::raw>> column_names;
@@ -454,7 +455,7 @@ insertStatement returns [::shared_ptr<update_statement::parsed_insert> expr]
         ( K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
         ( usingClause[attrs] )?
       {
-          $expr = ::make_shared<update_statement::parsed_insert>(std::move(cf),
+          $expr = ::make_shared<raw::insert_statement>(std::move(cf),
                                                    std::move(attrs),
                                                    std::move(column_names),
                                                    std::move(values),
@@ -477,7 +478,7 @@ usingClauseObjective[::shared_ptr<cql3::attributes::raw> attrs]
  * SET name1 = value1, name2 = value2
  * WHERE key = value;
  */
-updateStatement returns [::shared_ptr<update_statement::parsed_update> expr]
+updateStatement returns [::shared_ptr<raw::update_statement> expr]
     @init {
         auto attrs = ::make_shared<cql3::attributes::raw>();
         std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>, ::shared_ptr<cql3::operation::raw_update>>> operations;
@@ -488,7 +489,7 @@ updateStatement returns [::shared_ptr<update_statement::parsed_update> expr]
       K_WHERE wclause=whereClause
       ( K_IF conditions=updateConditions )?
       {
-          return ::make_shared<update_statement::parsed_update>(std::move(cf),
+          return ::make_shared<raw::update_statement>(std::move(cf),
                                                   std::move(attrs),
                                                   std::move(operations),
                                                   std::move(wclause),

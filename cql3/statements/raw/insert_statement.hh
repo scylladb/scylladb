@@ -55,22 +55,33 @@ namespace cql3 {
 
 namespace statements {
 
-/**
- * An <code>UPDATE</code> statement parsed from a CQL query statement.
- *
- */
-class update_statement : public modification_statement {
-public:
-#if 0
-    private static final Constants.Value EMPTY = new Constants.Value(ByteBufferUtil.EMPTY_BYTE_BUFFER);
-#endif
+namespace raw {
 
-    update_statement(statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs);
+class insert_statement : public raw::modification_statement {
 private:
-    virtual bool require_full_clustering_key() const override;
+    const std::vector<::shared_ptr<column_identifier::raw>> _column_names;
+    const std::vector<::shared_ptr<term::raw>> _column_values;
+public:
+    /**
+     * A parsed <code>INSERT</code> statement.
+     *
+     * @param name column family being operated on
+     * @param columnNames list of column names
+     * @param columnValues list of column values (corresponds to names)
+     * @param attrs additional attributes for statement (CL, timestamp, timeToLive)
+     */
+    insert_statement(::shared_ptr<cf_name> name,
+                  ::shared_ptr<attributes::raw> attrs,
+                  std::vector<::shared_ptr<column_identifier::raw>> column_names,
+                  std::vector<::shared_ptr<term::raw>> column_values,
+                  bool if_not_exists);
 
-    virtual void add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
+    virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(database& db, schema_ptr schema,
+                ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs) override;
+
 };
+
+}
 
 }
 
