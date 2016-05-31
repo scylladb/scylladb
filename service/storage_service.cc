@@ -78,6 +78,8 @@ namespace service {
 
 static logging::logger logger("storage_service");
 
+static const sstring RANGE_TOMBSTONES_FEATURE = "RANGE_TOMBSTONES";
+
 distributed<storage_service> _the_storage_service;
 
 int get_generation_number() {
@@ -1148,6 +1150,10 @@ future<> storage_service::init_server(int delay) {
             }
             logger.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
         }
+
+        get_storage_service().invoke_on_all([] (auto& ss) {
+            ss._range_tombstones_feature = gms::feature(RANGE_TOMBSTONES_FEATURE);
+        }).get();
     });
 }
 
