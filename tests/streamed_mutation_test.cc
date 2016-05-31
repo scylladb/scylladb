@@ -221,3 +221,30 @@ SEASTAR_TEST_CASE(test_range_tombstones_stream) {
     });
 }
 
+SEASTAR_TEST_CASE(test_mutation_hash) {
+    return seastar::async([] {
+        for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq) {
+            auto get_hash = [] (streamed_mutation m) {
+                md5_hasher h;
+                m.key().feed_hash(h, *m.schema());
+
+                mutation_hasher<md5_hasher> mh(*m.schema(), h);
+                consume(m, std::move(mh)).get0();
+                return h.finalize();
+            };
+            auto h1 = get_hash(streamed_mutation_from_mutation(mutation(m1)));
+            auto h2 = get_hash(streamed_mutation_from_mutation(mutation(m2)));
+            if (eq) {
+                if (h1 != h2) {
+                    BOOST_FAIL(sprint("Hash should be equal for %s and %s", m1, m2));
+                }
+            } else {
+                // We're using a strong hasher, collision should be unlikely
+                if (h1 == h2) {
+                    BOOST_FAIL(sprint("Hash should be different for %s and %s", m1, m2));
+                }
+            }
+        });
+    });
+}
+
