@@ -33,6 +33,7 @@
 #include "utils/UUID_gen.hh"
 #include <thrift/protocol/TBinaryProtocol.h>
 #include <boost/move/iterator.hpp>
+#include "db/marshal/type_parser.hh"
 #include "service/migration_manager.hh"
 #include "utils/class_registrator.hh"
 #include "noexcept_traits.hh"
@@ -498,12 +499,24 @@ public:
                 std::vector<schema::column> regular_columns;
                 // FIXME: get this from comparator
                 auto column_name_type = utf8_type;
-                // FIXME: look at key_alias and key_validator first
+                // FIXME: look at key_alias and key_validation_class first
                 partition_key.push_back({"key", bytes_type});
-                // FIXME: guess clustering keys
-                for (const ColumnDef& col_def : cf_def.column_metadata) {
-                    // FIXME: look at all fields, not just name
-                    regular_columns.push_back({to_bytes(col_def.name), bytes_type});
+                if (cf_def.column_metadata.empty()) {
+                    // Dynamic CF
+                    auto ck_types = get_types(cf_def.comparator_type);
+                    for (uint32_t i = 0; i < ck_types.size(); ++i) {
+                        clustering_key.push_back({"column" + (i + 1), std::move(ck_types[i])});
+                    }
+                    auto&& vtype = cf_def.__isset.default_validation_class
+                                 ? db::marshal::type_parser::parse(sstring_view(cf_def.default_validation_class))
+                                 : utf8_type;
+                    regular_columns.push_back({"value", std::move(vtype)});
+                } else {
+                    // Static CF
+                    for (const ColumnDef& col_def : cf_def.column_metadata) {
+                        // FIXME: look at all fields, not just name
+                        regular_columns.push_back({to_bytes(col_def.name), bytes_type});
+                    }
                 }
                 auto id = utils::UUID_gen::get_time_UUID();
                 auto s = make_lw_shared(schema(id, ks_def.name, cf_def.name,
@@ -620,6 +633,20 @@ private:
         type += ")";
         return type;
     }
+    static std::vector<data_type> get_types(const std::string& thrift_type) {
+        static const char composite_type[] = "CompositeType";
+        std::vector<data_type> ret;
+        auto t = sstring_view(thrift_type);
+        auto composite_idx = t.find(composite_type);
+        if (composite_idx == sstring_view::npos) {
+            ret.emplace_back(db::marshal::type_parser::parse(t));
+        } else {
+            t.remove_prefix(composite_idx + sizeof(composite_type) - 1);
+            auto types = db::marshal::type_parser(t).get_type_parameters(false);
+            std::move(types.begin(), types.end(), std::back_inserter(ret));
+        }
+        return ret;
+    }
     static KsDef get_keyspace_definition(const keyspace& ks) {
         auto&& meta = ks.metadata();
         KsDef def;
@@ -673,6 +700,10 @@ private:
             fail(unimplemented::cause::THRIFT);
         }
         return partition_key::from_single_value(*s, std::move(k));
+    }
+    static bool is_dynamic(const schema& s) {
+        // FIXME: what about CFs created from CQL?
+        return s.clustering_key_size() > 0;
     }
 };
 
