@@ -51,7 +51,7 @@ options {
 #include "cql3/statements/raw/delete_statement.hh"
 #include "cql3/statements/index_prop_defs.hh"
 #include "cql3/statements/use_statement.hh"
-#include "cql3/statements/batch_statement.hh"
+#include "cql3/statements/raw/batch_statement.hh"
 #include "cql3/statements/create_user_statement.hh"
 #include "cql3/statements/alter_user_statement.hh"
 #include "cql3/statements/drop_user_statement.hh"
@@ -567,9 +567,9 @@ usingClauseDelete[::shared_ptr<cql3::attributes::raw> attrs]
  *   ...
  * APPLY BATCH
  */
-batchStatement returns [shared_ptr<cql3::statements::batch_statement::parsed> expr]
+batchStatement returns [shared_ptr<cql3::statements::raw::batch_statement> expr]
     @init {
-        using btype = cql3::statements::batch_statement::type; 
+        using btype = cql3::statements::raw::batch_statement::type; 
         btype type = btype::LOGGED;
         std::vector<shared_ptr<cql3::statements::raw::modification_statement>> statements;
         auto attrs = make_shared<cql3::attributes::raw>();
@@ -580,7 +580,7 @@ batchStatement returns [shared_ptr<cql3::statements::batch_statement::parsed> ex
           ( s=batchStatementObjective ';'? { statements.push_back(std::move(s)); } )*
       K_APPLY K_BATCH
       {
-          $expr = ::make_shared<cql3::statements::batch_statement::parsed>(type, std::move(attrs), std::move(statements));
+          $expr = ::make_shared<cql3::statements::raw::batch_statement>(type, std::move(attrs), std::move(statements));
       }
     ;
 
