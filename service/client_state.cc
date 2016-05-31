@@ -47,6 +47,7 @@
 #include "validation.hh"
 #include "db/system_keyspace.hh"
 #include "db/schema_tables.hh"
+#include "tracing/trace_keyspace_helper.hh"
 
 void service::client_state::set_login(::shared_ptr<auth::authenticated_user> user) {
     if (user == nullptr) {
@@ -133,7 +134,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
         }
 
         // we want to allow altering AUTH_KS and TRACING_KS.
-        for (auto& n : { auth::auth::AUTH_KS /* TODO: tracing */ }) {
+        for (auto& n : { auth::auth::AUTH_KS, tracing::trace_keyspace_helper::KEYSPACE_NAME }) {
             if (name == n && !resource.is_keyspace_level() && p != auth::permission::ALTER) {
                 throw exceptions::unauthorized_exception(sprint("Cannot %s %s", auth::permissions::to_string(p), resource));
             }
