@@ -42,6 +42,7 @@
 #pragma once
 
 #include "cql3/statements/modification_statement.hh"
+#include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/attributes.hh"
 #include "cql3/operation.hh"
 #include "database_fwd.hh"
@@ -80,7 +81,7 @@ public:
     }
 #endif
 
-    class parsed : public modification_statement::parsed {
+    class parsed : public raw::modification_statement {
     private:
         std::vector<::shared_ptr<operation::raw_deletion>> _deletions;
         std::vector<::shared_ptr<relation>> _where_clause;
@@ -92,7 +93,7 @@ public:
                conditions_vector conditions,
                bool if_exists);
     protected:
-        virtual ::shared_ptr<modification_statement> prepare_internal(database& db, schema_ptr schema,
+        virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(database& db, schema_ptr schema,
             ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs);
     };
 };

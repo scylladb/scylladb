@@ -39,6 +39,7 @@
 
 #include "cql3/cql_statement.hh"
 #include "modification_statement.hh"
+#include "raw/modification_statement.hh"
 #include "service/storage_proxy.hh"
 #include "transport/messages/result_message.hh"
 #include "timestamp.hh"
@@ -321,12 +322,12 @@ public:
     class parsed : public raw::cf_statement {
         type _type;
         shared_ptr<attributes::raw> _attrs;
-        std::vector<shared_ptr<modification_statement::parsed>> _parsed_statements;
+        std::vector<shared_ptr<raw::modification_statement>> _parsed_statements;
     public:
         parsed(
             type type_,
             shared_ptr<attributes::raw> attrs,
-            std::vector<shared_ptr<modification_statement::parsed>> parsed_statements)
+            std::vector<shared_ptr<raw::modification_statement>> parsed_statements)
                 : cf_statement(nullptr)
                 , _type(type_)
                 , _attrs(std::move(attrs))

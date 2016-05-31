@@ -42,6 +42,7 @@
 #pragma once
 
 #include "cql3/statements/modification_statement.hh"
+#include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/term.hh"
 
@@ -70,7 +71,7 @@ private:
 
     virtual void add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
 public:
-    class parsed_insert : public modification_statement::parsed {
+    class parsed_insert : public raw::modification_statement {
     private:
         const std::vector<::shared_ptr<column_identifier::raw>> _column_names;
         const std::vector<::shared_ptr<term::raw>> _column_values;
@@ -89,12 +90,12 @@ public:
                       std::vector<::shared_ptr<term::raw>> column_values,
                       bool if_not_exists);
 
-        virtual ::shared_ptr<modification_statement> prepare_internal(database& db, schema_ptr schema,
+        virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(database& db, schema_ptr schema,
                     ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs) override;
 
     };
 
-    class parsed_update : public modification_statement::parsed {
+    class parsed_update : public raw::modification_statement {
     private:
         // Provided for an UPDATE
         std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> _updates;
@@ -115,7 +116,7 @@ public:
             std::vector<relation_ptr> where_clause,
             conditions_vector conditions);
     protected:
-        virtual ::shared_ptr<modification_statement> prepare_internal(database& db, schema_ptr schema,
+        virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(database& db, schema_ptr schema,
                     ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs);
     };
 };

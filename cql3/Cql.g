@@ -570,7 +570,7 @@ batchStatement returns [shared_ptr<cql3::statements::batch_statement::parsed> ex
     @init {
         using btype = cql3::statements::batch_statement::type; 
         btype type = btype::LOGGED;
-        std::vector<shared_ptr<cql3::statements::modification_statement::parsed>> statements;
+        std::vector<shared_ptr<cql3::statements::raw::modification_statement>> statements;
         auto attrs = make_shared<cql3::attributes::raw>();
     }
     : K_BEGIN
@@ -583,7 +583,7 @@ batchStatement returns [shared_ptr<cql3::statements::batch_statement::parsed> ex
       }
     ;
 
-batchStatementObjective returns [shared_ptr<cql3::statements::modification_statement::parsed> statement]
+batchStatementObjective returns [shared_ptr<cql3::statements::raw::modification_statement> statement]
     : i=insertStatement  { $statement = i; }
     | u=updateStatement  { $statement = u; }
     | d=deleteStatement  { $statement = d; }

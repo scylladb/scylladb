@@ -110,7 +110,7 @@ delete_statement::parsed::parsed(::shared_ptr<cf_name> name,
                                  std::vector<::shared_ptr<relation>> where_clause,
                                  conditions_vector conditions,
                                  bool if_exists)
-    : modification_statement::parsed(std::move(name), std::move(attrs), std::move(conditions), false, if_exists)
+    : raw::modification_statement(std::move(name), std::move(attrs), std::move(conditions), false, if_exists)
     , _deletions(std::move(deletions))
     , _where_clause(std::move(where_clause))
 { }

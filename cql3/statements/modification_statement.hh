@@ -66,6 +66,9 @@ namespace cql3 {
 
 namespace statements {
 
+
+namespace raw { class modification_statement; }
+
 /*
  * Abstract parent class of individual modifications, i.e. INSERT, UPDATE and DELETE.
  */
@@ -345,27 +348,7 @@ protected:
      * @throws InvalidRequestException
      */
     virtual void validate_where_clause_for_conditions();
-
-public:
-    class parsed : public raw::cf_statement {
-    public:
-        using conditions_vector = std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<column_condition::raw>>>;
-    protected:
-        const ::shared_ptr<attributes::raw> _attrs;
-        const std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<column_condition::raw>>> _conditions;
-    private:
-        const bool _if_not_exists;
-        const bool _if_exists;
-    protected:
-        parsed(::shared_ptr<cf_name> name, ::shared_ptr<attributes::raw> attrs, conditions_vector conditions, bool if_not_exists, bool if_exists);
-
-    public:
-        virtual ::shared_ptr<prepared> prepare(database& db) override;
-        ::shared_ptr<modification_statement> prepare(database& db, ::shared_ptr<variable_specifications> bound_names);;
-    protected:
-        virtual ::shared_ptr<modification_statement> prepare_internal(database& db, schema_ptr schema,
-            ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs) = 0;
-    };
+    friend class raw::modification_statement;
 };
 
 std::ostream& operator<<(std::ostream& out, modification_statement::statement_type t);

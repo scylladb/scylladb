@@ -113,7 +113,7 @@ update_statement::parsed_insert::parsed_insert(::shared_ptr<cf_name> name,
                                                std::vector<::shared_ptr<column_identifier::raw>> column_names,
                                                std::vector<::shared_ptr<term::raw>> column_values,
                                                bool if_not_exists)
-    : modification_statement::parsed{std::move(name), std::move(attrs), conditions_vector{}, if_not_exists, false}
+    : raw::modification_statement{std::move(name), std::move(attrs), conditions_vector{}, if_not_exists, false}
     , _column_names{std::move(column_names)}
     , _column_values{std::move(column_values)}
 { }
@@ -169,7 +169,7 @@ update_statement::parsed_update::parsed_update(::shared_ptr<cf_name> name,
                                                std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> updates,
                                                std::vector<relation_ptr> where_clause,
                                                conditions_vector conditions)
-    : modification_statement::parsed(std::move(name), std::move(attrs), std::move(conditions), false, false)
+    : modification_statement(std::move(name), std::move(attrs), std::move(conditions), false, false)
     , _updates(std::move(updates))
     , _where_clause(std::move(where_clause))
 { }
