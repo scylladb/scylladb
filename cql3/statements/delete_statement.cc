@@ -40,6 +40,7 @@
  */
 
 #include "delete_statement.hh"
+#include "raw/delete_statement.hh"
 
 namespace cql3 {
 
@@ -76,11 +77,13 @@ void delete_statement::add_update_for_key(mutation& m, const exploded_clustering
     }
 }
 
-::shared_ptr<modification_statement>
-delete_statement::parsed::prepare_internal(database& db, schema_ptr schema, ::shared_ptr<variable_specifications> bound_names,
-        std::unique_ptr<attributes> attrs) {
+namespace raw {
 
-    auto stmt = ::make_shared<delete_statement>(statement_type::DELETE, bound_names->size(), schema, std::move(attrs));
+::shared_ptr<cql3::statements::modification_statement>
+delete_statement::prepare_internal(database& db, schema_ptr schema, ::shared_ptr<variable_specifications> bound_names,
+        std::unique_ptr<attributes> attrs) {
+    using statement_type = cql3::statements::modification_statement::statement_type;
+    auto stmt = ::make_shared<cql3::statements::delete_statement>(statement_type::DELETE, bound_names->size(), schema, std::move(attrs));
 
     for (auto&& deletion : _deletions) {
         auto&& id = deletion->affected_column()->prepare_column_identifier(schema);
@@ -104,7 +107,7 @@ delete_statement::parsed::prepare_internal(database& db, schema_ptr schema, ::sh
     return stmt;
 }
 
-delete_statement::parsed::parsed(::shared_ptr<cf_name> name,
+delete_statement::delete_statement(::shared_ptr<cf_name> name,
                                  ::shared_ptr<attributes::raw> attrs,
                                  std::vector<::shared_ptr<operation::raw_deletion>> deletions,
                                  std::vector<::shared_ptr<relation>> where_clause,
@@ -114,6 +117,8 @@ delete_statement::parsed::parsed(::shared_ptr<cf_name> name,
     , _deletions(std::move(deletions))
     , _where_clause(std::move(where_clause))
 { }
+
+}
 
 }
 

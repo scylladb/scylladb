@@ -48,7 +48,7 @@ options {
 #include "cql3/statements/truncate_statement.hh"
 #include "cql3/statements/raw/update_statement.hh"
 #include "cql3/statements/raw/insert_statement.hh"
-#include "cql3/statements/delete_statement.hh"
+#include "cql3/statements/raw/delete_statement.hh"
 #include "cql3/statements/index_prop_defs.hh"
 #include "cql3/statements/use_statement.hh"
 #include "cql3/statements/batch_statement.hh"
@@ -508,7 +508,7 @@ updateConditions returns [conditions_type conditions]
  * WHERE KEY = keyname
    [IF (EXISTS | name = value, ...)];
  */
-deleteStatement returns [::shared_ptr<delete_statement::parsed> expr]
+deleteStatement returns [::shared_ptr<raw::delete_statement> expr]
     @init {
         auto attrs = ::make_shared<cql3::attributes::raw>();
         std::vector<::shared_ptr<cql3::operation::raw_deletion>> column_deletions;
@@ -520,7 +520,7 @@ deleteStatement returns [::shared_ptr<delete_statement::parsed> expr]
       K_WHERE wclause=whereClause
       ( K_IF ( K_EXISTS { if_exists = true; } | conditions=updateConditions ))?
       {
-          return ::make_shared<delete_statement::parsed>(cf,
+          return ::make_shared<raw::delete_statement>(cf,
                                             std::move(attrs),
                                             std::move(column_deletions),
                                             std::move(wclause),
