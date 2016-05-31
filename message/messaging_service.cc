@@ -300,16 +300,31 @@ gms::inet_address messaging_service::listen_address() {
     return _listen_address;
 }
 
+future<> messaging_service::stop_tls_server() {
+    if (_server_tls) {
+        return _server_tls->stop();
+    }
+    return make_ready_future<>();
+}
+
+future<> messaging_service::stop_nontls_server() {
+    if (_server) {
+        return _server->stop();
+    }
+    return make_ready_future<>();
+}
+
+future<> messaging_service::stop_client() {
+    return parallel_for_each(_clients, [] (auto& m) {
+        return parallel_for_each(m, [] (std::pair<const msg_addr, shard_info>& c) {
+            return c.second.rpc_client->stop();
+        });
+    });
+}
+
 future<> messaging_service::stop() {
     _stopping = true;
-    return when_all(
-        _server->stop(),
-        parallel_for_each(_clients, [] (auto& m) {
-            return parallel_for_each(m, [] (std::pair<const msg_addr, shard_info>& c) {
-                return c.second.rpc_client->stop();
-            });
-        })
-    ).discard_result();
+    return when_all(stop_nontls_server(), stop_tls_server(), stop_client()).discard_result();
 }
 
 rpc::no_wait_type messaging_service::no_wait() {
