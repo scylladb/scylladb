@@ -97,7 +97,7 @@ sstring storage_service::get_config_supported_features() {
     // Add features supported by this local node. When a new feature is
     // introduced in scylla, update it here, e.g.,
     // return sstring("FEATURE1,FEATURE2")
-    return sstring("");
+    return RANGE_TOMBSTONES_FEATURE;
 }
 
 std::set<inet_address> get_seeds() {
