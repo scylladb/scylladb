@@ -70,6 +70,11 @@ future<repair_status> repair_get_status(seastar::sharded<database>& db, int id);
 // stop them abruptly).
 future<> repair_shutdown(seastar::sharded<database>& db);
 
+enum class repair_checksum {
+    legacy = 0,
+    streamed = 1,
+};
+
 // The class partition_checksum calculates a 256-bit cryptographically-secure
 // checksum of a set of partitions fed to it. The checksum of a partition set
 // is calculated by calculating a strong hash function (SHA-256) of each
@@ -81,10 +86,13 @@ future<> repair_shutdown(seastar::sharded<database>& db);
 class partition_checksum {
 private:
     std::array<uint8_t, 32> _digest; // 256 bits
+private:
+    static future<partition_checksum> compute_legacy(streamed_mutation m);
+    static future<partition_checksum> compute_streamed(streamed_mutation m);
 public:
     constexpr partition_checksum() : _digest{} { }
     explicit partition_checksum(std::array<uint8_t, 32> digest) : _digest(std::move(digest)) { }
-    partition_checksum(const mutation& m);
+    static future<partition_checksum> compute(streamed_mutation m, repair_checksum rt);
     void add(const partition_checksum& other);
     bool operator==(const partition_checksum& other) const;
     bool operator!=(const partition_checksum& other) const { return !operator==(other); }
@@ -99,4 +107,4 @@ public:
 // not resolved.
 future<partition_checksum> checksum_range(seastar::sharded<database> &db,
         const sstring& keyspace, const sstring& cf,
-        const ::range<dht::token>& range);
+        const ::range<dht::token>& range, repair_checksum rt);

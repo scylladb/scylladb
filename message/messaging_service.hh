@@ -30,6 +30,7 @@
 #include "query-request.hh"
 #include "mutation_query.hh"
 #include "range.hh"
+#include "repair/repair.hh"
 
 #include <seastar/net/tls.hh>
 
@@ -233,9 +234,9 @@ public:
     future<> send_complete_message(msg_addr id, UUID plan_id, unsigned dst_cpu_id);
 
     // Wrapper for REPAIR_CHECKSUM_RANGE verb
-    void register_repair_checksum_range(std::function<future<partition_checksum> (sstring keyspace, sstring cf, range<dht::token> range)>&& func);
+    void register_repair_checksum_range(std::function<future<partition_checksum> (sstring keyspace, sstring cf, range<dht::token> range, rpc::optional<repair_checksum> hash_version)>&& func);
     void unregister_repair_checksum_range();
-    future<partition_checksum> send_repair_checksum_range(msg_addr id, sstring keyspace, sstring cf, range<dht::token> range);
+    future<partition_checksum> send_repair_checksum_range(msg_addr id, sstring keyspace, sstring cf, range<dht::token> range, repair_checksum hash_version);
 
     // Wrapper for GOSSIP_ECHO verb
     void register_gossip_echo(std::function<future<> ()>&& func);

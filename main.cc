@@ -578,10 +578,11 @@ int main(int ac, char** av) {
             api::set_server_stream_manager(ctx).get();
             // Start handling REPAIR_CHECKSUM_RANGE messages
             net::get_messaging_service().invoke_on_all([&db] (auto& ms) {
-                ms.register_repair_checksum_range([&db] (sstring keyspace, sstring cf, query::range<dht::token> range) {
+                ms.register_repair_checksum_range([&db] (sstring keyspace, sstring cf, query::range<dht::token> range, rpc::optional<repair_checksum> hash_version) {
+                    auto hv = hash_version ? *hash_version : repair_checksum::legacy;
                     return do_with(std::move(keyspace), std::move(cf), std::move(range),
-                            [&db] (auto& keyspace, auto& cf, auto& range) {
-                        return checksum_range(db, keyspace, cf, range);
+                            [&db, hv] (auto& keyspace, auto& cf, auto& range) {
+                        return checksum_range(db, keyspace, cf, range, hv);
                     });
                 });
             }).get();
