@@ -33,6 +33,7 @@
 #include "row_cache.hh"
 #include "core/thread.hh"
 #include "memtable.hh"
+#include "partition_slice_builder.hh"
 
 #include "disk-error-handler.hh"
 
@@ -884,5 +885,114 @@ SEASTAR_TEST_CASE(test_mvcc) {
             auto m_5 = mutation_from_streamed_mutation(std::move(sm5)).get0();
             BOOST_REQUIRE(no_difference(m12, *m_5));
         });
+    });
+}
+
+void test_sliced_read_row_presence(mutation_reader reader, schema_ptr s, const query::partition_slice& ps, std::deque<int> expected)
+{
+    clustering_key::equality ck_eq(*s);
+
+    auto smopt = reader().get0();
+    BOOST_REQUIRE(smopt);
+    auto mfopt = (*smopt)().get0();
+    while (mfopt) {
+        if (mfopt->is_clustering_row()) {
+            auto& cr = mfopt->as_clustering_row();
+            BOOST_REQUIRE(ck_eq(cr.key(), clustering_key_prefix::from_single_value(*s, int32_type->decompose(expected.front()))));
+            expected.pop_front();
+        }
+        mfopt = (*smopt)().get0();
+    }
+
+    BOOST_REQUIRE(!reader().get0());
+}
+
+SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("v", int32_type)
+            .build();
+
+        auto pk = partition_key::from_exploded(*s, { int32_type->decompose(0) });
+        mutation m(pk, s);
+        constexpr auto row_count = 8;
+        for (auto i = 0; i < row_count; i++) {
+            m.set_clustered_cell(clustering_key_prefix::from_single_value(*s, int32_type->decompose(i)),
+                                 to_bytes("v"), data_value(i), api::new_timestamp());
+        }
+
+        auto mt = make_lw_shared<memtable>(s);
+        mt->apply(m);
+
+        cache_tracker tracker;
+        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
+
+        auto run_tests = [&] (auto& ps, std::deque<int> expected) {
+            auto ck_filtering = query::clustering_key_filtering_context::create(s, ps);
+
+            cache.clear().get0();
+
+            auto reader = cache.make_reader(s, query::full_partition_range, ck_filtering);
+            test_sliced_read_row_presence(std::move(reader), s, ps, expected);
+
+            reader = cache.make_reader(s, query::full_partition_range, ck_filtering);
+            test_sliced_read_row_presence(std::move(reader), s, ps, expected);
+
+            auto dk = dht::global_partitioner().decorate_key(*s, pk);
+
+            reader = cache.make_reader(s, query::partition_range::make_singular(dk), ck_filtering);
+            test_sliced_read_row_presence(std::move(reader), s, ps, expected);
+
+            cache.clear().get0();
+
+            reader = cache.make_reader(s, query::partition_range::make_singular(dk), ck_filtering);
+            test_sliced_read_row_presence(std::move(reader), s, ps, expected);
+        };
+
+        {
+            auto ps = partition_slice_builder(*s)
+                          .with_range(query::clustering_range {
+                              { },
+                              query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(2)), false },
+                          }).with_range(clustering_key_prefix::from_single_value(*s, int32_type->decompose(5)))
+                          .with_range(query::clustering_range {
+                              query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(7)) },
+                              query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(10)) },
+                          }).build();
+            run_tests(ps, { 0, 1, 5, 7 });
+        }
+
+        {
+            auto ps = partition_slice_builder(*s)
+                          .with_range(query::clustering_range {
+                              query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(1)) },
+                              query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(2)) },
+                          }).with_range(query::clustering_range {
+                              query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(4)), false },
+                              query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(6)) },
+                          }).with_range(query::clustering_range {
+                              query::clustering_range::bound { clustering_key_prefix::from_single_value(*s, int32_type->decompose(7)), false },
+                              { },
+                          }).build();
+            run_tests(ps, { 1, 2, 5, 6 });
+        }
+
+        {
+            auto ps = partition_slice_builder(*s)
+                          .with_range(query::clustering_range {
+                              { },
+                              { },
+                          }).build();
+            run_tests(ps, { 0, 1, 2, 3, 4, 5, 6, 7 });
+        }
+
+        {
+            auto ps = partition_slice_builder(*s)
+                    .with_range(query::clustering_range::make_singular(clustering_key_prefix::from_single_value(*s, int32_type->decompose(4))))
+                    .build();
+            run_tests(ps, { 4 });
+        }
     });
 }
