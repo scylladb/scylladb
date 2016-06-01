@@ -89,23 +89,23 @@ public:
 
 lw_shared_ptr<memtable_list>
 column_family::make_memory_only_memtable_list() {
-    auto seal = [this] { return make_ready_future<>(); };
+    auto seal = [this] (memtable_list::flush_behavior ignored) { return make_ready_future<>(); };
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_memtable_size, _config.dirty_memory_region_group);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_memtable_size, _config.dirty_memory_region_group, _memtables_serializer);
 }
 
 lw_shared_ptr<memtable_list>
 column_family::make_memtable_list() {
-    auto seal = [this] { return seal_active_memtable(); };
+    auto seal = [this] (memtable_list::flush_behavior behavior) { return seal_active_memtable(behavior); };
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_memtable_size, _config.dirty_memory_region_group);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_memtable_size, _config.dirty_memory_region_group, _memtables_serializer);
 }
 
 lw_shared_ptr<memtable_list>
 column_family::make_streaming_memtable_list() {
-    auto seal = [this] { return seal_active_streaming_memtable_delayed(); };
+    auto seal = [this] (memtable_list::flush_behavior behavior) { return seal_active_streaming_memtable(behavior); };
     auto get_schema =  [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_streaming_memtable_size, _config.streaming_dirty_memory_region_group);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_streaming_memtable_size, _config.streaming_dirty_memory_region_group, _streaming_serializer);
 }
 
 column_family::column_family(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager)
@@ -589,7 +589,7 @@ column_family::seal_active_streaming_memtable_delayed() {
     }
 
     if (_streaming_memtables->should_flush()) {
-        return seal_active_streaming_memtable();
+        return seal_active_streaming_memtable_immediate();
     }
 
     if (!_delayed_streaming_flush.armed()) {
@@ -608,7 +608,7 @@ column_family::seal_active_streaming_memtable_delayed() {
 }
 
 future<>
-column_family::seal_active_streaming_memtable() {
+column_family::seal_active_streaming_memtable_immediate() {
     auto old = _streaming_memtables->back();
     if (old->empty()) {
         return make_ready_future<>();
@@ -667,7 +667,7 @@ column_family::seal_active_streaming_memtable() {
 }
 
 future<>
-column_family::seal_active_memtable() {
+column_family::seal_active_memtable(memtable_list::flush_behavior ignored) {
     auto old = _memtables->back();
     dblog.debug("Sealing active memtable, partitions: {}, occupancy: {}", old->partition_count(), old->occupancy());
 
@@ -771,14 +771,8 @@ column_family::start() {
 
 future<>
 column_family::stop() {
-    // Please note that in here, we shouldn't use the implicit seal function in each memtable's
-    // list. The reason is that for the streaming memtables, the memtable_list's seal function does
-    // not guarantee anything to be immediately flushed, and will set a timer instead (so we can
-    // coalesce writes). During stop, we need to force flushing behavior so we call
-    // seal_active_streaming_memtable() instead. That problem does not exist for memtables and we
-    // could call _memtables->seal_active_memtable() here. We don't, for consistency with streaming.
-    seal_active_memtable();
-    seal_active_streaming_memtable();
+    _memtables->seal_active_memtable(memtable_list::flush_behavior::immediate);
+    _streaming_memtables->seal_active_memtable(memtable_list::flush_behavior::immediate);
     return _compaction_manager.remove(this).then([this] {
         // Nest, instead of using when_all, so we don't lose any exceptions.
         return _flush_queue->close().then([this] {
@@ -2594,7 +2588,7 @@ future<> column_family::flush() {
     // FIXME: this will synchronously wait for this write to finish, but doesn't guarantee
     // anything about previous writes.
     _stats.pending_flushes++;
-    return _memtables->seal_active_memtable().finally([this]() mutable {
+    return _memtables->seal_active_memtable(memtable_list::flush_behavior::immediate).finally([this]() mutable {
         _stats.pending_flushes--;
         // In origin memtable_switch_count is incremented inside
         // ColumnFamilyMeetrics Flush.run
@@ -2616,7 +2610,7 @@ future<> column_family::flush(const db::replay_position& pos) {
     // We ignore this for now and just say that if we're asked for
     // a CF and it exists, we pretty much have to have data that needs
     // flushing. Let's do it.
-    return _memtables->seal_active_memtable();
+    return _memtables->seal_active_memtable(memtable_list::flush_behavior::immediate);
 }
 
 // FIXME: We can do much better than this in terms of cache management. Right
@@ -2633,7 +2627,7 @@ future<> column_family::flush_streaming_mutations(std::vector<query::partition_r
     // need this code to go away as soon as we can (see FIXME above). So the double gate is a better
     // temporary counter measure.
     return with_gate(_streaming_flush_gate, [this, ranges = std::move(ranges)] {
-        return _streaming_memtables->seal_active_memtable().finally([this, ranges = std::move(ranges)] {
+        return _streaming_memtables->seal_active_memtable(memtable_list::flush_behavior::delayed).finally([this, ranges = std::move(ranges)] {
             if (_config.enable_cache) {
                 for (auto& range : ranges) {
                     _cache.invalidate(range);

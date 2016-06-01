@@ -147,19 +147,24 @@ class replay_position_reordered_exception : public std::exception {};
 // If we are going to have different methods, better have different instances
 // of a common class.
 class memtable_list {
+public:
+    enum class flush_behavior { delayed, immediate };
+private:
     using shared_memtable = lw_shared_ptr<memtable>;
     std::vector<shared_memtable> _memtables;
-    std::function<future<> ()> _seal_fn;
+    std::function<future<> (flush_behavior)> _seal_fn;
     std::function<schema_ptr()> _current_schema;
     size_t _max_memtable_size;
     logalloc::region_group* _dirty_memory_region_group;
+    semaphore& _region_group_serializer;
 public:
-    memtable_list(std::function<future<> ()> seal_fn, std::function<schema_ptr()> cs, size_t max_memtable_size, logalloc::region_group* region_group)
+    memtable_list(std::function<future<> (flush_behavior)> seal_fn, std::function<schema_ptr()> cs, size_t max_memtable_size, logalloc::region_group* region_group, semaphore& sem)
         : _memtables({})
         , _seal_fn(seal_fn)
         , _current_schema(cs)
         , _max_memtable_size(max_memtable_size)
-        , _dirty_memory_region_group(region_group) {
+        , _dirty_memory_region_group(region_group)
+        , _region_group_serializer(sem) {
         add_memtable();
     }
 
@@ -179,8 +184,17 @@ public:
         return _memtables.size();
     }
 
-    future<> seal_active_memtable() {
-        return _seal_fn();
+    future<> seal_active_memtable(flush_behavior behavior) {
+        // We may need a lot of delayed flushes to get to the point where we force an immediate
+        // flush. So just let it go immediately.
+        if (behavior == flush_behavior::delayed) {
+            return _seal_fn(behavior);
+        }
+        return _region_group_serializer.wait().then([this] {
+            return _seal_fn(flush_behavior::immediate);
+        }).finally([this] {
+            _region_group_serializer.signal();
+        });
     }
 
     auto begin() noexcept {
@@ -215,7 +229,7 @@ public:
         if (should_flush()) {
             // FIXME: if sparse, do some in-memory compaction first
             // FIXME: maybe merge with other in-memory memtables
-            _seal_fn();
+            seal_active_memtable(flush_behavior::immediate);
         }
     }
 private:
@@ -279,6 +293,25 @@ private:
     schema_ptr _schema;
     config _config;
     stats _stats;
+
+    // We would like to serialize the flushing of memtables. While flushing many memtables
+    // simultaneously can sustain high levels of throughput, the memory is not freed until the
+    // memtable is totally gone. That means that if we have throttled requests, they will stay
+    // throttled for a long time. Even when we have virtual dirty, that only provides a rough
+    // estimate, and we can't release requests that early.
+    //
+    // Ideally, we'd allow one memtable flush per shard (or per database object), and write-behind
+    // would take care of the rest. But that still has issues, so we'll limit parallelism to some
+    // number (4), that we will hopefully reduce to 1 when write behind works.
+    //
+    // When streaming is going on, we'll separate half of that for the streaming code, which
+    // effectively increases the total to 6. That is a bit ugly and a bit redundant with the I/O
+    // Scheduler, but it's the easiest way not to hurt the common case (no streaming) and will have
+    // to do for the moment. Hopefully we can set both to 1 soon (with write behind)
+    //
+    // FIXME: enable write behind and set both to 1.
+    semaphore _memtables_serializer = { 4 };
+    semaphore _streaming_serializer = { 2 };
     lw_shared_ptr<memtable_list> _memtables;
 
     // In older incarnations, we simply commited the mutations to memtables.
@@ -596,7 +629,7 @@ private:
     // But it is possible to synchronously wait for the seal to complete by
     // waiting on this future. This is useful in situations where we want to
     // synchronously flush data to disk.
-    future<> seal_active_memtable();
+    future<> seal_active_memtable(memtable_list::flush_behavior behavior = memtable_list::flush_behavior::delayed);
 
     // I am assuming here that the repair process will potentially send ranges containing
     // few mutations, definitely not enough to fill a memtable. It wants to know whether or
@@ -619,9 +652,19 @@ private:
     // repair can now choose whatever strategy - small or big ranges - it wants, resting assure
     // that the incoming memtables will be coalesced together.
     shared_promise<> _waiting_streaming_flushes;
-    timer<> _delayed_streaming_flush{[this] { seal_active_streaming_memtable(); }};
-    future<> seal_active_streaming_memtable();
+    timer<> _delayed_streaming_flush{[this] { seal_active_streaming_memtable_immediate(); }};
     future<> seal_active_streaming_memtable_delayed();
+    future<> seal_active_streaming_memtable_immediate();
+    future<> seal_active_streaming_memtable(memtable_list::flush_behavior behavior) {
+        if (behavior == memtable_list::flush_behavior::delayed) {
+            return seal_active_streaming_memtable_delayed();
+        } else if (behavior == memtable_list::flush_behavior::immediate) {
+            return seal_active_streaming_memtable_immediate();
+        } else {
+            // Impossible
+            assert(0);
+        }
+    }
 
     // filter manifest.json files out
     static bool manifest_json_filter(const sstring& fname);
