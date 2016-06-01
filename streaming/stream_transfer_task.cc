@@ -84,44 +84,42 @@ struct send_info {
     }
 };
 
-future<stop_iteration> do_send_mutations(auto si, auto fm) {
-    sslog.debug("[Stream #{}] SEND STREAM_MUTATION to {}, cf_id={}", si->plan_id, si->id, si->cf_id);
-    auto fm_size = fm.representation().size();
-    net::get_local_messaging_service().send_stream_mutation(si->id, si->plan_id, std::move(fm), si->dst_cpu_id, false).then([si, fm_size] {
-        sslog.debug("[Stream #{}] GOT STREAM_MUTATION Reply from {}", si->plan_id, si->id.addr);
-        get_local_stream_manager().update_progress(si->plan_id, si->id.addr, progress_info::direction::OUT, fm_size);
-        si->mutations_done.signal();
-    }).handle_exception([si] (auto ep) {
-        // There might be larger number of STREAM_MUTATION inflight.
-        // Log one error per column_family per range
-        if (!si->error_logged) {
-            si->error_logged = true;
-            sslog.warn("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION to {}: {}", si->plan_id, si->id, ep);
-        }
-        si->mutations_done.broken();
+future<> do_send_mutations(auto si, auto fm, bool fragmented) {
+    return get_local_stream_manager().mutation_send_limiter().wait().then([si, fragmented, fm = std::move(fm)] () mutable {
+        sslog.debug("[Stream #{}] SEND STREAM_MUTATION to {}, cf_id={}", si->plan_id, si->id, si->cf_id);
+        auto fm_size = fm.representation().size();
+        net::get_local_messaging_service().send_stream_mutation(si->id, si->plan_id, std::move(fm), si->dst_cpu_id, fragmented).then([si, fm_size] {
+            sslog.debug("[Stream #{}] GOT STREAM_MUTATION Reply from {}", si->plan_id, si->id.addr);
+            get_local_stream_manager().update_progress(si->plan_id, si->id.addr, progress_info::direction::OUT, fm_size);
+            si->mutations_done.signal();
+        }).handle_exception([si] (auto ep) {
+            // There might be larger number of STREAM_MUTATION inflight.
+            // Log one error per column_family per range
+            if (!si->error_logged) {
+                si->error_logged = true;
+                sslog.warn("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION to {}: {}", si->plan_id, si->id, ep);
+            }
+            si->mutations_done.broken();
+        }).finally([] {
+            get_local_stream_manager().mutation_send_limiter().signal();
+        });
     });
-    return make_ready_future<stop_iteration>(stop_iteration::no);
 }
 
 future<> send_mutations(auto si) {
     auto& cf = si->db.find_column_family(si->cf_id);
     auto& priority = service::get_local_streaming_read_priority();
     return do_with(cf.make_reader(cf.schema(), si->pr, query::no_clustering_key_filtering, priority), [si] (auto& reader) {
-        return repeat([si, &reader] {
-            return get_local_stream_manager().mutation_send_limiter().wait().then([si, &reader] {
-                return reader().then([] (auto sm) {
-                    return mutation_from_streamed_mutation(std::move(sm));
-                }).then([si] (auto mopt) {
-                    if (mopt && si->db.column_family_exists(si->cf_id)) {
+        return repeat([si, &reader] () {
+            return reader().then([si] (auto smopt) {
+                if (smopt && si->db.column_family_exists(si->cf_id)) {
+                    return fragment_and_freeze(std::move(*smopt), [si] (auto fm, bool fragmented) {
                         si->mutations_nr++;
-                        auto fm = frozen_mutation(*mopt);
-                        return do_send_mutations(si, std::move(fm));
-                    } else {
-                        return make_ready_future<stop_iteration>(stop_iteration::yes);
-                    }
-                });
-            }).finally([] {
-                get_local_stream_manager().mutation_send_limiter().signal();
+                        return do_send_mutations(si, std::move(fm), fragmented);
+                    }).then([] { return stop_iteration::no; });
+                } else {
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }
             });
         });
     }).then([si] {
