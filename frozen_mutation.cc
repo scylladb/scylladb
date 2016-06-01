@@ -81,6 +81,11 @@ frozen_mutation::frozen_mutation(bytes&& b)
     , _pk(deserialize_key())
 { }
 
+frozen_mutation::frozen_mutation(bytes_view bv, partition_key pk)
+    : _bytes(bytes(bv.begin(), bv.end()))
+    , _pk(std::move(pk))
+{ }
+
 frozen_mutation::frozen_mutation(const mutation& m)
     : _pk(m.key())
 {
@@ -123,4 +128,53 @@ std::ostream& operator<<(std::ostream& out, const frozen_mutation::printer& pr) 
 
 frozen_mutation::printer frozen_mutation::pretty_printer(schema_ptr s) const {
     return { *this, std::move(s) };
+}
+
+stop_iteration streamed_mutation_freezer::consume(tombstone pt) {
+    _partition_tombstone = pt;
+    return stop_iteration::no;
+}
+
+stop_iteration streamed_mutation_freezer::consume(static_row&& sr) {
+    _sr = std::move(sr);
+    return stop_iteration::no;
+}
+
+stop_iteration streamed_mutation_freezer::consume(clustering_row&& cr) {
+    _crs.emplace_back(std::move(cr));
+    return stop_iteration::no;
+}
+
+stop_iteration streamed_mutation_freezer::consume(range_tombstone_begin&& rtb) {
+    assert(!_range_tombstone_begin);
+    _range_tombstone_begin = std::move(rtb);
+    return stop_iteration::no;
+}
+
+stop_iteration streamed_mutation_freezer::consume(range_tombstone_end&& rte) {
+    assert(_range_tombstone_begin);
+    _rts.apply(_schema, std::move(_range_tombstone_begin->key()), _range_tombstone_begin->kind(),
+               std::move(rte.key()), rte.kind(), _range_tombstone_begin->tomb());
+    _range_tombstone_begin = { };
+    return stop_iteration::no;
+}
+
+frozen_mutation streamed_mutation_freezer::consume_end_of_stream() {
+    bytes_ostream out;
+    ser::writer_of_mutation wom(out);
+    std::move(wom).write_table_id(_schema.id())
+                  .write_schema_version(_schema.version())
+                  .write_key(_key)
+                  .partition([&] (auto wr) {
+                      serialize_mutation_fragments(_schema, _partition_tombstone,
+                                                   std::move(_sr), std::move(_rts),
+                                                   std::move(_crs), std::move(wr));
+                  }).end_mutation();
+    return frozen_mutation(out.linearize(), std::move(_key));
+}
+
+future<frozen_mutation> freeze(streamed_mutation sm) {
+    return do_with(streamed_mutation(std::move(sm)), [] (auto& sm) mutable {
+        return consume(sm, streamed_mutation_freezer(*sm.schema(), sm.key()));
+    });
 }

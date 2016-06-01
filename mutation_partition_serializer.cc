@@ -196,3 +196,37 @@ void mutation_partition_serializer::write(ser::writer_of_mutation_partition&& wr
 {
     write_serialized(std::move(wr), _schema, _p);
 }
+
+void serialize_mutation_fragments(const schema& s, tombstone partition_tombstone,
+    stdx::optional<static_row> sr,  range_tombstone_list rts,
+    std::deque<clustering_row> crs, ser::writer_of_mutation_partition&& wr)
+{
+    auto srow_writer = std::move(wr).write_tomb(partition_tombstone).start_static_row();
+    auto row_tombstones = [&] {
+        if (sr) {
+            return write_row_cells(std::move(srow_writer), sr->cells(), s, column_kind::static_column).end_static_row().start_range_tombstones();
+        } else {
+            return std::move(srow_writer).start_columns().end_columns().end_static_row().start_range_tombstones();
+        }
+    }();
+    sr = { };
+
+    write_tombstones(s, row_tombstones, rts);
+    rts.clear();
+
+    auto clustering_rows = std::move(row_tombstones).end_range_tombstones().start_rows();
+    while (!crs.empty()) {
+        auto& cr = crs.front();
+        auto marker_writer = clustering_rows.add().write_key(cr.key());
+        auto deleted_at_writer = write_row_marker(std::move(marker_writer), cr.marker());
+        auto&& dt = cr.tomb();
+        auto row_writer = std::move(deleted_at_writer).start_deleted_at()
+                                                          .write_timestamp(dt.timestamp)
+                                                          .write_deletion_time(dt.deletion_time)
+                                                      .end_deleted_at()
+                                                      .start_cells();
+        write_row_cells(std::move(row_writer), cr.cells(), s, column_kind::regular_column).end_cells().end_deletable_row();
+        crs.pop_front();
+    }
+    std::move(clustering_rows).end_rows().end_mutation_partition();
+}
