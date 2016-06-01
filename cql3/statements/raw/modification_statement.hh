@@ -41,46 +41,56 @@
 
 #pragma once
 
-#include "cql3/statements/modification_statement.hh"
-#include "cql3/statements/raw/modification_statement.hh"
+#include "cql3/restrictions/restriction.hh"
+#include "cql3/statements/raw/cf_statement.hh"
+#include "cql3/column_identifier.hh"
+#include "cql3/update_parameters.hh"
+#include "cql3/column_condition.hh"
+#include "cql3/cql_statement.hh"
 #include "cql3/attributes.hh"
 #include "cql3/operation.hh"
-#include "database_fwd.hh"
+#include "cql3/relation.hh"
+
+#include "db/consistency_level.hh"
+
+#include "core/shared_ptr.hh"
+#include "core/future-util.hh"
+
+#include "unimplemented.hh"
+#include "validation.hh"
+#include "service/storage_proxy.hh"
+
+#include <memory>
 
 namespace cql3 {
 
 namespace statements {
 
-/**
-* A <code>DELETE</code> parsed from a CQL query statement.
-*/
-class delete_statement : public modification_statement {
+class modification_statement;
+
+namespace raw {
+
+class modification_statement : public cf_statement {
 public:
-    delete_statement(statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs);
+    using conditions_vector = std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<column_condition::raw>>>;
+protected:
+    const ::shared_ptr<attributes::raw> _attrs;
+    const std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<column_condition::raw>>> _conditions;
+private:
+    const bool _if_not_exists;
+    const bool _if_exists;
+protected:
+    modification_statement(::shared_ptr<cf_name> name, ::shared_ptr<attributes::raw> attrs, conditions_vector conditions, bool if_not_exists, bool if_exists);
 
-    virtual bool require_full_clustering_key() const override;
-
-    virtual void add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
-
-#if 0
-    protected void validateWhereClauseForConditions() throws InvalidRequestException
-    {
-        Iterator<ColumnDefinition> iterator = Iterators.concat(cfm.partitionKeyColumns().iterator(), cfm.clusteringColumns().iterator());
-        while (iterator.hasNext())
-        {
-            ColumnDefinition def = iterator.next();
-            Restriction restriction = processedKeys.get(def.name);
-            if (restriction == null || !(restriction.isEQ() || restriction.isIN()))
-            {
-                throw new InvalidRequestException(
-                        String.format("DELETE statements must restrict all PRIMARY KEY columns with equality relations in order " +
-                                      "to use IF conditions, but column '%s' is not restricted", def.name));
-            }
-        }
-
-    }
-#endif
+public:
+    virtual ::shared_ptr<prepared> prepare(database& db) override;
+    ::shared_ptr<cql3::statements::modification_statement> prepare(database& db, ::shared_ptr<variable_specifications> bound_names);;
+protected:
+    virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(database& db, schema_ptr schema,
+        ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs) = 0;
 };
+
+}
 
 }
 

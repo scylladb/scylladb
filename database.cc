@@ -1177,7 +1177,8 @@ future<> column_family::populate(sstring sstdir) {
     return do_with(std::vector<future<>>(), [this, sstdir, verifier, descriptor] (std::vector<future<>>& futures) {
         return lister::scan_dir(sstdir, { directory_entry_type::regular }, [this, sstdir, verifier, descriptor, &futures] (directory_entry de) {
             // FIXME: The secondary indexes are in this level, but with a directory type, (starting with ".")
-            auto f = probe_file(sstdir, de.name).then([verifier, descriptor, sstdir] (auto entry) {
+            auto f = probe_file(sstdir, de.name).then([verifier, descriptor, sstdir, de] (auto entry) {
+                auto filename = sstdir + "/" + de.name;
                 if (entry.component == sstables::sstable::component_type::TemporaryStatistics) {
                     return remove_file(sstables::sstable::filename(sstdir, entry.ks, entry.cf, entry.version, entry.generation,
                         entry.format, sstables::sstable::component_type::TemporaryStatistics));
@@ -1186,9 +1187,9 @@ future<> column_family::populate(sstring sstdir) {
                 if (verifier->count(entry.generation)) {
                     if (verifier->at(entry.generation) == status::has_toc_file) {
                         if (entry.component == sstables::sstable::component_type::TOC) {
-                            throw sstables::malformed_sstable_exception("Invalid State encountered. TOC file already processed");
+                            throw sstables::malformed_sstable_exception("Invalid State encountered. TOC file already processed", filename);
                         } else if (entry.component == sstables::sstable::component_type::TemporaryTOC) {
-                            throw sstables::malformed_sstable_exception("Invalid State encountered. Temporary TOC file found after TOC file was processed");
+                            throw sstables::malformed_sstable_exception("Invalid State encountered. Temporary TOC file found after TOC file was processed", filename);
                         }
                     } else if (entry.component == sstables::sstable::component_type::TOC) {
                         verifier->at(entry.generation) = status::has_toc_file;

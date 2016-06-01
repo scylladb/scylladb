@@ -51,36 +51,25 @@ namespace cql3 {
 
 namespace statements {
 
-/**
-* A <code>DELETE</code> parsed from a CQL query statement.
-*/
+namespace raw {
+
 class delete_statement : public modification_statement {
+private:
+    std::vector<::shared_ptr<operation::raw_deletion>> _deletions;
+    std::vector<::shared_ptr<relation>> _where_clause;
 public:
-    delete_statement(statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs);
-
-    virtual bool require_full_clustering_key() const override;
-
-    virtual void add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
-
-#if 0
-    protected void validateWhereClauseForConditions() throws InvalidRequestException
-    {
-        Iterator<ColumnDefinition> iterator = Iterators.concat(cfm.partitionKeyColumns().iterator(), cfm.clusteringColumns().iterator());
-        while (iterator.hasNext())
-        {
-            ColumnDefinition def = iterator.next();
-            Restriction restriction = processedKeys.get(def.name);
-            if (restriction == null || !(restriction.isEQ() || restriction.isIN()))
-            {
-                throw new InvalidRequestException(
-                        String.format("DELETE statements must restrict all PRIMARY KEY columns with equality relations in order " +
-                                      "to use IF conditions, but column '%s' is not restricted", def.name));
-            }
-        }
-
-    }
-#endif
+    delete_statement(::shared_ptr<cf_name> name,
+           ::shared_ptr<attributes::raw> attrs,
+           std::vector<::shared_ptr<operation::raw_deletion>> deletions,
+           std::vector<::shared_ptr<relation>> where_clause,
+           conditions_vector conditions,
+           bool if_exists);
+protected:
+    virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(database& db, schema_ptr schema,
+        ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs);
 };
+
+}
 
 }
 

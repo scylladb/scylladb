@@ -708,17 +708,17 @@ future<> sstable::read_toc() {
 
     sstlog.debug("Reading TOC file {} ", file_path);
 
-    return open_checked_file_dma(sstable_read_error, file_path, open_flags::ro).then([this] (file f) {
+    return open_checked_file_dma(sstable_read_error, file_path, open_flags::ro).then([this, file_path] (file f) {
         auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
         auto buf = bufptr.get();
 
         auto fut = f.dma_read(0, buf, 4096);
-        return std::move(fut).then([this, f = std::move(f), bufptr = std::move(bufptr)] (size_t size) mutable {
+        return std::move(fut).then([this, f = std::move(f), bufptr = std::move(bufptr), file_path] (size_t size) mutable {
             // This file is supposed to be very small. Theoretically we should check its size,
             // but if we so much as read a whole page from it, there is definitely something fishy
             // going on - and this simplifies the code.
             if (size >= 4096) {
-                throw malformed_sstable_exception("SSTable too big: " + to_sstring(size) + " bytes.");
+                throw malformed_sstable_exception("SSTable too big: " + to_sstring(size) + " bytes", file_path);
             }
 
             std::experimental::string_view buf(bufptr.get(), size);
@@ -735,11 +735,11 @@ future<> sstable::read_toc() {
                    _components.insert(reverse_map(c, _component_map));
                 } catch (std::out_of_range& oor) {
                     _components.clear(); // so subsequent read_toc will be forced to fail again
-                    throw malformed_sstable_exception("Unrecognized TOC component: " + c);
+                    throw malformed_sstable_exception("Unrecognized TOC component: " + c, file_path);
                 }
             }
             if (!_components.size()) {
-                throw malformed_sstable_exception("Empty TOC");
+                throw malformed_sstable_exception("Empty TOC", file_path);
             }
             return f.close().finally([f] {});
         });

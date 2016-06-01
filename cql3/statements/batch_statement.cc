@@ -38,6 +38,7 @@
  */
 
 #include "batch_statement.hh"
+#include "raw/batch_statement.hh"
 #include "db/config.hh"
 
 namespace cql3 {
@@ -99,6 +100,30 @@ void batch_statement::verify_batch_size(const std::vector<mutation>& mutations) 
                         size - warn_threshold, "");
     }
 }
+
+namespace raw {
+
+shared_ptr<prepared_statement>
+batch_statement::prepare(database& db) {
+    auto&& bound_names = get_bound_variables();
+
+    std::vector<shared_ptr<cql3::statements::modification_statement>> statements;
+    for (auto&& parsed : _parsed_statements) {
+        statements.push_back(parsed->prepare(db, bound_names));
+    }
+
+    auto&& prep_attrs = _attrs->prepare(db, "[batch]", "[batch]");
+    prep_attrs->collect_marker_specification(bound_names);
+
+    cql3::statements::batch_statement batch_statement_(bound_names->size(), _type, std::move(statements), std::move(prep_attrs));
+    batch_statement_.validate();
+
+    return ::make_shared<prepared>(make_shared(std::move(batch_statement_)),
+                                                     bound_names->get_specifications());
+}
+
+}
+
 
 }
 
