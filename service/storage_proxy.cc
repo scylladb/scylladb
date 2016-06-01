@@ -2058,7 +2058,6 @@ public:
                         auto write_timeout = exec->_proxy->_db.local().get_config().write_request_timeout_in_ms() * 1000;
                         auto delta = __int128_t(digest_resolver->last_modified()) - __int128_t(exec->_cmd->read_timestamp);
                         if (std::abs(delta) <= write_timeout) {
-                            print("HERE %d\n", int64_t(delta));
                             exec->_proxy->_stats.global_read_repairs_canceled_due_to_concurrent_write++;
                             // if CL is local and non matching data is modified less then write_timeout ms ago do only local repair
                             auto i = boost::range::remove_if(exec->_targets, std::not1(std::cref(db::is_local)));
