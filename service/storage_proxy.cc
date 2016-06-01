@@ -1206,8 +1206,6 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     local.reserve(3);
 
     for(auto dest: get_write_response_handler(response_id).get_targets()) {
-        ++_stats.writes_attempts.get_ep_stat(dest);
-
         sstring dc = get_dc(dest);
         if (dc == get_local_dc()) {
             local.emplace_back("", std::vector<gms::inet_address>({dest}));
@@ -1251,6 +1249,8 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
         forward.pop_back();
 
         future<> f = make_ready_future<>();
+
+        ++_stats.writes_attempts.get_ep_stat(coordinator);
 
         if (coordinator == my_address) {
             f = futurize<void>::apply(lmutate);
