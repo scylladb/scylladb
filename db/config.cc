@@ -167,6 +167,7 @@ struct convert<db::config::seed_provider_type> {
 
 }
 
+namespace db {
 template<typename... Args>
 std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os, const db::config::string_map & map) {
     int n = 0;
@@ -197,6 +198,7 @@ std::basic_istream<Args...> & operator>>(std::basic_istream<Args...> & is, db::c
     };
 
     return is;
+}
 }
 
 /*
