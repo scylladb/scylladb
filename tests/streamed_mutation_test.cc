@@ -26,6 +26,8 @@
 
 #include "mutation_source_test.hh"
 #include "streamed_mutation.hh"
+#include "frozen_mutation.hh"
+#include "tests/test_services.hh"
 
 #include "disk-error-handler.hh"
 
@@ -83,6 +85,22 @@ SEASTAR_TEST_CASE(test_mutation_merger) {
             BOOST_REQUIRE(mopt);
             BOOST_REQUIRE(m12.partition().difference(m1.schema(), mopt->partition()).empty());
             BOOST_REQUIRE(mopt->partition().difference(m1.schema(), m12.partition()).empty());
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_freezing_streamed_mutations) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+
+        for_each_mutation([&] (const mutation& m) {
+            auto fm = freeze(streamed_mutation_from_mutation(mutation(m))).get0();
+
+            auto m1 = fm.unfreeze(m.schema());
+            BOOST_REQUIRE_EQUAL(m, m1);
+
+            auto fm1 = freeze(m);
+            BOOST_REQUIRE(fm.representation() == fm1.representation());
         });
     });
 }
