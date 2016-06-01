@@ -94,15 +94,13 @@ def print_cw(f):
  """)
 
 def parse_file(file_name):
-    first = pp.Word(pp.alphas + "_", exact=1)
-    rest = pp.Word(pp.alphanums + "_")
 
     number = pp.Word(pp.nums)
-    identifier = pp.Combine(first + pp.Optional(rest))
+    identifier = pp.Word(pp.alphas + "_", pp.alphanums + "_")
 
     lbrace = pp.Literal('{').suppress()
     rbrace = pp.Literal('}').suppress()
-    cls = pp.Literal('class')
+    cls = pp.Keyword('class')
     colon = pp.Literal(":")
     semi = pp.Literal(";").suppress()
     langle = pp.Literal("<")
@@ -114,20 +112,20 @@ def parse_file(file_name):
     lbrack = pp.Literal("[")
     rbrack = pp.Literal("]")
     mins = pp.Literal("-")
-    struct = pp.Literal('struct')
-    template = pp.Literal('template')
-    final = pp.Literal('final').setResultsName("final")
-    stub = pp.Literal('stub').setResultsName("stub")
+    struct = pp.Keyword('struct')
+    template = pp.Keyword('template')
+    final = pp.Keyword('final')("final")
+    stub = pp.Keyword('stub')("stub")
     with_colon = pp.Word(pp.alphanums + "_" + ":")
     btype = with_colon
     type = pp.Forward()
     nestedParens = pp.nestedExpr('<', '>')
 
-    tmpl = pp.Group(btype.setResultsName("template_name") + langle.suppress() + pp.Group(pp.delimitedList(type)) + rangle.suppress())
+    tmpl = pp.Group(btype("template_name") + langle.suppress() + pp.Group(pp.delimitedList(type)) + rangle.suppress())
     type << (tmpl | btype)
-    enum_lit = pp.Literal('enum')
+    enum_lit = pp.Keyword('enum')
     enum_class = pp.Group(enum_lit + cls)
-    ns = pp.Literal("namespace")
+    ns = pp.Keyword("namespace")
 
     enum_init = equals.suppress() + pp.Optional(mins) + number
     enum_value = pp.Group(identifier + pp.Optional(enum_init))
@@ -136,17 +134,19 @@ def parse_file(file_name):
 
     member_name = pp.Combine(pp.Group(identifier + pp.Optional(lparen + rparen)))
     attrib = pp.Group(lbrack.suppress() + lbrack.suppress() + pp.SkipTo(']') + rbrack.suppress() + rbrack.suppress())
-    opt_attribute = pp.Optional(attrib).setResultsName("attribute")
-    namespace = pp.Group(ns.setResultsName("type") + identifier.setResultsName("name") + lbrace + pp.Group(pp.OneOrMore(content)).setResultsName("content") + rbrace)
-    enum = pp.Group(enum_class.setResultsName("type") + identifier.setResultsName("name") + colon.suppress() + identifier.setResultsName("underline_type") + enum_values.setResultsName("enum_values") + pp.Optional(semi).suppress())
+    opt_attribute = pp.Optional(attrib)("attribute")
+    namespace = pp.Group(ns("type") + identifier("name") + lbrace + pp.Group(pp.OneOrMore(content))("content") + rbrace)
+    enum = pp.Group(enum_class("type") + identifier("name") + colon.suppress() + identifier("underline_type") + enum_values("enum_values") + pp.Optional(semi).suppress())
     default_value = equals.suppress() + pp.SkipTo(';')
-    class_member = pp.Group(type.setResultsName("type") + member_name.setResultsName("name") + opt_attribute + pp.Optional(default_value).setResultsName("default") + semi.suppress()).setResultsName("member")
-    template_param = pp.Group(identifier.setResultsName("type") + identifier.setResultsName("name"))
-    template_def = pp.Group(template + langle + pp.Group(pp.delimitedList(template_param)).setResultsName("params") + rangle)
+    class_member = pp.Group(type("type") + member_name("name") + opt_attribute + pp.Optional(default_value)("default") + semi.suppress())("member")
+    template_param = pp.Group(identifier("type") + identifier("name"))
+    template_def = pp.Group(template + langle + pp.Group(pp.delimitedList(template_param))("params") + rangle)
     class_content = pp.Forward()
-    class_def = pp.Group(pp.Optional(template_def).setResultsName("template") + (cls | struct).setResultsName("type") + with_colon.setResultsName("name") + pp.Optional(final) + pp.Optional(stub) + opt_attribute + lbrace + pp.Group(pp.ZeroOrMore(class_content)).setResultsName("members") + rbrace + pp.Optional(semi))
+    class_def = pp.Group(pp.Optional(template_def)("template") + (cls | struct)("type") + with_colon("name") + pp.Optional(final) + pp.Optional(stub) + opt_attribute + lbrace + pp.Group(pp.ZeroOrMore(class_content))("members") + rbrace + pp.Optional(semi))
     content << (enum | class_def | namespace)
     class_content << (enum | class_def | class_member)
+    for varname in "enum class_def class_member content namespace template_def".split():
+        locals()[varname].setName(varname)
     rt = pp.OneOrMore(content)
     singleLineComment = "//" + pp.restOfLine
     rt.ignore(singleLineComment)
