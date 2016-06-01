@@ -40,6 +40,7 @@
  */
 
 #include "cql3/statements/modification_statement.hh"
+#include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/restrictions/single_column_restriction.hh"
 #include "cql3/single_column_relation.hh"
@@ -561,21 +562,23 @@ modification_statement::process_where_clause(database& db, std::vector<relation_
     }
 }
 
+namespace raw {
+
 ::shared_ptr<prepared_statement>
-modification_statement::parsed::prepare(database& db) {
+modification_statement::modification_statement::prepare(database& db) {
     auto bound_names = get_bound_variables();
     auto statement = prepare(db, bound_names);
     return ::make_shared<prepared>(std::move(statement), *bound_names);
 }
 
-::shared_ptr<modification_statement>
-modification_statement::parsed::prepare(database& db, ::shared_ptr<variable_specifications> bound_names) {
+::shared_ptr<cql3::statements::modification_statement>
+modification_statement::prepare(database& db, ::shared_ptr<variable_specifications> bound_names) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
 
     auto prepared_attributes = _attrs->prepare(db, keyspace(), column_family());
     prepared_attributes->collect_marker_specification(bound_names);
 
-    ::shared_ptr<modification_statement> stmt = prepare_internal(db, schema, bound_names, std::move(prepared_attributes));
+    ::shared_ptr<cql3::statements::modification_statement> stmt = prepare_internal(db, schema, bound_names, std::move(prepared_attributes));
 
     if (_if_not_exists || _if_exists || !_conditions.empty()) {
         if (stmt->is_counter()) {
@@ -615,6 +618,8 @@ modification_statement::parsed::prepare(database& db, ::shared_ptr<variable_spec
         stmt->validate_where_clause_for_conditions();
     }
     return stmt;
+}
+
 }
 
 void
@@ -689,13 +694,17 @@ void modification_statement::validate_where_clause_for_conditions() {
     //  no-op by default
 }
 
-modification_statement::parsed::parsed(::shared_ptr<cf_name> name, ::shared_ptr<attributes::raw> attrs, conditions_vector conditions, bool if_not_exists, bool if_exists)
+namespace raw {
+
+modification_statement::modification_statement(::shared_ptr<cf_name> name, ::shared_ptr<attributes::raw> attrs, conditions_vector conditions, bool if_not_exists, bool if_exists)
     : cf_statement{std::move(name)}
     , _attrs{std::move(attrs)}
     , _conditions{std::move(conditions)}
     , _if_not_exists{if_not_exists}
     , _if_exists{if_exists}
 { }
+
+}
 
 }
 

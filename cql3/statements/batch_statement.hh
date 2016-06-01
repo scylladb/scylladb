@@ -39,6 +39,8 @@
 
 #include "cql3/cql_statement.hh"
 #include "modification_statement.hh"
+#include "raw/modification_statement.hh"
+#include "raw/batch_statement.hh"
 #include "service/storage_proxy.hh"
 #include "transport/messages/result_message.hh"
 #include "timestamp.hh"
@@ -63,9 +65,7 @@ namespace statements {
 class batch_statement : public cql_statement_no_metadata {
     static logging::logger _logger;
 public:
-    enum class type {
-        LOGGED, UNLOGGED, COUNTER
-    };
+    using type = raw::batch_statement::type;
 private:
     int _bound_terms;
 public:
@@ -317,46 +317,6 @@ public:
         return sprint("BatchStatement(type=%s, statements=%s)", _type, join(", ", _statements));
     }
 #endif
-
-    class parsed : public raw::cf_statement {
-        type _type;
-        shared_ptr<attributes::raw> _attrs;
-        std::vector<shared_ptr<modification_statement::parsed>> _parsed_statements;
-    public:
-        parsed(
-            type type_,
-            shared_ptr<attributes::raw> attrs,
-            std::vector<shared_ptr<modification_statement::parsed>> parsed_statements)
-                : cf_statement(nullptr)
-                , _type(type_)
-                , _attrs(std::move(attrs))
-                , _parsed_statements(std::move(parsed_statements)) {
-        }
-
-        virtual void prepare_keyspace(const service::client_state& state) override {
-            for (auto&& s : _parsed_statements) {
-                s->prepare_keyspace(state);
-            }
-        }
-
-        virtual shared_ptr<prepared> prepare(database& db) override {
-            auto&& bound_names = get_bound_variables();
-
-            std::vector<shared_ptr<modification_statement>> statements;
-            for (auto&& parsed : _parsed_statements) {
-                statements.push_back(parsed->prepare(db, bound_names));
-            }
-
-            auto&& prep_attrs = _attrs->prepare(db, "[batch]", "[batch]");
-            prep_attrs->collect_marker_specification(bound_names);
-
-            batch_statement batch_statement_(bound_names->size(), _type, std::move(statements), std::move(prep_attrs));
-            batch_statement_.validate();
-
-            return ::make_shared<prepared>(make_shared(std::move(batch_statement_)),
-                                                             bound_names->get_specifications());
-        }
-    };
 };
 
 }

@@ -42,6 +42,7 @@
 #pragma once
 
 #include "cql3/statements/modification_statement.hh"
+#include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/term.hh"
 
@@ -69,55 +70,6 @@ private:
     virtual bool require_full_clustering_key() const override;
 
     virtual void add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
-public:
-    class parsed_insert : public modification_statement::parsed {
-    private:
-        const std::vector<::shared_ptr<column_identifier::raw>> _column_names;
-        const std::vector<::shared_ptr<term::raw>> _column_values;
-    public:
-        /**
-         * A parsed <code>INSERT</code> statement.
-         *
-         * @param name column family being operated on
-         * @param columnNames list of column names
-         * @param columnValues list of column values (corresponds to names)
-         * @param attrs additional attributes for statement (CL, timestamp, timeToLive)
-         */
-        parsed_insert(::shared_ptr<cf_name> name,
-                      ::shared_ptr<attributes::raw> attrs,
-                      std::vector<::shared_ptr<column_identifier::raw>> column_names,
-                      std::vector<::shared_ptr<term::raw>> column_values,
-                      bool if_not_exists);
-
-        virtual ::shared_ptr<modification_statement> prepare_internal(database& db, schema_ptr schema,
-                    ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs) override;
-
-    };
-
-    class parsed_update : public modification_statement::parsed {
-    private:
-        // Provided for an UPDATE
-        std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> _updates;
-        std::vector<relation_ptr> _where_clause;
-    public:
-        /**
-         * Creates a new UpdateStatement from a column family name, columns map, consistency
-         * level, and key term.
-         *
-         * @param name column family being operated on
-         * @param attrs additional attributes for statement (timestamp, timeToLive)
-         * @param updates a map of column operations to perform
-         * @param whereClause the where clause
-         */
-        parsed_update(::shared_ptr<cf_name> name,
-            ::shared_ptr<attributes::raw> attrs,
-            std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> updates,
-            std::vector<relation_ptr> where_clause,
-            conditions_vector conditions);
-    protected:
-        virtual ::shared_ptr<modification_statement> prepare_internal(database& db, schema_ptr schema,
-                    ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs);
-    };
 };
 
 }

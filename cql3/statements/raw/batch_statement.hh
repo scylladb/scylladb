@@ -15,11 +15,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 /*
- * Copyright (C) 2015 ScyllaDB
- *
  * Modified by ScyllaDB
+ * Copyright (C) 2015 ScyllaDB
  */
 
 /*
@@ -39,49 +37,57 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
+#include "cql3/cql_statement.hh"
+#include "modification_statement.hh"
+#include "service/storage_proxy.hh"
+#include "transport/messages/result_message.hh"
+#include "timestamp.hh"
+#include "log.hh"
+#include "to_string.hh"
+#include <boost/algorithm/cxx11/any_of.hpp>
+#include <boost/algorithm/cxx11/all_of.hpp>
+#include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/adaptor/uniqued.hpp>
+#include <boost/iterator/counting_iterator.hpp>
 
-#include "cql3/statements/modification_statement.hh"
-#include "cql3/statements/raw/modification_statement.hh"
-#include "cql3/attributes.hh"
-#include "cql3/operation.hh"
-#include "database_fwd.hh"
+#pragma once
 
 namespace cql3 {
 
 namespace statements {
 
-/**
-* A <code>DELETE</code> parsed from a CQL query statement.
-*/
-class delete_statement : public modification_statement {
+namespace raw {
+
+class batch_statement : public raw::cf_statement {
 public:
-    delete_statement(statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs);
-
-    virtual bool require_full_clustering_key() const override;
-
-    virtual void add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
-
-#if 0
-    protected void validateWhereClauseForConditions() throws InvalidRequestException
-    {
-        Iterator<ColumnDefinition> iterator = Iterators.concat(cfm.partitionKeyColumns().iterator(), cfm.clusteringColumns().iterator());
-        while (iterator.hasNext())
-        {
-            ColumnDefinition def = iterator.next();
-            Restriction restriction = processedKeys.get(def.name);
-            if (restriction == null || !(restriction.isEQ() || restriction.isIN()))
-            {
-                throw new InvalidRequestException(
-                        String.format("DELETE statements must restrict all PRIMARY KEY columns with equality relations in order " +
-                                      "to use IF conditions, but column '%s' is not restricted", def.name));
-            }
-        }
-
+    enum class type {
+        LOGGED, UNLOGGED, COUNTER
+    };
+private:
+    type _type;
+    shared_ptr<attributes::raw> _attrs;
+    std::vector<shared_ptr<raw::modification_statement>> _parsed_statements;
+public:
+    batch_statement(
+        type type_,
+        shared_ptr<attributes::raw> attrs,
+        std::vector<shared_ptr<raw::modification_statement>> parsed_statements)
+            : cf_statement(nullptr)
+            , _type(type_)
+            , _attrs(std::move(attrs))
+            , _parsed_statements(std::move(parsed_statements)) {
     }
-#endif
+
+    virtual void prepare_keyspace(const service::client_state& state) override {
+        for (auto&& s : _parsed_statements) {
+            s->prepare_keyspace(state);
+        }
+    }
+
+    virtual shared_ptr<prepared> prepare(database& db) override;
 };
 
 }
 
+}
 }
