@@ -188,3 +188,106 @@ future<frozen_mutation> freeze(streamed_mutation sm) {
         return consume(sm, streamed_mutation_freezer(*sm.schema(), sm.key()));
     });
 }
+
+class fragmenting_mutation_freezer {
+    const schema& _schema;
+    partition_key _key;
+
+    tombstone _partition_tombstone;
+    stdx::optional<static_row> _sr;
+    std::deque<clustering_row> _crs;
+    range_tombstone_list _rts;
+    stdx::optional<range_tombstone_begin> _range_tombstone_begin;
+
+    frozen_mutation_consumer_fn _consumer;
+
+    bool _fragmented = false;
+    size_t _dirty_size = 0;
+    size_t _fragment_size;
+private:
+    future<> flush() {
+        bytes_ostream out;
+        ser::writer_of_mutation wom(out);
+        std::move(wom).write_table_id(_schema.id())
+                      .write_schema_version(_schema.version())
+                      .write_key(_key)
+                      .partition([&] (auto wr) {
+                          serialize_mutation_fragments(_schema, _partition_tombstone,
+                                                       std::move(_sr), std::move(_rts),
+                                                       std::move(_crs), std::move(wr));
+                      }).end_mutation();
+
+        _sr = { };
+        _rts.clear();
+        _crs.clear();
+        _dirty_size = 0;
+        return _consumer(frozen_mutation(out.linearize(), _key), _fragmented);
+    }
+
+    future<stop_iteration> maybe_flush() {
+        if (_dirty_size >= _fragment_size) {
+            _fragmented = true;
+            return flush().then([] { return stop_iteration::no; });
+        }
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+public:
+    fragmenting_mutation_freezer(const schema& s, const partition_key& key, frozen_mutation_consumer_fn c, size_t fragment_size)
+        : _schema(s), _key(key), _rts(s), _consumer(c), _fragment_size(fragment_size) { }
+
+    void consume(tombstone pt) {
+        _dirty_size += sizeof(tombstone);
+        _partition_tombstone = pt;
+    }
+
+    future<stop_iteration> consume(static_row&& sr) {
+        _sr = std::move(sr);
+        _dirty_size += _sr->memory_usage() + sizeof(sr);
+        return maybe_flush();
+    }
+
+    future<stop_iteration> consume(clustering_row&& cr) {
+        _dirty_size += cr.memory_usage() + sizeof(cr);
+        _crs.emplace_back(std::move(cr));
+        return maybe_flush();
+    }
+
+    future<stop_iteration> consume(range_tombstone_begin&& rtb) {
+        assert(!_range_tombstone_begin);
+        _range_tombstone_begin = std::move(rtb);
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+
+    future<stop_iteration> consume(range_tombstone_end&& rte) {
+        assert(_range_tombstone_begin);
+        _dirty_size += _range_tombstone_begin->memory_usage() + rte.memory_usage() + sizeof(range_tombstone);
+        _rts.apply(_schema, std::move(_range_tombstone_begin->key()), _range_tombstone_begin->kind(),
+                   std::move(rte.key()), rte.kind(), _range_tombstone_begin->tomb());
+        _range_tombstone_begin = { };
+        return maybe_flush();
+    }
+
+    future<stop_iteration> consume_end_of_stream() {
+        assert(!_range_tombstone_begin);
+        if (_dirty_size) {
+            return flush().then([] { return stop_iteration::yes; });
+        }
+        return make_ready_future<stop_iteration>(stop_iteration::yes);
+    }
+};
+
+future<> fragment_and_freeze(streamed_mutation sm, frozen_mutation_consumer_fn c, size_t fragment_size)
+{
+    fragmenting_mutation_freezer freezer(*sm.schema(), sm.key(), c, fragment_size);
+    return do_with(std::move(sm), std::move(freezer), [] (auto& sm, auto& freezer) {
+        freezer.consume(sm.partition_tombstone());
+        return repeat([&] {
+            return sm().then([&] (auto mfopt) {
+                if (!mfopt) {
+                    return freezer.consume_end_of_stream();
+                }
+                return std::move(*mfopt).consume(freezer);
+            });
+        });
+    });
+}
