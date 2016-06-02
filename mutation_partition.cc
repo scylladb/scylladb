@@ -354,8 +354,8 @@ mutation_partition::apply_row_tombstone(const schema& schema, clustering_key_pre
 }
 
 void
-mutation_partition::apply_row_tombstone(const schema& schema, const range_tombstone& rt) {
-    _row_tombstones.apply(schema, rt);
+mutation_partition::apply_row_tombstone(const schema& schema, range_tombstone rt) {
+    _row_tombstones.apply(schema, std::move(rt));
 }
 
 void
@@ -370,22 +370,13 @@ mutation_partition::apply_delete(const schema& schema, const exploded_clustering
 }
 
 void
-mutation_partition::apply_delete(const schema& schema,
-        const exploded_clustering_prefix& start,
-        const exploded_clustering_prefix& end,
-        tombstone t) {
-    if (start.is_full(schema)) {
-        auto start_ckey = clustering_key::from_clustering_prefix(schema, start);
-        auto end_ckey = clustering_key::from_clustering_prefix(schema, end);
-        if (start_ckey.equal(schema, end_ckey)) {
-            apply_delete(schema, std::move(start_ckey), t);
-            return;
-        }
+mutation_partition::apply_delete(const schema& schema, range_tombstone rt) {
+    if (rt.start.is_full(schema) && rt.start_kind == bound_kind::incl_start
+            && rt.end_kind == bound_kind::incl_end && rt.start.equal(schema, rt.end)) {
+        apply_delete(schema, std::move(rt.start), std::move(rt.tomb));
+        return;
     }
-    apply_row_tombstone(schema, range_tombstone(
-                clustering_key::from_clustering_prefix(schema, start),
-                clustering_key::from_clustering_prefix(schema, end),
-                t));
+    apply_row_tombstone(schema, std::move(rt));
 }
 
 void

@@ -383,6 +383,44 @@ SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
     });
 }
 
+SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
+    return seastar::async([] {
+        auto dir = make_lw_shared<tmpdir>();
+        auto s = make_lw_shared(schema({}, "ks", "cf",
+            {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
+
+        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+        auto c_key_start = clustering_key::from_exploded(*s, {int32_type->decompose(1)});
+        auto c_key_end = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
+
+        mutation m(key, s);
+        auto ttl = gc_clock::now() + std::chrono::seconds(1);
+        m.partition().apply_delete(*s, range_tombstone(c_key_start, bound_kind::excl_start, c_key_end, bound_kind::excl_end, tombstone(9, ttl)));
+
+        auto mt = make_lw_shared<memtable>(s);
+        mt->apply(std::move(m));
+
+        auto sst = sstables::sstable("ks", "cf",
+                dir->path,
+                1 /* generation */,
+                sstables::sstable::version_types::la,
+                sstables::sstable::format_types::big);
+        sst.write_components(*mt).get();
+        sst.load().get();
+        auto mut = sst.read_rows(s).read().get0();
+        BOOST_REQUIRE(bool(mut));
+        auto& rts = mut->partition().row_tombstones();
+        BOOST_REQUIRE(rts.size() == 1);
+        auto it = rts.begin();
+        BOOST_REQUIRE(it->equal(*s, range_tombstone(
+                        c_key_start,
+                        bound_kind::excl_start,
+                        c_key_end,
+                        bound_kind::excl_end,
+                        tombstone(9, ttl))));
+    });
+}
+
 SEASTAR_TEST_CASE(compact_storage_sparse_read) {
     return reusable_sst("tests/sstables/compact_sparse", 1).then([] (auto sstp) {
         return do_with(sstables::key("first_row"), [sstp] (auto& key) {
@@ -547,7 +585,7 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone) {
                                     make_ckey("aaa"),
                                     bound_kind::incl_start,
                                     make_ckey("aaa", "bbb"),
-                                    bound_kind::incl_end,
+                                    bound_kind::excl_end,
                                     tombstone(1459334681228103LL, it->tomb.deletion_time))));
                     ++it;
                     BOOST_REQUIRE(it->equal(*s, range_tombstone(
@@ -607,12 +645,12 @@ SEASTAR_TEST_CASE(range_tombstone_reading) {
                                     make_ckey("aaa"),
                                     bound_kind::incl_start,
                                     make_ckey("aaa", "bbb"),
-                                    bound_kind::incl_end,
+                                    bound_kind::excl_end,
                                     tombstone(1459334681228103LL, it->tomb.deletion_time))));
                     ++it;
                     BOOST_REQUIRE(it->equal(*s, range_tombstone(
                                     make_ckey("aaa", "bbb"),
-                                    bound_kind::excl_start,
+                                    bound_kind::incl_start,
                                     make_ckey("aaa", "ccc"),
                                     bound_kind::incl_end,
                                     tombstone(1459334681228103LL, it->tomb.deletion_time))));
@@ -706,19 +744,19 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
 
                     auto it = rts.begin();
                     BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa"), bound_kind::incl_start)));
-                    BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa", "bba"), bound_kind::incl_end)));
+                    BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa", "bba"), bound_kind::excl_end)));
                     BOOST_REQUIRE(it->tomb.timestamp == 1459438519943668L);
                     ++it;
-                    BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa", "bba"), bound_kind::excl_start)));
+                    BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa", "bba"), bound_kind::incl_start)));
                     BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa", "bbb"), bound_kind::excl_end)));
                     BOOST_REQUIRE(it->tomb.timestamp == 1459438519943668L);
                     ++it;
                     BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa", "bbb"), bound_kind::incl_start)));
-                    BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa", "bbb", "ccb"), bound_kind::incl_end)));
+                    BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa", "bbb", "ccb"), bound_kind::excl_end)));
                     BOOST_REQUIRE(it->tomb.timestamp == 1459438519950348L);
                     ++it;
-                    BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa", "bbb", "ccb"), bound_kind::excl_start)));
-                    BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa", "bbb", "ccc"), bound_kind::incl_end)));
+                    BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa", "bbb", "ccb"), bound_kind::incl_start)));
+                    BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa", "bbb", "ccc"), bound_kind::excl_end)));
                     BOOST_REQUIRE(it->tomb.timestamp == 1459438519950348L);
                     ++it;
                     BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa", "bbb", "ccc"), bound_kind::excl_start)));

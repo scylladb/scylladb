@@ -484,7 +484,10 @@ private:
     void write_cell(file_writer& out, atomic_cell_view cell);
     void write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite_marker m = composite_marker::none);
     void write_column_name(file_writer& out, bytes_view column_names);
-    void write_range_tombstone(file_writer& out, const composite& start, const composite& stop, std::vector<bytes_view> suffix, const tombstone t);
+    void write_range_tombstone(file_writer& out, const composite& start, bound_kind start_kind, const composite& end, bound_kind stop_kind, std::vector<bytes_view> suffix, const tombstone t);
+    void write_range_tombstone(file_writer& out, const composite& start, const composite& end, std::vector<bytes_view> suffix, const tombstone t) {
+        write_range_tombstone(out, start, bound_kind::incl_start, end, bound_kind::incl_end, std::move(suffix), std::move(t));
+    }
     void write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation_view collection);
 public:
     future<> read_toc();

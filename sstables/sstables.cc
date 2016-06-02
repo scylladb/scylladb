@@ -1176,15 +1176,27 @@ void sstable::write_row_marker(file_writer& out, const rows_entry& clustered_row
     }
 }
 
-void sstable::write_range_tombstone(file_writer& out, const composite& start, const composite& stop, std::vector<bytes_view> suffix, const tombstone t) {
+void sstable::write_range_tombstone(file_writer& out,
+        const composite& start,
+        bound_kind start_kind,
+        const composite& end,
+        bound_kind end_kind,
+        std::vector<bytes_view> suffix,
+        const tombstone t) {
     if (!t) {
         return;
     }
 
-    write_column_name(out, start, suffix, composite_marker::start_range);
+    auto start_marker = start_kind == bound_kind::excl_start
+                      ? composite_marker::end_range
+                      : composite_marker::start_range;
+    write_column_name(out, start, suffix, start_marker);
     column_mask mask = column_mask::range_tombstone;
     write(out, mask);
-    write_column_name(out, stop, suffix, composite_marker::end_range);
+    auto end_marker = end_kind == bound_kind::excl_end
+                    ? composite_marker::start_range
+                    : composite_marker::end_range;
+    write_column_name(out, end, suffix, end_marker);
     uint64_t timestamp = t.timestamp;
     uint32_t deletion_time = t.deletion_time.time_since_epoch().count();
 
@@ -1447,8 +1459,8 @@ void sstable::do_write_components(::mutation_reader mr,
         write_static_row(out, *schema, static_row);
         for (const auto& rt: partition.row_tombstones()) {
             auto start = composite::from_clustering_element(*schema, rt.start);
-            auto stop = composite::from_clustering_element(*schema, rt.end);
-            write_range_tombstone(out, std::move(start), std::move(stop), {}, rt.tomb);
+            auto end = composite::from_clustering_element(*schema, rt.end);
+            write_range_tombstone(out, std::move(start), rt.start_kind, std::move(end), rt.end_kind, {}, rt.tomb);
         }
 
         // Write all CQL rows from a given mutation partition.

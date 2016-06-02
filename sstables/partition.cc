@@ -403,31 +403,41 @@ public:
         return proceed::no;
     }
 
-    static void check_marker(bytes_view component) {
+    static bound_kind start_marker_to_bound_kind(bytes_view component) {
         auto found = composite_marker(component.back());
         switch (found) {
+        // start_col may have composite_marker::none in sstables
+        // from older versions of Cassandra (see CASSANDRA-7593).
         case composite_marker::none:
+            return bound_kind::incl_start;
         case composite_marker::start_range:
+            return bound_kind::incl_start;
         case composite_marker::end_range:
-            break;
+            return bound_kind::excl_start;
         default:
-            throw malformed_sstable_exception(sprint("Unexpected composite marker %d\n", uint16_t(uint8_t(found))));
+            throw malformed_sstable_exception(sprint("Unexpected start composite marker %d\n", uint16_t(uint8_t(found))));
+        }
+    }
+
+    static bound_kind end_marker_to_bound_kind(bytes_view component) {
+        auto found = composite_marker(component.back());
+        switch (found) {
+        // start_col may have composite_marker::none in sstables
+        // from older versions of Cassandra (see CASSANDRA-7593).
+        case composite_marker::none:
+            return bound_kind::incl_end;
+        case composite_marker::start_range:
+            return bound_kind::excl_end;
+        case composite_marker::end_range:
+            return bound_kind::incl_end;
+        default:
+            throw malformed_sstable_exception(sprint("Unexpected start composite marker %d\n", uint16_t(uint8_t(found))));
         }
     }
 
     virtual void consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,
             sstables::deletion_time deltime) override {
-        // We used to check that start_col has composite_marker:start_range
-        // and end_col has composite_marker::end_range. But this check is
-        // incorrect. start_col may have composite_marker::none in sstables
-        // from older versions of Cassandra (see CASSANDRA-7593) and we also
-        // saw composite_marker::none in end_col. Also, when a larger range
-        // tombstone is split, we can have a start_range in end_col or
-        // end_range in start_col. So we don't check the markers' content at
-        // all here, only if they are sane.
-        check_marker(start_col);
-        check_marker(end_col);
 
         auto start = composite_view(column::fix_static_name(start_col)).explode();
 
@@ -437,8 +447,11 @@ public:
         // Still, it is enough to check if we're dealing with a collection, since any other tombstone
         // won't have a full clustering prefix (otherwise it isn't a range)
         if (start.size() <= _schema->clustering_key_size()) {
-            auto end = composite_view(column::fix_static_name(end_col)).explode();
-            mut->partition().apply_delete(*_schema, std::move(start), std::move(end), tombstone(deltime));
+            auto start_kind = start_marker_to_bound_kind(start_col);
+            auto end = clustering_key_prefix::from_exploded(composite_view(column::fix_static_name(end_col)).explode());
+            auto end_kind = end_marker_to_bound_kind(end_col);
+            mut->partition().apply_delete(*_schema, range_tombstone(
+                        clustering_key_prefix::from_exploded(std::move(start)), start_kind, std::move(end), end_kind, tombstone(deltime)));
         } else {
             auto&& column = pop_back(start);
             auto cdef = _schema->get_column_definition(column);
