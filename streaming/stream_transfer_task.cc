@@ -85,22 +85,22 @@ struct send_info {
 };
 
 future<stop_iteration> do_send_mutations(auto si, auto fm) {
-        sslog.debug("[Stream #{}] SEND STREAM_MUTATION to {}, cf_id={}", si->plan_id, si->id, si->cf_id);
-        auto fm_size = fm.representation().size();
-        net::get_local_messaging_service().send_stream_mutation(si->id, si->plan_id, std::move(fm), si->dst_cpu_id).then([si, fm_size] {
-            sslog.debug("[Stream #{}] GOT STREAM_MUTATION Reply from {}", si->plan_id, si->id.addr);
-            get_local_stream_manager().update_progress(si->plan_id, si->id.addr, progress_info::direction::OUT, fm_size);
-            si->mutations_done.signal();
-        }).handle_exception([si] (auto ep) {
-            // There might be larger number of STREAM_MUTATION inflight.
-            // Log one error per column_family per range
-            if (!si->error_logged) {
-                si->error_logged = true;
-                sslog.error("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION to {}: {}", si->plan_id, si->id, ep);
-            }
-            si->mutations_done.broken();
-        });
-        return make_ready_future<stop_iteration>(stop_iteration::no);
+    sslog.debug("[Stream #{}] SEND STREAM_MUTATION to {}, cf_id={}", si->plan_id, si->id, si->cf_id);
+    auto fm_size = fm.representation().size();
+    net::get_local_messaging_service().send_stream_mutation(si->id, si->plan_id, std::move(fm), si->dst_cpu_id).then([si, fm_size] {
+        sslog.debug("[Stream #{}] GOT STREAM_MUTATION Reply from {}", si->plan_id, si->id.addr);
+        get_local_stream_manager().update_progress(si->plan_id, si->id.addr, progress_info::direction::OUT, fm_size);
+        si->mutations_done.signal();
+    }).handle_exception([si] (auto ep) {
+        // There might be larger number of STREAM_MUTATION inflight.
+        // Log one error per column_family per range
+        if (!si->error_logged) {
+            si->error_logged = true;
+            sslog.error("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION to {}: {}", si->plan_id, si->id, ep);
+        }
+        si->mutations_done.broken();
+    });
+    return make_ready_future<stop_iteration>(stop_iteration::no);
 }
 
 future<> send_mutations(auto si) {
