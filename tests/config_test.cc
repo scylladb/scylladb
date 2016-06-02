@@ -24,7 +24,6 @@
 #include <boost/test/unit_test.hpp>
 #include <stdlib.h>
 #include <iostream>
-#include <unordered_map>
 
 #include "tests/test-utils.hh"
 #include "core/future-util.hh"
@@ -825,8 +824,10 @@ inline std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os
 }
 }
 
-template<typename... T, typename... Args>
-inline std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os, const std::unordered_map<T...> & v) {
+namespace db {
+
+template<typename... Args>
+inline std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os, const string_map& v) {
     os << "{";
     int n = 0;
     for (auto& p : v) {
@@ -836,6 +837,8 @@ inline std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os
         os << "{" << p.first << ", " << p.second << "}";
     }
     return os << "}";
+}
+
 }
 
 SEASTAR_TEST_CASE(test_parse_yaml) {
