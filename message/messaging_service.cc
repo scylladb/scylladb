@@ -176,9 +176,11 @@ void messaging_service::foreach_client(std::function<void(const msg_addr& id, co
 }
 
 void messaging_service::foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const {
-    _server->foreach_connection([f](const rpc_protocol::server::connection& c) {
-        f(c.info(), c.get_stats());
-    });
+    if (_server) {
+        _server->foreach_connection([f](const rpc_protocol::server::connection& c) {
+            f(c.info(), c.get_stats());
+        });
+    }
 }
 
 void messaging_service::increment_dropped_messages(messaging_verb verb) {
