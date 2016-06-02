@@ -114,26 +114,27 @@ struct convert<db::config::string_list> {
     }
 };
 
-template<typename K, typename V>
-struct convert<std::unordered_map<K, V>> {
-    static Node encode(const std::unordered_map<K, V>& rhs) {
+template<>
+struct convert<db::string_map> {
+    static Node encode(const db::string_map& rhs) {
         Node node(NodeType::Map);
         for (auto& p : rhs) {
             node.force_insert(p.first, p.second);
         }
         return node;
     }
-    static bool decode(const Node& node, std::unordered_map<K, V>& rhs) {
+    static bool decode(const Node& node, db::string_map& rhs) {
         if (!node.IsMap()) {
             return false;
         }
         rhs.clear();
         for (auto& n : node) {
-            rhs[n.first.as<K>()] = n.second.as<V>();
+            rhs[n.first.as<sstring>()] = n.second.as<sstring>();
         }
         return true;
     }
 };
+
 template<>
 struct convert<db::config::seed_provider_type> {
     static Node encode(const db::config::seed_provider_type& rhs) {
