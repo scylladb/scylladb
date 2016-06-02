@@ -56,6 +56,9 @@ public:
     virtual ~compaction_strategy_impl() {}
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) = 0;
     virtual compaction_strategy_type type() const = 0;
+    virtual bool parallel_compaction() const {
+        return true;
+    }
 };
 
 //
@@ -402,6 +405,10 @@ public:
 
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override;
 
+    virtual bool parallel_compaction() const override {
+        return false;
+    }
+
     virtual compaction_strategy_type type() const {
         return compaction_strategy_type::leveled;
     }
@@ -438,6 +445,9 @@ compaction_strategy_type compaction_strategy::type() const {
 }
 compaction_descriptor compaction_strategy::get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) {
     return _compaction_strategy_impl->get_sstables_for_compaction(cfs, std::move(candidates));
+}
+bool compaction_strategy::parallel_compaction() const {
+    return _compaction_strategy_impl->parallel_compaction();
 }
 
 compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options) {

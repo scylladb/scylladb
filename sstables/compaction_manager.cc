@@ -83,13 +83,17 @@ int compaction_manager::trim_to_compact(column_family* cf, sstables::compaction_
     return weight;
 }
 
-bool compaction_manager::try_to_register_weight(column_family* cf, int weight) {
+bool compaction_manager::try_to_register_weight(column_family* cf, int weight, bool parallel_compaction) {
     auto it = _weight_tracker.find(cf);
     if (it == _weight_tracker.end()) {
         _weight_tracker.insert({cf, {weight}});
         return true;
     }
     std::unordered_set<int>& s = it->second;
+    // Only one weight is allowed if parallel compaction is disabled.
+    if (!parallel_compaction && !s.empty()) {
+        return false;
+    }
     // TODO: Maybe allow only *smaller* compactions to start? That can be done
     // by returning true only if weight is not in the set and is lower than any
     // entry in the set.
@@ -164,8 +168,7 @@ lw_shared_ptr<compaction_manager::task> compaction_manager::task_start(column_fa
                 sstables::compaction_strategy cs = cf.get_compaction_strategy();
                 descriptor = cs.get_sstables_for_compaction(cf, std::move(candidates));
                 weight = trim_to_compact(&cf, descriptor);
-                if (!try_to_register_weight(&cf, weight)) {
-                    // Refusing compaction job because of an ongoing compaction with same weight.
+                if (!try_to_register_weight(&cf, weight, cs.parallel_compaction())) {
                     task->stopping = true;
                     _stats.pending_tasks--;
                     cmlog.debug("Refused compaction job ({} sstable(s)) of weight {} for {}.{}",

@@ -81,9 +81,9 @@ private:
     // It will not accept new requests in case the manager was stopped.
     bool can_submit();
 
-    // If weight is not taken for the column family, weight is registered and
-    // true is returned. Return false otherwise.
-    bool try_to_register_weight(column_family* cf, int weight);
+    // Return true if weight is not registered. If parallel_compaction is not
+    // true, only one weight is allowed to be registered.
+    bool try_to_register_weight(column_family* cf, int weight, bool parallel_compaction);
     // Deregister weight for a column family.
     void deregister_weight(column_family* cf, int weight);
 
