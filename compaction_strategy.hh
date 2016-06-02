@@ -51,6 +51,9 @@ public:
     // Return a list of sstables to be compacted after applying the strategy.
     compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<lw_shared_ptr<sstable>> candidates);
 
+    // Return if parallel compaction is allowed by strategy.
+    bool parallel_compaction() const;
+
     static sstring name(compaction_strategy_type type) {
         switch (type) {
         case compaction_strategy_type::null:
