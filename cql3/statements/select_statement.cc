@@ -61,8 +61,8 @@ select_statement::parameters::parameters()
 { }
 
 select_statement::parameters::parameters(orderings_type orderings,
-    bool is_distinct,
-    bool allow_filtering)
+                                         bool is_distinct,
+                                         bool allow_filtering)
     : _orderings{std::move(orderings)}
     , _is_distinct{is_distinct}
     , _allow_filtering{allow_filtering}
@@ -81,21 +81,21 @@ select_statement::parameters::orderings_type const& select_statement::parameters
 }
 
 select_statement::select_statement(schema_ptr schema,
-    uint32_t bound_terms,
-    ::shared_ptr<parameters> parameters,
-    ::shared_ptr<selection::selection> selection,
-    ::shared_ptr<restrictions::statement_restrictions> restrictions,
-    bool is_reversed,
-    ordering_comparator_type ordering_comparator,
-    ::shared_ptr<term> limit)
-        : _schema(schema)
-        , _bound_terms(bound_terms)
-        , _parameters(std::move(parameters))
-        , _selection(std::move(selection))
-        , _restrictions(std::move(restrictions))
-        , _is_reversed(is_reversed)
-        , _limit(std::move(limit))
-        , _ordering_comparator(std::move(ordering_comparator))
+                                   uint32_t bound_terms,
+                                   ::shared_ptr<parameters> parameters,
+                                   ::shared_ptr<selection::selection> selection,
+                                   ::shared_ptr<restrictions::statement_restrictions> restrictions,
+                                   bool is_reversed,
+                                   ordering_comparator_type ordering_comparator,
+                                   ::shared_ptr<term> limit)
+    : _schema(schema)
+    , _bound_terms(bound_terms)
+    , _parameters(std::move(parameters))
+    , _selection(std::move(selection))
+    , _restrictions(std::move(restrictions))
+    , _is_reversed(is_reversed)
+    , _limit(std::move(limit))
+    , _ordering_comparator(std::move(ordering_comparator))
 {
     _opts = _selection->get_query_options();
 }
@@ -152,7 +152,8 @@ const sstring& select_statement::column_family() const {
 }
 
 query::partition_slice
-select_statement::make_partition_slice(const query_options& options) {
+select_statement::make_partition_slice(const query_options& options)
+{
     std::vector<column_id> static_columns;
     std::vector<column_id> regular_columns;
 
@@ -213,7 +214,10 @@ bool select_statement::needs_post_query_ordering() const {
 }
 
 future<shared_ptr<transport::messages::result_message>>
-select_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
+select_statement::execute(distributed<service::storage_proxy>& proxy,
+                          service::query_state& state,
+                          const query_options& options)
+{
     auto cl = options.get_consistency();
 
     validate_for_read(_schema->ks_name(), cl);
@@ -286,9 +290,13 @@ select_statement::execute(distributed<service::storage_proxy>& proxy, service::q
 }
 
 future<shared_ptr<transport::messages::result_message>>
-select_statement::execute(distributed<service::storage_proxy>& proxy, lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges,
-        service::query_state& state, const query_options& options, db_clock::time_point now) {
-
+select_statement::execute(distributed<service::storage_proxy>& proxy,
+                          lw_shared_ptr<query::read_command> cmd,
+                          std::vector<query::partition_range>&& partition_ranges,
+                          service::query_state& state,
+                          const query_options& options,
+                          db_clock::time_point now)
+{
     // If this is a query with IN on partition key, ORDER BY clause and LIMIT
     // is specified we need to get "limit" rows from each partition since there
     // is no way to tell which of these rows belong to the query result before
@@ -312,9 +320,11 @@ select_statement::execute(distributed<service::storage_proxy>& proxy, lw_shared_
     }
 }
 
-
 future<::shared_ptr<transport::messages::result_message>>
-select_statement::execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
+select_statement::execute_internal(distributed<service::storage_proxy>& proxy,
+                                   service::query_state& state,
+                                   const query_options& options)
+{
     int32_t limit = get_limit(options);
     auto now = db_clock::now();
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
@@ -339,11 +349,12 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy, s
     }
 }
 
-shared_ptr<transport::messages::result_message> select_statement::process_results(
-        foreign_ptr<lw_shared_ptr<query::result>> results,
-        lw_shared_ptr<query::read_command> cmd, const query_options& options,
-        db_clock::time_point now) {
-
+shared_ptr<transport::messages::result_message>
+select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
+                                  lw_shared_ptr<query::read_command> cmd,
+                                  const query_options& options,
+                                  db_clock::time_point now)
+{
     cql3::selection::result_set_builder builder(*_selection, now,
             options.get_cql_serialization_format());
     query::result_view::consume(*results, cmd->slice,
@@ -364,10 +375,10 @@ shared_ptr<transport::messages::result_message> select_statement::process_result
 namespace raw {
 
 select_statement::select_statement(::shared_ptr<cf_name> cf_name,
-                                               ::shared_ptr<parameters> parameters,
-                                               std::vector<::shared_ptr<selection::raw_selector>> select_clause,
-                                               std::vector<::shared_ptr<relation>> where_clause,
-                                               ::shared_ptr<term::raw> limit)
+                                   ::shared_ptr<parameters> parameters,
+                                   std::vector<::shared_ptr<selection::raw_selector>> select_clause,
+                                   std::vector<::shared_ptr<relation>> where_clause,
+                                   ::shared_ptr<term::raw> limit)
     : cf_statement(std::move(cf_name))
     , _parameters(std::move(parameters))
     , _select_clause(std::move(select_clause))
@@ -375,8 +386,7 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
     , _limit(std::move(limit))
 { }
 
-::shared_ptr<prepared_statement>
-select_statement::prepare(database& db) {
+::shared_ptr<prepared_statement> select_statement::prepare(database& db) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto bound_names = get_bound_variables();
 
@@ -414,9 +424,10 @@ select_statement::prepare(database& db) {
 }
 
 ::shared_ptr<restrictions::statement_restrictions>
-select_statement::prepare_restrictions(database& db, schema_ptr schema,
-    ::shared_ptr<variable_specifications> bound_names,
-    ::shared_ptr<selection::selection> selection)
+select_statement::prepare_restrictions(database& db,
+                                       schema_ptr schema,
+                                       ::shared_ptr<variable_specifications> bound_names,
+                                       ::shared_ptr<selection::selection> selection)
 {
     try {
         return ::make_shared<restrictions::statement_restrictions>(db, schema, std::move(_where_clause), bound_names,
@@ -431,7 +442,8 @@ select_statement::prepare_restrictions(database& db, schema_ptr schema,
 
 /** Returns a ::shared_ptr<term> for the limit or null if no limit is set */
 ::shared_ptr<term>
-select_statement::prepare_limit(database& db, ::shared_ptr<variable_specifications> bound_names) {
+select_statement::prepare_limit(database& db, ::shared_ptr<variable_specifications> bound_names)
+{
     if (!_limit) {
         return {};
     }
@@ -441,8 +453,7 @@ select_statement::prepare_limit(database& db, ::shared_ptr<variable_specificatio
     return prep_limit;
 }
 
-void select_statement::verify_ordering_is_allowed(
-    ::shared_ptr<restrictions::statement_restrictions> restrictions)
+void select_statement::verify_ordering_is_allowed(::shared_ptr<restrictions::statement_restrictions> restrictions)
 {
     if (restrictions->uses_secondary_indexing()) {
         throw exceptions::invalid_request_exception("ORDER BY with 2ndary indexes is not supported.");
@@ -453,8 +464,8 @@ void select_statement::verify_ordering_is_allowed(
 }
 
 void select_statement::validate_distinct_selection(schema_ptr schema,
-    ::shared_ptr<selection::selection> selection,
-    ::shared_ptr<restrictions::statement_restrictions> restrictions)
+                                                   ::shared_ptr<selection::selection> selection,
+                                                   ::shared_ptr<restrictions::statement_restrictions> restrictions)
 {
     for (auto&& def : selection->get_columns()) {
         if (!def->is_partition_key() && !def->is_static()) {
@@ -478,8 +489,7 @@ void select_statement::validate_distinct_selection(schema_ptr schema,
     }
 }
 
-void select_statement::handle_unrecognized_ordering_column(
-    ::shared_ptr<column_identifier> column)
+void select_statement::handle_unrecognized_ordering_column(::shared_ptr<column_identifier> column)
 {
     if (contains_alias(column)) {
         throw exceptions::invalid_request_exception(sprint("Aliases are not allowed in order by clause ('%s')", *column));
@@ -489,8 +499,8 @@ void select_statement::handle_unrecognized_ordering_column(
 
 select_statement::ordering_comparator_type
 select_statement::get_ordering_comparator(schema_ptr schema,
-    ::shared_ptr<selection::selection> selection,
-    ::shared_ptr<restrictions::statement_restrictions> restrictions)
+                                          ::shared_ptr<selection::selection> selection,
+                                          ::shared_ptr<restrictions::statement_restrictions> restrictions)
 {
     if (!restrictions->key_is_in_relation()) {
         return {};
@@ -538,7 +548,6 @@ select_statement::get_ordering_comparator(schema_ptr schema,
 }
 
 bool select_statement::is_reversed(schema_ptr schema) {
-
     assert(_parameters->orderings().size() > 0);
     parameters::orderings_type::size_type i = 0;
     bool is_reversed_ = false;
@@ -583,8 +592,7 @@ bool select_statement::is_reversed(schema_ptr schema) {
 }
 
 /** If ALLOW FILTERING was not specified, this verifies that it is not needed */
-void select_statement::check_needs_filtering(
-    ::shared_ptr<restrictions::statement_restrictions> restrictions)
+void select_statement::check_needs_filtering(::shared_ptr<restrictions::statement_restrictions> restrictions)
 {
     // non-key-range non-indexed queries cannot involve filtering underneath
     if (!_parameters->allow_filtering() && (restrictions->is_key_range() || restrictions->uses_secondary_indexing())) {
@@ -612,5 +620,7 @@ bool select_statement::contains_alias(::shared_ptr<column_identifier> name) {
 }
 
 }
+
 }
+
 }
