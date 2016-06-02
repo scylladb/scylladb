@@ -175,10 +175,8 @@ public:
 
             if (previous != nullptr && current_first.tri_compare(s, previous->get_last_decorated_key(s)) <= 0) {
 
-                logger.warn("At level {}, {} [{}, {}] overlaps {} [{}, {}].  This could be caused by a bug in Cassandra 1.1.0 .. 1.1.3 " \
-                    "or due to the fact that you have dropped sstables from another node into the data directory. " \
-                    "Sending back to L0. If you didn't drop in sstables, and have not yet run scrub, you should do so since you may also " \
-                    "have rows out-of-order within an sstable",
+                logger.warn("At level {}, {} [{}, {}] overlaps {} [{}, {}]. This could be caused by the fact that you have dropped " \
+                    "sstables from another node into the data directory. Sending back to L0.",
                     level, previous->get_filename(), previous->get_first_partition_key(s), previous->get_last_partition_key(s),
                     current->get_filename(), current->get_first_partition_key(s), current->get_last_partition_key(s));
 
