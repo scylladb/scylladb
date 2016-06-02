@@ -473,6 +473,9 @@ scylla_core = (['database.cc',
                  'auth/data_resource.cc',
                  'auth/password_authenticator.cc',
                  'auth/permission.cc',
+                 'tracing/tracing.cc',
+                 'tracing/trace_keyspace_helper.cc',
+                 'tracing/trace_state.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
@@ -532,6 +535,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/query.idl.hh',
         'idl/idl_test.idl.hh',
         'idl/commitlog.idl.hh',
+        'idl/tracing.idl.hh',
         ]
 
 scylla_tests_dependencies = scylla_core + api + idls + [

@@ -39,6 +39,7 @@
 #include "database.hh"
 #include "net/byteorder.hh"
 #include <seastar/core/scollectd.hh>
+#include <seastar/net/byteorder.hh>
 
 #include "enum_set.hh"
 #include "service/query_state.hh"
@@ -182,12 +183,18 @@ cql_load_balance parse_load_balance(sstring value)
 class cql_server::response {
     int16_t           _stream;
     cql_binary_opcode _opcode;
+    std::experimental::optional<utils::UUID> _tracing_id;
     std::vector<char> _body;
 public:
     response(int16_t stream, cql_binary_opcode opcode)
         : _stream{stream}
         , _opcode{opcode}
     { }
+
+    void set_tracing_id(const utils::UUID& id) {
+        _tracing_id = id;
+    }
+
     scattered_message<char> make_message(uint8_t version);
     void serialize(const event::schema_change& event, uint8_t version);
     void write_byte(uint8_t b);
@@ -215,8 +222,46 @@ public:
         return _opcode;
     }
 private:
-    sstring make_frame(uint8_t version, uint8_t flags, size_t length);
     std::vector<char> compress(const std::vector<char>& body);
+
+    template <typename CqlFrameHeaderType>
+    sstring make_frame_one(uint8_t version, uint8_t flags, size_t length) {
+        size_t extra_len = 0;
+
+        // If tracing was requested the response should contain a "tracing
+        // session ID" which is a 16 bytes UUID.
+        if (_tracing_id) {
+            extra_len += 16;
+            flags |= cql_frame_flags::tracing;
+        }
+
+        sstring frame_buf(sstring::initialized_later(), sizeof(CqlFrameHeaderType) + extra_len);
+        auto* frame = reinterpret_cast<CqlFrameHeaderType*>(frame_buf.begin());
+        frame->version = version | 0x80;
+        frame->flags   = flags;
+        frame->opcode  = static_cast<uint8_t>(_opcode);
+        frame->length  = htonl(length + extra_len);
+        frame->stream = net::hton((decltype(frame->stream))_stream);
+
+        // Tracing session ID should be the first thing in the responce "body".
+        if (_tracing_id) {
+            std::memcpy(frame_buf.data() + sizeof(CqlFrameHeaderType), _tracing_id->to_bytes().data(), 16);
+        }
+
+        return frame_buf;
+    }
+
+    sstring make_frame(uint8_t version, uint8_t flags, size_t length) {
+        if (version > 0x04) {
+            throw exceptions::protocol_exception(sprint("Invalid or unsupported protocol version: %d", version));
+        }
+
+        if (version > 0x02) {
+            return make_frame_one<cql_binary_frame_v3>(version, flags, length);
+        } else {
+            return make_frame_one<cql_binary_frame_v1>(version, flags, length);
+        }
+    }
 };
 
 cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb)
@@ -414,8 +459,15 @@ cql_server::connection::read_frame() {
 }
 
 future<response_type>
-cql_server::connection::process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state) {
+    cql_server::connection::process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request) {
     auto cqlop = static_cast<cql_binary_opcode>(op);
+
+    if (tracing_request != tracing_request_type::not_requested) {
+        if (cqlop == cql_binary_opcode::QUERY) {
+            client_state.create_tracing_session(tracing::trace_type::QUERY, tracing_request == tracing_request_type::flush_on_close);
+        }
+    }
+
     return make_ready_future<>().then([this, cqlop, stream, buf = std::move(buf), client_state] () mutable {
         // When using authentication, we need to ensure we are doing proper state transitions,
         // i.e. we cannot simply accept any query/exec ops unless auth is complete
@@ -503,7 +555,7 @@ cql_server::connection::connection(cql_server& server, connected_socket&& fd, so
     , _fd(std::move(fd))
     , _read_buf(_fd.input())
     , _write_buf(_fd.output())
-    , _client_state(service::client_state::for_external_calls()) {
+    , _client_state(service::client_state::external_tag{}, addr) {
     ++_server._total_connections;
     ++_server._current_connections;
     _server._connections_list.push_back(*this);
@@ -563,6 +615,12 @@ future<> cql_server::connection::process_request() {
         }
 
         auto& f = *maybe_frame;
+        tracing_request_type tracing_requested = tracing_request_type::not_requested;
+        if (f.flags & cql_frame_flags::tracing) {
+            // If tracing is requested for a specific CQL command - flush
+            // tracing info right after the command is over.
+            tracing_requested = tracing_request_type::flush_on_close;
+        }
 
         auto op = f.opcode;
         auto stream = f.stream;
@@ -574,17 +632,21 @@ future<> cql_server::connection::process_request() {
                     f.length, mem_estimate, _server._max_request_size));
         }
 
-        return with_semaphore(_server._memory_available, mem_estimate, [this, length = f.length, flags = f.flags, op, stream] {
-          return read_and_decompress_frame(length, flags).then([this, flags, op, stream] (temporary_buffer<char> buf) {
+        return with_semaphore(_server._memory_available, mem_estimate, [this, length = f.length, flags = f.flags, op, stream, tracing_requested] {
+          return read_and_decompress_frame(length, flags).then([this, flags, op, stream, tracing_requested] (temporary_buffer<char> buf) {
 
             ++_server._requests_served;
             ++_server._requests_serving;
 
-            with_gate(_pending_requests_gate, [this, flags, op, stream, buf = std::move(buf)] () mutable {
+            with_gate(_pending_requests_gate, [this, flags, op, stream, buf = std::move(buf), tracing_requested] () mutable {
                 auto bv = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
                 auto cpu = pick_request_cpu();
-                return smp::submit_to(cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state] () mutable {
-                    return this->process_request_one(bv, op, stream, std::move(client_state)).then([] (auto&& response) {
+                return smp::submit_to(cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state, tracing_requested] () mutable {
+                    return this->process_request_one(bv, op, stream, std::move(client_state), tracing_requested).then([](auto&& response) {
+                        auto& tracing_session_id_ptr = response.second.tracing_session_id_ptr();
+                        if (tracing_session_id_ptr) {
+                            response.first->set_tracing_id(*tracing_session_id_ptr);
+                        }
                         return std::make_pair(make_foreign(response.first), response.second);
                     });
                 }).then([this, flags] (auto&& response) {
@@ -690,9 +752,12 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, byt
     auto query = read_long_string_view(buf);
     auto q_state = std::make_unique<cql_query_state>(client_state);
     auto& query_state = q_state->query_state;
+    query_state.begin_tracing(query.to_string(), query_state.get_client_state().get_client_address(), {});
     q_state->options = read_options(buf);
+    query_state.trace("Done reading options");
     auto& options = *q_state->options;
     return _server._query_processor.local().process(query, query_state, options).then([this, stream, buf = std::move(buf), &query_state] (auto msg) {
+         query_state.trace("Done processing - preparing a result");
          return this->make_result(stream, msg);
     }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
         /* Keep q_state alive. */
@@ -1366,36 +1431,6 @@ void cql_server::response::serialize(const event::schema_change& event, uint8_t 
                 write_string("");
             }
         }
-    }
-}
-
-sstring cql_server::response::make_frame(uint8_t version, uint8_t flags, size_t length)
-{
-    switch (version) {
-    case 0x01:
-    case 0x02: {
-        sstring frame_buf(sstring::initialized_later(), sizeof(cql_binary_frame_v1));
-        auto* frame = reinterpret_cast<cql_binary_frame_v1*>(frame_buf.begin());
-        frame->version = version | 0x80;
-        frame->flags   = flags;
-        frame->stream  = _stream;
-        frame->opcode  = static_cast<uint8_t>(_opcode);
-        frame->length  = htonl(length);
-        return frame_buf;
-    }
-    case 0x03:
-    case 0x04: {
-        sstring frame_buf(sstring::initialized_later(), sizeof(cql_binary_frame_v3));
-        auto* frame = reinterpret_cast<cql_binary_frame_v3*>(frame_buf.begin());
-        frame->version = version | 0x80;
-        frame->flags   = flags;
-        frame->stream  = htons(_stream);
-        frame->opcode  = static_cast<uint8_t>(_opcode);
-        frame->length  = htonl(length);
-        return frame_buf;
-    }
-    default:
-        throw exceptions::protocol_exception(sprint("Invalid or unsupported protocol version: %d", version));
     }
 }
 

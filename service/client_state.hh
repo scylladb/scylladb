@@ -49,6 +49,8 @@
 #include "auth/authenticated_user.hh"
 #include "auth/authenticator.hh"
 #include "auth/permission.hh"
+#include "tracing/tracing.hh"
+#include "tracing/trace_state.hh"
 
 namespace service {
 
@@ -58,6 +60,8 @@ namespace service {
 class client_state {
 private:
     sstring _keyspace;
+    tracing::trace_state_ptr _trace_state_ptr;
+    lw_shared_ptr<utils::UUID> _tracing_session_id;
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(ClientState.class);
     public static final SemanticVersion DEFAULT_CQL_VERSION = org.apache.cassandra.cql3.QueryProcessor.CQL_VERSION;
@@ -81,9 +85,6 @@ private:
     private volatile String keyspace;
 #endif
     ::shared_ptr<auth::authenticated_user> _user;
-public:
-    struct internal_tag {};
-    struct external_tag {};
 
     // isInternal is used to mark ClientState as used by some internal component
     // that should have an ability to modify system keyspace.
@@ -95,12 +96,40 @@ public:
     bool _dirty = false;
     bool _thrift = false; // TODO: maybe use/set?
 
-    // Note: Origin passes here a RemoteAddress parameter, but it doesn't seem to be used
-    // anywhere so I didn't bother converting it.
-    client_state(external_tag) : _is_internal(false) {
+    // Address of a client
+    socket_address _remote_address;
+
+public:
+    struct internal_tag {};
+    struct external_tag {};
+
+    void create_tracing_session(tracing::trace_type type, bool flush_on_close) {
+        _trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(type, flush_on_close);
+        // store a session ID separately because its lifetime is not always
+        // coupled with the trace_state because the trace_state may already be
+        // destroyed when we need a session ID for a response to a client (e.g.
+        // in case of errors).
+        _tracing_session_id = make_lw_shared<utils::UUID>(_trace_state_ptr->get_session_id());
+    }
+
+    tracing::trace_state_ptr& trace_state_ptr() {
+        return _trace_state_ptr;
+    }
+
+    lw_shared_ptr<utils::UUID>& tracing_session_id_ptr() {
+        return _tracing_session_id;
+    }
+
+    client_state(external_tag, const socket_address& remote_address = socket_address())
+            : _is_internal(false)
+            , _remote_address(remote_address) {
         if (!auth::authenticator::get().require_authentication()) {
             _user = ::make_shared<auth::authenticated_user>();
         }
+    }
+
+    gms::inet_address get_client_address() const {
+        return gms::inet_address(_remote_address);
     }
 
     client_state(internal_tag) : _keyspace("system"), _is_internal(true) {}
@@ -109,6 +138,10 @@ public:
 
     bool is_thrift() const {
         return _thrift;
+    }
+
+    bool is_internal() const {
+        return _is_internal;
     }
 
     /**
