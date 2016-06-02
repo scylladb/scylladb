@@ -1355,7 +1355,7 @@ future<> database::populate_keyspace(sstring datadir, sstring ks_name) {
     } else {
         dblog.info("Populating Keyspace {}", ks_name);
         auto& ks = i->second;
-        return parallel_for_each(std::cbegin(_column_families), std::cend(_column_families),
+        return parallel_for_each(_column_families,
             [ks_name, &ks] (const std::pair<utils::UUID, lw_shared_ptr<column_family>>& e) {
                 utils::UUID uuid = e.first;
                 lw_shared_ptr<column_family> cf = e.second;
