@@ -351,7 +351,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
             };
             auto make_mutation = [&] {
                 mutation m(new_key(), s);
-                m.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(to_bytes("value")), 1);
+                m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(to_bytes("value")), 1);
                 return m;
             };
 
@@ -564,7 +564,7 @@ SEASTAR_TEST_CASE(test_querying_of_mutation) {
         };
 
         mutation m(partition_key::from_single_value(*s, "key1"), s);
-        m.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v1")), 1);
+        m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v1")), 1);
 
         assert_that(resultify(m))
             .has_only(a_row()
@@ -1305,7 +1305,7 @@ SEASTAR_TEST_CASE(test_tombstone_purge) {
     const column_definition& col = *s->get_column_definition("value");
 
     mutation m(key, s);
-    m.set_clustered_cell(clustering_key::make_empty(*s), col, make_atomic_cell(int32_type->decompose(1)));
+    m.set_clustered_cell(clustering_key::make_empty(), col, make_atomic_cell(int32_type->decompose(1)));
     tombstone tomb(api::new_timestamp(), gc_clock::now() - std::chrono::seconds(1));
     m.partition().apply(tomb);
     BOOST_REQUIRE(!m.partition().empty());

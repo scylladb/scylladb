@@ -36,10 +36,13 @@ class feature final {
 public:
     explicit feature(sstring name, bool enabled = false);
     ~feature();
+    feature()
+            : _enabled(false)
+    { }
     feature(const feature& other)
             : feature(other._name, other._enabled)
     { }
-    feature& operator=(const feature& other) = delete;
+    feature& operator=(feature other);
     const sstring& name() const {
         return _name;
     }

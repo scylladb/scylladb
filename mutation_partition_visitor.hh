@@ -23,6 +23,7 @@
 
 #include "atomic_cell.hh"
 #include "tombstone.hh"
+#include "range_tombstone.hh"
 #include "keys.hh"
 
 class row_marker;
@@ -52,7 +53,7 @@ public:
 
     virtual void accept_static_cell(column_id, collection_mutation_view) = 0;
 
-    virtual void accept_row_tombstone(clustering_key_prefix_view, tombstone) = 0;
+    virtual void accept_row_tombstone(const range_tombstone&) = 0;
 
     virtual void accept_row(clustering_key_view key, tombstone deleted_at, const row_marker& rm) = 0;
 

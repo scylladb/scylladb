@@ -158,8 +158,12 @@ protected:
         return TopLevel::get_compound_type(s);
     }
 public:
-    static TopLevel make_empty(const schema& s) {
-        return from_exploded(s, {});
+    static TopLevel make_empty() {
+        return from_exploded(std::vector<bytes>());
+    }
+
+    static TopLevel make_empty(const schema&) {
+        return make_empty();
     }
 
     template<typename RangeOfSerializedComponents>
@@ -298,6 +302,11 @@ public:
     template<typename Hasher>
     void feed_hash(Hasher& h, const schema& s) const {
         view().feed_hash(h, s);
+    }
+
+    // Returns the number of components of this compound.
+    size_t size(const schema& s) const {
+        return std::distance(begin(s), end(s));
     }
 };
 

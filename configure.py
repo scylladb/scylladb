@@ -216,6 +216,7 @@ scylla_tests = [
     'tests/dynamic_bitset_test',
     'tests/auth_test',
     'tests/idl_test',
+    'tests/range_tombstone_list_test',
 ]
 
 apps = [
@@ -476,6 +477,8 @@ scylla_core = (['database.cc',
                  'tracing/tracing.cc',
                  'tracing/trace_keyspace_helper.cc',
                  'tracing/trace_state.cc',
+                 'range_tombstone.cc',
+                 'range_tombstone_list.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
@@ -558,8 +561,6 @@ tests_not_using_seastar_test_framework = set([
     'tests/keys_test',
     'tests/partitioner_test',
     'tests/map_difference_test',
-    'tests/frozen_mutation_test',
-    'tests/canonical_mutation_test',
     'tests/perf/perf_mutation',
     'tests/lsa_async_eviction_test',
     'tests/lsa_sync_eviction_test',
@@ -580,6 +581,7 @@ tests_not_using_seastar_test_framework = set([
     'tests/managed_vector_test',
     'tests/dynamic_bitset_test',
     'tests/idl_test',
+    'tests/range_tombstone_list_test'
 ])
 
 for t in tests_not_using_seastar_test_framework:

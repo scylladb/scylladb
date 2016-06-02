@@ -1779,7 +1779,11 @@ void gossiper::register_feature(feature* f) {
 }
 
 void gossiper::unregister_feature(feature* f) {
-    auto&& fs = _registered_features[f->name()];
+    auto&& fsit = _registered_features.find(f->name());
+    if (fsit == _registered_features.end()) {
+        return;
+    }
+    auto&& fs = fsit->second;
     auto it = std::find(fs.begin(), fs.end(), f);
     if (it != fs.end()) {
         fs.erase(it);
@@ -1814,8 +1818,23 @@ feature::feature(sstring name, bool enabled)
 
 feature::~feature() {
     if (!_enabled) {
+        auto& gossiper = get_gossiper();
+        if (gossiper.local_is_initialized()) {
+            gossiper.local().unregister_feature(this);
+        }
+    }
+}
+
+feature& feature::operator=(feature other) {
+    if (!_enabled) {
         get_local_gossiper().unregister_feature(this);
     }
+    _name = other._name;
+    _enabled = other._enabled;
+    if (!_enabled) {
+        get_local_gossiper().register_feature(this);
+    }
+    return *this;
 }
 
 } // namespace gms

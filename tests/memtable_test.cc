@@ -48,7 +48,7 @@ static bytes make_unique_bytes() {
 static void set_column(mutation& m, const sstring& column_name) {
     assert(m.schema()->get_column_definition(to_bytes(column_name))->type == bytes_type);
     auto value = data_value(make_unique_bytes());
-    m.set_clustered_cell(clustering_key::make_empty(*m.schema()), to_bytes(column_name), value, next_timestamp());
+    m.set_clustered_cell(clustering_key::make_empty(), to_bytes(column_name), value, next_timestamp());
 }
 
 static

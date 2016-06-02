@@ -54,7 +54,7 @@ static
 mutation make_new_mutation(schema_ptr s, partition_key key) {
     mutation m(key, s);
     static thread_local int next_value = 1;
-    m.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(to_bytes(sprint("v%d", next_value++))), next_timestamp++);
+    m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(to_bytes(sprint("v%d", next_value++))), next_timestamp++);
     return m;
 }
 
@@ -70,7 +70,7 @@ mutation make_new_large_mutation(schema_ptr s, partition_key key) {
     }
     next_value++;
     bytes b(reinterpret_cast<int8_t*>(data.data()), data.size() * sizeof(int));
-    m.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(std::move(b)), next_timestamp++);
+    m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(std::move(b)), next_timestamp++);
     return m;
 }
 

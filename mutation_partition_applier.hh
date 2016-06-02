@@ -46,8 +46,8 @@ public:
         _p._static_row.apply(_schema.column_at(column_kind::static_column, id), atomic_cell_or_collection(collection));
     }
 
-    virtual void accept_row_tombstone(clustering_key_prefix_view prefix, tombstone t) override {
-        _p.apply_row_tombstone(_schema, prefix, t);
+    virtual void accept_row_tombstone(const range_tombstone& rt) override {
+        _p.apply_row_tombstone(_schema, rt);
     }
 
     virtual void accept_row(clustering_key_view key, tombstone deleted_at, const row_marker& rm) override {

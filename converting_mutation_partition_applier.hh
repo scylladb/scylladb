@@ -90,8 +90,8 @@ public:
         }
     }
 
-    virtual void accept_row_tombstone(clustering_key_prefix_view prefix, tombstone t) override {
-        _p.apply_row_tombstone(_p_schema, prefix, t);
+    virtual void accept_row_tombstone(const range_tombstone& rt) override {
+        _p.apply_row_tombstone(_p_schema, rt);
     }
 
     virtual void accept_row(clustering_key_view key, tombstone deleted_at, const row_marker& rm) override {

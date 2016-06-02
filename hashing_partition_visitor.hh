@@ -58,9 +58,8 @@ public:
         feed_hash(_h, cell);
     }
 
-    virtual void accept_row_tombstone(clustering_key_prefix_view prefix, tombstone t) {
-        prefix.feed_hash(_h, _s);
-        feed_hash(_h, t);
+    virtual void accept_row_tombstone(const range_tombstone& rt) {
+        rt.feed_hash(_h, _s);
     }
 
     virtual void accept_row(clustering_key_view key, tombstone deleted_at, const row_marker& rm) {

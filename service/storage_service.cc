@@ -78,6 +78,8 @@ namespace service {
 
 static logging::logger logger("storage_service");
 
+static const sstring RANGE_TOMBSTONES_FEATURE = "RANGE_TOMBSTONES";
+
 distributed<storage_service> _the_storage_service;
 
 int get_generation_number() {
@@ -95,7 +97,7 @@ sstring storage_service::get_config_supported_features() {
     // Add features supported by this local node. When a new feature is
     // introduced in scylla, update it here, e.g.,
     // return sstring("FEATURE1,FEATURE2")
-    return sstring("");
+    return RANGE_TOMBSTONES_FEATURE;
 }
 
 std::set<inet_address> get_seeds() {
@@ -1148,6 +1150,10 @@ future<> storage_service::init_server(int delay) {
             }
             logger.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
         }
+
+        get_storage_service().invoke_on_all([] (auto& ss) {
+            ss._range_tombstones_feature = gms::feature(RANGE_TOMBSTONES_FEATURE);
+        }).get();
     });
 }
 

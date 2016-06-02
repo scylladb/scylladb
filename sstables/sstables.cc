@@ -52,6 +52,7 @@
 #include <regex>
 #include <core/align.hh>
 #include "utils/phased_barrier.hh"
+#include "range_tombstone_list.hh"
 
 #include "checked-file-impl.hh"
 #include "disk-error-handler.hh"
@@ -1175,15 +1176,27 @@ void sstable::write_row_marker(file_writer& out, const rows_entry& clustered_row
     }
 }
 
-void sstable::write_range_tombstone(file_writer& out, const composite& clustering_prefix, std::vector<bytes_view> suffix, const tombstone t) {
+void sstable::write_range_tombstone(file_writer& out,
+        const composite& start,
+        bound_kind start_kind,
+        const composite& end,
+        bound_kind end_kind,
+        std::vector<bytes_view> suffix,
+        const tombstone t) {
     if (!t) {
         return;
     }
 
-    write_column_name(out, clustering_prefix, suffix, composite_marker::start_range);
+    auto start_marker = start_kind == bound_kind::excl_start
+                      ? composite_marker::end_range
+                      : composite_marker::start_range;
+    write_column_name(out, start, suffix, start_marker);
     column_mask mask = column_mask::range_tombstone;
     write(out, mask);
-    write_column_name(out, clustering_prefix, suffix, composite_marker::end_range);
+    auto end_marker = end_kind == bound_kind::excl_end
+                    ? composite_marker::start_range
+                    : composite_marker::end_range;
+    write_column_name(out, end, suffix, end_marker);
     uint64_t timestamp = t.timestamp;
     uint32_t deletion_time = t.deletion_time.time_since_epoch().count();
 
@@ -1198,7 +1211,7 @@ void sstable::write_collection(file_writer& out, const composite& clustering_key
     auto t = static_pointer_cast<const collection_type_impl>(cdef.type);
     auto mview = t->deserialize_mutation_form(collection);
     const bytes& column_name = cdef.name();
-    write_range_tombstone(out, clustering_key, { bytes_view(column_name) }, mview.tomb);
+    write_range_tombstone(out, clustering_key, clustering_key, { bytes_view(column_name) }, mview.tomb);
     for (auto& cp: mview.cells) {
         write_column_name(out, clustering_key, { column_name, cp.first });
         write_cell(out, cp.second);
@@ -1215,7 +1228,7 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
     }
     // Before writing cells, range tombstone must be written if the row has any (deletable_row::t).
     if (clustered_row.row().deleted_at()) {
-        write_range_tombstone(out, clustering_key, {}, clustered_row.row().deleted_at());
+        write_range_tombstone(out, clustering_key, clustering_key, {}, clustered_row.row().deleted_at());
     }
 
     // Write all cells of a partition's row.
@@ -1445,8 +1458,9 @@ void sstable::do_write_components(::mutation_reader mr,
 
         write_static_row(out, *schema, static_row);
         for (const auto& rt: partition.row_tombstones()) {
-            auto prefix = composite::from_clustering_element(*schema, rt.prefix());
-            write_range_tombstone(out, prefix, {}, rt.t());
+            auto start = composite::from_clustering_element(*schema, rt.start);
+            auto end = composite::from_clustering_element(*schema, rt.end);
+            write_range_tombstone(out, std::move(start), rt.start_kind, std::move(end), rt.end_kind, {}, rt.tomb);
         }
 
         // Write all CQL rows from a given mutation partition.

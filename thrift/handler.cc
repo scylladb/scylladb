@@ -196,7 +196,7 @@ public:
                 } else if (predicate.__isset.slice_range) {
                   auto&& range = predicate.slice_range;
                     auto s = cf.schema();
-                    return cf.find_row(s, dk, clustering_key::make_empty(*s)).then(
+                    return cf.find_row(s, dk, clustering_key::make_empty()).then(
                           [s, &cf, range = std::move(range)] (column_family::const_row_ptr rw) {
                     std::vector<ColumnOrSuperColumn> ret;
                     if (rw) {
@@ -319,7 +319,7 @@ public:
                     auto& cf = lookup_column_family(_db.local(), _ks_name, cf_name);
                     auto schema = cf.schema();
                     mutation m_to_apply(key_from_thrift(schema, thrift_key), schema);
-                    auto empty_clustering_key = clustering_key::make_empty(*schema);
+                    auto empty_clustering_key = clustering_key::make_empty();
                     for (const Mutation& m : mutations) {
                         if (m.__isset.column_or_supercolumn) {
                             auto&& cosc = m.column_or_supercolumn;

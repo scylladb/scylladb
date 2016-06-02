@@ -106,7 +106,7 @@ public:
             auto key = partition_key::from_deeply_exploded(*s, { random_key() });
             auto mut = mutation(key, s);
             for (auto& cdef: s->regular_columns()) {
-                mut.set_clustered_cell(clustering_key::make_empty(*s), cdef, atomic_cell::make_live(0, utf8_type->decompose(random_column())));
+                mut.set_clustered_cell(clustering_key::make_empty(), cdef, atomic_cell::make_live(0, utf8_type->decompose(random_column())));
             }
             _mt->apply(std::move(mut));
         }
@@ -166,7 +166,7 @@ public:
                     if (!m) {
                         *done = true;
                     } else {
-                        auto row = m->partition().find_row(clustering_key::make_empty(*s));
+                        auto row = m->partition().find_row(clustering_key::make_empty());
                         if (!row || row->size() != _cfg.num_columns) {
                             throw std::invalid_argument("Invalid sstable found. Maybe you ran write mode with different num_columns settings?");
                         } else {
