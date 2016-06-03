@@ -468,15 +468,7 @@ void row_cache::populate(const mutation& m) {
 }
 
 void row_cache::clear() {
-    with_allocator(_tracker.allocator(), [this] {
-        // We depend on clear_and_dispose() below not looking up any keys.
-        // Using with_linearized_managed_bytes() is no helps, because we don't
-        // want to propagate an exception from here.
-        _partitions.clear_and_dispose([this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
-            _tracker.on_erase();
-            deleter(p);
-        });
-    });
+    invalidate(query::full_partition_range);
 }
 
 future<> row_cache::update(memtable& m, partition_presence_checker presence_checker) {
