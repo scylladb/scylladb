@@ -205,9 +205,12 @@ public:
     }
 
     void get(tcxx::function<void(ColumnOrSuperColumn const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnPath& column_path, const ConsistencyLevel::type consistency_level) {
-        ColumnOrSuperColumn _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return get_slice([cob = std::move(cob), &column_path](auto&& results) {
+            if (results.empty()) {
+                throw NotFoundException();
+            }
+            return cob(std::move(results.front()));
+        }, exn_cob, key, column_path_to_column_parent(column_path), column_path_to_slice_predicate(column_path), std::move(consistency_level));
     }
 
     void get_slice(tcxx::function<void(std::vector<ColumnOrSuperColumn>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnParent& column_parent, const SlicePredicate& predicate, const ConsistencyLevel::type consistency_level) {
