@@ -50,7 +50,7 @@ options {
 #include "cql3/statements/raw/insert_statement.hh"
 #include "cql3/statements/raw/delete_statement.hh"
 #include "cql3/statements/index_prop_defs.hh"
-#include "cql3/statements/use_statement.hh"
+#include "cql3/statements/raw/use_statement.hh"
 #include "cql3/statements/raw/batch_statement.hh"
 #include "cql3/statements/create_user_statement.hh"
 #include "cql3/statements/alter_user_statement.hh"
@@ -345,8 +345,8 @@ cqlStatement returns [shared_ptr<raw::parsed_statement> stmt]
 /*
  * USE <KEYSPACE>;
  */
-useStatement returns [::shared_ptr<use_statement> stmt]
-    : K_USE ks=keyspaceName { $stmt = ::make_shared<use_statement>(ks); }
+useStatement returns [::shared_ptr<raw::use_statement> stmt]
+    : K_USE ks=keyspaceName { $stmt = ::make_shared<raw::use_statement>(ks); }
     ;
 
 /**

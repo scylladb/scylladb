@@ -41,40 +41,27 @@
 
 #pragma once
 
-#include "transport/messages_fwd.hh"
-#include "cql3/cql_statement.hh"
 #include "cql3/statements/raw/parsed_statement.hh"
-#include "prepared_statement.hh"
 
 namespace cql3 {
 
 namespace statements {
 
-class use_statement : public cql_statement_no_metadata {
+class prepared_statement;
+
+namespace raw {
+
+class use_statement : public parsed_statement {
 private:
     const sstring _keyspace;
 
 public:
     use_statement(sstring keyspace);
 
-    virtual uint32_t get_bound_terms() override;
-
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
-
-    virtual bool depends_on_keyspace(const sstring& ks_name) const override;
-
-    virtual bool depends_on_column_family(const sstring& cf_name) const override;
-
-    virtual future<> check_access(const service::client_state& state) override;
-
-    virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
-
-    virtual future<::shared_ptr<transport::messages::result_message>>
-    execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;
-
-    virtual future<::shared_ptr<transport::messages::result_message>>
-    execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;
+    virtual ::shared_ptr<prepared> prepare(database& db) override;
 };
+
+}
 
 }
 

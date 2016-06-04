@@ -40,6 +40,7 @@
  */
 
 #include "cql3/statements/use_statement.hh"
+#include "cql3/statements/raw/use_statement.hh"
 
 #include "transport/messages/result_message.hh"
 
@@ -57,14 +58,23 @@ uint32_t use_statement::get_bound_terms()
     return 0;
 }
 
+namespace raw {
+
+use_statement::use_statement(sstring keyspace)
+    : _keyspace(keyspace)
+{
+}
+
 ::shared_ptr<prepared_statement> use_statement::prepare(database& db)
 {
-    return ::make_shared<prepared>(this->shared_from_this());
+    return ::make_shared<prepared>(make_shared<cql3::statements::use_statement>(_keyspace));
+}
+
 }
 
 bool use_statement::uses_function(const sstring& ks_name, const sstring& function_name) const
 {
-    return parsed_statement::uses_function(ks_name, function_name);
+    return false;
 }
 
 bool use_statement::depends_on_keyspace(const sstring& ks_name) const
