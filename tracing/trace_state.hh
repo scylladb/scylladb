@@ -150,14 +150,14 @@ int trace_state::elapsed() {
 }
 
 template <typename... A>
-void begin(trace_state_ptr& p, A&&... a) {
+inline void begin(trace_state_ptr& p, A&&... a) {
     if (p) {
         p->begin(std::forward<A>(a)...);
     }
 }
 
 template <typename... A>
-void trace(trace_state_ptr& p, A&&... a) {
+inline void trace(trace_state_ptr& p, A&&... a) {
     if (p) {
         p->trace(std::forward<A>(a)...);
     }

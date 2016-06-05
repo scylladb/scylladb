@@ -84,7 +84,7 @@ trace_keyspace_helper::trace_keyspace_helper()
                                     "PRIMARY KEY ((session_id), event_id))", KEYSPACE_NAME, EVENTS);
 }
 
-future<> trace_keyspace_helper::setup_table(const sstring& name, const sstring& cql) {
+future<> trace_keyspace_helper::setup_table(const sstring& name, const sstring& cql) const {
     auto& qp = cql3::get_local_query_processor();
     auto& db = qp.db().local();
 
