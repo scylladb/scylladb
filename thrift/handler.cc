@@ -870,9 +870,21 @@ private:
         }
         return partition_key::from_single_value(*s, std::move(k));
     }
-    static bool is_dynamic(const schema& s) {
-        // FIXME: what about CFs created from CQL?
-        return s.clustering_key_size() > 0;
+    static db::consistency_level cl_from_thrift(const ConsistencyLevel::type consistency_level) {
+        switch(consistency_level) {
+        case ConsistencyLevel::type::ONE: return db::consistency_level::ONE;
+        case ConsistencyLevel::type::QUORUM: return db::consistency_level::QUORUM;
+        case ConsistencyLevel::type::LOCAL_QUORUM: return db::consistency_level::LOCAL_QUORUM;
+        case ConsistencyLevel::type::EACH_QUORUM: return db::consistency_level::EACH_QUORUM;
+        case ConsistencyLevel::type::ALL: return db::consistency_level::ALL;
+        case ConsistencyLevel::type::ANY: return db::consistency_level::ANY;
+        case ConsistencyLevel::type::TWO: return db::consistency_level::TWO;
+        case ConsistencyLevel::type::THREE: return db::consistency_level::THREE;
+        case ConsistencyLevel::type::SERIAL: return db::consistency_level::SERIAL;
+        case ConsistencyLevel::type::LOCAL_SERIAL: return db::consistency_level::LOCAL_SERIAL;
+        case ConsistencyLevel::type::LOCAL_ONE: return db::consistency_level::LOCAL_ONE;
+        default: throw make_exception<InvalidRequestException>("undefined consistency_level %s", consistency_level);
+        }
     }
 };
 
