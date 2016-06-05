@@ -49,3 +49,9 @@ bool is_system_error_errno(int err_no)
                code.category() == std::system_category();
     });
 }
+
+bool should_stop_on_system_error(const std::system_error& e) {
+    // We may whitelist transient errors in the future, but for now,
+    // be conservative.
+    return true;
+}
