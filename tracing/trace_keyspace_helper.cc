@@ -84,7 +84,7 @@ trace_keyspace_helper::trace_keyspace_helper()
                                     "PRIMARY KEY ((session_id), event_id))", KEYSPACE_NAME, EVENTS);
 }
 
-future<> trace_keyspace_helper::setup_table(const sstring& name, const sstring& cql) {
+future<> trace_keyspace_helper::setup_table(const sstring& name, const sstring& cql) const {
     auto& qp = cql3::get_local_query_processor();
     auto& db = qp.db().local();
 
@@ -281,10 +281,11 @@ future<> trace_keyspace_helper::flush_one_session_mutations(utils::UUID session_
 }
 
 void trace_keyspace_helper::flush() {
+    logger.debug("flushing {} sessions", _mutation_makers.size());
     parallel_for_each(_mutation_makers,[this](decltype(_mutation_makers)::value_type& uuid_mutation_makers) {
         return with_gate(_pending_writes, [this, &uuid_mutation_makers]  {
             logger.debug("{}: flushing traces", uuid_mutation_makers.first);
-            return this->flush_one_session_mutations(uuid_mutation_makers.first, uuid_mutation_makers.second);
+            return this->flush_one_session_mutations(uuid_mutation_makers.first, uuid_mutation_makers.second).finally([] { tracing::get_local_tracing_instance().flush_complete(); });
         }).handle_exception([this] (auto ep) {
             try {
                 ++_stats.tracing_errors;

@@ -659,16 +659,22 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::set_trace_probability.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
         auto probability = req->get_query_param("probability");
-        return make_ready_future<json::json_return_type>(json_void());
+        try {
+            double real_prob = std::stod(probability.c_str());
+            return tracing::tracing::tracing_instance().invoke_on_all([real_prob] (auto& local_tracing) {
+                local_tracing.set_trace_probability(real_prob);
+            }).then([] {
+                return make_ready_future<json::json_return_type>(json_void());
+            });
+        } catch (...) {
+            throw httpd::bad_param_exception(sprint("Bad format of a probability value: \"%s\"", probability.c_str()));
+        }
+
     });
 
     ss::get_trace_probability.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+        return make_ready_future<json::json_return_type>(tracing::tracing::get_local_tracing_instance().get_trace_probability());
     });
 
     ss::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<request> req) {

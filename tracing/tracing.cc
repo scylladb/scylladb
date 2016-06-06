@@ -53,7 +53,8 @@ std::vector<sstring> trace_type_names = {
 };
 
 tracing::tracing(const sstring& tracing_backend_helper_class_name)
-        : _thread_name(to_sstring(engine().cpu_id()))
+        : _flush_timer([this] { flush_timer_callback(); })
+        , _thread_name(to_sstring(engine().cpu_id()))
         , _registrations{
             scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
                     , scollectd::per_cpu_plugin_instance
@@ -69,8 +70,17 @@ tracing::tracing(const sstring& tracing_backend_helper_class_name)
                     , scollectd::make_typed(scollectd::data_type::DERIVE, stats.trace_events_count)),
             scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
                     , scollectd::per_cpu_plugin_instance
-                    , "queue_length", "pending_sessions")
-                    , scollectd::make_typed(scollectd::data_type::GAUGE, _pending_sessions))} {
+                    , "queue_length", "active_sessions")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE, _active_sessions)),
+            scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
+                    , scollectd::per_cpu_plugin_instance
+                    , "queue_length", "pending_for_flush_sessions")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE, _pending_for_flush_sessions)),
+            scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
+                    , scollectd::per_cpu_plugin_instance
+                    , "queue_length", "flushing_sessions")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE, _flushing_sessions))}
+        , _gen(std::random_device()()) {
     try {
         _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(tracing_backend_helper_class_name);
     } catch (no_such_class& e) {
@@ -92,7 +102,7 @@ future<> tracing::create_tracing(const sstring& tracing_backend_class_name) {
 trace_state_ptr tracing::create_session(trace_type type, bool flush_on_close, const std::experimental::optional<utils::UUID>& session_id) {
     trace_state_ptr tstate;
     try {
-        if (_pending_sessions > max_pending_sessions) {
+        if (_active_sessions + _pending_for_flush_sessions + _flushing_sessions > 2 * max_pending_for_flush_sessions) {
             if (session_id) {
                 logger.trace("{}: Maximum sessions count is reached. Dropping a secondary session", session_id);
             } else {
@@ -100,12 +110,14 @@ trace_state_ptr tracing::create_session(trace_type type, bool flush_on_close, co
             }
 
             if (++stats.max_sessions_threshold_hits % tracing::max_threshold_hits_warning_period == 1) {
-                logger.warn("Maximum sessions limit is hit {} times", stats.max_sessions_threshold_hits);
+                logger.warn("Maximum sessions limit is hit {} times: open_sessions {}, pending_for_flush_sessions {}, flushing_sessions {}",
+                            stats.max_sessions_threshold_hits, _active_sessions, _pending_for_flush_sessions, _flushing_sessions);
             }
 
             return trace_state_ptr();
         }
-        ++_pending_sessions;
+
+        ++_active_sessions;
         return make_lw_shared<trace_state>(type, flush_on_close, session_id);
     } catch (...) {
         // return an uninitialized state in case of any error (OOM?)
@@ -113,11 +125,40 @@ trace_state_ptr tracing::create_session(trace_type type, bool flush_on_close, co
     }
 }
 
+future<> tracing::start() {
+    return _tracing_backend_helper_ptr->start().then([this] {
+        _flush_timer.arm(flush_period);
+    });
+}
+
+void tracing::flush_timer_callback() {
+    if (_stopped) {
+        return;
+    }
+
+    logger.debug("Timer kicks in: {}", _pending_for_flush_sessions ? "flushing" : "not flushing");
+    flush_pending_records();
+    _flush_timer.arm(flush_period);
+}
+
 future<> tracing::stop() {
     logger.info("Asked to stop");
+    _stopped = true;
+    _flush_timer.cancel();
     return _tracing_backend_helper_ptr->stop().then([] {
         logger.info("Tracing is down");
     });
+}
+
+void tracing::set_trace_probability(double p) {
+    if (p < 0 || p > 1) {
+        throw std::invalid_argument("trace probability must be in a [0,1] range");
+    }
+
+    _trace_probability = p;
+    _normalized_trace_probability = std::llround(_trace_probability * (_gen.max() + 1));
+
+    logger.info("Setting tracing probability to {} (normalized {})", _trace_probability, _normalized_trace_probability);
 }
 }
 

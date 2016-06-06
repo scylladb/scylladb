@@ -42,6 +42,7 @@
 
 #include <vector>
 #include <atomic>
+#include <random>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/sstring.hh>
 #include "gc_clock.hh"
@@ -51,6 +52,7 @@
 namespace tracing {
 
 class trace_state;
+class tracing;
 
 enum class trace_type : uint8_t {
     NONE,
@@ -137,17 +139,23 @@ struct i_tracing_backend_helper {
                                     int elapsed,
                                     gc_clock::duration ttl) = 0;
 
+private:
     /**
      * Commit all pending tracing records to the underlying storage.
+     * The implementation has to call tracing::tracing::flush_complete(nr) for
+     * each "nr" completed records once they are written to the backend.
      */
     virtual void flush() = 0;
+
+    friend class tracing;
 };
 
 using trace_state_ptr = lw_shared_ptr<trace_state>;
 
 class tracing {
 public:
-    static constexpr int max_pending_sessions = 100;
+    static constexpr gc_clock::duration flush_period = std::chrono::seconds(2);
+    static constexpr int max_pending_for_flush_sessions = 1000;
     static constexpr int max_trace_events_per_session = 30;
     // Number of max threshold XXX hits when an info message is printed
     static constexpr int max_threshold_hits_warning_period = 10000;
@@ -159,10 +167,17 @@ public:
     } stats;
 
 private:
-    uint64_t _pending_sessions = 0;
+    uint64_t _active_sessions = 0;
+    uint64_t _pending_for_flush_sessions = 0;
+    uint64_t _flushing_sessions = 0;
+    timer<lowres_clock> _flush_timer;
+    bool _stopped = false;
     std::unique_ptr<i_tracing_backend_helper> _tracing_backend_helper_ptr;
     sstring _thread_name;
     scollectd::registrations _registrations;
+    double _trace_probability = 0.0; // keep this one for querying purposes
+    uint64_t _normalized_trace_probability = 0;
+    std::ranlux48_base _gen;
 
 public:
     i_tracing_backend_helper& backend_helper() {
@@ -188,10 +203,23 @@ public:
     tracing(const sstring& tracing_backend_helper_class_name);
 
     // Initialize a tracing backend (e.g. tracing_keyspace or logstash)
-    future<> start() { return _tracing_backend_helper_ptr->start(); }
+    future<> start();
 
     // waits until all active tracing sessions are over.
     future<> stop();
+
+    void flush_pending_records() {
+        _flushing_sessions += _pending_for_flush_sessions;
+        _pending_for_flush_sessions = 0;
+        _tracing_backend_helper_ptr->flush();
+    }
+
+    void flush_complete(uint64_t nr = 1) {
+        if (nr > _flushing_sessions) {
+            throw std::logic_error("completing more sessions than there are pending");
+        }
+        _flushing_sessions -= nr;
+    }
 
     /**
      * Create a new tracing session.
@@ -205,7 +233,31 @@ public:
     trace_state_ptr create_session(trace_type type, bool flush_on_close, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt);
 
     void end_session() {
-        --_pending_sessions;
+        --_active_sessions;
+        ++_pending_for_flush_sessions;
+        if (_pending_for_flush_sessions >= max_pending_for_flush_sessions) {
+            flush_pending_records();
+        }
     }
+
+    /**
+     * Sets a probability for tracing a CQL request.
+     *
+     * @param p a new tracing probability - a floating point value in a [0,1]
+     *          range. It would effectively define a portion of CQL requests
+     *          initiated on the current Node that will be traced.
+     * @throw std::invalid_argument if @ref p is out of range
+     */
+    void set_trace_probability(double p);
+    double get_trace_probability() const {
+        return _trace_probability;
+    }
+
+    bool trace_next_query() {
+        return _normalized_trace_probability != 0 && _gen() < _normalized_trace_probability;
+    }
+
+private:
+    void flush_timer_callback();
 };
 }

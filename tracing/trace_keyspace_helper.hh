@@ -107,7 +107,6 @@ public:
     // requested during the initialization phase.
     virtual future<> start() override;
 
-    virtual void flush() override;
     virtual future<> stop() override {
         flush();
         return _pending_writes.close();
@@ -128,6 +127,8 @@ public:
                                     gc_clock::duration ttl) override;
 
 private:
+    virtual void flush() override;
+
     /**
      * Tries to create a table with a given name and using the provided CQL
      * command.
@@ -138,7 +139,7 @@ private:
      * @return A future that resolves when the operation is complete. Any
      *         possible errors are ignored.
      */
-    future<> setup_table(const sstring& name, const sstring& cql);
+    future<> setup_table(const sstring& name, const sstring& cql) const;
 
     /**
      * Flush mutations of one particular tracing session. First "events"
@@ -171,7 +172,7 @@ private:
      * @return a schema_ptr as requested
      */
     template <typename ColumnsHandlesChecker>
-    schema_ptr get_schema_ptr_or_create(utils::UUID& id, const sstring& table_name, const sstring& cql, ColumnsHandlesChecker check_and_cache);
+    inline schema_ptr get_schema_ptr_or_create(utils::UUID& id, const sstring& table_name, const sstring& cql, ColumnsHandlesChecker check_and_cache) const;
 
     /**
      * Cache definitions of a system_traces.sessions table: table ID and column
@@ -226,7 +227,7 @@ public:
 };
 
 template <typename ColumnsHandlesChecker>
-schema_ptr trace_keyspace_helper::get_schema_ptr_or_create(utils::UUID& id, const sstring& table_name, const sstring& cql, ColumnsHandlesChecker check_and_cache) {
+schema_ptr trace_keyspace_helper::get_schema_ptr_or_create(utils::UUID& id, const sstring& table_name, const sstring& cql, ColumnsHandlesChecker check_and_cache) const {
     auto& db = cql3::get_local_query_processor().db().local();
     schema_ptr schema;
     try {

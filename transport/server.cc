@@ -620,6 +620,8 @@ future<> cql_server::connection::process_request() {
             // If tracing is requested for a specific CQL command - flush
             // tracing info right after the command is over.
             tracing_requested = tracing_request_type::flush_on_close;
+        } else if (tracing::tracing::get_local_tracing_instance().trace_next_query()) {
+            tracing_requested = tracing_request_type::no_flush_on_close;
         }
 
         auto op = f.opcode;
