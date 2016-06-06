@@ -456,7 +456,7 @@ public:
     future<> flush();
     future<> flush(const db::replay_position&);
     future<> flush_streaming_mutations(std::vector<query::partition_range> ranges = std::vector<query::partition_range>{});
-    void clear(); // discards memtable(s) without flushing them to disk.
+    future<> clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);
 
     // Important warning: disabling writes will only have an effect in the current shard.

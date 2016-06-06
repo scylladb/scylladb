@@ -993,7 +993,7 @@ column_family::load_new_sstables(std::vector<sstables::entry_descriptor> new_tab
     }).then([this] {
         // Drop entire cache for this column family because it may be populated
         // with stale data.
-        get_row_cache().clear();
+        return get_row_cache().clear();
     });
 }
 
@@ -2196,7 +2196,7 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
         // gotten all things to disk. Again, need queue-ish or something.
         f = cf.flush();
     } else {
-        cf.clear();
+        f = cf.clear();
     }
 
     return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, tsf = std::move(tsf)]() mutable {
@@ -2572,21 +2572,24 @@ future<> column_family::flush_streaming_mutations(std::vector<query::partition_r
     // temporary counter measure.
     return with_gate(_streaming_flush_gate, [this, ranges = std::move(ranges)] {
         return seal_active_streaming_memtable_delayed().finally([this, ranges = std::move(ranges)] {
-            if (_config.enable_cache) {
-                for (auto& range : ranges) {
-                    _cache.invalidate(range);
-                }
+            if (!_config.enable_cache) {
+                return make_ready_future<>();
             }
+            return do_with(std::move(ranges), [this] (auto& ranges) {
+                return parallel_for_each(ranges, [this](auto&& range) {
+                    return _cache.invalidate(range);
+                });
+            });
         });
     });
 }
 
-void column_family::clear() {
-    _cache.clear();
+future<> column_family::clear() {
     _memtables->clear();
     _memtables->add_memtable();
     _streaming_memtables->clear();
     _streaming_memtables->add_memtable();
+    return _cache.clear();
 }
 
 // NOTE: does not need to be futurized, but might eventually, depending on
@@ -2613,13 +2616,13 @@ future<db::replay_position> column_family::discard_sstables(db_clock::time_point
 
         _sstables = std::move(pruned);
         dblog.debug("cleaning out row cache");
-        _cache.clear();
-
-        return parallel_for_each(remove, [](sstables::shared_sstable s) {
-            return sstables::delete_atomically({s});
-        }).then([rp] {
-            return make_ready_future<db::replay_position>(rp);
-        }).finally([remove] {}); // keep the objects alive until here.
+        return _cache.clear().then([rp, remove = std::move(remove)] () mutable {
+            return parallel_for_each(remove, [](sstables::shared_sstable s) {
+                return sstables::delete_atomically({s});
+            }).then([rp] {
+                return make_ready_future<db::replay_position>(rp);
+            }).finally([remove] {}); // keep the objects alive until here.
+        });
     });
 }
 
