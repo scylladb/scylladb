@@ -13,3 +13,5 @@ RUN	chown -R scylla:scylla /start-scylla
 USER 	scylla
 EXPOSE 	10000 9042 9160 7000 7001
 VOLUME 	/var/lib/scylla
+
+CMD /start-scylla && /bin/bash
