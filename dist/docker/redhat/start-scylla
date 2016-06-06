@@ -1,10 +1,16 @@
 #!/bin/sh
 
+if [ "$production" == "true" ]; then
+	DEV_MODE=""
+else
+	DEV_MODE="--developer-mode true"
+fi
+
 IP=$(hostname -i)
 sed -e "s/seeds:.*/seeds: $IP/g" /var/lib/scylla/conf/scylla.yaml > $HOME/scylla.yaml
 /usr/bin/scylla --log-to-syslog 1 \
                 --log-to-stdout 0 \
-                --developer-mode true \
+                $DEV_MODE \
                 --default-log-level info \
                 --options-file $HOME/scylla.yaml \
                 --listen-address $IP \
