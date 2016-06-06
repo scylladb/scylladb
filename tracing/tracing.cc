@@ -53,7 +53,8 @@ std::vector<sstring> trace_type_names = {
 };
 
 tracing::tracing(const sstring& tracing_backend_helper_class_name)
-        : _thread_name(to_sstring(engine().cpu_id()))
+        : _flush_timer([this] { flush_timer_callback(); })
+        , _thread_name(to_sstring(engine().cpu_id()))
         , _registrations{
             scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
                     , scollectd::per_cpu_plugin_instance
@@ -123,8 +124,26 @@ trace_state_ptr tracing::create_session(trace_type type, bool flush_on_close, co
     }
 }
 
+future<> tracing::start() {
+    return _tracing_backend_helper_ptr->start().then([this] {
+        _flush_timer.arm(flush_period);
+    });
+}
+
+void tracing::flush_timer_callback() {
+    if (_stopped) {
+        return;
+    }
+
+    logger.debug("Timer kicks in: {}", _pending_for_flush_sessions ? "flushing" : "not flushing");
+    flush_pending_records();
+    _flush_timer.arm(flush_period);
+}
+
 future<> tracing::stop() {
     logger.info("Asked to stop");
+    _stopped = true;
+    _flush_timer.cancel();
     return _tracing_backend_helper_ptr->stop().then([] {
         logger.info("Tracing is down");
     });

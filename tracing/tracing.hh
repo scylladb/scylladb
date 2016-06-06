@@ -42,6 +42,7 @@
 
 #include <vector>
 #include <atomic>
+#include <random>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/sstring.hh>
 #include "gc_clock.hh"
@@ -153,6 +154,7 @@ using trace_state_ptr = lw_shared_ptr<trace_state>;
 
 class tracing {
 public:
+    static constexpr gc_clock::duration flush_period = std::chrono::seconds(2);
     static constexpr int max_pending_for_flush_sessions = 1000;
     static constexpr int max_trace_events_per_session = 30;
     // Number of max threshold XXX hits when an info message is printed
@@ -168,6 +170,8 @@ private:
     uint64_t _active_sessions = 0;
     uint64_t _pending_for_flush_sessions = 0;
     uint64_t _flushing_sessions = 0;
+    timer<lowres_clock> _flush_timer;
+    bool _stopped = false;
     std::unique_ptr<i_tracing_backend_helper> _tracing_backend_helper_ptr;
     sstring _thread_name;
     scollectd::registrations _registrations;
@@ -196,7 +200,7 @@ public:
     tracing(const sstring& tracing_backend_helper_class_name);
 
     // Initialize a tracing backend (e.g. tracing_keyspace or logstash)
-    future<> start() { return _tracing_backend_helper_ptr->start(); }
+    future<> start();
 
     // waits until all active tracing sessions are over.
     future<> stop();
@@ -232,5 +236,8 @@ public:
             flush_pending_records();
         }
     }
+
+private:
+    void flush_timer_callback();
 };
 }
