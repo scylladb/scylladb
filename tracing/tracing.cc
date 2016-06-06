@@ -79,7 +79,8 @@ tracing::tracing(const sstring& tracing_backend_helper_class_name)
             scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
                     , scollectd::per_cpu_plugin_instance
                     , "queue_length", "flushing_sessions")
-                    , scollectd::make_typed(scollectd::data_type::GAUGE, _flushing_sessions))} {
+                    , scollectd::make_typed(scollectd::data_type::GAUGE, _flushing_sessions))}
+        , _gen(std::random_device()()) {
     try {
         _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(tracing_backend_helper_class_name);
     } catch (no_such_class& e) {
@@ -147,6 +148,17 @@ future<> tracing::stop() {
     return _tracing_backend_helper_ptr->stop().then([] {
         logger.info("Tracing is down");
     });
+}
+
+void tracing::set_trace_probability(double p) {
+    if (p < 0 || p > 1) {
+        throw std::invalid_argument("trace probability must be in a [0,1] range");
+    }
+
+    _trace_probability = p;
+    _normalized_trace_probability = std::llround(_trace_probability * (_gen.max() + 1));
+
+    logger.info("Setting tracing probability to {} (normalized {})", _trace_probability, _normalized_trace_probability);
 }
 }
 

@@ -175,6 +175,9 @@ private:
     std::unique_ptr<i_tracing_backend_helper> _tracing_backend_helper_ptr;
     sstring _thread_name;
     scollectd::registrations _registrations;
+    double _trace_probability = 0.0; // keep this one for querying purposes
+    uint64_t _normalized_trace_probability = 0;
+    std::ranlux48_base _gen;
 
 public:
     i_tracing_backend_helper& backend_helper() {
@@ -235,6 +238,23 @@ public:
         if (_pending_for_flush_sessions >= max_pending_for_flush_sessions) {
             flush_pending_records();
         }
+    }
+
+    /**
+     * Sets a probability for tracing a CQL request.
+     *
+     * @param p a new tracing probability - a floating point value in a [0,1]
+     *          range. It would effectively define a portion of CQL requests
+     *          initiated on the current Node that will be traced.
+     * @throw std::invalid_argument if @ref p is out of range
+     */
+    void set_trace_probability(double p);
+    double get_trace_probability() const {
+        return _trace_probability;
+    }
+
+    bool trace_next_query() {
+        return _normalized_trace_probability != 0 && _gen() < _normalized_trace_probability;
     }
 
 private:
