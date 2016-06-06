@@ -154,7 +154,7 @@ using trace_state_ptr = lw_shared_ptr<trace_state>;
 
 class tracing {
 public:
-    static constexpr gc_clock::duration flush_period = std::chrono::seconds(2);
+    static const gc_clock::duration flush_period;
     static constexpr int max_pending_for_flush_sessions = 1000;
     static constexpr int max_trace_events_per_session = 30;
     // Number of max threshold XXX hits when an info message is printed

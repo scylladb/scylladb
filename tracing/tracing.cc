@@ -45,6 +45,8 @@
 namespace tracing {
 
 static logging::logger logger("tracing");
+const gc_clock::duration tracing::tracing::flush_period = std::chrono::seconds(2);
+
 
 std::vector<sstring> trace_type_names = {
     "NONE",
