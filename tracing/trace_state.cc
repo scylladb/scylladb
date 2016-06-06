@@ -63,8 +63,10 @@ trace_state::~trace_state() {
             tracing::get_local_tracing_instance().backend_helper().store_session_record(_session_id, _client, std::move(_params), std::move(_request), _started_at, _type, elapsed(), _ttl);
         }
 
+        tracing::get_local_tracing_instance().end_session();
+
         if (_flush_on_close) {
-            tracing::get_local_tracing_instance().backend_helper().flush();
+            tracing::get_local_tracing_instance().flush_pending_records();
         }
 
         // update some stats and get out...
@@ -79,8 +81,6 @@ trace_state::~trace_state() {
                 logger.warn("Maximum traces per session limit is hit {} times", tracing_stats.max_traces_threshold_hits);
             }
         }
-
-        tracing::get_local_tracing_instance().end_session();
     }
 }
 }

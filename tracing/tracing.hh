@@ -51,6 +51,7 @@
 namespace tracing {
 
 class trace_state;
+class tracing;
 
 enum class trace_type : uint8_t {
     NONE,
@@ -137,17 +138,22 @@ struct i_tracing_backend_helper {
                                     int elapsed,
                                     gc_clock::duration ttl) = 0;
 
+private:
     /**
      * Commit all pending tracing records to the underlying storage.
+     * The implementation has to call tracing::tracing::flush_complete(nr) for
+     * each "nr" completed records once they are written to the backend.
      */
     virtual void flush() = 0;
+
+    friend class tracing;
 };
 
 using trace_state_ptr = lw_shared_ptr<trace_state>;
 
 class tracing {
 public:
-    static constexpr int max_pending_sessions = 100;
+    static constexpr int max_pending_for_flush_sessions = 1000;
     static constexpr int max_trace_events_per_session = 30;
     // Number of max threshold XXX hits when an info message is printed
     static constexpr int max_threshold_hits_warning_period = 10000;
@@ -159,7 +165,9 @@ public:
     } stats;
 
 private:
-    uint64_t _pending_sessions = 0;
+    uint64_t _active_sessions = 0;
+    uint64_t _pending_for_flush_sessions = 0;
+    uint64_t _flushing_sessions = 0;
     std::unique_ptr<i_tracing_backend_helper> _tracing_backend_helper_ptr;
     sstring _thread_name;
     scollectd::registrations _registrations;
@@ -193,6 +201,19 @@ public:
     // waits until all active tracing sessions are over.
     future<> stop();
 
+    void flush_pending_records() {
+        _flushing_sessions += _pending_for_flush_sessions;
+        _pending_for_flush_sessions = 0;
+        _tracing_backend_helper_ptr->flush();
+    }
+
+    void flush_complete(uint64_t nr = 1) {
+        if (nr > _flushing_sessions) {
+            throw std::logic_error("completing more sessions than there are pending");
+        }
+        _flushing_sessions -= nr;
+    }
+
     /**
      * Create a new tracing session.
      *
@@ -205,7 +226,11 @@ public:
     trace_state_ptr create_session(trace_type type, bool flush_on_close, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt);
 
     void end_session() {
-        --_pending_sessions;
+        --_active_sessions;
+        ++_pending_for_flush_sessions;
+        if (_pending_for_flush_sessions >= max_pending_for_flush_sessions) {
+            flush_pending_records();
+        }
     }
 };
 }

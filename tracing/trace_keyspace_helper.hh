@@ -107,7 +107,6 @@ public:
     // requested during the initialization phase.
     virtual future<> start() override;
 
-    virtual void flush() override;
     virtual future<> stop() override {
         flush();
         return _pending_writes.close();
@@ -128,6 +127,8 @@ public:
                                     gc_clock::duration ttl) override;
 
 private:
+    virtual void flush() override;
+
     /**
      * Tries to create a table with a given name and using the provided CQL
      * command.
