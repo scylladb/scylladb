@@ -196,7 +196,7 @@ inline ihistogram operator +(ihistogram a, const ihistogram& b) {
 struct rate_moving_average {
     uint64_t count = 0;
     double rates[3] = {0};
-    double mean_rate;
+    double mean_rate = 0;
     rate_moving_average& operator +=(const rate_moving_average& o) {
         count += o.count;
         mean_rate += o.mean_rate;
