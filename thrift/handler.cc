@@ -348,8 +348,7 @@ public:
                         [this, thrift_key] (std::pair<std::string, std::vector<Mutation>> cf_mutations) {
                     sstring cf_name = cf_mutations.first;
                     const std::vector<Mutation>& mutations = cf_mutations.second;
-                    auto& cf = lookup_column_family(_db.local(), current_keyspace(), cf_name);
-                    auto schema = cf.schema();
+                    auto schema = lookup_schema(_db.local(), current_keyspace(), cf_name);
                     mutation m_to_apply(key_from_thrift(schema, thrift_key), schema);
                     auto empty_clustering_key = clustering_key::make_empty();
                     for (const Mutation& m : mutations) {
@@ -358,7 +357,7 @@ public:
                             if (cosc.__isset.column) {
                                 auto&& col = cosc.column;
                                 bytes cname = to_bytes(col.name);
-                                auto def = cf.schema()->get_column_definition(cname);
+                                auto def = schema->get_column_definition(cname);
                                 if (!def) {
                                     throw make_exception<InvalidRequestException>("column %s not found", col.name);
                                 }
@@ -370,7 +369,7 @@ public:
                                     ttl = std::chrono::duration_cast<gc_clock::duration>(std::chrono::seconds(col.ttl));
                                 }
                                 if (ttl.count() <= 0) {
-                                    ttl = cf.schema()->default_time_to_live();
+                                    ttl = schema->default_time_to_live();
                                 }
                                 ttl_opt maybe_ttl;
                                 if (ttl.count() > 0) {
@@ -997,11 +996,17 @@ private:
             std::move(cf_defs));
     }
     static column_family& lookup_column_family(database& db, const sstring& ks_name, const sstring& cf_name) {
+        if (ks_name.empty()) {
+            throw make_exception<InvalidRequestException>("keyspace not set");
+        }
         try {
             return db.find_column_family(ks_name, cf_name);
-        } catch (std::out_of_range&) {
+        } catch (no_such_column_family&) {
             throw make_exception<InvalidRequestException>("column family %s not found", cf_name);
         }
+    }
+    static schema_ptr lookup_schema(database& db, const sstring& ks_name, const sstring& cf_name) {
+        return lookup_column_family(db, ks_name, cf_name).schema();
     }
     static partition_key key_from_thrift(schema_ptr s, bytes k) {
         if (s->partition_key_size() != 1) {
