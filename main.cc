@@ -540,7 +540,6 @@ int main(int ac, char** av) {
             api::set_server_storage_service(ctx).get();
             api::set_server_gossip(ctx).get();
             api::set_server_snitch(ctx).get();
-            api::set_server_messaging_service(ctx).get();
             api::set_server_storage_proxy(ctx).get();
             api::set_server_load_sstable(ctx).get();
             supervisor_notify("initializing migration manager RPC verbs");
@@ -566,6 +565,7 @@ int main(int ac, char** av) {
             supervisor_notify("starting storage service", true);
             auto& ss = service::get_local_storage_service();
             ss.init_server().get();
+            api::set_server_messaging_service(ctx).get();
             api::set_server_storage_service(ctx).get();
             supervisor_notify("starting batchlog manager");
             db::get_batchlog_manager().invoke_on_all([] (db::batchlog_manager& b) {
