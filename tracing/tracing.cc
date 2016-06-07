@@ -194,7 +194,7 @@ future<> tracing::stop() {
 
 void tracing::set_trace_probability(double p) {
     if (p < 0 || p > 1) {
-        throw std::invalid_argument("trace probability must be in a [0,1] range");
+        throw std::out_of_range("trace probability must be in a [0,1] range");
     }
 
     _trace_probability = p;
