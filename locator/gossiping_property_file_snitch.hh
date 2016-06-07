@@ -62,7 +62,7 @@ namespace locator {
 class gossiping_property_file_snitch : public production_snitch_base {
 public:
     // Check the property file for changes every 60s.
-    static constexpr timer<>::duration reload_property_file_period() {
+    static constexpr timer<lowres_clock>::duration reload_property_file_period() {
         return std::chrono::seconds(60);
     }
 
@@ -133,7 +133,7 @@ private:
     void start_io();
 
 private:
-    timer<> _file_reader;
+    timer<lowres_clock> _file_reader;
     std::experimental::optional<timespec> _last_file_mod;
     std::istringstream _istrm;
     bool _file_reader_runs = false;
