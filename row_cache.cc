@@ -57,6 +57,7 @@ cache_tracker::cache_tracker() {
             }
             _lru.pop_back_and_dispose(current_deleter<cache_entry>());
             --_partitions;
+            ++_evictions;
             ++_modification_count;
             return memory::reclaiming_result::reclaimed_something;
            } catch (std::bad_alloc&) {
@@ -109,6 +110,16 @@ cache_tracker::setup_collectd() {
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("cache"
                 , scollectd::per_cpu_plugin_instance
+                , "total_operations", "evictions")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _evictions)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "removals")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _removals)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
+                , scollectd::per_cpu_plugin_instance
                 , "objects", "partitions")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, _partitions)
         ),
@@ -119,6 +130,7 @@ void cache_tracker::clear() {
     with_allocator(_region.allocator(), [this] {
         _lru.clear_and_dispose(current_deleter<cache_entry>());
     });
+    _removals += _partitions;
     _partitions = 0;
     ++_modification_count;
 }
@@ -137,6 +149,7 @@ void cache_tracker::insert(cache_entry& entry) {
 
 void cache_tracker::on_erase() {
     --_partitions;
+    ++_removals;
     ++_modification_count;
 }
 
