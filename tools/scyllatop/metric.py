@@ -23,6 +23,9 @@ class Metric(object):
 
     def update(self):
         response = self._collectd.query('GETVAL "{metric}"'.format(metric=self._symbol))
+        if response is None:
+            self.markAbsent()
+            return
         for line in response:
             match = self._METRIC_INFO_PATTERN.search(line)
             if match is None:
@@ -30,7 +33,11 @@ class Metric(object):
             key = match.groupdict()['key']
             value = match.groupdict()['value']
             self._status[key] = value
-            logging.debug( '{}: {}'.format( self.symbol, line.strip() ) )
+            logging.debug('{}: {}'.format(self.symbol, line.strip()))
+
+    def markAbsent(self):
+        for key in self._status.keys():
+            self._status[key] = 'not available'
 
     @classmethod
     def discover(cls, collectd):

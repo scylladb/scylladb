@@ -17,15 +17,34 @@ class Aggregate(base.Base):
         self.refresh()
 
     def _prepareTable(self, groups):
-        mean = lambda vector: sum(float(x) for x in vector) / len(vector)
-        _sum = lambda vector: sum(float(x) for x in vector)
         result = table.Table('lr')
         for group in groups:
             formatted = 'avg[{0}] tot[{1}]'.format(
-                helpers.formatValues(group.aggregate(mean)),
-                helpers.formatValues(group.aggregate(_sum)))
+                helpers.formatValues(group.aggregate(self._mean)),
+                helpers.formatValues(group.aggregate(self._sum)))
             result.add(self._label(group), formatted)
         return result
+
+    def _mean(self, values):
+        valid = self._valid(values)
+        if len(valid) == 0:
+            return 'not available'
+        return sum(x for x in valid) / len(valid)
+
+    def _sum(self, values):
+        valid = self._valid(values)
+        return sum(x for x in valid)
+
+    def _valid(self, values):
+        floats = [self._float(value) for value in values]
+        valid = filter(lambda x: x is not None, floats)
+        return valid
+
+    def _float(self, value):
+        try:
+            return float(value)
+        except ValueError:
+            return None
 
     def _label(self, group):
         label = '{label}({size})'.format(label=group.label, size=group.size)

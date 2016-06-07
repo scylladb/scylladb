@@ -43,6 +43,8 @@ class Collectd(object):
 
     def _readLines(self):
         line = self._lineReader.readline()
+        if line.strip() == '-1 No such value':
+            return None
         match = self._FIRST_LINE_PATTERN.search(line)
         if match is None:
             raise parseexception.ParseException('could not parse first line of response from collectd: {0}'.format(line))
