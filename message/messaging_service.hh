@@ -194,6 +194,9 @@ public:
     void start_listen();
     uint16_t port();
     gms::inet_address listen_address();
+    future<> stop_tls_server();
+    future<> stop_nontls_server();
+    future<> stop_client();
     future<> stop();
     static rpc::no_wait_type no_wait();
     bool is_stopping() { return _stopping; }
