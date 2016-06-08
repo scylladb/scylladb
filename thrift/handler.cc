@@ -250,9 +250,25 @@ public:
     }
 
     void multiget_count(tcxx::function<void(std::map<std::string, int32_t>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::vector<std::string> & keys, const ColumnParent& column_parent, const SlicePredicate& predicate, const ConsistencyLevel::type consistency_level) {
-        std::map<std::string, int32_t>  _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        with_cob(std::move(cob), std::move(exn_cob), [&] {
+            if (!column_parent.super_column.empty()) {
+                fail(unimplemented::cause::SUPER);
+            }
+            auto schema = lookup_schema(_db.local(), current_keyspace(), column_parent.column_family);
+            auto cmd = slice_pred_to_read_cmd(*schema, predicate);
+            auto cell_limit = predicate.__isset.slice_range ? static_cast<uint32_t>(predicate.slice_range.count) : std::numeric_limits<uint32_t>::max();
+            return service::get_local_storage_proxy().query(
+                    schema,
+                    cmd,
+                    make_partition_ranges(*schema, keys),
+                    cl_from_thrift(consistency_level)).then([schema, cmd, cell_limit](auto&& result) {
+                return query::result_view::do_with(*result, [schema, cmd, cell_limit](query::result_view v) {
+                    column_counter counter(*schema, cmd->slice, cell_limit);
+                    v.consume(cmd->slice, counter);
+                    return counter.release();
+                });
+            });
+        });
     }
 
     void get_range_slices(tcxx::function<void(std::vector<KeySlice>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const ColumnParent& column_parent, const SlicePredicate& predicate, const KeyRange& range, const ConsistencyLevel::type consistency_level) {
@@ -1212,6 +1228,13 @@ private:
         }
     };
     using column_aggregator = column_visitor<column_or_supercolumn_builder>;
+    struct counter {
+        using type = int32_t;
+        void on_column(int32_t* current_cols, const bytes_view& name, const query::result_atomic_cell_view& cell) {
+            *current_cols += 1;
+        }
+    };
+    using column_counter = column_visitor<counter>;
 };
 
 class handler_factory : public CassandraCobSvIfFactory {
