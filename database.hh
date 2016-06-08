@@ -597,8 +597,6 @@ public:
         return _compaction_strategy;
     }
 
-    bool pending_compactions() const;
-
     const stats& get_stats() const {
         return _stats;
     }
@@ -611,9 +609,7 @@ public:
     Result run_with_compaction_disabled(Func && func) {
         ++_compaction_disabled;
         return _compaction_manager.remove(this).then(std::forward<Func>(func)).finally([this] {
-            // #934. The pending counter is actually a great indicator into whether we
-            // actually need to trigger a compaction again.
-            if (--_compaction_disabled == 0 && _stats.pending_compactions > 0) {
+            if (--_compaction_disabled == 0) {
                 // we're turning if on again, use function that does not increment
                 // the counter further.
                 do_trigger_compaction();

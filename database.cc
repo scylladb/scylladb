@@ -1073,9 +1073,6 @@ void column_family::start_compaction() {
 
 void column_family::trigger_compaction() {
     // Submitting compaction job to compaction manager.
-    // #934 - always inc the pending counter, to help
-    // indicate the want for compaction.
-    _stats.pending_compactions++;
     do_trigger_compaction(); // see below
 }
 
@@ -1087,22 +1084,12 @@ void column_family::do_trigger_compaction() {
 }
 
 future<> column_family::run_compaction(sstables::compaction_descriptor descriptor) {
-    assert(_stats.pending_compactions > 0);
-    return compact_sstables(std::move(descriptor)).then([this] {
-        // only do this on success. (no exceptions)
-        // in that case, we rely on it being still set
-        // for reqeueuing
-        _stats.pending_compactions--;
-    });
+    return compact_sstables(std::move(descriptor));
 }
 
 void column_family::set_compaction_strategy(sstables::compaction_strategy_type strategy) {
     dblog.info("Setting compaction strategy of {}.{} to {}", _schema->ks_name(), _schema->cf_name(), sstables::compaction_strategy::name(strategy));
     _compaction_strategy = make_compaction_strategy(strategy, _schema->compaction_strategy_options());
-}
-
-bool column_family::pending_compactions() const {
-    return _stats.pending_compactions > 0;
 }
 
 size_t column_family::sstables_count() {
