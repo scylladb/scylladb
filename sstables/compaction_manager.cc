@@ -251,6 +251,51 @@ lw_shared_ptr<compaction_manager::task> compaction_manager::task_start(column_fa
     return task;
 }
 
+// submit_sstable_rewrite() starts a compaction task, much like submit(),
+// But rather than asking a compaction policy what to compact, this function
+// compacts just a single sstable, and writes one new sstable. This operation
+// is useful to split an sstable containing data belonging to multiple shards
+// into a separate sstable on each shard.
+void compaction_manager::submit_sstable_rewrite(column_family* cf, sstables::shared_sstable sst) {
+    // The semaphore ensures that the sstable rewrite operations submitted by
+    // submit_sstable_rewrite are run in sequence, and not all of them in
+    // parallel. Note that unlike general compaction which currently allows
+    // different cfs to compact in parallel, here we don't have a semaphore
+    // per cf, so we only get one rewrite at a time on each shard.
+    static thread_local semaphore sem(1);
+    // We cannot, and don't need to, compact an sstable which is already
+    // being compacted anyway.
+    if (_stopped || _compacting_sstables.count(sst)) {
+        return;
+    }
+    // Conversely, we don't want another compaction job to compact the
+    // sstable we are planning to work on:
+    _compacting_sstables.insert(sst);
+    auto task = make_lw_shared<compaction_manager::task>();
+    _tasks.push_back(task);
+    _stats.active_tasks++;
+    task->compaction_done = with_semaphore(sem, 1, [cf, sst] {
+        return cf->compact_sstables(sstables::compaction_descriptor(
+                std::vector<sstables::shared_sstable>{sst},
+                sst->get_sstable_level(),
+                std::numeric_limits<uint64_t>::max()), false);
+    }).then_wrapped([this, sst, task] (future<> f) {
+        _compacting_sstables.erase(sst);
+        _stats.active_tasks--;
+        _tasks.remove(task);
+        try {
+            f.get();
+            _stats.completed_tasks++;
+        } catch (sstables::compaction_stop_exception& e) {
+            cmlog.info("compaction info: {}", e.what());
+            _stats.errors++;
+        } catch (...) {
+            cmlog.error("compaction failed: {}", std::current_exception());
+            _stats.errors++;
+        }
+    });
+}
+
 future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> task) {
     task->stopping = true;
     return task->compaction_gate.close().then([task] {
