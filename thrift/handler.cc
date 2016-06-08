@@ -417,8 +417,16 @@ public:
     }
 
     void insert(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnParent& column_parent, const Column& column, const ConsistencyLevel::type consistency_level) {
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+            if (column_parent.__isset.super_column) {
+                fail(unimplemented::cause::SUPER);
+            }
+
+            auto schema = lookup_schema(_db.local(), current_keyspace(), column_parent.column_family);
+            mutation m_to_apply(key_from_thrift(*schema, to_bytes_view(key)), schema);
+            add_to_mutation(*schema, column, m_to_apply);
+            return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level));
+        });
     }
 
     void add(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnParent& column_parent, const CounterColumn& column, const ConsistencyLevel::type consistency_level) {
