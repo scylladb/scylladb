@@ -441,8 +441,25 @@ public:
     }
 
     void remove(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnPath& column_path, const int64_t timestamp, const ConsistencyLevel::type consistency_level) {
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+            auto schema = lookup_schema(_db.local(), current_keyspace(), column_path.column_family);
+            mutation m_to_apply(key_from_thrift(*schema, to_bytes_view(key)), schema);
+
+            if (column_path.__isset.super_column) {
+                fail(unimplemented::cause::SUPER);
+            } else if (column_path.__isset.column) {
+                Deletion d;
+                d.__set_timestamp(timestamp);
+                d.__set_predicate(column_path_to_slice_predicate(column_path));
+                Mutation m;
+                m.__set_deletion(d);
+                add_to_mutation(*schema, m, m_to_apply);
+            } else {
+                m_to_apply.partition().apply(tombstone(timestamp, gc_clock::now()));
+            }
+
+            return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level));
+        });
     }
 
     void remove_counter(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnPath& path, const ConsistencyLevel::type consistency_level) {
