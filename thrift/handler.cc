@@ -450,8 +450,10 @@ public:
     }
 
     void atomic_batch_mutate(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::map<std::string, std::map<std::string, std::vector<Mutation> > > & mutation_map, const ConsistencyLevel::type consistency_level) {
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+            auto muts = prepare_mutations(_db.local(), current_keyspace(), mutation_map);
+            return service::get_local_storage_proxy().mutate_atomically(std::move(muts), cl_from_thrift(consistency_level));
+        });
     }
 
     void truncate(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& cfname) {
