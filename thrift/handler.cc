@@ -223,8 +223,12 @@ public:
     }
 
     void get_count(tcxx::function<void(int32_t const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnParent& column_parent, const SlicePredicate& predicate, const ConsistencyLevel::type consistency_level) {
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return multiget_count([cob = std::move(cob)](auto&& results) {
+            if (!results.empty()) {
+                return cob(results.begin()->second);
+            }
+            return cob(0);
+        }, exn_cob, {key}, column_parent, predicate, consistency_level);
     }
 
     void multiget_slice(tcxx::function<void(std::map<std::string, std::vector<ColumnOrSuperColumn> >  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::vector<std::string> & keys, const ColumnParent& column_parent, const SlicePredicate& predicate, const ConsistencyLevel::type consistency_level) {
