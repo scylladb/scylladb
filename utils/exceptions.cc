@@ -51,7 +51,15 @@ bool is_system_error_errno(int err_no)
 }
 
 bool should_stop_on_system_error(const std::system_error& e) {
-    // We may whitelist transient errors in the future, but for now,
-    // be conservative.
+    if (e.code().category() == std::system_category()) {
+	// Whitelist of errors that don't require us to stop the server:
+	switch (e.code().value()) {
+        case EEXIST:
+        case ENOENT:
+            return false;
+        default:
+            break;
+        }
+    }
     return true;
 }
