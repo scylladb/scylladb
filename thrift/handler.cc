@@ -212,7 +212,7 @@ public:
             } catch (...) {
                 throw make_exception<InvalidRequestException>("column family %s not found", column_parent.column_family);
             }
-            auto pk = key_from_thrift(schema, to_bytes_view(key));
+            auto pk = key_from_thrift(*schema, to_bytes_view(key));
             auto dk = dht::global_partitioner().decorate_key(*schema, pk);
             auto shard = _db.local().shard_of(dk._token);
 
@@ -350,7 +350,7 @@ public:
                     sstring cf_name = cf_mutations.first;
                     const std::vector<Mutation>& mutations = cf_mutations.second;
                     auto schema = lookup_schema(_db.local(), current_keyspace(), cf_name);
-                    mutation m_to_apply(key_from_thrift(schema, thrift_key), schema);
+                    mutation m_to_apply(key_from_thrift(*schema, thrift_key), schema);
                     auto empty_clustering_key = clustering_key::make_empty();
                     for (const Mutation& m : mutations) {
                         if (m.__isset.column_or_supercolumn) {
@@ -998,9 +998,9 @@ private:
     static schema_ptr lookup_schema(database& db, const sstring& ks_name, const sstring& cf_name) {
         return lookup_column_family(db, ks_name, cf_name).schema();
     }
-    static partition_key key_from_thrift(schema_ptr s, bytes_view k) {
-        if (s->partition_key_size() == 1) {
-            return partition_key::from_single_value(*s, to_bytes(k));
+    static partition_key key_from_thrift(const schema& s, bytes_view k) {
+        if (s.partition_key_size() == 1) {
+            return partition_key::from_single_value(s, to_bytes(k));
         }
         auto composite = composite_view(k);
         return partition_key::from_exploded(composite.values());
