@@ -36,8 +36,6 @@ extern thread_local disk_error_signal_type sstable_read_error;
 extern thread_local disk_error_signal_type sstable_write_error;
 extern thread_local disk_error_signal_type general_disk_error;
 
-bool should_stop_on_system_error(const std::system_error& e);
-
 template<typename Func, typename... Args>
 std::enable_if_t<!is_future<std::result_of_t<Func(Args&&...)>>::value,
 		         std::result_of_t<Func(Args&&...)>>
@@ -46,7 +44,7 @@ do_io_check(disk_error_signal_type& signal, Func&& func, Args&&... args) {
         // calling function
         return func(std::forward<Args>(args)...);
     } catch (std::system_error& e) {
-        if (should_stop_on_system_error(e)) {
+        if (is_system_error_errno(EIO)) {
             signal();
             throw storage_io_error(e);
         }
@@ -64,7 +62,7 @@ auto do_io_check(disk_error_signal_type& signal, Func&& func, Args&&... args) {
             try {
                 std::rethrow_exception(ep);
             } catch (std::system_error& sys_err) {
-                if (should_stop_on_system_error(sys_err)) {
+                if (is_system_error_errno(EIO)) {
                     signal();
                     throw storage_io_error(sys_err);
                 }
@@ -72,7 +70,7 @@ auto do_io_check(disk_error_signal_type& signal, Func&& func, Args&&... args) {
             return futurize<std::result_of_t<Func(Args&&...)>>::make_exception_future(ep);
         });
     } catch (std::system_error& e) {
-        if (should_stop_on_system_error(e)) {
+        if (is_system_error_errno(EIO)) {
             signal();
             throw storage_io_error(e);
         }
