@@ -35,10 +35,9 @@ private:
     std::string _what;
 public:
     storage_io_error(std::system_error& e) noexcept
-    {
-        _code = e.code();
-        _what = std::string("Storage io error errno: ") + std::to_string(_code.value());
-    }
+        : _code{e.code()}
+        , _what{std::string("Storage I/O error: ") + std::to_string(e.code().value()) + ": " + e.what()}
+    { }
 
     virtual const char* what() const noexcept override {
         return _what.c_str();
