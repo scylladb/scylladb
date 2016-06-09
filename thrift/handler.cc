@@ -275,10 +275,39 @@ public:
         });
     }
 
+    /**
+     * In origin, empty partitions are returned as part of the KeySlice, for which the key will be filled
+     * in but the columns vector will be empty. Since in our case we don't return empty partitions, we
+     * don't know which partition keys in the specified range we should return back to the client. So for
+     * now our behavior differs from Origin.
+     */
     void get_range_slices(tcxx::function<void(std::vector<KeySlice>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const ColumnParent& column_parent, const SlicePredicate& predicate, const KeyRange& range, const ConsistencyLevel::type consistency_level) {
-        std::vector<KeySlice>  _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        with_cob(std::move(cob), std::move(exn_cob), [&] {
+            if (!column_parent.super_column.empty()) {
+                fail(unimplemented::cause::SUPER);
+            }
+            auto schema = lookup_schema(_db.local(), current_keyspace(), column_parent.column_family);
+            auto&& prange = make_partition_range(*schema, range);
+            auto cmd = slice_pred_to_read_cmd(*schema, predicate);
+            // KeyRange::count is the number of thrift rows to return, while
+            // SlicePredicte::slice_range::count limits the number of thrift colums.
+            if (schema->thrift().is_dynamic()) {
+                // For dynamic CFs we must limit the number of partitions returned.
+                cmd->partition_limit = range.count;
+            } else {
+                // For static CFs each thrift row maps to a CQL row.
+                cmd->row_limit = range.count;
+            }
+            return service::get_local_storage_proxy().query(
+                    schema,
+                    cmd,
+                    {std::move(prange)},
+                    cl_from_thrift(consistency_level)).then([schema, cmd](auto result) {
+                return query::result_view::do_with(*result, [schema, cmd](query::result_view v) {
+                    return to_key_slices(*schema, cmd->slice, v, std::numeric_limits<uint32_t>::max());
+                });
+            });
+        });
     }
 
     void get_paged_slice(tcxx::function<void(std::vector<KeySlice>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family, const KeyRange& range, const std::string& start_column, const ConsistencyLevel::type consistency_level) {
@@ -1147,7 +1176,7 @@ private:
     static std::vector<query::partition_range> make_partition_ranges(const schema& s, const std::vector<std::string>& keys) {
         std::vector<query::partition_range> ranges;
         for (auto&& key : keys) {
-            auto pk = key_from_thrift(s, to_bytes(key));
+            auto pk = key_from_thrift(s, to_bytes_view(key));
             auto dk = dht::global_partitioner().decorate_key(s, pk);
             ranges.emplace_back(query::partition_range::make_singular(std::move(dk)));
         }
@@ -1239,6 +1268,85 @@ private:
         }
     };
     using column_counter = column_visitor<counter>;
+    static query::partition_range make_partition_range(const schema& s, const KeyRange& range) {
+        if (range.__isset.row_filter) {
+            fail(unimplemented::cause::INDEXES);
+        }
+        if ((range.__isset.start_key == range.__isset.start_token)
+                || (range.__isset.end_key == range.__isset.end_token)) {
+            throw make_exception<InvalidRequestException>(
+                    "Exactly one each of {start key, start token} and {end key, end token} must be specified");
+        }
+        if (range.__isset.start_token && range.__isset.end_key) {
+            throw make_exception<InvalidRequestException>("Start token + end key is not a supported key range");
+        }
+
+        auto&& partitioner = dht::global_partitioner();
+
+        if (range.__isset.start_key && range.__isset.end_key) {
+            auto start = range.start_key.empty()
+                       ? dht::ring_position::starting_at(dht::minimum_token())
+                       : partitioner.decorate_key(s, key_from_thrift(s, to_bytes(range.start_key)));
+            auto end = range.end_key.empty()
+                     ? dht::ring_position::ending_at(dht::maximum_token())
+                     : partitioner.decorate_key(s, key_from_thrift(s, to_bytes(range.end_key)));
+            if (end.less_compare(s, start)) {
+                if (partitioner.preserves_order()) {
+                    throw make_exception<InvalidRequestException>(
+                            "Start key must sort before (or equal to) finish key in the partitioner");
+                } else {
+                    throw make_exception<InvalidRequestException>(
+                            "Start key's token sorts after end key's token. This is not allowed; you probably should not specify end key at all except with an ordered partitioner");
+                }
+            }
+            return {query::partition_range::bound(std::move(start), true),
+                    query::partition_range::bound(std::move(end), true)};
+        }
+
+        if (range.__isset.start_key && range.__isset.end_token) {
+            // start_token/end_token can wrap, but key/token should not
+            auto start = range.start_key.empty()
+                       ? dht::ring_position::starting_at(dht::minimum_token())
+                       : partitioner.decorate_key(s, key_from_thrift(s, to_bytes(range.start_key)));
+            auto end = dht::ring_position::ending_at(partitioner.from_sstring(sstring(range.end_token)));
+            if (end.token().is_minimum()) {
+                end = dht::ring_position::ending_at(dht::maximum_token());
+            } else if (end.less_compare(s, start)) {
+                throw make_exception<InvalidRequestException>("Start key's token sorts after end token");
+            }
+            return {query::partition_range::bound(std::move(start), true),
+                    query::partition_range::bound(std::move(end), true)};
+        }
+
+        // Token range can wrap; the start token is exclusive.
+        auto start = dht::ring_position::ending_at(partitioner.from_sstring(sstring(range.start_token)));
+        auto end = dht::ring_position::ending_at(partitioner.from_sstring(sstring(range.end_token)));
+        if (end.token().is_minimum()) {
+            end = dht::ring_position::ending_at(dht::maximum_token());
+        }
+        if (start.token() == end.token()) {
+            return query::partition_range::make_open_ended_both_sides();
+        }
+        return {query::partition_range::bound(std::move(start), false),
+                query::partition_range::bound(std::move(end), true)};
+    }
+    static std::vector<KeySlice> to_key_slices(const schema& s, const query::partition_slice& slice, query::result_view v, uint32_t cell_limit) {
+        column_aggregator aggregator(s, slice, cell_limit);
+        v.consume(slice, aggregator);
+        auto&& cols = aggregator.release();
+        std::vector<KeySlice> ret;
+        std::transform(
+                std::make_move_iterator(cols.begin()),
+                std::make_move_iterator(cols.end()),
+                boost::back_move_inserter(ret),
+                [](auto&& p) {
+            KeySlice ks;
+            ks.__set_key(std::move(p.first));
+            ks.__set_columns(std::move(p.second));
+            return ks;
+        });
+        return ret;
+    }
 };
 
 class handler_factory : public CassandraCobSvIfFactory {
