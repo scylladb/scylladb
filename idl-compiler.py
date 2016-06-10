@@ -184,6 +184,9 @@ struct serializer<$name> {
 
   template <typename Input>
   static $name read(Input& buf);
+
+  template <typename Input>
+  static void skip(Input& buf);
 };
 """).substitute({'name' : name, 'sizetype' : SIZETYPE, 'tmp_param' : template_param }))
     if config.ns != '':
@@ -769,7 +772,7 @@ def add_view(hout, info):
             }
         """)).substitute({'type' : cls["name"]}))
 
-    skip = "" if is_final(cls) else "skip(in, boost::type<size_type>());"
+    skip = "" if is_final(cls) else "ser::skip(in, boost::type<size_type>());"
     for m in members:
         full_type = param_view_type(m["type"])
         fprintln(hout, Template(reindent(4, """
@@ -780,7 +783,7 @@ def add_view(hout, info):
             }
         """)).substitute({'name' : m["name"], 'type' : full_type, 'skip' : skip}))
 
-        skip = skip + Template("\n       skip(in, boost::type<${type}>());").substitute({'type': full_type})
+        skip = skip + Template("\n       ser::skip(in, boost::type<${type}>());").substitute({'type': full_type})
 
     fprintln(hout, "};")
     skip_impl = "seastar::simple_input_stream& in = v;\n       " + skip if is_final(cls) else "v.skip(read_frame_size(v));"
@@ -789,22 +792,21 @@ def add_view(hout, info):
 
     fprintln(hout, Template("""
 template<>
-inline void skip(seastar::simple_input_stream& v, boost::type<${type}_view>) {
-    $skip_impl
-}
-
-template<>
 struct serializer<${type}_view> {
     template<typename Input>
     static ${type}_view read(Input& v) {
         auto v_start = v;
         auto start_size = v.size();
-        skip(v, boost::type<${type}_view>());
+        skip(v);
         return ${type}_view{v_start.read_substream(start_size - v.size())};
     }
     template<typename Output>
     static void write(Output& out, ${type}_view v) {
         out.write(v.v.begin(), v.v.size());
+    }
+    template<typename Input>
+    static void skip(Input& v) {
+        $skip_impl
     }
 };
 """).substitute({'type' : param_type(cls["name"]), 'skip' : skip, 'skip_impl' : skip_impl}))
@@ -891,6 +893,19 @@ $name$temp_param serializer<$name$temp_param>::read(Input& buf) {""").substitute
   $name$temp_param res {$params};
   return res;
 }""").substitute({'name' : name, 'params': ", ".join(params), 'temp_param' : template_class_param}))
+
+    fprintln(cout, Template("""
+$template
+template <typename Input>
+void serializer<$name$temp_param>::skip(Input& buf) {""").substitute({'func' : DESERIALIZER, 'name' : name, 'template': template, 'temp_param' : template_class_param}))
+    if not is_final:
+        fprintln(cout, Template("""  $size_type size = $func(buf, boost::type<$size_type>());
+  buf.skip(size - sizeof($size_type));""").substitute({'func' : DESERIALIZER, 'size_type' : SIZETYPE}))
+    else:
+        for m in get_members(cls):
+            full_type = param_view_type(m["type"])
+            fprintln(cout, "  ser::skip(buf, boost::type<%s>());" % full_type)
+    fprintln(cout, """}""")
 
 
 def handle_objects(tree, hout, cout, namespaces=[]):
