@@ -211,71 +211,12 @@ public:
     }
 
     void get_slice(tcxx::function<void(std::vector<ColumnOrSuperColumn>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnParent& column_parent, const SlicePredicate& predicate, const ConsistencyLevel::type consistency_level) {
-        with_cob_dereference(std::move(cob), std::move(exn_cob), [&] {
-            schema_ptr schema;
-            try {
-                schema = _db.local().find_schema(current_keyspace(), column_parent.column_family);
-            } catch (...) {
-                throw make_exception<InvalidRequestException>("column family %s not found", column_parent.column_family);
+        return multiget_slice([cob = std::move(cob)](auto&& results) {
+            if (!results.empty()) {
+                return cob(std::move(results.begin()->second));
             }
-            auto pk = key_from_thrift(*schema, to_bytes_view(key));
-            auto dk = dht::global_partitioner().decorate_key(*schema, pk);
-            auto shard = _db.local().shard_of(dk._token);
-
-            auto do_get = [this,
-                           dk = std::move(dk),
-                           column_parent = std::move(column_parent),
-                           predicate = std::move(predicate)] (database& db) {
-                if (!column_parent.super_column.empty()) {
-                    throw unimplemented_exception();
-                }
-                auto& cf = lookup_column_family(_db.local(), current_keyspace(), column_parent.column_family);
-                if (predicate.__isset.column_names) {
-                    throw unimplemented_exception();
-                } else if (predicate.__isset.slice_range) {
-                  auto&& range = predicate.slice_range;
-                    auto s = cf.schema();
-                    return cf.find_row(s, dk, clustering_key::make_empty()).then(
-                          [s, &cf, range = std::move(range)] (column_family::const_row_ptr rw) {
-                    std::vector<ColumnOrSuperColumn> ret;
-                    if (rw) {
-                        auto beg = s->regular_begin();
-                        if (!range.start.empty()) {
-                            beg = s->regular_lower_bound(to_bytes(range.start));
-                        }
-                        auto end = s->regular_end();
-                        if (!range.finish.empty()) {
-                            end = s->regular_upper_bound(to_bytes(range.finish));
-                        }
-                        auto count = range.count;
-                        // FIXME: force limit count?
-                        while (beg != end && count--) {
-                            const column_definition& def = range.reversed ? *--end : *beg++;
-                            atomic_cell_view cell = (*rw).cell_at(def.id).as_atomic_cell();
-                            if (def.is_atomic()) {
-                                if (cell.is_live()) { // FIXME: we should actually use tombstone information from all levels
-                                    Column col;
-                                    col.__set_name(bytes_to_string(def.name()));
-                                    col.__set_value(bytes_to_string(cell.value()));
-                                    col.__set_timestamp(cell.timestamp());
-                                    // FIXME: set ttl
-                                    ColumnOrSuperColumn v;
-                                    v.__set_column(std::move(col));
-                                    ret.push_back(std::move(v));
-                                };
-                            }
-                        }
-                    }
-                    return make_foreign(make_lw_shared(std::move(ret)));
-                  });
-                } else {
-                    throw make_exception<InvalidRequestException>("empty SlicePredicate");
-                }
-            };
-            return _db.invoke_on(shard, [do_get = std::move(do_get)] (database& db) {
-                return do_get(db);
-            });
-        });
+            return cob({ });
+        }, exn_cob, {key}, column_parent, predicate, consistency_level);
     }
 
     void get_count(tcxx::function<void(int32_t const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnParent& column_parent, const SlicePredicate& predicate, const ConsistencyLevel::type consistency_level) {
