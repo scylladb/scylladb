@@ -37,6 +37,7 @@ class partition_slice {
     query::partition_slice::option_set options;
     std::unique_ptr<query::specific_ranges> get_specific_ranges();
     cql_serialization_format cql_format();
+    uint32_t partition_row_limit() [[version 1.3]] = std::numeric_limits<uint32_t>::max();
 };
 
 class read_command {

@@ -47,6 +47,7 @@ std::ostream& operator<<(std::ostream& out, const partition_slice& ps) {
     }
     out << ", options=" << sprint("%x", ps.options.mask()); // FIXME: pretty print options
     out << ", cql_format=" << ps.cql_format();
+    out << ", partition_row_limit=" << ps._partition_row_limit;
     return out << "}";
 }
 
@@ -68,13 +69,15 @@ partition_slice::partition_slice(clustering_row_ranges row_ranges,
     std::vector<column_id> regular_columns,
     option_set options,
     std::unique_ptr<specific_ranges> specific_ranges,
-    cql_serialization_format cql_format)
+    cql_serialization_format cql_format,
+    uint32_t partition_row_limit)
     : _row_ranges(std::move(row_ranges))
     , static_columns(std::move(static_columns))
     , regular_columns(std::move(regular_columns))
     , options(options)
     , _specific_ranges(std::move(specific_ranges))
     , _cql_format(std::move(cql_format))
+    , _partition_row_limit(partition_row_limit)
 {}
 
 partition_slice::partition_slice(partition_slice&&) = default;
@@ -88,6 +91,7 @@ partition_slice::partition_slice(const partition_slice& s)
     , options(s.options)
     , _specific_ranges(s._specific_ranges ? std::make_unique<specific_ranges>(*s._specific_ranges) : nullptr)
     , _cql_format(s._cql_format)
+    , _partition_row_limit(s._partition_row_limit)
 {}
 
 partition_slice::~partition_slice()

@@ -1660,7 +1660,7 @@ class compact_for_query {
     api::timestamp_type _max_purgeable = api::max_timestamp;
     const query::partition_slice& _slice;
     uint32_t _limit;
-    const bool _is_distinct;
+    uint32_t _partition_row_limit;
 
     Consumer _consumer;
     tombstone _partition_tombstone;
@@ -1699,7 +1699,7 @@ public:
         , _gc_before(query_time - s.gc_grace_seconds())
         , _slice(slice)
         , _limit(limit)
-        , _is_distinct(_slice.options.contains(query::partition_slice::option::distinct))
+        , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
         , _consumer(std::move(consumer))
     { }
 
@@ -1711,7 +1711,7 @@ public:
         _static_row_live = false;
         _current_tombstone = { };
         _partition_tombstone = { };
-        _partition_limit = _is_distinct ? 1 : _limit;
+        _partition_limit = std::min(_limit, _partition_row_limit);
         return stop_iteration::no;
     }
 
@@ -1972,7 +1972,7 @@ future<uint32_t> data_query(schema_ptr s, const mutation_source& source, const q
                             const query::partition_slice& slice, uint32_t row_limit, gc_clock::time_point query_time,
                             query::result::builder& builder)
 {
-    if (row_limit == 0) {
+    if (row_limit == 0 || slice.partition_row_limit() == 0) {
         return make_ready_future<uint32_t>(0);
     }
 
@@ -2046,7 +2046,7 @@ mutation_query(schema_ptr s,
                uint32_t row_limit,
                gc_clock::time_point query_time)
 {
-    if (row_limit == 0) {
+    if (row_limit == 0 || slice.partition_row_limit() == 0) {
         return make_ready_future<reconcilable_result>(reconcilable_result());
     }
 

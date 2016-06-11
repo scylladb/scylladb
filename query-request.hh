@@ -96,6 +96,8 @@ private:
     clustering_row_ranges _ranges;
 };
 
+constexpr auto max_rows = std::numeric_limits<uint32_t>::max();
+
 // Specifies subset of rows, columns and cell attributes to be returned in a query.
 // Can be accessed across cores.
 // Schema-dependent.
@@ -118,11 +120,13 @@ public:
 private:
     std::unique_ptr<specific_ranges> _specific_ranges;
     cql_serialization_format _cql_format;
+    uint32_t _partition_row_limit;
 public:
     partition_slice(clustering_row_ranges row_ranges, std::vector<column_id> static_columns,
         std::vector<column_id> regular_columns, option_set options,
         std::unique_ptr<specific_ranges> specific_ranges = nullptr,
-        cql_serialization_format = cql_serialization_format::internal());
+        cql_serialization_format = cql_serialization_format::internal(),
+        uint32_t partition_row_limit = max_rows);
     partition_slice(const partition_slice&);
     partition_slice(partition_slice&&);
     ~partition_slice();
@@ -140,12 +144,16 @@ public:
     const cql_serialization_format& cql_format() const {
         return _cql_format;
     }
+    const uint32_t partition_row_limit() const {
+        return _partition_row_limit;
+    }
+    void set_partition_row_limit(uint32_t limit) {
+        _partition_row_limit = limit;
+    }
 
     friend std::ostream& operator<<(std::ostream& out, const partition_slice& ps);
     friend std::ostream& operator<<(std::ostream& out, const specific_ranges& ps);
 };
-
-constexpr auto max_rows = std::numeric_limits<uint32_t>::max();
 
 // Full specification of a query to the database.
 // Intended for passing across replicas.
