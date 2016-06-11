@@ -1885,6 +1885,7 @@ struct query_state {
             , cmd(cmd)
             , builder(cmd.slice, request)
             , limit(cmd.row_limit)
+            , partition_limit(cmd.partition_limit)
             , current_partition_range(ranges.begin())
             , range_end(ranges.end()){
     }
@@ -1892,6 +1893,7 @@ struct query_state {
     const query::read_command& cmd;
     query::result::builder builder;
     uint32_t limit;
+    uint32_t partition_limit;
     bool range_empty = false;   // Avoid ubsan false-positive when moving after construction
     std::vector<query::partition_range>::const_iterator current_partition_range;
     std::vector<query::partition_range>::const_iterator range_end;
@@ -1910,8 +1912,10 @@ column_family::query(schema_ptr s, const query::read_command& cmd, query::result
     {
         return do_until(std::bind(&query_state::done, &qs), [this, &qs] {
             auto&& range = *qs.current_partition_range++;
-            return data_query(qs.schema, as_mutation_source(), range, qs.cmd.slice, qs.limit, qs.cmd.timestamp, qs.builder).then([&qs] (auto live_rows) {
-                qs.limit -= live_rows;
+            return data_query(qs.schema, as_mutation_source(), range, qs.cmd.slice, qs.limit, qs.partition_limit,
+                              qs.cmd.timestamp, qs.builder).then([&qs] (auto&& r) {
+                qs.limit -= r.live_rows;
+                qs.partition_limit -= r.partitions;
             });
         }).then([qs_ptr = std::move(qs_ptr), &qs] {
             return make_ready_future<lw_shared_ptr<query::result>>(
@@ -1947,7 +1951,8 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_requ
 future<reconcilable_result>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const query::partition_range& range) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return mutation_query(std::move(s), cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.timestamp).then([this, s = _stats] (auto&& res) {
+    return mutation_query(std::move(s), cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.partition_limit,
+            cmd.timestamp).then([this, s = _stats] (auto&& res) {
         ++s->total_reads;
         return std::move(res);
     });

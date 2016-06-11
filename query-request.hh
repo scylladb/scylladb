@@ -155,6 +155,8 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const specific_ranges& ps);
 };
 
+constexpr auto max_partitions = std::numeric_limits<uint32_t>::max();
+
 // Full specification of a query to the database.
 // Intended for passing across replicas.
 // Can be accessed across cores.
@@ -166,6 +168,7 @@ public:
     uint32_t row_limit;
     gc_clock::time_point timestamp;
     std::experimental::optional<tracing::trace_info> trace_info;
+    uint32_t partition_limit;
     api::timestamp_type read_timestamp; // not serialized
 public:
     read_command(utils::UUID cf_id,
@@ -174,6 +177,7 @@ public:
                  uint32_t row_limit = max_rows,
                  gc_clock::time_point now = gc_clock::now(),
                  std::experimental::optional<tracing::trace_info> ti = std::experimental::nullopt,
+                 uint32_t partition_limit = max_partitions,
                  api::timestamp_type rt = api::missing_timestamp)
         : cf_id(std::move(cf_id))
         , schema_version(std::move(schema_version))
@@ -181,6 +185,7 @@ public:
         , row_limit(row_limit)
         , timestamp(now)
         , trace_info(ti)
+        , partition_limit(partition_limit)
         , read_timestamp(rt)
     { }
 
