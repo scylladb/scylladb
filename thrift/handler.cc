@@ -1529,6 +1529,116 @@ private:
         });
         return range<RangeType>::deoverlap(std::move(ranges), cmp);
     }
+    static range_tombstone make_range_tombstone(const schema& s, const SliceRange& range, tombstone tomb) {
+        using bound = query::clustering_range::bound;
+        stdx::optional<bound> start_bound;
+        if (!range.start.empty()) {
+            start_bound = make_clustering_bound(s, to_bytes_view(range.start), composite::eoc::end);
+        }
+        stdx::optional<bound> end_bound;
+        if (!range.finish.empty()) {
+            end_bound = make_clustering_bound(s, to_bytes_view(range.finish), composite::eoc::start);
+        }
+        return {start_bound ? std::move(*start_bound).value() : clustering_key_prefix::make_empty(),
+                !start_bound || start_bound->is_inclusive() ? bound_kind::incl_start : bound_kind::excl_start,
+                end_bound ? std::move(*end_bound).value() : clustering_key_prefix::make_empty(),
+                !end_bound || end_bound->is_inclusive() ? bound_kind::incl_end : bound_kind::excl_end,
+                std::move(tomb)};
+    }
+    static void delete_cell(const column_definition& def, api::timestamp_type timestamp, gc_clock::time_point deletion_time, mutation& m_to_apply) {
+        if (def.is_atomic()) {
+            auto dead_cell = atomic_cell::make_dead(timestamp, deletion_time);
+            m_to_apply.set_clustered_cell(clustering_key_prefix::make_empty(), def, std::move(dead_cell));
+        }
+    }
+    static void delete_column(const schema& s, const sstring& column_name, api::timestamp_type timestamp, gc_clock::time_point deletion_time, mutation& m_to_apply) {
+        auto&& def = s.get_column_definition(to_bytes(column_name));
+        if (def) {
+            delete_cell(*def, timestamp, deletion_time, m_to_apply);
+        }
+    }
+    static void apply_delete(const schema& s, const SlicePredicate& predicate, api::timestamp_type timestamp, mutation& m_to_apply) {
+        auto deletion_time = gc_clock::now();
+        if (predicate.__isset.column_names) {
+            thrift_validation::validate_column_names(predicate.column_names);
+            if (s.thrift().is_dynamic()) {
+                for (auto&& name : predicate.column_names) {
+                    auto ckey = make_clustering_prefix(s, to_bytes(name));
+                    m_to_apply.partition().apply_delete(s, std::move(ckey), tombstone(timestamp, deletion_time));
+                }
+            } else {
+                for (auto&& name : predicate.column_names) {
+                    delete_column(s, name, timestamp, deletion_time, m_to_apply);
+                }
+            }
+        } else if (predicate.__isset.slice_range) {
+            auto&& range = predicate.slice_range;
+            if (s.thrift().is_dynamic()) {
+                m_to_apply.partition().apply_delete(s, make_range_tombstone(s, range, tombstone(timestamp, deletion_time)));
+            } else {
+                auto r = make_column_range(s, range.start, range.finish);
+                std::for_each(r.first, r.second, [&](auto&& def) {
+                    delete_cell(def, timestamp, deletion_time, m_to_apply);
+                });
+            }
+        } else {
+            throw make_exception<InvalidRequestException>("SlicePredicate column_names and slice_range may not both be null");
+        }
+    }
+    static void add_live_cell(const schema& s, const Column& col, const column_definition& def, clustering_key_prefix ckey, mutation& m_to_apply) {
+        auto cell = atomic_cell::make_live(col.timestamp, to_bytes_view(col.value), maybe_ttl(s, col));
+        m_to_apply.set_clustered_cell(std::move(ckey), def, std::move(cell));
+    }
+    static void add_to_mutation(const schema& s, const Column& col, mutation& m_to_apply) {
+        thrift_validation::validate_column_name(col.name);
+        if (s.thrift().is_dynamic()) {
+            auto&& value_col = s.regular_begin();
+            add_live_cell(s, col, *value_col, make_clustering_prefix(s, to_bytes_view(col.name)), m_to_apply);
+        } else {
+            auto def = s.get_column_definition(to_bytes(col.name));
+            if (def) {
+                if (def->kind != column_kind::regular_column) {
+                    throw make_exception<InvalidRequestException>("Column %s is not settable", col.name);
+                }
+                add_live_cell(s, col, *def, clustering_key_prefix::make_empty(s), m_to_apply);
+            } else {
+                throw make_exception<InvalidRequestException>("No such column %s", col.name);
+            }
+        }
+    }
+    static void add_to_mutation(const schema& s, const Mutation& m, mutation& m_to_apply) {
+        if (m.__isset.column_or_supercolumn) {
+            if (m.__isset.deletion) {
+                throw make_exception<InvalidRequestException>("Mutation must have one and only one of column_or_supercolumn or deletion");
+            }
+            auto&& cosc = m.column_or_supercolumn;
+            if (cosc.__isset.column + cosc.__isset.super_column + cosc.__isset.counter_column + cosc.__isset.counter_super_column != 1) {
+                throw make_exception<InvalidRequestException>("ColumnOrSuperColumn must have one (and only one) of column, super_column, counter and counter_super_column");
+            }
+            if (cosc.__isset.column) {
+                add_to_mutation(s, cosc.column, m_to_apply);
+            } else if (cosc.__isset.super_column) {
+                fail(unimplemented::cause::SUPER);
+            } else if (cosc.__isset.counter_column) {
+                fail(unimplemented::cause::COUNTERS);
+            } else if (cosc.__isset.counter_super_column) {
+                fail(unimplemented::cause::SUPER);
+            }
+        } else if (m.__isset.deletion) {
+            auto&& del = m.deletion;
+            if (!del.__isset.timestamp) {
+                fail(unimplemented::cause::COUNTERS);
+            } else if (del.__isset.super_column) {
+                fail(unimplemented::cause::SUPER);
+            } else if (del.__isset.predicate) {
+                apply_delete(s, del.predicate, del.timestamp, m_to_apply);
+            } else {
+                m_to_apply.partition().apply(tombstone(del.timestamp, gc_clock::now()));
+            }
+        } else {
+            throw make_exception<InvalidRequestException>("Mutation must have either column or deletion");
+        }
+    }
 };
 
 class handler_factory : public CassandraCobSvIfFactory {
