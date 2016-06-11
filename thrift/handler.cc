@@ -45,6 +45,11 @@
 #include "service/query_state.hh"
 #include "cql3/query_processor.hh"
 #include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/adaptor/filtered.hpp>
+#include <boost/range/adaptor/indirected.hpp>
+#include <boost/range/adaptor/uniqued.hpp>
+#include <boost/range/adaptor/reversed.hpp>
+#include <boost/range/adaptor/indirected.hpp>
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -1039,13 +1044,107 @@ private:
         }
     }
     static clustering_key_prefix make_clustering_prefix(const schema& s, bytes_view v) {
-        if (s.thrift().has_compound_comparator()) {
-            auto composite = composite_view(v);
-            return clustering_key_prefix::from_exploded(composite.values());
-        } else {
-            assert(s.clustering_key_size() == 1);
-            return clustering_key_prefix::from_single_value(s, to_bytes(v));
+        auto composite = composite_view(v, s.thrift().has_compound_comparator());
+        return clustering_key_prefix::from_exploded(composite.values());
+    }
+    static query::clustering_range::bound make_clustering_bound(const schema& s, bytes_view v, composite::eoc exclusiveness_marker) {
+        auto composite = composite_view(v, s.thrift().has_compound_comparator());
+        auto last = composite::eoc::none;
+        auto&& ck = clustering_key_prefix::from_exploded(composite.components() | boost::adaptors::transformed([&](auto&& c) {
+            last = c.second;
+            return c.first;
+        }));
+        return query::clustering_range::bound(std::move(ck), last != exclusiveness_marker);
+    }
+    static query::clustering_range make_clustering_range(const schema& s, const std::string& start, const std::string& end) {
+        using bound = query::clustering_range::bound;
+        stdx::optional<bound> start_bound;
+        if (!start.empty()) {
+            start_bound = make_clustering_bound(s, to_bytes_view(start), composite::eoc::end);
         }
+        stdx::optional<bound> end_bound;
+        if (!end.empty()) {
+            end_bound = make_clustering_bound(s, to_bytes_view(end), composite::eoc::start);
+        }
+        query::clustering_range range = { std::move(start_bound), std::move(end_bound) };
+        if (range.is_wrap_around(clustering_key_prefix::prefix_equal_tri_compare(s))) {
+            throw make_exception<InvalidRequestException>("Range finish must come after start in the order of traversal");
+        }
+        return range;
+    }
+    static std::pair<schema::const_iterator, schema::const_iterator> make_column_range(const schema& s, const std::string& start, const std::string& end) {
+        auto start_it = start.empty() ? s.regular_begin() : s.regular_lower_bound(to_bytes(start));
+        auto end_it = end.empty() ? s.regular_end() : s.regular_upper_bound(to_bytes(end));
+        if (start_it > end_it) {
+            throw make_exception<InvalidRequestException>("Range finish must come after start in the order of traversal");
+        }
+        return std::make_pair(std::move(start_it), std::move(end_it));
+    }
+    // Adds the column_ids from the specified range of column_definitions to the out vector,
+    // according to the order defined by reversed.
+    static std::vector<column_id> add_columns(auto&& beg, auto&& end, bool reversed) {
+        auto range = boost::make_iterator_range(std::move(beg), std::move(end))
+                     | boost::adaptors::filtered(std::mem_fn(&column_definition::is_atomic))
+                     | boost::adaptors::transformed(std::mem_fn(&column_definition::id));
+        return reversed ? boost::copy_range<std::vector<column_id>>(range | boost::adaptors::reversed)
+                        : boost::copy_range<std::vector<column_id>>(range);
+    }
+    static query::partition_slice::option_set query_opts(const schema& s) {
+        query::partition_slice::option_set opts;
+        opts.set(query::partition_slice::option::send_timestamp);
+        opts.set(query::partition_slice::option::send_ttl);
+        if (s.thrift().is_dynamic()) {
+            opts.set(query::partition_slice::option::send_clustering_key);
+        }
+        return opts;
+    }
+    static lw_shared_ptr<query::read_command> slice_pred_to_read_cmd(const schema& s, const SlicePredicate& predicate) {
+        auto opts = query_opts(s);
+        std::vector<query::clustering_range> clustering_ranges;
+        std::vector<column_id> regular_columns;
+        uint32_t per_partition_row_limit = query::max_rows;
+        if (predicate.__isset.column_names) {
+            auto unique_column_names = boost::copy_range<std::vector<std::string>>(predicate.column_names | boost::adaptors::uniqued);
+            if (s.thrift().is_dynamic()) {
+                for (auto&& name : unique_column_names) {
+                    auto ckey = make_clustering_prefix(s, to_bytes(name));
+                    clustering_ranges.emplace_back(query::clustering_range::make_singular(std::move(ckey)));
+                }
+                regular_columns.emplace_back(s.regular_begin()->id);
+            } else {
+                clustering_ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
+                auto&& defs = unique_column_names
+                    | boost::adaptors::transformed([&s](auto&& name) { return s.get_column_definition(to_bytes(name)); })
+                    | boost::adaptors::filtered([](auto* def) { return def; })
+                    | boost::adaptors::indirected;
+                regular_columns = add_columns(defs.begin(), defs.end(), false);
+            }
+        } else if (predicate.__isset.slice_range) {
+            auto range = predicate.slice_range;
+            if (range.count < 0) {
+                throw make_exception<InvalidRequestException>("SliceRange requires non-negative count");
+            }
+            if (range.reversed) {
+                std::swap(range.start, range.finish);
+                opts.set(query::partition_slice::option::reversed);
+            }
+            per_partition_row_limit = static_cast<uint32_t>(range.count);
+            if (s.thrift().is_dynamic()) {
+                clustering_ranges.emplace_back(make_clustering_range(s, range.start, range.finish));
+                regular_columns.emplace_back(s.regular_begin()->id);
+            } else {
+                clustering_ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
+                auto r = make_column_range(s, range.start, range.finish);
+                // For static CFs, the limit is enforced on the result as we do not implement
+                // a cell limit in the database engine.
+                regular_columns = add_columns(r.first, r.second, range.reversed);
+            }
+        } else {
+            throw make_exception<InvalidRequestException>("SlicePredicate column_names and slice_range may not both be null");
+        }
+        auto slice = query::partition_slice(std::move(clustering_ranges), {}, std::move(regular_columns), opts,
+                nullptr, cql_serialization_format::internal(), per_partition_row_limit);
+        return make_lw_shared<query::read_command>(s.id(), s.version(), std::move(slice));
     }
 };
 
