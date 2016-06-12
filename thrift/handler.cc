@@ -310,10 +310,104 @@ public:
         });
     }
 
-    void get_paged_slice(tcxx::function<void(std::vector<KeySlice>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family, const KeyRange& range, const std::string& start_column, const ConsistencyLevel::type consistency_level) {
-        std::vector<KeySlice>  _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+    static lw_shared_ptr<query::read_command> make_paged_read_cmd(const schema& s, uint32_t column_limit, const std::string* start_column, const query::partition_range& range) {
+        auto opts = query_opts(s);
+        std::vector<query::clustering_range> clustering_ranges;
+        std::vector<column_id> regular_columns;
+        uint32_t row_limit;
+        uint32_t partition_limit;
+        std::unique_ptr<query::specific_ranges> specific_ranges = nullptr;
+        // KeyRange::count is the number of thrift columns to return (unlike get_range_slices).
+        if (s.thrift().is_dynamic()) {
+            // For dynamic CFs we must limit the number of rows returned. We use the query::specific_ranges to constrain
+            // the first partition, of which we are only interested in the columns after start_column.
+            row_limit = column_limit;
+            partition_limit = query::max_partitions;
+            if (start_column) {
+                auto sr = query::specific_ranges(*range.start()->value().key(), {make_clustering_range(s, *start_column, std::string())});
+                specific_ranges = std::make_unique<query::specific_ranges>(std::move(sr));
+            }
+            regular_columns.emplace_back(s.regular_begin()->id);
+        } else {
+            // For static CFs we must limit the number of columns returned. Since we don't implement a cell limit,
+            // we ask for as many partitions as those that are capable of exhausting the limit and later filter out
+            // any excess cells.
+            row_limit = query::max_rows;
+            partition_limit = (column_limit + s.regular_columns_count() - 1) / s.regular_columns_count();
+            schema::const_iterator start_col = start_column
+                                             ? s.regular_lower_bound(to_bytes(*start_column))
+                                             : s.regular_begin();
+            regular_columns = add_columns(start_col, s.regular_end(), false);
+        }
+        clustering_ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
+        auto slice = query::partition_slice(std::move(clustering_ranges), { }, std::move(regular_columns), opts,
+                std::move(specific_ranges), cql_serialization_format::internal());
+        return make_lw_shared<query::read_command>(s.id(), s.version(), std::move(slice), row_limit, gc_clock::now(), stdx::nullopt, partition_limit);
+    }
+
+    static future<> do_get_paged_slice(
+            schema_ptr schema,
+            uint32_t column_limit,
+            query::partition_range range,
+            const std::string* start_column,
+            db::consistency_level consistency_level,
+            std::vector<KeySlice>& output) {
+        auto cmd = make_paged_read_cmd(*schema, column_limit, start_column, range);
+        stdx::optional<partition_key> start_key;
+        auto end = range.end();
+        if (start_column && !schema->thrift().is_dynamic()) {
+            // For static CFs, we must first query for a specific key so as to consume the remainder
+            // of columns in that partition.
+            start_key = range.start()->value().key();
+            range = query::partition_range::make_singular(std::move(range.start()->value()));
+        }
+        return service::get_local_storage_proxy().query(schema, cmd, {std::move(range)}, consistency_level).then([schema, cmd, column_limit](auto result) {
+            return query::result_view::do_with(*result, [schema, cmd, column_limit](query::result_view v) {
+                return to_key_slices(*schema, cmd->slice, v, column_limit);
+            });
+        }).then([schema, cmd, column_limit, consistency_level, start_key = std::move(start_key), end = std::move(end), &output](auto&& slices) mutable {
+            auto columns = std::accumulate(slices.begin(), slices.end(), 0u, [](auto&& acc, auto&& ks) {
+                return acc + ks.columns.size();
+            });
+            std::move(slices.begin(), slices.end(), std::back_inserter(output));
+            if (columns == 0 || columns == column_limit || (slices.size() < cmd->partition_limit && columns < cmd->row_limit)) {
+                if (!output.empty() || !start_key) {
+                    return make_ready_future();
+                }
+                // The single, first partition we queried was empty, so retry with no start column.
+            } else {
+                start_key = key_from_thrift(*schema, to_bytes_view(output.back().key));
+            }
+            auto start = dht::global_partitioner().decorate_key(*schema, std::move(*start_key));
+            auto new_range = query::partition_range(query::partition_range::bound(std::move(start), false), std::move(end));
+            return do_get_paged_slice(schema, column_limit - columns, std::move(new_range), nullptr, consistency_level, output);
+        });
+    }
+
+    void get_paged_slice(tcxx::function<void(std::vector<KeySlice> const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family, const KeyRange& range, const std::string& start_column, const ConsistencyLevel::type consistency_level) {
+        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+            return do_with(std::vector<KeySlice>(), [&](auto& output) {
+                if (range.__isset.row_filter) {
+                    throw make_exception<InvalidRequestException>("Cross-row paging is not supported along with index clauses");
+                }
+                if (range.count <= 0) {
+                    throw make_exception<InvalidRequestException>("Count must be positive");
+                }
+                auto schema = lookup_schema(_db.local(), this->current_keyspace(), column_family);
+                auto&& prange = make_partition_range(*schema, range);
+                if (!start_column.empty()) {
+                    auto&& start_bound = prange.start();
+                    if (!(start_bound && start_bound->is_inclusive() && start_bound->value().has_key())) {
+                        // According to Orign's DataRange#Paging#slicesForKey.
+                        throw make_exception<InvalidRequestException>("If start column is provided, so must the start key");
+                    }
+                }
+                return do_get_paged_slice(std::move(schema), range.count, std::move(prange), &start_column,
+                        cl_from_thrift(consistency_level), output).then([&output] {
+                    return std::move(output);
+                });
+            });
+        });
     }
 
     void get_indexed_slices(tcxx::function<void(std::vector<KeySlice>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const ColumnParent& column_parent, const IndexClause& index_clause, const SlicePredicate& column_predicate, const ConsistencyLevel::type consistency_level) {
