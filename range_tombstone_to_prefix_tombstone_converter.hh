@@ -77,7 +77,7 @@ public:
             // overlapping tombstones into disjoint tombstones, they have to
             // be adjacent. If they are not, it is probably a bona-fide range
             // delete, which we don't support.
-            if (!end_bound.equal(s, rt.start_bound())) {
+            if (!end_bound.adjacent(s, rt.start_bound())) {
                 throw exceptions::unsupported_operation_exception(sprint(
                         "RANGE DELETE not implemented. Tried to convert but "
                         "found non-adjacent tombstones: %s and %s.",
