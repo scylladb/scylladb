@@ -86,7 +86,7 @@ void range_tombstone_list::insert_from(const schema& s,
             return;
         }
 
-        if (tomb.timestamp > it->tomb.timestamp) {
+        if (tomb > it->tomb) {
             // We overwrite the current tombstone.
 
             if (less(it->start_bound(), start_bound)) {
