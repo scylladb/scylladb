@@ -55,7 +55,7 @@ class tracker::impl {
     std::vector<region::impl*> _regions;
     scollectd::registrations _collectd_registrations;
     bool _reclaiming_enabled = true;
-    size_t _reclamation_step = 16;
+    size_t _reclamation_step = 1;
 private:
     // Prevents tracker's reclaimer from running while live. Reclaimer may be
     // invoked synchronously with allocator. This guard ensures that this
