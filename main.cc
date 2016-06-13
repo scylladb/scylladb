@@ -594,6 +594,9 @@ int main(int ac, char** av) {
                     });
                 }).get();
             }
+            smp::invoke_on_all([&cfg] () {
+                return logalloc::shard_tracker().set_reclamation_step(cfg->lsa_reclamation_step());
+            }).get();
             api::set_server_done(ctx).get();
             supervisor_notify("serving");
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
