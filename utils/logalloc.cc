@@ -78,9 +78,7 @@ public:
     impl() {
         register_collectd_metrics();
     }
-    ~impl() {
-        assert(_regions.empty());
-    }
+    ~impl();
     void register_region(region::impl*);
     void unregister_region(region::impl*);
     size_t reclaim(size_t bytes);
@@ -1925,6 +1923,15 @@ void tracker::impl::register_collectd_metrics() {
             scollectd::make_typed(scollectd::data_type::DERIVE, [] { return shard_segment_pool.statistics().segments_compacted; })
         ),
     });
+}
+
+tracker::impl::~impl() {
+    if (!_regions.empty()) {
+        for (auto&& r : _regions) {
+            logger.error("Region with id={} not unregistered!", r->id());
+        }
+        abort();
+    }
 }
 
 region_group::region_group(region_group&& o) noexcept
