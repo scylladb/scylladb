@@ -48,11 +48,13 @@ bound_kind invert_kind(bound_kind k) {
 int32_t weight(bound_kind k) {
     switch(k) {
     case bound_kind::excl_end:
+        return -2;
     case bound_kind::incl_start:
         return -1;
     case bound_kind::incl_end:
-    case bound_kind::excl_start:
         return 1;
+    case bound_kind::excl_start:
+        return 2;
     }
     abort();
 }
