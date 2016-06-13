@@ -1054,7 +1054,7 @@ future<> column_family::cleanup_sstables(sstables::compaction_descriptor descrip
         }
 
         std::vector<sstables::shared_sstable> sstable_to_compact({ sst });
-        return this->compact_sstables(sstables::compaction_descriptor(std::move(sstable_to_compact)), true);
+        return this->compact_sstables(sstables::compaction_descriptor(std::move(sstable_to_compact), sst->get_sstable_level()), true);
     });
 }
 

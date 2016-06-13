@@ -31,19 +31,16 @@ namespace sstables {
         // List of sstables to be compacted.
         std::vector<sstables::shared_sstable> sstables;
         // Level of sstable(s) created by compaction procedure.
-        int level = 0;
+        int level;
         // Threshold size for sstable(s) to be created.
-        uint64_t max_sstable_bytes = std::numeric_limits<uint64_t>::max();
+        uint64_t max_sstable_bytes;
 
         compaction_descriptor() = default;
 
-        compaction_descriptor(std::vector<sstables::shared_sstable> sstables, int level, long max_sstable_bytes)
+        compaction_descriptor(std::vector<sstables::shared_sstable> sstables, int level = 0, long max_sstable_bytes = std::numeric_limits<uint64_t>::max())
             : sstables(std::move(sstables))
             , level(level)
             , max_sstable_bytes(max_sstable_bytes) {}
-
-        compaction_descriptor(std::vector<sstables::shared_sstable> sstables)
-            : sstables(std::move(sstables)) {}
     };
 
     enum class compaction_type {
