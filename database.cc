@@ -1890,6 +1890,7 @@ column_family::query(schema_ptr s, const query::read_command& cmd, query::result
             auto add_partition = [&qs] (uint32_t live_rows, mutation&& m) {
                 auto pb = qs.builder.add_partition(*qs.schema, m.key());
                 m.partition().query_compacted(pb, *qs.schema, live_rows);
+                qs.limit -= live_rows;
             };
             return do_with(querying_reader(qs.schema, as_mutation_source(), range, qs.cmd.slice, qs.limit, qs.cmd.timestamp, add_partition),
                            [] (auto&& rd) { return rd.read(); });
@@ -1897,10 +1898,10 @@ column_family::query(schema_ptr s, const query::read_command& cmd, query::result
             return make_ready_future<lw_shared_ptr<query::result>>(
                     make_lw_shared<query::result>(qs.builder.build()));
         }).finally([lc, this]() mutable {
-        _stats.reads.mark(lc);
-        if (lc.is_start()) {
-            _stats.estimated_read.add(lc.latency(), _stats.reads.hist.count);
-        }
+            _stats.reads.mark(lc);
+            if (lc.is_start()) {
+                _stats.estimated_read.add(lc.latency(), _stats.reads.hist.count);
+            }
         });
     }
 }
