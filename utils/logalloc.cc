@@ -1643,6 +1643,16 @@ struct reclaim_timer {
                 std::chrono::duration_cast<std::chrono::duration<double, std::micro>>(duration).count());
         }
     }
+    void stop(size_t released) {
+        if (enabled) {
+            enabled = false;
+            auto duration = clock::now() - start;
+            auto bytes_per_second = static_cast<float>(released) / std::chrono::duration_cast<std::chrono::duration<float>>(duration).count();
+            timing_logger.debug("Reclamation cycle took {} us. Reclamation rate = {} MiB/s",
+                                std::chrono::duration_cast<std::chrono::duration<double, std::micro>>(duration).count(),
+                                sprint("%.3f", bytes_per_second / (1024*1024)));
+        }
+    }
 };
 
 reactor::idle_cpu_handler_result tracker::impl::compact_on_idle(reactor::work_waiting_on_reactor check_for_work) {
@@ -1795,6 +1805,8 @@ size_t tracker::impl::compact_and_evict(size_t memory_to_release) {
 
     logger.debug("Released {} bytes (wanted {}), {} during compaction, {} from reserve",
         mem_released, memory_to_release, released_during_compaction, released_from_reserve);
+
+    timing_guard.stop(mem_released);
 
     return mem_released;
 }
