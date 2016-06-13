@@ -198,6 +198,13 @@ public:
             bi::member_hook<range_tombstone, bi::set_member_hook<bi::link_mode<bi::auto_unlink>>, &range_tombstone::_link>,
             bi::compare<range_tombstone::compare>,
             bi::constant_time_size<false>>;
+
+    static bool is_single_clustering_row_tombstone(const schema& s, const clustering_key_prefix& start,
+        bound_kind start_kind, const clustering_key_prefix& end, bound_kind end_kind)
+    {
+        return start.is_full(s) && start_kind == bound_kind::incl_start
+            && end_kind == bound_kind::incl_end && start.equal(s, end);
+    }
 private:
     void move_assign(range_tombstone&& rt) {
         start = std::move(rt.start);

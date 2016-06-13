@@ -371,8 +371,7 @@ mutation_partition::apply_delete(const schema& schema, const exploded_clustering
 
 void
 mutation_partition::apply_delete(const schema& schema, range_tombstone rt) {
-    if (rt.start.is_full(schema) && rt.start_kind == bound_kind::incl_start
-            && rt.end_kind == bound_kind::incl_end && rt.start.equal(schema, rt.end)) {
+    if (range_tombstone::is_single_clustering_row_tombstone(schema, rt.start, rt.start_kind, rt.end, rt.end_kind)) {
         apply_delete(schema, std::move(rt.start), std::move(rt.tomb));
         return;
     }
