@@ -546,27 +546,33 @@ static std::vector<mutation> updated_ring(std::vector<mutation>& mutations) {
     return result;
 }
 
+static mutation_source make_mutation_source(std::vector<lw_shared_ptr<memtable>>& memtables) {
+    return mutation_source([&memtables] (schema_ptr s, const query::partition_range& pr) {
+        std::vector<mutation_reader> readers;
+        for (auto&& mt : memtables) {
+            readers.emplace_back(mt->make_reader(s, pr));
+        }
+        return make_combined_reader(std::move(readers));
+    });
+}
+
+static key_source make_key_source(schema_ptr s, std::vector<lw_shared_ptr<memtable>>& memtables) {
+    return key_source([s, &memtables] (const query::partition_range& pr) {
+        std::vector<key_reader> readers;
+        for (auto&& mt : memtables) {
+            readers.emplace_back(mt->as_key_source()(pr));
+        }
+        return make_combined_reader(s, std::move(readers));
+    });
+}
+
 SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
     return seastar::async([] {
         auto s = make_schema();
         std::vector<lw_shared_ptr<memtable>> memtables;
-        auto memtables_data_source = mutation_source([&] (schema_ptr s, const query::partition_range& pr) {
-            std::vector<mutation_reader> readers;
-            for (auto&& mt : memtables) {
-                readers.emplace_back(mt->make_reader(s, pr));
-            }
-            return make_combined_reader(std::move(readers));
-        });
-        auto memtables_key_source = key_source([&] (const query::partition_range& pr) {
-            std::vector<key_reader> readers;
-            for (auto&& mt : memtables) {
-                readers.emplace_back(mt->as_key_source()(pr));
-            }
-            return make_combined_reader(s, std::move(readers));
-        });
-        throttled_mutation_source cache_source(memtables_data_source);
+        throttled_mutation_source cache_source(make_mutation_source(memtables));
         cache_tracker tracker;
-        row_cache cache(s, cache_source, memtables_key_source, tracker);
+        row_cache cache(s, cache_source, make_key_source(s, memtables), tracker);
 
         auto mt1 = make_lw_shared<memtable>(s);
         memtables.push_back(mt1);
@@ -656,7 +662,7 @@ SEASTAR_TEST_CASE(test_invalidate) {
         auto some_element = keys_in_cache.begin() + 547;
         std::vector<dht::decorated_key> keys_not_in_cache;
         keys_not_in_cache.push_back(*some_element);
-        cache.invalidate(*some_element);
+        cache.invalidate(*some_element).get();
         keys_in_cache.erase(some_element);
 
         for (auto&& key : keys_in_cache) {
@@ -676,7 +682,7 @@ SEASTAR_TEST_CASE(test_invalidate) {
             { *some_range_begin, true }, { *some_range_end, false }
         );
         keys_not_in_cache.insert(keys_not_in_cache.end(), some_range_begin, some_range_end);
-        cache.invalidate(range);
+        cache.invalidate(range).get();
         keys_in_cache.erase(some_range_begin, some_range_end);
 
         for (auto&& key : keys_in_cache) {
@@ -687,6 +693,72 @@ SEASTAR_TEST_CASE(test_invalidate) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
+    return seastar::async([] {
+        auto s = make_schema();
+        std::vector<lw_shared_ptr<memtable>> memtables;
+        throttled_mutation_source cache_source(make_mutation_source(memtables));
+        cache_tracker tracker;
+        row_cache cache(s, cache_source, make_key_source(s, memtables), tracker);
+
+        auto mt1 = make_lw_shared<memtable>(s);
+        memtables.push_back(mt1);
+        auto ring = make_ring(s, 3);
+        for (auto&& m : ring) {
+            mt1->apply(m);
+        }
+
+        auto mt2 = make_lw_shared<memtable>(s);
+        auto ring2 = updated_ring(ring);
+        for (auto&& m : ring2) {
+            mt2->apply(m);
+        }
+
+        cache_source.block();
+
+        auto rd1 = cache.make_reader(s);
+        auto rd1_result = rd1();
+
+        sleep(10ms).get();
+
+        memtables.clear();
+        memtables.push_back(mt2);
+
+        // This update should miss on all partitions
+        auto cache_cleared = cache.clear();
+
+        auto rd2 = cache.make_reader(s);
+
+        // rd1, which is in progress, should not prevent forward progress of clear()
+        cache_source.unblock();
+        cache_cleared.get();
+
+        // Reads started before memtable flush should return previous value, otherwise this test
+        // doesn't trigger the conditions it is supposed to protect against.
+
+        assert_that(rd1_result.get0()).has_mutation().is_equal_to(ring[0]);
+        assert_that(rd1().get0()).has_mutation().is_equal_to(ring2[1]);
+        assert_that(rd1().get0()).has_mutation().is_equal_to(ring2[2]);
+        assert_that(rd1().get0()).has_no_mutation();
+
+        // Reads started after clear but before previous populations completed
+        // should already see the new data
+        assert_that(std::move(rd2))
+                .produces(ring2[0])
+                .produces(ring2[1])
+                .produces(ring2[2])
+                .produces_end_of_stream();
+
+        // Reads started after clear should see new data
+        assert_that(cache.make_reader(s))
+                .produces(ring2[0])
+                .produces(ring2[1])
+                .produces(ring2[2])
+                .produces_end_of_stream();
+    });
+}
+
 
 SEASTAR_TEST_CASE(test_invalidate_works_with_wrap_arounds) {
     return seastar::async([] {
@@ -707,7 +779,7 @@ SEASTAR_TEST_CASE(test_invalidate_works_with_wrap_arounds) {
         }
 
         // wrap-around
-        cache.invalidate(query::partition_range({ring[6].ring_position()}, {ring[1].ring_position()}));
+        cache.invalidate(query::partition_range({ring[6].ring_position()}, {ring[1].ring_position()})).get();
 
         verify_does_not_have(cache, ring[0].decorated_key());
         verify_does_not_have(cache, ring[1].decorated_key());
@@ -719,7 +791,7 @@ SEASTAR_TEST_CASE(test_invalidate_works_with_wrap_arounds) {
         verify_does_not_have(cache, ring[7].decorated_key());
 
         // not wrap-around
-        cache.invalidate(query::partition_range({ring[3].ring_position()}, {ring[4].ring_position()}));
+        cache.invalidate(query::partition_range({ring[3].ring_position()}, {ring[4].ring_position()})).get();
 
         verify_does_not_have(cache, ring[0].decorated_key());
         verify_does_not_have(cache, ring[1].decorated_key());

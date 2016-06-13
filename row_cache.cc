@@ -456,7 +456,16 @@ row_cache::make_reader(schema_ptr s,
 }
 
 row_cache::~row_cache() {
-    clear();
+    clear_now();
+}
+
+void row_cache::clear_now() noexcept {
+    with_allocator(_tracker.allocator(), [this] {
+        _partitions.clear_and_dispose([this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
+            _tracker.on_erase();
+            deleter(p);
+        });
+    });
 }
 
 void row_cache::populate(const mutation& m) {
@@ -480,16 +489,8 @@ void row_cache::populate(const mutation& m) {
     });
 }
 
-void row_cache::clear() {
-    with_allocator(_tracker.allocator(), [this] {
-        // We depend on clear_and_dispose() below not looking up any keys.
-        // Using with_linearized_managed_bytes() is no helps, because we don't
-        // want to propagate an exception from here.
-        _partitions.clear_and_dispose([this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
-            _tracker.on_erase();
-            deleter(p);
-        });
-    });
+future<> row_cache::clear() {
+    return invalidate(query::full_partition_range);
 }
 
 future<> row_cache::update(memtable& m, partition_presence_checker presence_checker) {
@@ -515,8 +516,8 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                 });
                 if (blow_cache) {
                     // We failed to invalidate the key, presumably due to with_linearized_managed_bytes()
-                    // running out of memory.  Recover using clear(), which doesn't throw.
-                    clear();
+                    // running out of memory.  Recover using clear_now(), which doesn't throw.
+                    clear_now();
                 }
             });
         });
@@ -590,7 +591,8 @@ void row_cache::invalidate_locked(const dht::decorated_key& dk) {
         });
 }
 
-void row_cache::invalidate(const dht::decorated_key& dk) {
+future<> row_cache::invalidate(const dht::decorated_key& dk) {
+return _populate_phaser.advance_and_await().then([this, &dk] {
   _read_section(_tracker.region(), [&] {
     with_allocator(_tracker.allocator(), [this, &dk] {
       with_linearized_managed_bytes([&] {
@@ -598,17 +600,24 @@ void row_cache::invalidate(const dht::decorated_key& dk) {
       });
     });
   });
+});
 }
 
-void row_cache::invalidate(const query::partition_range& range) {
-  with_linearized_managed_bytes([&] {
-    if (range.is_wrap_around(dht::ring_position_comparator(*_schema))) {
-        auto unwrapped = range.unwrap();
-        invalidate(unwrapped.first);
-        invalidate(unwrapped.second);
-        return;
-    }
+future<> row_cache::invalidate(const query::partition_range& range) {
+    return _populate_phaser.advance_and_await().then([this, &range] {
+        with_linearized_managed_bytes([&] {
+            if (range.is_wrap_around(dht::ring_position_comparator(*_schema))) {
+                auto unwrapped = range.unwrap();
+                invalidate_unwrapped(unwrapped.first);
+                invalidate_unwrapped(unwrapped.second);
+            } else {
+                invalidate_unwrapped(range);
+            }
+        });
+    });
+}
 
+void row_cache::invalidate_unwrapped(const query::partition_range& range) {
     logalloc::reclaim_lock _(_tracker.region());
 
     auto cmp = cache_entry::compare(_schema);
@@ -634,7 +643,6 @@ void row_cache::invalidate(const query::partition_range& range) {
             deleter(p);
         });
     });
-  });
 }
 
 row_cache::row_cache(schema_ptr s, mutation_source fallback_factory, key_source underlying_keys,

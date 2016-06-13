@@ -186,13 +186,13 @@ private:
     mutation_source _underlying;
     key_source _underlying_keys;
 
-    // Synchronizes populating reads with update() to ensure that cache
+    // Synchronizes populating reads with updates of underlying data source to ensure that cache
     // remains consistent across flushes with the underlying data source.
     // Readers obtained from the underlying data source in earlier than
     // current phases must not be used to populate the cache, unless they hold
     // phaser::operation created in the reader's phase of origin. Readers
     // should hold to a phase only briefly because this inhibits progress of
-    // update(). Phase changes occur only in update(), which can be assumed to
+    // updates. Phase changes occur in update()/clear(), which can be assumed to
     // be asynchronous wrt invoking of the underlying data source.
     utils::phased_barrier _populate_phaser;
 
@@ -206,6 +206,8 @@ private:
     void on_miss();
     void upgrade_entry(cache_entry&);
     void invalidate_locked(const dht::decorated_key&);
+    void invalidate_unwrapped(const query::partition_range&);
+    void clear_now() noexcept;
     static thread_local seastar::thread_scheduling_group _update_thread_scheduling_group;
 public:
     ~row_cache();
@@ -230,7 +232,9 @@ public:
     void populate(const mutation& m);
 
     // Clears the cache.
-    void clear();
+    // Guarantees that cache will not be populated using readers created
+    // before this method was invoked.
+    future<> clear();
 
     // Synchronizes cache with the underlying data source from a memtable which
     // has just been flushed to the underlying data source.
@@ -242,11 +246,21 @@ public:
     void touch(const dht::decorated_key&);
 
     // Removes given partition from cache.
-    void invalidate(const dht::decorated_key&);
+    //
+    // Guarantees that cache will not be populated with given key
+    // using readers created before this method was invoked.
+    //
+    // The key must be kept alive until method resolves.
+    future<> invalidate(const dht::decorated_key& key);
 
     // Removes given range of partitions from cache.
     // The range can be a wrap around.
-    void invalidate(const query::partition_range&);
+    //
+    // Guarantees that cache will not be populated with partitions from that range
+    // using readers created before this method was invoked.
+    //
+    // The range must be kept alive until method resolves.
+    future<> invalidate(const query::partition_range&);
 
     auto num_entries() const {
         return _partitions.size();
