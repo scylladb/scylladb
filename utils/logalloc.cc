@@ -55,6 +55,7 @@ class tracker::impl {
     std::vector<region::impl*> _regions;
     scollectd::registrations _collectd_registrations;
     bool _reclaiming_enabled = true;
+    size_t _reclamation_step = 16;
 private:
     // Prevents tracker's reclaimer from running while live. Reclaimer may be
     // invoked synchronously with allocator. This guard ensures that this
@@ -88,6 +89,8 @@ public:
     void reclaim_all_free_segments();
     occupancy_stats region_occupancy();
     occupancy_stats occupancy();
+    void set_reclamation_step(size_t step_in_segments) { _reclamation_step = step_in_segments; }
+    size_t reclamation_step() const { return _reclamation_step; }
 };
 
 class tracker_reclaimer_lock {
@@ -643,7 +646,6 @@ segment* segment_pool::allocate_segment()
         desc._zone = &zone;
     };
 
-    static constexpr unsigned reclaim_step = 16;
     do {
         tracker_reclaimer_lock rl;
         if (!_not_full_zones.empty()) {
@@ -672,7 +674,7 @@ segment* segment_pool::allocate_segment()
             }
             return seg;
         }
-    } while (shard_tracker().get_impl().compact_and_evict(reclaim_step * segment::size));
+    } while (shard_tracker().get_impl().compact_and_evict(shard_tracker().reclamation_step() * segment::size));
     return nullptr;
 }
 
@@ -1504,6 +1506,14 @@ public:
 
     friend class region_group;
 };
+
+void tracker::set_reclamation_step(size_t step_in_segments) {
+    _impl->set_reclamation_step(step_in_segments);
+}
+
+size_t tracker::reclamation_step() const {
+    return _impl->reclamation_step();
+}
 
 region::region()
     : _impl(make_shared<impl>())
