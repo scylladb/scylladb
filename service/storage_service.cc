@@ -988,8 +988,15 @@ future<> storage_service::drain_on_shutdown() {
             ss.shutdown_client_servers().get();
             logger.info("Drain on shutdown: shutdown rpc and cql server done");
 
+            tracing::tracing::tracing_instance().invoke_on_all([] (auto& tr) {
+                return tr.shutdown();
+            }).get();
+
             ss.do_stop_ms().get();
             logger.info("Drain on shutdown: shutdown messaging_service done");
+
+            tracing::tracing::tracing_instance().stop().get();
+            logger.info("Drain on shutdown: tracing is stopped");
 
             auth::auth::shutdown().get();
             logger.info("Drain on shutdown: auth shutdown");

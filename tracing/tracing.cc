@@ -134,7 +134,7 @@ future<> tracing::start() {
 }
 
 void tracing::flush_timer_callback() {
-    if (_stopped) {
+    if (_down) {
         return;
     }
 
@@ -143,13 +143,21 @@ void tracing::flush_timer_callback() {
     _flush_timer.arm(flush_period);
 }
 
-future<> tracing::stop() {
-    logger.info("Asked to stop");
-    _stopped = true;
+future<> tracing::shutdown() {
+    logger.info("Asked to shut down");
+    _down = true;
     _flush_timer.cancel();
     return _tracing_backend_helper_ptr->stop().then([] {
         logger.info("Tracing is down");
     });
+}
+
+future<> tracing::stop() {
+    if (!_down) {
+        throw std::logic_error("tracing: stop() called before shutdown()");
+    }
+
+    return make_ready_future<>();
 }
 
 void tracing::set_trace_probability(double p) {

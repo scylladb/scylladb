@@ -171,7 +171,7 @@ private:
     uint64_t _pending_for_flush_sessions = 0;
     uint64_t _flushing_sessions = 0;
     timer<lowres_clock> _flush_timer;
-    bool _stopped = false;
+    bool _down = false;
     std::unique_ptr<i_tracing_backend_helper> _tracing_backend_helper_ptr;
     sstring _thread_name;
     scollectd::registrations _registrations;
@@ -205,8 +205,17 @@ public:
     // Initialize a tracing backend (e.g. tracing_keyspace or logstash)
     future<> start();
 
-    // waits until all active tracing sessions are over.
     future<> stop();
+
+    /**
+     * Waits until all pending tracing records are flushed to the backend an
+     * shuts down the backend. The following calls to
+     * store_session_record()/store_event_record() methods of a backend instance
+     * should be a NOOP.
+     *
+     * @return a ready future when the shutdown is complete
+     */
+    future<> shutdown();
 
     void flush_pending_records() {
         _flushing_sessions += _pending_for_flush_sessions;
