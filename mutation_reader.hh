@@ -201,3 +201,61 @@ inline
 partition_presence_checker make_default_partition_presence_checker() {
     return [] (partition_key_view key) { return partition_presence_checker_result::maybe_exists; };
 }
+
+template<typename Consumer>
+future<stop_iteration> do_consume_streamed_mutation_flattened(streamed_mutation& sm, Consumer& c)
+{
+    do {
+        if (sm.is_buffer_empty()) {
+            if (sm.is_end_of_stream()) {
+                break;
+            }
+            auto f = sm.fill_buffer();
+            if (!f.available()) {
+                return f.then([&] { return do_consume_streamed_mutation_flattened(sm, c); });
+            }
+            f.get();
+        } else {
+            if (sm.pop_mutation_fragment().consume(c) == stop_iteration::yes) {
+                break;
+            }
+        }
+    } while (true);
+    return make_ready_future<stop_iteration>(c.consume_end_of_partition());
+}
+
+/*
+template<typename T>
+concept bool FlattenedConsumer() {
+    return StreamedMutationConsumer() && requires(T obj, const partition_key& pk) {
+        obj.consume_new_partition(pk);
+        obj.consume_end_of_partition();
+    };
+}
+*/
+template<typename Consumer>
+auto consume_flattened(mutation_reader mr, Consumer c, bool reverse_mutations = false)
+{
+    return do_with(std::move(mr), std::move(c), stdx::optional<streamed_mutation>(), [reverse_mutations] (auto& mr, auto& c, auto& sm) {
+        return repeat([&, reverse_mutations] {
+            return mr().then([&, reverse_mutations] (auto smopt) {
+                if (!smopt) {
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }
+                if (!reverse_mutations) {
+                    sm.emplace(std::move(*smopt));
+                } else {
+                    sm.emplace(reverse_streamed_mutation(std::move(*smopt)));
+                }
+                c.consume_new_partition(sm->key());
+                if (sm->partition_tombstone()) {
+                    c.consume(sm->partition_tombstone());
+                }
+                return do_consume_streamed_mutation_flattened(*sm, c);
+            });
+        }).then([&] {
+            return c.consume_end_of_stream();
+        });
+    });
+}
+
