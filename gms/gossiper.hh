@@ -111,7 +111,7 @@ public:
     void timer_callback_unlock() { _callback_running.signal(); }
     sstring get_cluster_name();
     sstring get_partitioner_name();
-    inet_address get_broadcast_address() {
+    inet_address get_broadcast_address() const {
         return utils::fb_utilities::get_broadcast_address();
     }
     void set_cluster_name(sstring name);
@@ -529,6 +529,7 @@ public:
     future<> wait_for_feature_on_all_node(std::set<sstring> features);
     // Wait for features are available on a particular node
     future<> wait_for_feature_on_node(std::set<sstring> features, inet_address endpoint);
+    void check_knows_remote_features(sstring local_features_string) const;
 private:
     void register_feature(feature* f);
     void unregister_feature(feature* f);
