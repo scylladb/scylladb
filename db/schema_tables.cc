@@ -2175,7 +2175,7 @@ data_type parse_type(sstring str)
 
 std::vector<schema_ptr> all_tables() {
     return {
-        keyspaces(), columnfamilies(), columns(), triggers(), usertypes(), /* Not in 2.1.8 functions(), aggregates() */
+        keyspaces(), columnfamilies(), columns(), triggers(), usertypes(), functions(), aggregates(),
         views(),
     };
 }
