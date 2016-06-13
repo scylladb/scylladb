@@ -224,7 +224,7 @@ range_tombstone_list range_tombstone_list::difference(const schema& s, const ran
     return diff;
 }
 
-void range_tombstone_list::apply(const schema& s, range_tombstone_list& rt_list) {
+void range_tombstone_list::apply(const schema& s, const range_tombstone_list& rt_list) {
     for (auto&& rt : rt_list) {
         apply(s, rt);
     }
