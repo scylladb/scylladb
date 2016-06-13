@@ -51,6 +51,8 @@ sstring time_point_to_string(const T& tp)
     return boost::posix_time::to_iso_extended_string(time);
 }
 
+static const char* byte_type_name      = "org.apache.cassandra.db.marshal.ByteType";
+static const char* short_type_name     = "org.apache.cassandra.db.marshal.ShortType";
 static const char* int32_type_name     = "org.apache.cassandra.db.marshal.Int32Type";
 static const char* long_type_name      = "org.apache.cassandra.db.marshal.LongType";
 static const char* ascii_type_name     = "org.apache.cassandra.db.marshal.AsciiType";
@@ -190,6 +192,36 @@ struct integer_type_impl : simple_type_impl<T> {
             return {};
         }
         return to_sstring(compose_value(b));
+    }
+};
+
+struct byte_type_impl : integer_type_impl<int8_t> {
+    byte_type_impl() : integer_type_impl{byte_type_name}
+    { }
+
+    virtual void validate(bytes_view v) const override {
+        if (v.size() != 0 && v.size() != 1) {
+            throw marshal_exception(sprint("Expected 1 byte for a tinyint (%d)", v.size()));
+        }
+    }
+
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
+        return cql3::cql3_type::tinyint;
+    }
+};
+
+struct short_type_impl : integer_type_impl<int16_t> {
+    short_type_impl() : integer_type_impl{short_type_name}
+    { }
+
+    virtual void validate(bytes_view v) const override {
+        if (v.size() != 0 && v.size() != 2) {
+            throw marshal_exception(sprint("Expected 2 bytes for a smallint (%d)", v.size()));
+        }
+    }
+
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
+        return cql3::cql3_type::smallint;
     }
 };
 
@@ -2816,6 +2848,8 @@ reversed_type_impl::native_typeid() const {
     return _underlying_type->native_typeid();
 }
 
+thread_local const shared_ptr<const abstract_type> byte_type(make_shared<byte_type_impl>());
+thread_local const shared_ptr<const abstract_type> short_type(make_shared<short_type_impl>());
 thread_local const shared_ptr<const abstract_type> int32_type(make_shared<int32_type_impl>());
 thread_local const shared_ptr<const abstract_type> long_type(make_shared<long_type_impl>());
 thread_local const shared_ptr<const abstract_type> ascii_type(make_shared<ascii_type_impl>());
@@ -2837,6 +2871,8 @@ thread_local const data_type empty_type(make_shared<empty_type_impl>());
 data_type abstract_type::parse_type(const sstring& name)
 {
     static thread_local const std::unordered_map<sstring, data_type> types = {
+        { byte_type_name,      byte_type      },
+        { short_type_name,     short_type     },
         { int32_type_name,     int32_type     },
         { long_type_name,      long_type      },
         { ascii_type_name,     ascii_type     },
@@ -2892,6 +2928,12 @@ data_value::data_value(const char* v) : data_value(make_new(utf8_type, sstring(v
 }
 
 data_value::data_value(bool v) : data_value(make_new(boolean_type, v)) {
+}
+
+data_value::data_value(int8_t v) : data_value(make_new(byte_type, v)) {
+}
+
+data_value::data_value(int16_t v) : data_value(make_new(short_type, v)) {
 }
 
 data_value::data_value(int32_t v) : data_value(make_new(int32_type, v)) {

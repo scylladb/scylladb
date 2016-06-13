@@ -273,8 +273,10 @@ thread_local shared_ptr<cql3_type> cql3_type::boolean = make("boolean", boolean_
 thread_local shared_ptr<cql3_type> cql3_type::double_ = make("double", double_type, cql3_type::kind::DOUBLE);
 thread_local shared_ptr<cql3_type> cql3_type::float_ = make("float", float_type, cql3_type::kind::FLOAT);
 thread_local shared_ptr<cql3_type> cql3_type::int_ = make("int", int32_type, cql3_type::kind::INT);
+thread_local shared_ptr<cql3_type> cql3_type::smallint = make("smallint", short_type, cql3_type::kind::SMALLINT);
 thread_local shared_ptr<cql3_type> cql3_type::text = make("text", utf8_type, cql3_type::kind::TEXT);
 thread_local shared_ptr<cql3_type> cql3_type::timestamp = make("timestamp", timestamp_type, cql3_type::kind::TIMESTAMP);
+thread_local shared_ptr<cql3_type> cql3_type::tinyint = make("tinyint", byte_type, cql3_type::kind::TINYINT);
 thread_local shared_ptr<cql3_type> cql3_type::uuid = make("uuid", uuid_type, cql3_type::kind::UUID);
 thread_local shared_ptr<cql3_type> cql3_type::varchar = make("varchar", utf8_type, cql3_type::kind::TEXT);
 thread_local shared_ptr<cql3_type> cql3_type::timeuuid = make("timeuuid", timeuuid_type, cql3_type::kind::TIMEUUID);
@@ -296,8 +298,10 @@ cql3_type::values() {
         cql3_type::float_,
         cql3_type:inet,
         cql3_type::int_,
+        cql3_type::smallint,
         cql3_type::text,
         cql3_type::timestamp,
+        cql3_type::tinyint,
         cql3_type::uuid,
         cql3_type::varchar,
         cql3_type::varint,
