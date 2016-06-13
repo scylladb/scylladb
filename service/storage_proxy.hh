@@ -55,6 +55,7 @@ namespace service {
 
 class abstract_write_response_handler;
 class abstract_read_executor;
+class mutation_holder;
 
 class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*implements StorageProxyMBean*/ {
     using clock_type = std::chrono::steady_clock;
@@ -197,17 +198,18 @@ private:
     void got_response(response_id_type id, gms::inet_address from);
     future<> response_wait(response_id_type id, clock_type::time_point timeout);
     abstract_write_response_handler& get_write_response_handler(storage_proxy::response_id_type id);
-    response_id_type create_write_response_handler(schema_ptr s, keyspace& ks, db::consistency_level cl, db::write_type type, frozen_mutation&& mutation, std::unordered_set<gms::inet_address> targets,
+    response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, std::unordered_set<gms::inet_address> targets,
             const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address>);
     response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type);
+    response_id_type create_write_response_handler(const std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>&, db::consistency_level cl, db::write_type type);
     void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
     template<typename Range>
-    size_t hint_to_dead_endpoints(lw_shared_ptr<const frozen_mutation> m, const Range& targets) noexcept;
+    size_t hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets) noexcept;
     void hint_to_dead_endpoints(response_id_type, db::consistency_level);
     bool cannot_hint(gms::inet_address target);
     size_t get_hints_in_progress_for(gms::inet_address target);
     bool should_hint(gms::inet_address ep) noexcept;
-    bool submit_hint(lw_shared_ptr<const frozen_mutation> m, gms::inet_address target);
+    bool submit_hint(std::unique_ptr<mutation_holder>& mh, gms::inet_address target);
     std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token);
     db::read_repair_decision new_read_repair_decision(const schema& s);
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl);
@@ -228,13 +230,16 @@ private:
         db::consistency_level cl);
     template<typename Range, typename CreateWriteHandler>
     future<std::vector<unique_response_handler>> mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler handler);
-    future<std::vector<unique_response_handler>> mutate_prepare(std::vector<mutation>& mutations, db::consistency_level cl, db::write_type type);
+    template<typename Range>
+    future<std::vector<unique_response_handler>> mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type);
     future<> mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl);
     future<> mutate_end(future<> mutate_result, utils::latency_counter);
-    future<> schedule_repair(std::unordered_map<gms::inet_address, std::vector<mutation>> diffs);
+    future<> schedule_repair(std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>> diffs, db::consistency_level cl);
     bool need_throttle_writes() const;
     void unthrottle();
     void handle_read_error(std::exception_ptr eptr);
+    template<typename Range>
+    future<> mutate_internal(Range mutations, db::consistency_level cl);
 
 public:
     storage_proxy(distributed<database>& db);
