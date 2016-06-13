@@ -101,11 +101,7 @@ public:
 
 tracker::tracker()
     : _impl(std::make_unique<impl>())
-    , _reclaimer([this] () {
-            return reclaim(10*1024*1024)
-                   ? memory::reclaiming_result::reclaimed_something
-                   : memory::reclaiming_result::reclaimed_nothing;
-        }, memory::reclaimer_scope::sync)
+    , _reclaimer([this] { return reclaim(); }, memory::reclaimer_scope::sync)
 { }
 
 tracker::~tracker() {
@@ -1513,6 +1509,12 @@ void tracker::set_reclamation_step(size_t step_in_segments) {
 
 size_t tracker::reclamation_step() const {
     return _impl->reclamation_step();
+}
+
+memory::reclaiming_result tracker::reclaim() {
+    return reclaim(_impl->reclamation_step() * segment::size)
+           ? memory::reclaiming_result::reclaimed_something
+           : memory::reclaiming_result::reclaimed_nothing;
 }
 
 region::region()
