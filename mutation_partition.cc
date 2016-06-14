@@ -1984,3 +1984,77 @@ future<uint32_t> data_query(schema_ptr s, const mutation_source& source, const q
     auto reader = source(s, range, query::clustering_key_filtering_context::create(s, slice), service::get_local_sstable_query_read_priority());
     return consume_flattened(std::move(reader), std::move(cfq), is_reversed);
 }
+
+class reconcilable_result_builder {
+    const schema& _schema;
+    const query::partition_slice& _slice;
+
+    std::vector<partition> _result;
+    uint32_t _live_rows;
+
+    bool _has_ck_selector{};
+    bool _static_row_is_alive{};
+    uint32_t _total_live_rows = 0;
+    stdx::optional<streamed_mutation_freezer> _mutation_consumer;
+public:
+    reconcilable_result_builder(const schema& s, const query::partition_slice& slice)
+            : _schema(s), _slice(slice) { }
+
+    void consume_new_partition(const partition_key& pk) {
+        _has_ck_selector = has_ck_selector(_slice.row_ranges(_schema, pk));
+        _static_row_is_alive = false;
+        _live_rows = 0;
+        _mutation_consumer.emplace(streamed_mutation_freezer(_schema, pk));
+    }
+
+    void consume(tombstone t) {
+        _mutation_consumer->consume(t);
+    }
+    void consume(static_row&& sr, bool is_alive) {
+        _static_row_is_alive = is_alive;
+        _mutation_consumer->consume(std::move(sr));
+    }
+    void consume(clustering_row&& cr, bool is_alive) {
+        _live_rows += is_alive;
+        _mutation_consumer->consume(std::move(cr));
+    }
+    void consume(range_tombstone_begin&& rt) {
+        _mutation_consumer->consume(std::move(rt));
+    }
+    void consume(range_tombstone_end&& rt) {
+        _mutation_consumer->consume(std::move(rt));
+    }
+
+    void consume_end_of_partition() {
+        if (_live_rows == 0 && _static_row_is_alive && !_has_ck_selector) {
+            ++_live_rows;
+        }
+        _total_live_rows += _live_rows;
+        _result.emplace_back(partition { _live_rows, _mutation_consumer->consume_end_of_stream() });
+    }
+
+    reconcilable_result consume_end_of_stream() {
+        return reconcilable_result(_total_live_rows, std::move(_result));
+    }
+};
+
+future<reconcilable_result>
+mutation_query(schema_ptr s,
+               const mutation_source& source,
+               const query::partition_range& range,
+               const query::partition_slice& slice,
+               uint32_t row_limit,
+               gc_clock::time_point query_time)
+{
+    if (row_limit == 0) {
+        return make_ready_future<reconcilable_result>(reconcilable_result());
+    }
+
+    auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
+
+    auto rrb = reconcilable_result_builder(*s, slice);
+    auto cfq = compact_for_query<emit_only_live_rows::no, reconcilable_result_builder>(*s, query_time, slice, row_limit, std::move(rrb));
+
+    auto reader = source(s, range, query::clustering_key_filtering_context::create(s, slice), service::get_local_sstable_query_read_priority());
+    return consume_flattened(std::move(reader), std::move(cfq), is_reversed);
+}

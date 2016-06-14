@@ -107,49 +107,6 @@ future<> querying_reader::read() {
     });
 }
 
-class reconcilable_result_builder {
-    querying_reader _reader;
-    std::vector<partition> _result;
-    uint32_t _total = 0;
-public:
-    reconcilable_result_builder(schema_ptr s,
-        const mutation_source& source,
-        const query::partition_range& range,
-        const query::partition_slice& slice,
-        uint32_t row_limit,
-        gc_clock::time_point query_time)
-            : _reader(std::move(s), source, range, slice, row_limit, query_time, [this] (uint32_t live_rows, mutation&& m) {
-                _result.emplace_back(partition{live_rows, freeze(m)});
-                _total += live_rows;
-            })
-    { }
-
-    reconcilable_result_builder(reconcilable_result_builder&&) = delete; // this captured
-
-    future<reconcilable_result> build() {
-        return _reader.read().then([this] {
-            return make_ready_future<reconcilable_result>(reconcilable_result(_total, std::move(_result)));
-        });
-    }
-};
-
-future<reconcilable_result>
-mutation_query(schema_ptr s,
-               const mutation_source& source,
-               const query::partition_range& range,
-               const query::partition_slice& slice,
-               uint32_t row_limit,
-               gc_clock::time_point query_time)
-{
-    if (row_limit == 0) {
-        return make_ready_future<reconcilable_result>(reconcilable_result());
-    }
-
-    auto b_ptr = std::make_unique<reconcilable_result_builder>(std::move(s), source, range, slice, row_limit, query_time);
-    auto& b = *b_ptr;
-    return b.build().finally([keep = std::move(b_ptr)] {});
-}
-
 std::ostream& operator<<(std::ostream& out, const reconcilable_result::printer& pr) {
     out << "{rows=" << pr.self.row_count() << ", [";
     bool first = true;
