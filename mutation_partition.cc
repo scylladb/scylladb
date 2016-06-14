@@ -1801,3 +1801,128 @@ public:
         return _consumer.consume_end_of_stream();
     }
 };
+
+// Adds mutation to query::result.
+class mutation_querier {
+    const schema& _schema;
+    query::result::partition_writer& _pw;
+    tombstone _partition_tombstone;
+    tombstone _current_tombstone;
+    ser::qr_partition__static_row__cells _static_cells_wr;
+    bool _live_data_in_static_row{};
+    uint32_t _live_clustering_rows = 0;
+    stdx::optional<ser::qr_partition__rows> _rows_wr;
+private:
+    void query_static_row(const row& r);
+    void prepare_writers();
+public:
+    mutation_querier(const schema& s, query::result::partition_writer& pw);
+    void consume(tombstone t);
+    // Requires that sr.has_any_live_data()
+    stop_iteration consume(static_row&& sr);
+    // Requires that cr.has_any_live_data()
+    stop_iteration consume(clustering_row&& cr);
+    stop_iteration consume(range_tombstone_begin&& rt);
+    stop_iteration consume(range_tombstone_end&& rt);
+    uint32_t consume_end_of_stream();
+};
+
+mutation_querier::mutation_querier(const schema& s, query::result::partition_writer& pw)
+    : _schema(s)
+    , _pw(pw)
+    , _static_cells_wr(pw.start().start_static_row().start_cells())
+{
+}
+
+void mutation_querier::consume(tombstone t) {
+    _partition_tombstone = t;
+    _current_tombstone = t;
+}
+
+void mutation_querier::query_static_row(const row& r)
+{
+    const query::partition_slice& slice = _pw.slice();
+    if (!slice.static_columns.empty()) {
+        if (_pw.requested_result()) {
+            get_compacted_row_slice(_schema, slice, column_kind::static_column,
+                                    r, slice.static_columns, _static_cells_wr);
+        }
+        if (_pw.requested_digest()) {
+            ::feed_hash(_pw.digest(), _partition_tombstone);
+            auto t = hash_row_slice(_pw.digest(), _schema, column_kind::static_column,
+                                    r, slice.static_columns);
+            _pw.last_modified() = std::max({_pw.last_modified(), _partition_tombstone.timestamp, t});
+        }
+    }
+    _rows_wr.emplace(std::move(_static_cells_wr).end_cells().end_static_row().start_rows());
+}
+
+stop_iteration mutation_querier::consume(static_row&& sr) {
+    query_static_row(sr.cells());
+    _live_data_in_static_row = true;
+    return stop_iteration::no;
+}
+
+stop_iteration mutation_querier::consume(range_tombstone_begin&& rt) {
+    _current_tombstone.apply(rt.tomb());
+    return stop_iteration::no;
+}
+
+stop_iteration mutation_querier::consume(range_tombstone_end&& rt) {
+    _current_tombstone = _partition_tombstone;
+    return stop_iteration::no;
+}
+
+void mutation_querier::prepare_writers() {
+    if (!_rows_wr) {
+        row empty_row;
+        query_static_row(empty_row);
+        _live_data_in_static_row = false;
+    }
+}
+
+stop_iteration mutation_querier::consume(clustering_row&& cr) {
+    prepare_writers();
+
+    const query::partition_slice& slice = _pw.slice();
+
+    if (_pw.requested_digest()) {
+        cr.key().feed_hash(_pw.digest(), _schema);
+        ::feed_hash(_pw.digest(), _current_tombstone);
+        auto t = hash_row_slice(_pw.digest(), _schema, column_kind::regular_column, cr.cells(), slice.regular_columns);
+        _pw.last_modified() = std::max({_pw.last_modified(), _current_tombstone.timestamp, t});
+    }
+
+    if (_pw.requested_result()) {
+        auto cells_wr = [&] {
+            if (slice.options.contains(query::partition_slice::option::send_clustering_key)) {
+                return _rows_wr->add().write_key(cr.key()).start_cells().start_cells();
+            } else {
+                return _rows_wr->add().skip_key().start_cells().start_cells();
+            }
+        }();
+        get_compacted_row_slice(_schema, slice, column_kind::regular_column, cr.cells(), slice.regular_columns, cells_wr);
+        std::move(cells_wr).end_cells().end_cells().end_qr_clustered_row();
+    }
+
+    _live_clustering_rows++;
+    return stop_iteration::no;
+}
+
+uint32_t mutation_querier::consume_end_of_stream() {
+    prepare_writers();
+
+    // If we got no rows, but have live static columns, we should only
+    // give them back IFF we did not have any CK restrictions.
+    // #589
+    // If ck:s exist, and we do a restriction on them, we either have maching
+    // rows, or return nothing, since cql does not allow "is null".
+    if (!_live_clustering_rows
+        && (has_ck_selector(_pw.ranges()) || !_live_data_in_static_row)) {
+        _pw.retract();
+        return 0;
+    } else {
+        std::move(*_rows_wr).end_rows().end_qr_partition();
+        return std::max(_live_clustering_rows, uint32_t(1));
+    }
+}
