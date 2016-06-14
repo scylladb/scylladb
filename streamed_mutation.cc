@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <stack>
 #include <boost/range/algorithm/heap_algorithm.hpp>
 
 #include "mutation.hh"
@@ -427,3 +428,62 @@ mutation_fragment_opt range_tombstone_stream::get_next()
     }
     return { };
 }
+
+streamed_mutation reverse_streamed_mutation(streamed_mutation sm) {
+    class reversing_steamed_mutation final : public streamed_mutation::impl {
+        streamed_mutation_opt _source;
+        mutation_fragment_opt _static_row;
+        std::stack<mutation_fragment> _mutation_fragments;
+        tombstone _current_tombstone;
+    private:
+        future<> consume_source() {
+            return repeat([&] {
+                return (*_source)().then([&] (mutation_fragment_opt mf) {
+                    if (!mf) {
+                        return stop_iteration::yes;
+                    } else if (mf->is_static_row()) {
+                        _static_row = std::move(mf);
+                    } else if (mf->is_range_tombstone_begin()) {
+                        auto& rtb = mf->as_range_tombstone_begin();
+                        _mutation_fragments.emplace(range_tombstone_end(std::move(rtb.key()), flip_bound_kind(rtb.kind())));
+                        _current_tombstone = rtb.tomb();
+                    } else if (mf->is_range_tombstone_end()) {
+                        auto& rte = mf->as_range_tombstone_end();
+                        _mutation_fragments.emplace(range_tombstone_begin(std::move(rte.key()), flip_bound_kind(rte.kind()), _current_tombstone));
+                    } else {
+                        _mutation_fragments.emplace(std::move(*mf));
+                    }
+                    return stop_iteration::no;
+                });
+            }).then([&] {
+                _source = { };
+            });
+        }
+    public:
+        explicit reversing_steamed_mutation(streamed_mutation sm)
+            : streamed_mutation::impl(sm.schema(), sm.decorated_key(), sm.partition_tombstone())
+            , _source(std::move(sm))
+        { }
+
+        virtual future<> fill_buffer() override {
+            if (_source) {
+                return consume_source().then([this] { return fill_buffer(); });
+            }
+            if (_static_row) {
+                push_mutation_fragment(std::move(*_static_row));
+                _static_row = { };
+            }
+            while (!is_end_of_stream() && !is_buffer_full()) {
+                if (_mutation_fragments.empty()) {
+                    _end_of_stream = true;
+                } else {
+                    push_mutation_fragment(std::move(_mutation_fragments.top()));
+                    _mutation_fragments.pop();
+                }
+            }
+            return make_ready_future<>();
+        }
+    };
+
+    return make_streamed_mutation<reversing_steamed_mutation>(std::move(sm));
+};
