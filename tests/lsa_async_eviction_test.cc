@@ -23,6 +23,7 @@
 #include <core/app-template.hh>
 #include <core/sstring.hh>
 #include <core/thread.hh>
+#include <seastar/util/defer.hh>
 
 #include "utils/managed_bytes.hh"
 #include "utils/logalloc.hh"
@@ -58,10 +59,11 @@ int main(int argc, char** argv) {
         auto objects_in_batch = app.configuration()["batch"].as<unsigned>();
 
         return seastar::async([obj_size, obj_count, objects_in_batch] {
+            std::deque<managed_bytes> refs;
             logalloc::region r;
 
             with_allocator(r.allocator(), [&] {
-                std::deque<managed_bytes> refs;
+                auto clear_refs = defer([&refs] { refs.clear(); });
 
                 r.make_evictable([&] {
                     return with_allocator(r.allocator(), [&] {
