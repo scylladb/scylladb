@@ -163,10 +163,10 @@ mutation_partition_view::accept(const column_mapping& cm, mutation_partition_vis
     struct static_row_cell_visitor {
         mutation_partition_visitor& _visitor;
 
-        void accept_atomic_cell(column_id id, atomic_cell ac) const {
+        void accept_atomic_cell(column_id id, const atomic_cell& ac) const {
            _visitor.accept_static_cell(id, ac);
         }
-        void accept_collection(column_id id, collection_mutation cm) const {
+        void accept_collection(column_id id, const collection_mutation& cm) const {
            _visitor.accept_static_cell(id, cm);
         }
     };
@@ -182,10 +182,10 @@ mutation_partition_view::accept(const column_mapping& cm, mutation_partition_vis
         struct cell_visitor {
             mutation_partition_visitor& _visitor;
 
-            void accept_atomic_cell(column_id id, atomic_cell ac) const {
+            void accept_atomic_cell(column_id id, const atomic_cell& ac) const {
                _visitor.accept_row_cell(id, ac);
             }
-            void accept_collection(column_id id, collection_mutation cm) const {
+            void accept_collection(column_id id, const collection_mutation& cm) const {
                _visitor.accept_row_cell(id, cm);
             }
         };
