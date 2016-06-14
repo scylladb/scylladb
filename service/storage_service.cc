@@ -1762,7 +1762,7 @@ future<> storage_service::start_rpc_server() {
                 return tserver->invoke_on_all(&thrift_server::listen, ipv4_addr{ip, port}, keepalive);
             });
         }).then([addr, port] {
-            print("Thrift server listening on %s:%s ...\n", addr, port);
+            logger.info("Thrift server listening on {}:{} ...", addr, port);
         });
     });
 }
