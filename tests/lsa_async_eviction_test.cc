@@ -78,7 +78,11 @@ int main(int argc, char** argv) {
                 uint64_t counter = 0;
 
                 while (counter < obj_count) {
-                    refs.push_back(managed_bytes(managed_bytes::initialized_later(), obj_size));
+                    auto obj = managed_bytes(managed_bytes::initialized_later(), obj_size);
+                    {
+                        logalloc::reclaim_lock l(r);
+                        refs.push_back(std::move(obj));
+                    }
 
                     ++counter;
 
