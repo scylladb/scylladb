@@ -389,3 +389,146 @@ struct move_constructor_disengages<mutation_fragment> {
     enum { value = true };
 };
 using mutation_fragment_opt = optimized_optional<mutation_fragment>;
+
+// streamed_mutation represents a mutation in a form of a stream of
+// mutation_fragments. streamed_mutation emits mutation fragments in the order
+// they should appear in the sstables, i.e. static row is always the first one,
+// then clustering rows and range tombstones are emitted according to the
+// lexicographical ordering of their clustering keys and bounds of the range
+// tombstones.
+//
+// Range tombstones are disjoint, i.e. after emitting
+// range_tombstone_begin it is guaranteed that there is going to be a single
+// range_tombstone_end before another range_tombstone_begin is emitted.
+//
+// The ordering of mutation_fragments also guarantees that by the time the
+// consumer sees a clustering row it has already received all relevant tombstones.
+//
+// Partition key and partition tombstone are not streamed and is part of the
+// streamed_mutation itself.
+class streamed_mutation {
+public:
+    // streamed_mutation uses batching. The mutation implementations are
+    // supposed to fill a buffer with mutation fragments until is_buffer_full()
+    // or end of stream is encountered.
+    class impl {
+    protected:
+        // FIXME: use size in bytes of the mutation_fragments
+        static constexpr size_t buffer_size = 16;
+
+        schema_ptr _schema;
+        dht::decorated_key _key;
+        tombstone _partition_tombstone;
+
+        bool _end_of_stream = false;
+        circular_buffer<mutation_fragment> _buffer;
+
+        friend class streamed_mutation;
+    protected:
+        template<typename... Args>
+        void push_mutation_fragment(Args&&... args) {
+            _buffer.emplace_back(std::forward<Args>(args)...);
+        }
+    public:
+        explicit impl(schema_ptr s, dht::decorated_key dk, tombstone pt)
+            : _schema(std::move(s)), _key(std::move(dk)), _partition_tombstone(pt)
+        {
+            _buffer.reserve(buffer_size);
+        }
+
+        virtual ~impl() { }
+        virtual future<> fill_buffer() = 0;
+
+        bool is_end_of_stream() const { return _end_of_stream; }
+        bool is_buffer_empty() const { return _buffer.empty(); }
+        bool is_buffer_full() const { return _buffer.size() >= buffer_size; }
+
+        mutation_fragment pop_mutation_fragment() {
+            auto mf = std::move(_buffer.front());
+            _buffer.pop_front();
+            return mf;
+        }
+
+        future<mutation_fragment_opt> operator()() {
+            if (is_buffer_empty()) {
+                if (is_end_of_stream()) {
+                    return make_ready_future<mutation_fragment_opt>();
+                }
+                return fill_buffer().then([this] { return operator()(); });
+            }
+            return make_ready_future<mutation_fragment_opt>(pop_mutation_fragment());
+        }
+    };
+private:
+    std::unique_ptr<impl> _impl;
+
+    streamed_mutation() = default;
+    explicit operator bool() const { return bool(_impl); }
+    friend class optimized_optional<streamed_mutation>;
+public:
+    explicit streamed_mutation(std::unique_ptr<impl> i)
+        : _impl(std::move(i)) { }
+
+    const partition_key& key() const { return _impl->_key.key(); }
+    const dht::decorated_key decorated_key() const { return _impl->_key; }
+
+    schema_ptr schema() const { return _impl->_schema; }
+
+    tombstone partition_tombstone() const { return _impl->_partition_tombstone; }
+
+    bool is_end_of_stream() const { return _impl->is_end_of_stream(); }
+    bool is_buffer_empty() const { return _impl->is_buffer_empty(); }
+    bool is_buffer_full() const { return _impl->is_buffer_full(); }
+
+    mutation_fragment pop_mutation_fragment() { return _impl->pop_mutation_fragment(); }
+
+    future<> fill_buffer() { return _impl->fill_buffer(); }
+
+    future<mutation_fragment_opt> operator()() {
+        return _impl->operator()();
+    }
+};
+
+std::ostream& operator<<(std::ostream& os, const streamed_mutation& sm);
+
+template<typename Impl, typename... Args>
+streamed_mutation make_streamed_mutation(Args&&... args) {
+    return streamed_mutation(std::make_unique<Impl>(std::forward<Args>(args)...));
+}
+
+template<>
+struct move_constructor_disengages<streamed_mutation> {
+    enum { value = true };
+};
+using streamed_mutation_opt = optimized_optional<streamed_mutation>;
+
+/*
+template<typename T>
+concept bool StreamedMutationConsumer() {
+    return MutationFragmentConsumer<T, stop_iteration>
+        && requires(T t, tombstone tomb)
+    {
+        { t.consume(tomb) } -> stop_iteration;
+        t.consume_end_of_stream();
+    };
+}
+*/
+template<typename Consumer>
+auto consume(streamed_mutation& m, Consumer consumer) {
+    return do_with(std::move(consumer), [&m] (Consumer& c) {
+        if (c.consume(m.partition_tombstone()) == stop_iteration::yes) {
+            return make_ready_future().then([&] { return c.consume_end_of_stream(); });
+        }
+        return repeat([&m, &c] {
+            if (m.is_buffer_empty()) {
+                if (m.is_end_of_stream()) {
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }
+                return m.fill_buffer().then([] { return stop_iteration::no; });
+            }
+            return make_ready_future<stop_iteration>(m.pop_mutation_fragment().consume(c));
+        }).then([&c] {
+            return c.consume_end_of_stream();
+        });
+    });
+}
