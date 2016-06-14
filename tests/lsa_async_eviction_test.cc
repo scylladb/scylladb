@@ -74,21 +74,11 @@ int main(int argc, char** argv) {
                 });
 
                 uint64_t counter = 0;
-                bool stop = false;
 
-                engine().at_exit([&stop] {
-                    stop = true;
-                    return make_ready_future<>();
-                });
-
-                while (!stop) {
+                while (counter < obj_count) {
                     refs.push_back(managed_bytes(managed_bytes::initialized_later(), obj_size));
 
                     ++counter;
-
-                    if (counter >= obj_count) {
-                        break;
-                    }
 
                     if (counter % objects_in_batch == 0) {
                         print_stats();
