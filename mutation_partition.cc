@@ -30,6 +30,7 @@
 #include "reversibly_mergeable.hh"
 #include "streamed_mutation.hh"
 #include "mutation_query.hh"
+#include "service/priority_manager.hh"
 
 template<bool reversed>
 struct reversal_traits;
@@ -1925,4 +1926,61 @@ uint32_t mutation_querier::consume_end_of_stream() {
         std::move(*_rows_wr).end_rows().end_qr_partition();
         return std::max(_live_clustering_rows, uint32_t(1));
     }
+}
+
+class query_result_builder {
+    const schema& _schema;
+    uint32_t _live_rows = 0;
+    query::result::builder& _rb;
+    stdx::optional<query::result::partition_writer> _pw;
+    stdx::optional<mutation_querier> _mutation_consumer;
+public:
+    query_result_builder(const schema& s, query::result::builder& rb)
+            : _schema(s), _rb(rb) { }
+
+    void consume_new_partition(const partition_key& pk) {
+        _pw.emplace(_rb.add_partition(_schema, pk));
+        _mutation_consumer.emplace(mutation_querier(_schema, *_pw));
+    }
+
+    void consume(tombstone t) {
+        _mutation_consumer->consume(t);
+    }
+    void consume(static_row&& sr, bool) {
+        _mutation_consumer->consume(std::move(sr));
+    }
+    void consume(clustering_row&& cr, bool) {
+        _mutation_consumer->consume(std::move(cr));
+    }
+    void consume(range_tombstone_begin&& rt) {
+        _mutation_consumer->consume(std::move(rt));
+    }
+    void consume(range_tombstone_end&& rt) {
+        _mutation_consumer->consume(std::move(rt));
+    }
+
+    void consume_end_of_partition() {
+        _live_rows += _mutation_consumer->consume_end_of_stream();
+    }
+
+    uint32_t consume_end_of_stream() {
+        return _live_rows;
+    }
+};
+
+future<uint32_t> data_query(schema_ptr s, const mutation_source& source, const query::partition_range& range,
+                            const query::partition_slice& slice, uint32_t row_limit, gc_clock::time_point query_time,
+                            query::result::builder& builder)
+{
+    if (row_limit == 0) {
+        return make_ready_future<uint32_t>(0);
+    }
+
+    auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
+
+    auto qrb = query_result_builder(*s, builder);
+    auto cfq = compact_for_query<emit_only_live_rows::yes, query_result_builder>(*s, query_time, slice, row_limit, std::move(qrb));
+
+    auto reader = source(s, range, query::clustering_key_filtering_context::create(s, slice), service::get_local_sstable_query_read_priority());
+    return consume_flattened(std::move(reader), std::move(cfq), is_reversed);
 }

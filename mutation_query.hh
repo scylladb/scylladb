@@ -115,6 +115,9 @@ future<reconcilable_result> mutation_query(
     uint32_t row_limit,
     gc_clock::time_point query_time);
 
+future<uint32_t> data_query(schema_ptr s, const mutation_source& source, const query::partition_range& range,
+                            const query::partition_slice& slice, uint32_t row_limit, gc_clock::time_point query_time,
+                            query::result::builder& builder);
 
 class querying_reader {
     schema_ptr _schema;
