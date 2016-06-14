@@ -329,6 +329,12 @@ public:
         bool operator()(const range_tombstone& a, const mutation_fragment& b) const {
             return b.row_type_weight() && _cmp(a.start, weight(a.start_kind), b.key(), b.bound_kind_weight());
         }
+        bool operator()(const bound_view& a, const rows_entry& b) const {
+            return _cmp(a.prefix, weight(a.kind), b.key(), 0);
+        }
+        bool operator()(const bound_view& a, const mutation_fragment& b) const {
+            return b.row_type_weight() && _cmp(a.prefix, weight(a.kind), b.key(), b.bound_kind_weight());
+        }
     };
     class equal_compare {
         clustering_key_prefix::equality _equal;
@@ -539,3 +545,41 @@ streamed_mutation streamed_mutation_from_mutation(mutation);
 
 //Requires all streamed_mutations to have the same schema.
 streamed_mutation merge_mutations(std::vector<streamed_mutation>);
+
+// range_tombstone_stream is a helper object that simplifies producing a stream
+// of range tombstones and merging it with a stream of clustering rows.
+// Tombstones are added using apply() and retrieved using get_next().
+//
+// get_next(const rows_entry&) and get_next(const mutation_fragment&) allow
+// merging the stream of tombstones with a stream of clustering rows. If these
+// overloads return disengaged optional it means that there is no tombstone
+// in the stream that should be emitted before the object given as an argument.
+// (And, consequently, if the optional is engaged that tombstone should be
+// emitted first). After calling any of these overloads with a mutation_fragment
+// which is at some position in partition P no range tombstone can be added to
+// the stream which start bound is before that position.
+//
+// get_next() overload which doesn't take any arguments is used to return the
+// remaining tombstones. After it was called no new tombstones can be added
+// to the stream.
+class range_tombstone_stream {
+    const schema& _schema;
+    position_in_partition::less_compare _cmp;
+    range_tombstone_list _list;
+    bool _inside_range_tombstone = false;
+private:
+    mutation_fragment_opt get_next_start();
+    mutation_fragment_opt get_next_end();
+public:
+    range_tombstone_stream(const schema& s) : _schema(s), _cmp(s), _list(s) { }
+    mutation_fragment_opt get_next(const rows_entry&);
+    mutation_fragment_opt get_next(const mutation_fragment&);
+    mutation_fragment_opt get_next();
+
+    void apply(range_tombstone&& rt) {
+        _list.apply(_schema, std::move(rt));
+    }
+    void apply(const range_tombstone_list& list) {
+        _list.apply(_schema, list);
+    }
+};

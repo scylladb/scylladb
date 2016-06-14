@@ -377,3 +377,53 @@ streamed_mutation merge_mutations(std::vector<streamed_mutation> ms)
     assert(!ms.empty());
     return make_streamed_mutation<mutation_merger>(ms.back().schema(), ms.back().decorated_key(), std::move(ms));
 }
+
+mutation_fragment_opt range_tombstone_stream::get_next_start()
+{
+    auto& rt = *_list.tombstones().begin();
+    auto mf = mutation_fragment(range_tombstone_begin(std::move(rt.start), rt.start_kind, rt.tomb));
+    rt.start = clustering_key::make_empty();
+    rt.start_kind = bound_kind::incl_start;
+    _inside_range_tombstone = true;
+    return mf;
+}
+
+mutation_fragment_opt range_tombstone_stream::get_next_end()
+{
+    auto& rt = *_list.tombstones().begin();
+    auto mf = mutation_fragment(range_tombstone_end(std::move(rt.end), rt.end_kind));
+    _list.tombstones().erase(_list.begin());
+    current_deleter<range_tombstone>()(&rt);
+    _inside_range_tombstone = false;
+    return mf;
+}
+
+mutation_fragment_opt range_tombstone_stream::get_next(const rows_entry& re)
+{
+    if (_inside_range_tombstone) {
+        return _cmp(_list.begin()->end_bound(), re) ? get_next_end() : mutation_fragment_opt();
+    } else if (!_list.empty()) {
+        return _cmp(_list.begin()->start_bound(), re) ? get_next_start() : mutation_fragment_opt();
+    }
+    return { };
+}
+
+mutation_fragment_opt range_tombstone_stream::get_next(const mutation_fragment& mf)
+{
+    if (_inside_range_tombstone) {
+        return _cmp(_list.begin()->end_bound(), mf) ? get_next_end() : mutation_fragment_opt();
+    } else if (!_list.empty()) {
+        return _cmp(_list.begin()->start_bound(), mf) ? get_next_start() : mutation_fragment_opt();
+    }
+    return { };
+}
+
+mutation_fragment_opt range_tombstone_stream::get_next()
+{
+    if (_inside_range_tombstone) {
+        return get_next_end();
+    } else if (!_list.empty()) {
+        return get_next_start();
+    }
+    return { };
+}
