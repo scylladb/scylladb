@@ -79,7 +79,8 @@ mutation_reader make_combined_reader(mutation_reader&& a, mutation_reader&& b);
 // reads from the input readers, in order
 mutation_reader make_reader_returning(mutation);
 mutation_reader make_reader_returning(streamed_mutation);
-mutation_reader make_reader_returning_many(std::vector<mutation>);
+mutation_reader make_reader_returning_many(std::vector<mutation>,
+    query::clustering_key_filtering_context filter = query::no_clustering_key_filtering);
 mutation_reader make_reader_returning_many(std::vector<streamed_mutation>);
 mutation_reader make_empty_reader();
 

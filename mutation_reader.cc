@@ -163,11 +163,14 @@ public:
     }
 };
 
-mutation_reader make_reader_returning_many(std::vector<mutation> mutations) {
+mutation_reader make_reader_returning_many(std::vector<mutation> mutations, query::clustering_key_filtering_context ck_filtering) {
     std::vector<streamed_mutation> streamed_mutations;
     streamed_mutations.reserve(mutations.size());
     for (auto& m : mutations) {
-        streamed_mutations.emplace_back(streamed_mutation_from_mutation(std::move(m)));
+        const query::clustering_row_ranges& ck_ranges = ck_filtering.get_ranges(m.key());
+        auto mp = mutation_partition(std::move(m.partition()), *m.schema(), ck_ranges);
+        auto sm = streamed_mutation_from_mutation(mutation(m.schema(), m.decorated_key(), std::move(mp)));
+        streamed_mutations.emplace_back(std::move(sm));
     }
     return make_mutation_reader<reader_returning_many>(std::move(streamed_mutations));
 }
