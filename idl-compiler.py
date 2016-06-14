@@ -847,13 +847,13 @@ def handle_class(cls, hout, cout, namespaces=[], parent_template_param = []):
         elif is_enum(param):
             handle_enum(param, hout, cout, namespaces + [cls["name"] + template_class_param], parent_template_param + template_param_list)
     declear_methods(hout, name + template_class_param, temp_def)
-    modifier = "final" in cls
+    is_final = "final" in cls
 
     fprintln(cout, Template("""
 $template
 template <typename Output>
 void serializer<$name>::write(Output& buf, const $name& obj) {""").substitute({'func' : SERIALIZER, 'name' : full_name, 'template': template}))
-    if not modifier:
+    if not is_final:
         fprintln(cout, Template("""  $set_size(buf, obj);""").substitute({'func' : SERIALIZER, 'set_size' : SETSIZE, 'name' : name, 'sizetype' : SIZETYPE}))
     for param in cls["members"]:
         if is_class(param) or is_enum(param):
@@ -866,7 +866,7 @@ void serializer<$name>::write(Output& buf, const $name& obj) {""").substitute({'
 $template
 template <typename Input>
 $name$temp_param serializer<$name$temp_param>::read(Input& buf) {""").substitute({'func' : DESERIALIZER, 'name' : name, 'template': template, 'temp_param' : template_class_param}))
-    if not modifier:
+    if not is_final:
         fprintln(cout, Template("""  $size_type size = $func(buf, boost::type<$size_type>());
   Input in = buf.read_substream(size - sizeof($size_type));""").substitute({'func' : DESERIALIZER, 'size_type' : SIZETYPE}))
     else:
