@@ -1732,12 +1732,12 @@ private:
         return _data_results.size();
     }
 
-    std::vector<row_address> get_last_rows(schema_ptr schema, const query::read_command& cmd) {
-        class get_last_row final : public mutation_partition_visitor {
+    static row_address get_last_row(const schema& s, const partition& p, bool is_reversed) {
+        class last_clustering_key final : public mutation_partition_visitor {
             stdx::optional<clustering_key> _last_ck;
             bool _is_reversed;
         public:
-            explicit get_last_row(bool is_reversed) : _is_reversed(is_reversed) { }
+            explicit last_clustering_key(bool is_reversed) : _is_reversed(is_reversed) { }
 
             virtual void accept_partition_tombstone(tombstone) override { }
             virtual void accept_static_cell(column_id, atomic_cell_view) override { }
@@ -1751,11 +1751,18 @@ private:
             virtual void accept_row_cell(column_id id, atomic_cell_view) override { }
             virtual void accept_row_cell(column_id id, collection_mutation_view) override { }
 
-            auto last_clustering_key() {
+            stdx::optional<clustering_key>&& release() {
                 return std::move(_last_ck);
             }
         };
 
+        last_clustering_key lck(is_reversed);
+        p.mut().partition().accept(s, lck);
+        return {p.mut().decorated_key(s), lck.release()};
+    }
+
+    std::vector<row_address> get_last_rows(schema_ptr schema, const query::read_command& cmd) {
+        auto is_reversed = cmd.slice.options.contains(query::partition_slice::option::reversed);
         std::vector<row_address> vec;
         vec.reserve(_data_results.size());
         for (auto& reply : _data_results) {
@@ -1764,12 +1771,7 @@ private:
                 continue;
             }
             assert(!result.partitions().empty());
-            auto& p = result.partitions().back();
-
-            auto is_reversed = cmd.slice.options.contains(query::partition_slice::option::reversed);
-            get_last_row glr(is_reversed);
-            p.mut().partition().accept(*schema, glr);
-            vec.emplace_back(p.mut().decorated_key(*schema), std::move(glr.last_clustering_key()));
+            vec.emplace_back(get_last_row(*schema, result.partitions().back(), is_reversed));
         }
         return vec;
     }
