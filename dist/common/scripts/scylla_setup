@@ -228,7 +228,18 @@ if [ $INTERACTIVE -eq 1 ]; then
     if [ $RAID_SETUP -eq 1 ]; then
         echo "Please select disks from following list: "
         while true; do
-            lsblk -d -i -n -r|awk '{print $1}'|sed -e ':loop;N;$!b loop;s/\n/ /g'
+            cat /proc/partitions|awk '{print $4}'|while read dev
+            do
+                count_raw=$(grep $dev /proc/mounts|wc -l)
+                count_pvs=0
+                if [ -f /usr/sbin/pvs ]; then
+                    count_pvs=$(pvs|grep $dev|wc -l)
+                fi
+                if [ $count_raw -eq 0 -a $count_pvs -eq 0 ]; then
+                    echo -n "$dev "
+                fi
+            done
+
             echo "type 'done' to finish selection. selected: $DISKS"
             echo -n "> "
             read dsk
