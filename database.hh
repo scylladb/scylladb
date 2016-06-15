@@ -339,6 +339,7 @@ private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable);
     void add_sstable(sstables::sstable&& sstable);
     void add_sstable(lw_shared_ptr<sstables::sstable> sstable);
+    future<> load_sstable(sstables::sstable&& sstab, bool reset_level = false);
     lw_shared_ptr<memtable> new_memtable();
     lw_shared_ptr<memtable> new_streaming_memtable();
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt);
@@ -456,7 +457,7 @@ public:
     future<> flush();
     future<> flush(const db::replay_position&);
     future<> flush_streaming_mutations(std::vector<query::partition_range> ranges = std::vector<query::partition_range>{});
-    void clear(); // discards memtable(s) without flushing them to disk.
+    future<> clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);
 
     // Important warning: disabling writes will only have an effect in the current shard.

@@ -475,10 +475,59 @@ static bool belongs_to_current_shard(const schema& s, const partition_key& first
     return (s1 <= me) && (me <= s2);
 }
 
+static bool belongs_to_other_shard(const schema& s, const partition_key& first, const partition_key& last) {
+    auto key_shard = [&s] (const partition_key& pk) {
+        auto token = dht::global_partitioner().get_token(s, pk);
+        return dht::shard_of(token);
+    };
+    auto s1 = key_shard(first);
+    auto s2 = key_shard(last);
+    auto me = engine().cpu_id();
+    return (s1 != me) || (me != s2);
+}
+
 static bool belongs_to_current_shard(const schema& s, range<partition_key> r) {
     assert(r.start());
     assert(r.end());
     return belongs_to_current_shard(s, r.start()->value(), r.end()->value());
+}
+
+static bool belongs_to_other_shard(const schema& s, range<partition_key> r) {
+    assert(r.start());
+    assert(r.end());
+    return belongs_to_other_shard(s, r.start()->value(), r.end()->value());
+}
+
+future<> column_family::load_sstable(sstables::sstable&& sstab, bool reset_level) {
+    auto sst = make_lw_shared<sstables::sstable>(std::move(sstab));
+    return sst->get_sstable_key_range(*_schema).then([this, sst, reset_level] (range<partition_key> r) mutable {
+        // Checks whether or not sstable belongs to current shard.
+        if (!belongs_to_current_shard(*_schema, r)) {
+            dblog.debug("sstable {} not relevant for this shard, ignoring", sst->get_filename());
+            sst->mark_for_deletion();
+            return make_ready_future<>();
+        }
+        bool in_other_shard = belongs_to_other_shard(*_schema, std::move(r));
+        return sst->load().then([this, sst, in_other_shard, reset_level] () mutable {
+            if (in_other_shard) {
+                // If we're here, this sstable is shared by this and other
+                // shard(s). Shared sstables cannot be deleted until all
+                // shards compacted them, so to reduce disk space usage we
+                // want to start splitting them now.
+                dblog.info("Splitting {} for shard", sst->get_filename());
+                _compaction_manager.submit_sstable_rewrite(this, sst);
+            }
+            if (reset_level) {
+                // When loading a migrated sstable, set level to 0 because
+                // it may overlap with existing tables in levels > 0.
+                // This step is optional, because even if we didn't do this
+                // scylla would detect the overlap, and bring back some of
+                // the sstables to level 0.
+                sst->set_sstable_level(0);
+            }
+            add_sstable(sst);
+        });
+    });
 }
 
 future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sstring fname) {
@@ -505,24 +554,9 @@ future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sst
         }
     }
 
-    auto sst = std::make_unique<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
-    auto fut = sst->get_sstable_key_range(*_schema);
-    return std::move(fut).then([this, sst = std::move(sst), sstdir = std::move(sstdir), comps] (range<partition_key> r) mutable {
-        // Checks whether or not sstable belongs to current shard.
-        if (!belongs_to_current_shard(*_schema, std::move(r))) {
-            dblog.debug("sstable {} not relevant for this shard, ignoring",
-                    sstables::sstable::filename(sstdir, _schema->ks_name(), _schema->cf_name(), comps.version, comps.generation, comps.format,
-                            sstables::sstable::component_type::Data));
-            sstable::mark_sstable_for_deletion(_schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
-            return make_ready_future<>();
-        }
-
-        auto fut = sst->load();
-        return std::move(fut).then([this, sst = std::move(sst)] () mutable {
-            add_sstable(std::move(*sst));
-            return make_ready_future<>();
-        });
-    }).then_wrapped([fname, comps] (future<> f) {
+    return load_sstable(sstables::sstable(
+            _schema->ks_name(), _schema->cf_name(), sstdir, comps.generation,
+            comps.version, comps.format)).then_wrapped([fname, comps] (future<> f) {
         try {
             f.get();
         } catch (malformed_sstable_exception& e) {
@@ -971,25 +1005,13 @@ future<> column_family::cleanup_sstables(sstables::compaction_descriptor descrip
 future<>
 column_family::load_new_sstables(std::vector<sstables::entry_descriptor> new_tables) {
     return parallel_for_each(new_tables, [this] (auto comps) {
-        auto sst = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), _config.datadir, comps.generation, comps.version, comps.format);
-        return sst->load().then([this, sst] {
-            // This sets in-memory level of sstable to 0.
-            // When loading a migrated sstable, it's important to set it to level 0 because
-            // leveled compaction relies on a level > 0 having no overlapping sstables.
-            // If Scylla reboots before migrated sstable gets compacted, leveled strategy
-            // is smart enough to detect a sstable that overlaps and set its in-memory
-            // level to 0.
-            return sst->set_sstable_level(0);
-        }).then([this, sst] {
-            auto first = sst->get_first_partition_key(*_schema);
-            auto last = sst->get_last_partition_key(*_schema);
-            if (belongs_to_current_shard(*_schema, first, last)) {
-                this->add_sstable(sst);
-            } else {
-                sst->mark_for_deletion();
-            }
-            return make_ready_future<>();
-        });
+        return this->load_sstable(sstables::sstable(
+                _schema->ks_name(), _schema->cf_name(), _config.datadir,
+                comps.generation, comps.version, comps.format), true);
+    }).then([this] {
+        // Drop entire cache for this column family because it may be populated
+        // with stale data.
+        return get_row_cache().clear();
     });
 }
 
@@ -2192,7 +2214,7 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
         // gotten all things to disk. Again, need queue-ish or something.
         f = cf.flush();
     } else {
-        cf.clear();
+        f = cf.clear();
     }
 
     return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, tsf = std::move(tsf)]() mutable {
@@ -2568,21 +2590,24 @@ future<> column_family::flush_streaming_mutations(std::vector<query::partition_r
     // temporary counter measure.
     return with_gate(_streaming_flush_gate, [this, ranges = std::move(ranges)] {
         return seal_active_streaming_memtable_delayed().finally([this, ranges = std::move(ranges)] {
-            if (_config.enable_cache) {
-                for (auto& range : ranges) {
-                    _cache.invalidate(range);
-                }
+            if (!_config.enable_cache) {
+                return make_ready_future<>();
             }
+            return do_with(std::move(ranges), [this] (auto& ranges) {
+                return parallel_for_each(ranges, [this](auto&& range) {
+                    return _cache.invalidate(range);
+                });
+            });
         });
     });
 }
 
-void column_family::clear() {
-    _cache.clear();
+future<> column_family::clear() {
     _memtables->clear();
     _memtables->add_memtable();
     _streaming_memtables->clear();
     _streaming_memtables->add_memtable();
+    return _cache.clear();
 }
 
 // NOTE: does not need to be futurized, but might eventually, depending on
@@ -2609,13 +2634,13 @@ future<db::replay_position> column_family::discard_sstables(db_clock::time_point
 
         _sstables = std::move(pruned);
         dblog.debug("cleaning out row cache");
-        _cache.clear();
-
-        return parallel_for_each(remove, [](sstables::shared_sstable s) {
-            return sstables::delete_atomically({s});
-        }).then([rp] {
-            return make_ready_future<db::replay_position>(rp);
-        }).finally([remove] {}); // keep the objects alive until here.
+        return _cache.clear().then([rp, remove = std::move(remove)] () mutable {
+            return parallel_for_each(remove, [](sstables::shared_sstable s) {
+                return sstables::delete_atomically({s});
+            }).then([rp] {
+                return make_ready_future<db::replay_position>(rp);
+            }).finally([remove] {}); // keep the objects alive until here.
+        });
     });
 }
 
