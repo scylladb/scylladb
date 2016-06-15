@@ -2224,6 +2224,7 @@ protected:
                         // The number of live rows was bounded by the total row limit.
                         _retry_cmd->row_limit = x(cmd->row_limit, data_resolver->total_live_count());
                     }
+                    logger.trace("Retrying query with command {} (previous is {})", *_retry_cmd, *cmd);
                     reconcile(cl, timeout, _retry_cmd);
                 }
             } catch (...) {
