@@ -66,6 +66,7 @@ class partition_slice_clustering_key_filter_factory : public clustering_key_filt
     schema_ptr _schema;
     const partition_slice& _slice;
     clustering_key_prefix::prefix_equal_tri_compare _cmp;
+    query::clustering_row_ranges _ck_ranges;
 public:
     partition_slice_clustering_key_filter_factory(schema_ptr s, const partition_slice& slice)
         : _schema(std::move(s)), _slice(slice), _cmp(*_schema) {}
@@ -87,6 +88,11 @@ public:
     }
 
     virtual const std::vector<range<clustering_key_prefix>>& get_ranges(const partition_key& key) override {
+        if (_slice.options.contains(query::partition_slice::option::reversed)) {
+            _ck_ranges = _slice.row_ranges(*_schema, key);
+            std::reverse(_ck_ranges.begin(), _ck_ranges.end());
+            return _ck_ranges;
+        }
         return _slice.row_ranges(*_schema, key);
     }
 };
