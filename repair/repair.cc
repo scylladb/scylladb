@@ -397,7 +397,7 @@ static future<> sync_range(seastar::sharded<database>& db,
         return sp_in.execute().discard_result().then([&sp_out] {
                 return sp_out.execute().discard_result();
         }).handle_exception([] (auto ep) {
-            logger.error("repair's stream failed: {}", ep);
+            logger.warn("repair's stream failed: {}", ep);
             return make_exception_future(ep);
         });
     });
