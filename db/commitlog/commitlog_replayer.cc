@@ -114,8 +114,10 @@ future<> db::commitlog_replayer::impl::init() {
                 auto& pp = _rpm[p1.first][p2.first];
                 pp = std::max(pp, p2.second);
 
-                auto& min = _min_pos[p1.first];
-                min = (min == replay_position()) ? p2.second : std::min(p2.second, min);
+                auto i = _min_pos.find(p1.first);
+                if (i == _min_pos.end() || p2.second < i->second) {
+                    _min_pos[p1.first] = p2.second;
+                }
             }
         }
     }, [this](cql3::query_processor& qp) {
@@ -126,10 +128,8 @@ future<> db::commitlog_replayer::impl::init() {
                     try {
                         auto p = sst->get_stats_metadata().position;
                         logger.trace("sstable {} -> rp {}", sst->get_filename(), p);
-                        if (p != replay_position()) {
-                            auto& pp = map[p.shard_id()][uuid];
-                            pp = std::max(pp, p);
-                        }
+                        auto& pp = map[p.shard_id()][uuid];
+                        pp = std::max(pp, p);
                     } catch (...) {
                         logger.warn("Could not read sstable metadata {}", std::current_exception());
                     }
@@ -151,6 +151,25 @@ future<> db::commitlog_replayer::impl::init() {
             });
         });
     }).finally([this] {
+        // bugfix: the above map-reduce will not_ detect if sstables
+        // are _missing_ from a CF. And because of re-sharding, we can't
+        // just insert initial zeros into the maps, because we don't know
+        // how many shards there we're last time.
+        // However, this only affects global min pos, since
+        // for each CF, the worst that happens is that we have a missing
+        // entry -> empty replay_pos == min value. But calculating
+        // global min pos will be off, since we will only base it on
+        // existing sstables-per-shard.
+        // So, go through all CF:s and check, if a shard mapping does not
+        // have data for it, assume we must set global pos to zero.
+        for (auto&p : _qp.local().db().local().get_column_families()) {
+            for (auto&p1 : _rpm) { // for each shard
+                if (!p1.second.count(p.first)) {
+                    _min_pos[p1.first] = replay_position();
+                }
+            }
+        }
+
         for (auto&p : _min_pos) {
             logger.debug("minimum position for shard {}: {}", p.first, p.second);
         }
