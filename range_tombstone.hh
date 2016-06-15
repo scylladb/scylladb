@@ -86,7 +86,7 @@ public:
         }
     };
     bool equal(const schema& s, const bound_view other) const {
-        return weight(kind) == weight(other.kind) && prefix.equal(s, other.prefix);
+        return kind == other.kind && prefix.equal(s, other.prefix);
     }
     bool adjacent(const schema& s, const bound_view other) const {
         return invert_kind(other.kind) == kind && prefix.equal(s, other.prefix);
