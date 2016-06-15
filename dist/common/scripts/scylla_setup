@@ -2,6 +2,9 @@
 #
 #  Copyright (C) 2015 ScyllaDB
 
+GREEN='\033[0;32m'
+NO_COLOR='\033[0m' # No Color
+
 if [ "`id -u`" -ne 0 ]; then
     echo "Requires root permission."
     exit 1
@@ -157,6 +160,8 @@ if [ $INTERACTIVE -eq 0 ] && [ $SYSCONFIG_SETUP -eq 1 ] && [ "$NIC" = "" ]; then
 fi
 
 . /etc/os-release
+
+printf "${GREEN}Skip any of the following steps by answering 'no'${NO_COLOR}\n"
 
 if [ $INTERACTIVE -eq 1 ]; then
     interactive_ask_service "Do you want to run kernel version check?" &&:
