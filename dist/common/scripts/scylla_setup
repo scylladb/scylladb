@@ -33,10 +33,25 @@ print_usage() {
 
 interactive_ask_service() {
     echo $1
+    echo $2
     while true; do
-        echo -n "yes/no: "
-        read ans
-        case $ans in
+        if [ "$3" == "yes" ]; then
+        prompt="[YES/no]"
+        elif [ "$3" == "no" ]; then
+        prompt="[yes/NO]"
+        else
+        prompt="[yes/no]"
+        fi
+        result=""
+        while [ x == x"$result" ]; do
+            read -p $prompt ans
+            if [ x == x"$ans" ]; then
+                result="$3"
+            else
+                result="$ans"
+            fi
+        done
+        case $result in
             "y" | "yes")
                 return 1
                 ;;
@@ -164,7 +179,7 @@ fi
 printf "${GREEN}Skip any of the following steps by answering 'no'${NO_COLOR}\n"
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to run kernel version check?" &&:
+    interactive_ask_service "Do you want to run kernel version check?" "Answer yes to have this script verify that the currently installed kernel is qualified to run Scylla; answer no to skip this check." "yes" &&:
     KERNEL_CHECK=$?
 fi
 if [ $KERNEL_CHECK -eq 1 ]; then
@@ -172,12 +187,7 @@ if [ $KERNEL_CHECK -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to enable ScyllaDB services?" &&:
-    ENABLE_SERVICE=$?
-fi
-
-if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you verify ScyllaDB packages installed?" &&:
+    interactive_ask_service "Do you verify ScyllaDB packages installed?" "Answer yes to have this script check that ScyllaDB is already installed; answer no to skip this check." "yes" &&:
     VERIFY_PACKAGE=$?
 fi
 
@@ -187,7 +197,7 @@ if [ $VERIFY_PACKAGE -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to enable ScyllaDB services?" &&:
+    interactive_ask_service "Do you want to enable ScyllaDB services?" "Answer yes to automatically start Scylla when the node boots; answer no to skip this step." "yes" &&:
     ENABLE_SERVICE=$?
 fi
 
@@ -200,7 +210,7 @@ if [ $ENABLE_SERVICE -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to disable SELinux?" &&:
+    interactive_ask_service "Do you want to disable SELinux?" "Answer yes to disable SELinux; this improves performance; answer no to keep it activated." "yes" &&:
     SELINUX_SETUP=$?
 fi
 if [ $SELINUX_SETUP -eq 1 ]; then
@@ -208,7 +218,7 @@ if [ $SELINUX_SETUP -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to setup bootloader options?" &&:
+    interactive_ask_service "Do you want to setup bootloader options?" "Anwser yes to enable hugepages at boot time; this improve performance. Answer no to skip this step." "yes" &&:
     BOOTPARAM_SETUP=$?
 fi
 if [ $BOOTPARAM_SETUP -eq 1 ]; then
@@ -216,7 +226,7 @@ if [ $BOOTPARAM_SETUP -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to setup NTP?" &&:
+    interactive_ask_service "Do you want to setup NTP?" "Answer yes to enable time synchronization at boot time. This keeps time right on the node. Answer no to do nothing." "yes" &&:
     NTP_SETUP=$?
 fi
 if [ $NTP_SETUP -eq 1 ]; then
@@ -228,7 +238,7 @@ if [ $NTP_SETUP -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to setup RAID?" &&:
+    interactive_ask_service "Do you want to setup RAID?" "Its is recommended to use RAID0 for Scylla data. If you select yes, you will need to choose which disks to use for Scylla data." "yes" &&:
     RAID_SETUP=$?
     if [ $RAID_SETUP -eq 1 ]; then
         echo "Please select disks from following list: "
@@ -274,7 +284,7 @@ if [ $RAID_SETUP -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to setup coredump?" &&:
+    interactive_ask_service "Do you want to setup coredump?" "Answer yes to enable core dumps; this allow to do post mortem analysis of Scylla state after a crash. Answer no to do nothing." "yes" &&:
     COREDUMP_SETUP=$?
 fi
 if [ $COREDUMP_SETUP -eq 1 ]; then
@@ -286,7 +296,7 @@ if [ $COREDUMP_SETUP -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to setup sysconfig?" &&:
+    interactive_ask_service "Do you want to setup sysconfig?" "Answer yes to do system wide configuration customized for Scylla. Answer no to do nothing." "yes" &&:
     SYSCONFIG_SETUP=$?
     if [ $SYSCONFIG_SETUP -eq 1 ]; then
         NICS=$(for i in /sys/class/net/*;do nic=`basename $i`; if [ "$nic" != "lo" ]; then echo $nic; fi; done)
@@ -307,7 +317,7 @@ if [ $INTERACTIVE -eq 1 ]; then
                 fi
             done
         fi
-        interactive_ask_service "Do you want to optimize NIC queue settings?" &&:
+        interactive_ask_service "Do you want to optimize NIC queue settings?" "Answer yes to enable network card optimization; this improve performance. Answer no to skip this optimization." "yes" &&:
         SET_NIC=$?
     fi
 fi
@@ -320,7 +330,7 @@ if [ $SYSCONFIG_SETUP -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to setup IO configuration?" &&:
+    interactive_ask_service "Do you want to setup IO configuration?" "Answer yes to let iotune study what are your disks IO profile and adapt Scylla to it. Answer no to skip this action." "yes" &&:
     IO_SETUP=$?
 fi
 if [ $IO_SETUP -eq 1 ]; then
