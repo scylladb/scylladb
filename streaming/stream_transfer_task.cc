@@ -96,7 +96,7 @@ future<stop_iteration> do_send_mutations(auto si, auto fm) {
         // Log one error per column_family per range
         if (!si->error_logged) {
             si->error_logged = true;
-            sslog.error("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION to {}: {}", si->plan_id, si->id, ep);
+            sslog.warn("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION to {}: {}", si->plan_id, si->id, ep);
         }
         si->mutations_done.broken();
     });
@@ -153,7 +153,7 @@ void stream_transfer_task::start() {
         sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, cf_id={}", plan_id, id, cf_id);
         return session->ms().send_stream_mutation_done(id, plan_id, _ranges,
                 cf_id, session->dst_cpu_id).handle_exception([plan_id, id, cf_id] (auto ep) {
-            sslog.error("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION_DONE to {}: {}", plan_id, id, ep);
+            sslog.warn("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION_DONE to {}: {}", plan_id, id, ep);
             std::rethrow_exception(ep);
         });
     }).then([this, id, plan_id, cf_id] {
@@ -161,7 +161,7 @@ void stream_transfer_task::start() {
         session->start_keep_alive_timer();
         session->transfer_task_completed(cf_id);
     }).handle_exception([this, plan_id, id] (auto ep){
-        sslog.error("[Stream #{}] stream_transfer_task: Fail to send to {}: {}", plan_id, id, ep);
+        sslog.warn("[Stream #{}] stream_transfer_task: Fail to send to {}: {}", plan_id, id, ep);
         this->session->on_error();
     });
 }
