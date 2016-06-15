@@ -228,7 +228,7 @@ future<> stream_session::on_initialization_complete() {
             }
             _stream_result->handle_session_prepared(this->shared_from_this());
         } catch (...) {
-            sslog.error("[Stream #{}] Fail to send PREPARE_MESSAGE to {}, {}", this->plan_id(), id, std::current_exception());
+            sslog.warn("[Stream #{}] Fail to send PREPARE_MESSAGE to {}, {}", this->plan_id(), id, std::current_exception());
             throw;
         }
         return make_ready_future<>();
@@ -238,7 +238,7 @@ future<> stream_session::on_initialization_complete() {
         return ms().send_prepare_done_message(id, plan_id, this->dst_cpu_id).then([this] {
             sslog.debug("[Stream #{}] GOT PREPARE_DONE_MESSAGE Reply from {}", this->plan_id(), this->peer);
         }).handle_exception([id, plan_id] (auto ep) {
-            sslog.error("[Stream #{}] Fail to send PREPARE_DONE_MESSAGE to {}, {}", plan_id, id, ep);
+            sslog.warn("[Stream #{}] Fail to send PREPARE_DONE_MESSAGE to {}, {}", plan_id, id, ep);
             std::rethrow_exception(ep);
         });
     }).then([this] {
@@ -248,7 +248,7 @@ future<> stream_session::on_initialization_complete() {
 }
 
 void stream_session::on_error() {
-    sslog.error("[Stream #{}] Streaming error occurred", plan_id());
+    sslog.warn("[Stream #{}] Streaming error occurred", plan_id());
     // fail session
     close_session(stream_session_state::FAILED);
 }
@@ -270,7 +270,7 @@ future<prepare_message> stream_session::prepare(std::vector<stream_request> requ
                 db.find_column_family(ks, cf);
             } catch (no_such_column_family) {
                 auto err = sprint("[Stream #{}] prepare requested ks={} cf={} does not exist", ks, cf);
-                sslog.error(err.c_str());
+                sslog.warn(err.c_str());
                 throw std::runtime_error(err);
             }
         }
@@ -284,7 +284,7 @@ future<prepare_message> stream_session::prepare(std::vector<stream_request> requ
             db.find_column_family(cf_id);
         } catch (no_such_column_family) {
             auto err = sprint("[Stream #{}] prepare cf_id=%s does not exist", plan_id, cf_id);
-            sslog.error(err.c_str());
+            sslog.warn(err.c_str());
             throw std::runtime_error(err);
         }
         prepare_receiving(summary);
