@@ -1052,7 +1052,7 @@ future<std::vector<storage_proxy::unique_response_handler>> storage_proxy::mutat
     // apply is used to convert exceptions to exceptional future
     return futurize<std::vector<storage_proxy::unique_response_handler>>::apply([this] (const Range& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler create_handler) {
         std::vector<unique_response_handler> ids;
-        ids.reserve(boost::size(mutations));
+        ids.reserve(std::distance(std::begin(mutations), std::end(mutations)));
         for (auto& m : mutations) {
             ids.emplace_back(*this, create_handler(m, cl, type));
         }
@@ -1137,7 +1137,7 @@ future<>
 storage_proxy::mutate_internal(Range mutations, db::consistency_level cl) {
     logger.trace("mutate cl={}", cl);
     mlogger.trace("mutations={}", mutations);
-    auto type = boost::size(mutations) == 1 ? db::write_type::SIMPLE : db::write_type::UNLOGGED_BATCH;
+    auto type = std::next(std::begin(mutations)) == std::end(mutations) ? db::write_type::SIMPLE : db::write_type::UNLOGGED_BATCH;
     utils::latency_counter lc;
     lc.start();
 
