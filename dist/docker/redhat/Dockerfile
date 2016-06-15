@@ -7,7 +7,7 @@ RUN yum -y install epel-release
 RUN yum -y clean expire-cache
 RUN yum -y update
 RUN yum -y remove boost-thread boost-system
-RUN yum -y install scylla-server scylla-jmx scylla-tools hostname
+RUN yum -y install scylla hostname
 RUN yum clean all
 
 ADD start-scylla /start-scylla
