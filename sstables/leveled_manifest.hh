@@ -487,9 +487,8 @@ public:
         return level;
     }
 
-    std::vector<sstables::shared_sstable>
-    overlapping(std::vector<sstables::shared_sstable>& candidates, std::list<sstables::shared_sstable>& others) {
-        const schema& s = *_schema;
+    template <typename T>
+    static std::vector<sstables::shared_sstable> overlapping(const schema& s, std::vector<sstables::shared_sstable>& candidates, T& others) {
         assert(!candidates.empty());
         /*
          * Picking each sstable from others that overlap one of the sstable of candidates is not enough
@@ -516,21 +515,19 @@ public:
             first = first <= first_candidate? first : first_candidate;
             last = last >= last_candidate ? last : last_candidate;
         }
-        return overlapping(first, last, others);
+        return overlapping(s, first, last, others);
     }
 
-    std::vector<sstables::shared_sstable>
-    overlapping(sstables::shared_sstable& sstable, std::list<sstables::shared_sstable>& others) {
-        const schema& s = *_schema;
-        return overlapping(sstable->get_first_decorated_key(s)._token, sstable->get_last_decorated_key(s)._token, others);
+    template <typename T>
+    static std::vector<sstables::shared_sstable> overlapping(const schema& s, sstables::shared_sstable& sstable, T& others) {
+        return overlapping(s, sstable->get_first_decorated_key(s)._token, sstable->get_last_decorated_key(s)._token, others);
     }
 
     /**
      * @return sstables from @param sstables that contain keys between @param start and @param end, inclusive.
      */
-   std::vector<sstables::shared_sstable>
-   overlapping(dht::token start, dht::token end, std::list<sstables::shared_sstable>& sstables) {
-        const schema& s = *_schema;
+    template <typename T>
+    static std::vector<sstables::shared_sstable> overlapping(const schema& s, dht::token start, dht::token end, T& sstables) {
         assert(start <= end);
 
         std::vector<sstables::shared_sstable> overlapped;
@@ -607,7 +604,7 @@ public:
                     continue;
                 }
 
-                auto overlappedL0 = overlapping(sstable, remaining);
+                auto overlappedL0 = overlapping(*_schema, sstable, remaining);
                 it = std::find(overlappedL0.begin(), overlappedL0.end(), sstable);
                 if (it == overlappedL0.end()) {
                     overlappedL0.push_back(sstable);
@@ -643,7 +640,7 @@ public:
                 // add sstables from L1 that overlap candidates
                 // if the overlapping ones are already busy in a compaction, leave it out.
                 // TODO try to find a set of L0 sstables that only overlaps with non-busy L1 sstables
-                auto l1overlapping = overlapping(candidates, get_level(1));
+                auto l1overlapping = overlapping(*_schema, candidates, get_level(1));
                 for (auto candidate : l1overlapping) {
                     auto it = std::find(candidates.begin(), candidates.end(), candidate);
                     if (it != candidates.end()) {
@@ -684,7 +681,7 @@ public:
             std::advance(it, pos);
 
             auto sstable = *it;
-            auto candidates = overlapping(sstable, get_level(level + 1));
+            auto candidates = overlapping(*_schema, sstable, get_level(level + 1));
             candidates.push_back(sstable);
 #if 0
             if (Iterables.any(candidates, suspectP))
