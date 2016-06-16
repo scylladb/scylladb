@@ -2025,6 +2025,13 @@ void region_group::do_release_requests() noexcept {
     });
 }
 
+region* region_group::get_largest_region() {
+    if (!_maximal_rg || _maximal_rg->_regions.empty()) {
+        return nullptr;
+    }
+    return _maximal_rg->_regions.top()->_region;
+}
+
 void
 region_group::add(region_group* child) {
     child->_subgroup_heap_handle = _subgroups.push(child);

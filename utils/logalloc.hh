@@ -307,6 +307,11 @@ public:
         return fut;
     }
 
+    // returns a pointer to the largest region (in terms of memory usage) that sits below this
+    // region group. This includes the regions owned by this region group as well as all of its
+    // children.
+    region* get_largest_region();
+
     // Shutdown is mandatory for every user who has set a threshold
     future<> shutdown() {
         _shutdown_requested = true;
