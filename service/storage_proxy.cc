@@ -2232,9 +2232,12 @@ public:
                 f.finally([exec = shared_from_this()]{});
             }
         });
-        // FIXME: the timeout should come from previous latency statistics for a partition
-        auto speculate_timeout = std::chrono::steady_clock::now() + std::chrono::milliseconds(_proxy->get_db().local().get_config().read_request_timeout_in_ms()/2);
-        _speculate_timer.arm(speculate_timeout);
+        auto& sr = _schema->speculative_retry();
+        auto t = (sr.get_type() == speculative_retry::type::PERCENTILE) ?
+            // FIXME: the timeout should come from previous latency statistics for a partition
+            std::chrono::milliseconds(_proxy->get_db().local().get_config().read_request_timeout_in_ms()/2) :
+            std::chrono::milliseconds(unsigned(sr.get_value()));
+        _speculate_timer.arm(t);
 
         // if CL + RR result in covering all replicas, getReadExecutor forces AlwaysSpeculating.  So we know
         // that the last replica in our list is "extra."
