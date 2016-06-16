@@ -96,6 +96,7 @@ private:
     memory::reclaimer _reclaimer;
     friend class region;
     friend class region_impl;
+    memory::reclaiming_result reclaim();
 public:
     tracker();
     ~tracker();
@@ -127,6 +128,12 @@ public:
     occupancy_stats occupancy();
 
     impl& get_impl() { return *_impl; }
+
+    // Set the minimum number of segments reclaimed during single reclamation cycle.
+    void set_reclamation_step(size_t step_in_segments);
+
+    // Returns the minimum number of segments reclaimed during single reclamation cycle.
+    size_t reclamation_step() const;
 };
 
 tracker& shard_tracker();

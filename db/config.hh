@@ -728,6 +728,7 @@ public:
     val(developer_mode, bool, false, Used, "Relax environment checks. Setting to true can reduce performance and reliability significantly.") \
     val(skip_wait_for_gossip_to_settle, int32_t, -1, Used, "An integer to configure the wait for gossip to settle. -1: wait normally, 0: do not wait at all, n: wait for at most n polls. Same as -Dcassandra.skip_wait_for_gossip_to_settle in cassandra.") \
     val(experimental, bool, false, Used, "Set to true to unlock experimental features.") \
+    val(lsa_reclamation_step, size_t, 1, Used, "Minimum number of segments to reclaim in a single step") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \

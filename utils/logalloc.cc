@@ -55,6 +55,7 @@ class tracker::impl {
     std::vector<region::impl*> _regions;
     scollectd::registrations _collectd_registrations;
     bool _reclaiming_enabled = true;
+    size_t _reclamation_step = 1;
 private:
     // Prevents tracker's reclaimer from running while live. Reclaimer may be
     // invoked synchronously with allocator. This guard ensures that this
@@ -78,9 +79,7 @@ public:
     impl() {
         register_collectd_metrics();
     }
-    ~impl() {
-        assert(_regions.empty());
-    }
+    ~impl();
     void register_region(region::impl*);
     void unregister_region(region::impl*);
     size_t reclaim(size_t bytes);
@@ -90,6 +89,8 @@ public:
     void reclaim_all_free_segments();
     occupancy_stats region_occupancy();
     occupancy_stats occupancy();
+    void set_reclamation_step(size_t step_in_segments) { _reclamation_step = step_in_segments; }
+    size_t reclamation_step() const { return _reclamation_step; }
 };
 
 class tracker_reclaimer_lock {
@@ -100,11 +101,7 @@ public:
 
 tracker::tracker()
     : _impl(std::make_unique<impl>())
-    , _reclaimer([this] () {
-            return reclaim(10*1024*1024)
-                   ? memory::reclaiming_result::reclaimed_something
-                   : memory::reclaiming_result::reclaimed_nothing;
-        }, memory::reclaimer_scope::sync)
+    , _reclaimer([this] { return reclaim(); }, memory::reclaimer_scope::sync)
 { }
 
 tracker::~tracker() {
@@ -645,7 +642,6 @@ segment* segment_pool::allocate_segment()
         desc._zone = &zone;
     };
 
-    static constexpr unsigned reclaim_step = 16;
     do {
         tracker_reclaimer_lock rl;
         if (!_not_full_zones.empty()) {
@@ -674,7 +670,7 @@ segment* segment_pool::allocate_segment()
             }
             return seg;
         }
-    } while (shard_tracker().get_impl().compact_and_evict(reclaim_step * segment::size));
+    } while (shard_tracker().get_impl().compact_and_evict(shard_tracker().reclamation_step() * segment::size));
     return nullptr;
 }
 
@@ -1507,6 +1503,20 @@ public:
     friend class region_group;
 };
 
+void tracker::set_reclamation_step(size_t step_in_segments) {
+    _impl->set_reclamation_step(step_in_segments);
+}
+
+size_t tracker::reclamation_step() const {
+    return _impl->reclamation_step();
+}
+
+memory::reclaiming_result tracker::reclaim() {
+    return reclaim(_impl->reclamation_step() * segment::size)
+           ? memory::reclaiming_result::reclaimed_something
+           : memory::reclaiming_result::reclaimed_nothing;
+}
+
 region::region()
     : _impl(make_shared<impl>())
 { }
@@ -1643,6 +1653,16 @@ struct reclaim_timer {
             auto duration = clock::now() - start;
             timing_logger.debug("Reclamation cycle took {} us.",
                 std::chrono::duration_cast<std::chrono::duration<double, std::micro>>(duration).count());
+        }
+    }
+    void stop(size_t released) {
+        if (enabled) {
+            enabled = false;
+            auto duration = clock::now() - start;
+            auto bytes_per_second = static_cast<float>(released) / std::chrono::duration_cast<std::chrono::duration<float>>(duration).count();
+            timing_logger.debug("Reclamation cycle took {} us. Reclamation rate = {} MiB/s",
+                                std::chrono::duration_cast<std::chrono::duration<double, std::micro>>(duration).count(),
+                                sprint("%.3f", bytes_per_second / (1024*1024)));
         }
     }
 };
@@ -1798,6 +1818,8 @@ size_t tracker::impl::compact_and_evict(size_t memory_to_release) {
     logger.debug("Released {} bytes (wanted {}), {} during compaction, {} from reserve",
         mem_released, memory_to_release, released_during_compaction, released_from_reserve);
 
+    timing_guard.stop(mem_released);
+
     return mem_released;
 }
 
@@ -1925,6 +1947,15 @@ void tracker::impl::register_collectd_metrics() {
             scollectd::make_typed(scollectd::data_type::DERIVE, [] { return shard_segment_pool.statistics().segments_compacted; })
         ),
     });
+}
+
+tracker::impl::~impl() {
+    if (!_regions.empty()) {
+        for (auto&& r : _regions) {
+            logger.error("Region with id={} not unregistered!", r->id());
+        }
+        abort();
+    }
 }
 
 region_group::region_group(region_group&& o) noexcept
