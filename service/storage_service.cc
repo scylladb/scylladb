@@ -972,6 +972,28 @@ void storage_service::unregister_subscriber(endpoint_lifecycle_subscriber* subsc
 
 static stdx::optional<future<>> drain_in_progress;
 
+future<> storage_service::stop_transport() {
+    return run_with_no_api_lock([] (storage_service& ss) {
+        return seastar::async([&ss] {
+            logger.info("Stop transport: starts");
+
+            gms::get_local_gossiper().stop_gossiping().get();
+            logger.info("Stop transport: stop_gossiping done");
+
+            ss.shutdown_client_servers().get();
+            logger.info("Stop transport: shutdown rpc and cql server done");
+
+            ss.do_stop_ms().get();
+            logger.info("Stop transport: shutdown messaging_service done");
+
+            auth::auth::shutdown().get();
+            logger.info("Stop transport: auth shutdown");
+
+            logger.info("Stop transport: done");
+        });
+    });
+}
+
 future<> storage_service::drain_on_shutdown() {
     return run_with_no_api_lock([] (storage_service& ss) {
         if (drain_in_progress) {
@@ -980,17 +1002,8 @@ future<> storage_service::drain_on_shutdown() {
         return seastar::async([&ss] {
             logger.info("Drain on shutdown: starts");
 
-            gms::get_local_gossiper().stop_gossiping().get();
-            logger.info("Drain on shutdown: stop_gossiping done");
-
-            ss.shutdown_client_servers().get();
-            logger.info("Drain on shutdown: shutdown rpc and cql server done");
-
-            ss.do_stop_ms().get();
-            logger.info("Drain on shutdown: shutdown messaging_service done");
-
-            auth::auth::shutdown().get();
-            logger.info("Drain on shutdown: auth shutdown");
+            ss.stop_transport().get();
+            logger.info("Drain on shutdown: stop_transport done");
 
             ss.flush_column_families();
             logger.info("Drain on shutdown: flush column_families done");
@@ -3007,7 +3020,7 @@ void storage_service::do_isolate_on_error(disk_error type)
     if (must_isolate && !isolated.exchange(true)) {
         logger.warn("Shutting down communications due to I/O errors until operator intervention");
         // isolated protect us against multiple stops
-        service::get_storage_service().invoke_on_all([] (service::storage_service& s) { s.stop_native_transport(); });
+        service::get_local_storage_service().stop_transport();
     }
 }
 
