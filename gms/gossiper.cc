@@ -1723,6 +1723,7 @@ std::set<sstring> gossiper::get_supported_features(inet_address endpoint) const 
         return features;
     }
     boost::split(features, app_state->value, boost::is_any_of(","));
+    features.erase("");
     return features;
 }
 
@@ -1750,6 +1751,7 @@ std::set<sstring> gossiper::get_supported_features() const {
                 std::inserter(result, result.begin()));
         common_features = std::move(result);
     }
+    common_features.erase("");
     return common_features;
 }
 
