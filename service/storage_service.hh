@@ -385,6 +385,8 @@ public:
 
     future<> drain_on_shutdown();
 
+    future<> stop_transport();
+
     void flush_column_families();
 #if 0
     /**
