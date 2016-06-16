@@ -52,8 +52,49 @@ constexpr size_t segment_size = 1 << segment_size_shift;
 //
 using eviction_fn = std::function<memory::reclaiming_result()>;
 
+//
+// Users of a region_group can pass an instance of the class region_group_reclaimer, and specialize
+// its methods start_reclaiming() and stop_reclaiming(). Those methods will be called when the LSA
+// see relevant changes in the memory pressure conditions for this region_group. By specializing
+// those methods - which are a nop by default - the callers can take action to aid the LSA in
+// alleviating pressure.
+class region_group_reclaimer {
+protected:
+    size_t _threshold;
+    bool _under_pressure = false;
+    virtual void start_reclaiming() {}
+    virtual void stop_reclaiming() {}
+public:
+    bool under_pressure() const {
+        return _under_pressure;
+    }
+
+    void notify_pressure() {
+        if (!_under_pressure) {
+            _under_pressure = true;
+            start_reclaiming();
+        }
+    }
+
+    void notify_relief() {
+        if (_under_pressure) {
+            _under_pressure = false;
+            stop_reclaiming();
+        }
+    }
+
+    region_group_reclaimer(size_t threshold = std::numeric_limits<size_t>::max()) : _threshold(threshold) {}
+    virtual ~region_group_reclaimer() {}
+
+    size_t throttle_threshold() const {
+        return _threshold;
+    }
+};
+
 // Groups regions for the purpose of statistics.  Can be nested.
 class region_group {
+    static region_group_reclaimer no_reclaimer;
+
     struct region_evictable_occupancy_ascending_less_comparator {
         bool operator()(region_impl* r1, region_impl* r2) const;
     };
@@ -93,7 +134,8 @@ class region_group {
 
     region_group* _parent = nullptr;
     size_t _total_memory = 0;
-    size_t _throttle_threshold = std::numeric_limits<size_t>::max();
+    region_group_reclaimer& _reclaimer;
+
     subgroup_heap _subgroups;
     subgroup_heap::handle_type _subgroup_heap_handle;
     region_heap _regions;
@@ -154,8 +196,8 @@ public:
     // method run_when_memory_available(), to make sure that a given function is only executed when
     // the total memory for the region group (and all of its parents) is lower or equal to the
     // region_group's throttle_treshold (and respectively for its parents).
-    region_group(size_t throttle_threshold = std::numeric_limits<size_t>::max()) : region_group(nullptr, throttle_threshold) {}
-    region_group(region_group* parent, size_t throttle_threshold = std::numeric_limits<size_t>::max()) : _parent(parent), _throttle_threshold(throttle_threshold) {
+    region_group(region_group_reclaimer& reclaimer = no_reclaimer) : region_group(nullptr, reclaimer) {}
+    region_group(region_group* parent, region_group_reclaimer& reclaimer = no_reclaimer) : _parent(parent), _reclaimer(reclaimer) {
         if (_parent) {
             _parent->add(this);
         }
@@ -165,7 +207,7 @@ public:
     ~region_group() {
         // If we set a throttle threshold, we'd be postponing many operations. So shutdown must be
         // called.
-        if (_throttle_threshold != std::numeric_limits<size_t>::max()) {
+        if (_reclaimer.throttle_threshold() != std::numeric_limits<size_t>::max()) {
             assert(_shutdown_requested);
         }
         if (_parent) {
@@ -244,6 +286,24 @@ public:
         auto fn = std::make_unique<concrete_allocating_function<Func>>(std::forward<Func>(func));
         auto fut = fn->get_future();
         _blocked_requests.push_back(std::move(fn));
+
+        // This is called here, and not at update(), for two reasons: the first, is that things that
+        // are done during the free() path should be done carefuly, in the sense that they can
+        // trigger another update call and put us in a loop. Not to mention we would like to keep
+        // those from having exceptions. We solve that for release_requests by using later(), but in
+        // here we can do away with that need altogether.
+        //
+        // Second and most important, until we actually block a request, the pressure condition may
+        // very well be transient. There are opportunities for compactions, the condition can go
+        // away on its own, etc.
+        //
+        // The reason we check execution permitted(), is that we'll still block requests if we have
+        // free memory but existing requests in the queue. That is so we can keep our FIFO ordering
+        // guarantee. So we need to distinguish here the case in which we're blocking merely to
+        // serialize requests, so that the caller does not evict more than it should.
+        if (!blocked_at->execution_permitted()) {
+            blocked_at->_reclaimer.notify_pressure();
+        }
         return fut;
     }
 
@@ -307,10 +367,12 @@ private:
         return nullptr;
     }
     inline bool execution_permitted() const {
-        return _total_memory <= _throttle_threshold;
+        return _total_memory <= _reclaimer.throttle_threshold();
     }
 
     void release_requests() noexcept {
+        _reclaimer.notify_relief();
+
         _descendant_blocked_requests.set_value();
         _descendant_blocked_requests = shared_promise<>();
         if (!_blocked_requests.empty()) {

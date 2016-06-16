@@ -1976,6 +1976,8 @@ void tracker::impl::register_collectd_metrics() {
     });
 }
 
+region_group_reclaimer region_group::no_reclaimer;
+
 uint64_t region_group::top_region_evictable_space() const {
     return _regions.empty() ? 0 : _regions.top()->evictable_occupancy().total_space();
 }
