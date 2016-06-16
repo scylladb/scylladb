@@ -1090,6 +1090,7 @@ class region_impl : public allocation_strategy {
         }
     } __attribute__((packed));
 private:
+    region* _region = nullptr;
     region_group* _group = nullptr;
     segment* _active = nullptr;
     size_t _active_offset;
@@ -1243,8 +1244,8 @@ private:
     };
 
 public:
-    explicit region_impl(region_group* group = nullptr)
-        : _group(group), _id(next_id())
+    explicit region_impl(region* region, region_group* group = nullptr)
+        : _region(region), _group(group), _id(next_id())
     {
         _preferred_max_contiguous_allocation = max_managed_object_size;
         tracker_instance._impl->register_region(this);
@@ -1547,6 +1548,7 @@ public:
         return _reclaim_counter;
     }
 
+    friend class region;
     friend class region_group;
     friend class region_group::region_evictable_occupancy_ascending_less_comparator;
 };
@@ -1557,11 +1559,22 @@ region_group::region_evictable_occupancy_ascending_less_comparator::operator()(r
 }
 
 region::region()
-    : _impl(make_shared<impl>())
+    : _impl(make_shared<impl>(this))
 { }
 
 region::region(region_group& group)
-        : _impl(make_shared<impl>(&group)) {
+        : _impl(make_shared<impl>(this, &group)) {
+}
+
+region::region(region&& other) {
+    this->_impl = std::move(other._impl);
+    this->_impl->_region = this;
+}
+
+region& region::operator=(region&& other) {
+    this->_impl = std::move(other._impl);
+    this->_impl->_region = this;
+    return *this;
 }
 
 region::~region() {
