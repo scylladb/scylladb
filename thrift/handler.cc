@@ -466,9 +466,14 @@ public:
     }
 
     void describe_token_map(tcxx::function<void(std::map<std::string, std::string>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob) {
-        std::map<std::string, std::string>  _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        with_cob(std::move(cob), std::move(exn_cob), [] {
+            auto m = service::get_local_storage_service().get_token_to_endpoint_map();
+            std::map<std::string, std::string> ret;
+            for (auto&& p : m) {
+                ret[sprint("%s", p.first)] = p.second.to_sstring();
+            }
+            return ret;
+        });
     }
 
     void describe_partitioner(tcxx::function<void(std::string const& _return)> cob) {
