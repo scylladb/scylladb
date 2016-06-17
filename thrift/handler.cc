@@ -85,6 +85,8 @@ public:
             throw make_exception<InvalidRequestException>(ce.what());
         } catch (no_such_column_family&) {
             throw NotFoundException();
+        } catch (no_such_keyspace&) {
+            throw NotFoundException();
         } catch (std::exception& e) {
             // Unexpected exception, wrap it
             throw ::apache::thrift::TException(std::string("Internal server error: ") + e.what());
@@ -424,16 +426,43 @@ public:
         cob("20.1.0");
     }
 
+    void do_describe_ring(tcxx::function<void(std::vector<TokenRange>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace, bool local) {
+        with_cob(std::move(cob), std::move(exn_cob), [&] {
+            auto& ks = _db.local().find_keyspace(keyspace);
+            if (ks.get_replication_strategy().get_type() == locator::replication_strategy_type::local) {
+                throw make_exception<InvalidRequestException>("There is no ring for the keyspace: %s", keyspace);
+            }
+
+            auto ring = service::get_local_storage_service().describe_ring(keyspace, local);
+            std::vector<TokenRange> ret;
+            ret.reserve(ring.size());
+            std::transform(ring.begin(), ring.end(), std::back_inserter(ret), [](auto&& tr) {
+                TokenRange token_range;
+                token_range.__set_start_token(std::move(tr._start_token));
+                token_range.__set_end_token(std::move(tr._end_token));
+                token_range.__set_endpoints(std::vector<std::string>(tr._endpoints.begin(), tr._endpoints.end()));
+                std::vector<EndpointDetails> eds;
+                std::transform(tr._endpoint_details.begin(), tr._endpoint_details.end(), std::back_inserter(eds), [](auto&& ed) {
+                    EndpointDetails detail;
+                    detail.__set_host(ed._host);
+                    detail.__set_datacenter(ed._datacenter);
+                    detail.__set_rack(ed._rack);
+                    return detail;
+                });
+                token_range.__set_endpoint_details(std::move(eds));
+                token_range.__set_rpc_endpoints(std::vector<std::string>(tr._rpc_endpoints.begin(), tr._rpc_endpoints.end()));
+                return token_range;
+            });
+            return ret;
+        });
+    }
+
     void describe_ring(tcxx::function<void(std::vector<TokenRange>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
-        std::vector<TokenRange>  _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        do_describe_ring(std::move(cob), std::move(exn_cob), keyspace, false);
     }
 
     void describe_local_ring(tcxx::function<void(std::vector<TokenRange>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
-        std::vector<TokenRange>  _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        do_describe_ring(std::move(cob), std::move(exn_cob), keyspace, true);
     }
 
     void describe_token_map(tcxx::function<void(std::map<std::string, std::string>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob) {
