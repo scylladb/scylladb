@@ -477,9 +477,7 @@ public:
     }
 
     void describe_partitioner(tcxx::function<void(std::string const& _return)> cob) {
-        std::string _return;
-        // FIXME: implement
-        return cob("dummy paritioner");
+        cob(dht::global_partitioner().name());
     }
 
     void describe_snitch(tcxx::function<void(std::string const& _return)> cob) {
