@@ -421,9 +421,7 @@ public:
     }
 
     void describe_version(tcxx::function<void(std::string const& _return)> cob) {
-        std::string _return;
-        // FIXME: implement
-        cob("0.0.0");
+        cob("20.1.0");
     }
 
     void describe_ring(tcxx::function<void(std::vector<TokenRange>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
