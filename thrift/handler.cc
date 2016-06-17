@@ -44,6 +44,7 @@
 #include "service/storage_service.hh"
 #include "service/query_state.hh"
 #include "cql3/query_processor.hh"
+#include <boost/range/adaptor/transformed.hpp>
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -211,7 +212,7 @@ public:
             } catch (...) {
                 throw make_exception<InvalidRequestException>("column family %s not found", column_parent.column_family);
             }
-            auto pk = key_from_thrift(schema, to_bytes(key));
+            auto pk = key_from_thrift(schema, to_bytes_view(key));
             auto dk = dht::global_partitioner().decorate_key(*schema, pk);
             auto shard = _db.local().shard_of(dk._token);
 
@@ -997,11 +998,12 @@ private:
     static schema_ptr lookup_schema(database& db, const sstring& ks_name, const sstring& cf_name) {
         return lookup_column_family(db, ks_name, cf_name).schema();
     }
-    static partition_key key_from_thrift(schema_ptr s, bytes k) {
-        if (s->partition_key_size() != 1) {
-            fail(unimplemented::cause::THRIFT);
+    static partition_key key_from_thrift(schema_ptr s, bytes_view k) {
+        if (s->partition_key_size() == 1) {
+            return partition_key::from_single_value(*s, to_bytes(k));
         }
-        return partition_key::from_single_value(*s, std::move(k));
+        auto composite = composite_view(k);
+        return partition_key::from_exploded(composite.values());
     }
     static db::consistency_level cl_from_thrift(const ConsistencyLevel::type consistency_level) {
         switch(consistency_level) {
@@ -1033,6 +1035,15 @@ private:
             return {s.default_time_to_live()};
         } else {
             return { };
+        }
+    }
+    static clustering_key_prefix make_clustering_prefix(const schema& s, bytes_view v) {
+        if (s.thrift().has_compound_comparator()) {
+            auto composite = composite_view(v);
+            return clustering_key_prefix::from_exploded(composite.values());
+        } else {
+            assert(s.clustering_key_size() == 1);
+            return clustering_key_prefix::from_single_value(s, to_bytes(v));
         }
     }
 };
