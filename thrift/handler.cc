@@ -417,9 +417,7 @@ public:
     }
 
     void describe_cluster_name(tcxx::function<void(std::string const& _return)> cob) {
-        std::string _return;
-        // FIXME: implement
-        cob("seastar");
+        cob(_db.local().get_config().cluster_name());
     }
 
     void describe_version(tcxx::function<void(std::string const& _return)> cob) {
