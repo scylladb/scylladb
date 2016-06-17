@@ -41,6 +41,7 @@
 #include "thrift/utils.hh"
 #include "schema_builder.hh"
 #include "thrift/thrift_validation.hh"
+#include "service/storage_service.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -394,9 +395,15 @@ public:
     }
 
     void describe_schema_versions(tcxx::function<void(std::map<std::string, std::vector<std::string> >  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob) {
-        std::map<std::string, std::vector<std::string> >  _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        with_cob(std::move(cob), std::move(exn_cob), [] {
+            return service::get_local_storage_service().describe_schema_versions().then([](auto&& m) {
+                std::map<std::string, std::vector<std::string>> ret;
+                for (auto&& p : m) {
+                    ret[p.first] = std::vector<std::string>(p.second.begin(), p.second.end());
+                }
+                return ret;
+            });
+        });
     }
 
     void describe_keyspaces(tcxx::function<void(std::vector<KsDef>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob) {
