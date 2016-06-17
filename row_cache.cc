@@ -550,7 +550,6 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                                         mem_e.schema(), std::move(mem_e.key()), std::move(mem_e.partition()));
                                 _tracker.insert(*entry);
                                 _partitions.insert(cache_i, *entry);
-                                upgrade_entry(*entry);
                             }
                             i = m.partitions.erase(i);
                             current_allocator().destroy(&mem_e);
