@@ -22,13 +22,13 @@ umount /var/tmp/mnt
 rm -rf /var/tmp/mnt
 rm /var/tmp/kernel-check.img
 if [ $RET -eq 0 ]; then
-    echo "This is supported kernel."
+    echo "This is a supported kernel version."
 else
-    echo "This is unsupported kernel."
+    echo "This is an unsupported kernel version."
     if [ "$ID" = "ubuntu" ] && [ "$VERSION_ID" = "14.04" ]; then
-        echo "Please upgrade to newer kernel by 'apt-get install linux-image-generic-lts-vivid && reboot'."
+        echo "Please upgrade to a newer kernel version by executing 'apt-get install linux-image-generic-lts-vivid && reboot'."
     else
-        echo "Please upgrade to newer kernel."
+        echo "Please upgrade to a newer kernel version."
     fi
     echo " see http://docs.scylladb.com/kb/kb-fs-not-qualified-aio/ for details"
 fi
