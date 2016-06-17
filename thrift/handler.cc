@@ -481,9 +481,7 @@ public:
     }
 
     void describe_snitch(tcxx::function<void(std::string const& _return)> cob) {
-        std::string _return;
-        // FIXME: implement
-        return cob("dummy snitch");
+        cob(sprint("org.apache.cassandra.locator.%s", _db.local().get_snitch_name()));
     }
 
     void describe_keyspace(tcxx::function<void(KsDef const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
