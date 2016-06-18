@@ -92,6 +92,8 @@ void validate_key(const schema& s, const bytes_view& key);
 void validate_keyspace_not_system(const std::string& keyspace);
 void validate_ks_def(const KsDef& ks_def);
 void validate_cf_def(const CfDef& cf_def);
+void validate_column_name(const std::string& name);
+void validate_column_names(const std::vector<std::string>& names);
 
 #if 0
     public static void validateKeyspace(String keyspaceName) throws KeyspaceNotDefinedException
