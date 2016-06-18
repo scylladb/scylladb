@@ -214,7 +214,9 @@ This package contains Linux kernel configuration changes for the Scylla database
 if Scylla is the main application on your server and you wish to optimize its latency and throughput.
 
 %post kernel-conf
-%sysctl_apply 99-scylla-sched.conf
+# We cannot use the sysctl_apply rpm macro because it is not present in 7.0
+# following is a "manual" expansion
+/usr/lib/systemd/systemd-sysctl 99-scylla-sched.conf >/dev/null 2>&1 || :
 
 %files kernel-conf
 %defattr(-,root,root)
