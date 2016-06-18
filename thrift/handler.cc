@@ -37,6 +37,7 @@
 #include "utils/class_registrator.hh"
 #include "noexcept_traits.hh"
 #include "schema_registry.hh"
+#include "thrift/utils.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -45,6 +46,8 @@ using namespace ::apache::thrift::async;
 
 using namespace  ::org::apache::cassandra;
 
+using namespace thrift;
+
 class unimplemented_exception : public std::exception {
 public:
     virtual const char* what() const throw () override { return "sorry, not implemented"; }
@@ -52,14 +55,6 @@ public:
 
 void pass_unimplemented(const tcxx::function<void(::apache::thrift::TDelayedException* _throw)>& exn_cob) {
     exn_cob(::apache::thrift::TDelayedException::delayException(unimplemented_exception()));
-}
-
-template <typename Ex, typename... Args>
-Ex
-make_exception(const char* fmt, Args&&... args) {
-    Ex ex;
-    ex.why = sprint(fmt, std::forward<Args>(args)...);
-    return ex;
 }
 
 class delayed_exception_wrapper : public ::apache::thrift::TDelayedException {
