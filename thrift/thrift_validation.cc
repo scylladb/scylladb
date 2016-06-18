@@ -43,36 +43,26 @@
 #include "thrift/utils.hh"
 #include "db/system_keyspace.hh"
 #include <regex>
+#include "utils/fb_utilities.hh"
 
 using namespace thrift;
+using namespace ::apache::thrift;
+using namespace  ::org::apache::cassandra;
 
 namespace thrift_validation {
 
-void validate_key(schema_ptr schema_, const bytes& key) {
-    throw std::runtime_error("NOT IMPLEMENTED");
-#if 0
-        if (key == null || key.remaining() == 0)
-        {
-            throw new org.apache.cassandra.exceptions.InvalidRequestException("Key may not be empty");
-        }
+void validate_key(const schema& s, const bytes_view& k) {
+    if (k.empty()) {
+        throw make_exception<InvalidRequestException>("Key may not be empty");
+    }
 
-        // check that key can be handled by FBUtilities.writeShortByteArray
-        if (key.remaining() > FBUtilities.MAX_UNSIGNED_SHORT)
-        {
-            throw new org.apache.cassandra.exceptions.InvalidRequestException("Key length of " + key.remaining() +
-                                                                              " is longer than maximum of " +
-                                                                              FBUtilities.MAX_UNSIGNED_SHORT);
-        }
+    auto max = static_cast<uint32_t>(utils::fb_utilities::MAX_UNSIGNED_SHORT);
+    if (k.size() > max) {
+        throw make_exception<InvalidRequestException>("Key length of %d is longer than maximum of %d", k.size(), max);
+    }
 
-        try
-        {
-            metadata.getKeyValidator().validate(key);
-        }
-        catch (MarshalException e)
-        {
-            throw new org.apache.cassandra.exceptions.InvalidRequestException(e.getMessage());
-        }
-#endif
+    // FIXME: implement
+    //s.partition_key_type()->validate(k);
 }
 
 void validate_keyspace_not_system(const std::string& keyspace) {

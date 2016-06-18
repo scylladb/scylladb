@@ -999,6 +999,7 @@ private:
         return lookup_column_family(db, ks_name, cf_name).schema();
     }
     static partition_key key_from_thrift(const schema& s, bytes_view k) {
+        thrift_validation::validate_key(s, k);
         if (s.partition_key_size() == 1) {
             return partition_key::from_single_value(s, to_bytes(k));
         }
