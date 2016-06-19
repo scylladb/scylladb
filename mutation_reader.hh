@@ -84,6 +84,8 @@ mutation_reader make_empty_reader();
 // Returns a reader that is lazily constructed on the first call.  Useful
 // when creating the reader involves disk I/O or a shard call
 mutation_reader make_lazy_reader(std::function<mutation_reader ()> make_reader);
+// Restricts a given `mutation_reader` to a concurrency limited by a `semaphore`.
+mutation_reader make_restricted_reader(semaphore& sem, unsigned weight, mutation_reader&& base);
 
 template <typename MutationFilter>
 class filtering_reader : public mutation_reader::impl {
