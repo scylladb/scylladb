@@ -249,6 +249,7 @@ public:
         size_t max_streaming_memtable_size = 5'000'000;
         logalloc::region_group* dirty_memory_region_group = nullptr;
         logalloc::region_group* streaming_dirty_memory_region_group = nullptr;
+        semaphore* read_concurrency_sem = nullptr;
         ::cf_stats* cf_stats = nullptr;
     };
     struct no_commitlog {};
@@ -750,6 +751,7 @@ public:
         size_t max_streaming_memtable_size = 5'000'000;
         logalloc::region_group* dirty_memory_region_group = nullptr;
         logalloc::region_group* streaming_dirty_memory_region_group = nullptr;
+        semaphore* read_concurreny_sem = nullptr;
         ::cf_stats* cf_stats = nullptr;
     };
 private:
@@ -829,6 +831,8 @@ public:
 
 class database {
     ::cf_stats _cf_stats;
+    static constexpr size_t max_concurrent_reads() { return 100; }
+    static constexpr size_t max_system_concurrent_reads() { return 10; }
     struct db_stats {
         uint64_t total_writes = 0;
         uint64_t total_reads = 0;
@@ -841,6 +845,8 @@ class database {
     size_t _streaming_memtable_total_space = 500 << 20;
     logalloc::region_group _dirty_memory_region_group;
     logalloc::region_group _streaming_dirty_memory_region_group;
+    semaphore _read_concurrency_sem{max_concurrent_reads()};
+    semaphore _system_read_concurrency_sem{max_system_concurrent_reads()};
 
     std::unordered_map<sstring, keyspace> _keyspaces;
     std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
@@ -986,6 +992,9 @@ public:
     std::unordered_set<sstring> get_initial_tokens();
     std::experimental::optional<gms::inet_address> get_replace_address();
     bool is_replacing();
+    semaphore& system_keyspace_read_concurrency_sem() {
+        return _system_read_concurrency_sem;
+    }
 };
 
 // FIXME: stub
