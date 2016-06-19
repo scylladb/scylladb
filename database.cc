@@ -256,15 +256,24 @@ column_family::make_sstable_reader(schema_ptr s,
                                    const query::partition_range& pr,
                                    query::clustering_key_filtering_context ck_filtering,
                                    const io_priority_class& pc) const {
+    // restricts a reader's concurrency if the configuration specifies it
+    auto restrict_reader = [&] (mutation_reader&& in) {
+        if (_config.read_concurrency_sem) {
+            return make_restricted_reader(*_config.read_concurrency_sem, 1, std::move(in));
+        } else {
+            return std::move(in);
+        }
+    };
+
     if (pr.is_singular() && pr.start()->value().has_key()) {
         const dht::ring_position& pos = pr.start()->value();
         if (dht::shard_of(pos.token()) != engine().cpu_id()) {
             return make_empty_reader(); // range doesn't belong to this shard
         }
-        return make_mutation_reader<single_key_sstable_reader>(std::move(s), _sstables, *pos.key(), ck_filtering, pc);
+        return restrict_reader(make_mutation_reader<single_key_sstable_reader>(std::move(s), _sstables, *pos.key(), ck_filtering, pc));
     } else {
         // range_sstable_reader is not movable so we need to wrap it
-        return make_mutation_reader<range_sstable_reader>(std::move(s), _sstables, pr, ck_filtering, pc);
+        return restrict_reader(make_mutation_reader<range_sstable_reader>(std::move(s), _sstables, pr, ck_filtering, pc));
     }
 }
 
@@ -1732,6 +1741,7 @@ keyspace::make_column_family_config(const schema& s) const {
     cfg.max_streaming_memtable_size = _config.max_streaming_memtable_size;
     cfg.dirty_memory_region_group = _config.dirty_memory_region_group;
     cfg.streaming_dirty_memory_region_group = _config.streaming_dirty_memory_region_group;
+    cfg.read_concurrency_sem = _config.read_concurreny_sem;
     cfg.cf_stats = _config.cf_stats;
     cfg.enable_incremental_backups = _config.enable_incremental_backups;
 
@@ -2193,6 +2203,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     }
     cfg.dirty_memory_region_group = &_dirty_memory_region_group;
     cfg.streaming_dirty_memory_region_group = &_streaming_dirty_memory_region_group;
+    cfg.read_concurreny_sem = &_read_concurrency_sem;
     cfg.cf_stats = &_cf_stats;
     cfg.enable_incremental_backups = _enable_incremental_backups;
     return cfg;
