@@ -83,6 +83,8 @@ mutation_reader make_reader_returning_many(std::vector<mutation>,
     query::clustering_key_filtering_context filter = query::no_clustering_key_filtering);
 mutation_reader make_reader_returning_many(std::vector<streamed_mutation>);
 mutation_reader make_empty_reader();
+// Restricts a given `mutation_reader` to a concurrency limited by a `semaphore`.
+mutation_reader make_restricted_reader(semaphore& sem, unsigned weight, mutation_reader&& base);
 
 /*
 template<typename T>
