@@ -523,8 +523,11 @@ future<> column_family::load_sstable(sstables::sstable&& sstab, bool reset_level
                 // shard(s). Shared sstables cannot be deleted until all
                 // shards compacted them, so to reduce disk space usage we
                 // want to start splitting them now.
-                dblog.info("Splitting {} for shard", sst->get_filename());
-                _compaction_manager.submit_sstable_rewrite(this, sst);
+                // However, we need to delay this compaction until we read all
+                // the sstables belonging to this CF, because we need all of
+                // them to know which tombstones we can drop, and what
+                // generation number is free.
+                _sstables_need_rewrite.push_back(sst);
             }
             if (reset_level) {
                 // When loading a migrated sstable, set level to 0 because
@@ -537,6 +540,17 @@ future<> column_family::load_sstable(sstables::sstable&& sstab, bool reset_level
             add_sstable(sst);
         });
     });
+}
+
+// load_sstable() wants to start rewriting sstables which are shared between
+// several shards, but we can't start any compaction before all the sstables
+// of this CF were loaded. So call this function to start rewrites, if any.
+void column_family::start_rewrite() {
+    for (auto sst : _sstables_need_rewrite) {
+        dblog.info("Splitting {} for shard", sst->get_filename());
+        _compaction_manager.submit_sstable_rewrite(this, sst);
+    }
+    _sstables_need_rewrite.clear();
 }
 
 future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sstring fname) {
@@ -1065,6 +1079,7 @@ column_family::load_new_sstables(std::vector<sstables::entry_descriptor> new_tab
                 _schema->ks_name(), _schema->cf_name(), _config.datadir,
                 comps.generation, comps.version, comps.format), true);
     }).then([this] {
+        start_rewrite();
         // Drop entire cache for this column family because it may be populated
         // with stale data.
         return get_row_cache().clear();
@@ -1265,6 +1280,7 @@ future<> column_family::populate(sstring sstdir) {
             });
         });
     }).then([this] {
+        start_rewrite();
         // Make sure this is called even if CF is empty
         mark_ready_for_writes();
     });

@@ -343,6 +343,11 @@ private:
     // have not been deleted yet, so must not GC any tombstones in other sstables
     // that may delete data in these sstables:
     std::vector<sstables::shared_sstable> _sstables_compacted_but_not_deleted;
+    // sstables that are shared between several shards so we want to rewrite
+    // them (split the data belonging to this shard to a separate sstable),
+    // but for correct compaction we need to start the compaction only after
+    // reading all sstables.
+    std::vector<sstables::shared_sstable> _sstables_need_rewrite;
     // Control background fibers waiting for sstables to be deleted
     seastar::gate _sstable_deletion_gate;
     // There are situations in which we need to stop writing sstables. Flushers will take
@@ -372,6 +377,7 @@ private:
     void add_sstable(sstables::sstable&& sstable);
     void add_sstable(lw_shared_ptr<sstables::sstable> sstable);
     future<> load_sstable(sstables::sstable&& sstab, bool reset_level = false);
+    void start_rewrite();
     lw_shared_ptr<memtable> new_memtable();
     lw_shared_ptr<memtable> new_streaming_memtable();
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt);
