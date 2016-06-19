@@ -271,12 +271,11 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
         }
     };
 
-    bool backup = cf.incremental_backups_enabled();
     // If there is a maximum size for a sstable, it's possible that more than
     // one sstable will be generated for all partitions to be written.
-    future<> write_done = repeat([creator, ancestors, rp, max_sstable_size, sstable_level, output_reader, info, partitions_per_sstable, schema, backup] {
+    future<> write_done = repeat([creator, ancestors, rp, max_sstable_size, sstable_level, output_reader, info, partitions_per_sstable, schema] {
         return output_reader->read().then(
-                [creator, ancestors, rp, max_sstable_size, sstable_level, output_reader, info, partitions_per_sstable, schema, backup] (auto mut) {
+                [creator, ancestors, rp, max_sstable_size, sstable_level, output_reader, info, partitions_per_sstable, schema] (auto mut) {
             // Check if mutation is available from the pipe for a new sstable to be written. If not, just stop writing.
             if (!mut) {
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
@@ -295,7 +294,7 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
             ::mutation_reader mutation_queue_reader = make_mutation_reader<queue_reader>(output_reader);
 
             auto&& priority = service::get_local_compaction_priority();
-            return newtab->write_components(std::move(mutation_queue_reader), partitions_per_sstable, schema, max_sstable_size, backup, priority).then([newtab, info] {
+            return newtab->write_components(std::move(mutation_queue_reader), partitions_per_sstable, schema, max_sstable_size, false, priority).then([newtab, info] {
                 return newtab->open_data().then([newtab, info] {
                     info->end_size += newtab->data_size();
                     return make_ready_future<stop_iteration>(stop_iteration::no);
