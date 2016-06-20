@@ -486,12 +486,8 @@ public:
 
     void describe_keyspace(tcxx::function<void(KsDef const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
         with_cob(std::move(cob), std::move(exn_cob), [&] {
-            try {
-                auto& ks = _db.local().find_keyspace(keyspace);
-                return get_keyspace_definition(ks);
-            } catch (no_such_keyspace& nsk) {
-                throw make_exception<InvalidRequestException>("keyspace %s does not exist", keyspace);
-            }
+            auto& ks = _db.local().find_keyspace(keyspace);
+            return get_keyspace_definition(ks);
         });
     }
 
@@ -670,14 +666,14 @@ private:
         return ret;
     }
     static KsDef get_keyspace_definition(const keyspace& ks) {
+        auto make_options = [](auto&& m) {
+            return std::map<std::string, std::string>(m.begin(), m.end());
+        };
         auto&& meta = ks.metadata();
         KsDef def;
         def.__set_name(meta->name());
         def.__set_strategy_class(meta->strategy_name());
-        std::map<std::string, std::string> options(
-            meta->strategy_options().begin(),
-            meta->strategy_options().end());
-        def.__set_strategy_options(options);
+        def.__set_strategy_options(make_options(meta->strategy_options()));
         std::vector<CfDef> cfs;
         for (auto&& cf : meta->cf_meta_data()) {
             // FIXME: skip cql3 column families
@@ -685,25 +681,39 @@ private:
             CfDef cf_def;
             cf_def.__set_keyspace(s->ks_name());
             cf_def.__set_name(s->cf_name());
-            cf_def.__set_key_validation_class(class_from_compound_type(*s->partition_key_type()));
+            cf_def.__set_column_type(cf_type_to_sstring(s->type()));
             if (s->clustering_key_size()) {
                 cf_def.__set_comparator_type(class_from_compound_type(*s->clustering_key_type()));
             } else {
-                cf_def.__set_comparator_type(class_from_data_type(s->regular_column_name_type()));
+                cf_def.__set_comparator_type(s->regular_column_name_type()->name());
             }
             cf_def.__set_comment(s->comment());
-            cf_def.__set_bloom_filter_fp_chance(s->bloom_filter_fp_chance());
+            cf_def.__set_read_repair_chance(s->read_repair_chance());
             if (s->regular_columns_count()) {
                 std::vector<ColumnDef> columns;
                 for (auto&& c : s->regular_columns()) {
                     ColumnDef c_def;
                     c_def.__set_name(c.name_as_text());
-                    c_def.__set_validation_class(class_from_data_type(c.type));
+                    c_def.__set_validation_class(c.type->name());
                     columns.emplace_back(std::move(c_def));
                 }
                 cf_def.__set_column_metadata(columns);
             }
-            // FIXME: there are more fields that should be filled...
+            cf_def.__set_gc_grace_seconds(s->gc_grace_seconds().count());
+            cf_def.__set_default_validation_class(s->default_validator()->name());
+            cf_def.__set_min_compaction_threshold(s->min_compaction_threshold());
+            cf_def.__set_max_compaction_threshold(s->max_compaction_threshold());
+            cf_def.__set_key_validation_class(class_from_compound_type(*s->partition_key_type()));
+            cf_def.__set_key_alias(s->partition_key_columns().begin()->name_as_text());
+            cf_def.__set_compaction_strategy(sstables::compaction_strategy::name(s->compaction_strategy()));
+            cf_def.__set_compaction_strategy_options(make_options(s->compaction_strategy_options()));
+            cf_def.__set_compression_options(make_options(s->get_compressor_params().get_options()));
+            cf_def.__set_bloom_filter_fp_chance(s->bloom_filter_fp_chance());
+            cf_def.__set_caching("all");
+            cf_def.__set_dclocal_read_repair_chance(s->dc_local_read_repair_chance());
+            cf_def.__set_memtable_flush_period_in_ms(s->memtable_flush_period());
+            cf_def.__set_default_time_to_live(s->default_time_to_live().count());
+            cf_def.__set_speculative_retry(s->speculative_retry().to_sstring());
             cfs.emplace_back(std::move(cf_def));
         }
         def.__set_cf_defs(cfs);
