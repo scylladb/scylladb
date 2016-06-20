@@ -257,9 +257,26 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
             // FIXME: verify that the above is reasonably true.
             return limiter->reserve(size).then([this, mutations = std::move(mutations), id] {
                 _stats.write_attempts += mutations.size();
-                return _qp.proxy().local().mutate(mutations, db::consistency_level::ANY);
+                // #1222 - change cl level to ALL, emulating origins behaviour of sending/hinting
+                // to all natural end points.
+                // Note however that origin uses hints here, and actually allows for this
+                // send to partially or wholly fail in actually sending stuff. Since we don't
+                // have hints (yet), send with CL=ALL, and hope we can re-do this soon.
+                // See below, we use retry on write failure.
+                return _qp.proxy().local().mutate(mutations, db::consistency_level::ALL);
             });
-        }).then([this, id] {
+        }).then_wrapped([this, id](future<> batch_result) {
+            try {
+                batch_result.get();
+            } catch (no_such_keyspace& ex) {
+                // should probably ignore and drop the batch
+            } catch (...) {
+                // timeout, overload etc.
+                // Do _not_ remove the batch, assuning we got a node write error.
+                // Since we don't have hints (which origin is satisfied with),
+                // we have to resort to keeping this batch to next lap.
+                return make_ready_future<>();
+            }
             // delete batch
             auto schema = _qp.db().local().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
             auto key = partition_key::from_singular(*schema, id);
