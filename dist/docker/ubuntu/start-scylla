@@ -1,7 +1,25 @@
 #!/bin/bash
 
+ . /etc/default/scylla-server
+
+CPUSET=""
+if [ x"$cpu_set" != "x" ]; then
+	CPUSET="--cpuset $cpu_set"
+fi
+
 if [ "$production" == "true" ]; then
 	DEV_MODE=""
+	if [ ! -f /var/lib/scylla/.io_setup_done ]; then
+		DATA_DIR=`/usr/lib/scylla/scylla_config_get.py --config $SCYLLA_CONF/scylla.yaml --get data_file_directories|head -n1`
+		iotune --evaluation-directory $DATA_DIR --format envfile --options-file /var/lib/scylla/io.conf $CPUSET --timeout 600
+		if [ $? -ne 0 ]; then
+			echo "/var/lib/scylla did not pass validation tests, it may not be on XFS and/or has limited disk space."
+			echo "This is a non-supported setup, please bind mount an XFS volume."
+			exit 1
+		fi
+		touch /var/lib/scylla/.io_setup_done
+	fi
+	source /var/lib/scylla/io.conf
 else
 	DEV_MODE="--developer-mode true"
 fi
@@ -9,7 +27,7 @@ fi
 IP=$(hostname -i)
 sed -i "s/seeds: \"127.0.0.1\"/seeds: \"$IP\"/g" /etc/scylla/scylla.yaml
 sed -i "s/listen_address: localhost/listen_address: $IP/g" /etc/scylla/scylla.yaml
-/usr/bin/scylla --log-to-syslog 1 --log-to-stdout 0 $DEV_MODE --default-log-level info --options-file /etc/scylla/scylla.yaml --listen-address $IP --rpc-address $IP --network-stack posix &
+/usr/bin/scylla --log-to-syslog 1 --log-to-stdout 0 $DEV_MODE $SEASTAR_IO $CPU_SET --default-log-level info --options-file /etc/scylla/scylla.yaml --listen-address $IP --rpc-address $IP --network-stack posix &
 
 source /etc/default/scylla-jmx
 export SCYLLA_HOME SCYLLA_CONF

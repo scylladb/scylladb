@@ -8,6 +8,7 @@ RUN	sudo apt-get install -y scylla-server scylla-jmx scylla-tools --force-yes
 USER	root
 COPY 	start-scylla /start-scylla
 RUN	chown -R scylla:scylla /etc/scylla
+RUN	chown -R scylla:scylla /etc/scylla.d
 RUN	chown -R scylla:scylla /start-scylla
 
 USER 	scylla

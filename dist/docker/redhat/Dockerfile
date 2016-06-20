@@ -15,6 +15,8 @@ RUN chown scylla /start-scylla
 
 ADD bashrc /var/lib/scylla/.bashrc
 RUN chown scylla /var/lib/scylla/.bashrc
+RUN chown -R scylla:scylla /etc/scylla
+RUN chown -R scylla:scylla /etc/scylla.d
 
 USER scylla
 EXPOSE 10000 9042 9160 7000 7001
