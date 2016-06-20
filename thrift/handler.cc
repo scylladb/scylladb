@@ -640,33 +640,14 @@ public:
     }
 
 private:
-    static sstring class_from_data_type(const data_type& dt) {
-        static const std::unordered_map<sstring, sstring> types = {
-            { "boolean", "BooleanType" },
-            { "bytes", "BytesType" },
-            { "double", "DoubleType" },
-            { "int32", "Int32Type" },
-            { "long", "LongType" },
-            { "timestamp", "DateType" },
-            { "timeuuid", "TimeUUIDType" },
-            { "utf8", "UTF8Type" },
-            { "uuid", "UUIDType" },
-            // FIXME: missing types
-        };
-        auto it = types.find(dt->name());
-        if (it == types.end()) {
-            return sstring("<unknown> ") + dt->name();
-        }
-        return sstring("org.apache.cassandra.db.marshal.") + it->second;
-    }
     template<allow_prefixes IsPrefixable>
     static sstring class_from_compound_type(const compound_type<IsPrefixable>& ct) {
         if (ct.is_singular()) {
-            return class_from_data_type(ct.types().front());
+            return ct.types().front()->name();
         }
         sstring type = "org.apache.cassandra.db.marshal.CompositeType(";
         for (auto& dt : ct.types()) {
-            type += class_from_data_type(dt);
+            type += dt->name();
             if (&dt != &*ct.types().rbegin()) {
                 type += ",";
             }
