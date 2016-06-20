@@ -3,11 +3,11 @@
  . /etc/sysconfig/scylla-server
 
 CPUSET=""
-if [ x"$cpu_set" != "x" ]; then
-	CPUSET="--cpuset $cpu_set"
+if [ x"$SCYLLA_CPU_SET" != "x" ]; then
+	CPUSET="--cpuset $SCYLLA_CPU_SET"
 fi
 
-if [ "$production" == "true" ]; then
+if [ "$SCYLLA_PRODUCTION" == "true" ]; then
 	DEV_MODE=""
 	if [ ! -f /var/lib/scylla/.io_setup_done ]; then
 		DATA_DIR=`/usr/lib/scylla/scylla_config_get.py --config $SCYLLA_CONF/scylla.yaml --get data_file_directories|head -n1`
@@ -26,16 +26,16 @@ fi
 
 IP=$(hostname -i)
 
-if [ x"$seeds" != "x" ];then
-	SEEDS="$seeds"
+if [ x"$SCYLLA_SEEDS" != "x" ];then
+	SEEDS="$SCYLLA_SEEDS"
 else
 	SEEDS="$IP"
 fi
 
 sed -e "s/seeds:.*/seeds: $SEEDS/g" /var/lib/scylla/conf/scylla.yaml > $HOME/scylla.yaml
 
-if [ x"$broadcast_address" != "x" ];then
-	sed -i "s/.*broadcast_address:.*/broadcast_address: $broadcast_address/g" $HOME/scylla.yaml
+if [ x"$SCYLLA_BROADCAST_ADDRESS" != "x" ];then
+	sed -i "s/.*broadcast_address:.*/broadcast_address: $SCYLLA_BROADCAST_ADDRESS/g" $HOME/scylla.yaml
 fi
 
 /usr/bin/scylla --log-to-syslog 1 \
