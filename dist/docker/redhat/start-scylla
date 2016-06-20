@@ -25,7 +25,19 @@ else
 fi
 
 IP=$(hostname -i)
-sed -e "s/seeds:.*/seeds: $IP/g" /var/lib/scylla/conf/scylla.yaml > $HOME/scylla.yaml
+
+if [ x"$seeds" != "x" ];then
+	SEEDS="$seeds"
+else
+	SEEDS="$IP"
+fi
+
+sed -e "s/seeds:.*/seeds: $SEEDS/g" /var/lib/scylla/conf/scylla.yaml > $HOME/scylla.yaml
+
+if [ x"$broadcast_address" != "x" ];then
+	sed -i "s/.*broadcast_address:.*/broadcast_address: $broadcast_address/g" $HOME/scylla.yaml
+fi
+
 /usr/bin/scylla --log-to-syslog 1 \
                 --log-to-stdout 0 \
                 $DEV_MODE \

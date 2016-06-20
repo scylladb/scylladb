@@ -25,8 +25,20 @@ else
 fi
 
 IP=$(hostname -i)
-sed -i "s/seeds: \"127.0.0.1\"/seeds: \"$IP\"/g" /etc/scylla/scylla.yaml
+
+if [ x"$seeds" != "x" ];then
+	SEEDS="$seeds"
+else
+	SEEDS="$IP"
+fi
+
+sed -i "s/seeds: \"127.0.0.1\"/seeds: \"$SEEDS\"/g" /etc/scylla/scylla.yaml
 sed -i "s/listen_address: localhost/listen_address: $IP/g" /etc/scylla/scylla.yaml
+
+if [ x"$broadcast_address" != "x" ];then
+	sed -i "s/.*broadcast_address:.*/broadcast_address: $broadcast_address/g" /etc/scylla/scylla.yaml
+fi
+
 /usr/bin/scylla --log-to-syslog 1 --log-to-stdout 0 $DEV_MODE $SEASTAR_IO $CPU_SET --default-log-level info --options-file /etc/scylla/scylla.yaml --listen-address $IP --rpc-address $IP --network-stack posix &
 
 source /etc/default/scylla-jmx
