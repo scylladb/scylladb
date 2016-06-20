@@ -3213,15 +3213,15 @@ void storage_proxy::init_messaging_service() {
     });
     ms.register_read_data([] (const rpc::client_info& cinfo, query::read_command cmd, query::partition_range pr) {
         tracing::trace_state_ptr trace_state_ptr;
+        auto src_addr = net::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
             trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(cmd.trace_info->type, cmd.trace_info->write_on_close, cmd.trace_info->session_id);
-            auto msg = sprint("read_data: message received from /%s", net::messaging_service::get_source(cinfo).addr);
             tracing::begin(trace_state_ptr);
-            tracing::trace(trace_state_ptr, std::move(msg));
+            tracing::trace(trace_state_ptr, "read_data: message received from /{}", src_addr.addr);
         }
 
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) {
-            return get_schema_for_read(cmd->schema_version, net::messaging_service::get_source(cinfo)).then([cmd, &pr, &p] (schema_ptr s) {
+        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr)] (const query::partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p] (schema_ptr s) {
                 return p->query_singular_local(std::move(s), cmd, pr);
             }).finally([&trace_state_ptr] () mutable {
                 tracing::trace(trace_state_ptr, "read_data handling is done");
@@ -3230,14 +3230,14 @@ void storage_proxy::init_messaging_service() {
     });
     ms.register_read_mutation_data([] (const rpc::client_info& cinfo, query::read_command cmd, query::partition_range pr) {
         tracing::trace_state_ptr trace_state_ptr;
+        auto src_addr = net::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
             trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(cmd.trace_info->type, cmd.trace_info->write_on_close, cmd.trace_info->session_id);
-            auto msg = sprint("read_mutation_data: message received from /%s", net::messaging_service::get_source(cinfo).addr);
             tracing::begin(trace_state_ptr);
-            tracing::trace(trace_state_ptr, std::move(msg));
+            tracing::trace(trace_state_ptr, "read_mutation_data: message received from /{}", src_addr.addr);
         }
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) {
-            return get_schema_for_read(cmd->schema_version, net::messaging_service::get_source(cinfo)).then([cmd, &pr, &p] (schema_ptr s) {
+        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr)] (const query::partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p] (schema_ptr s) {
                 return p->query_mutations_locally(std::move(s), cmd, pr);
             }).finally([&trace_state_ptr] () mutable {
                 tracing::trace(trace_state_ptr, "read_mutation_data handling is done");
@@ -3246,14 +3246,14 @@ void storage_proxy::init_messaging_service() {
     });
     ms.register_read_digest([] (const rpc::client_info& cinfo, query::read_command cmd, query::partition_range pr) {
         tracing::trace_state_ptr trace_state_ptr;
+        auto src_addr = net::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
             trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(cmd.trace_info->type, cmd.trace_info->write_on_close, cmd.trace_info->session_id);
-            auto msg = sprint("read_digest: message received from /%s", net::messaging_service::get_source(cinfo).addr);
             tracing::begin(trace_state_ptr);
-            tracing::trace(trace_state_ptr, std::move(msg));
+            tracing::trace(trace_state_ptr, "read_digest: message received from /{}", src_addr.addr);
         }
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) {
-            return get_schema_for_read(cmd->schema_version, net::messaging_service::get_source(cinfo)).then([cmd, &pr, &p] (schema_ptr s) {
+        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr)] (const query::partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p] (schema_ptr s) {
                 return p->query_singular_local_digest(std::move(s), cmd, pr);
             }).finally([&trace_state_ptr] () mutable {
                 tracing::trace(trace_state_ptr, "read_digest handling is done");
