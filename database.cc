@@ -1297,7 +1297,6 @@ future<> column_family::populate(sstring sstdir) {
             });
         });
     }).then([this] {
-        start_rewrite();
         // Make sure this is called even if CF is empty
         mark_ready_for_writes();
     });

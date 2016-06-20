@@ -344,7 +344,6 @@ private:
     void add_sstable(sstables::sstable&& sstable);
     void add_sstable(lw_shared_ptr<sstables::sstable> sstable);
     future<> load_sstable(sstables::sstable&& sstab, bool reset_level = false);
-    void start_rewrite();
     lw_shared_ptr<memtable> new_memtable();
     lw_shared_ptr<memtable> new_streaming_memtable();
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt);
@@ -641,6 +640,7 @@ private:
     future<sstables::entry_descriptor> probe_file(sstring sstdir, sstring fname);
     void check_valid_rp(const db::replay_position&) const;
 public:
+    void start_rewrite();
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
     future<bool> for_all_partitions_slow(schema_ptr, std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const;
