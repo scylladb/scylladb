@@ -2,6 +2,7 @@
 Description=Scylla Server
 
 [Service]
+PermissionsStartOnly=true
 Type=notify
 LimitMEMLOCK=infinity
 LimitNOFILE=200000
@@ -10,9 +11,9 @@ LimitNPROC=8096
 EnvironmentFile=@@SYSCONFDIR@@/scylla-server
 EnvironmentFile=/etc/scylla.d/*.conf
 WorkingDirectory=$SCYLLA_HOME
-ExecStartPre=/usr/bin/sudo /usr/lib/scylla/scylla_prepare
+ExecStartPre=/usr/lib/scylla/scylla_prepare
 ExecStart=/usr/bin/scylla $SCYLLA_ARGS $SEASTAR_IO $DEV_MODE $CPUSET
-ExecStopPost=/usr/bin/sudo /usr/lib/scylla/scylla_stop
+ExecStopPost=/usr/lib/scylla/scylla_stop
 TimeoutStartSec=900
 KillMode=process
 Restart=on-abnormal
