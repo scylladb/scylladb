@@ -35,7 +35,7 @@ public:
         : _sst(sst)
         , _smr(sst->read_range_rows(std::move(s), pr, ck_filtering, pc)) {
     }
-    virtual future<mutation_opt> operator()() override {
+    virtual future<streamed_mutation_opt> operator()() override {
         return _smr.read();
     }
 };

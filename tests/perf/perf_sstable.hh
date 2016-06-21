@@ -162,7 +162,9 @@ public:
             auto total = make_lw_shared<size_t>(0);
             auto done = make_lw_shared<bool>(false);
             return do_until([done] { return *done; }, [this, done, total, &r] {
-                return r.read().then([this, done, total] (mutation_opt m) {
+                return r.read().then([] (auto sm) {
+                    return mutation_from_streamed_mutation(std::move(sm));
+                }).then([this, done, total] (mutation_opt m) {
                     if (!m) {
                         *done = true;
                     } else {

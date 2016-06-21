@@ -211,3 +211,66 @@ void mutation::apply(const mutation& m) {
 mutation& mutation::operator=(const mutation& m) {
     return *this = mutation(m);
 }
+
+future<mutation_opt> mutation_from_streamed_mutation(streamed_mutation_opt sm)
+{
+    class rebuilder {
+        mutation& _m;
+        stdx::optional<range_tombstone_begin> _rt_in_progress;
+    public:
+        rebuilder(mutation& m) : _m(m) { }
+
+        stop_iteration consume(tombstone t) {
+            _m.partition().apply(t);
+            return stop_iteration::no;
+        }
+
+        stop_iteration consume(static_row&& sr) {
+            _m.partition().static_row().apply(*_m.schema(), column_kind::static_column, std::move(sr.cells()));
+            return stop_iteration::no;
+        }
+
+        stop_iteration consume(range_tombstone_begin rtb) {
+            assert(!_rt_in_progress);
+            _rt_in_progress = std::move(rtb);
+            return stop_iteration::no;
+        }
+
+        stop_iteration consume(range_tombstone_end&& rte) {
+            assert(_rt_in_progress);
+            auto rt = range_tombstone(std::move(_rt_in_progress->key()), _rt_in_progress->kind(),
+                                      std::move(rte.key()), rte.kind(),
+                                      _rt_in_progress->tomb());
+            _m.partition().apply_row_tombstone(*_m.schema(), std::move(rt));
+            _rt_in_progress = { };
+            return stop_iteration::no;
+        }
+
+        stop_iteration consume(clustering_row&& cr) {
+            auto& dr = _m.partition().clustered_row(std::move(cr.key()));
+            dr.apply(cr.tomb());
+            dr.apply(cr.marker());
+            dr.cells().apply(*_m.schema(), column_kind::regular_column, std::move(cr.cells()));
+            return stop_iteration::no;
+        }
+
+        void consume_end_of_stream() {
+            assert(!_rt_in_progress);
+        }
+    };
+
+    struct data {
+        mutation m;
+        streamed_mutation sm;
+    };
+
+    if (!sm) {
+        return make_ready_future<mutation_opt>();
+    }
+    mutation m(sm->decorated_key(), sm->schema());
+    return do_with(data { std::move(m), std::move(*sm) }, [] (auto& d) {
+        return consume(d.sm, rebuilder(d.m)).then([&d] {
+            return mutation_opt(std::move(d.m));
+        });
+    });
+}

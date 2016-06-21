@@ -274,7 +274,7 @@ struct deletion_time {
         return !(*this == d);
     }
     explicit operator tombstone() {
-        return tombstone(marked_for_delete_at, gc_clock::time_point(gc_clock::duration(local_deletion_time)));
+        return !live() ? tombstone(marked_for_delete_at, gc_clock::time_point(gc_clock::duration(local_deletion_time))) : tombstone();
     }
 };
 

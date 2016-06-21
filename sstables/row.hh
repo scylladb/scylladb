@@ -54,7 +54,7 @@ public:
     // (according to the schema) before use.
     // As explained above, the key object is only valid during this call, and
     // if the implementation wishes to save it, it must copy the *contents*.
-    virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) = 0;
+    virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) = 0;
 
     // Consume one cell (column name and value). Both are serialized, and need
     // to be deserialized according to the schema.
@@ -62,16 +62,16 @@ public:
     // (in seconds) originally set for this cell, and "expiration" is the
     // absolute time (in seconds since the UNIX epoch) when this cell will
     // expire. Typical cells, not set to expire, will get expiration = 0.
-    virtual void consume_cell(bytes_view col_name, bytes_view value,
+    virtual proceed consume_cell(bytes_view col_name, bytes_view value,
             int64_t timestamp,
             int32_t ttl, int32_t expiration) = 0;
 
 
     // Consume a deleted cell (i.e., a cell tombstone).
-    virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) = 0;
+    virtual proceed consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) = 0;
 
     // Consume one range tombstone.
-    virtual void consume_range_tombstone(
+    virtual proceed consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,
             sstables::deletion_time deltime) = 0;
 

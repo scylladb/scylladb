@@ -130,11 +130,14 @@ public:
             deletion_time del;
             del.local_deletion_time = _u32;
             del.marked_for_delete_at = _u64;
-            _consumer.consume_row_start(to_bytes_view(_key), del);
+            auto ret = _consumer.consume_row_start(to_bytes_view(_key), del);
             // after calling the consume function, we can release the
             // buffers we held for it.
             _key.release();
             _state = state::ATOM_START;
+            if (ret == row_consumer::proceed::no) {
+                return row_consumer::proceed::no;
+            }
         }
         case state::ATOM_START:
             if (read_16(data) == read_status::ready) {
@@ -236,6 +239,7 @@ public:
                 // need to copy, and can skip the CELL_VALUE_BYTES_2 state.
                 //
                 // finally pass it to the consumer:
+                row_consumer::proceed ret;
                 if (_deleted) {
                     if (_val.size() != 4) {
                         throw malformed_sstable_exception("deleted cell expects local_deletion_time value");
@@ -243,9 +247,9 @@ public:
                     deletion_time del;
                     del.local_deletion_time = consume_be<uint32_t>(_val);
                     del.marked_for_delete_at = _u64;
-                    _consumer.consume_deleted_cell(to_bytes_view(_key), del);
+                    ret = _consumer.consume_deleted_cell(to_bytes_view(_key), del);
                 } else {
-                    _consumer.consume_cell(to_bytes_view(_key),
+                    ret = _consumer.consume_cell(to_bytes_view(_key),
                             to_bytes_view(_val), _u64, _ttl, _expiration);
                 }
                 // after calling the consume function, we can release the
@@ -253,11 +257,16 @@ public:
                 _key.release();
                 _val.release();
                 _state = state::ATOM_START;
+                if (ret == row_consumer::proceed::no) {
+                    return row_consumer::proceed::no;
+                }
             } else {
                 _state = state::CELL_VALUE_BYTES_2;
             }
             break;
         case state::CELL_VALUE_BYTES_2:
+        {
+            row_consumer::proceed ret;
             if (_deleted) {
                 if (_val.size() != 4) {
                     throw malformed_sstable_exception("deleted cell expects local_deletion_time value");
@@ -265,9 +274,9 @@ public:
                 deletion_time del;
                 del.local_deletion_time = consume_be<uint32_t>(_val);
                 del.marked_for_delete_at = _u64;
-                _consumer.consume_deleted_cell(to_bytes_view(_key), del);
+                ret = _consumer.consume_deleted_cell(to_bytes_view(_key), del);
             } else {
-                _consumer.consume_cell(to_bytes_view(_key),
+                ret = _consumer.consume_cell(to_bytes_view(_key),
                         to_bytes_view(_val), _u64, _ttl, _expiration);
             }
             // after calling the consume function, we can release the
@@ -275,7 +284,11 @@ public:
             _key.release();
             _val.release();
             _state = state::ATOM_START;
+            if (ret == row_consumer::proceed::no) {
+                return row_consumer::proceed::no;
+            }
             break;
+        }
         case state::RANGE_TOMBSTONE:
             if (read_16(data) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_2;
@@ -302,11 +315,14 @@ public:
             deletion_time del;
             del.local_deletion_time = _u32;
             del.marked_for_delete_at = _u64;
-            _consumer.consume_range_tombstone(to_bytes_view(_key),
+            auto ret = _consumer.consume_range_tombstone(to_bytes_view(_key),
                     to_bytes_view(_val), del);
             _key.release();
             _val.release();
             _state = state::ATOM_START;
+            if (ret == row_consumer::proceed::no) {
+                return row_consumer::proceed::no;
+            }
             break;
         }
         default:

@@ -163,8 +163,8 @@ logalloc::occupancy_stats column_family::occupancy() const {
 }
 
 static
-bool belongs_to_current_shard(const mutation& m) {
-    return dht::shard_of(m.token()) == engine().cpu_id();
+bool belongs_to_current_shard(const streamed_mutation& m) {
+    return dht::shard_of(m.decorated_key().token()) == engine().cpu_id();
 }
 
 class range_sstable_reader final : public mutation_reader::impl {
@@ -201,7 +201,7 @@ public:
 
     range_sstable_reader(range_sstable_reader&&) = delete; // reader takes reference to member fields
 
-    virtual future<mutation_opt> operator()() override {
+    virtual future<streamed_mutation_opt> operator()() override {
         return _reader();
     }
 };
@@ -209,7 +209,7 @@ public:
 class single_key_sstable_reader final : public mutation_reader::impl {
     schema_ptr _schema;
     sstables::key _key;
-    mutation_opt _m;
+    std::vector<streamed_mutation> _mutations;
     bool _done = false;
     lw_shared_ptr<sstable_list> _sstables;
     // Use a pointer instead of copying, so we don't need to regenerate the reader if
@@ -229,19 +229,23 @@ public:
         , _ck_filtering(ck_filtering)
     { }
 
-    virtual future<mutation_opt> operator()() override {
+    virtual future<streamed_mutation_opt> operator()() override {
         if (_done) {
-            return make_ready_future<mutation_opt>();
+            return make_ready_future<streamed_mutation_opt>();
         }
         return parallel_for_each(*_sstables | boost::adaptors::map_values,
             [this](const lw_shared_ptr<sstables::sstable>& sstable) {
-                return sstable->read_row(_schema, _key, _ck_filtering, _pc)
-                    .then([this](mutation_opt mo) {
-                        apply(_m, std::move(mo));
+                return sstable->read_row(_schema, _key, _ck_filtering, _pc).then([this](auto smo) {
+                    if (smo) {
+                        _mutations.emplace_back(std::move(*smo));
+                    }
                 });
-        }).then([this] {
+        }).then([this] () -> streamed_mutation_opt {
             _done = true;
-            return std::move(_m);
+            if (_mutations.empty()) {
+                return { };
+            }
+            return merge_mutations(std::move(_mutations));
         });
     }
 };
@@ -286,7 +290,9 @@ future<column_family::const_mutation_partition_ptr>
 column_family::find_partition(schema_ptr s, const dht::decorated_key& key) const {
     return do_with(query::partition_range::make_singular(key), [s = std::move(s), this] (auto& range) {
         return do_with(this->make_reader(s, range), [] (mutation_reader& reader) {
-            return reader().then([] (mutation_opt&& mo) -> std::unique_ptr<const mutation_partition> {
+            return reader().then([] (auto sm) {
+                return mutation_from_streamed_mutation(std::move(sm));
+            }).then([] (mutation_opt&& mo) -> std::unique_ptr<const mutation_partition> {
                 if (!mo) {
                     return {};
                 }
@@ -385,7 +391,9 @@ column_family::for_all_partitions(schema_ptr s, Func&& func) const {
 
     return do_with(iteration_state(std::move(s), *this, std::move(func)), [] (iteration_state& is) {
         return do_until([&is] { return is.done(); }, [&is] {
-            return is.reader().then([&is](mutation_opt&& mo) {
+            return is.reader().then([] (auto sm) {
+                return mutation_from_streamed_mutation(std::move(sm));
+            }).then([&is](mutation_opt&& mo) {
                 if (!mo) {
                     is.empty = true;
                 } else {
@@ -1902,13 +1910,9 @@ column_family::query(schema_ptr s, const query::read_command& cmd, query::result
     {
         return do_until(std::bind(&query_state::done, &qs), [this, &qs] {
             auto&& range = *qs.current_partition_range++;
-            auto add_partition = [&qs] (uint32_t live_rows, mutation&& m) {
-                auto pb = qs.builder.add_partition(*qs.schema, m.key());
-                m.partition().query_compacted(pb, *qs.schema, live_rows);
+            return data_query(qs.schema, as_mutation_source(), range, qs.cmd.slice, qs.limit, qs.cmd.timestamp, qs.builder).then([&qs] (auto live_rows) {
                 qs.limit -= live_rows;
-            };
-            return do_with(querying_reader(qs.schema, as_mutation_source(), range, qs.cmd.slice, qs.limit, qs.cmd.timestamp, add_partition),
-                           [] (auto&& rd) { return rd.read(); });
+            });
         }).then([qs_ptr = std::move(qs_ptr), &qs] {
             return make_ready_future<lw_shared_ptr<query::result>>(
                     make_lw_shared<query::result>(qs.builder.build()));

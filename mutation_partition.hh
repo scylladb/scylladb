@@ -117,8 +117,8 @@ public:
     row();
     ~row();
     row(const row&);
-    row(row&& other);
-    row& operator=(row&& other);
+    row(row&& other) noexcept;
+    row& operator=(row&& other) noexcept;
     size_t size() const { return _size; }
     bool empty() const { return _size == 0; }
 
@@ -242,6 +242,9 @@ public:
 
     // Adds cell to the row. The column must not be already set.
     void append_cell(column_id id, atomic_cell_or_collection cell);
+
+    void apply(const schema&, column_kind, const row& src);
+    void apply(const schema&, column_kind, row&& src);
 
     // See reversibly_mergeable.hh
     void apply_reversibly(const schema&, column_kind, row& src);
@@ -526,8 +529,8 @@ template<typename T>
 class serializer;
 }
 
-
 class mutation_partition final {
+public:
     // FIXME: using boost::intrusive because gcc's std::set<> does not support heterogeneous lookup yet
     using rows_type = boost::intrusive::set<rows_entry,
         boost::intrusive::member_hook<rows_entry, boost::intrusive::set_member_hook<>, &rows_entry::_link>,
@@ -559,6 +562,7 @@ public:
     mutation_partition(mutation_partition&&) = default;
     mutation_partition(const mutation_partition&);
     mutation_partition(const mutation_partition&, const schema&, const query::clustering_row_ranges&);
+    mutation_partition(mutation_partition&&, const schema&, const query::clustering_row_ranges&);
     ~mutation_partition();
     mutation_partition& operator=(const mutation_partition& x);
     mutation_partition& operator=(mutation_partition&& x) noexcept;

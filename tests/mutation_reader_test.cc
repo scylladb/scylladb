@@ -139,7 +139,7 @@ SEASTAR_TEST_CASE(test_filtering) {
 
         // All pass
         assert_that(make_filtering_reader(make_reader_returning_many({m1, m2, m3, m4}),
-                 [] (const mutation& m) { return true; }))
+                 [] (const streamed_mutation& m) { return true; }))
             .produces(m1)
             .produces(m2)
             .produces(m3)
@@ -148,47 +148,47 @@ SEASTAR_TEST_CASE(test_filtering) {
 
         // None pass
         assert_that(make_filtering_reader(make_reader_returning_many({m1, m2, m3, m4}),
-                 [] (const mutation& m) { return false; }))
+                 [] (const streamed_mutation& m) { return false; }))
             .produces_end_of_stream();
 
         // Trim front
         assert_that(make_filtering_reader(make_reader_returning_many({m1, m2, m3, m4}),
-                [&] (const mutation& m) { return !m.key().equal(*s, m1.key()); }))
+                [&] (const streamed_mutation& m) { return !m.key().equal(*s, m1.key()); }))
             .produces(m2)
             .produces(m3)
             .produces(m4)
             .produces_end_of_stream();
 
         assert_that(make_filtering_reader(make_reader_returning_many({m1, m2, m3, m4}),
-            [&] (const mutation& m) { return !m.key().equal(*s, m1.key()) && !m.key().equal(*s, m2.key()); }))
+            [&] (const streamed_mutation& m) { return !m.key().equal(*s, m1.key()) && !m.key().equal(*s, m2.key()); }))
             .produces(m3)
             .produces(m4)
             .produces_end_of_stream();
 
         // Trim back
         assert_that(make_filtering_reader(make_reader_returning_many({m1, m2, m3, m4}),
-                 [&] (const mutation& m) { return !m.key().equal(*s, m4.key()); }))
+                 [&] (const streamed_mutation& m) { return !m.key().equal(*s, m4.key()); }))
             .produces(m1)
             .produces(m2)
             .produces(m3)
             .produces_end_of_stream();
 
         assert_that(make_filtering_reader(make_reader_returning_many({m1, m2, m3, m4}),
-                 [&] (const mutation& m) { return !m.key().equal(*s, m4.key()) && !m.key().equal(*s, m3.key()); }))
+                 [&] (const streamed_mutation& m) { return !m.key().equal(*s, m4.key()) && !m.key().equal(*s, m3.key()); }))
             .produces(m1)
             .produces(m2)
             .produces_end_of_stream();
 
         // Trim middle
         assert_that(make_filtering_reader(make_reader_returning_many({m1, m2, m3, m4}),
-                 [&] (const mutation& m) { return !m.key().equal(*s, m3.key()); }))
+                 [&] (const streamed_mutation& m) { return !m.key().equal(*s, m3.key()); }))
             .produces(m1)
             .produces(m2)
             .produces(m4)
             .produces_end_of_stream();
 
         assert_that(make_filtering_reader(make_reader_returning_many({m1, m2, m3, m4}),
-                 [&] (const mutation& m) { return !m.key().equal(*s, m2.key()) && !m.key().equal(*s, m3.key()); }))
+                 [&] (const streamed_mutation& m) { return !m.key().equal(*s, m2.key()) && !m.key().equal(*s, m3.key()); }))
             .produces(m1)
             .produces(m4)
             .produces_end_of_stream();
@@ -223,24 +223,3 @@ SEASTAR_TEST_CASE(test_combining_one_empty_reader) {
     });
 }
 
-SEASTAR_TEST_CASE(test_joining_reader) {
-    return seastar::async([] {
-        auto s = make_schema();
-
-        mutation m1(partition_key::from_single_value(*s, "keyB"), s);
-        m1.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v1")), 1);
-
-        mutation m2(partition_key::from_single_value(*s, "keyA"), s);
-        m2.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v2")), 2);
-
-        std::vector<mutation_reader> v;
-        v.push_back(make_reader_returning(m1));
-        v.push_back(make_empty_reader());
-        v.push_back(make_reader_returning(m2));
-        auto cr = make_joining_reader(std::move(v));
-        assert_that(std::move(cr))
-            .produces(m1)
-            .produces(m2)
-            .produces_end_of_stream();
-    });
-}

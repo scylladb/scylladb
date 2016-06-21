@@ -44,6 +44,17 @@ std::ostream& operator<<(std::ostream& out, const bound_kind k);
 bound_kind invert_kind(bound_kind k);
 int32_t weight(bound_kind k);
 
+static inline bound_kind flip_bound_kind(bound_kind bk)
+{
+    switch (bk) {
+    case bound_kind::excl_end: return bound_kind::excl_start;
+    case bound_kind::incl_end: return bound_kind::incl_start;
+    case bound_kind::excl_start: return bound_kind::excl_end;
+    case bound_kind::incl_start: return bound_kind::incl_end;
+    }
+    abort();
+}
+
 class bound_view {
     const static thread_local clustering_key empty_prefix;
 public:
@@ -86,7 +97,10 @@ public:
         }
     };
     bool equal(const schema& s, const bound_view other) const {
-        return weight(kind) == weight(other.kind) && prefix.equal(s, other.prefix);
+        return kind == other.kind && prefix.equal(s, other.prefix);
+    }
+    bool adjacent(const schema& s, const bound_view other) const {
+        return invert_kind(other.kind) == kind && prefix.equal(s, other.prefix);
     }
     static bound_view bottom() {
         return {empty_prefix, bound_kind::incl_start};
@@ -195,6 +209,13 @@ public:
             bi::member_hook<range_tombstone, bi::set_member_hook<bi::link_mode<bi::auto_unlink>>, &range_tombstone::_link>,
             bi::compare<range_tombstone::compare>,
             bi::constant_time_size<false>>;
+
+    static bool is_single_clustering_row_tombstone(const schema& s, const clustering_key_prefix& start,
+        bound_kind start_kind, const clustering_key_prefix& end, bound_kind end_kind)
+    {
+        return start.is_full(s) && start_kind == bound_kind::incl_start
+            && end_kind == bound_kind::incl_end && start.equal(s, end);
+    }
 private:
     void move_assign(range_tombstone&& rt) {
         start = std::move(rt.start);

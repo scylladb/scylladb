@@ -109,7 +109,9 @@ future<> send_mutations(auto si) {
     return do_with(cf.make_reader(cf.schema(), si->pr, query::no_clustering_key_filtering, priority), [si] (auto& reader) {
         return repeat([si, &reader] {
             return get_local_stream_manager().mutation_send_limiter().wait().then([si, &reader] {
-                return reader().then([si] (auto mopt) {
+                return reader().then([] (auto sm) {
+                    return mutation_from_streamed_mutation(std::move(sm));
+                }).then([si] (auto mopt) {
                     if (mopt && si->db.column_family_exists(si->cf_id)) {
                         si->mutations_nr++;
                         auto fm = frozen_mutation(*mopt);

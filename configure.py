@@ -162,6 +162,7 @@ modes = {
 
 scylla_tests = [
     'tests/mutation_test',
+    'tests/streamed_mutation_test',
     'tests/schema_registry_test',
     'tests/canonical_mutation_test',
     'tests/range_test',
@@ -217,6 +218,7 @@ scylla_tests = [
     'tests/auth_test',
     'tests/idl_test',
     'tests/range_tombstone_list_test',
+    'tests/anchorless_list_test',
 ]
 
 apps = [
@@ -279,6 +281,8 @@ scylla_core = (['database.cc',
                  'schema_registry.cc',
                  'bytes.cc',
                  'mutation.cc',
+                 'streamed_mutation.cc',
+                 'partition_version.cc',
                  'row_cache.cc',
                  'canonical_mutation.cc',
                  'frozen_mutation.cc',
@@ -581,7 +585,8 @@ tests_not_using_seastar_test_framework = set([
     'tests/managed_vector_test',
     'tests/dynamic_bitset_test',
     'tests/idl_test',
-    'tests/range_tombstone_list_test'
+    'tests/range_tombstone_list_test',
+    'tests/anchorless_list_test',
 ])
 
 for t in tests_not_using_seastar_test_framework:
@@ -599,6 +604,7 @@ deps['tests/bytes_ostream_test'] = ['tests/bytes_ostream_test.cc']
 deps['tests/UUID_test'] = ['utils/UUID_gen.cc', 'tests/UUID_test.cc']
 deps['tests/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'tests/murmur_hash_test.cc']
 deps['tests/allocation_strategy_test'] = ['tests/allocation_strategy_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
+deps['tests/anchorless_list_test'] = ['tests/anchorless_list_test.cc']
 
 warnings = [
     '-Wno-mismatched-tags',  # clang-only

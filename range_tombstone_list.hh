@@ -140,7 +140,10 @@ public:
             }
         }
     }
-    void apply(const schema& s, range_tombstone_list& rt_list);
+    void clear() {
+        _tombstones.clear_and_dispose(current_deleter<range_tombstone>());
+    }
+    void apply(const schema& s, const range_tombstone_list& rt_list);
     // See reversibly_mergeable.hh
     reverter apply_reversibly(const schema& s, range_tombstone_list& rt_list);
 private:

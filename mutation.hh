@@ -28,6 +28,8 @@
 #include "schema.hh"
 #include "dht/i_partitioner.hh"
 #include "hashing.hh"
+#include "utils/optimized_optional.hh"
+#include "streamed_mutation.hh"
 
 class mutation final {
 private:
@@ -44,6 +46,8 @@ private:
     std::unique_ptr<data> _ptr;
 private:
     mutation() = default;
+    explicit operator bool() const { return bool(_ptr); }
+    friend class optimized_optional<mutation>;
 public:
     mutation(dht::decorated_key key, schema_ptr schema)
         : _ptr(std::make_unique<data>(std::move(key), std::move(schema)))
@@ -129,64 +133,17 @@ public:
     void apply(const mutation&);
 private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
-    friend class mutation_opt;
 };
 
 struct mutation_decorated_key_less_comparator {
     bool operator()(const mutation& m1, const mutation& m2) const;
 };
 
-class mutation_opt {
-private:
-    mutation _mutation;
-public:
-    mutation_opt() = default;
-    mutation_opt(std::experimental::nullopt_t) noexcept { }
-    mutation_opt(const mutation& obj) : _mutation(obj) { }
-    mutation_opt(mutation&& obj) noexcept : _mutation(std::move(obj)) { }
-    mutation_opt(std::experimental::optional<mutation>&& obj) noexcept {
-        if (obj) {
-            _mutation = std::move(*obj);
-        }
-    }
-    mutation_opt(const mutation_opt&) = default;
-    mutation_opt(mutation_opt&&) = default;
-
-    mutation_opt& operator=(std::experimental::nullopt_t) noexcept {
-        _mutation = mutation();
-        return *this;
-    }
-    template<typename T>
-    std::enable_if_t<std::is_same<std::decay_t<T>, mutation>::value, mutation_opt&>
-    operator=(T&& obj) noexcept {
-        _mutation = std::forward<T>(obj);
-        return *this;
-    }
-    mutation_opt& operator=(mutation_opt&&) = default;
-
-    explicit operator bool() const noexcept {
-        return bool(_mutation._ptr);
-    }
-
-    mutation* operator->() noexcept { return &_mutation; }
-    const mutation* operator->() const noexcept { return &_mutation; }
-
-    mutation& operator*() noexcept { return _mutation; }
-    const mutation& operator*() const noexcept { return _mutation; }
-
-    bool operator==(const mutation_opt& other) const {
-        if (!*this && !other) {
-            return true;
-        }
-        if (!*this || !other) {
-            return false;
-        }
-        return _mutation == other._mutation;
-    }
-    bool operator!=(const mutation_opt& other) const {
-        return !(*this == other);
-    }
+template<>
+struct move_constructor_disengages<mutation> {
+    enum { value = true };
 };
+using mutation_opt = optimized_optional<mutation>;
 
 // Consistent with operator==()
 // Consistent across the cluster, so should not rely on particular
@@ -200,10 +157,6 @@ struct appending_hash<mutation> {
         m.partition().feed_hash(h, s);
     }
 };
-
-inline mutation_opt move_and_disengage(mutation_opt& opt) {
-    return std::move(opt);
-}
 
 inline
 void apply(mutation_opt& dst, mutation&& src) {
@@ -227,3 +180,5 @@ void apply(mutation_opt& dst, mutation_opt&& src) {
 boost::iterator_range<std::vector<mutation>::const_iterator> slice(
     const std::vector<mutation>& partitions,
     const query::partition_range&);
+
+future<mutation_opt> mutation_from_streamed_mutation(streamed_mutation_opt sm);

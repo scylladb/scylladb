@@ -1412,7 +1412,7 @@ void sstable::do_write_components(::mutation_reader mr,
     // Iterate through CQL partitions, then CQL rows, then CQL columns.
     // Each mt.all_partitions() entry is a set of clustered rows sharing the same partition key.
     while (get_offset() < max_sstable_size) {
-        mutation_opt mut = mr().get0();
+        mutation_opt mut = mr().then([] (auto sm) { return mutation_from_streamed_mutation(std::move(sm)); }).get0();
         if (!mut) {
             break;
         }

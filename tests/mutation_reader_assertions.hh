@@ -34,7 +34,9 @@ public:
     { }
 
     reader_assertions& produces(mutation m) {
-        _reader().then([this, m = std::move(m)] (mutation_opt&& mo) mutable {
+        _reader().then([] (auto sm) {
+            return mutation_from_streamed_mutation(std::move(sm));
+        }).then([this, m = std::move(m)] (mutation_opt&& mo) mutable {
             BOOST_REQUIRE(bool(mo));
             assert_that(*mo).is_equal_to(m);
         }).get0();
@@ -42,7 +44,9 @@ public:
     }
 
     mutation_assertion next_mutation() {
-        return _reader().then([] (mutation_opt&& mo) mutable {
+        return _reader().then([] (auto sm) {
+            return mutation_from_streamed_mutation(std::move(sm));
+        }).then([] (mutation_opt&& mo) mutable {
             BOOST_REQUIRE(bool(mo));
             return mutation_assertion(std::move(*mo));
         }).get0();
@@ -57,7 +61,9 @@ public:
     }
 
     reader_assertions& produces_end_of_stream() {
-        _reader().then([this] (mutation_opt&& mo) mutable {
+        _reader().then([] (auto sm) {
+            return mutation_from_streamed_mutation(std::move(sm));
+        }).then([this] (mutation_opt&& mo) mutable {
             if (bool(mo)) {
                 BOOST_FAIL(sprint("Expected end of stream, got %s", *mo));
             }

@@ -585,7 +585,7 @@ struct test_mutation_reader final : public ::mutation_reader::impl {
 public:
     test_mutation_reader(sstables::shared_sstable sst, sstables::mutation_reader rd)
             : _sst(std::move(sst)), _rd(std::move(rd)) {}
-    virtual future<mutation_opt> operator()() override {
+    virtual future<streamed_mutation_opt> operator()() override {
         return _rd.read();
     }
 };

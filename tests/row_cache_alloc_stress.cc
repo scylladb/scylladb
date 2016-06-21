@@ -70,15 +70,17 @@ int main(int argc, char** argv) {
                 .with_column("v", bytes_type, column_kind::regular_column)
                 .build();
 
-            auto mt = make_lw_shared<memtable>(s);
+            auto mt0 = make_lw_shared<memtable>(s);
 
             cache_tracker tracker;
-            row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
+            row_cache cache(s, mt0->as_data_source(), mt0->as_key_source(), tracker);
 
+            auto mt = make_lw_shared<memtable>(s);
             std::vector<dht::decorated_key> keys;
 
             size_t cell_size = 1024;
             size_t row_count = 40 * 1024; // 40M mutations
+            size_t large_cell_size = cell_size * row_count;
 
             auto make_small_mutation = [&] {
                 mutation m(new_key(s), s);
@@ -88,9 +90,7 @@ int main(int argc, char** argv) {
 
             auto make_large_mutation = [&] {
                 mutation m(new_key(s), s);
-                for (size_t j = 0; j < row_count; j++) {
-                    m.set_clustered_cell(new_ckey(s), "v", data_value(bytes(bytes::initialized_later(), cell_size)), 2);
-                }
+                m.set_clustered_cell(new_ckey(s), "v", data_value(bytes(bytes::initialized_later(), large_cell_size)), 2);
                 return m;
             };
 
@@ -193,7 +193,7 @@ int main(int argc, char** argv) {
             for (auto&& key : keys) {
                 auto range = query::partition_range::make_singular(key);
                 auto reader = cache.make_reader(s, range);
-                auto mo = reader().get0();
+                auto mo = mutation_from_streamed_mutation(reader().get0()).get0();
                 assert(mo);
                 assert(mo->partition().live_row_count(*s) ==
                        row_count + 1 /* one row was already in cache before update()*/);
@@ -248,7 +248,7 @@ int main(int argc, char** argv) {
                 try {
                     auto reader = cache.make_reader(s, range);
                     assert(!reader().get0());
-                    auto evicted_from_cache = logalloc::segment_size + cell_size * row_count;
+                    auto evicted_from_cache = logalloc::segment_size + large_cell_size;
                     new char[evicted_from_cache + logalloc::segment_size];
                     assert(false); // The test is not invoking the case which it's supposed to test
                 } catch (const std::bad_alloc&) {

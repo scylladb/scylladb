@@ -25,8 +25,9 @@
 #include "atomic_cell.hh"
 #include "database_fwd.hh"
 #include "mutation_partition_view.hh"
-
+#include "streamed_mutation.hh"
 class mutation;
+class streamed_mutation;
 
 // Immutable, compact form of mutation.
 //
@@ -47,6 +48,7 @@ private:
 public:
     frozen_mutation(const mutation& m);
     explicit frozen_mutation(bytes&& b);
+    frozen_mutation(bytes_view bv, partition_key key);
     frozen_mutation(frozen_mutation&& m) = default;
     frozen_mutation(const frozen_mutation& m) = default;
     frozen_mutation& operator=(frozen_mutation&&) = default;
@@ -70,3 +72,31 @@ public:
 };
 
 frozen_mutation freeze(const mutation& m);
+
+class streamed_mutation_freezer {
+    const schema& _schema;
+    partition_key _key;
+
+    tombstone _partition_tombstone;
+    stdx::optional<static_row> _sr;
+    std::deque<clustering_row> _crs;
+    range_tombstone_list _rts;
+    stdx::optional<range_tombstone_begin> _range_tombstone_begin;
+public:
+    streamed_mutation_freezer(const schema& s, const partition_key& key)
+        : _schema(s), _key(key), _rts(s) { }
+
+    stop_iteration consume(tombstone pt);
+
+    stop_iteration consume(static_row&& sr);
+    stop_iteration consume(clustering_row&& cr);
+
+    stop_iteration consume(range_tombstone_begin&& rtb);
+    stop_iteration consume(range_tombstone_end&& rte);
+
+    frozen_mutation consume_end_of_stream();
+};
+
+future<frozen_mutation> freeze(streamed_mutation sm);
+
+

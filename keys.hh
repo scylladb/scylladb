@@ -220,6 +220,20 @@ public:
         return result;
     }
 
+    struct tri_compare {
+        typename TopLevel::compound _t;
+        tri_compare(const schema& s) : _t(get_compound_type(s)) {}
+        int operator()(const TopLevel& k1, const TopLevel& k2) const {
+            return _t->compare(k1.representation(), k2.representation());
+        }
+        int operator()(const TopLevelView& k1, const TopLevel& k2) const {
+            return _t->compare(k1.representation(), k2.representation());
+        }
+        int operator()(const TopLevel& k1, const TopLevelView& k2) const {
+            return _t->compare(k1.representation(), k2.representation());
+        }
+    };
+
     struct less_compare {
         typename TopLevel::compound _t;
         less_compare(const schema& s) : _t(get_compound_type(s)) {}

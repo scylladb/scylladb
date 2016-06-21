@@ -99,7 +99,7 @@ class mutation_reader {
     mutation_reader(std::unique_ptr<impl>);
     friend class sstable;
 public:
-    future<mutation_opt> read();
+    future<streamed_mutation_opt> read();
     // Define (as defaults) the destructor and move operations in the source
     // file, so here we don't need to know the incomplete impl type.
     ~mutation_reader();
@@ -194,7 +194,7 @@ public:
         return _generation;
     }
 
-    future<mutation_opt> read_row(
+    future<streamed_mutation_opt> read_row(
         schema_ptr schema,
         const key& k,
         query::clustering_key_filtering_context ck_filtering = query::no_clustering_key_filtering,

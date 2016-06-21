@@ -74,6 +74,12 @@ mutation_assertion assert_that(mutation m) {
     return { std::move(m) };
 }
 
+static inline
+mutation_assertion assert_that(streamed_mutation sm) {
+    auto mo = mutation_from_streamed_mutation(std::move(sm)).get0();
+    return { std::move(*mo) };
+}
+
 class mutation_opt_assertions {
     mutation_opt _mo;
 public:
@@ -97,3 +103,10 @@ static inline
 mutation_opt_assertions assert_that(mutation_opt mo) {
     return { std::move(mo) };
 }
+
+static inline
+mutation_opt_assertions assert_that(streamed_mutation_opt smo) {
+    auto mo = mutation_from_streamed_mutation(std::move(smo)).get0();
+    return { std::move(mo) };
+}
+

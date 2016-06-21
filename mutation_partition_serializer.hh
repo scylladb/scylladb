@@ -26,6 +26,7 @@
 #include "database_fwd.hh"
 #include "mutation_partition_view.hh"
 #include "bytes_ostream.hh"
+#include "streamed_mutation.hh"
 
 namespace ser {
 class writer_of_mutation_partition;
@@ -48,3 +49,7 @@ public:
     void write(bytes_ostream&) const;
     void write(ser::writer_of_mutation_partition&&) const;
 };
+
+void serialize_mutation_fragments(const schema& s, tombstone partition_tombstone,
+    stdx::optional<static_row> sr, range_tombstone_list range_tombstones,
+    std::deque<clustering_row> clustering_rows, ser::writer_of_mutation_partition&&);
