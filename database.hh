@@ -380,7 +380,7 @@ private:
     lw_shared_ptr<memtable> new_memtable();
     lw_shared_ptr<memtable> new_streaming_memtable();
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt);
-    future<> update_cache(memtable&, lw_shared_ptr<sstable_list> old_sstables);
+    future<> update_cache(memtable&, sstables::shared_sstable exclude_sstable);
     struct merge_comparator;
 
     // update the sstable generation, making sure that new new sstables don't overwrite this one.
@@ -414,7 +414,7 @@ private:
 
     mutation_source sstables_as_mutation_source();
     key_source sstables_as_key_source() const;
-    partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstable_list> old_sstables);
+    partition_presence_checker make_partition_presence_checker(sstables::shared_sstable exclude_sstable);
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
     void do_trigger_compaction();
 public:

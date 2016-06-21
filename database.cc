@@ -125,10 +125,11 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog* cl
 }
 
 partition_presence_checker
-column_family::make_partition_presence_checker(lw_shared_ptr<sstable_list> old_sstables) {
-    return [this, old_sstables = std::move(old_sstables)] (partition_key_view key) {
-        for (auto&& s : *old_sstables) {
-            if (s.second->filter_has_key(*_schema, key)) {
+column_family::make_partition_presence_checker(sstables::shared_sstable exclude_sstable) {
+    return [this, exclude_sstable = std::move(exclude_sstable)] (partition_key_view key) {
+        auto exclude = [e = std::move(exclude_sstable)] (auto s) { return s != e; };
+        for (auto&& s : boost::make_iterator_range(*_sstables) | boost::adaptors::map_values | boost::adaptors::filtered(exclude)) {
+            if (s->filter_has_key(*_schema, key)) {
                 return partition_presence_checker_result::maybe_exists;
             }
         }
@@ -621,11 +622,11 @@ void column_family::add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
 }
 
 future<>
-column_family::update_cache(memtable& m, lw_shared_ptr<sstable_list> old_sstables) {
+column_family::update_cache(memtable& m, sstables::shared_sstable exclude_sstable) {
     if (_config.enable_cache) {
        // be careful to use the old sstable list, since the new one will hit every
        // mutation in m.
-       return _cache.update(m, make_partition_presence_checker(std::move(old_sstables)));
+       return _cache.update(m, make_partition_presence_checker(std::move(exclude_sstable)));
     } else {
        return make_ready_future<>();
     }
@@ -798,7 +799,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
 
             trigger_compaction();
 
-            return update_cache(*old, std::move(old_sstables)).then_wrapped([this, old] (future<> f) {
+            return update_cache(*old, newtab).then_wrapped([this, old] (future<> f) {
                 try {
                     f.get();
                 } catch(...) {
