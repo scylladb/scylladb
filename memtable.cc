@@ -26,20 +26,20 @@
 namespace stdx = std::experimental;
 
 memtable::memtable(schema_ptr schema, logalloc::region_group* dirty_memory_region_group)
-        : _schema(std::move(schema))
-        , _region(dirty_memory_region_group ? logalloc::region(*dirty_memory_region_group) : logalloc::region())
+        : logalloc::region(dirty_memory_region_group ? logalloc::region(*dirty_memory_region_group) : logalloc::region())
+        , _schema(std::move(schema))
         , partitions(memtable_entry::compare(_schema)) {
 }
 
 memtable::~memtable() {
-    with_allocator(_region.allocator(), [this] {
+    with_allocator(allocator(), [this] {
         partitions.clear_and_dispose(current_deleter<memtable_entry>());
     });
 }
 
 partition_entry&
 memtable::find_or_create_partition_slow(partition_key_view key) {
-    assert(!_region.reclaiming_enabled());
+    assert(!reclaiming_enabled());
 
     // FIXME: Perform lookup using std::pair<token, partition_key_view>
     // to avoid unconditional copy of the partition key.
@@ -59,7 +59,7 @@ memtable::find_or_create_partition_slow(partition_key_view key) {
 
 partition_entry&
 memtable::find_or_create_partition(const dht::decorated_key& key) {
-    assert(!_region.reclaiming_enabled());
+    assert(!reclaiming_enabled());
 
     // call lower_bound so we have a hint for the insert, just in case.
     auto i = partitions.lower_bound(key, memtable_entry::compare(_schema));
@@ -127,7 +127,7 @@ private:
     }
     void update_iterators() {
         // We must be prepared that iterators may get invalidated during compaction.
-        auto current_reclaim_counter = _memtable->_region.reclaim_counter();
+        auto current_reclaim_counter = _memtable->reclaim_counter();
         auto cmp = memtable_entry::compare(_memtable->_schema);
         if (_last) {
             if (current_reclaim_counter != _last_reclaim_counter ||
@@ -177,7 +177,7 @@ public:
             return _delegate();
         }
 
-        logalloc::reclaim_lock _(_memtable->_region);
+        logalloc::reclaim_lock _(*_memtable);
         managed_bytes::linearization_context_guard lcg;
         update_iterators();
         if (_i == _end) {
@@ -202,7 +202,7 @@ memtable::make_reader(schema_ptr s,
 
     if (query::is_single_partition(range)) {
         const query::ring_position& pos = range.start()->value();
-        return _read_section(_region, [&] {
+        return _read_section(*this, [&] {
         managed_bytes::linearization_context_guard lcg;
         auto i = partitions.find(pos, memtable_entry::compare(_schema));
         if (i != partitions.end()) {
@@ -236,8 +236,8 @@ memtable::apply(memtable& mt) {
 
 void
 memtable::apply(const mutation& m, const db::replay_position& rp) {
-    with_allocator(_region.allocator(), [this, &m] {
-        _allocating_section(_region, [&, this] {
+    with_allocator(allocator(), [this, &m] {
+        _allocating_section(*this, [&, this] {
           with_linearized_managed_bytes([&] {
             auto& p = find_or_create_partition(m.decorated_key());
             p.apply(*_schema, m.partition(), *m.schema());
@@ -249,8 +249,8 @@ memtable::apply(const mutation& m, const db::replay_position& rp) {
 
 void
 memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& rp) {
-    with_allocator(_region.allocator(), [this, &m, &m_schema] {
-        _allocating_section(_region, [&, this] {
+    with_allocator(allocator(), [this, &m, &m_schema] {
+        _allocating_section(*this, [&, this] {
           with_linearized_managed_bytes([&] {
             auto& p = find_or_create_partition_slow(m.key(*_schema));
             p.apply(*_schema, m.partition(), *m_schema);
@@ -261,7 +261,7 @@ memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::
 }
 
 logalloc::occupancy_stats memtable::occupancy() const {
-    return _region.occupancy();
+    return logalloc::region::occupancy();
 }
 
 mutation_source memtable::as_data_source() {
@@ -308,13 +308,13 @@ memtable_entry::read(lw_shared_ptr<memtable> mtbl, const schema_ptr& target_sche
     }
     auto& cr = ck_filtering.get_ranges(_key.key());
     auto snp = _pe.read(_schema);
-    return make_partition_snapshot_reader(_schema, _key, ck_filtering, cr, snp, mtbl->_region, mtbl->_read_section, mtbl);
+    return make_partition_snapshot_reader(_schema, _key, ck_filtering, cr, snp, *mtbl, mtbl->_read_section, mtbl);
 }
 
 void memtable::upgrade_entry(memtable_entry& e) {
     if (e._schema != _schema) {
-        assert(!_region.reclaiming_enabled());
-        with_allocator(_region.allocator(), [this, &e] {
+        assert(!reclaiming_enabled());
+        with_allocator(allocator(), [this, &e] {
           with_linearized_managed_bytes([&] {
             e.partition().upgrade(e._schema, _schema);
             e._schema = _schema;
