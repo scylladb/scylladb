@@ -1371,7 +1371,7 @@ public:
         }
     }
 
-    // Merges another region into this region. The other region is mad
+    // Merges another region into this region. The other region is made
     // to refer to this region.
     // Doesn't invalidate references to allocated objects.
     void merge(region_impl& other) {
