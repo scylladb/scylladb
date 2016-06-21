@@ -922,6 +922,33 @@ segment::heap_handle() {
     return shard_segment_pool.descriptor(this)._heap_handle;
 }
 
+inline void
+region_group_binomial_group_sanity_check(auto& bh) {
+#ifdef DEBUG
+    bool failed = false;
+    size_t last =  std::numeric_limits<size_t>::max();
+    for (auto b = bh.ordered_begin(); b != bh.ordered_end(); b++) {
+        auto t = (*b)->evictable_occupancy().total_space();
+        if (!(t <= last)) {
+            failed = true;
+            break;
+        }
+        last = t;
+    }
+    if (!failed) {
+        return;
+    }
+
+    printf("Sanity checking FAILED, size %ld\n", bh.size());
+    for (auto b = bh.ordered_begin(); b != bh.ordered_end(); b++) {
+        auto r = (*b);
+        auto t = r->evictable_occupancy().total_space();
+        printf(" r = %p (id=%ld), occupancy = %ld\n",r, r->id(), t);
+    }
+    assert(0);
+#endif
+}
+
 //
 // For interface documentation see logalloc::region and allocation_strategy.
 //
@@ -1059,17 +1086,27 @@ class region_impl : public allocation_strategy {
         }
     } __attribute__((packed));
 private:
+    region* _region = nullptr;
     region_group* _group = nullptr;
     segment* _active = nullptr;
     size_t _active_offset;
     segment_heap _segments; // Contains only closed segments
     occupancy_stats _closed_occupancy;
     occupancy_stats _non_lsa_occupancy;
+    // This helps us keeping track of the region_group* heap. That's because we call update before
+    // we have a chance to update the occupancy stats - mainly because at this point we don't know
+    // what will we do with the new segment. Also, because we are not ever interested in the
+    // fraction used, we'll keep it as a scalar and convert when we need to present it as an
+    // occupancy. We could actually just present this as a scalar as well and never use occupancies,
+    // but consistency is good.
+    size_t _evictable_space = 0;
     bool _reclaiming_enabled = true;
     bool _evictable = false;
     uint64_t _id;
     uint64_t _reclaim_counter = 0;
     eviction_fn _eviction_fn;
+
+    region_group::region_heap::handle_type _heap_handle;
 private:
     struct compaction_lock {
         region_impl& _region;
@@ -1150,14 +1187,16 @@ private:
     void free_segment(segment* seg) noexcept {
         shard_segment_pool.free_segment(seg);
         if (_group) {
-            _group->update(-segment::size);
+            _evictable_space -= segment_size;
+            _group->decrease_usage(_heap_handle, -segment::size);
         }
     }
 
     segment* new_segment() {
         segment* seg = shard_segment_pool.new_segment(this);
         if (_group) {
-            _group->update(segment::size);
+            _evictable_space += segment_size;
+            _group->increase_usage(_heap_handle, segment::size);
         }
         return seg;
     }
@@ -1201,8 +1240,8 @@ private:
     };
 
 public:
-    explicit region_impl(region_group* group = nullptr)
-        : _group(group), _id(next_id())
+    explicit region_impl(region* region, region_group* group = nullptr)
+        : _region(region), _group(group), _id(next_id())
     {
         _preferred_max_contiguous_allocation = max_managed_object_size;
         tracker_instance._impl->register_region(this);
@@ -1251,6 +1290,9 @@ public:
         return _closed_occupancy;
     }
 
+    occupancy_stats evictable_occupancy() const {
+        return occupancy_stats(_evictable_space, _evictable_space);
+    }
     //
     // Returns true if this region can be compacted and compact() will make forward progress,
     // so that this will eventually stop:
@@ -1281,7 +1323,8 @@ public:
             auto allocated_size = malloc_usable_size(ptr);
             _non_lsa_occupancy += occupancy_stats(0, allocated_size);
             if (_group) {
-                _group->update(allocated_size);
+                 _evictable_space += allocated_size;
+                _group->increase_usage(_heap_handle, allocated_size);
             }
             shard_segment_pool.update_non_lsa_memory_in_use(allocated_size);
             return ptr;
@@ -1298,7 +1341,8 @@ public:
             auto allocated_size = malloc_usable_size(obj);
             _non_lsa_occupancy -= occupancy_stats(0, allocated_size);
             if (_group) {
-                _group->update(-allocated_size);
+                 _evictable_space -= allocated_size;
+                _group->decrease_usage(_heap_handle, allocated_size);
             }
             shard_segment_pool.update_non_lsa_memory_in_use(-allocated_size);
             standard_allocator().free(obj);
@@ -1500,7 +1544,9 @@ public:
         return _reclaim_counter;
     }
 
+    friend class region;
     friend class region_group;
+    friend class region_group::region_evictable_occupancy_ascending_less_comparator;
 };
 
 void tracker::set_reclamation_step(size_t step_in_segments) {
@@ -1517,12 +1563,28 @@ memory::reclaiming_result tracker::reclaim() {
            : memory::reclaiming_result::reclaimed_nothing;
 }
 
+bool
+region_group::region_evictable_occupancy_ascending_less_comparator::operator()(region_impl* r1, region_impl* r2) const {
+    return r1->evictable_occupancy().total_space() < r2->evictable_occupancy().total_space();
+}
+
 region::region()
-    : _impl(make_shared<impl>())
+    : _impl(make_shared<impl>(this))
 { }
 
 region::region(region_group& group)
-        : _impl(make_shared<impl>(&group)) {
+        : _impl(make_shared<impl>(this, &group)) {
+}
+
+region::region(region&& other) {
+    this->_impl = std::move(other._impl);
+    this->_impl->_region = this;
+}
+
+region& region::operator=(region&& other) {
+    this->_impl = std::move(other._impl);
+    this->_impl->_region = this;
+    return *this;
 }
 
 region::~region() {
@@ -1958,43 +2020,72 @@ tracker::impl::~impl() {
     }
 }
 
-region_group::region_group(region_group&& o) noexcept
-        : _parent(o._parent), _total_memory(o._total_memory)
-        , _subgroups(std::move(o._subgroups)), _regions(std::move(o._regions)) {
-    if (_parent) {
-        _parent->del(&o);
-        _parent->add(this);
+region_group_reclaimer region_group::no_reclaimer;
+
+uint64_t region_group::top_region_evictable_space() const {
+    return _regions.empty() ? 0 : _regions.top()->evictable_occupancy().total_space();
+}
+
+void region_group::do_release_requests() noexcept {
+    // The later() statement is here  to avoid executing the function in update() context. But
+    // also guarantees that we won't dominate the CPU if we have many requests to release.
+    with_gate(_asynchronous_gate, [this] {
+        return later().then([this] {
+            // Check again, we may have executed release_requests() in this mean time from another entry
+            // point (for instance, a descendant notification)
+            if (_blocked_requests.empty()) {
+                return;
+            }
+
+            auto blocked_at = do_for_each_parent(this, [] (auto rg) {
+                return rg->execution_permitted() ? stop_iteration::no : stop_iteration::yes;
+            });
+
+            if (!blocked_at) {
+                auto req = std::move(_blocked_requests.front());
+                _blocked_requests.pop_front();
+                req->allocate();
+                release_requests();
+            } else {
+                // If someone blocked us in the mean time then we can't execute. We need to make
+                // sure that we are listening to notifications, though. It could be that we used to
+                // be blocked on ourselves and now we are blocking on an ancestor
+                subscribe_for_ancestor_available_memory_notification(blocked_at);
+            }
+        });
+    });
+}
+
+region* region_group::get_largest_region() {
+    if (!_maximal_rg || _maximal_rg->_regions.empty()) {
+        return nullptr;
     }
-    o._total_memory = 0;
-    for (auto&& sg : _subgroups) {
-        sg->_parent = this;
-    }
-    for (auto&& r : _regions) {
-        r->_group = this;
-    }
+    return _maximal_rg->_regions.top()->_region;
 }
 
 void
 region_group::add(region_group* child) {
-    _subgroups.push_back(child);
+    child->_subgroup_heap_handle = _subgroups.push(child);
     update(child->_total_memory);
 }
 
 void
 region_group::del(region_group* child) {
-    _subgroups.erase(boost::range::remove(_subgroups, child), _subgroups.end());
+    _subgroups.erase(child->_subgroup_heap_handle);
     update(-child->_total_memory);
 }
 
 void
 region_group::add(region_impl* child) {
-    _regions.push_back(child);
+    child->_heap_handle = _regions.push(child);
+    region_group_binomial_group_sanity_check(_regions);
     update(child->occupancy().total_space());
 }
 
 void
 region_group::del(region_impl* child) {
-    _regions.erase(boost::range::remove(_regions, child), _regions.end());
+    _regions.erase(child->_heap_handle);
+    region_group_binomial_group_sanity_check(_regions);
     update(-child->occupancy().total_space());
 }
 

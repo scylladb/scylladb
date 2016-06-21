@@ -26,7 +26,12 @@
 #include <seastar/core/memory.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/shared_future.hh>
+#include <seastar/core/gate.hh>
+#include <seastar/core/future-util.hh>
+#include <seastar/core/circular_buffer.hh>
 #include "allocation_strategy.hh"
+#include <boost/heap/binomial_heap.hpp>
 
 namespace logalloc {
 
@@ -47,22 +52,164 @@ constexpr size_t segment_size = 1 << segment_size_shift;
 //
 using eviction_fn = std::function<memory::reclaiming_result()>;
 
+//
+// Users of a region_group can pass an instance of the class region_group_reclaimer, and specialize
+// its methods start_reclaiming() and stop_reclaiming(). Those methods will be called when the LSA
+// see relevant changes in the memory pressure conditions for this region_group. By specializing
+// those methods - which are a nop by default - the callers can take action to aid the LSA in
+// alleviating pressure.
+class region_group_reclaimer {
+protected:
+    size_t _threshold;
+    bool _under_pressure = false;
+    virtual void start_reclaiming() {}
+    virtual void stop_reclaiming() {}
+public:
+    bool under_pressure() const {
+        return _under_pressure;
+    }
+
+    void notify_pressure() {
+        if (!_under_pressure) {
+            _under_pressure = true;
+            start_reclaiming();
+        }
+    }
+
+    void notify_relief() {
+        if (_under_pressure) {
+            _under_pressure = false;
+            stop_reclaiming();
+        }
+    }
+
+    region_group_reclaimer(size_t threshold = std::numeric_limits<size_t>::max()) : _threshold(threshold) {}
+    virtual ~region_group_reclaimer() {}
+
+    size_t throttle_threshold() const {
+        return _threshold;
+    }
+};
+
 // Groups regions for the purpose of statistics.  Can be nested.
 class region_group {
+    static region_group_reclaimer no_reclaimer;
+
+    struct region_evictable_occupancy_ascending_less_comparator {
+        bool operator()(region_impl* r1, region_impl* r2) const;
+    };
+
+    // We want to sort the subgroups so that we can easily find the one that holds the biggest
+    // region for freeing purposes. Please note that this is not the biggest of the region groups,
+    // since a big region group can have a big collection of very small regions, and freeing them
+    // won't achieve anything. An example of such scenario is a ScyllaDB region with a lot of very
+    // small memtables that add up, versus one with a very big memtable. The small memtables are
+    // likely still growing, and freeing the big memtable will guarantee that the most memory is
+    // freed up, while maximizing disk throughput.
+    //
+    // As asynchronous reclaim will likely involve disk operation, and those tend to be more
+    // efficient when bulk done, this behavior is not ScyllaDB memtable specific.
+    //
+    // The maximal score is recursively defined as:
+    //
+    //      max(our_biggest_region, our_subtree_biggest_region)
+    struct subgroup_maximal_region_ascending_less_comparator {
+        bool operator()(region_group* rg1, region_group* rg2) const {
+            return rg1->maximal_score() < rg2->maximal_score();
+        }
+    };
+    friend struct subgroup_maximal_region_ascending_less_comparator;
+
+    using region_heap = boost::heap::binomial_heap<region_impl*,
+          boost::heap::compare<region_evictable_occupancy_ascending_less_comparator>,
+          boost::heap::allocator<std::allocator<region_impl*>>,
+          //constant_time_size<true> causes corruption with boost < 1.60
+          boost::heap::constant_time_size<false>>;
+
+    using subgroup_heap = boost::heap::binomial_heap<region_group*,
+          boost::heap::compare<subgroup_maximal_region_ascending_less_comparator>,
+          boost::heap::allocator<std::allocator<region_group*>>,
+          //constant_time_size<true> causes corruption with boost < 1.60
+          boost::heap::constant_time_size<false>>;
+
     region_group* _parent = nullptr;
     size_t _total_memory = 0;
-    std::vector<region_group*> _subgroups;
-    std::vector<region_impl*> _regions;
+    region_group_reclaimer& _reclaimer;
+
+    subgroup_heap _subgroups;
+    subgroup_heap::handle_type _subgroup_heap_handle;
+    region_heap _regions;
+    region_group* _maximal_rg = nullptr;
+    // We need to store the score separately, otherwise we'd have to have an extra pass
+    // before we update the region occupancy.
+    size_t _maximal_score = 0;
+
+    struct allocating_function {
+        virtual ~allocating_function() = default;
+        virtual void allocate() = 0;
+    };
+
+    template <typename Func>
+    struct concrete_allocating_function : public allocating_function {
+        using futurator = futurize<std::result_of_t<Func()>>;
+        typename futurator::promise_type pr;
+        Func func;
+    public:
+        void allocate() override {
+            futurator::apply(func).forward_to(std::move(pr));
+        }
+        concrete_allocating_function(Func&& func) : func(std::forward<Func>(func)) {}
+        typename futurator::type get_future() {
+            return pr.get_future();
+        }
+    };
+
+    // It is a more common idiom to just hold the promises in the circular buffer and make them
+    // ready. However, in the time between the promise being made ready and the function execution,
+    // it could be that our memory usage went up again. To protect against that, we have to recheck
+    // if memory is still available after the future resolves.
+    //
+    // But we can greatly simplify it if we store the function itself in the circular_buffer, and
+    // execute it synchronously in release_requests() when we are sure memory is available.
+    //
+    // This allows us to easily provide strong execution guarantees while keeping all re-check
+    // complication in release_requests and keep the main request execution path simpler.
+    circular_buffer<std::unique_ptr<allocating_function>> _blocked_requests;
+
+    // All requests waiting for execution are kept in _blocked_requests (explained above) in the
+    // region_group they were executed against. However, it could be that they are blocked not due
+    // to their region group but to an ancestor. To handle these cases we will keep a list of
+    // descendant region_groups that have requests that are waiting on us.
+    //
+    // Please note that what we keep here are not requests, and can be thought as just messages. The
+    // requests themselves are kept in the region_group in which they originated. When we see that
+    // there are region_groups waiting on us, we broadcast these messages to the waiters and they
+    // will then decide whether they can now run or if they have to wait on us again (or potentially
+    // a different ancestor)
+    shared_promise<> _descendant_blocked_requests;
+    region_group* _waiting_on_ancestor = nullptr;
+    seastar::gate _asynchronous_gate;
+    bool _shutdown_requested = false;
 public:
-    region_group() = default;
-    region_group(region_group* parent) : _parent(parent) {
+    // When creating a region_group, one can specify an optional throttle_threshold parameter. This
+    // parameter won't affect normal allocations, but an API is provided, through the region_group's
+    // method run_when_memory_available(), to make sure that a given function is only executed when
+    // the total memory for the region group (and all of its parents) is lower or equal to the
+    // region_group's throttle_treshold (and respectively for its parents).
+    region_group(region_group_reclaimer& reclaimer = no_reclaimer) : region_group(nullptr, reclaimer) {}
+    region_group(region_group* parent, region_group_reclaimer& reclaimer = no_reclaimer) : _parent(parent), _reclaimer(reclaimer) {
         if (_parent) {
             _parent->add(this);
         }
     }
-    region_group(region_group&& o) noexcept;
+    region_group(region_group&& o) = delete;
     region_group(const region_group&) = delete;
     ~region_group() {
+        // If we set a throttle threshold, we'd be postponing many operations. So shutdown must be
+        // called.
+        if (_reclaimer.throttle_threshold() != std::numeric_limits<size_t>::max()) {
+            assert(_shutdown_requested);
+        }
         if (_parent) {
             _parent->del(this);
         }
@@ -73,13 +220,199 @@ public:
         return _total_memory;
     }
     void update(ssize_t delta) {
-        auto rg = this;
-        while (rg) {
+        do_for_each_parent(this, [delta] (auto rg) mutable {
+            rg->update_maximal_rg();
             rg->_total_memory += delta;
-            rg = rg->_parent;
+            // It is okay to call release_requests for a region_group that can't allow execution.
+            // But that can generate various spurious messages to groups waiting on us that will be
+            // then woken up just so they can go to wait again. So let's filter that.
+            if (rg->execution_permitted()) {
+                rg->release_requests();
+            }
+            return stop_iteration::no;
+        });
+    }
+
+    // It would be easier to call update, but it is unfortunately broken in boost versions up to at
+    // least 1.59.
+    //
+    // One possibility would be to just test for delta sigdness, but we adopt an explicit call for
+    // two reasons:
+    //
+    // 1) it save us a branch
+    // 2) some callers would like to pass delta = 0. For instance, when we are making a region
+    //    evictable / non-evictable. Because the evictable occupancy changes, we would like to call
+    //    the full update cycle even then.
+    void increase_usage(region_heap::handle_type& r_handle, ssize_t delta) {
+        _regions.increase(r_handle);
+        update(delta);
+    }
+
+    void decrease_usage(region_heap::handle_type& r_handle, ssize_t delta) {
+        _regions.decrease(r_handle);
+        update(delta);
+    }
+
+    //
+    // Make sure that the function specified by the parameter func only runs when this region_group,
+    // as well as each of its ancestors have a memory_used() amount of memory that is lesser or
+    // equal the throttle_threshold, as specified in the region_group's constructor.
+    //
+    // region_groups that did not specify a throttle_threshold will always allow for execution.
+    //
+    // In case current memory_used() is over the threshold, a non-ready future is returned and it
+    // will be made ready at some point in the future, at which memory usage in the offending
+    // region_group (either this or an ancestor) falls below the threshold.
+    //
+    // Requests that are not allowed for execution are queued and released in FIFO order within the
+    // same region_group, but no guarantees are made regarding release ordering across different
+    // region_groups.
+    template <typename Func>
+    futurize_t<std::result_of_t<Func()>> run_when_memory_available(Func&& func) {
+        // We disallow future-returning functions here, because otherwise memory may be available
+        // when we start executing it, but no longer available in the middle of the execution.
+        static_assert(!is_future<std::result_of_t<Func()>>::value, "future-returning functions are not permitted.");
+        using futurator = futurize<std::result_of_t<Func()>>;
+
+        auto blocked_at = do_for_each_parent(this, [] (auto rg) {
+            return (rg->_blocked_requests.empty() && rg->execution_permitted()) ? stop_iteration::no : stop_iteration::yes;
+        });
+
+        if (!blocked_at) {
+            return futurator::apply(func);
         }
+        subscribe_for_ancestor_available_memory_notification(blocked_at);
+
+        auto fn = std::make_unique<concrete_allocating_function<Func>>(std::forward<Func>(func));
+        auto fut = fn->get_future();
+        _blocked_requests.push_back(std::move(fn));
+
+        // This is called here, and not at update(), for two reasons: the first, is that things that
+        // are done during the free() path should be done carefuly, in the sense that they can
+        // trigger another update call and put us in a loop. Not to mention we would like to keep
+        // those from having exceptions. We solve that for release_requests by using later(), but in
+        // here we can do away with that need altogether.
+        //
+        // Second and most important, until we actually block a request, the pressure condition may
+        // very well be transient. There are opportunities for compactions, the condition can go
+        // away on its own, etc.
+        //
+        // The reason we check execution permitted(), is that we'll still block requests if we have
+        // free memory but existing requests in the queue. That is so we can keep our FIFO ordering
+        // guarantee. So we need to distinguish here the case in which we're blocking merely to
+        // serialize requests, so that the caller does not evict more than it should.
+        if (!blocked_at->execution_permitted()) {
+            blocked_at->_reclaimer.notify_pressure();
+        }
+        return fut;
+    }
+
+    // returns a pointer to the largest region (in terms of memory usage) that sits below this
+    // region group. This includes the regions owned by this region group as well as all of its
+    // children.
+    region* get_largest_region();
+
+    // Shutdown is mandatory for every user who has set a threshold
+    future<> shutdown() {
+        _shutdown_requested = true;
+        return _asynchronous_gate.close();
     }
 private:
+    // Make sure we get a notification and can call release_requests when one of our ancestors that
+    // used to block us is no longer under memory pressure.
+    void subscribe_for_ancestor_available_memory_notification(region_group *ancestor) {
+        if ((this == ancestor) || (_waiting_on_ancestor)) {
+            return; // already subscribed, or no need to
+        }
+
+        _waiting_on_ancestor = ancestor;
+
+        with_gate(_asynchronous_gate, [this] {
+            // We reevaluate _waiting_on_ancestor here so we make sure there is no deferring point
+            // between determining the ancestor and registering with it for a notification. We start
+            // with _waiting_on_ancestor set to the initial value, and after we are notified, we
+            // will set _waiting_on_ancestor to nullptr to force this lambda to reevaluate it.
+            auto evaluate_ancestor_and_stop = [this] {
+                if (!_waiting_on_ancestor) {
+                    auto new_blocking_point = do_for_each_parent(this, [] (auto rg) {
+                        return (rg->execution_permitted()) ? stop_iteration::no : stop_iteration::yes;
+                    });
+                    if (!new_blocking_point) {
+                        release_requests();
+                    }
+                    _waiting_on_ancestor = (new_blocking_point == this) ? nullptr : new_blocking_point;
+                }
+                return _waiting_on_ancestor == nullptr;
+            };
+
+            return do_until(evaluate_ancestor_and_stop, [this] {
+                return _waiting_on_ancestor->_descendant_blocked_requests.get_shared_future().then([this] {
+                    _waiting_on_ancestor = nullptr;
+                });
+            });
+        });
+    }
+
+    // Executes the function func for each region_group upwards in the hierarchy, starting with the
+    // parameter node. The function func may return stop_iteration::no, in which case it proceeds to
+    // the next ancestor in the hierarchy, or stop_iteration::yes, in which case it stops at this
+    // level.
+    //
+    // This method returns a pointer to the region_group that was processed last, or nullptr if the
+    // root was reached.
+    template <typename Func>
+    static region_group* do_for_each_parent(region_group *node, Func&& func) {
+        auto rg = node;
+        while (rg) {
+            if (func(rg) == stop_iteration::yes) {
+                return rg;
+            }
+            rg = rg->_parent;
+        }
+        return nullptr;
+    }
+    inline bool execution_permitted() const {
+        return _total_memory <= _reclaimer.throttle_threshold();
+    }
+
+    void release_requests() noexcept {
+        _reclaimer.notify_relief();
+
+        _descendant_blocked_requests.set_value();
+        _descendant_blocked_requests = shared_promise<>();
+        if (!_blocked_requests.empty()) {
+            do_release_requests();
+        }
+    }
+    void do_release_requests() noexcept;
+
+    uint64_t top_region_evictable_space() const;
+
+    uint64_t maximal_score() const {
+        return _maximal_score;
+    }
+
+    void update_maximal_rg() {
+        auto my_score = top_region_evictable_space();
+        auto children_score = _subgroups.empty() ? 0 : _subgroups.top()->maximal_score();
+        auto old_maximal_score = _maximal_score;
+        if (children_score > my_score) {
+            _maximal_rg = _subgroups.top()->_maximal_rg;
+        } else {
+            _maximal_rg = this;
+        }
+
+        _maximal_score = _maximal_rg->top_region_evictable_space();
+        if (_parent) {
+            // binomial heap update boost bug.
+            if (_maximal_score > old_maximal_score) {
+                _parent->_subgroups.increase(_subgroup_heap_handle);
+            } else if (_maximal_score < old_maximal_score) {
+                _parent->_subgroups.decrease(_subgroup_heap_handle);
+            }
+        }
+    }
+
     void add(region_group* child);
     void del(region_group* child);
     void add(region_impl* child);
