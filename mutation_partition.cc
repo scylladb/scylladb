@@ -1668,7 +1668,7 @@ class compact_for_query {
 
     bool _static_row_live{};
     uint32_t _rows_in_current_partition;
-    uint32_t _partition_limit;
+    uint32_t _current_partition_limit;
     bool _empty_partition{};
     const partition_key* _pk;
     bool _has_ck_selector{};
@@ -1711,7 +1711,7 @@ public:
         _static_row_live = false;
         _current_tombstone = { };
         _partition_tombstone = { };
-        _partition_limit = std::min(_row_limit, _partition_row_limit);
+        _current_partition_limit = std::min(_row_limit, _partition_row_limit);
         return stop_iteration::no;
     }
 
@@ -1746,12 +1746,12 @@ public:
         if (only_live() && is_live) {
             partition_is_not_empty();
             _consumer.consume(std::move(cr), true);
-            if (++_rows_in_current_partition == _partition_limit) {
+            if (++_rows_in_current_partition == _current_partition_limit) {
                 return stop_iteration::yes;
             }
         } else if (!only_live()) {
             if (is_live) {
-                if (_rows_in_current_partition == _partition_limit) {
+                if (_rows_in_current_partition == _current_partition_limit) {
                     return stop_iteration::yes;
                 }
                 _rows_in_current_partition++;
