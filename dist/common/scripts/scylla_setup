@@ -238,7 +238,7 @@ if [ $NTP_SETUP -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to setup RAID?" "Its is recommended to use RAID0 for Scylla data. If you select yes, you will need to choose which disks to use for Scylla data." "yes" &&:
+    interactive_ask_service "Do you want to setup RAID and XFS?" "It is recommended to use RAID0 and XFS for Scylla data. If you select yes, you will be prompt to choose which disks to use for Scylla data. Selected disks will be formatted in the process." "yes" &&:
     RAID_SETUP=$?
     if [ $RAID_SETUP -eq 1 ]; then
         echo "Please select disks from following list: "
