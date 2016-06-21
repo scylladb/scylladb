@@ -243,7 +243,7 @@ if [ $INTERACTIVE -eq 1 ]; then
     if [ $RAID_SETUP -eq 1 ]; then
         echo "Please select disks from following list: "
         while true; do
-            blkid -c /dev/null|cut -f 1 -d ' '|sed s/://g|while read dev
+            blkid -c /dev/null|cut -f 1 -d ' '|sed s/://g|grep -v loop|while read dev
             do
                 count_raw=$(grep $dev /proc/mounts|wc -l)
                 count_pvs=0
