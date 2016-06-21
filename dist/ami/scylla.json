@@ -1,7 +1,7 @@
 {
   "builders": [
     {
-      "type": "amazon-instance",
+      "type": "amazon-ebs",
       "access_key": "{{user `access_key`}}",
       "secret_key": "{{user `secret_key`}}",
       "subnet_id": "{{user `subnet_id`}}",
