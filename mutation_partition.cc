@@ -1659,7 +1659,7 @@ class compact_for_query {
     gc_clock::time_point _gc_before;
     api::timestamp_type _max_purgeable = api::max_timestamp;
     const query::partition_slice& _slice;
-    uint32_t _limit;
+    uint32_t _row_limit;
     uint32_t _partition_row_limit;
 
     Consumer _consumer;
@@ -1698,7 +1698,7 @@ public:
         , _query_time(query_time)
         , _gc_before(query_time - s.gc_grace_seconds())
         , _slice(slice)
-        , _limit(limit)
+        , _row_limit(limit)
         , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
         , _consumer(std::move(consumer))
     { }
@@ -1711,7 +1711,7 @@ public:
         _static_row_live = false;
         _current_tombstone = { };
         _partition_tombstone = { };
-        _partition_limit = std::min(_limit, _partition_row_limit);
+        _partition_limit = std::min(_row_limit, _partition_row_limit);
         return stop_iteration::no;
     }
 
@@ -1791,9 +1791,9 @@ public:
                 ++_rows_in_current_partition;
             }
 
-            _limit -= _rows_in_current_partition;
+            _row_limit -= _rows_in_current_partition;
             _consumer.consume_end_of_partition();
-            return _limit ? stop_iteration::no : stop_iteration::yes;
+            return _row_limit ? stop_iteration::no : stop_iteration::yes;
         }
         return stop_iteration::no;
     }
