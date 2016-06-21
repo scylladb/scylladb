@@ -58,7 +58,6 @@ mkdir -p $RPM_BUILD_ROOT%{_bindir}
 mkdir -p $RPM_BUILD_ROOT%{_sbindir}
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
-mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sudoers.d/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/collectd.d/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/scylla.d/
@@ -69,7 +68,6 @@ mkdir -p $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 
 install -m644 dist/common/sysconfig/scylla-server $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/
 install -m644 dist/common/limits.d/scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
-install -m644 dist/common/sudoers.d/scylla $RPM_BUILD_ROOT%{_sysconfdir}/sudoers.d/
 install -m644 dist/common/collectd.d/scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/collectd.d/
 install -m644 dist/common/scylla.d/*.conf $RPM_BUILD_ROOT%{_sysconfdir}/scylla.d/
 install -m644 dist/common/sysctl.d/*.conf $RPM_BUILD_ROOT%{_sysctldir}/
@@ -134,7 +132,6 @@ rm -rf $RPM_BUILD_ROOT
 
 %config(noreplace) %{_sysconfdir}/sysconfig/scylla-server
 %{_sysconfdir}/security/limits.d/scylla.conf
-%{_sysconfdir}/sudoers.d/scylla
 %config(noreplace) %{_sysconfdir}/collectd.d/scylla.conf
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla.d
 %config(noreplace) %{_sysconfdir}/scylla.d/*.conf
