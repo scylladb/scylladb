@@ -43,6 +43,9 @@
 
 #include "schema.hh"
 #include "bytes.hh"
+#include "Cassandra.h"
+
+using namespace  ::org::apache::cassandra;
 
 #if 0
 import java.nio.ByteBuffer;
@@ -79,11 +82,16 @@ import org.apache.cassandra.utils.FBUtilities;
  * (ValidateColumnPath is the main exception in that it includes keyspace and CF validation.)
  */
 namespace thrift_validation {
+
+
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(ThriftValidation.class);
 #endif
 
 void validate_key(schema_ptr schema_, const bytes& key);
+void validate_keyspace_not_system(const std::string& keyspace);
+void validate_ks_def(const KsDef& ks_def);
+void validate_cf_def(const CfDef& cf_def);
 
 #if 0
     public static void validateKeyspace(String keyspaceName) throws KeyspaceNotDefinedException

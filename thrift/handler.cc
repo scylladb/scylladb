@@ -39,6 +39,8 @@
 #include "noexcept_traits.hh"
 #include "schema_registry.hh"
 #include "thrift/utils.hh"
+#include "schema_builder.hh"
+#include "thrift/thrift_validation.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -74,6 +76,8 @@ public:
             throw;
         } catch (no_such_class& nc) {
             throw make_exception<InvalidRequestException>(nc.what());
+        } catch (exceptions::already_exists_exception& ae) {
+            throw make_exception<InvalidRequestException>(ae.what());
         } catch (std::exception& e) {
             // Unexpected exception, wrap it
             throw ::apache::thrift::TException(std::string("Internal server error: ") + e.what());
@@ -484,53 +488,110 @@ public:
 
     void system_add_keyspace(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const KsDef& ks_def) {
         return with_cob(std::move(cob), std::move(exn_cob), [&] {
-            std::string schema_id = "schema-id";  // FIXME: make meaningful
-            if (_db.local().has_keyspace(ks_def.name)) {
-                InvalidRequestException ire;
-                ire.why = sprint("Keyspace %s already exists", ks_def.name);
-                throw ire;
-            }
-
+            thrift_validation::validate_ks_def(ks_def);
             std::vector<schema_ptr> cf_defs;
             cf_defs.reserve(ks_def.cf_defs.size());
             for (const CfDef& cf_def : ks_def.cf_defs) {
-                std::vector<schema::column> partition_key;
-                std::vector<schema::column> clustering_key;
-                std::vector<schema::column> regular_columns;
-                // FIXME: get this from comparator
-                auto column_name_type = utf8_type;
-                // FIXME: look at key_alias and key_validation_class first
-                partition_key.push_back({"key", bytes_type});
+                if (cf_def.keyspace != ks_def.name) {
+                    throw make_exception<InvalidRequestException>("CfDef (%s) had a keyspace definition that did not match KsDef", cf_def.keyspace);
+                }
+                thrift_validation::validate_cf_def(cf_def);
+                schema_builder builder(ks_def.name, cf_def.name, { });
+
+                if (cf_def.__isset.key_validation_class) {
+                    auto pk_types = get_types(cf_def.key_validation_class);
+                    if (pk_types.size() == 1 && cf_def.__isset.key_alias) {
+                        builder.with_column(to_bytes(cf_def.key_alias), std::move(pk_types.back()), column_kind::partition_key);
+                    } else {
+                        for (uint32_t i = 0; i < pk_types.size(); ++i) {
+                            builder.with_column(to_bytes("key" + (i + 1)), std::move(pk_types[i]), column_kind::partition_key);
+                        }
+                    }
+                } else {
+                    builder.with_column(to_bytes("key"), bytes_type, column_kind::partition_key);
+                }
+
+                data_type regular_column_name_type;
                 if (cf_def.column_metadata.empty()) {
                     // Dynamic CF
+                    regular_column_name_type = utf8_type;
                     auto ck_types = get_types(cf_def.comparator_type);
                     for (uint32_t i = 0; i < ck_types.size(); ++i) {
-                        clustering_key.push_back({"column" + (i + 1), std::move(ck_types[i])});
+                        builder.with_column(to_bytes("column" + (i + 1)), std::move(ck_types[i]), column_kind::clustering_key);
                     }
                     auto&& vtype = cf_def.__isset.default_validation_class
-                                 ? db::marshal::type_parser::parse(sstring_view(cf_def.default_validation_class))
-                                 : utf8_type;
-                    regular_columns.push_back({"value", std::move(vtype)});
+                                 ? db::marshal::type_parser::parse(to_sstring(cf_def.default_validation_class))
+                                 : bytes_type;
+                    builder.with_column(to_bytes("value"), std::move(vtype));
                 } else {
                     // Static CF
+                    regular_column_name_type = db::marshal::type_parser::parse(to_sstring(cf_def.comparator_type));
                     for (const ColumnDef& col_def : cf_def.column_metadata) {
-                        // FIXME: look at all fields, not just name
-                        regular_columns.push_back({to_bytes(col_def.name), bytes_type});
+                        auto col_name = to_bytes(col_def.name);
+                        regular_column_name_type->validate(col_name);
+                        builder.with_column(std::move(col_name), db::marshal::type_parser::parse(to_sstring(col_def.validation_class)),
+                                            index_info_from_thrift(col_def), column_kind::regular_column);
                     }
                 }
-                auto id = utils::UUID_gen::get_time_UUID();
-                auto s = make_lw_shared(schema(id, ks_def.name, cf_def.name,
-                    std::move(partition_key), std::move(clustering_key), std::move(regular_columns),
-                    std::vector<schema::column>(), column_name_type));
-                cf_defs.push_back(s);
+                builder.set_regular_column_name_type(regular_column_name_type);
+                if (cf_def.__isset.comment) {
+                    builder.set_comment(cf_def.comment);
+                }
+                if (cf_def.__isset.read_repair_chance) {
+                    builder.set_read_repair_chance(cf_def.read_repair_chance);
+                }
+                if (cf_def.__isset.gc_grace_seconds) {
+                    builder.set_gc_grace_seconds(cf_def.gc_grace_seconds);
+                }
+                if (cf_def.__isset.min_compaction_threshold) {
+                    builder.set_min_compaction_threshold(cf_def.min_compaction_threshold);
+                }
+                if (cf_def.__isset.max_compaction_threshold) {
+                    builder.set_max_compaction_threshold(cf_def.max_compaction_threshold);
+                }
+                if (cf_def.__isset.compaction_strategy) {
+                    builder.set_compaction_strategy(sstables::compaction_strategy::type(cf_def.compaction_strategy));
+                }
+                auto make_options = [](const std::map<std::string, std::string>& m) {
+                    return std::map<sstring, sstring>{m.begin(), m.end()};
+                };
+                if (cf_def.__isset.compaction_strategy_options) {
+                    builder.set_compaction_strategy_options(make_options(cf_def.compaction_strategy_options));
+                }
+                if (cf_def.__isset.compression_options) {
+                    builder.set_compressor_params(compression_parameters(make_options(cf_def.compression_options)));
+                }
+                if (cf_def.__isset.bloom_filter_fp_chance) {
+                    builder.set_bloom_filter_fp_chance(cf_def.bloom_filter_fp_chance);
+                }
+                if (cf_def.__isset.dclocal_read_repair_chance) {
+                    builder.set_dc_local_read_repair_chance(cf_def.dclocal_read_repair_chance);
+                }
+                if (cf_def.__isset.memtable_flush_period_in_ms) {
+                    builder.set_memtable_flush_period(cf_def.memtable_flush_period_in_ms);
+                }
+                if (cf_def.__isset.default_time_to_live) {
+                    builder.set_default_time_to_live(gc_clock::duration(cf_def.default_time_to_live));
+                }
+                if (cf_def.__isset.speculative_retry) {
+                    builder.set_speculative_retry(cf_def.speculative_retry);
+                }
+                if (cf_def.__isset.min_index_interval) {
+                    builder.set_min_index_interval(cf_def.min_index_interval);
+                }
+                if (cf_def.__isset.max_index_interval) {
+                    builder.set_max_index_interval(cf_def.max_index_interval);
+                }
+                cf_defs.emplace_back(builder.build(schema_builder::compact_storage::yes));
             }
-            auto ksm = make_lw_shared<keyspace_metadata>(to_sstring(ks_def.name),
+            auto ksm = make_lw_shared<keyspace_metadata>(
+                to_sstring(ks_def.name),
                 to_sstring(ks_def.strategy_class),
                 std::map<sstring, sstring>{ks_def.strategy_options.begin(), ks_def.strategy_options.end()},
                 ks_def.durable_writes,
                 std::move(cf_defs));
-            return service::get_local_migration_manager().announce_new_keyspace(ksm, false).then([schema_id = std::move(schema_id)] {
-                return make_ready_future<std::string>(std::move(schema_id));
+            return service::get_local_migration_manager().announce_new_keyspace(std::move(ksm), false).then([this] {
+                return std::string(_db.local().get_version().to_sstring());
             });
         });
     }
@@ -687,6 +748,28 @@ private:
         def.__set_cf_defs(cfs);
         def.__set_durable_writes(meta->durable_writes());
         return std::move(def);
+    }
+    static index_info index_info_from_thrift(const ColumnDef& def) {
+        stdx::optional<sstring> idx_name;
+        stdx::optional<std::unordered_map<sstring, sstring>> idx_opts;
+        auto idx_type = ::index_type::none;
+        if (def.__isset.index_type) {
+            idx_type = [&def] {
+                switch (def.index_type) {
+                case IndexType::type::KEYS: return ::index_type::keys;
+                case IndexType::type::COMPOSITES: return ::index_type::composites;
+                case IndexType::type::CUSTOM: return ::index_type::custom;
+                default: return ::index_type::none;
+                };
+            }();
+        }
+        if (def.__isset.index_name) {
+            idx_name = to_sstring(def.index_name);
+        }
+        if (def.__isset.index_options) {
+            idx_opts = std::unordered_map<sstring, sstring>(def.index_options.begin(), def.index_options.end());
+        }
+        return index_info(idx_type, idx_name, idx_opts);
     }
     static column_family& lookup_column_family(database& db, const sstring& ks_name, const sstring& cf_name) {
         try {
