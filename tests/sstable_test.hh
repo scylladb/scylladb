@@ -137,6 +137,12 @@ public:
         _sst->_summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
         _sst->_summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
     }
+
+    void set_values(sstring first_key, sstring last_key, stats_metadata stats) {
+        _sst->_statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
+        _sst->_summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
+        _sst->_summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
+    }
 };
 
 inline future<sstable_ptr> reusable_sst(sstring dir, unsigned long generation) {
