@@ -80,6 +80,10 @@ public:
             throw make_exception<InvalidRequestException>(me.what());
         } catch (exceptions::already_exists_exception& ae) {
             throw make_exception<InvalidRequestException>(ae.what());
+        } catch (exceptions::configuration_exception& ce) {
+            throw make_exception<InvalidRequestException>(ce.what());
+        } catch (no_such_column_family&) {
+            throw NotFoundException();
         } catch (std::exception& e) {
             // Unexpected exception, wrap it
             throw ::apache::thrift::TException(std::string("Internal server error: ") + e.what());
@@ -520,9 +524,16 @@ public:
     }
 
     void system_update_column_family(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const CfDef& cf_def) {
-        std::string _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+            auto cf = _db.local().find_schema(cf_def.keyspace, cf_def.name);
+
+            // FIXME: don't update a non thrift-compatible CQL3 table.
+
+            auto s = schema_from_thrift(cf_def, cf_def.keyspace, cf->id());
+            return service::get_local_migration_manager().announce_column_family_update(std::move(s), true, false).then([this] {
+                return std::string(_db.local().get_version().to_sstring());
+            });
+        });
     }
 
     void execute_cql_query(tcxx::function<void(CqlResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression) {
@@ -682,9 +693,9 @@ private:
         }
         return index_info(idx_type, idx_name, idx_opts);
     }
-    static schema_ptr schema_from_thrift(const CfDef& cf_def, const sstring ks_name) {
+    static schema_ptr schema_from_thrift(const CfDef& cf_def, const sstring ks_name, std::experimental::optional<utils::UUID> id = { }) {
         thrift_validation::validate_cf_def(cf_def);
-        schema_builder builder(ks_name, cf_def.name, { });
+        schema_builder builder(ks_name, cf_def.name, id);
 
         if (cf_def.__isset.key_validation_class) {
             auto pk_types = get_types(cf_def.key_validation_class);
