@@ -2609,3 +2609,77 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
         BOOST_REQUIRE(!smopt);
     });
 }
+
+SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time) {
+    return test_setup::do_with_test_directory([] {
+        auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+            {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type));
+        auto mt = make_lw_shared<memtable>(s);
+        int32_t last_expiry = 0;
+
+        for (auto i = 0; i < 10; i++) {
+            auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(i))});
+            mutation m(key, s);
+            auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
+            last_expiry = (gc_clock::now() + gc_clock::duration(3600 + i)).time_since_epoch().count();
+            m.set_clustered_cell(c_key, *s->get_column_definition("r1"), make_atomic_cell(bytes("a"), 3600 + i, last_expiry));
+            mt->apply(std::move(m));
+        }
+        auto sst = make_lw_shared<sstable>("ks", "cf", "tests/sstables/tests-temporary", 53, la, big);
+        return sst->write_components(*mt).then([s, sst] {
+            return reusable_sst("tests/sstables/tests-temporary", 53);
+        }).then([s, last_expiry] (auto sstp) mutable {
+            BOOST_REQUIRE(last_expiry == sstp->get_stats_metadata().max_local_deletion_time);
+        }).then([sst, mt, s] {});
+    });
+}
+
+SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
+    // Create sstable A with 5x column with TTL 100 and 1x column with TTL 1000
+    // Create sstable B with tombstone for column in sstable A with TTL 1000.
+    // Compact them and expect that maximum deletion time is that of column with TTL 100.
+    return test_setup::do_with_test_directory([] {
+        return seastar::async([] {
+            auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+                {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type));
+            auto cm = make_lw_shared<compaction_manager>();
+            auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm);
+            auto mt = make_lw_shared<memtable>(s);
+            auto now = gc_clock::now();
+            int32_t last_expiry = 0;
+            auto add_row = [&now, &mt, &s, &last_expiry] (mutation& m, bytes column_name, uint32_t ttl) {
+                auto c_key = clustering_key::from_exploded(*s, {column_name});
+                last_expiry = (now + gc_clock::duration(ttl)).time_since_epoch().count();
+                m.set_clustered_cell(c_key, *s->get_column_definition("r1"), make_atomic_cell(bytes(""), ttl, last_expiry));
+                mt->apply(std::move(m));
+            };
+            auto get_usable_sst = [] (memtable& mt, int64_t gen) -> future<sstable_ptr> {
+                auto sst = make_lw_shared<sstable>("ks", "cf", "tests/sstables/tests-temporary", gen, la, big);
+                return sst->write_components(mt).then([sst, gen] {
+                    return reusable_sst("tests/sstables/tests-temporary", gen);
+                });
+            };
+
+            mutation m(partition_key::from_exploded(*s, {to_bytes("deletetest")}), s);
+            for (auto i = 0; i < 5; i++) {
+                add_row(m, to_bytes("deletecolumn" + to_sstring(i)), 100);
+            }
+            add_row(m, to_bytes("todelete"), 1000);
+            auto sst1 = get_usable_sst(*mt, 54).get0();
+            BOOST_REQUIRE(last_expiry == sst1->get_stats_metadata().max_local_deletion_time);
+
+            mt = make_lw_shared<memtable>(s);
+            m = mutation(partition_key::from_exploded(*s, {to_bytes("deletetest")}), s);
+            tombstone tomb(api::new_timestamp(), now);
+            m.partition().apply_delete(*s, clustering_key::from_exploded(*s, {to_bytes("todelete")}), tomb);
+            mt->apply(std::move(m));
+            auto sst2 = get_usable_sst(*mt, 55).get0();
+            BOOST_REQUIRE(now.time_since_epoch().count() == sst2->get_stats_metadata().max_local_deletion_time);
+
+            auto creator = [] { return make_lw_shared<sstables::sstable>("ks", "cf", "tests/sstables/tests-temporary", 56, la, big); };
+            auto new_sstables = sstables::compact_sstables({ sst1, sst2 }, *cf, creator, std::numeric_limits<uint64_t>::max(), 0).get0();
+            BOOST_REQUIRE(new_sstables.size() == 1);
+            BOOST_REQUIRE(((now + gc_clock::duration(100)).time_since_epoch().count()) == new_sstables.front()->get_stats_metadata().max_local_deletion_time);
+        });
+    });
+}
