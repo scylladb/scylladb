@@ -24,7 +24,15 @@ done
 if [ "$NAME" = "Ubuntu" ]; then
     apt-get install -y ntp ntpdate
     service ntp stop
-    ntpdate `cat /etc/ntp.conf |grep "^server"|head -n1|awk '{print $2}'`
+    count=$(egrep '^server' /etc/ntp.conf|wc -l)
+    if [ $count -eq 0 ]; then
+        cp /etc/ntp.conf /etc/ntp.conf_orig
+        grep -v "pool" /etc/ntp.conf > /etc/ntp.conf_new
+        cp /etc/ntp.conf_new /etc/ntp.conf
+        rm -rf /etc/ntp.conf_new
+        echo "server ntp.ubuntu.com iburst" >> /etc/ntp.conf
+    fi
+    ntpdate `cat /etc/ntp.conf |egrep "^server"|head -n1|awk '{print $2}'`
     service ntp start
 else
     yum install -y ntp ntpdate || true
