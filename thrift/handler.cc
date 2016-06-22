@@ -495,94 +495,7 @@ public:
                 if (cf_def.keyspace != ks_def.name) {
                     throw make_exception<InvalidRequestException>("CfDef (%s) had a keyspace definition that did not match KsDef", cf_def.keyspace);
                 }
-                thrift_validation::validate_cf_def(cf_def);
-                schema_builder builder(ks_def.name, cf_def.name, { });
-
-                if (cf_def.__isset.key_validation_class) {
-                    auto pk_types = get_types(cf_def.key_validation_class);
-                    if (pk_types.size() == 1 && cf_def.__isset.key_alias) {
-                        builder.with_column(to_bytes(cf_def.key_alias), std::move(pk_types.back()), column_kind::partition_key);
-                    } else {
-                        for (uint32_t i = 0; i < pk_types.size(); ++i) {
-                            builder.with_column(to_bytes("key" + (i + 1)), std::move(pk_types[i]), column_kind::partition_key);
-                        }
-                    }
-                } else {
-                    builder.with_column(to_bytes("key"), bytes_type, column_kind::partition_key);
-                }
-
-                data_type regular_column_name_type;
-                if (cf_def.column_metadata.empty()) {
-                    // Dynamic CF
-                    regular_column_name_type = utf8_type;
-                    auto ck_types = get_types(cf_def.comparator_type);
-                    for (uint32_t i = 0; i < ck_types.size(); ++i) {
-                        builder.with_column(to_bytes("column" + (i + 1)), std::move(ck_types[i]), column_kind::clustering_key);
-                    }
-                    auto&& vtype = cf_def.__isset.default_validation_class
-                                 ? db::marshal::type_parser::parse(to_sstring(cf_def.default_validation_class))
-                                 : bytes_type;
-                    builder.with_column(to_bytes("value"), std::move(vtype));
-                } else {
-                    // Static CF
-                    regular_column_name_type = db::marshal::type_parser::parse(to_sstring(cf_def.comparator_type));
-                    for (const ColumnDef& col_def : cf_def.column_metadata) {
-                        auto col_name = to_bytes(col_def.name);
-                        regular_column_name_type->validate(col_name);
-                        builder.with_column(std::move(col_name), db::marshal::type_parser::parse(to_sstring(col_def.validation_class)),
-                                            index_info_from_thrift(col_def), column_kind::regular_column);
-                    }
-                }
-                builder.set_regular_column_name_type(regular_column_name_type);
-                if (cf_def.__isset.comment) {
-                    builder.set_comment(cf_def.comment);
-                }
-                if (cf_def.__isset.read_repair_chance) {
-                    builder.set_read_repair_chance(cf_def.read_repair_chance);
-                }
-                if (cf_def.__isset.gc_grace_seconds) {
-                    builder.set_gc_grace_seconds(cf_def.gc_grace_seconds);
-                }
-                if (cf_def.__isset.min_compaction_threshold) {
-                    builder.set_min_compaction_threshold(cf_def.min_compaction_threshold);
-                }
-                if (cf_def.__isset.max_compaction_threshold) {
-                    builder.set_max_compaction_threshold(cf_def.max_compaction_threshold);
-                }
-                if (cf_def.__isset.compaction_strategy) {
-                    builder.set_compaction_strategy(sstables::compaction_strategy::type(cf_def.compaction_strategy));
-                }
-                auto make_options = [](const std::map<std::string, std::string>& m) {
-                    return std::map<sstring, sstring>{m.begin(), m.end()};
-                };
-                if (cf_def.__isset.compaction_strategy_options) {
-                    builder.set_compaction_strategy_options(make_options(cf_def.compaction_strategy_options));
-                }
-                if (cf_def.__isset.compression_options) {
-                    builder.set_compressor_params(compression_parameters(make_options(cf_def.compression_options)));
-                }
-                if (cf_def.__isset.bloom_filter_fp_chance) {
-                    builder.set_bloom_filter_fp_chance(cf_def.bloom_filter_fp_chance);
-                }
-                if (cf_def.__isset.dclocal_read_repair_chance) {
-                    builder.set_dc_local_read_repair_chance(cf_def.dclocal_read_repair_chance);
-                }
-                if (cf_def.__isset.memtable_flush_period_in_ms) {
-                    builder.set_memtable_flush_period(cf_def.memtable_flush_period_in_ms);
-                }
-                if (cf_def.__isset.default_time_to_live) {
-                    builder.set_default_time_to_live(gc_clock::duration(cf_def.default_time_to_live));
-                }
-                if (cf_def.__isset.speculative_retry) {
-                    builder.set_speculative_retry(cf_def.speculative_retry);
-                }
-                if (cf_def.__isset.min_index_interval) {
-                    builder.set_min_index_interval(cf_def.min_index_interval);
-                }
-                if (cf_def.__isset.max_index_interval) {
-                    builder.set_max_index_interval(cf_def.max_index_interval);
-                }
-                cf_defs.emplace_back(builder.build(schema_builder::compact_storage::yes));
+                cf_defs.emplace_back(schema_from_thrift(cf_def, ks_def.name));
             }
             auto ksm = make_lw_shared<keyspace_metadata>(
                 to_sstring(ks_def.name),
@@ -770,6 +683,96 @@ private:
             idx_opts = std::unordered_map<sstring, sstring>(def.index_options.begin(), def.index_options.end());
         }
         return index_info(idx_type, idx_name, idx_opts);
+    }
+    static schema_ptr schema_from_thrift(const CfDef& cf_def, const sstring ks_name) {
+        thrift_validation::validate_cf_def(cf_def);
+        schema_builder builder(ks_name, cf_def.name, { });
+
+        if (cf_def.__isset.key_validation_class) {
+            auto pk_types = get_types(cf_def.key_validation_class);
+            if (pk_types.size() == 1 && cf_def.__isset.key_alias) {
+                builder.with_column(to_bytes(cf_def.key_alias), std::move(pk_types.back()), column_kind::partition_key);
+            } else {
+                for (uint32_t i = 0; i < pk_types.size(); ++i) {
+                    builder.with_column(to_bytes("key" + (i + 1)), std::move(pk_types[i]), column_kind::partition_key);
+                }
+            }
+        } else {
+            builder.with_column(to_bytes("key"), bytes_type, column_kind::partition_key);
+        }
+
+        data_type regular_column_name_type;
+        if (cf_def.column_metadata.empty()) {
+            // Dynamic CF
+            regular_column_name_type = utf8_type;
+            auto ck_types = get_types(cf_def.comparator_type);
+            for (uint32_t i = 0; i < ck_types.size(); ++i) {
+                builder.with_column(to_bytes("column" + (i + 1)), std::move(ck_types[i]), column_kind::clustering_key);
+            }
+            auto&& vtype = cf_def.__isset.default_validation_class
+                         ? db::marshal::type_parser::parse(to_sstring(cf_def.default_validation_class))
+                         : bytes_type;
+            builder.with_column(to_bytes("value"), std::move(vtype));
+        } else {
+            // Static CF
+            regular_column_name_type = db::marshal::type_parser::parse(to_sstring(cf_def.comparator_type));
+            for (const ColumnDef& col_def : cf_def.column_metadata) {
+                auto col_name = to_bytes(col_def.name);
+                regular_column_name_type->validate(col_name);
+                builder.with_column(std::move(col_name), db::marshal::type_parser::parse(to_sstring(col_def.validation_class)),
+                                    index_info_from_thrift(col_def), column_kind::regular_column);
+            }
+        }
+        builder.set_regular_column_name_type(regular_column_name_type);
+        if (cf_def.__isset.comment) {
+            builder.set_comment(cf_def.comment);
+        }
+        if (cf_def.__isset.read_repair_chance) {
+            builder.set_read_repair_chance(cf_def.read_repair_chance);
+        }
+        if (cf_def.__isset.gc_grace_seconds) {
+            builder.set_gc_grace_seconds(cf_def.gc_grace_seconds);
+        }
+        if (cf_def.__isset.min_compaction_threshold) {
+            builder.set_min_compaction_threshold(cf_def.min_compaction_threshold);
+        }
+        if (cf_def.__isset.max_compaction_threshold) {
+            builder.set_max_compaction_threshold(cf_def.max_compaction_threshold);
+        }
+        if (cf_def.__isset.compaction_strategy) {
+            builder.set_compaction_strategy(sstables::compaction_strategy::type(cf_def.compaction_strategy));
+        }
+        auto make_options = [](const std::map<std::string, std::string>& m) {
+            return std::map<sstring, sstring>{m.begin(), m.end()};
+        };
+        if (cf_def.__isset.compaction_strategy_options) {
+            builder.set_compaction_strategy_options(make_options(cf_def.compaction_strategy_options));
+        }
+        if (cf_def.__isset.compression_options) {
+            builder.set_compressor_params(compression_parameters(make_options(cf_def.compression_options)));
+        }
+        if (cf_def.__isset.bloom_filter_fp_chance) {
+            builder.set_bloom_filter_fp_chance(cf_def.bloom_filter_fp_chance);
+        }
+        if (cf_def.__isset.dclocal_read_repair_chance) {
+            builder.set_dc_local_read_repair_chance(cf_def.dclocal_read_repair_chance);
+        }
+        if (cf_def.__isset.memtable_flush_period_in_ms) {
+            builder.set_memtable_flush_period(cf_def.memtable_flush_period_in_ms);
+        }
+        if (cf_def.__isset.default_time_to_live) {
+            builder.set_default_time_to_live(gc_clock::duration(cf_def.default_time_to_live));
+        }
+        if (cf_def.__isset.speculative_retry) {
+            builder.set_speculative_retry(cf_def.speculative_retry);
+        }
+        if (cf_def.__isset.min_index_interval) {
+            builder.set_min_index_interval(cf_def.min_index_interval);
+        }
+        if (cf_def.__isset.max_index_interval) {
+            builder.set_max_index_interval(cf_def.max_index_interval);
+        }
+        return builder.build(schema_builder::compact_storage::yes);
     }
     static column_family& lookup_column_family(database& db, const sstring& ks_name, const sstring& cf_name) {
         try {
