@@ -135,8 +135,9 @@ mutation::query(query::result::builder& builder,
     auto pb = builder.add_partition(*schema(), key());
     auto is_reversed = slice.options.contains<query::partition_slice::option::reversed>();
     mutation_partition& p = partition();
-    p.compact_for_query(*schema(), now, slice.row_ranges(*schema(), key()), is_reversed, row_limit);
-    p.query_compacted(pb, *schema(), row_limit);
+    auto limit = std::min(row_limit, slice.partition_row_limit());
+    p.compact_for_query(*schema(), now, slice.row_ranges(*schema(), key()), is_reversed, limit);
+    p.query_compacted(pb, *schema(), limit);
 }
 
 query::result

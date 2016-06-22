@@ -37,6 +37,7 @@ class partition_slice {
     query::partition_slice::option_set options;
     std::unique_ptr<query::specific_ranges> get_specific_ranges();
     cql_serialization_format cql_format();
+    uint32_t partition_row_limit() [[version 1.3]] = std::numeric_limits<uint32_t>::max();
 };
 
 class read_command {
@@ -46,6 +47,7 @@ class read_command {
     uint32_t row_limit;
     std::chrono::time_point<gc_clock, gc_clock::duration> timestamp;
     std::experimental::optional<tracing::trace_info> trace_info [[version 1.3]];
+    uint32_t partition_limit [[version 1.3]] = std::numeric_limits<uint32_t>::max();
 };
 
 }
