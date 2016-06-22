@@ -76,6 +76,8 @@ public:
             throw;
         } catch (no_such_class& nc) {
             throw make_exception<InvalidRequestException>(nc.what());
+        } catch (marshal_exception& me) {
+            throw make_exception<InvalidRequestException>(me.what());
         } catch (exceptions::already_exists_exception& ae) {
             throw make_exception<InvalidRequestException>(ae.what());
         } catch (std::exception& e) {
@@ -475,9 +477,19 @@ public:
     }
 
     void system_add_column_family(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const CfDef& cf_def) {
-        std::string _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+            if (!_db.local().has_keyspace(cf_def.keyspace)) {
+                throw NotFoundException();
+            }
+            if (_db.local().has_schema(cf_def.keyspace, cf_def.name)) {
+                throw make_exception<InvalidRequestException>("Column family %s already exists", cf_def.name);
+            }
+
+            auto s = schema_from_thrift(cf_def, cf_def.keyspace);
+            return service::get_local_migration_manager().announce_new_column_family(std::move(s), false).then([this] {
+                return std::string(_db.local().get_version().to_sstring());
+            });
+        });
     }
 
     void system_drop_column_family(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family) {
