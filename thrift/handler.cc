@@ -497,9 +497,12 @@ public:
     }
 
     void system_drop_column_family(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family) {
-        std::string _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+            _db.local().find_schema(_ks_name, column_family); // Throws if column family doesn't exist.
+            return service::get_local_migration_manager().announce_column_family_drop(_ks_name, column_family, false).then([this] {
+                return std::string(_db.local().get_version().to_sstring());
+            });
+        });
     }
 
     void system_add_keyspace(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const KsDef& ks_def) {
