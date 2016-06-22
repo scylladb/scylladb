@@ -40,6 +40,7 @@
 #include "dht/i_partitioner.hh"
 #include "range.hh"
 #include "partition_slice_builder.hh"
+#include "sstables/date_tiered_compaction_strategy.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -2719,6 +2720,14 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
     });
 }
 
+static stats_metadata build_stats(int64_t min_timestamp, int64_t max_timestamp, int32_t max_local_deletion_time) {
+    stats_metadata stats = {};
+    stats.min_timestamp = min_timestamp;
+    stats.max_timestamp = max_timestamp;
+    stats.max_local_deletion_time = max_local_deletion_time;
+    return stats;
+}
+
 SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
@@ -2728,14 +2737,6 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
     auto key_and_token_pair = token_generation_for_current_shard(4);
     auto min_key = key_and_token_pair[0].first;
     auto max_key = key_and_token_pair[key_and_token_pair.size()-1].first;
-    auto build_stats = [] (int64_t min_timestamp, int64_t max_timestamp, int32_t max_local_deletion_time) {
-        // Create a synthetic stats metadata
-        stats_metadata stats = {};
-        stats.min_timestamp = min_timestamp;
-        stats.max_timestamp = max_timestamp;
-        stats.max_local_deletion_time = max_local_deletion_time;
-        return stats;
-    };
 
     {
         auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm);
@@ -2756,6 +2757,43 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
         auto expired = get_fully_expired_sstables(*cf, compacting, /*gc before*/25);
         BOOST_REQUIRE(expired.size() == 1);
         BOOST_REQUIRE(expired.front()->generation() == 1);
+    }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(basic_date_tiered_strategy_test) {
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
+    compaction_manager cm;
+    column_family::config cfg;
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm);
+
+    std::vector<sstables::shared_sstable> candidates;
+    int min_threshold = cf->schema()->min_compaction_threshold();
+    auto now = db_clock::now();
+    auto past_hour = now - std::chrono::seconds(3600);
+    int64_t timestamp_for_past_hour = past_hour.time_since_epoch().count() * 1000;
+
+    for (auto i = 1; i <= min_threshold; i++) {
+        auto tp = now + std::chrono::seconds(i);
+        int64_t timestamp_for_this_sst = tp.time_since_epoch().count() * 1000;
+        auto sst = add_sstable_for_overlapping_test(cf, /*gen*/i, "a", "a",
+            build_stats(timestamp_for_this_sst, timestamp_for_this_sst, std::numeric_limits<int32_t>::max()));
+        candidates.push_back(sst);
+    }
+    // add sstable that belong to a different time tier.
+    auto sst = add_sstable_for_overlapping_test(cf, /*gen*/min_threshold + 1, "a", "a",
+        build_stats(timestamp_for_past_hour, timestamp_for_past_hour, std::numeric_limits<int32_t>::max()));
+    candidates.push_back(sst);
+
+    auto gc_before = gc_clock::now() - cf->schema()->gc_grace_seconds();
+    std::map<sstring, sstring> options;
+    date_tiered_manifest manifest(options);
+    auto sstables = manifest.get_next_sstables(*cf, candidates, gc_before);
+    BOOST_REQUIRE(sstables.size() == 4);
+    for (auto& sst : sstables) {
+        BOOST_REQUIRE(sst->generation() != (min_threshold + 1));
     }
 
     return make_ready_future<>();
