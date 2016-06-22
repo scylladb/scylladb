@@ -488,21 +488,7 @@ public:
 
     void system_add_keyspace(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const KsDef& ks_def) {
         return with_cob(std::move(cob), std::move(exn_cob), [&] {
-            thrift_validation::validate_ks_def(ks_def);
-            std::vector<schema_ptr> cf_defs;
-            cf_defs.reserve(ks_def.cf_defs.size());
-            for (const CfDef& cf_def : ks_def.cf_defs) {
-                if (cf_def.keyspace != ks_def.name) {
-                    throw make_exception<InvalidRequestException>("CfDef (%s) had a keyspace definition that did not match KsDef", cf_def.keyspace);
-                }
-                cf_defs.emplace_back(schema_from_thrift(cf_def, ks_def.name));
-            }
-            auto ksm = make_lw_shared<keyspace_metadata>(
-                to_sstring(ks_def.name),
-                to_sstring(ks_def.strategy_class),
-                std::map<sstring, sstring>{ks_def.strategy_options.begin(), ks_def.strategy_options.end()},
-                ks_def.durable_writes,
-                std::move(cf_defs));
+            auto ksm = keyspace_from_thrift(ks_def);
             return service::get_local_migration_manager().announce_new_keyspace(std::move(ksm), false).then([this] {
                 return std::string(_db.local().get_version().to_sstring());
             });
@@ -773,6 +759,23 @@ private:
             builder.set_max_index_interval(cf_def.max_index_interval);
         }
         return builder.build(schema_builder::compact_storage::yes);
+    }
+    static lw_shared_ptr<keyspace_metadata> keyspace_from_thrift(const KsDef& ks_def) {
+        thrift_validation::validate_ks_def(ks_def);
+        std::vector<schema_ptr> cf_defs;
+        cf_defs.reserve(ks_def.cf_defs.size());
+        for (const CfDef& cf_def : ks_def.cf_defs) {
+            if (cf_def.keyspace != ks_def.name) {
+                throw make_exception<InvalidRequestException>("CfDef (%s) had a keyspace definition that did not match KsDef", cf_def.keyspace);
+            }
+            cf_defs.emplace_back(schema_from_thrift(cf_def, ks_def.name));
+        }
+        return make_lw_shared<keyspace_metadata>(
+            to_sstring(ks_def.name),
+            to_sstring(ks_def.strategy_class),
+            std::map<sstring, sstring>{ks_def.strategy_options.begin(), ks_def.strategy_options.end()},
+            ks_def.durable_writes,
+            std::move(cf_defs));
     }
     static column_family& lookup_column_family(database& db, const sstring& ks_name, const sstring& cf_name) {
         try {
