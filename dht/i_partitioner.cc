@@ -24,6 +24,7 @@
 #include "murmur3_partitioner.hh"
 #include "utils/class_registrator.hh"
 #include "types.hh"
+#include <boost/range/adaptor/map.hpp>
 
 namespace dht {
 
@@ -175,7 +176,14 @@ std::unique_ptr<i_partitioner> default_partitioner { new murmur3_partitioner };
 
 void set_global_partitioner(const sstring& class_name)
 {
-    default_partitioner = create_object<i_partitioner>(class_name);
+    try {
+        default_partitioner = create_object<i_partitioner>(class_name);
+    } catch (std::exception& e) {
+        auto supported_partitioners = ::join(", ", class_registry<i_partitioner>::classes() |
+                boost::adaptors::map_keys);
+        throw std::runtime_error(sprint("Partitioner %s is not supported, supported partitioners = { %s } : %s",
+                class_name, supported_partitioners, e.what()));
+    }
 }
 
 i_partitioner&
