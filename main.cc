@@ -277,6 +277,7 @@ verify_seastar_io_scheduler(bool has_max_io_requests, bool developer_mode) {
 }
 
 int main(int ac, char** av) {
+  try {
     // early check to avoid triggering
     if (!cpu_sanity()) {
         _exit(71);
@@ -619,6 +620,11 @@ int main(int ac, char** av) {
             });
         }).or_terminate();
     });
+  } catch (...) {
+      // reactor may not have been initialized, so can't use logger
+      fprint(std::cerr, "FATAL: Exception during startup, aborting: %s\n", std::current_exception());
+      return 7; // 1 has a special meaning for upstart
+  }
 }
 
 namespace debug {
