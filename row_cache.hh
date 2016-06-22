@@ -59,8 +59,10 @@ class cache_entry {
     using cache_link_type = bi::set_member_hook<bi::link_mode<bi::auto_unlink>>;
 
     schema_ptr _schema;
-    dht::decorated_key _key;
+    dht::ring_position _key;
     partition_entry _pe;
+    // True when we know that there is nothing between this entry and the next one in cache
+    bool _continuous;
     lru_link_type _lru_link;
     cache_link_type _cache_link;
     friend class size_calculator;
@@ -68,39 +70,51 @@ public:
     friend class row_cache;
     friend class cache_tracker;
 
-    cache_entry(schema_ptr s, const dht::decorated_key& key, const mutation_partition& p)
+    cache_entry(schema_ptr s)
+        : _schema(std::move(s))
+        , _key(dht::ring_position::starting_at(dht::minimum_token()))
+        , _pe(_schema)
+        , _continuous(false)
+    { }
+
+    cache_entry(schema_ptr s, const dht::decorated_key& key, const mutation_partition& p, bool continuous = false)
         : _schema(std::move(s))
         , _key(key)
         , _pe(p)
+        , _continuous(continuous)
     { }
 
-    cache_entry(schema_ptr s, dht::decorated_key&& key, mutation_partition&& p) noexcept
+    cache_entry(schema_ptr s, dht::decorated_key&& key, mutation_partition&& p, bool continuous = false) noexcept
         : _schema(std::move(s))
         , _key(std::move(key))
         , _pe(std::move(p))
+        , _continuous(continuous)
     { }
 
-    cache_entry(schema_ptr s, dht::decorated_key&& key, partition_entry&& pe) noexcept
+    cache_entry(schema_ptr s, dht::decorated_key&& key, partition_entry&& pe, bool continuous = false) noexcept
         : _schema(std::move(s))
         , _key(std::move(key))
         , _pe(std::move(pe))
+        , _continuous(continuous)
     { }
 
     cache_entry(cache_entry&&) noexcept;
 
-    const dht::decorated_key& key() const { return _key; }
+    const dht::ring_position& key() const { return _key; }
     const partition_entry& partition() const { return _pe; }
     partition_entry& partition() { return _pe; }
     const schema_ptr& schema() const { return _schema; }
     schema_ptr& schema() { return _schema; }
     streamed_mutation read(row_cache&, const schema_ptr&);
     streamed_mutation read(row_cache&, const schema_ptr&, query::clustering_key_filtering_context);
+    bool continuous() const { return _continuous; }
+    void set_continuous(bool value) { _continuous = value; }
 
     struct compare {
-        dht::decorated_key::less_comparator _c;
+        dht::ring_position_less_comparator _c;
 
         compare(schema_ptr s)
-            : _c(std::move(s))
+            : _c(*s)
         {}
 
         bool operator()(const dht::decorated_key& k1, const cache_entry& k2) const {
@@ -159,6 +173,7 @@ public:
     logalloc::region& region();
     const logalloc::region& region() const;
     uint64_t modification_count() const { return _modification_count; }
+    uint64_t partitions() const { return _partitions; }
 };
 
 // Returns a reference to shard-wide cache_tracker.
@@ -181,7 +196,7 @@ public:
         bi::member_hook<cache_entry, cache_entry::cache_link_type, &cache_entry::_cache_link>,
         bi::constant_time_size<false>, // we need this to have bi::auto_unlink on hooks
         bi::compare<cache_entry::compare>>;
-    friend class populating_reader;
+    friend class single_partition_populating_reader;
     friend class cache_entry;
 public:
     struct stats {
@@ -285,4 +300,6 @@ public:
 
     friend class just_cache_scanning_reader;
     friend class scanning_and_populating_reader;
+    friend class range_populating_reader;
+    friend class cache_tracker;
 };
