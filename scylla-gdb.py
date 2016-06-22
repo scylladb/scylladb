@@ -41,10 +41,10 @@ def build_pretty_printer():
 gdb.printing.register_pretty_printer(gdb.current_objfile(), build_pretty_printer(), replace=True)
 
 def cpus():
-    return int(gdb.parse_and_eval('smp::count'))
+    return int(gdb.parse_and_eval('::smp::count'))
 
 def find_db(shard):
-    return gdb.parse_and_eval('debug::db')['_instances']['_M_impl']['_M_start'][shard]['service']['_p']
+    return gdb.parse_and_eval('::debug::db')['_instances']['_M_impl']['_M_start'][shard]['service']['_p']
 
 def find_dbs():
     return [find_db(shard) for shard in range(cpus())]
@@ -52,8 +52,8 @@ def find_dbs():
 def list_unordered_map(map):
     kt = map.type.template_argument(0)
     vt = map.type.template_argument(1)
-    value_type = gdb.lookup_type('std::pair<{} const, {}>'.format(kt.name, vt.name))
-    hashnode_ptr_type = gdb.lookup_type('std::__detail::_Hash_node<' + value_type.name + ', true>').pointer()
+    value_type = gdb.lookup_type('::std::pair<{} const, {}>'.format(kt.name, vt.name))
+    hashnode_ptr_type = gdb.lookup_type('::std::__detail::_Hash_node<' + value_type.name + ', true>').pointer()
     h = map['_M_h']
     p = h['_M_before_begin']['_M_nxt']
     while p:
@@ -102,8 +102,8 @@ class scylla_memory(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla memory', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
     def invoke(self, arg, from_tty):
-        cpu_mem = gdb.parse_and_eval('memory::cpu_mem')
-        page_size = int(gdb.parse_and_eval('memory::page_size'))
+        cpu_mem = gdb.parse_and_eval('::memory::cpu_mem')
+        page_size = int(gdb.parse_and_eval('::memory::page_size'))
         free_mem = int(cpu_mem['nr_free_pages']) * page_size
         total_mem = int(cpu_mem['nr_pages']) * page_size
         gdb.write('Used memory: {used_mem:>13}\nFree memory: {free_mem:>13}\nTotal memory: {total_mem:>12}\n\n'
@@ -144,8 +144,8 @@ class scylla_lsa(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla lsa', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
     def invoke(self, arg, from_tty):
-        lsa = gdb.parse_and_eval('logalloc::shard_segment_pool')
-        segment_size = int(gdb.parse_and_eval('logalloc::segment::size'))
+        lsa = gdb.parse_and_eval('::logalloc::shard_segment_pool')
+        segment_size = int(gdb.parse_and_eval('::logalloc::segment::size'))
 
         lsa_mem = int(lsa['_segments_in_use']) * segment_size
         non_lsa_mem = int(lsa['_non_lsa_memory_in_use'])
@@ -161,7 +161,7 @@ class scylla_lsa(gdb.Command):
             'Emergency reserve current: {er_current:>8}\n\n'
             .format(er_goal=er_goal, er_max=er_max, er_current=er_current))
 
-        lsa_tracker = gdb.parse_and_eval('logalloc::tracker_instance._impl')['_M_t']['_M_head_impl']
+        lsa_tracker = gdb.parse_and_eval('::logalloc::tracker_instance._impl')['_M_t']['_M_head_impl']
         regions = lsa_tracker['_regions']
         region = regions['_M_impl']['_M_start']
         gdb.write('LSA regions:\n')
@@ -178,7 +178,7 @@ class scylla_lsa(gdb.Command):
 
 def lsa_zone_tree(node):
     if node:
-        zone = node.cast(gdb.lookup_type('logalloc::segment_zone').pointer())
+        zone = node.cast(gdb.lookup_type('::logalloc::segment_zone').pointer())
 
         for x in lsa_zone_tree(node['left_']):
             yield x
@@ -193,7 +193,7 @@ class scylla_lsa_zones(gdb.Command):
         gdb.Command.__init__(self, 'scylla lsa_zones', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
     def invoke(self, arg, from_tty):
         gdb.write('LSA zones:\n')
-        all_zones = gdb.parse_and_eval('logalloc::shard_segment_pool._all_zones')
+        all_zones = gdb.parse_and_eval('::logalloc::shard_segment_pool._all_zones')
         for zone in lsa_zone_tree(all_zones['holder']['root']['parent_']):
             gdb.write('    Zone:\n      - base: {z_base:08X}\n      - size: {z_size:>12}\n'
                 '      - used: {z_used:>12}\n'
