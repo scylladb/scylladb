@@ -1,6 +1,6 @@
-#Scylla
+# Scylla
 
-##Building Scylla
+## Building Scylla
 
 In addition to required packages by Seastar, the following packages are required by Scylla.
 
