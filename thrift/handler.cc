@@ -528,9 +528,21 @@ public:
     }
 
     void system_update_keyspace(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const KsDef& ks_def) {
-        std::string _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+            thrift_validation::validate_keyspace_not_system(ks_def.name);
+
+            if (!_db.local().has_keyspace(ks_def.name)) {
+                throw NotFoundException();
+            }
+            if (!ks_def.cf_defs.empty()) {
+                throw make_exception<InvalidRequestException>("Keyspace update must not contain any column family definitions.");
+            }
+
+            auto ksm = keyspace_from_thrift(ks_def);
+            return service::get_local_migration_manager().announce_keyspace_update(ksm, false).then([this] {
+                return std::string(_db.local().get_version().to_sstring());
+            });
+        });
     }
 
     void system_update_column_family(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const CfDef& cf_def) {
