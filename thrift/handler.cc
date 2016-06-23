@@ -151,6 +151,20 @@ with_cob(tcxx::function<void ()>&& cob,
     });
 }
 
+template <typename Func>
+void
+with_exn_cob(tcxx::function<void (::apache::thrift::TDelayedException* _throw)>&& exn_cob, Func&& func) {
+    // then_wrapped() terminates the fiber by calling one of the cob objects
+    futurize<void>::apply(func).then_wrapped([exn_cob = std::move(exn_cob)] (future<> f) {
+        try {
+            f.get();
+        } catch (...) {
+            delayed_exception_wrapper dew(std::current_exception());
+            exn_cob(&dew);
+       }
+    });
+}
+
 std::string bytes_to_string(bytes_view v) {
     return { reinterpret_cast<const char*>(v.begin()), v.size() };
 }
