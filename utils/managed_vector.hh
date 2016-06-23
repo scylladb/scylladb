@@ -38,7 +38,7 @@ public:
 private:
     struct external {
         managed_vector* _backref;
-        T _data[];
+        T _data[0];
 
         external(external&& other) noexcept : _backref(other._backref) {
             for (unsigned i = 0; i < _backref->size(); i++) {
