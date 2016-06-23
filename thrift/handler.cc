@@ -33,10 +33,14 @@
 #include "utils/UUID_gen.hh"
 #include <thrift/protocol/TBinaryProtocol.h>
 #include <boost/move/iterator.hpp>
+#include "db/marshal/type_parser.hh"
 #include "service/migration_manager.hh"
 #include "utils/class_registrator.hh"
 #include "noexcept_traits.hh"
 #include "schema_registry.hh"
+#include "thrift/utils.hh"
+#include "schema_builder.hh"
+#include "thrift/thrift_validation.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -45,6 +49,8 @@ using namespace ::apache::thrift::async;
 
 using namespace  ::org::apache::cassandra;
 
+using namespace thrift;
+
 class unimplemented_exception : public std::exception {
 public:
     virtual const char* what() const throw () override { return "sorry, not implemented"; }
@@ -52,14 +58,6 @@ public:
 
 void pass_unimplemented(const tcxx::function<void(::apache::thrift::TDelayedException* _throw)>& exn_cob) {
     exn_cob(::apache::thrift::TDelayedException::delayException(unimplemented_exception()));
-}
-
-template <typename Ex, typename... Args>
-Ex
-make_exception(const char* fmt, Args&&... args) {
-    Ex ex;
-    ex.why = sprint(fmt, std::forward<Args>(args)...);
-    return ex;
 }
 
 class delayed_exception_wrapper : public ::apache::thrift::TDelayedException {
@@ -78,6 +76,14 @@ public:
             throw;
         } catch (no_such_class& nc) {
             throw make_exception<InvalidRequestException>(nc.what());
+        } catch (marshal_exception& me) {
+            throw make_exception<InvalidRequestException>(me.what());
+        } catch (exceptions::already_exists_exception& ae) {
+            throw make_exception<InvalidRequestException>(ae.what());
+        } catch (exceptions::configuration_exception& ce) {
+            throw make_exception<InvalidRequestException>(ce.what());
+        } catch (no_such_column_family&) {
+            throw NotFoundException();
         } catch (std::exception& e) {
             // Unexpected exception, wrap it
             throw ::apache::thrift::TException(std::string("Internal server error: ") + e.what());
@@ -475,74 +481,81 @@ public:
     }
 
     void system_add_column_family(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const CfDef& cf_def) {
-        std::string _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+            if (!_db.local().has_keyspace(cf_def.keyspace)) {
+                throw NotFoundException();
+            }
+            if (_db.local().has_schema(cf_def.keyspace, cf_def.name)) {
+                throw make_exception<InvalidRequestException>("Column family %s already exists", cf_def.name);
+            }
+
+            auto s = schema_from_thrift(cf_def, cf_def.keyspace);
+            return service::get_local_migration_manager().announce_new_column_family(std::move(s), false).then([this] {
+                return std::string(_db.local().get_version().to_sstring());
+            });
+        });
     }
 
     void system_drop_column_family(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family) {
-        std::string _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+            _db.local().find_schema(_ks_name, column_family); // Throws if column family doesn't exist.
+            return service::get_local_migration_manager().announce_column_family_drop(_ks_name, column_family, false).then([this] {
+                return std::string(_db.local().get_version().to_sstring());
+            });
+        });
     }
 
     void system_add_keyspace(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const KsDef& ks_def) {
         return with_cob(std::move(cob), std::move(exn_cob), [&] {
-            std::string schema_id = "schema-id";  // FIXME: make meaningful
-            if (_db.local().has_keyspace(ks_def.name)) {
-                InvalidRequestException ire;
-                ire.why = sprint("Keyspace %s already exists", ks_def.name);
-                throw ire;
-            }
-
-            std::vector<schema_ptr> cf_defs;
-            cf_defs.reserve(ks_def.cf_defs.size());
-            for (const CfDef& cf_def : ks_def.cf_defs) {
-                std::vector<schema::column> partition_key;
-                std::vector<schema::column> clustering_key;
-                std::vector<schema::column> regular_columns;
-                // FIXME: get this from comparator
-                auto column_name_type = utf8_type;
-                // FIXME: look at key_alias and key_validator first
-                partition_key.push_back({"key", bytes_type});
-                // FIXME: guess clustering keys
-                for (const ColumnDef& col_def : cf_def.column_metadata) {
-                    // FIXME: look at all fields, not just name
-                    regular_columns.push_back({to_bytes(col_def.name), bytes_type});
-                }
-                auto id = utils::UUID_gen::get_time_UUID();
-                auto s = make_lw_shared(schema(id, ks_def.name, cf_def.name,
-                    std::move(partition_key), std::move(clustering_key), std::move(regular_columns),
-                    std::vector<schema::column>(), column_name_type));
-                cf_defs.push_back(s);
-            }
-            auto ksm = make_lw_shared<keyspace_metadata>(to_sstring(ks_def.name),
-                to_sstring(ks_def.strategy_class),
-                std::map<sstring, sstring>{ks_def.strategy_options.begin(), ks_def.strategy_options.end()},
-                ks_def.durable_writes,
-                std::move(cf_defs));
-            return service::get_local_migration_manager().announce_new_keyspace(ksm, false).then([schema_id = std::move(schema_id)] {
-                return make_ready_future<std::string>(std::move(schema_id));
+            auto ksm = keyspace_from_thrift(ks_def);
+            return service::get_local_migration_manager().announce_new_keyspace(std::move(ksm), false).then([this] {
+                return std::string(_db.local().get_version().to_sstring());
             });
         });
     }
 
     void system_drop_keyspace(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
-        std::string _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+            thrift_validation::validate_keyspace_not_system(keyspace);
+            if (!_db.local().has_keyspace(keyspace)) {
+                throw NotFoundException();
+            }
+
+            return service::get_local_migration_manager().announce_keyspace_drop(keyspace, false).then([this] {
+                return std::string(_db.local().get_version().to_sstring());
+            });
+        });
     }
 
     void system_update_keyspace(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const KsDef& ks_def) {
-        std::string _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+            thrift_validation::validate_keyspace_not_system(ks_def.name);
+
+            if (!_db.local().has_keyspace(ks_def.name)) {
+                throw NotFoundException();
+            }
+            if (!ks_def.cf_defs.empty()) {
+                throw make_exception<InvalidRequestException>("Keyspace update must not contain any column family definitions.");
+            }
+
+            auto ksm = keyspace_from_thrift(ks_def);
+            return service::get_local_migration_manager().announce_keyspace_update(ksm, false).then([this] {
+                return std::string(_db.local().get_version().to_sstring());
+            });
+        });
     }
 
     void system_update_column_family(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const CfDef& cf_def) {
-        std::string _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+            auto cf = _db.local().find_schema(cf_def.keyspace, cf_def.name);
+
+            // FIXME: don't update a non thrift-compatible CQL3 table.
+
+            auto s = schema_from_thrift(cf_def, cf_def.keyspace, cf->id());
+            return service::get_local_migration_manager().announce_column_family_update(std::move(s), true, false).then([this] {
+                return std::string(_db.local().get_version().to_sstring());
+            });
+        });
     }
 
     void execute_cql_query(tcxx::function<void(CqlResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression) {
@@ -625,6 +638,20 @@ private:
         type += ")";
         return type;
     }
+    static std::vector<data_type> get_types(const std::string& thrift_type) {
+        static const char composite_type[] = "CompositeType";
+        std::vector<data_type> ret;
+        auto t = sstring_view(thrift_type);
+        auto composite_idx = t.find(composite_type);
+        if (composite_idx == sstring_view::npos) {
+            ret.emplace_back(db::marshal::type_parser::parse(t));
+        } else {
+            t.remove_prefix(composite_idx + sizeof(composite_type) - 1);
+            auto types = db::marshal::type_parser(t).get_type_parameters(false);
+            std::move(types.begin(), types.end(), std::back_inserter(ret));
+        }
+        return ret;
+    }
     static KsDef get_keyspace_definition(const keyspace& ks) {
         auto&& meta = ks.metadata();
         KsDef def;
@@ -666,6 +693,135 @@ private:
         def.__set_durable_writes(meta->durable_writes());
         return std::move(def);
     }
+    static index_info index_info_from_thrift(const ColumnDef& def) {
+        stdx::optional<sstring> idx_name;
+        stdx::optional<std::unordered_map<sstring, sstring>> idx_opts;
+        auto idx_type = ::index_type::none;
+        if (def.__isset.index_type) {
+            idx_type = [&def] {
+                switch (def.index_type) {
+                case IndexType::type::KEYS: return ::index_type::keys;
+                case IndexType::type::COMPOSITES: return ::index_type::composites;
+                case IndexType::type::CUSTOM: return ::index_type::custom;
+                default: return ::index_type::none;
+                };
+            }();
+        }
+        if (def.__isset.index_name) {
+            idx_name = to_sstring(def.index_name);
+        }
+        if (def.__isset.index_options) {
+            idx_opts = std::unordered_map<sstring, sstring>(def.index_options.begin(), def.index_options.end());
+        }
+        return index_info(idx_type, idx_name, idx_opts);
+    }
+    static schema_ptr schema_from_thrift(const CfDef& cf_def, const sstring ks_name, std::experimental::optional<utils::UUID> id = { }) {
+        thrift_validation::validate_cf_def(cf_def);
+        schema_builder builder(ks_name, cf_def.name, id);
+
+        if (cf_def.__isset.key_validation_class) {
+            auto pk_types = get_types(cf_def.key_validation_class);
+            if (pk_types.size() == 1 && cf_def.__isset.key_alias) {
+                builder.with_column(to_bytes(cf_def.key_alias), std::move(pk_types.back()), column_kind::partition_key);
+            } else {
+                for (uint32_t i = 0; i < pk_types.size(); ++i) {
+                    builder.with_column(to_bytes("key" + (i + 1)), std::move(pk_types[i]), column_kind::partition_key);
+                }
+            }
+        } else {
+            builder.with_column(to_bytes("key"), bytes_type, column_kind::partition_key);
+        }
+
+        data_type regular_column_name_type;
+        if (cf_def.column_metadata.empty()) {
+            // Dynamic CF
+            regular_column_name_type = utf8_type;
+            auto ck_types = get_types(cf_def.comparator_type);
+            for (uint32_t i = 0; i < ck_types.size(); ++i) {
+                builder.with_column(to_bytes("column" + (i + 1)), std::move(ck_types[i]), column_kind::clustering_key);
+            }
+            auto&& vtype = cf_def.__isset.default_validation_class
+                         ? db::marshal::type_parser::parse(to_sstring(cf_def.default_validation_class))
+                         : bytes_type;
+            builder.with_column(to_bytes("value"), std::move(vtype));
+        } else {
+            // Static CF
+            regular_column_name_type = db::marshal::type_parser::parse(to_sstring(cf_def.comparator_type));
+            for (const ColumnDef& col_def : cf_def.column_metadata) {
+                auto col_name = to_bytes(col_def.name);
+                regular_column_name_type->validate(col_name);
+                builder.with_column(std::move(col_name), db::marshal::type_parser::parse(to_sstring(col_def.validation_class)),
+                                    index_info_from_thrift(col_def), column_kind::regular_column);
+            }
+        }
+        builder.set_regular_column_name_type(regular_column_name_type);
+        if (cf_def.__isset.comment) {
+            builder.set_comment(cf_def.comment);
+        }
+        if (cf_def.__isset.read_repair_chance) {
+            builder.set_read_repair_chance(cf_def.read_repair_chance);
+        }
+        if (cf_def.__isset.gc_grace_seconds) {
+            builder.set_gc_grace_seconds(cf_def.gc_grace_seconds);
+        }
+        if (cf_def.__isset.min_compaction_threshold) {
+            builder.set_min_compaction_threshold(cf_def.min_compaction_threshold);
+        }
+        if (cf_def.__isset.max_compaction_threshold) {
+            builder.set_max_compaction_threshold(cf_def.max_compaction_threshold);
+        }
+        if (cf_def.__isset.compaction_strategy) {
+            builder.set_compaction_strategy(sstables::compaction_strategy::type(cf_def.compaction_strategy));
+        }
+        auto make_options = [](const std::map<std::string, std::string>& m) {
+            return std::map<sstring, sstring>{m.begin(), m.end()};
+        };
+        if (cf_def.__isset.compaction_strategy_options) {
+            builder.set_compaction_strategy_options(make_options(cf_def.compaction_strategy_options));
+        }
+        if (cf_def.__isset.compression_options) {
+            builder.set_compressor_params(compression_parameters(make_options(cf_def.compression_options)));
+        }
+        if (cf_def.__isset.bloom_filter_fp_chance) {
+            builder.set_bloom_filter_fp_chance(cf_def.bloom_filter_fp_chance);
+        }
+        if (cf_def.__isset.dclocal_read_repair_chance) {
+            builder.set_dc_local_read_repair_chance(cf_def.dclocal_read_repair_chance);
+        }
+        if (cf_def.__isset.memtable_flush_period_in_ms) {
+            builder.set_memtable_flush_period(cf_def.memtable_flush_period_in_ms);
+        }
+        if (cf_def.__isset.default_time_to_live) {
+            builder.set_default_time_to_live(gc_clock::duration(cf_def.default_time_to_live));
+        }
+        if (cf_def.__isset.speculative_retry) {
+            builder.set_speculative_retry(cf_def.speculative_retry);
+        }
+        if (cf_def.__isset.min_index_interval) {
+            builder.set_min_index_interval(cf_def.min_index_interval);
+        }
+        if (cf_def.__isset.max_index_interval) {
+            builder.set_max_index_interval(cf_def.max_index_interval);
+        }
+        return builder.build(schema_builder::compact_storage::yes);
+    }
+    static lw_shared_ptr<keyspace_metadata> keyspace_from_thrift(const KsDef& ks_def) {
+        thrift_validation::validate_ks_def(ks_def);
+        std::vector<schema_ptr> cf_defs;
+        cf_defs.reserve(ks_def.cf_defs.size());
+        for (const CfDef& cf_def : ks_def.cf_defs) {
+            if (cf_def.keyspace != ks_def.name) {
+                throw make_exception<InvalidRequestException>("CfDef (%s) had a keyspace definition that did not match KsDef", cf_def.keyspace);
+            }
+            cf_defs.emplace_back(schema_from_thrift(cf_def, ks_def.name));
+        }
+        return make_lw_shared<keyspace_metadata>(
+            to_sstring(ks_def.name),
+            to_sstring(ks_def.strategy_class),
+            std::map<sstring, sstring>{ks_def.strategy_options.begin(), ks_def.strategy_options.end()},
+            ks_def.durable_writes,
+            std::move(cf_defs));
+    }
     static column_family& lookup_column_family(database& db, const sstring& ks_name, const sstring& cf_name) {
         try {
             return db.find_column_family(ks_name, cf_name);
@@ -678,6 +834,10 @@ private:
             fail(unimplemented::cause::THRIFT);
         }
         return partition_key::from_single_value(*s, std::move(k));
+    }
+    static bool is_dynamic(const schema& s) {
+        // FIXME: what about CFs created from CQL?
+        return s.clustering_key_size() > 0;
     }
 };
 

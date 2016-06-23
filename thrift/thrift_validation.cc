@@ -40,6 +40,11 @@
  */
 
 #include "thrift_validation.hh"
+#include "thrift/utils.hh"
+#include "db/system_keyspace.hh"
+#include <regex>
+
+using namespace thrift;
 
 namespace thrift_validation {
 
@@ -68,6 +73,36 @@ void validate_key(schema_ptr schema_, const bytes& key) {
             throw new org.apache.cassandra.exceptions.InvalidRequestException(e.getMessage());
         }
 #endif
+}
+
+void validate_keyspace_not_system(const std::string& keyspace) {
+    std::string name;
+    name.resize(keyspace.length());
+    std::transform(keyspace.begin(), keyspace.end(), name.begin(), ::tolower);
+    if (name == db::system_keyspace::NAME) {
+        throw make_exception<InvalidRequestException>("system keyspace is not user-modifiable");
+    }
+}
+
+void validate_ks_def(const KsDef& ks_def) {
+    validate_keyspace_not_system(ks_def.name);
+    std::regex name_regex("\\w+");
+    if (!std::regex_match(ks_def.name, name_regex)) {
+        throw make_exception<InvalidRequestException>("\"%s\" is not a valid keyspace name", ks_def.name);
+    }
+    if (ks_def.name.length() > schema::NAME_LENGTH) {
+        throw make_exception<InvalidRequestException>("Keyspace names shouldn't be more than %d characters long (got \"%s\")", schema::NAME_LENGTH, ks_def.name);
+    }
+}
+
+void validate_cf_def(const CfDef& cf_def) {
+    std::regex name_regex("\\w+");
+    if (!std::regex_match(cf_def.name, name_regex)) {
+        throw make_exception<InvalidRequestException>("\"%s\" is not a valid column family name", cf_def.name);
+    }
+    if (cf_def.name.length() > schema::NAME_LENGTH) {
+        throw make_exception<InvalidRequestException>("Keyspace names shouldn't be more than %d characters long (got \"%s\")", schema::NAME_LENGTH, cf_def.name);
+    }
 }
 
 }
