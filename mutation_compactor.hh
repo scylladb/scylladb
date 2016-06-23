@@ -56,7 +56,7 @@ concept bool CompactedMutationsConsumer() {
 // static and clustering rows. It doesn't affect the way range tombstones are
 // emitted.
 template<emit_only_live_rows OnlyLive, typename Consumer>
-class compact_for_query {
+class compact_mutation {
     const schema& _schema;
     gc_clock::time_point _query_time;
     gc_clock::time_point _gc_before;
@@ -97,7 +97,7 @@ private:
         return t.timestamp < _max_purgeable && t.deletion_time < _gc_before;
     };
 public:
-    compact_for_query(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint32_t limit,
+    compact_mutation(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint32_t limit,
               uint32_t partition_limit, Consumer consumer)
         : _schema(s)
         , _query_time(query_time)
