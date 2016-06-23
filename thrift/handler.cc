@@ -41,6 +41,7 @@
 #include "thrift/utils.hh"
 #include "schema_builder.hh"
 #include "thrift/thrift_validation.hh"
+#include "service/storage_service.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -83,6 +84,8 @@ public:
         } catch (exceptions::configuration_exception& ce) {
             throw make_exception<InvalidRequestException>(ce.what());
         } catch (no_such_column_family&) {
+            throw NotFoundException();
+        } catch (no_such_keyspace&) {
             throw NotFoundException();
         } catch (std::exception& e) {
             // Unexpected exception, wrap it
@@ -394,9 +397,15 @@ public:
     }
 
     void describe_schema_versions(tcxx::function<void(std::map<std::string, std::vector<std::string> >  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob) {
-        std::map<std::string, std::vector<std::string> >  _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        with_cob(std::move(cob), std::move(exn_cob), [] {
+            return service::get_local_storage_service().describe_schema_versions().then([](auto&& m) {
+                std::map<std::string, std::vector<std::string>> ret;
+                for (auto&& p : m) {
+                    ret[p.first] = std::vector<std::string>(p.second.begin(), p.second.end());
+                }
+                return ret;
+            });
+        });
     }
 
     void describe_keyspaces(tcxx::function<void(std::vector<KsDef>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob) {
@@ -410,61 +419,85 @@ public:
     }
 
     void describe_cluster_name(tcxx::function<void(std::string const& _return)> cob) {
-        std::string _return;
-        // FIXME: implement
-        cob("seastar");
+        cob(_db.local().get_config().cluster_name());
     }
 
     void describe_version(tcxx::function<void(std::string const& _return)> cob) {
-        std::string _return;
-        // FIXME: implement
-        cob("0.0.0");
+        cob("20.1.0");
+    }
+
+    void do_describe_ring(tcxx::function<void(std::vector<TokenRange>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace, bool local) {
+        with_cob(std::move(cob), std::move(exn_cob), [&] {
+            auto& ks = _db.local().find_keyspace(keyspace);
+            if (ks.get_replication_strategy().get_type() == locator::replication_strategy_type::local) {
+                throw make_exception<InvalidRequestException>("There is no ring for the keyspace: %s", keyspace);
+            }
+
+            auto ring = service::get_local_storage_service().describe_ring(keyspace, local);
+            std::vector<TokenRange> ret;
+            ret.reserve(ring.size());
+            std::transform(ring.begin(), ring.end(), std::back_inserter(ret), [](auto&& tr) {
+                TokenRange token_range;
+                token_range.__set_start_token(std::move(tr._start_token));
+                token_range.__set_end_token(std::move(tr._end_token));
+                token_range.__set_endpoints(std::vector<std::string>(tr._endpoints.begin(), tr._endpoints.end()));
+                std::vector<EndpointDetails> eds;
+                std::transform(tr._endpoint_details.begin(), tr._endpoint_details.end(), std::back_inserter(eds), [](auto&& ed) {
+                    EndpointDetails detail;
+                    detail.__set_host(ed._host);
+                    detail.__set_datacenter(ed._datacenter);
+                    detail.__set_rack(ed._rack);
+                    return detail;
+                });
+                token_range.__set_endpoint_details(std::move(eds));
+                token_range.__set_rpc_endpoints(std::vector<std::string>(tr._rpc_endpoints.begin(), tr._rpc_endpoints.end()));
+                return token_range;
+            });
+            return ret;
+        });
     }
 
     void describe_ring(tcxx::function<void(std::vector<TokenRange>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
-        std::vector<TokenRange>  _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        do_describe_ring(std::move(cob), std::move(exn_cob), keyspace, false);
     }
 
     void describe_local_ring(tcxx::function<void(std::vector<TokenRange>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
-        std::vector<TokenRange>  _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        do_describe_ring(std::move(cob), std::move(exn_cob), keyspace, true);
     }
 
     void describe_token_map(tcxx::function<void(std::map<std::string, std::string>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob) {
-        std::map<std::string, std::string>  _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        with_cob(std::move(cob), std::move(exn_cob), [] {
+            auto m = service::get_local_storage_service().get_token_to_endpoint_map();
+            std::map<std::string, std::string> ret;
+            for (auto&& p : m) {
+                ret[sprint("%s", p.first)] = p.second.to_sstring();
+            }
+            return ret;
+        });
     }
 
     void describe_partitioner(tcxx::function<void(std::string const& _return)> cob) {
-        std::string _return;
-        // FIXME: implement
-        return cob("dummy paritioner");
+        cob(dht::global_partitioner().name());
     }
 
     void describe_snitch(tcxx::function<void(std::string const& _return)> cob) {
-        std::string _return;
-        // FIXME: implement
-        return cob("dummy snitch");
+        cob(sprint("org.apache.cassandra.locator.%s", _db.local().get_snitch_name()));
     }
 
     void describe_keyspace(tcxx::function<void(KsDef const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
         with_cob(std::move(cob), std::move(exn_cob), [&] {
-            try {
-                auto& ks = _db.local().find_keyspace(keyspace);
-                return get_keyspace_definition(ks);
-            } catch (no_such_keyspace& nsk) {
-                throw make_exception<InvalidRequestException>("keyspace %s does not exist", keyspace);
-            }
+            auto& ks = _db.local().find_keyspace(keyspace);
+            return get_keyspace_definition(ks);
         });
     }
 
     void describe_splits(tcxx::function<void(std::vector<std::string>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& cfName, const std::string& start_token, const std::string& end_token, const int32_t keys_per_split) {
-        std::vector<std::string>  _return;
-        // FIXME: implement
+        // FIXME: Maybe implement.
+        // Origin's thrift interface has this to say about the verb:
+        //      "experimental API for hadoop/parallel query support. may change violently and without warning.".
+        // Some drivers have moved away from depending on this verb (SPARKC-94). The correct way to implement
+        // this, as well as describe_splits_ex, is to use the size_estimates system table (CASSANDRA-7688).
+        // However, we currently don't populate that table, which is done by SizeEstimatesRecorder.java in Origin.
         return pass_unimplemented(exn_cob);
     }
 
@@ -475,8 +508,7 @@ public:
     }
 
     void describe_splits_ex(tcxx::function<void(std::vector<CfSplit>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& cfName, const std::string& start_token, const std::string& end_token, const int32_t keys_per_split) {
-        std::vector<CfSplit>  _return;
-        // FIXME: implement
+        // FIXME: To implement. See describe_splits.
         return pass_unimplemented(exn_cob);
     }
 
@@ -604,33 +636,14 @@ public:
     }
 
 private:
-    static sstring class_from_data_type(const data_type& dt) {
-        static const std::unordered_map<sstring, sstring> types = {
-            { "boolean", "BooleanType" },
-            { "bytes", "BytesType" },
-            { "double", "DoubleType" },
-            { "int32", "Int32Type" },
-            { "long", "LongType" },
-            { "timestamp", "DateType" },
-            { "timeuuid", "TimeUUIDType" },
-            { "utf8", "UTF8Type" },
-            { "uuid", "UUIDType" },
-            // FIXME: missing types
-        };
-        auto it = types.find(dt->name());
-        if (it == types.end()) {
-            return sstring("<unknown> ") + dt->name();
-        }
-        return sstring("org.apache.cassandra.db.marshal.") + it->second;
-    }
     template<allow_prefixes IsPrefixable>
     static sstring class_from_compound_type(const compound_type<IsPrefixable>& ct) {
         if (ct.is_singular()) {
-            return class_from_data_type(ct.types().front());
+            return ct.types().front()->name();
         }
         sstring type = "org.apache.cassandra.db.marshal.CompositeType(";
         for (auto& dt : ct.types()) {
-            type += class_from_data_type(dt);
+            type += dt->name();
             if (&dt != &*ct.types().rbegin()) {
                 type += ",";
             }
@@ -653,14 +666,14 @@ private:
         return ret;
     }
     static KsDef get_keyspace_definition(const keyspace& ks) {
+        auto make_options = [](auto&& m) {
+            return std::map<std::string, std::string>(m.begin(), m.end());
+        };
         auto&& meta = ks.metadata();
         KsDef def;
         def.__set_name(meta->name());
         def.__set_strategy_class(meta->strategy_name());
-        std::map<std::string, std::string> options(
-            meta->strategy_options().begin(),
-            meta->strategy_options().end());
-        def.__set_strategy_options(options);
+        def.__set_strategy_options(make_options(meta->strategy_options()));
         std::vector<CfDef> cfs;
         for (auto&& cf : meta->cf_meta_data()) {
             // FIXME: skip cql3 column families
@@ -668,25 +681,39 @@ private:
             CfDef cf_def;
             cf_def.__set_keyspace(s->ks_name());
             cf_def.__set_name(s->cf_name());
-            cf_def.__set_key_validation_class(class_from_compound_type(*s->partition_key_type()));
+            cf_def.__set_column_type(cf_type_to_sstring(s->type()));
             if (s->clustering_key_size()) {
                 cf_def.__set_comparator_type(class_from_compound_type(*s->clustering_key_type()));
             } else {
-                cf_def.__set_comparator_type(class_from_data_type(s->regular_column_name_type()));
+                cf_def.__set_comparator_type(s->regular_column_name_type()->name());
             }
             cf_def.__set_comment(s->comment());
-            cf_def.__set_bloom_filter_fp_chance(s->bloom_filter_fp_chance());
+            cf_def.__set_read_repair_chance(s->read_repair_chance());
             if (s->regular_columns_count()) {
                 std::vector<ColumnDef> columns;
                 for (auto&& c : s->regular_columns()) {
                     ColumnDef c_def;
                     c_def.__set_name(c.name_as_text());
-                    c_def.__set_validation_class(class_from_data_type(c.type));
+                    c_def.__set_validation_class(c.type->name());
                     columns.emplace_back(std::move(c_def));
                 }
                 cf_def.__set_column_metadata(columns);
             }
-            // FIXME: there are more fields that should be filled...
+            cf_def.__set_gc_grace_seconds(s->gc_grace_seconds().count());
+            cf_def.__set_default_validation_class(s->default_validator()->name());
+            cf_def.__set_min_compaction_threshold(s->min_compaction_threshold());
+            cf_def.__set_max_compaction_threshold(s->max_compaction_threshold());
+            cf_def.__set_key_validation_class(class_from_compound_type(*s->partition_key_type()));
+            cf_def.__set_key_alias(s->partition_key_columns().begin()->name_as_text());
+            cf_def.__set_compaction_strategy(sstables::compaction_strategy::name(s->compaction_strategy()));
+            cf_def.__set_compaction_strategy_options(make_options(s->compaction_strategy_options()));
+            cf_def.__set_compression_options(make_options(s->get_compressor_params().get_options()));
+            cf_def.__set_bloom_filter_fp_chance(s->bloom_filter_fp_chance());
+            cf_def.__set_caching("all");
+            cf_def.__set_dclocal_read_repair_chance(s->dc_local_read_repair_chance());
+            cf_def.__set_memtable_flush_period_in_ms(s->memtable_flush_period());
+            cf_def.__set_default_time_to_live(s->default_time_to_live().count());
+            cf_def.__set_speculative_retry(s->speculative_retry().to_sstring());
             cfs.emplace_back(std::move(cf_def));
         }
         def.__set_cf_defs(cfs);
