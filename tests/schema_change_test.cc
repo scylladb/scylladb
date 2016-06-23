@@ -64,6 +64,38 @@ SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
     });
 }
 
+SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            auto builder = schema_builder("tests", "table")
+                    .with_column("pk", bytes_type, column_kind::partition_key)
+                    .with_column("v1", bytes_type);
+
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+
+            auto old_schema = builder.build();
+
+            service::get_local_migration_manager().announce_new_column_family(old_schema, false).get();
+
+            auto s = e.local_db().find_schema(old_schema->id());
+            BOOST_REQUIRE_EQUAL(*old_schema, *s);
+            BOOST_REQUIRE_EQUAL(864000, s->gc_grace_seconds().count());
+            BOOST_REQUIRE_EQUAL(*s, *e.local_db().find_keyspace(s->ks_name()).metadata()->cf_meta_data().at(s->cf_name()));
+
+            builder.set_gc_grace_seconds(1);
+            auto new_schema = builder.build();
+
+            service::get_local_migration_manager().announce_column_family_update(new_schema, false).get();
+
+            s = e.local_db().find_schema(old_schema->id());
+            BOOST_REQUIRE_NE(*old_schema, *s);
+            BOOST_REQUIRE_EQUAL(*new_schema, *s);
+            BOOST_REQUIRE_EQUAL(1, s->gc_grace_seconds().count());
+            BOOST_REQUIRE_EQUAL(*s, *e.local_db().find_keyspace(s->ks_name()).metadata()->cf_meta_data().at(s->cf_name()));
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {

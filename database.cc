@@ -1590,7 +1590,7 @@ void database::add_column_family(schema_ptr schema, column_family::config cfg) {
     if (_ks_cf_to_uuid.count(kscf) != 0) {
         throw std::invalid_argument("Column family " + schema->cf_name() + " exists");
     }
-    ks->second.add_column_family(schema);
+    ks->second.add_or_update_column_family(schema);
     cf->start();
     _column_families.emplace(uuid, std::move(cf));
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);

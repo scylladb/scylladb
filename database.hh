@@ -761,8 +761,8 @@ public:
     const lw_shared_ptr<user_types_metadata>& user_types() const {
         return _user_types;
     }
-    void add_column_family(const schema_ptr& s) {
-        _cf_meta_data.emplace(s->cf_name(), s);
+    void add_or_update_column_family(const schema_ptr& s) {
+        _cf_meta_data[s->cf_name()] = s;
     }
     void remove_column_family(const schema_ptr& s) {
         _cf_meta_data.erase(s->cf_name());
@@ -822,8 +822,8 @@ public:
     const locator::abstract_replication_strategy& get_replication_strategy() const;
     column_family::config make_column_family_config(const schema& s) const;
     future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
-    void add_column_family(const schema_ptr& s) {
-        _metadata->add_column_family(s);
+    void add_or_update_column_family(const schema_ptr& s) {
+        _metadata->add_or_update_column_family(s);
     }
     void add_user_type(const user_type ut) {
         _metadata->add_user_type(ut);
