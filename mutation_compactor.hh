@@ -60,6 +60,7 @@ class compact_mutation {
     const schema& _schema;
     gc_clock::time_point _query_time;
     gc_clock::time_point _gc_before;
+    std::function<api::timestamp_type(const dht::decorated_key&)> _get_max_purgeable;
     api::timestamp_type _max_purgeable = api::max_timestamp;
     const query::partition_slice& _slice;
     uint32_t _row_limit;
@@ -119,6 +120,9 @@ public:
         _current_tombstone = { };
         _partition_tombstone = { };
         _current_partition_limit = std::min(_row_limit, _partition_row_limit);
+        if (_get_max_purgeable) {
+            _max_purgeable = _get_max_purgeable(dk);
+        }
     }
 
     void consume(tombstone t) {
