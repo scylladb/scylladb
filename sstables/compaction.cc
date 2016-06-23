@@ -125,6 +125,7 @@ static void delete_sstables_for_interrupted_compaction(std::vector<shared_sstabl
 future<std::vector<shared_sstable>>
 compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::function<shared_sstable()> creator,
                  uint64_t max_sstable_size, uint32_t sstable_level, bool cleanup) {
+  return seastar::async([sstables = std::move(sstables), &cf, creator = std::move(creator), max_sstable_size, sstable_level, cleanup] () mutable {
     std::vector<::mutation_reader> readers;
     uint64_t estimated_partitions = 0;
     auto ancestors = make_lw_shared<std::vector<unsigned long>>();
@@ -314,17 +315,13 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
         });
     }).then([output_reader] {});
 
-    // Wait for both read_done and write_done fibers to finish.
-    return when_all(std::move(read_done), std::move(write_done)).then([&cm, info] (std::tuple<future<>, future<>> t) {
-        // deregister compaction_stats of finished compaction from compaction manager.
-        cm.deregister_compaction(info);
-
         sstring ex;
         try {
-            std::get<0>(t).get();
+            read_done.get0();
         } catch(compaction_stop_exception& e) {
-
-            std::get<1>(t).ignore_ready_future(); // ignore result of write fiber if compaction was asked to stop.
+            try {
+                write_done.get0();
+            } catch (...) { } // ignore result of write fiber if compaction was asked to stop.
             delete_sstables_for_interrupted_compaction(info->new_sstables, info->ks, info->cf);
             throw;
         } catch(...) {
@@ -333,17 +330,20 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
         }
 
         try {
-            std::get<1>(t).get();
+            write_done.get0();
         } catch(...) {
             ex += sprint("%swrite_exception: %s", (ex.size() ? ", " : ""), std::current_exception());
         }
+
+        // deregister compaction_stats of finished compaction from compaction manager.
+        cm.deregister_compaction(info);
 
         if (ex.size()) {
             delete_sstables_for_interrupted_compaction(info->new_sstables, info->ks, info->cf);
 
             throw std::runtime_error(ex);
         }
-    }).then([start_time, info, cleanup] {
+
         double ratio = double(info->end_size) / double(info->start_size);
         auto end_time = db_clock::now();
         // time taken by compaction in seconds.
@@ -370,12 +370,12 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
         // If compaction is running for testing purposes, detect that there is
         // no query context and skip code that updates compaction history.
         if (!db::qctx) {
-            return make_ready_future<>();
+            return std::move(info->new_sstables);
         }
 
         // Skip code that updates compaction history if running on behalf of a cleanup job.
         if (cleanup) {
-            return make_ready_future<>();
+            return std::move(info->new_sstables);
         }
 
         auto compacted_at = std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch()).count();
@@ -384,9 +384,9 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
         // shows how many sstables each row is merged from. This information
         // cannot be accessed until we make combined_reader more generic,
         // for example, by adding a reducer method.
-        return db::system_keyspace::update_compaction_history(info->ks, info->cf, compacted_at,
-                info->start_size, info->end_size, std::unordered_map<int32_t, int64_t>{});
-    }).then([info] {
+        db::system_keyspace::update_compaction_history(info->ks, info->cf, compacted_at,
+            info->start_size, info->end_size, std::unordered_map<int32_t, int64_t>{}).get0();
+
         // Return vector with newly created sstable(s).
         return std::move(info->new_sstables);
     });
