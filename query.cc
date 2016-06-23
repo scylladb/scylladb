@@ -34,6 +34,8 @@ namespace query {
 
 const partition_range full_partition_range = partition_range::make_open_ended_both_sides();
 
+const query::partition_slice full_slice = query::partition_slice({ query::clustering_range::make_open_ended_both_sides() }, { }, { }, { });
+
 std::ostream& operator<<(std::ostream& out, const specific_ranges& s);
 
 std::ostream& operator<<(std::ostream& out, const partition_slice& ps) {
