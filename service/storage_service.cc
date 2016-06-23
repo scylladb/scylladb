@@ -154,7 +154,7 @@ bool storage_service::should_bootstrap() {
 }
 
 // Runs inside seastar::async context
-void storage_service::prepare_to_join() {
+void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints) {
     if (_joined) {
         return;
     }
@@ -189,6 +189,22 @@ void storage_service::prepare_to_join() {
         app_states.emplace(gms::application_state::STATUS, value_factory.hibernate(true));
     } else if (should_bootstrap()) {
         check_for_endpoint_collision().get();
+    } else {
+        auto& gossiper = gms::get_local_gossiper();
+        auto seeds = gms::get_local_gossiper().get_seeds();
+        auto my_ep = get_broadcast_address();
+        // If this node is the only seed node, it can not do shadow round to itself
+        if (!(seeds.count(my_ep) && seeds.size() == 1)) {
+            // Do shadow round to check if this node knows all the features
+            // advertised by all other nodes, otherwise this node is too old
+            // (missing features) to join the cluser.
+            gossiper.do_shadow_round().get();
+            gossiper.check_knows_remote_features(get_config_supported_features());
+            gossiper.reset_endpoint_state_map();
+            for (auto ep : loaded_endpoints) {
+                gossiper.add_saved_endpoint(ep);
+            }
+        }
     }
 
     // have to start the gossip service before we can see any info on other nodes.  this is necessary
@@ -1121,6 +1137,7 @@ future<> storage_service::init_server(int delay) {
         }
 #endif
 
+        std::vector<inet_address> loaded_endpoints;
         if (get_property_load_ring_state()) {
             logger.info("Loading persisted ring state");
             auto loaded_tokens = db::system_keyspace::load_tokens().get0();
@@ -1145,12 +1162,13 @@ future<> storage_service::init_server(int delay) {
                     if (loaded_host_ids.count(ep)) {
                         _token_metadata.update_host_id(loaded_host_ids.at(ep), ep);
                     }
+                    loaded_endpoints.push_back(ep);
                     gossiper.add_saved_endpoint(ep);
                 }
             }
         }
 
-        prepare_to_join();
+        prepare_to_join(std::move(loaded_endpoints));
 #if 0
         // Has to be called after the host id has potentially changed in prepareToJoin().
         for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
@@ -1283,6 +1301,7 @@ future<> storage_service::check_for_endpoint_collision() {
         bool found_bootstrapping_node = false;
         do {
             gossiper.do_shadow_round().get();
+            gossiper.check_knows_remote_features(get_config_supported_features());
             auto addr = get_broadcast_address();
             if (!gossiper.is_safe_for_bootstrap(addr)) {
                 throw std::runtime_error(sprint("A node with address %s already exists, cancelling join. "
@@ -1350,6 +1369,7 @@ future<std::unordered_set<token>> storage_service::prepare_replacement_info() {
     // make magic happen
     return gms::get_local_gossiper().do_shadow_round().then([this, replace_address] {
         auto& gossiper = gms::get_local_gossiper();
+        gossiper.check_knows_remote_features(get_config_supported_features());
         // now that we've gossiped at least once, we should be able to find the node we're replacing
         auto state = gossiper.get_endpoint_state_for_endpoint(replace_address);
         if (!state) {

@@ -400,7 +400,7 @@ public:
 #endif
 private:
     bool should_bootstrap();
-    void prepare_to_join();
+    void prepare_to_join(std::vector<inet_address> loaded_endpoints);
     void join_token_ring(int delay);
 public:
     future<> join_ring();
