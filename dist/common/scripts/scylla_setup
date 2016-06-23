@@ -51,7 +51,7 @@ interactive_ask_service() {
                 result="$ans"
             fi
         done
-        case $result in
+        case $(echo $result | tr '[:upper:]' '[:lower:]') in
             "y" | "yes")
                 return 1
                 ;;
