@@ -31,6 +31,7 @@
 #include "streamed_mutation.hh"
 #include "mutation_query.hh"
 #include "service/priority_manager.hh"
+#include "mutation_compactor.hh"
 
 template<bool reversed>
 struct reversal_traits;
@@ -669,13 +670,6 @@ bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tomb
         return stop_iteration::no;
     });
     return any_live;
-}
-
-static bool has_ck_selector(const query::clustering_row_ranges& ranges) {
-    // Like PK range, an empty row range, should be considered an "exclude all" restriction
-    return ranges.empty() || std::any_of(ranges.begin(), ranges.end(), [](auto& r) {
-        return !r.is_full();
-    });
 }
 
 void
@@ -1627,186 +1621,6 @@ void row_marker::revert(row_marker& rm) noexcept {
     std::swap(*this, rm);
 }
 
-enum class emit_only_live_rows {
-    no,
-    yes,
-};
-
-/*
-template<typename T>
-concept bool CompactedMutationsConsumer() {
-    return requires(T obj, tombstone t, const partition_key& pk, static_row sr,
-        clustering_row cr, range_tombstone_begin rtb, range_tombstone_end rte, bool is_alive)
-    {
-        obj.consume_new_partition(pk);
-        obj.consume(t);
-        obj.consume(std::move(sr), is_alive);
-        obj.consume(std::move(cr), is_alive);
-        obj.consume(std::move(rtb));
-        obj.consume(std::move(rte));
-        obj.consume_end_of_partition();
-        obj.consume_end_of_stream();
-    };
-}
-*/
-// emit_only_live::yes will cause compact_for_query to emit only live
-// static and clustering rows. It doesn't affect the way range tombstones are
-// emitted.
-template<emit_only_live_rows OnlyLive, typename Consumer>
-class compact_for_query {
-    const schema& _schema;
-    gc_clock::time_point _query_time;
-    gc_clock::time_point _gc_before;
-    api::timestamp_type _max_purgeable = api::max_timestamp;
-    const query::partition_slice& _slice;
-    uint32_t _row_limit;
-    uint32_t _partition_limit;
-    uint32_t _partition_row_limit;
-
-    Consumer _consumer;
-    tombstone _partition_tombstone;
-    tombstone _current_tombstone;
-
-    bool _static_row_live{};
-    uint32_t _rows_in_current_partition;
-    uint32_t _current_partition_limit;
-    bool _empty_partition{};
-    const partition_key* _pk;
-    bool _has_ck_selector{};
-    bool _current_tombstone_emitted{};
-private:
-    static constexpr bool only_live() {
-        return OnlyLive == emit_only_live_rows::yes;
-    }
-
-    void partition_is_not_empty() {
-        if (_empty_partition) {
-            _empty_partition = false;
-            _consumer.consume_new_partition(*_pk);
-            auto pt = _partition_tombstone;
-            if (!can_purge_tombstone(pt)) {
-                _consumer.consume(pt);
-            }
-        }
-    }
-
-    bool can_purge_tombstone(const tombstone& t) {
-        return t.timestamp < _max_purgeable && t.deletion_time < _gc_before;
-    };
-public:
-    compact_for_query(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint32_t limit,
-              uint32_t partition_limit, Consumer consumer)
-        : _schema(s)
-        , _query_time(query_time)
-        , _gc_before(query_time - s.gc_grace_seconds())
-        , _slice(slice)
-        , _row_limit(limit)
-        , _partition_limit(partition_limit)
-        , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
-        , _consumer(std::move(consumer))
-    { }
-
-    stop_iteration consume_new_partition(const partition_key& pk) {
-        _pk = &pk;
-        _has_ck_selector = has_ck_selector(_slice.row_ranges(_schema, pk));
-        _empty_partition = true;
-        _rows_in_current_partition = 0;
-        _static_row_live = false;
-        _current_tombstone = { };
-        _partition_tombstone = { };
-        _current_partition_limit = std::min(_row_limit, _partition_row_limit);
-        return stop_iteration::no;
-    }
-
-    void consume(tombstone t) {
-        _partition_tombstone = t;
-        _current_tombstone = t;
-        if (!only_live() && !can_purge_tombstone(t)) {
-            partition_is_not_empty();
-        }
-    }
-
-    stop_iteration consume(static_row&& sr) {
-        bool is_live = sr.cells().compact_and_expire(_schema, column_kind::static_column,
-                                                     _partition_tombstone,
-                                                     _query_time, _max_purgeable, _gc_before);
-        _static_row_live = is_live;
-        if (is_live || (!only_live() && !sr.empty())) {
-            partition_is_not_empty();
-            _consumer.consume(std::move(sr), is_live);
-        }
-        return stop_iteration::no;
-    }
-
-    stop_iteration consume(clustering_row&& cr) {
-        auto t = _current_tombstone;
-        t.apply(cr.tomb());
-        if (cr.tomb() <= _current_tombstone || can_purge_tombstone(cr.tomb())) {
-            cr.remove_tombstone();
-        }
-        bool is_live = cr.marker().compact_and_expire(t, _query_time, _max_purgeable, _gc_before);
-        is_live |= cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, _max_purgeable, _gc_before);
-        if (only_live() && is_live) {
-            partition_is_not_empty();
-            _consumer.consume(std::move(cr), true);
-            if (++_rows_in_current_partition == _current_partition_limit) {
-                return stop_iteration::yes;
-            }
-        } else if (!only_live()) {
-            if (is_live) {
-                if (_rows_in_current_partition == _current_partition_limit) {
-                    return stop_iteration::yes;
-                }
-                _rows_in_current_partition++;
-            }
-            if (!cr.empty()) {
-                partition_is_not_empty();
-                _consumer.consume(std::move(cr), is_live);
-            }
-        }
-        return stop_iteration::no;
-    }
-
-    stop_iteration consume(range_tombstone_begin&& rt) {
-        _current_tombstone.apply(rt.tomb());
-        if (!can_purge_tombstone(rt.tomb()) && rt.tomb() > _partition_tombstone) {
-            partition_is_not_empty();
-            _consumer.consume(std::move(rt));
-            _current_tombstone_emitted = true;
-        }
-        return stop_iteration::no;
-    }
-
-    stop_iteration consume(range_tombstone_end&& rt) {
-        if (_current_tombstone_emitted) {
-            _consumer.consume(std::move(rt));
-            _current_tombstone_emitted = false;
-        }
-        _current_tombstone = _partition_tombstone;
-        return stop_iteration::no;
-    }
-
-    stop_iteration consume_end_of_partition() {
-        if (!_empty_partition) {
-            // #589 - Do not add extra row for statics unless we did a CK range-less query.
-            // See comment in query
-            if (_rows_in_current_partition == 0 && _static_row_live && !_has_ck_selector) {
-                ++_rows_in_current_partition;
-            }
-
-            _row_limit -= _rows_in_current_partition;
-            _partition_limit -= 1;
-            _consumer.consume_end_of_partition();
-            return _row_limit && _partition_limit ? stop_iteration::no : stop_iteration::yes;
-        }
-        return stop_iteration::no;
-    }
-
-    auto consume_end_of_stream() {
-        return _consumer.consume_end_of_stream();
-    }
-};
-
 // Adds mutation to query::result.
 class mutation_querier {
     const schema& _schema;
@@ -1985,7 +1799,7 @@ future<data_query_result> data_query(schema_ptr s, const mutation_source& source
     auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
 
     auto qrb = query_result_builder(*s, builder);
-    auto cfq = compact_for_query<emit_only_live_rows::yes, query_result_builder>(*s, query_time, slice, row_limit, partition_limit, std::move(qrb));
+    auto cfq = compact_mutation<emit_only_live_rows::yes, query_result_builder>(*s, query_time, slice, row_limit, partition_limit, std::move(qrb));
 
     auto reader = source(s, range, query::clustering_key_filtering_context::create(s, slice), service::get_local_sstable_query_read_priority());
     return consume_flattened(std::move(reader), std::move(cfq), is_reversed);
@@ -2061,7 +1875,7 @@ mutation_query(schema_ptr s,
     auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
 
     auto rrb = reconcilable_result_builder(*s, slice);
-    auto cfq = compact_for_query<emit_only_live_rows::no, reconcilable_result_builder>(*s, query_time, slice, row_limit, partition_limit, std::move(rrb));
+    auto cfq = compact_mutation<emit_only_live_rows::no, reconcilable_result_builder>(*s, query_time, slice, row_limit, partition_limit, std::move(rrb));
 
     auto reader = source(s, range, query::clustering_key_filtering_context::create(s, slice), service::get_local_sstable_query_read_priority());
     return consume_flattened(std::move(reader), std::move(cfq), is_reversed);
