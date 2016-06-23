@@ -219,6 +219,7 @@ scylla_tests = [
     'tests/idl_test',
     'tests/range_tombstone_list_test',
     'tests/anchorless_list_test',
+    'tests/database_test',
 ]
 
 apps = [

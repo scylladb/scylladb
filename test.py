@@ -72,6 +72,7 @@ boost_tests = [
     'range_tombstone_list_test',
     'streamed_mutation_test',
     'anchorless_list_test',
+    'database_test',
 ]
 
 other_tests = [
