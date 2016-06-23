@@ -1757,8 +1757,8 @@ public:
     query_result_builder(const schema& s, query::result::builder& rb)
             : _schema(s), _rb(rb) { }
 
-    void consume_new_partition(const partition_key& pk) {
-        _pw.emplace(_rb.add_partition(_schema, pk));
+    void consume_new_partition(const dht::decorated_key& dk) {
+        _pw.emplace(_rb.add_partition(_schema, dk.key()));
         _mutation_consumer.emplace(mutation_querier(_schema, *_pw));
     }
 
@@ -1820,12 +1820,12 @@ public:
     reconcilable_result_builder(const schema& s, const query::partition_slice& slice)
             : _schema(s), _slice(slice) { }
 
-    void consume_new_partition(const partition_key& pk) {
-        _has_ck_selector = has_ck_selector(_slice.row_ranges(_schema, pk));
+    void consume_new_partition(const dht::decorated_key& dk) {
+        _has_ck_selector = has_ck_selector(_slice.row_ranges(_schema, dk.key()));
         _static_row_is_alive = false;
         _live_rows = 0;
         auto is_reversed = _slice.options.contains(query::partition_slice::option::reversed);
-        _mutation_consumer.emplace(streamed_mutation_freezer(_schema, pk, is_reversed));
+        _mutation_consumer.emplace(streamed_mutation_freezer(_schema, dk.key(), is_reversed));
     }
 
     void consume(tombstone t) {

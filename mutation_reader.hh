@@ -244,8 +244,8 @@ future<stop_iteration> do_consume_streamed_mutation_flattened(streamed_mutation&
 /*
 template<typename T>
 concept bool FlattenedConsumer() {
-    return StreamedMutationConsumer() && requires(T obj, const partition_key& pk) {
-        obj.consume_new_partition(pk);
+    return StreamedMutationConsumer() && requires(T obj, const dht::decorated_key& dk) {
+        obj.consume_new_partition(dk);
         obj.consume_end_of_partition();
     };
 }
@@ -264,7 +264,7 @@ auto consume_flattened(mutation_reader mr, Consumer c, bool reverse_mutations = 
                 } else {
                     sm.emplace(reverse_streamed_mutation(std::move(*smopt)));
                 }
-                c.consume_new_partition(sm->key());
+                c.consume_new_partition(sm->decorated_key());
                 if (sm->partition_tombstone()) {
                     c.consume(sm->partition_tombstone());
                 }

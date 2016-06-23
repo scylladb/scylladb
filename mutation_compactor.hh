@@ -38,10 +38,10 @@ enum class emit_only_live_rows {
 /*
 template<typename T>
 concept bool CompactedMutationsConsumer() {
-    return requires(T obj, tombstone t, const partition_key& pk, static_row sr,
+    return requires(T obj, tombstone t, const dht::decorated_key& dk, static_row sr,
         clustering_row cr, range_tombstone_begin rtb, range_tombstone_end rte, bool is_alive)
     {
-        obj.consume_new_partition(pk);
+        obj.consume_new_partition(dk);
         obj.consume(t);
         obj.consume(std::move(sr), is_alive);
         obj.consume(std::move(cr), is_alive);
@@ -74,7 +74,7 @@ class compact_mutation {
     uint32_t _rows_in_current_partition;
     uint32_t _current_partition_limit;
     bool _empty_partition{};
-    const partition_key* _pk;
+    const dht::decorated_key* _dk;
     bool _has_ck_selector{};
     bool _current_tombstone_emitted{};
 private:
@@ -85,7 +85,7 @@ private:
     void partition_is_not_empty() {
         if (_empty_partition) {
             _empty_partition = false;
-            _consumer.consume_new_partition(*_pk);
+            _consumer.consume_new_partition(*_dk);
             auto pt = _partition_tombstone;
             if (!can_purge_tombstone(pt)) {
                 _consumer.consume(pt);
@@ -109,8 +109,9 @@ public:
         , _consumer(std::move(consumer))
     { }
 
-    stop_iteration consume_new_partition(const partition_key& pk) {
-        _pk = &pk;
+    void consume_new_partition(const dht::decorated_key& dk) {
+        auto& pk = dk.key();
+        _dk = &dk;
         _has_ck_selector = has_ck_selector(_slice.row_ranges(_schema, pk));
         _empty_partition = true;
         _rows_in_current_partition = 0;
@@ -118,7 +119,6 @@ public:
         _current_tombstone = { };
         _partition_tombstone = { };
         _current_partition_limit = std::min(_row_limit, _partition_row_limit);
-        return stop_iteration::no;
     }
 
     void consume(tombstone t) {
