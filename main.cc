@@ -290,10 +290,12 @@ int main(int ac, char** av) {
 
     auto cfg = make_lw_shared<db::config>();
     bool help_loggers = false;
+    bool help_version = false;
     cfg->add_options(opt_add)
         // TODO : default, always read?
         ("options-file", bpo::value<sstring>(), "configuration file (i.e. <SCYLLA_HOME>/conf/scylla.yaml)")
         ("help-loggers", bpo::bool_switch(&help_loggers), "print a list of logger names and exit")
+        ("version", bpo::bool_switch(&help_version), "print version number and exit")
         ;
 
     distributed<database> db;
@@ -305,6 +307,11 @@ int main(int ac, char** av) {
     directories dirs;
 
     return app.run_deprecated(ac, av, [&] {
+        if (help_version) {
+            print("%s\n", scylla_version());
+            engine().exit(0);
+            return make_ready_future<>();
+        }
         if (help_loggers) {
             do_help_loggers();
             engine().exit(1);
