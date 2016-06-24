@@ -933,7 +933,8 @@ SEASTAR_TEST_CASE(test_functions) {
                 std::vector<bytes_opt> res;
                 virtual void visit(const result_message::void_message&) override { throw "bad"; }
                 virtual void visit(const result_message::set_keyspace&) override { throw "bad"; }
-                virtual void visit(const result_message::prepared&) override { throw "bad"; }
+                virtual void visit(const result_message::prepared::cql&) override { throw "bad"; }
+                virtual void visit(const result_message::prepared::thrift&) override { throw "bad"; }
                 virtual void visit(const result_message::schema_change&) override { throw "bad"; }
                 virtual void visit(const result_message::rows& rows) override {
                     BOOST_REQUIRE_EQUAL(rows.rs().rows().size(), 3);

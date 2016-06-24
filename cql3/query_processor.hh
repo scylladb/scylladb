@@ -121,9 +121,9 @@ private:
 #endif
 
     std::unordered_map<bytes, ::shared_ptr<statements::prepared_statement>> _prepared_statements;
+    std::unordered_map<int32_t, ::shared_ptr<statements::prepared_statement>> _thrift_prepared_statements;
     std::unordered_map<sstring, ::shared_ptr<statements::prepared_statement>> _internal_statements;
 #if 0
-    private static final ConcurrentLinkedHashMap<Integer, ParsedStatement.Prepared> thriftPreparedStatements;
 
     // A map for prepared statements used internally (which we don't want to mix with user statement, in particular we don't
     // bother with expiration on those.
@@ -221,12 +221,14 @@ public:
         return it->second;
     }
 
-#if 0
-    public ParsedStatement.Prepared getPreparedForThrift(Integer id)
-    {
-        return thriftPreparedStatements.get(id);
+    ::shared_ptr<statements::prepared_statement> get_prepared_for_thrift(int32_t id) {
+        auto it = _thrift_prepared_statements.find(id);
+        if (it == _thrift_prepared_statements.end()) {
+            return ::shared_ptr<statements::prepared_statement>{};
+        }
+        return it->second;
     }
-
+#if 0
     public static void validateKey(ByteBuffer key) throws InvalidRequestException
     {
         if (key == null || key.remaining() == 0)
@@ -431,14 +433,8 @@ public:
     prepare(const std::experimental::string_view& query_string, const service::client_state& client_state, bool for_thrift);
 
     static bytes compute_id(const std::experimental::string_view& query_string, const sstring& keyspace);
+    static int32_t compute_thrift_id(const std::experimental::string_view& query_string, const sstring& keyspace);
 
-#if 0
-    private static Integer computeThriftId(String queryString, String keyspace)
-    {
-        String toHash = keyspace == null ? queryString : keyspace + queryString;
-        return toHash.hashCode();
-    }
-#endif
 private:
     ::shared_ptr<transport::messages::result_message::prepared>
     get_stored_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, bool for_thrift);
@@ -446,7 +442,26 @@ private:
     future<::shared_ptr<transport::messages::result_message::prepared>>
     store_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, ::shared_ptr<statements::prepared_statement> prepared, bool for_thrift);
 
-    void invalidate_prepared_statement(bytes statement_id);
+    // Erases the statements for which filter returns true.
+    template <typename Pred>
+    void invalidate_prepared_statements(Pred filter) {
+        static_assert(std::is_same<bool, std::result_of_t<Pred(::shared_ptr<cql_statement>)>>::value,
+                      "bad Pred signature");
+        for (auto it = _prepared_statements.begin(); it != _prepared_statements.end(); ) {
+            if (filter(it->second->statement)) {
+                it = _prepared_statements.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        for (auto it = _thrift_prepared_statements.begin(); it != _thrift_prepared_statements.end(); ) {
+            if (filter(it->second->statement)) {
+                it = _thrift_prepared_statements.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
 
 #if 0
     public ResultMessage processPrepared(CQLStatement statement, QueryState queryState, QueryOptions options)

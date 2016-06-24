@@ -632,7 +632,10 @@ public:
         virtual void visit(const ::transport::messages::result_message::set_keyspace& m) override {
             _result.__set_type(CqlResultType::VOID);
         }
-        virtual void visit(const ::transport::messages::result_message::prepared& m) override {
+        virtual void visit(const ::transport::messages::result_message::prepared::cql& m) override {
+            throw make_exception<InvalidRequestException>("Cannot convert prepared query result to CqlResult");
+        }
+        virtual void visit(const ::transport::messages::result_message::prepared::thrift& m) override {
             throw make_exception<InvalidRequestException>("Cannot convert prepared query result to CqlResult");
         }
         virtual void visit(const ::transport::messages::result_message::schema_change& m) override {

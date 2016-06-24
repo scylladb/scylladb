@@ -998,7 +998,7 @@ shared_ptr<cql_server::response> cql_server::connection::make_supported(int16_t 
     return response;
 }
 
-class cql_server::fmt_visitor : public messages::result_message::visitor {
+class cql_server::fmt_visitor : public messages::result_message::visitor_base {
 private:
     uint8_t _version;
     shared_ptr<cql_server::response> _response;
@@ -1017,7 +1017,7 @@ public:
         _response->write_string(m.get_keyspace());
     }
 
-    virtual void visit(const messages::result_message::prepared& m) override {
+    virtual void visit(const messages::result_message::prepared::cql& m) override {
         auto prepared = m.get_prepared();
         _response->write_int(0x0004);
         _response->write_short_bytes(m.get_id());
