@@ -712,9 +712,28 @@ public:
     }
 
     void execute_prepared_cql3_query(tcxx::function<void(CqlResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const int32_t itemId, const std::vector<std::string> & values, const ConsistencyLevel::type consistency) {
-        CqlResult _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return with_exn_cob(std::move(exn_cob), [&] {
+            auto prepared = _query_processor.local().get_prepared_for_thrift(itemId);
+            if (!prepared) {
+                throw make_exception<InvalidRequestException>("Prepared query with id %d not found", itemId);
+            }
+            auto stmt = prepared->statement;
+            if (stmt->get_bound_terms() != values.size()) {
+                throw make_exception<InvalidRequestException>("Wrong number of values specified. Expected %d, got %d.", stmt->get_bound_terms(), values.size());
+            }
+            std::vector<bytes_opt> bytes_values;
+            std::transform(values.begin(), values.end(), std::back_inserter(bytes_values), [](auto&& s) {
+                return to_bytes(s);
+            });
+            auto opts = std::make_unique<cql3::query_options>(cl_from_thrift(consistency), stdx::nullopt, std::move(bytes_values),
+                            false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
+            auto f = _query_processor.local().process_statement(stmt, _query_state, *opts);
+            return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {
+                cql3_result_visitor visitor;
+                ret->accept(visitor);
+                return cob(visitor.result());
+            });
+        });
     }
 
     void set_cql_version(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& version) {
