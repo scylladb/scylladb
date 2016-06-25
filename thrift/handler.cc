@@ -668,10 +668,41 @@ public:
         return pass_unimplemented(exn_cob);
     }
 
+    class prepared_result_visitor final : public ::transport::messages::result_message::visitor_base {
+        CqlPreparedResult _result;
+    public:
+        const CqlPreparedResult& result() const {
+            return _result;
+        }
+        virtual void visit(const ::transport::messages::result_message::prepared::cql& m) override {
+            throw std::runtime_error("Unexpected result message type.");
+        }
+        virtual void visit(const ::transport::messages::result_message::prepared::thrift& m) override {
+            _result.__set_itemId(m.get_id());
+            auto& names = m.metadata()->names();
+            _result.__set_count(names.size());
+            std::vector<std::string> variable_types;
+            std::vector<std::string> variable_names;
+            for (auto csp : names) {
+                variable_types.emplace_back(csp->type->name());
+                variable_names.emplace_back(csp->name->to_string());
+            }
+            _result.__set_variable_types(std::move(variable_types));
+            _result.__set_variable_names(std::move(variable_names));
+        }
+    };
+
     void prepare_cql3_query(tcxx::function<void(CqlPreparedResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression) {
-        CqlPreparedResult _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return with_exn_cob(std::move(exn_cob), [&] {
+            if (compression != Compression::type::NONE) {
+                throw make_exception<InvalidRequestException>("Compressed query strings are not supported");
+            }
+            return _query_processor.local().prepare(query, _query_state).then([cob = std::move(cob)](auto&& stmt) {
+                prepared_result_visitor visitor;
+                stmt->accept(visitor);
+                cob(visitor.result());
+            });
+        });
     }
 
     void execute_prepared_cql_query(tcxx::function<void(CqlResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const int32_t itemId, const std::vector<std::string> & values) {
