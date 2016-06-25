@@ -174,7 +174,6 @@ std::string bytes_to_string(bytes_view v) {
 class thrift_handler : public CassandraCobSvIf {
     distributed<database>& _db;
     distributed<cql3::query_processor>& _query_processor;
-    sstring _cql_version;
     service::query_state _query_state;
 public:
     explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp)
@@ -615,9 +614,7 @@ public:
     }
 
     void execute_cql_query(tcxx::function<void(CqlResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression) {
-        CqlResult _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        throw make_exception<InvalidRequestException>("CQL2 is not supported");
     }
 
     class cql3_result_visitor final : public ::transport::messages::result_message::visitor {
@@ -663,9 +660,7 @@ public:
     }
 
     void prepare_cql_query(tcxx::function<void(CqlPreparedResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression) {
-        CqlPreparedResult _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        throw make_exception<InvalidRequestException>("CQL2 is not supported");
     }
 
     class prepared_result_visitor final : public ::transport::messages::result_message::visitor_base {
@@ -706,9 +701,7 @@ public:
     }
 
     void execute_prepared_cql_query(tcxx::function<void(CqlResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const int32_t itemId, const std::vector<std::string> & values) {
-        CqlResult _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        throw make_exception<InvalidRequestException>("CQL2 is not supported");
     }
 
     void execute_prepared_cql3_query(tcxx::function<void(CqlResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const int32_t itemId, const std::vector<std::string> & values, const ConsistencyLevel::type consistency) {
@@ -737,7 +730,7 @@ public:
     }
 
     void set_cql_version(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& version) {
-        _cql_version = version;
+        // No-op.
         cob();
     }
 
