@@ -1188,16 +1188,20 @@ void db::commitlog::segment_manager::discard_completed_segments(
     discard_unused_segments();
 }
 
-std::ostream& db::operator<<(std::ostream& out, const db::commitlog::segment& s) {
+namespace db {
+
+std::ostream& operator<<(std::ostream& out, const db::commitlog::segment& s) {
     return out << s._desc.filename();
 }
 
-std::ostream& db::operator<<(std::ostream& out, const db::commitlog::segment::cf_mark& m) {
+std::ostream& operator<<(std::ostream& out, const db::commitlog::segment::cf_mark& m) {
     return out << (m.s._cf_dirty | boost::adaptors::map_keys);
 }
 
-std::ostream& db::operator<<(std::ostream& out, const db::replay_position& p) {
+std::ostream& operator<<(std::ostream& out, const db::replay_position& p) {
     return out << "{" << p.shard_id() << ", " << p.base_id() << ", " << p.pos << "}";
+}
+
 }
 
 void db::commitlog::segment_manager::discard_unused_segments() {
