@@ -24,7 +24,7 @@
 
 range_tombstone_list::range_tombstone_list(const range_tombstone_list& x)
         : _tombstones(x._tombstones.value_comp()) {
-    auto cloner = [] (const auto& x) {
+    auto cloner = [] (const range_tombstone& x) {
         return current_allocator().construct<range_tombstone>(x);
     };
     _tombstones.clone_from(x._tombstones, cloner, current_deleter<range_tombstone>());
