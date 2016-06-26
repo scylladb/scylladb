@@ -83,7 +83,6 @@ public:
     explicit query_options(db::consistency_level consistency,
                            std::experimental::optional<std::vector<sstring_view>> names,
                            std::vector<bytes_opt> values,
-                           std::vector<bytes_view_opt> value_views,
                            bool skip_metadata,
                            specific_options options,
                            cql_serialization_format sf);
@@ -132,6 +131,8 @@ public:
     const specific_options& get_specific_options() const;
     const query_options& for_statement(size_t i) const;
     void prepare(const std::vector<::shared_ptr<column_specification>>& specs);
+private:
+    void fill_value_views();
 };
 
 }
