@@ -42,6 +42,7 @@
 #include "schema_builder.hh"
 #include "thrift/thrift_validation.hh"
 #include "service/storage_service.hh"
+#include "service/query_state.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -155,10 +156,18 @@ std::string bytes_to_string(bytes_view v) {
 
 class thrift_handler : public CassandraCobSvIf {
     distributed<database>& _db;
-    sstring _ks_name;
     sstring _cql_version;
+    service::query_state _query_state;
 public:
-    explicit thrift_handler(distributed<database>& db) : _db(db) {}
+    explicit thrift_handler(distributed<database>& db)
+        : _db(db)
+        , _query_state(service::client_state::for_external_calls())
+    { }
+
+    const sstring& current_keyspace() const {
+        return _query_state.get_client_state().get_raw_keyspace();
+    }
+
     void login(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const AuthenticationRequest& auth_request) {
         // FIXME: implement
         return pass_unimplemented(exn_cob);
@@ -166,11 +175,7 @@ public:
 
     void set_keyspace(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
         with_cob(std::move(cob), std::move(exn_cob), [&] {
-            if (!_db.local().has_keyspace(keyspace)) {
-                throw make_exception<InvalidRequestException>("keyspace %s does not exist", keyspace);
-            } else {
-                _ks_name = keyspace;
-            }
+            _query_state.get_client_state().set_keyspace(_db, keyspace);
         });
     }
 
@@ -184,7 +189,7 @@ public:
         with_cob_dereference(std::move(cob), std::move(exn_cob), [&] {
             schema_ptr schema;
             try {
-                schema = _db.local().find_schema(_ks_name, column_parent.column_family);
+                schema = _db.local().find_schema(current_keyspace(), column_parent.column_family);
             } catch (...) {
                 throw make_exception<InvalidRequestException>("column family %s not found", column_parent.column_family);
             }
@@ -199,7 +204,7 @@ public:
                 if (!column_parent.super_column.empty()) {
                     throw unimplemented_exception();
                 }
-                auto& cf = lookup_column_family(_db.local(), _ks_name, column_parent.column_family);
+                auto& cf = lookup_column_family(_db.local(), current_keyspace(), column_parent.column_family);
                 if (predicate.__isset.column_names) {
                     throw unimplemented_exception();
                 } else if (predicate.__isset.slice_range) {
@@ -311,7 +316,7 @@ public:
 
     void batch_mutate(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::map<std::string, std::map<std::string, std::vector<Mutation> > > & mutation_map, const ConsistencyLevel::type consistency_level) {
         return with_cob(std::move(cob), std::move(exn_cob), [&] {
-            if (_ks_name.empty()) {
+            if (current_keyspace().empty()) {
                 throw make_exception<InvalidRequestException>("keyspace not set");
             }
             // Would like to use move_iterator below, but Mutation is filled with some const stuff.
@@ -325,7 +330,7 @@ public:
                         [this, thrift_key] (std::pair<std::string, std::vector<Mutation>> cf_mutations) {
                     sstring cf_name = cf_mutations.first;
                     const std::vector<Mutation>& mutations = cf_mutations.second;
-                    auto& cf = lookup_column_family(_db.local(), _ks_name, cf_name);
+                    auto& cf = lookup_column_family(_db.local(), current_keyspace(), cf_name);
                     auto schema = cf.schema();
                     mutation m_to_apply(key_from_thrift(schema, thrift_key), schema);
                     auto empty_clustering_key = clustering_key::make_empty();
@@ -530,8 +535,8 @@ public:
 
     void system_drop_column_family(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family) {
         return with_cob(std::move(cob), std::move(exn_cob), [&] {
-            _db.local().find_schema(_ks_name, column_family); // Throws if column family doesn't exist.
-            return service::get_local_migration_manager().announce_column_family_drop(_ks_name, column_family, false).then([this] {
+            _db.local().find_schema(current_keyspace(), column_family); // Throws if column family doesn't exist.
+            return service::get_local_migration_manager().announce_column_family_drop(current_keyspace(), column_family, false).then([this] {
                 return std::string(_db.local().get_version().to_sstring());
             });
         });
