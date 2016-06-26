@@ -43,24 +43,8 @@ public:
         tracing::begin(_trace_state_ptr, std::move(request), client);
     }
 
-    bool is_tracing() const {
-        return (bool)_trace_state_ptr;
-    }
-
-    const utils::UUID& tracing_session_id() const {
-        return _trace_state_ptr->get_session_id();
-    }
-
-    tracing::trace_type trace_type() const {
-        return _trace_state_ptr->get_type();
-    }
-
-    bool write_trace_on_close() const {
-        return _trace_state_ptr->get_write_on_close();
-    }
-
-    void trace(const sstring& message) {
-        tracing::trace(_trace_state_ptr, std::move(message));
+    const tracing::trace_state_ptr& get_trace_state() const {
+        return _trace_state_ptr;
     }
 
     client_state& get_client_state() {

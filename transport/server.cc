@@ -757,10 +757,10 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, byt
     auto& query_state = q_state->query_state;
     query_state.begin_tracing(query.to_string(), query_state.get_client_state().get_client_address());
     q_state->options = read_options(buf);
-    query_state.trace("Done reading options");
+    tracing::trace(query_state.get_trace_state(), "Done reading options");
     auto& options = *q_state->options;
     return _server._query_processor.local().process(query, query_state, options).then([this, stream, buf = std::move(buf), &query_state] (auto msg) {
-         query_state.trace("Done processing - preparing a result");
+         tracing::trace(query_state.get_trace_state(), "Done processing - preparing a result");
          return this->make_result(stream, msg);
     }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
         /* Keep q_state alive. */
