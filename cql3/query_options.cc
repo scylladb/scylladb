@@ -204,6 +204,7 @@ void query_options::prepare(const std::vector<::shared_ptr<column_specification>
         }
     }
     _values = std::move(ordered_values);
+    fill_value_views();
 }
 
 void query_options::fill_value_views()
