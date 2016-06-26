@@ -45,7 +45,7 @@
 
 namespace tracing {
 
-static logging::logger logger("keyspace_based_trace_state");
+static logging::logger logger("trace_state");
 
 trace_state::~trace_state() {
     if (_tracing_began) {
