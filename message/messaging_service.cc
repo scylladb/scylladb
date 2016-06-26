@@ -775,16 +775,16 @@ future<std::vector<frozen_mutation>> messaging_service::send_migration_request(m
 }
 
 void messaging_service::register_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, frozen_mutation fm, std::vector<inet_address> forward,
-    inet_address reply_to, unsigned shard, response_id_type response_id)>&& func) {
+    inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::experimental::optional<tracing::trace_info>> trace_info)>&& func) {
     register_handler(this, net::messaging_verb::MUTATION, std::move(func));
 }
 void messaging_service::unregister_mutation() {
     _rpc->unregister_handler(net::messaging_verb::MUTATION);
 }
 future<> messaging_service::send_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
-    inet_address reply_to, unsigned shard, response_id_type response_id) {
+    inet_address reply_to, unsigned shard, response_id_type response_id, std::experimental::optional<tracing::trace_info> trace_info) {
     return send_message_oneway_timeout(this, timeout, messaging_verb::MUTATION, std::move(id), fm, std::move(forward),
-        std::move(reply_to), std::move(shard), std::move(response_id));
+        std::move(reply_to), std::move(shard), std::move(response_id), std::move(trace_info));
 }
 
 void messaging_service::register_mutation_done(std::function<future<rpc::no_wait_type> (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id)>&& func) {

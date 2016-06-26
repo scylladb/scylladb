@@ -464,11 +464,12 @@ modification_statement::execute_without_condition(distributed<service::storage_p
         db::validate_for_write(s->ks_name(), cl);
     }
 
-    return get_mutations(proxy, options, false, options.get_timestamp(qs)).then([cl, &proxy] (auto mutations) {
+    return get_mutations(proxy, options, false, options.get_timestamp(qs)).then([cl, &proxy, &qs] (auto mutations) {
         if (mutations.empty()) {
             return now();
         }
-        return proxy.local().mutate_with_triggers(std::move(mutations), cl, false);
+
+        return proxy.local().mutate_with_triggers(std::move(mutations), cl, false, qs.get_trace_state());
     });
 }
 

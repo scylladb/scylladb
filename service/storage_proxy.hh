@@ -50,6 +50,7 @@
 #include "db/write_type.hh"
 #include "utils/histogram.hh"
 #include "sstables/estimated_histogram.hh"
+#include "tracing/trace_state.hh"
 
 namespace service {
 
@@ -199,9 +200,9 @@ private:
     future<> response_wait(response_id_type id, clock_type::time_point timeout);
     abstract_write_response_handler& get_write_response_handler(storage_proxy::response_id_type id);
     response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, std::unordered_set<gms::inet_address> targets,
-            const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address>);
-    response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type);
-    response_id_type create_write_response_handler(const std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>&, db::consistency_level cl, db::write_type type);
+            const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address>, tracing::trace_state_ptr tr_state = nullptr);
+    response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state = nullptr);
+    response_id_type create_write_response_handler(const std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state = nullptr);
     void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
     template<typename Range>
     size_t hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets) noexcept;
@@ -231,15 +232,15 @@ private:
     template<typename Range, typename CreateWriteHandler>
     future<std::vector<unique_response_handler>> mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler handler);
     template<typename Range>
-    future<std::vector<unique_response_handler>> mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type);
+    future<std::vector<unique_response_handler>> mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state = nullptr);
     future<> mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl);
-    future<> mutate_end(future<> mutate_result, utils::latency_counter);
+    future<> mutate_end(future<> mutate_result, utils::latency_counter, tracing::trace_state_ptr trace_state = nullptr);
     future<> schedule_repair(std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>> diffs, db::consistency_level cl);
     bool need_throttle_writes() const;
     void unthrottle();
     void handle_read_error(std::exception_ptr eptr);
     template<typename Range>
-    future<> mutate_internal(Range mutations, db::consistency_level cl);
+    future<> mutate_internal(Range mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state = nullptr);
 
 public:
     storage_proxy(distributed<database>& db);
@@ -264,11 +265,12 @@ public:
     *
     * @param mutations the mutations to be applied across the replicas
     * @param consistency_level the consistency level for the operation
+    * @param tr_state trace state handle
     */
-    future<> mutate(std::vector<mutation> mutations, db::consistency_level cl);
+    future<> mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state = nullptr);
 
     future<> mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl,
-        bool should_mutate_atomically);
+        bool should_mutate_atomically, tracing::trace_state_ptr tr_state = nullptr);
 
     /**
     * See mutate. Adds additional steps before and after writing a batch.
