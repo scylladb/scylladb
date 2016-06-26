@@ -131,10 +131,10 @@ private:
     inline void trace(const char* fmt, A&&... a);
 
     template <typename... A>
-    friend void begin(trace_state_ptr& p, A&&... a);
+    friend void begin(const trace_state_ptr& p, A&&... a);
 
     template <typename... A>
-    friend void trace(trace_state_ptr& p, A&&... a);
+    friend void trace(const trace_state_ptr& p, A&&... a);
 };
 
 void trace_state::trace(sstring message) {
@@ -176,14 +176,14 @@ int trace_state::elapsed() {
 }
 
 template <typename... A>
-inline void begin(trace_state_ptr& p, A&&... a) {
+inline void begin(const trace_state_ptr& p, A&&... a) {
     if (p) {
         p->begin(std::forward<A>(a)...);
     }
 }
 
 template <typename... A>
-inline void trace(trace_state_ptr& p, A&&... a) {
+inline void trace(const trace_state_ptr& p, A&&... a) {
     if (p) {
         p->trace(std::forward<A>(a)...);
     }
