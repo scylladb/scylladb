@@ -63,14 +63,14 @@ trace_state::~trace_state() {
             tracing::get_local_tracing_instance().backend_helper().write_session_record(_session_id, _client, std::move(_params), std::move(_request), _started_at, _type, elapsed(), _ttl);
         }
 
-        tracing::get_local_tracing_instance().end_session();
+        _local_tracing_ptr->end_session();
 
         if (_write_on_close) {
-            tracing::get_local_tracing_instance().write_pending_records();
+            _local_tracing_ptr->write_pending_records();
         }
 
         // update some stats and get out...
-        auto& tracing_stats = tracing::get_local_tracing_instance().stats;
+        auto& tracing_stats = _local_tracing_ptr->stats;
 
         tracing_stats.trace_events_count += _pending_trace_events;
 

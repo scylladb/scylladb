@@ -66,6 +66,7 @@ private:
     sstring _request;
     std::unordered_map<sstring, sstring> _params;
     int _pending_trace_events = 0;
+    shared_ptr<tracing> _local_tracing_ptr;
 
 public:
     trace_state(trace_type type, bool write_on_close, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt)
@@ -74,6 +75,7 @@ public:
         , _write_on_close(write_on_close)
         , _ttl(ttl_by_type(_type))
         , _primary(!session_id)
+        , _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
     { }
 
     ~trace_state();

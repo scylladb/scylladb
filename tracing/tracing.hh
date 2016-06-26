@@ -152,7 +152,7 @@ private:
 
 using trace_state_ptr = lw_shared_ptr<trace_state>;
 
-class tracing {
+class tracing : public seastar::async_sharded_service<tracing> {
 public:
     static const gc_clock::duration write_period;
     static constexpr int max_pending_for_write_sessions = 1000;
