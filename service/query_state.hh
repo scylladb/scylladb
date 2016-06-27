@@ -36,7 +36,7 @@ private:
 public:
     query_state(client_state client_state)
         : _client_state(client_state)
-        , _trace_state_ptr(_client_state.trace_state_ptr())
+        , _trace_state_ptr(_client_state.get_trace_state())
     { }
 
     void begin_tracing(sstring request, gms::inet_address client) {

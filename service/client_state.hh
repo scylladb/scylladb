@@ -114,7 +114,7 @@ public:
         }
     }
 
-    tracing::trace_state_ptr& trace_state_ptr() {
+    tracing::trace_state_ptr& get_trace_state() {
         return _trace_state_ptr;
     }
 
