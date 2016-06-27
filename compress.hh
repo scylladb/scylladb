@@ -32,7 +32,7 @@ enum class compressor {
 
 class compression_parameters {
 public:
-    static constexpr int32_t DEFAULT_CHUNK_LENGTH = 64 * 1024;
+    static constexpr int32_t DEFAULT_CHUNK_LENGTH = 4 * 1024;
     static constexpr double DEFAULT_CRC_CHECK_CHANCE = 1.0;
 
     static constexpr auto SSTABLE_COMPRESSION = "sstable_compression";
