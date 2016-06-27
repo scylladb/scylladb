@@ -757,6 +757,7 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                                 _tracker.insert(*entry);
                                 _partitions.insert(cache_i, *entry);
                             } else {
+                                --cache_i;
                                 cache_i->set_continuous(false);
                             }
                             i = m.partitions.erase(i);
