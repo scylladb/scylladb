@@ -234,7 +234,7 @@ public:
             _sem.signal(_weight);
         }
     }
-    future<streamed_mutation_opt> operator()() override {
+    future<mutation_opt> operator()() override {
         // FIXME: we should defer freeing until the mutation is freed, perhaps,
         //        rather than just returned
         if (_waited) {
