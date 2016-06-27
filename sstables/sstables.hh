@@ -478,8 +478,8 @@ private:
     bool filter_has_key(const schema& s, const dht::decorated_key& dk) { return filter_has_key(key::from_partition_key(s, dk._key)); }
 
     // NOTE: functions used to generate sstable components.
-    void write_row_marker(file_writer& out, const rows_entry& clustered_row, const composite& clustering_key);
-    void write_clustered_row(file_writer& out, const schema& schema, const rows_entry& clustered_row);
+    void write_row_marker(file_writer& out, const row_marker& marker, const composite& clustering_key);
+    void write_clustered_row(file_writer& out, const schema& schema, const clustering_row& clustered_row);
     void write_static_row(file_writer& out, const schema& schema, const row& static_row);
     void write_cell(file_writer& out, atomic_cell_view cell);
     void write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite_marker m = composite_marker::none);
@@ -568,6 +568,7 @@ public:
     friend class test;
 
     friend class key_reader;
+    friend class components_writer;
 };
 
 using shared_sstable = lw_shared_ptr<sstable>;
@@ -645,5 +646,40 @@ void cancel_atomic_deletions();
 
 // Read toc content and delete all components found in it.
 future<> remove_by_toc_name(sstring sstable_toc_name);
+
+class components_writer {
+    sstable& _sst;
+    const schema& _schema;
+    file_writer& _out;
+    file_writer _index;
+    uint64_t _max_sstable_size;
+    bool _tombstone_written;
+    // Remember first and last keys, which we need for the summary file.
+    stdx::optional<key> _first_key, _last_key;
+    stdx::optional<key> _partition_key;
+
+    stdx::optional<range_tombstone_begin> _rt_in_progress;
+    circular_buffer<clustering_row> _deferred_rows;
+private:
+    size_t get_offset();
+    file_writer index_file_writer(sstable& sst, const io_priority_class& pc);
+    void flush_deferred_rows();
+    void ensure_tombstone_is_written() {
+        if (!_tombstone_written) {
+            consume(tombstone());
+        }
+    }
+public:
+    components_writer(sstable& sst, const schema& s, file_writer& out, uint64_t estimated_partitions, uint64_t max_sstable_size, const io_priority_class& pc);
+
+    void consume_new_partition(const dht::decorated_key& dk);
+    void consume(tombstone t);
+    stop_iteration consume(static_row&& sr);
+    stop_iteration consume(clustering_row&& cr);
+    stop_iteration consume(range_tombstone_begin&& rtb);
+    stop_iteration consume(range_tombstone_end&& rte);
+    stop_iteration consume_end_of_partition();
+    void consume_end_of_stream();
+};
 
 }

@@ -1144,8 +1144,7 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell) {
     }
 }
 
-void sstable::write_row_marker(file_writer& out, const rows_entry& clustered_row, const composite& clustering_key) {
-    const auto& marker = clustered_row.row().marker();
+void sstable::write_row_marker(file_writer& out, const row_marker& marker, const composite& clustering_key) {
     if (marker.is_missing()) {
         return;
     }
@@ -1220,19 +1219,19 @@ void sstable::write_collection(file_writer& out, const composite& clustering_key
 
 // write_datafile_clustered_row() is about writing a clustered_row to data file according to SSTables format.
 // clustered_row contains a set of cells sharing the same clustering key.
-void sstable::write_clustered_row(file_writer& out, const schema& schema, const rows_entry& clustered_row) {
+void sstable::write_clustered_row(file_writer& out, const schema& schema, const clustering_row& clustered_row) {
     auto clustering_key = composite::from_clustering_element(schema, clustered_row.key());
 
     if (schema.is_compound() && !schema.is_dense()) {
-        write_row_marker(out, clustered_row, clustering_key);
+        write_row_marker(out, clustered_row.marker(), clustering_key);
     }
     // Before writing cells, range tombstone must be written if the row has any (deletable_row::t).
-    if (clustered_row.row().deleted_at()) {
-        write_range_tombstone(out, clustering_key, clustering_key, {}, clustered_row.row().deleted_at());
+    if (clustered_row.tomb()) {
+        write_range_tombstone(out, clustering_key, clustering_key, {}, clustered_row.tomb());
     }
 
     // Write all cells of a partition's row.
-    clustered_row.row().cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
+    clustered_row.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
         auto&& column_definition = schema.regular_column_at(id);
         // non atomic cell isn't supported yet. atomic cell maps to a single trift cell.
         // non atomic cell maps to multiple trift cell, e.g. collection.
@@ -1378,123 +1377,164 @@ static void seal_statistics(statistics& s, metadata_collector& collector,
     s.hash.map[metadata_type::Stats] = offset;
 }
 
+// Returns offset into data component.
+size_t components_writer::get_offset() {
+    if (_sst.has_component(sstable::component_type::CompressionInfo)) {
+        // Variable returned by compressed_file_length() is constantly updated by compressed output stream.
+        return _sst._compression.compressed_file_length();
+    } else {
+        return _out.offset();
+    }
+}
+
+file_writer components_writer::index_file_writer(sstable& sst, const io_priority_class& pc) {
+    file_output_stream_options options;
+    options.buffer_size = sst.sstable_buffer_size;
+    options.io_priority_class = pc;
+    return file_writer(sst._index_file, std::move(options));
+}
+
+void components_writer::flush_deferred_rows() {
+    while (!_deferred_rows.empty()) {
+        _sst.write_clustered_row(_out, _schema, _deferred_rows.front());
+        _deferred_rows.pop_front();
+    }
+}
+
+components_writer::components_writer(sstable& sst, const schema& s, file_writer& out,
+                                     uint64_t estimated_partitions, uint64_t max_sstable_size,
+                                     const io_priority_class& pc)
+    : _sst(sst)
+    , _schema(s)
+    , _out(out)
+    , _index(index_file_writer(sst, pc))
+    , _max_sstable_size(max_sstable_size)
+{
+    _sst._filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance());
+
+    prepare_summary(_sst._summary, estimated_partitions, _schema.min_index_interval());
+
+    // FIXME: we may need to set repaired_at stats at this point.
+}
+
+void components_writer::consume_new_partition(const dht::decorated_key& dk) {
+    // Set current index of data to later compute row size.
+    _sst._c_stats.start_offset = _out.offset();
+
+    _partition_key = key::from_partition_key(_schema, dk.key());
+
+    maybe_add_summary_entry(_sst._summary, bytes_view(*_partition_key), _index.offset());
+    _sst._filter->add(bytes_view(*_partition_key));
+    _sst._collector.add_key(bytes_view(*_partition_key));
+
+    auto p_key = disk_string_view<uint16_t>();
+    p_key.value = bytes_view(*_partition_key);
+
+    // Write index file entry from partition key into index file.
+    write_index_entry(_index, p_key, _out.offset());
+
+    // Write partition key into data file.
+    write(_out, p_key);
+
+    _tombstone_written = false;
+}
+
+void components_writer::consume(tombstone t) {
+    deletion_time d;
+
+    if (t) {
+        d.local_deletion_time = t.deletion_time.time_since_epoch().count();
+        d.marked_for_delete_at = t.timestamp;
+
+        _sst._c_stats.tombstone_histogram.update(d.local_deletion_time);
+        _sst._c_stats.update_max_local_deletion_time(d.local_deletion_time);
+        _sst._c_stats.update_min_timestamp(d.marked_for_delete_at);
+        _sst._c_stats.update_max_timestamp(d.marked_for_delete_at);
+    } else {
+        // Default values for live, undeleted rows.
+        d.local_deletion_time = std::numeric_limits<int32_t>::max();
+        d.marked_for_delete_at = std::numeric_limits<int64_t>::min();
+    }
+    write(_out, d);
+    _tombstone_written = true;
+}
+
+stop_iteration components_writer::consume(static_row&& sr) {
+    ensure_tombstone_is_written();
+    _sst.write_static_row(_out, _schema, sr.cells());
+    return stop_iteration::no;
+}
+
+stop_iteration components_writer::consume(clustering_row&& cr) {
+    ensure_tombstone_is_written();
+    if (_rt_in_progress) {
+        _deferred_rows.push_back(std::move(cr));
+    } else {
+        _sst.write_clustered_row(_out, _schema, cr);
+    }
+    return stop_iteration::no;
+}
+
+stop_iteration components_writer::consume(range_tombstone_begin&& rtb) {
+    ensure_tombstone_is_written();
+    assert(!_rt_in_progress);
+    _rt_in_progress = std::move(rtb);
+    return stop_iteration::no;
+}
+
+stop_iteration components_writer::consume(range_tombstone_end&& rte) {
+    auto start = composite::from_clustering_element(_schema, std::move(_rt_in_progress->key()));
+    auto end = composite::from_clustering_element(_schema, std::move(rte.key()));
+    _sst.write_range_tombstone(_out, std::move(start), _rt_in_progress->kind(), std::move(end), rte.kind(), {}, _rt_in_progress->tomb());
+    _rt_in_progress = { };
+    flush_deferred_rows();
+    return stop_iteration::no;
+}
+
+stop_iteration components_writer::consume_end_of_partition() {
+    assert(!_rt_in_progress);
+    ensure_tombstone_is_written();
+    int16_t end_of_row = 0;
+    write(_out, end_of_row);
+
+    // compute size of the current row.
+    _sst._c_stats.row_size = _out.offset() - _sst._c_stats.start_offset;
+    // update is about merging column_stats with the data being stored by collector.
+    _sst._collector.update(std::move(_sst._c_stats));
+    _sst._c_stats.reset();
+
+    if (!_first_key) {
+        _first_key = *_partition_key;
+    }
+    _last_key = std::move(*_partition_key);
+
+    return get_offset() < _max_sstable_size ? stop_iteration::no : stop_iteration::yes;
+}
+
+void components_writer::consume_end_of_stream() {
+    seal_summary(_sst._summary, std::move(_first_key), std::move(_last_key)); // what if there is only one partition? what if it is empty?
+
+    _index.close().get();
+    _sst._index_file = file(); // index->close() closed _index_file
+
+    if (_sst.has_component(sstable::component_type::CompressionInfo)) {
+        _sst._collector.add_compression_ratio(_sst._compression.compressed_file_length(), _sst._compression.uncompressed_file_length());
+    }
+
+    // NOTE: Cassandra gets partition name by calling getClass().getCanonicalName() on
+    // partition class.
+    seal_statistics(_sst._statistics, _sst._collector, dht::global_partitioner().name(), _schema.bloom_filter_fp_chance());
+}
+
 ///
 ///  @param out holds an output stream to data file.
 ///
 void sstable::do_write_components(::mutation_reader mr,
         uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, file_writer& out,
         const io_priority_class& pc) {
-    file_output_stream_options options;
-    options.buffer_size = sstable_buffer_size;
-    options.io_priority_class = pc;
-    auto index = make_shared<file_writer>(_index_file, std::move(options));
 
-    auto filter_fp_chance = schema->bloom_filter_fp_chance();
-    _filter = utils::i_filter::get_filter(estimated_partitions, filter_fp_chance);
-
-    prepare_summary(_summary, estimated_partitions, schema->min_index_interval());
-
-    // FIXME: we may need to set repaired_at stats at this point.
-
-    // Remember first and last keys, which we need for the summary file.
-    std::experimental::optional<key> first_key, last_key;
-
-    // Returns offset into data component.
-    auto get_offset = [this, &out] () {
-        if (this->has_component(sstable::component_type::CompressionInfo)) {
-            // Variable returned by compressed_file_length() is constantly updated by compressed output stream.
-            return this->_compression.compressed_file_length();
-        } else {
-            return out.offset();
-        }
-    };
-
-    // Iterate through CQL partitions, then CQL rows, then CQL columns.
-    // Each mt.all_partitions() entry is a set of clustered rows sharing the same partition key.
-    while (get_offset() < max_sstable_size) {
-        mutation_opt mut = mr().then([] (auto sm) { return mutation_from_streamed_mutation(std::move(sm)); }).get0();
-        if (!mut) {
-            break;
-        }
-
-        // Set current index of data to later compute row size.
-        _c_stats.start_offset = out.offset();
-
-        auto partition_key = key::from_partition_key(*schema, mut->key());
-
-        maybe_add_summary_entry(_summary, bytes_view(partition_key), index->offset());
-        _filter->add(bytes_view(partition_key));
-        _collector.add_key(bytes_view(partition_key));
-
-        auto p_key = disk_string_view<uint16_t>();
-        p_key.value = bytes_view(partition_key);
-
-        // Write index file entry from partition key into index file.
-        write_index_entry(*index, p_key, out.offset());
-
-        // Write partition key into data file.
-        write(out, p_key);
-
-        auto tombstone = mut->partition().partition_tombstone();
-        deletion_time d;
-
-        if (tombstone) {
-            d.local_deletion_time = tombstone.deletion_time.time_since_epoch().count();
-            d.marked_for_delete_at = tombstone.timestamp;
-
-            _c_stats.tombstone_histogram.update(d.local_deletion_time);
-            _c_stats.update_max_local_deletion_time(d.local_deletion_time);
-            _c_stats.update_min_timestamp(d.marked_for_delete_at);
-            _c_stats.update_max_timestamp(d.marked_for_delete_at);
-        } else {
-            // Default values for live, undeleted rows.
-            d.local_deletion_time = std::numeric_limits<int32_t>::max();
-            d.marked_for_delete_at = std::numeric_limits<int64_t>::min();
-        }
-        write(out, d);
-
-        auto& partition = mut->partition();
-        auto& static_row = partition.static_row();
-
-        write_static_row(out, *schema, static_row);
-        for (const auto& rt: partition.row_tombstones()) {
-            auto start = composite::from_clustering_element(*schema, rt.start);
-            auto end = composite::from_clustering_element(*schema, rt.end);
-            write_range_tombstone(out, std::move(start), rt.start_kind, std::move(end), rt.end_kind, {}, rt.tomb);
-        }
-
-        // Write all CQL rows from a given mutation partition.
-        for (auto& clustered_row: partition.clustered_rows()) {
-            write_clustered_row(out, *schema, clustered_row);
-        }
-        int16_t end_of_row = 0;
-        write(out, end_of_row);
-
-        // compute size of the current row.
-        _c_stats.row_size = out.offset() - _c_stats.start_offset;
-        // update is about merging column_stats with the data being stored by collector.
-        _collector.update(std::move(_c_stats));
-        _c_stats.reset();
-
-        if (!first_key) {
-            first_key = std::move(partition_key);
-        } else {
-            last_key = std::move(partition_key);
-        }
-
-    }
-    seal_summary(_summary, std::move(first_key), std::move(last_key));
-
-    index->close().get();
-    _index_file = file(); // index->close() closed _index_file
-
-    if (has_component(sstable::component_type::CompressionInfo)) {
-        _collector.add_compression_ratio(_compression.compressed_file_length(), _compression.uncompressed_file_length());
-    }
-
-    // NOTE: Cassandra gets partition name by calling getClass().getCanonicalName() on
-    // partition class.
-    seal_statistics(_statistics, _collector, dht::global_partitioner().name(), filter_fp_chance);
+    components_writer wr(*this, *schema, out, estimated_partitions, max_sstable_size, pc);
+    consume_flattened_in_thread(mr, wr);
 }
 
 void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_partitions, schema_ptr schema,
