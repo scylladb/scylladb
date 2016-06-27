@@ -146,7 +146,7 @@ void trace_state::trace(sstring message) {
         return;
     }
 
-    _local_backend.write_event_record(_session_id, std::move(message), elapsed(), _ttl);
+    _local_backend.write_event_record(_session_id, std::move(message), elapsed(), _ttl, i_tracing_backend_helper::wall_clock::now());
     ++_pending_trace_events;
 }
 

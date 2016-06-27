@@ -191,10 +191,11 @@ void trace_keyspace_helper::write_session_record(const utils::UUID& session_id,
 void trace_keyspace_helper::write_event_record(const utils::UUID& session_id,
                                                sstring message,
                                                int elapsed,
-                                               gc_clock::duration ttl) {
+                                               gc_clock::duration ttl,
+                                               wall_clock::time_point event_time_point) {
     try {
-        _mutation_makers[session_id].second.makers.emplace_back([message = std::move(message), elapsed, ttl, this] (const utils::UUID& session_id) {
-            return make_event_mutation(session_id, message, elapsed, tracing::get_local_tracing_instance().get_thread_name(), ttl);
+        _mutation_makers[session_id].second.makers.emplace_back([message = std::move(message), elapsed, ttl, event_time_point, this] (const utils::UUID& session_id) mutable {
+            return make_event_mutation(session_id, message, elapsed, tracing::get_local_tracing_instance().get_thread_name(), ttl, event_time_point);
         });
     } catch (...) {
         // OOM: ignore
@@ -241,14 +242,15 @@ mutation trace_keyspace_helper::make_event_mutation(const utils::UUID& session_i
                                                     const sstring& message,
                                                     int elapsed,
                                                     const sstring& thread_name,
-                                                    gc_clock::duration ttl) {
+                                                    gc_clock::duration ttl,
+                                                    wall_clock::time_point event_time_point) {
     schema_ptr schema = get_schema_ptr_or_create(_events_id, EVENTS, _events_create_cql,
                                                  [this] (const schema_ptr& s) { return cache_events_table_handles(s); });
 
     auto key = partition_key::from_singular(*schema, session_id);
     auto timestamp = api::new_timestamp();
     mutation m(key, schema);
-    auto& cells = m.partition().clustered_row(clustering_key::from_singular(*schema, utils::UUID_gen::get_time_UUID())).cells();
+    auto& cells = m.partition().clustered_row(clustering_key::from_singular(*schema, utils::UUID_gen::get_time_UUID(make_monotonic_UUID_tp(event_time_point)))).cells();
 
     cells.apply(*_activity_column, atomic_cell::make_live(timestamp, utf8_type->decompose(message), ttl));
     cells.apply(*_source_column, atomic_cell::make_live(timestamp, inet_addr_type->decompose(utils::fb_utilities::get_broadcast_address().addr()), ttl));
@@ -263,6 +265,10 @@ mutation trace_keyspace_helper::make_event_mutation(const utils::UUID& session_i
 future<> trace_keyspace_helper::flush_one_session_mutations(utils::UUID session_id, std::pair<mutation_maker, events_mutation_makers>& mutation_makers) {
     return make_ready_future<>().then([this, session_id, events_makers = std::move(mutation_makers.second.makers)] {
         if (events_makers.size()) {
+            // Reset the "monotinic time point" state machine since it's
+            // relevant in a context of a single tracing session only. The
+            // events from different sessions will differ by a session UUID.
+            reset_monotonic_tp();
             logger.debug("{}: events number is {}", session_id, events_makers.size());
             mutation m((*events_makers.begin())(session_id));
             std::for_each(std::next(events_makers.begin()), events_makers.end(), [&m, &session_id] (const mutation_maker& maker) mutable { m.apply(maker(session_id)); });

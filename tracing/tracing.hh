@@ -100,6 +100,8 @@ public:
 };
 
 struct i_tracing_backend_helper {
+    using wall_clock = std::chrono::system_clock;
+
     virtual ~i_tracing_backend_helper() {}
     virtual future<> start() = 0;
     virtual future<> stop() = 0;
@@ -133,11 +135,13 @@ struct i_tracing_backend_helper {
      * @param elapsed number of microseconds passed since a beginning of a
      *                corresponding tracing session till this event
      * @param ttl TTL of the event record
+     * @param event_time_point time point when a record was taken
      */
     virtual void write_event_record(const utils::UUID& session_id,
                                     sstring message,
                                     int elapsed,
-                                    gc_clock::duration ttl) = 0;
+                                    gc_clock::duration ttl,
+                                    wall_clock::time_point event_time_point) = 0;
 
 private:
     /**
