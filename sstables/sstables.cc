@@ -1526,48 +1526,6 @@ void components_writer::consume_end_of_stream() {
     seal_statistics(_sst._statistics, _sst._collector, dht::global_partitioner().name(), _schema.bloom_filter_fp_chance());
 }
 
-///
-///  @param out holds an output stream to data file.
-///
-void sstable::do_write_components(::mutation_reader mr,
-        uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, file_writer& out,
-        const io_priority_class& pc) {
-
-    components_writer wr(*this, *schema, out, estimated_partitions, max_sstable_size, pc);
-    consume_flattened_in_thread(mr, wr);
-}
-
-void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_partitions, schema_ptr schema,
-        uint64_t max_sstable_size, const io_priority_class& pc) {
-    // CRC component must only be present when compression isn't enabled.
-    bool checksum_file = has_component(sstable::component_type::CRC);
-
-    if (checksum_file) {
-        file_output_stream_options options;
-        options.buffer_size = sstable_buffer_size;
-        options.io_priority_class = pc;
-
-        auto w = make_shared<checksummed_file_writer>(_data_file, std::move(options), checksum_file);
-        this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), max_sstable_size, *w, pc);
-        w->close().get();
-        _data_file = file(); // w->close() closed _data_file
-
-        write_digest(filename(sstable::component_type::Digest), w->full_checksum());
-        write_crc(filename(sstable::component_type::CRC), w->finalize_checksum());
-    } else {
-        file_output_stream_options options;
-        options.io_priority_class = pc;
-
-        prepare_compression(_compression, *schema);
-        auto w = make_shared<file_writer>(make_compressed_file_output_stream(_data_file, std::move(options), &_compression));
-        this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), max_sstable_size, *w, pc);
-        w->close().get();
-        _data_file = file(); // w->close() closed _data_file
-
-        write_digest(filename(sstable::component_type::Digest), _compression.full_checksum());
-    }
-}
-
 future<> sstable::write_components(memtable& mt, bool backup, const io_priority_class& pc) {
     _collector.set_replay_position(mt.replay_position());
     return write_components(mt.make_reader(mt.schema()),

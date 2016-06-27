@@ -346,12 +346,6 @@ private:
 
     size_t sstable_buffer_size = 128*1024;
 
-    void do_write_components(::mutation_reader mr,
-            uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size,
-            file_writer& out, const io_priority_class& pc);
-    void prepare_write_components(::mutation_reader mr,
-            uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size,
-            const io_priority_class& pc);
     static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
     static std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
     static std::unordered_map<component_type, sstring, enum_hash<component_type>> _component_map;
