@@ -276,13 +276,17 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
             mt->apply(m);
         }
 
-        auto make_ds = [&tracker, &mt](schema_ptr s, int& secondary_calls_count) -> mutation_source {
+        auto make_cache = [&tracker, &mt](schema_ptr s, int& secondary_calls_count) -> lw_shared_ptr<row_cache> {
             auto secondary = mutation_source([&mt, &secondary_calls_count] (schema_ptr s, const query::partition_range& range) {
                 ++secondary_calls_count;
                 return mt->as_data_source()(s, range);
             });
 
-            auto cache = make_lw_shared<row_cache>(s, secondary, mt->as_key_source(), tracker);
+            return make_lw_shared<row_cache>(s, secondary, mt->as_key_source(), tracker);
+        };
+
+        auto make_ds = [&make_cache](schema_ptr s, int& secondary_calls_count) -> mutation_source {
+            auto cache = make_cache(s, secondary_calls_count);
             return mutation_source([cache] (schema_ptr s, const query::partition_range& range) {
                 return cache->make_reader(s, range);
             });
@@ -393,6 +397,23 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
                 .produces(slice(partitions, range3))
                 .produces_end_of_stream();
             BOOST_CHECK_EQUAL( 3, secondary_calls_count);
+        }
+        {
+            int secondary_calls_count = 0;
+            auto cache = make_cache(s, secondary_calls_count);
+            auto ds = mutation_source([cache] (schema_ptr s, const query::partition_range& range) {
+                    return cache->make_reader(s, range);
+            });
+
+            test(ds, query::full_partition_range, secondary_calls_count);
+            test(ds, query::full_partition_range, secondary_calls_count);
+
+            cache->invalidate(key_after_all);
+
+            assert_that(ds(s, query::full_partition_range))
+                .produces(slice(partitions, query::full_partition_range))
+                .produces_end_of_stream();
+            BOOST_CHECK_EQUAL( 2, secondary_calls_count);
         }
     });
 }

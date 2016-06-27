@@ -793,7 +793,12 @@ void row_cache::touch(const dht::decorated_key& dk) {
 
 void row_cache::invalidate_locked(const dht::decorated_key& dk) {
     auto pos = _partitions.lower_bound(dk, cache_entry::compare(_schema));
-    if (pos != _partitions.end() && pos->key().equal(*_schema, dk)) {
+    if (pos == _partitions.end()) {
+        _partitions.rbegin()->set_continuous(false);
+    } else if (!pos->key().equal(*_schema, dk)) {
+        --pos;
+        pos->set_continuous(false);
+    } else {
         auto end = pos;
         ++end;
         auto it = _partitions.erase_and_dispose(pos, end,
