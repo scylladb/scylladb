@@ -889,7 +889,7 @@ cache_entry::cache_entry(cache_entry&& o) noexcept
     , _lru_link()
     , _cache_link()
 {
-    if (_key.has_key()) {
+    if (o._lru_link.is_linked()) {
         auto prev = o._lru_link.prev_;
         o._lru_link.unlink();
         cache_tracker::lru_type::node_algorithms::link_after(prev, _lru_link.this_ptr());
