@@ -1574,25 +1574,79 @@ future<> sstable::write_components(memtable& mt, bool backup, const io_priority_
             mt.partition_count(), mt.schema(), std::numeric_limits<uint64_t>::max(), backup, pc);
 }
 
+void sstable_writer::prepare_file_writer()
+{
+    file_output_stream_options options;
+    options.io_priority_class = _pc;
+
+    if (!_compression_enabled) {
+        options.buffer_size = _sst.sstable_buffer_size;
+        _writer = make_shared<checksummed_file_writer>(_sst._data_file, std::move(options), true);
+    } else {
+        prepare_compression(_sst._compression, _schema);
+        _writer = make_shared<file_writer>(make_compressed_file_output_stream(_sst._data_file, std::move(options), &_sst._compression));
+    }
+}
+
+void sstable_writer::finish_file_writer()
+{
+    _writer->close().get();
+    _sst._data_file = file(); // w->close() closed _data_file
+
+    if (!_compression_enabled) {
+        auto chksum_wr = static_pointer_cast<checksummed_file_writer>(_writer);
+        write_digest(_sst.filename(sstable::component_type::Digest), chksum_wr->full_checksum());
+        write_crc(_sst.filename(sstable::component_type::CRC), chksum_wr->finalize_checksum());
+    } else {
+        write_digest(_sst.filename(sstable::component_type::Digest), _sst._compression.full_checksum());
+    }
+}
+
+sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
+                               uint64_t max_sstable_size, bool backup, const io_priority_class& pc)
+    : _sst(sst)
+    , _schema(s)
+    , _pc(pc)
+    , _backup(backup)
+{
+    _sst.generate_toc(_schema.get_compressor_params().get_compressor(), _schema.bloom_filter_fp_chance());
+    _sst.write_toc(_pc);
+    _sst.create_data().get();
+    _compression_enabled = !_sst.has_component(sstable::component_type::CRC);
+    prepare_file_writer();
+    _components_writer.emplace(_sst, _schema, *_writer, estimated_partitions, max_sstable_size, _pc);
+}
+
+void sstable_writer::consume_end_of_stream()
+{
+    _components_writer->consume_end_of_stream();
+    _components_writer = stdx::nullopt;
+    finish_file_writer();
+    _sst.write_summary(_pc);
+    _sst.write_filter(_pc);
+    _sst.write_statistics(_pc);
+    // NOTE: write_compression means maybe_write_compression.
+    _sst.write_compression(_pc);
+    _sst.seal_sstable();
+
+    if (_backup) {
+        auto dir = _sst.get_dir() + "/backups/";
+        sstable_write_io_check(touch_directory, dir).get();
+        _sst.create_links(dir).get();
+    }
+}
+
+sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partitions, uint64_t max_sstable_size,
+                                   bool backup, const io_priority_class& pc)
+{
+    return sstable_writer(*this, s, estimated_partitions, max_sstable_size, backup, pc);
+}
+
 future<> sstable::write_components(::mutation_reader mr,
         uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, bool backup, const io_priority_class& pc) {
     return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), max_sstable_size, backup, &pc] () mutable {
-        generate_toc(schema->get_compressor_params().get_compressor(), schema->bloom_filter_fp_chance());
-        write_toc(pc);
-        create_data().get();
-        prepare_write_components(std::move(mr), estimated_partitions, std::move(schema), max_sstable_size, pc);
-        write_summary(pc);
-        write_filter(pc);
-        write_statistics(pc);
-        // NOTE: write_compression means maybe_write_compression.
-        write_compression(pc);
-        seal_sstable();
-
-        if (backup) {
-            auto dir = get_dir() + "/backups/";
-            sstable_write_io_check(touch_directory, dir).get();
-            create_links(dir).get();
-        }
+        auto wr = get_writer(*schema, estimated_partitions, max_sstable_size, backup, pc);
+        consume_flattened_in_thread(mr, wr);
     });
 }
 

@@ -108,6 +108,7 @@ public:
 };
 
 class key;
+class sstable_writer;
 
 using index_list = std::vector<index_entry>;
 
@@ -237,6 +238,9 @@ public:
     future<> write_components(::mutation_reader mr,
             uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, bool backup = false,
             const io_priority_class& pc = default_priority_class());
+
+    sstable_writer get_writer(const schema& s, uint64_t estimated_partitions, uint64_t max_sstable_size,
+                              bool backup = false, const io_priority_class& pc = default_priority_class());
 
     uint64_t get_estimated_key_count() const {
         return ((uint64_t)_summary.header.size_at_full_sampling + 1) *
@@ -569,6 +573,7 @@ public:
 
     friend class key_reader;
     friend class components_writer;
+    friend class sstable_writer;
 };
 
 using shared_sstable = lw_shared_ptr<sstable>;
@@ -679,6 +684,30 @@ public:
     stop_iteration consume(range_tombstone_begin&& rtb);
     stop_iteration consume(range_tombstone_end&& rte);
     stop_iteration consume_end_of_partition();
+    void consume_end_of_stream();
+};
+
+class sstable_writer {
+    sstable& _sst;
+    const schema& _schema;
+    const io_priority_class& _pc;
+    bool _backup;
+    bool _compression_enabled;
+    shared_ptr<file_writer> _writer;
+    stdx::optional<components_writer> _components_writer;
+private:
+    void prepare_file_writer();
+    void finish_file_writer();
+public:
+    sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
+                   uint64_t max_sstable_size, bool backup, const io_priority_class& pc);
+    void consume_new_partition(const dht::decorated_key& dk) { return _components_writer->consume_new_partition(dk); }
+    void consume(tombstone t) { _components_writer->consume(t); }
+    stop_iteration consume(static_row&& sr) { return _components_writer->consume(std::move(sr)); }
+    stop_iteration consume(clustering_row&& cr) { return _components_writer->consume(std::move(cr)); }
+    stop_iteration consume(range_tombstone_begin&& rtb) { return _components_writer->consume(std::move(rtb)); }
+    stop_iteration consume(range_tombstone_end&& rte) { return _components_writer->consume(std::move(rte)); }
+    stop_iteration consume_end_of_partition() { return _components_writer->consume_end_of_partition(); }
     void consume_end_of_stream();
 };
 
