@@ -140,6 +140,82 @@ class scylla_memory(gdb.Command):
                 front = int(span['link']['_next'])
             gdb.write('{index:5} {size:13} {total}\n'.format(index=index, size=(1<<index)*page_size, total=total*page_size))
 
+def seastar_memory_layout():
+    orig = gdb.selected_thread()
+    results = []
+    for t in gdb.selected_inferior().threads():
+        t.switch()
+        cpu_mem = gdb.parse_and_eval('memory::cpu_mem')
+        page_size = int(gdb.parse_and_eval('memory::page_size'))
+        total_mem = int(cpu_mem['nr_pages']) * page_size
+        start = int(cpu_mem['memory'])
+        results.append((t, start, total_mem))
+    orig.switch()
+    return results
+
+class scylla_ptr(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla ptr', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+    def invoke(self, arg, from_tty):
+        ptr = int(arg, 0)
+
+        owning_thread = None
+        for t, start, size in seastar_memory_layout():
+            if ptr >= start and ptr < start + size:
+                owning_thread = t
+                break
+
+        if not owning_thread:
+            gdb.write("Not managed by seastar\n")
+            return
+
+        msg = "thread %d" % t.num
+
+        owning_thread.switch()
+
+        cpu_mem = gdb.parse_and_eval('memory::cpu_mem')
+        page_size = int(gdb.parse_and_eval('memory::page_size'))
+        offset = ptr - int(cpu_mem['memory'])
+
+        page = cpu_mem['pages'][offset / page_size];
+        if page['free']:
+            msg += ', page is free'
+            gdb.write(msg + '\n')
+            return
+
+        pool = page['pool']
+        offset_in_span = page['offset_in_span'] * page_size + ptr % page_size
+        first_page_in_span = cpu_mem['pages'][offset / page_size - page['offset_in_span']];
+        if pool:
+            object_size = int(pool['_object_size'])
+            msg += ', small (size <= %d)' % object_size
+            offset_in_object = offset_in_span % object_size
+            free_object_ptr = gdb.lookup_type('void').pointer().pointer()
+            # pool's free list
+            next_free = pool['_free']
+            free = False
+            while next_free:
+                if ptr >= next_free and ptr < next_free + object_size:
+                    free = True
+                    break
+                next_free = next_free.reinterpret_cast(free_object_ptr).dereference()
+            if not free:
+                # span's free list
+                next_free = first_page_in_span['freelist']
+                while next_free:
+                    if ptr >= next_free and ptr < next_free + object_size:
+                        free = True
+                        break
+                    next_free = next_free.reinterpret_cast(free_object_ptr).dereference()
+            if free:
+                msg += ', free'
+            else:
+                msg += ', live (0x%x +%d)' % (ptr - offset_in_object, offset_in_object)
+        else:
+            msg += ', large'
+        gdb.write(msg + '\n')
+        return
+
 class scylla_lsa(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla lsa', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
@@ -205,5 +281,6 @@ scylla_databases()
 scylla_keyspaces()
 scylla_column_families()
 scylla_memory()
+scylla_ptr()
 scylla_lsa()
 scylla_lsa_zones()
