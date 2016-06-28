@@ -125,6 +125,14 @@ public:
         return _id;
     }
 
+    static const bytes& get_id(::shared_ptr<transport::messages::result_message::prepared> prepared) {
+        auto msg_cql = dynamic_pointer_cast<const messages::result_message::prepared::cql>(prepared);
+        if (msg_cql == nullptr) {
+            throw std::bad_cast();
+        }
+        return msg_cql->get_id();
+    }
+
     virtual void accept(result_message::visitor& v) override {
         v.visit(*this);
     }

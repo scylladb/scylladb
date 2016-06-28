@@ -40,6 +40,7 @@
 #include "net/byteorder.hh"
 #include <seastar/core/scollectd.hh>
 #include <seastar/net/byteorder.hh>
+#include <seastar/util/lazy.hh>
 
 #include "enum_set.hh"
 #include "service/query_state.hh"
@@ -464,7 +465,7 @@ future<response_type>
     auto cqlop = static_cast<cql_binary_opcode>(op);
 
     if (tracing_request != tracing_request_type::not_requested) {
-        if (cqlop == cql_binary_opcode::QUERY) {
+        if (cqlop == cql_binary_opcode::QUERY || cqlop == cql_binary_opcode::PREPARE) {
             client_state.create_tracing_session(tracing::trace_type::QUERY, tracing_request == tracing_request_type::write_on_close);
         }
     }
@@ -771,6 +772,10 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, byt
 future<response_type> cql_server::connection::process_prepare(uint16_t stream, bytes_view buf, service::client_state client_state_)
 {
     auto query = read_long_string_view(buf).to_string();
+
+    tracing::set_query(client_state_.get_trace_state(), query);
+    tracing::begin(client_state_.get_trace_state(), "Preparing CQL3 query", client_state_.get_client_address());
+
     auto cpu_id = engine().cpu_id();
     auto cpus = boost::irange(0u, smp::count);
     auto client_state = std::make_unique<service::client_state>(client_state_);
@@ -785,7 +790,11 @@ future<response_type> cql_server::connection::process_prepare(uint16_t stream, b
             return make_ready_future<>();
         }
     }).then([this, query, stream, &cs] {
-        return _server._query_processor.local().prepare(query, cs, false).then([this, stream] (auto msg) {
+        tracing::trace(cs.get_trace_state(), "Done preparing on remote shards");
+        return _server._query_processor.local().prepare(query, cs, false).then([this, stream, &cs] (auto msg) {
+            tracing::trace(cs.get_trace_state(), "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&msg] {
+                return messages::result_message::prepared::cql::get_id(std::move(msg));
+            }));
             return this->make_result(stream, msg);
         });
     }).then([client_state = std::move(client_state)] (auto&& response) {
