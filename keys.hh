@@ -322,6 +322,10 @@ public:
     size_t size(const schema& s) const {
         return std::distance(begin(s), end(s));
     }
+
+    size_t memory_usage() const {
+        return _bytes.memory_usage();
+    }
 };
 
 template <typename TopLevel, typename PrefixTopLevel>
