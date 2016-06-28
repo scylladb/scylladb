@@ -45,7 +45,7 @@
 #include "bytes.hh"
 #include "Cassandra.h"
 
-using namespace  ::org::apache::cassandra;
+using namespace ::org::apache::cassandra;
 
 #if 0
 import java.nio.ByteBuffer;
@@ -94,6 +94,7 @@ void validate_ks_def(const KsDef& ks_def);
 void validate_cf_def(const CfDef& cf_def);
 void validate_column_name(const std::string& name);
 void validate_column_names(const std::vector<std::string>& names);
+void validate_column(const Column& col, const column_definition& def);
 
 #if 0
     public static void validateKeyspace(String keyspaceName) throws KeyspaceNotDefinedException

@@ -47,7 +47,6 @@
 
 using namespace thrift;
 using namespace ::apache::thrift;
-using namespace  ::org::apache::cassandra;
 
 namespace thrift_validation {
 
@@ -109,6 +108,16 @@ void validate_column_names(const std::vector<std::string>& names) {
     for (auto&& name : names) {
         validate_column_name(name);
     }
+}
+
+void validate_column(const Column& col, const column_definition& def) {
+    if (!col.__isset.value) {
+        throw make_exception<InvalidRequestException>("Column value is required");
+    }
+    if (!col.__isset.timestamp) {
+        throw make_exception<InvalidRequestException>("Column timestamp is required");
+    }
+    def.type->validate(to_bytes_view(col.value));
 }
 
 }
