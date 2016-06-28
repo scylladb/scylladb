@@ -35,11 +35,45 @@ namespace transport {
 
 namespace messages {
 
+class result_message::prepared : public result_message {
+private:
+    ::shared_ptr<cql3::statements::prepared_statement> _prepared;
+    ::shared_ptr<cql3::prepared_metadata> _metadata;
+    ::shared_ptr<const cql3::metadata> _result_metadata;
+protected:
+    prepared(::shared_ptr<cql3::statements::prepared_statement> prepared)
+        : _prepared{prepared}
+        // FIXME: Populate partition key bind indices for prepared_metadata.
+        , _metadata{::make_shared<cql3::prepared_metadata>(prepared->bound_names, std::vector<uint16_t>())}
+        , _result_metadata{extract_result_metadata(prepared->statement)}
+    { }
+public:
+    const ::shared_ptr<cql3::statements::prepared_statement>& get_prepared() const {
+        return _prepared;
+    }
+
+    ::shared_ptr<cql3::prepared_metadata> metadata() const {
+        return _metadata;
+    }
+
+    ::shared_ptr<const cql3::metadata> result_metadata() const {
+        return _result_metadata;
+    }
+
+    class cql;
+    class thrift;
+private:
+    static ::shared_ptr<const cql3::metadata> extract_result_metadata(::shared_ptr<cql3::cql_statement> statement) {
+        return statement->get_result_metadata();
+    }
+};
+
 class result_message::visitor {
 public:
     virtual void visit(const result_message::void_message&) = 0;
     virtual void visit(const result_message::set_keyspace&) = 0;
-    virtual void visit(const result_message::prepared&) = 0;
+    virtual void visit(const result_message::prepared::cql&) = 0;
+    virtual void visit(const result_message::prepared::thrift&) = 0;
     virtual void visit(const result_message::schema_change&) = 0;
     virtual void visit(const result_message::rows&) = 0;
 };
@@ -48,7 +82,8 @@ class result_message::visitor_base : public visitor {
 public:
     void visit(const result_message::void_message&) override {};
     void visit(const result_message::set_keyspace&) override {};
-    void visit(const result_message::prepared&) override {};
+    void visit(const result_message::prepared::cql&) override {};
+    void visit(const result_message::prepared::thrift&) override {};
     void visit(const result_message::schema_change&) override {};
     void visit(const result_message::rows&) override {};
 };
@@ -77,43 +112,38 @@ public:
     }
 };
 
-class result_message::prepared : public result_message {
-private:
+
+class result_message::prepared::cql : public result_message::prepared {
     bytes _id;
-    ::shared_ptr<cql3::statements::prepared_statement> _prepared;
-    ::shared_ptr<cql3::prepared_metadata> _metadata;
-    ::shared_ptr<const cql3::metadata> _result_metadata;
 public:
-    prepared(const bytes& id, ::shared_ptr<cql3::statements::prepared_statement> prepared)
-        : _id{id}
-        , _prepared{prepared}
-        // FIXME: Populate partition key bind indices for prepared_metadata.
-        , _metadata{::make_shared<cql3::prepared_metadata>(prepared->bound_names, std::vector<uint16_t>())}
-        , _result_metadata{extract_result_metadata(prepared->statement)}
+    cql(const bytes& id, ::shared_ptr<cql3::statements::prepared_statement> prepared)
+        : result_message::prepared(prepared)
+        , _id{id}
     { }
 
     const bytes& get_id() const {
         return _id;
     }
 
-    const ::shared_ptr<cql3::statements::prepared_statement>& get_prepared() const {
-        return _prepared;
+    virtual void accept(result_message::visitor& v) override {
+        v.visit(*this);
     }
+};
 
-    ::shared_ptr<cql3::prepared_metadata> metadata() const {
-        return _metadata;
-    }
+class result_message::prepared::thrift : public result_message::prepared {
+    int32_t _id;
+public:
+    thrift(int32_t id, ::shared_ptr<cql3::statements::prepared_statement> prepared)
+        : result_message::prepared(prepared)
+        , _id{id}
+    { }
 
-    ::shared_ptr<const cql3::metadata> result_metadata() const {
-        return _result_metadata;
+    const int32_t get_id() const {
+        return _id;
     }
 
     virtual void accept(result_message::visitor& v) override {
         v.visit(*this);
-    }
-private:
-    static ::shared_ptr<const cql3::metadata> extract_result_metadata(::shared_ptr<cql3::cql_statement> statement) {
-        return statement->get_result_metadata();
     }
 };
 

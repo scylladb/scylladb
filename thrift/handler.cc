@@ -42,6 +42,8 @@
 #include "schema_builder.hh"
 #include "thrift/thrift_validation.hh"
 #include "service/storage_service.hh"
+#include "service/query_state.hh"
+#include "cql3/query_processor.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -87,6 +89,8 @@ public:
             throw NotFoundException();
         } catch (no_such_keyspace&) {
             throw NotFoundException();
+        } catch (exceptions::syntax_exception& se) {
+            throw make_exception<InvalidRequestException>("syntax error: %s", se.what());
         } catch (std::exception& e) {
             // Unexpected exception, wrap it
             throw ::apache::thrift::TException(std::string("Internal server error: ") + e.what());
@@ -149,16 +153,39 @@ with_cob(tcxx::function<void ()>&& cob,
     });
 }
 
+template <typename Func>
+void
+with_exn_cob(tcxx::function<void (::apache::thrift::TDelayedException* _throw)>&& exn_cob, Func&& func) {
+    // then_wrapped() terminates the fiber by calling one of the cob objects
+    futurize<void>::apply(func).then_wrapped([exn_cob = std::move(exn_cob)] (future<> f) {
+        try {
+            f.get();
+        } catch (...) {
+            delayed_exception_wrapper dew(std::current_exception());
+            exn_cob(&dew);
+       }
+    });
+}
+
 std::string bytes_to_string(bytes_view v) {
     return { reinterpret_cast<const char*>(v.begin()), v.size() };
 }
 
 class thrift_handler : public CassandraCobSvIf {
     distributed<database>& _db;
-    sstring _ks_name;
-    sstring _cql_version;
+    distributed<cql3::query_processor>& _query_processor;
+    service::query_state _query_state;
 public:
-    explicit thrift_handler(distributed<database>& db) : _db(db) {}
+    explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp)
+        : _db(db)
+        , _query_processor(qp)
+        , _query_state(service::client_state::for_external_thrift_calls())
+    { }
+
+    const sstring& current_keyspace() const {
+        return _query_state.get_client_state().get_raw_keyspace();
+    }
+
     void login(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const AuthenticationRequest& auth_request) {
         // FIXME: implement
         return pass_unimplemented(exn_cob);
@@ -166,11 +193,7 @@ public:
 
     void set_keyspace(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
         with_cob(std::move(cob), std::move(exn_cob), [&] {
-            if (!_db.local().has_keyspace(keyspace)) {
-                throw make_exception<InvalidRequestException>("keyspace %s does not exist", keyspace);
-            } else {
-                _ks_name = keyspace;
-            }
+            _query_state.get_client_state().set_keyspace(_db, keyspace);
         });
     }
 
@@ -184,7 +207,7 @@ public:
         with_cob_dereference(std::move(cob), std::move(exn_cob), [&] {
             schema_ptr schema;
             try {
-                schema = _db.local().find_schema(_ks_name, column_parent.column_family);
+                schema = _db.local().find_schema(current_keyspace(), column_parent.column_family);
             } catch (...) {
                 throw make_exception<InvalidRequestException>("column family %s not found", column_parent.column_family);
             }
@@ -199,7 +222,7 @@ public:
                 if (!column_parent.super_column.empty()) {
                     throw unimplemented_exception();
                 }
-                auto& cf = lookup_column_family(_db.local(), _ks_name, column_parent.column_family);
+                auto& cf = lookup_column_family(_db.local(), current_keyspace(), column_parent.column_family);
                 if (predicate.__isset.column_names) {
                     throw unimplemented_exception();
                 } else if (predicate.__isset.slice_range) {
@@ -311,7 +334,7 @@ public:
 
     void batch_mutate(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::map<std::string, std::map<std::string, std::vector<Mutation> > > & mutation_map, const ConsistencyLevel::type consistency_level) {
         return with_cob(std::move(cob), std::move(exn_cob), [&] {
-            if (_ks_name.empty()) {
+            if (current_keyspace().empty()) {
                 throw make_exception<InvalidRequestException>("keyspace not set");
             }
             // Would like to use move_iterator below, but Mutation is filled with some const stuff.
@@ -325,7 +348,7 @@ public:
                         [this, thrift_key] (std::pair<std::string, std::vector<Mutation>> cf_mutations) {
                     sstring cf_name = cf_mutations.first;
                     const std::vector<Mutation>& mutations = cf_mutations.second;
-                    auto& cf = lookup_column_family(_db.local(), _ks_name, cf_name);
+                    auto& cf = lookup_column_family(_db.local(), current_keyspace(), cf_name);
                     auto schema = cf.schema();
                     mutation m_to_apply(key_from_thrift(schema, thrift_key), schema);
                     auto empty_clustering_key = clustering_key::make_empty();
@@ -530,8 +553,8 @@ public:
 
     void system_drop_column_family(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family) {
         return with_cob(std::move(cob), std::move(exn_cob), [&] {
-            _db.local().find_schema(_ks_name, column_family); // Throws if column family doesn't exist.
-            return service::get_local_migration_manager().announce_column_family_drop(_ks_name, column_family, false).then([this] {
+            _db.local().find_schema(current_keyspace(), column_family); // Throws if column family doesn't exist.
+            return service::get_local_migration_manager().announce_column_family_drop(current_keyspace(), column_family, false).then([this] {
                 return std::string(_db.local().get_version().to_sstring());
             });
         });
@@ -591,47 +614,123 @@ public:
     }
 
     void execute_cql_query(tcxx::function<void(CqlResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression) {
-        CqlResult _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        throw make_exception<InvalidRequestException>("CQL2 is not supported");
     }
 
+    class cql3_result_visitor final : public ::transport::messages::result_message::visitor {
+        CqlResult _result;
+    public:
+        const CqlResult& result() const {
+            return _result;
+        }
+        virtual void visit(const ::transport::messages::result_message::void_message&) override {
+            _result.__set_type(CqlResultType::VOID);
+        }
+        virtual void visit(const ::transport::messages::result_message::set_keyspace& m) override {
+            _result.__set_type(CqlResultType::VOID);
+        }
+        virtual void visit(const ::transport::messages::result_message::prepared::cql& m) override {
+            throw make_exception<InvalidRequestException>("Cannot convert prepared query result to CqlResult");
+        }
+        virtual void visit(const ::transport::messages::result_message::prepared::thrift& m) override {
+            throw make_exception<InvalidRequestException>("Cannot convert prepared query result to CqlResult");
+        }
+        virtual void visit(const ::transport::messages::result_message::schema_change& m) override {
+            _result.__set_type(CqlResultType::VOID);
+        }
+        virtual void visit(const ::transport::messages::result_message::rows& m) override {
+            _result = to_thrift_result(m.rs());
+        }
+    };
+
     void execute_cql3_query(tcxx::function<void(CqlResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression, const ConsistencyLevel::type consistency) {
-        print("warning: ignoring query %s\n", query);
-        cob({});
-#if 0
-        CqlResult _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
-#endif
+        return with_exn_cob(std::move(exn_cob), [&] {
+            if (compression != Compression::type::NONE) {
+                throw make_exception<InvalidRequestException>("Compressed query strings are not supported");
+            }
+            auto opts = std::make_unique<cql3::query_options>(cl_from_thrift(consistency), stdx::nullopt, std::vector<bytes_view_opt>(),
+                            false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
+            auto f = _query_processor.local().process(query, _query_state, *opts);
+            return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {
+                cql3_result_visitor visitor;
+                ret->accept(visitor);
+                return cob(visitor.result());
+            });
+        });
     }
 
     void prepare_cql_query(tcxx::function<void(CqlPreparedResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression) {
-        CqlPreparedResult _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        throw make_exception<InvalidRequestException>("CQL2 is not supported");
     }
 
+    class prepared_result_visitor final : public ::transport::messages::result_message::visitor_base {
+        CqlPreparedResult _result;
+    public:
+        const CqlPreparedResult& result() const {
+            return _result;
+        }
+        virtual void visit(const ::transport::messages::result_message::prepared::cql& m) override {
+            throw std::runtime_error("Unexpected result message type.");
+        }
+        virtual void visit(const ::transport::messages::result_message::prepared::thrift& m) override {
+            _result.__set_itemId(m.get_id());
+            auto& names = m.metadata()->names();
+            _result.__set_count(names.size());
+            std::vector<std::string> variable_types;
+            std::vector<std::string> variable_names;
+            for (auto csp : names) {
+                variable_types.emplace_back(csp->type->name());
+                variable_names.emplace_back(csp->name->to_string());
+            }
+            _result.__set_variable_types(std::move(variable_types));
+            _result.__set_variable_names(std::move(variable_names));
+        }
+    };
+
     void prepare_cql3_query(tcxx::function<void(CqlPreparedResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression) {
-        CqlPreparedResult _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return with_exn_cob(std::move(exn_cob), [&] {
+            if (compression != Compression::type::NONE) {
+                throw make_exception<InvalidRequestException>("Compressed query strings are not supported");
+            }
+            return _query_processor.local().prepare(query, _query_state).then([cob = std::move(cob)](auto&& stmt) {
+                prepared_result_visitor visitor;
+                stmt->accept(visitor);
+                cob(visitor.result());
+            });
+        });
     }
 
     void execute_prepared_cql_query(tcxx::function<void(CqlResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const int32_t itemId, const std::vector<std::string> & values) {
-        CqlResult _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        throw make_exception<InvalidRequestException>("CQL2 is not supported");
     }
 
     void execute_prepared_cql3_query(tcxx::function<void(CqlResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const int32_t itemId, const std::vector<std::string> & values, const ConsistencyLevel::type consistency) {
-        CqlResult _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return with_exn_cob(std::move(exn_cob), [&] {
+            auto prepared = _query_processor.local().get_prepared_for_thrift(itemId);
+            if (!prepared) {
+                throw make_exception<InvalidRequestException>("Prepared query with id %d not found", itemId);
+            }
+            auto stmt = prepared->statement;
+            if (stmt->get_bound_terms() != values.size()) {
+                throw make_exception<InvalidRequestException>("Wrong number of values specified. Expected %d, got %d.", stmt->get_bound_terms(), values.size());
+            }
+            std::vector<bytes_opt> bytes_values;
+            std::transform(values.begin(), values.end(), std::back_inserter(bytes_values), [](auto&& s) {
+                return to_bytes(s);
+            });
+            auto opts = std::make_unique<cql3::query_options>(cl_from_thrift(consistency), stdx::nullopt, std::move(bytes_values),
+                            false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
+            auto f = _query_processor.local().process_statement(stmt, _query_state, *opts);
+            return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {
+                cql3_result_visitor visitor;
+                ret->accept(visitor);
+                return cob(visitor.result());
+            });
+        });
     }
 
     void set_cql_version(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& version) {
-        _cql_version = version;
+        // No-op.
         cob();
     }
 
@@ -664,6 +763,49 @@ private:
             std::move(types.begin(), types.end(), std::back_inserter(ret));
         }
         return ret;
+    }
+    static CqlResult to_thrift_result(const cql3::result_set& rs) {
+        CqlResult result;
+        result.__set_type(CqlResultType::ROWS);
+
+        constexpr static const char* utf8 = "UTF8Type";
+
+        CqlMetadata mtd;
+        std::map<std::string, std::string> name_types;
+        std::map<std::string, std::string> value_types;
+        for (auto&& c : rs.get_metadata().get_names()) {
+            auto&& name = c->name->to_string();
+            name_types.emplace(name, utf8);
+            value_types.emplace(name, c->type->name());
+        }
+        mtd.__set_name_types(name_types);
+        mtd.__set_value_types(value_types);
+        mtd.__set_default_name_type(utf8);
+        mtd.__set_default_value_type(utf8);
+        result.__set_schema(mtd);
+
+        std::vector<CqlRow> rows;
+        rows.reserve(rs.rows().size());
+        for (auto&& row : rs.rows()) {
+            std::vector<Column> columns;
+            columns.reserve(rs.get_metadata().column_count());
+            for (unsigned i = 0; i < row.size(); i++) { // iterator
+                auto& col = rs.get_metadata().get_names()[i];
+                Column c;
+                c.__set_name(col->name->to_string());
+                auto& data = row[i];
+                if (data) {
+                    c.__set_value(bytes_to_string(*data));
+                }
+                columns.emplace_back(std::move(c));
+            }
+            CqlRow r;
+            r.__set_key(std::string());
+            r.__set_columns(columns);
+            rows.emplace_back(std::move(r));
+        }
+        result.__set_rows(rows);
+        return result;
     }
     static KsDef get_keyspace_definition(const keyspace& ks) {
         auto make_options = [](auto&& m) {
@@ -862,19 +1004,34 @@ private:
         }
         return partition_key::from_single_value(*s, std::move(k));
     }
-    static bool is_dynamic(const schema& s) {
-        // FIXME: what about CFs created from CQL?
-        return s.clustering_key_size() > 0;
+    static db::consistency_level cl_from_thrift(const ConsistencyLevel::type consistency_level) {
+        switch(consistency_level) {
+        case ConsistencyLevel::type::ONE: return db::consistency_level::ONE;
+        case ConsistencyLevel::type::QUORUM: return db::consistency_level::QUORUM;
+        case ConsistencyLevel::type::LOCAL_QUORUM: return db::consistency_level::LOCAL_QUORUM;
+        case ConsistencyLevel::type::EACH_QUORUM: return db::consistency_level::EACH_QUORUM;
+        case ConsistencyLevel::type::ALL: return db::consistency_level::ALL;
+        case ConsistencyLevel::type::ANY: return db::consistency_level::ANY;
+        case ConsistencyLevel::type::TWO: return db::consistency_level::TWO;
+        case ConsistencyLevel::type::THREE: return db::consistency_level::THREE;
+        case ConsistencyLevel::type::SERIAL: return db::consistency_level::SERIAL;
+        case ConsistencyLevel::type::LOCAL_SERIAL: return db::consistency_level::LOCAL_SERIAL;
+        case ConsistencyLevel::type::LOCAL_ONE: return db::consistency_level::LOCAL_ONE;
+        default: throw make_exception<InvalidRequestException>("undefined consistency_level %s", consistency_level);
+        }
     }
 };
 
 class handler_factory : public CassandraCobSvIfFactory {
     distributed<database>& _db;
+    distributed<cql3::query_processor>& _query_processor;
 public:
-    explicit handler_factory(distributed<database>& db) : _db(db) {}
+    explicit handler_factory(distributed<database>& db,
+                             distributed<cql3::query_processor>& qp)
+        : _db(db), _query_processor(qp) {}
     typedef CassandraCobSvIf Handler;
     virtual CassandraCobSvIf* getHandler(const ::apache::thrift::TConnectionInfo& connInfo) {
-        return new thrift_handler(_db);
+        return new thrift_handler(_db, _query_processor);
     }
     virtual void releaseHandler(CassandraCobSvIf* handler) {
         delete handler;
@@ -882,6 +1039,6 @@ public:
 };
 
 std::unique_ptr<CassandraCobSvIfFactory>
-create_handler_factory(distributed<database>& db) {
-    return std::make_unique<handler_factory>(db);
+create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp) {
+    return std::make_unique<handler_factory>(db, qp);
 }

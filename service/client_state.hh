@@ -89,12 +89,12 @@ private:
     // isInternal is used to mark ClientState as used by some internal component
     // that should have an ability to modify system keyspace.
     bool _is_internal;
+    bool _is_thrift;
 
     // The biggest timestamp that was returned by getTimestamp/assigned to a query
     api::timestamp_type _last_timestamp_micros = 0;
 
     bool _dirty = false;
-    bool _thrift = false; // TODO: maybe use/set?
 
     // Address of a client
     socket_address _remote_address;
@@ -122,8 +122,9 @@ public:
         return _tracing_session_id;
     }
 
-    client_state(external_tag, const socket_address& remote_address = socket_address())
+    client_state(external_tag, const socket_address& remote_address = socket_address(), bool thrift = false)
             : _is_internal(false)
+            , _is_thrift(thrift)
             , _remote_address(remote_address) {
         if (!auth::authenticator::get().require_authentication()) {
             _user = ::make_shared<auth::authenticated_user>();
@@ -134,12 +135,12 @@ public:
         return gms::inet_address(_remote_address);
     }
 
-    client_state(internal_tag) : _keyspace("system"), _is_internal(true) {}
+    client_state(internal_tag) : _keyspace("system"), _is_internal(true), _is_thrift(false) {}
 
     void merge(const client_state& other);
 
     bool is_thrift() const {
-        return _thrift;
+        return _is_thrift;
     }
 
     bool is_internal() const {
@@ -158,6 +159,9 @@ public:
      */
     static client_state for_external_calls() {
         return client_state(external_tag());
+    }
+    static client_state for_external_thrift_calls() {
+        return client_state(external_tag(), socket_address(), true);
     }
 
     /**

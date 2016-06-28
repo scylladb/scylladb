@@ -189,19 +189,19 @@ query_processor::prepare(const std::experimental::string_view& query_string, con
 query_processor::get_stored_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, bool for_thrift)
 {
     if (for_thrift) {
-        throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
-#if 0
-        Integer thriftStatementId = computeThriftId(queryString, keyspace);
-        ParsedStatement.Prepared existing = thriftPreparedStatements.get(thriftStatementId);
-        return existing == null ? null : ResultMessage.Prepared.forThrift(thriftStatementId, existing.boundNames);
-#endif
+        auto statement_id = compute_thrift_id(query_string, keyspace);
+        auto it = _thrift_prepared_statements.find(statement_id);
+        if (it == _thrift_prepared_statements.end()) {
+            return ::shared_ptr<result_message::prepared>();
+        }
+        return ::make_shared<result_message::prepared::thrift>(statement_id, it->second);
     } else {
         auto statement_id = compute_id(query_string, keyspace);
         auto it = _prepared_statements.find(statement_id);
         if (it == _prepared_statements.end()) {
             return ::shared_ptr<result_message::prepared>();
         }
-        return ::make_shared<result_message::prepared>(statement_id, it->second);
+        return ::make_shared<result_message::prepared::cql>(statement_id, it->second);
     }
 }
 
@@ -220,23 +220,16 @@ query_processor::store_prepared_statement(const std::experimental::string_view& 
                                                         MAX_CACHE_PREPARED_MEMORY));
 #endif
     if (for_thrift) {
-        throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
-#if 0
-        Integer statementId = computeThriftId(queryString, keyspace);
-        thriftPreparedStatements.put(statementId, prepared);
-        return ResultMessage.Prepared.forThrift(statementId, prepared.boundNames);
-#endif
+        auto statement_id = compute_thrift_id(query_string, keyspace);
+        _thrift_prepared_statements.emplace(statement_id, prepared);
+        auto msg = ::make_shared<result_message::prepared::thrift>(statement_id, prepared);
+        return make_ready_future<::shared_ptr<result_message::prepared>>(std::move(msg));
     } else {
         auto statement_id = compute_id(query_string, keyspace);
         _prepared_statements.emplace(statement_id, prepared);
-        auto msg = ::make_shared<result_message::prepared>(statement_id, prepared);
+        auto msg = ::make_shared<result_message::prepared::cql>(statement_id, prepared);
         return make_ready_future<::shared_ptr<result_message::prepared>>(std::move(msg));
     }
-}
-
-void query_processor::invalidate_prepared_statement(bytes statement_id)
-{
-    _prepared_statements.erase(statement_id);
 }
 
 static bytes md5_calculate(const std::experimental::string_view& s)
@@ -248,14 +241,23 @@ static bytes md5_calculate(const std::experimental::string_view& s)
     return std::move(bytes{reinterpret_cast<const int8_t*>(digest), size});
 }
 
+static sstring hash_target(const std::experimental::string_view& query_string, const sstring& keyspace) {
+    return keyspace + query_string.to_string();
+}
+
 bytes query_processor::compute_id(const std::experimental::string_view& query_string, const sstring& keyspace)
 {
-    sstring to_hash;
-    if (!keyspace.empty()) {
-        to_hash += keyspace;
+    return md5_calculate(hash_target(query_string, keyspace));
+}
+
+int32_t query_processor::compute_thrift_id(const std::experimental::string_view& query_string, const sstring& keyspace)
+{
+    auto target = hash_target(query_string, keyspace);
+    uint32_t h = 0;
+    for (auto&& c : hash_target(query_string, keyspace)) {
+        h = 31*h + c;
     }
-    to_hash += query_string.to_string();
-    return md5_calculate(to_hash);
+    return static_cast<int32_t>(h);
 }
 
 ::shared_ptr<prepared_statement>
@@ -477,17 +479,9 @@ void query_processor::migration_subscriber::on_drop_aggregate(const sstring& ks_
 
 void query_processor::migration_subscriber::remove_invalid_prepared_statements(sstring ks_name, std::experimental::optional<sstring> cf_name)
 {
-    std::vector<bytes> invalid;
-    for (auto& kv : _qp->_prepared_statements) {
-        auto id   = kv.first;
-        auto stmt = kv.second;
-        if (should_invalidate(ks_name, cf_name, stmt->statement)) {
-            invalid.emplace_back(id);
-        }
-    }
-    for (auto& id : invalid) {
-        _qp->invalidate_prepared_statement(id);
-    }
+    _qp->invalidate_prepared_statements([&] (::shared_ptr<cql_statement> stmt) {
+        return this->should_invalidate(ks_name, cf_name, stmt);
+    });
 }
 
 bool query_processor::migration_subscriber::should_invalidate(sstring ks_name, std::experimental::optional<sstring> cf_name, ::shared_ptr<cql_statement> statement)
