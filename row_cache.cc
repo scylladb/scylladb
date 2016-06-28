@@ -438,7 +438,8 @@ class scanning_and_populating_reader final : public mutation_reader::impl{
                        after_continuous_entry_state,
                        after_not_continuous_entry_state,
                        secondary_then_primary_state> _state;
-        bool previous_entry_is_continuous(const std::experimental::optional<range_bound<dht::ring_position>>& bound_opt) {
+        // returns true if previous entry is continuous and sets _last_key_from_primary
+        bool check_previous_entry(const std::experimental::optional<range_bound<dht::ring_position>>& bound_opt) {
             if (!bound_opt) {
                 _last_key_from_primary = {_cache._partitions.begin()->key(), true};
                 _last_key_from_primary_populate_phase = _cache._populate_phaser.phase();
@@ -459,12 +460,8 @@ class scanning_and_populating_reader final : public mutation_reader::impl{
                     _last_key_from_primary_populate_phase = _cache._populate_phaser.phase();
                     return i->continuous();
                 }
-                if (i == _cache._partitions.begin()) {
-                    return false;
-                } else {
-                    --i;
-                    return i->continuous();
-                }
+                --i;
+                return i->continuous();
             });
         }
         void switch_to_end() {
@@ -542,7 +539,7 @@ class scanning_and_populating_reader final : public mutation_reader::impl{
         }
         future<streamed_mutation_opt> operator()(start_state& state) {
             return _primary().then([this] (just_cache_scanning_reader::cache_data&& data) {
-                if (previous_entry_is_continuous(_range.start())) {
+                if (check_previous_entry(_range.start())) {
                     if (!data.mut) {
                         switch_to_end();
                         return make_ready_future<streamed_mutation_opt>();

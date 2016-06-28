@@ -358,9 +358,8 @@ public:
     }
 
     // Returns -1 if smaller than keys with the same token, +1 if greater.
-    // Valid when !has_key().
     int relation_to_keys() const {
-        return static_cast<int>(_token_bound);
+        return _key ? 0 : static_cast<int>(_token_bound);
     }
 
     const std::experimental::optional<partition_key>& key() const {
