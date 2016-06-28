@@ -482,8 +482,13 @@ public:
     }
 
     void truncate(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& cfname) {
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+            if (current_keyspace().empty()) {
+                throw make_exception<InvalidRequestException>("keyspace not set");
+            }
+
+            return service::get_local_storage_proxy().truncate_blocking(current_keyspace(), cfname);
+        });
     }
 
     void get_multi_slice(tcxx::function<void(std::vector<ColumnOrSuperColumn>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const MultiSliceRequest& request) {
