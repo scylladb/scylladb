@@ -89,6 +89,10 @@ public:
     }
 
     position_in_partition position() const;
+
+    size_t memory_usage() const {
+        return _ck.memory_usage() + _cells.memory_usage();
+    }
 };
 
 class static_row {
@@ -115,6 +119,10 @@ public:
     }
 
     position_in_partition position() const;
+
+    size_t memory_usage() const {
+        return _cells.memory_usage();
+    }
 };
 
 class range_tombstone_begin {
@@ -137,6 +145,10 @@ public:
     }
 
     position_in_partition position() const;
+
+    size_t memory_usage() const {
+        return _ck.memory_usage();
+    }
 };
 
 class range_tombstone_end {
@@ -153,6 +165,10 @@ public:
     bound_view bound() const { return bound_view(_ck, _kind); }
 
     position_in_partition position() const;
+
+    size_t memory_usage() const {
+        return _ck.memory_usage();
+    }
 };
 
 class mutation_fragment {
@@ -283,6 +299,10 @@ public:
             return visitor(as_range_tombstone_end());
         }
         abort();
+    }
+
+    size_t memory_usage() const {
+        return sizeof(data) + visit([] (auto& mf) { return mf.memory_usage(); });
     }
 };
 
