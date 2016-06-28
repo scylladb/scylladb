@@ -369,6 +369,20 @@ public:
         return read_linearize();
     }
 
+    // Returns the amount of external memory used.
+    size_t memory_usage() const {
+        if (external()) {
+            size_t mem = 0;
+            blob_storage* blob = _u.ptr;
+            while (blob) {
+                mem += blob->frag_size + sizeof(blob_storage);
+                blob = blob->next;
+            }
+            return mem;
+        }
+        return 0;
+    }
+
     template <typename Func>
     friend std::result_of_t<Func()> with_linearized_managed_bytes(Func&& func);
 };
