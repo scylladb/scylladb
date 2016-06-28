@@ -135,8 +135,8 @@ public:
     int32_t received;
     int32_t block_for;
 
-    request_timeout_exception(exception_code code, db::consistency_level consistency, int32_t received, int32_t block_for) noexcept
-        : cassandra_exception{code, prepare_message("Operation timed out - received only %d responses.", received)}
+    request_timeout_exception(exception_code code, const sstring& ks, const sstring& cf, db::consistency_level consistency, int32_t received, int32_t block_for) noexcept
+        : cassandra_exception{code, prepare_message("Operation timed out for %s.%s - received only %d responses from %d CL=%s.", ks, cf, received, block_for, consistency)}
         , consistency{consistency}
         , received{received}
         , block_for{block_for}
@@ -147,16 +147,16 @@ class read_timeout_exception : public request_timeout_exception {
 public:
     bool data_present;
 
-    read_timeout_exception(db::consistency_level consistency, int32_t received, int32_t block_for, bool data_present) noexcept
-        : request_timeout_exception{exception_code::READ_TIMEOUT, consistency, received, block_for}
+    read_timeout_exception(const sstring& ks, const sstring& cf, db::consistency_level consistency, int32_t received, int32_t block_for, bool data_present) noexcept
+        : request_timeout_exception{exception_code::READ_TIMEOUT, ks, cf, consistency, received, block_for}
         , data_present{data_present}
     { }
 };
 
 struct mutation_write_timeout_exception : public request_timeout_exception {
     db::write_type type;
-    mutation_write_timeout_exception(db::consistency_level consistency, int32_t received, int32_t block_for, db::write_type type) noexcept :
-        request_timeout_exception(exception_code::WRITE_TIMEOUT, consistency, received, block_for)
+    mutation_write_timeout_exception(const sstring& ks, const sstring& cf, db::consistency_level consistency, int32_t received, int32_t block_for, db::write_type type) noexcept :
+        request_timeout_exception(exception_code::WRITE_TIMEOUT, ks, cf, consistency, received, block_for)
         , type{std::move(type)}
     { }
 };

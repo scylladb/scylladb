@@ -354,7 +354,7 @@ storage_proxy::response_id_type storage_proxy::register_response_handler(std::un
         // _cl_achieved can be modified after previous check by call to signal() above if cl == ANY
         if (!e.handler->_cl_achieved) {
             // timeout happened before cl was achieved, throw exception
-            e.handler->_ready.set_exception(mutation_write_timeout_exception(e.handler->_cl, e.handler->_cl_acks, e.handler->total_block_for(), e.handler->_type));
+            e.handler->_ready.set_exception(mutation_write_timeout_exception(e.handler->get_schema()->ks_name(), e.handler->get_schema()->cf_name(), e.handler->_cl, e.handler->_cl_acks, e.handler->total_block_for(), e.handler->_type));
         } else {
             logger.trace("Write is not acknowledged by {} replicas after achieving CL", e.handler->get_targets());
         }
@@ -1581,17 +1581,19 @@ protected:
     bool _timedout = false; // will be true if request timeouts
     timer<> _timeout;
     size_t _responses = 0;
+    schema_ptr _schema;
 
     virtual void on_timeout() {}
     virtual size_t response_count() const = 0;
 public:
-    abstract_read_resolver(db::consistency_level cl, size_t target_count, std::chrono::steady_clock::time_point timeout)
+    abstract_read_resolver(schema_ptr schema, db::consistency_level cl, size_t target_count, std::chrono::steady_clock::time_point timeout)
         : _cl(cl)
         , _targets_count(target_count)
+        , _schema(std::move(schema))
     {
         _timeout.set_callback([this] {
             _timedout = true;
-            _done_promise.set_exception(read_timeout_exception(_cl, response_count(), _targets_count, _responses != 0));
+            _done_promise.set_exception(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), _targets_count, _responses != 0));
             on_timeout();
         });
         _timeout.arm(timeout);
@@ -1630,7 +1632,7 @@ class digest_read_resolver : public abstract_read_resolver {
 
     virtual void on_timeout() override {
         if (!_cl_reported) {
-            _cl_promise.set_exception(read_timeout_exception(_cl, _cl_responses, _block_for, _data_result));
+            _cl_promise.set_exception(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _block_for, _data_result));
         }
         // we will not need them any more
         _data_result = foreign_ptr<lw_shared_ptr<query::result>>();
@@ -1640,7 +1642,7 @@ class digest_read_resolver : public abstract_read_resolver {
         return _digest_results.size();
     }
 public:
-    digest_read_resolver(db::consistency_level cl, size_t block_for, std::chrono::steady_clock::time_point timeout) : abstract_read_resolver(cl, 0, timeout), _block_for(block_for) {}
+    digest_read_resolver(schema_ptr schema, db::consistency_level cl, size_t block_for, std::chrono::steady_clock::time_point timeout) : abstract_read_resolver(std::move(schema), cl, 0, timeout), _block_for(block_for) {}
     void add_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<query::result>> result) {
         if (!_timedout) {
             // if only one target was queried digest_check() will be skipped so we can also skip digest calculation
@@ -1904,7 +1906,7 @@ private:
         return false;
     }
 public:
-    data_read_resolver(db::consistency_level cl, size_t targets_count, std::chrono::steady_clock::time_point timeout) : abstract_read_resolver(cl, targets_count, timeout) {
+    data_read_resolver(schema_ptr schema, db::consistency_level cl, size_t targets_count, std::chrono::steady_clock::time_point timeout) : abstract_read_resolver(std::move(schema), cl, targets_count, timeout) {
         _data_results.reserve(targets_count);
     }
     void add_mutate_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<reconcilable_result>> result) {
@@ -2174,7 +2176,7 @@ protected:
         return _cmd->slice.partition_row_limit();
     }
     void reconcile(db::consistency_level cl, std::chrono::steady_clock::time_point timeout, lw_shared_ptr<query::read_command> cmd) {
-        data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(cl, _targets.size(), timeout);
+        data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(_schema, cl, _targets.size(), timeout);
         auto exec = shared_from_this();
 
         make_mutation_data_requests(cmd, data_resolver, _targets.begin(), _targets.end(), timeout).finally([exec]{});
@@ -2200,7 +2202,7 @@ protected:
                             std::rethrow_exception(eptr);
                         } catch (mutation_write_timeout_exception&) {
                             // convert write error to read error
-                            _result_promise.set_exception(read_timeout_exception(_cl, _block_for - 1, _block_for, true));
+                            _result_promise.set_exception(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, _block_for - 1, _block_for, true));
                         } catch (...) {
                             _result_promise.set_exception(std::current_exception());
                         }
@@ -2238,7 +2240,7 @@ protected:
 
 public:
     virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(std::chrono::steady_clock::time_point timeout) {
-        digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_cl, _block_for, timeout);
+        digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_schema, _cl, _block_for, timeout);
         auto exec = shared_from_this();
 
         make_requests(digest_resolver, timeout).finally([exec]() {
