@@ -258,6 +258,32 @@ public:
         }
         abort();
     }
+
+    /*
+    template<typename T, typename ReturnType>
+    concept bool MutationFragmentVisitor() {
+        return requires(T t, const static_row& sr, const clustering_row& cr, const range_tombstone_begin& rtb, const range_tombstone_end& rte) {
+            { t(sr) } -> ReturnType;
+            { t(cr) } -> ReturnType;
+            { t(rtb) } -> ReturnType;
+            { t(rte) } -> ReturnType;
+        };
+    }
+    */
+    template<typename Visitor>
+    decltype(auto) visit(Visitor&& visitor) const {
+        switch (_kind) {
+        case kind::static_row:
+            return visitor(as_static_row());
+        case kind::clustering_row:
+            return visitor(as_clustering_row());
+        case kind::range_tombstone_begin:
+            return visitor(as_range_tombstone_begin());
+        case kind::range_tombstone_end:
+            return visitor(as_range_tombstone_end());
+        }
+        abort();
+    }
 };
 
 class position_in_partition {

@@ -68,33 +68,29 @@ void mutation_fragment::destroy_data() noexcept
     }
 }
 
+// C++ does not allow local classes that have template member. The rightful
+// place of this class is inside mutation_fragment::key().
+struct get_mutation_fragment_key_visitor {
+    template<typename T>
+    const clustering_key_prefix& operator()(const T& mf) { return mf.key(); }
+    const clustering_key_prefix& operator()(const static_row& sr) { abort(); }
+};
+
 const clustering_key_prefix& mutation_fragment::key() const
 {
     assert(has_key());
-    switch (_kind) {
-    case kind::clustering_row:
-        return as_clustering_row().key();
-    case kind::range_tombstone_begin:
-        return as_range_tombstone_begin().key();
-    case kind::range_tombstone_end:
-        return as_range_tombstone_end().key();
-    default:
-        abort();
-    }
+    return visit(get_mutation_fragment_key_visitor());
 }
 
 int mutation_fragment::bound_kind_weight() const {
     assert(has_key());
-    switch (_kind) {
-    case kind::clustering_row:
-        return 0;
-    case kind::range_tombstone_begin:
-        return weight(as_range_tombstone_begin().bound().kind);
-    case kind::range_tombstone_end:
-        return weight(as_range_tombstone_end().bound().kind);
-    default:
-        abort();
-    }
+    struct get_bound_kind_weight {
+        int operator()(const clustering_row&) { return 0; }
+        int operator()(const range_tombstone_begin& rtb) { return weight(rtb.kind()); }
+        int operator()(const range_tombstone_end& rte) { return weight(rte.kind()); }
+        int operator()(...) { abort(); }
+    };
+    return visit(get_bound_kind_weight());
 }
 
 void mutation_fragment::apply(const schema& s, mutation_fragment&& mf)
@@ -122,17 +118,7 @@ void mutation_fragment::apply(const schema& s, mutation_fragment&& mf)
 
 position_in_partition mutation_fragment::position() const
 {
-    switch (_kind) {
-    case kind::static_row:
-        return _data->_static_row.position();
-    case kind::clustering_row:
-        return _data->_clustering_row.position();
-    case kind::range_tombstone_begin:
-        return _data->_range_tombstone_begin.position();
-    case kind::range_tombstone_end:
-        return _data->_range_tombstone_end.position();
-    }
-    abort();
+    return visit([] (auto& mf) { return mf.position(); });
 }
 
 std::ostream& operator<<(std::ostream& os, const streamed_mutation& sm) {
