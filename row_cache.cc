@@ -131,17 +131,18 @@ cache_tracker::setup_collectd() {
 }
 
 void cache_tracker::clear() {
-    if (!_lru.empty()) {
-        cache_entry& ce = _lru.back();
-        // Find _partitions.begin()
-        auto it = row_cache::partitions_type::s_iterator_to(ce);
-        while (it->key().relation_to_keys() != -1) {
-            --it;
-        }
-        it->set_continuous(false);
-    }
     with_allocator(_region.allocator(), [this] {
-        _lru.clear_and_dispose(current_deleter<cache_entry>());
+        while (!_lru.empty()) {
+            cache_entry& ce = _lru.back();
+            auto it = row_cache::partitions_type::s_iterator_to(ce);
+            while (it->is_evictable()) {
+                cache_entry& to_remove = *it;
+                --it;
+                _lru.erase(_lru.iterator_to(to_remove));
+                current_deleter<cache_entry>()(&to_remove);
+            }
+            it->set_continuous(false);
+        }
     });
     _removals += _partitions;
     _partitions = 0;

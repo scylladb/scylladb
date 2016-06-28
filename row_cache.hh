@@ -100,6 +100,7 @@ public:
 
     cache_entry(cache_entry&&) noexcept;
 
+    bool is_evictable() { return _lru_link.is_linked(); }
     const dht::ring_position& key() const { return _key; }
     const partition_entry& partition() const { return _pe; }
     partition_entry& partition() { return _pe; }
