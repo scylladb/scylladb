@@ -39,11 +39,11 @@ public:
         , _trace_state_ptr(_client_state.get_trace_state())
     { }
 
-    void begin_tracing(sstring request, gms::inet_address client) {
-        tracing::begin(_trace_state_ptr, std::move(request), client);
+    const tracing::trace_state_ptr& get_trace_state() const {
+        return _trace_state_ptr;
     }
 
-    const tracing::trace_state_ptr& get_trace_state() const {
+    tracing::trace_state_ptr& get_trace_state() {
         return _trace_state_ptr;
     }
 
