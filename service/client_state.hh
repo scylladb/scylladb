@@ -118,6 +118,10 @@ public:
         return _trace_state_ptr;
     }
 
+    const tracing::trace_state_ptr& get_trace_state() const {
+        return _trace_state_ptr;
+    }
+
     lw_shared_ptr<utils::UUID>& tracing_session_id_ptr() {
         return _tracing_session_id;
     }
