@@ -165,7 +165,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
             logger.warn("This node was decommissioned, but overriding by operator request.");
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
         } else {
-            auto msg = sstring("This node was decommissioned and will not rejoin the ring unless cassandra.override_decommission=true has been set,"
+            auto msg = sstring("This node was decommissioned and will not rejoin the ring unless override_decommission=true has been set,"
                                "or all existing data is removed and the node is bootstrapped again");
             logger.error(msg.c_str());
             throw std::runtime_error(msg.c_str());
@@ -175,7 +175,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
         throw std::runtime_error("Cannot set both join_ring=false and attempt to replace a node");
     }
     if (get_replace_tokens().size() > 0 || get_replace_node()) {
-         throw std::runtime_error("Replace method removed; use cassandra.replace_address instead");
+         throw std::runtime_error("Replace method removed; use replace_address instead");
     }
     if (db().local().is_replacing()) {
         if (db::system_keyspace::bootstrap_complete()) {
@@ -307,7 +307,7 @@ void storage_service::join_token_ring(int delay) {
             sleep(std::chrono::seconds(1)).get();
 
             if (gms::gossiper::clk::now() > t + std::chrono::seconds(60)) {
-                throw std::runtime_error("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true");
+                throw std::runtime_error("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while consistent_rangemovement is true");
             }
 
             // Check the schema and pending range again
@@ -1305,7 +1305,7 @@ future<> storage_service::check_for_endpoint_collision() {
             auto addr = get_broadcast_address();
             if (!gossiper.is_safe_for_bootstrap(addr)) {
                 throw std::runtime_error(sprint("A node with address %s already exists, cancelling join. "
-                    "Use cassandra.replace_address if you want to replace this node.", addr));
+                    "Use replace_address if you want to replace this node.", addr));
             }
             if (dht::range_streamer::use_strict_consistency()) {
                 found_bootstrapping_node = false;
@@ -1319,7 +1319,7 @@ future<> storage_service::check_for_endpoint_collision() {
                         state == sstring(versioned_value::STATUS_LEAVING) ||
                         state == sstring(versioned_value::STATUS_MOVING)) {
                         if (gms::gossiper::clk::now() > t + std::chrono::seconds(60)) {
-                            throw std::runtime_error("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true (check_for_endpoint_collision)");
+                            throw std::runtime_error("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while consistent_rangemovement is true (check_for_endpoint_collision)");
                         } else {
                             gossiper.goto_shadow_round();
                             gossiper.reset_endpoint_state_map();
@@ -2873,7 +2873,7 @@ void storage_service::range_relocator::calculate_to_from_streams(std::unordered_
                     auto& gossiper = gms::get_local_gossiper();
                     auto state = gossiper.get_endpoint_state_for_endpoint(source_ip);
                     if (gossiper.is_enabled() && state && !state->is_alive())
-                        throw std::runtime_error(sprint("A node required to move the data consistently is down (%s).  If you wish to move the data from a potentially inconsistent replica, restart the node with -Dcassandra.consistent.rangemovement=false", source_ip));
+                        throw std::runtime_error(sprint("A node required to move the data consistently is down (%s).  If you wish to move the data from a potentially inconsistent replica, restart the node with consistent_rangemovement=false", source_ip));
                 }
             }
             // calculating endpoints to stream current ranges to if needed

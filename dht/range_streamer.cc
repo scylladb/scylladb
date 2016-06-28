@@ -195,7 +195,7 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
         auto& gossiper = gms::get_local_gossiper();
         auto source_state = gossiper.get_endpoint_state_for_endpoint(source_ip);
         if (gossiper.is_enabled() && source_state && !source_state->is_alive()) {
-            throw std::runtime_error(sprint("A node required to move the data consistently is down (%s).  If you wish to move the data from a potentially inconsistent replica, restart the node with -Dcassandra.consistent.rangemovement=false", source_ip));
+            throw std::runtime_error(sprint("A node required to move the data consistently is down (%s).  If you wish to move the data from a potentially inconsistent replica, restart the node with consistent_rangemovement=false", source_ip));
         }
     }
 
