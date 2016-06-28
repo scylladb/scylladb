@@ -245,7 +245,7 @@ public:
     }
     */
     template<typename Consumer>
-    auto consume(Consumer& consumer) && {
+    decltype(auto) consume(Consumer& consumer) && {
         switch (_kind) {
         case kind::static_row:
             return consumer.consume(std::move(_data->_static_row));
