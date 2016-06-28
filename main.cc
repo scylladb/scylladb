@@ -530,11 +530,13 @@ int main(int ac, char** av) {
             // start thse compactions now. Note we start compacting only after
             // all sstables in this CF were loaded on all shards - otherwise
             // we will have races between the compaction and loading processes
+            // We also want to trigger regular compaction on boot.
             db.invoke_on_all([&proxy] (database& db) {
                 for (auto& x : db.get_column_families()) {
                     column_family& cf = *(x.second);
                     // We start the rewrite, but do not wait for it.
                     cf.start_rewrite();
+                    cf.trigger_compaction();
                 }
             }).get();
             supervisor_notify("setting up system keyspace");
