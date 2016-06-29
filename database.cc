@@ -258,8 +258,8 @@ column_family::make_sstable_reader(schema_ptr s,
                                    const io_priority_class& pc) const {
     // restricts a reader's concurrency if the configuration specifies it
     auto restrict_reader = [&] (mutation_reader&& in) {
-        if (_config.read_concurrency_sem) {
-            return make_restricted_reader(*_config.read_concurrency_sem, 1, std::move(in));
+        if (_config.read_concurrency_config.sem) {
+            return make_restricted_reader(_config.read_concurrency_config, 1, std::move(in));
         } else {
             return std::move(in);
         }
@@ -1376,6 +1376,13 @@ database::setup_collectd() {
     _collectd.push_back(
         scollectd::add_polled_metric(scollectd::type_instance_id("database"
                 , scollectd::per_cpu_plugin_instance
+                , "total_operations", "sstable_read_queue_overloads")
+                , scollectd::make_typed(scollectd::data_type::COUNTER, _stats->sstable_read_queue_overloaded)
+    ));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
                 , "queue_length", "active_reads")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return max_concurrent_reads() - _read_concurrency_sem.current(); })
     ));
@@ -1766,7 +1773,7 @@ keyspace::make_column_family_config(const schema& s) const {
     cfg.max_streaming_memtable_size = _config.max_streaming_memtable_size;
     cfg.dirty_memory_region_group = _config.dirty_memory_region_group;
     cfg.streaming_dirty_memory_region_group = _config.streaming_dirty_memory_region_group;
-    cfg.read_concurrency_sem = _config.read_concurreny_sem;
+    cfg.read_concurrency_config = _config.read_concurrency_config;
     cfg.cf_stats = _config.cf_stats;
     cfg.enable_incremental_backups = _config.enable_incremental_backups;
 
@@ -2228,7 +2235,14 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     }
     cfg.dirty_memory_region_group = &_dirty_memory_region_group;
     cfg.streaming_dirty_memory_region_group = &_streaming_dirty_memory_region_group;
-    cfg.read_concurreny_sem = &_read_concurrency_sem;
+    cfg.read_concurrency_config.sem = &_read_concurrency_sem;
+    cfg.read_concurrency_config.timeout = _cfg->read_request_timeout_in_ms() * 1ms;
+    // Assume a queued read takes up 1kB of memory, and allow 2% of memory to be filled up with such reads.
+    cfg.read_concurrency_config.max_queue_length = memory::stats().total_memory() * 0.02 / 1000;
+    cfg.read_concurrency_config.raise_queue_overloaded_exception = [this] {
+        ++_stats->sstable_read_queue_overloaded;
+        throw std::runtime_error("sstable inactive read queue overloaded");
+    };
     cfg.cf_stats = &_cf_stats;
     cfg.enable_incremental_backups = _enable_incremental_backups;
     return cfg;

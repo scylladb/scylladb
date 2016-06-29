@@ -192,17 +192,20 @@ mutation_reader make_empty_reader() {
 
 
 class restricting_mutation_reader : public mutation_reader::impl {
-    semaphore& _sem;
+    const restricted_mutation_reader_config& _config;
     unsigned _weight = 0;
     bool _waited = false;
     mutation_reader _base;
 public:
-    restricting_mutation_reader(semaphore& sem, unsigned weight, mutation_reader&& base)
-            : _sem(sem), _weight(weight), _base(std::move(base)) {
+    restricting_mutation_reader(const restricted_mutation_reader_config& config, unsigned weight, mutation_reader&& base)
+            : _config(config), _weight(weight), _base(std::move(base)) {
+        if (_config.sem->waiters() >= _config.max_queue_length) {
+            _config.raise_queue_overloaded_exception();
+        }
     }
     ~restricting_mutation_reader() {
         if (_waited) {
-            _sem.signal(_weight);
+            _config.sem->signal(_weight);
         }
     }
     future<streamed_mutation_opt> operator()() override {
@@ -211,7 +214,10 @@ public:
         if (_waited) {
             return _base();
         }
-        return _sem.wait(_weight).then([this] {
+        auto waited = _config.timeout.count() != 0
+                ? _config.sem->wait(_config.timeout, _weight)
+                : _config.sem->wait(_weight);
+        return waited.then([this] {
             _waited = true;
             return _base();
         });
@@ -219,6 +225,6 @@ public:
 };
 
 mutation_reader
-make_restricted_reader(semaphore& sem, unsigned weight, mutation_reader&& base) {
-    return make_mutation_reader<restricting_mutation_reader>(sem, weight, std::move(base));
+make_restricted_reader(const restricted_mutation_reader_config& config, unsigned weight, mutation_reader&& base) {
+    return make_mutation_reader<restricting_mutation_reader>(config, weight, std::move(base));
 }
