@@ -168,8 +168,8 @@ public:
     uint32_t row_limit;
     gc_clock::time_point timestamp;
     std::experimental::optional<tracing::trace_info> trace_info;
-    uint32_t partition_limit;
     api::timestamp_type read_timestamp; // not serialized
+    uint32_t partition_limit;
 public:
     read_command(utils::UUID cf_id,
                  table_schema_version schema_version,
@@ -177,16 +177,16 @@ public:
                  uint32_t row_limit = max_rows,
                  gc_clock::time_point now = gc_clock::now(),
                  std::experimental::optional<tracing::trace_info> ti = std::experimental::nullopt,
-                 uint32_t partition_limit = max_partitions,
-                 api::timestamp_type rt = api::missing_timestamp)
+                 api::timestamp_type rt = api::missing_timestamp,
+                 uint32_t partition_limit = max_partitions)
         : cf_id(std::move(cf_id))
         , schema_version(std::move(schema_version))
         , slice(std::move(slice))
         , row_limit(row_limit)
         , timestamp(now)
         , trace_info(ti)
-        , partition_limit(partition_limit)
         , read_timestamp(rt)
+        , partition_limit(partition_limit)
     { }
 
     friend std::ostream& operator<<(std::ostream& out, const read_command& r);
