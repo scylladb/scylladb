@@ -467,7 +467,8 @@ future<response_type>
     if (tracing_request != tracing_request_type::not_requested) {
         if (cqlop == cql_binary_opcode::QUERY ||
             cqlop == cql_binary_opcode::PREPARE ||
-            cqlop == cql_binary_opcode::EXECUTE) {
+            cqlop == cql_binary_opcode::EXECUTE ||
+            cqlop == cql_binary_opcode::BATCH) {
             client_state.create_tracing_session(tracing::trace_type::QUERY, tracing_request == tracing_request_type::write_on_close);
         }
     }
@@ -859,6 +860,8 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
     modifications.reserve(n);
     values.reserve(n);
 
+    tracing::begin(client_state.get_trace_state(), "Execute batch of CQL3 queries", client_state.get_client_address());
+
     for ([[gnu::unused]] auto i : boost::irange(0u, n)) {
         const auto kind = read_byte(buf);
 
@@ -906,6 +909,10 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
     // #563. CQL v2 encodes query_options in v1 format for batch requests.
     q_state->options = std::make_unique<cql3::query_options>(std::move(*read_options(buf, _version < 3 ? 1 : _version)), std::move(values));
     auto& options = *q_state->options;
+
+    tracing::set_consistency_level(client_state.get_trace_state(), options.get_consistency());
+    tracing::set_optional_serial_consistency_level(client_state.get_trace_state(), options.get_serial_consistency());
+    tracing::trace(client_state.get_trace_state(), "Creating a batch statement");
 
     auto batch = ::make_shared<cql3::statements::batch_statement>(-1, cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none());
     return _server._query_processor.local().process_batch(batch, query_state, options).then([this, stream, batch] (auto msg) {

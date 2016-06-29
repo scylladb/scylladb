@@ -70,6 +70,7 @@
 #include "schema.hh"
 #include "schema_registry.hh"
 #include "utils/joinpoint.hh"
+#include <seastar/util/lazy.hh>
 
 namespace service {
 
@@ -1177,8 +1178,7 @@ storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consist
         } else {
 #endif
     if (should_mutate_atomically) {
-        // TODO: instrument this when add BATCH tracing instrumentation
-        return mutate_atomically(std::move(mutations), cl);
+        return mutate_atomically(std::move(mutations), cl, std::move(tr_state));
     }
     return mutate(std::move(mutations), cl, std::move(tr_state));
 #if 0
@@ -1196,7 +1196,7 @@ storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consist
  * @param consistency_level the consistency level for the operation
  */
 future<>
-storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl) {
+storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state) {
 
     utils::latency_counter lc;
     lc.start();
@@ -1205,15 +1205,19 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
         storage_proxy& _p;
         std::vector<mutation> _mutations;
         db::consistency_level _cl;
+        tracing::trace_state_ptr _trace_state;
 
         const utils::UUID _batch_uuid;
         const std::unordered_set<gms::inet_address> _batchlog_endpoints;
 
     public:
-        context(storage_proxy & p, std::vector<mutation>&& mutations,
-                db::consistency_level cl)
-                : _p(p), _mutations(std::move(mutations)), _cl(cl), _batch_uuid(utils::UUID_gen::get_time_UUID()),
-                  _batchlog_endpoints(
+        context(storage_proxy & p, std::vector<mutation>&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state)
+                : _p(p)
+                , _mutations(std::move(mutations))
+                , _cl(cl)
+                , _trace_state(std::move(tr_state))
+                , _batch_uuid(utils::UUID_gen::get_time_UUID())
+                , _batchlog_endpoints(
                         [this]() -> std::unordered_set<gms::inet_address> {
                             auto local_addr = utils::fb_utilities::get_broadcast_address();
                             auto topology = service::get_storage_service().local().get_token_metadata().get_topology();
@@ -1228,18 +1232,22 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                                 throw exceptions::unavailable_exception(db::consistency_level::ONE, 1, 0);
                             }
                             return chosen_endpoints;
-                        }()) {}
+                        }()) {
+                tracing::trace(_trace_state, "Created a batch context");
+                tracing::set_batchlog_endpoints(_trace_state, _batchlog_endpoints);
+        }
 
         future<> send_batchlog_mutation(mutation m, db::consistency_level cl = db::consistency_level::ONE) {
             return _p.mutate_prepare<>(std::array<mutation, 1>{std::move(m)}, cl, db::write_type::BATCH_LOG, [this] (const mutation& m, db::consistency_level cl, db::write_type type) {
                 auto& ks = _p._db.local().find_keyspace(m.schema()->ks_name());
-                return _p.create_write_response_handler(ks, cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {});
+                return _p.create_write_response_handler(ks, cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state);
             }).then([this, cl] (std::vector<unique_response_handler> ids) {
                 return _p.mutate_begin(std::move(ids), cl);
             });
         }
         future<> sync_write_to_batchlog() {
             auto m = db::get_batchlog_manager().local().get_batch_log_mutation_for(_mutations, _batch_uuid, net::messaging_service::current_version);
+            tracing::trace(_trace_state, "Sending a batchlog write mutation");
             return send_batchlog_mutation(std::move(m));
         };
         future<> async_remove_from_batchlog() {
@@ -1250,23 +1258,25 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             mutation m(key, schema);
             m.partition().apply_delete(*schema, {}, tombstone(now, gc_clock::now()));
 
+            tracing::trace(_trace_state, "Sending a batchlog remove mutation");
             return send_batchlog_mutation(std::move(m), db::consistency_level::ANY).handle_exception([] (std::exception_ptr eptr) {
                 logger.error("Failed to remove mutations from batchlog: {}", eptr);
             });
         };
 
         future<> run() {
-            return _p.mutate_prepare(_mutations, _cl, db::write_type::BATCH).then([this] (std::vector<unique_response_handler> ids) {
+            return _p.mutate_prepare(_mutations, _cl, db::write_type::BATCH, _trace_state).then([this] (std::vector<unique_response_handler> ids) {
                 return sync_write_to_batchlog().then([this, ids = std::move(ids)] () mutable {
+                    tracing::trace(_trace_state, "Sending batch mutations");
                     return _p.mutate_begin(std::move(ids), _cl);
                 }).then(std::bind(&context::async_remove_from_batchlog, this));
             });
         }
     };
 
-    auto mk_ctxt = [this] (std::vector<mutation> mutations, db::consistency_level cl) {
+    auto mk_ctxt = [this, tr_state] (std::vector<mutation> mutations, db::consistency_level cl) mutable {
       try {
-          return make_ready_future<lw_shared_ptr<context>>(make_lw_shared<context>(*this, std::move(mutations), cl));
+          return make_ready_future<lw_shared_ptr<context>>(make_lw_shared<context>(*this, std::move(mutations), cl, std::move(tr_state)));
       } catch(...) {
           return make_exception_future<lw_shared_ptr<context>>(std::current_exception());
       }
@@ -1274,8 +1284,8 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
 
     return mk_ctxt(std::move(mutations), cl).then([this] (lw_shared_ptr<context> ctxt) {
         return ctxt->run().finally([ctxt]{});
-    }).then_wrapped([p = shared_from_this(), lc] (future<> f) mutable {
-        return p->mutate_end(std::move(f), lc);
+    }).then_wrapped([p = shared_from_this(), lc, tr_state = std::move(tr_state)] (future<> f) mutable {
+        return p->mutate_end(std::move(f), lc, std::move(tr_state));
     });
 }
 

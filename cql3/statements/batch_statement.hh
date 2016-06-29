@@ -213,8 +213,8 @@ private:
             return execute_with_conditions(storage, options, query_state);
         }
 
-        return get_mutations(storage, options, local, now).then([this, &storage, &options] (std::vector<mutation> ms) {
-            return execute_without_conditions(storage, std::move(ms), options.get_consistency());
+        return get_mutations(storage, options, local, now).then([this, &storage, &options, tr_state = query_state.get_trace_state()] (std::vector<mutation> ms) mutable {
+            return execute_without_conditions(storage, std::move(ms), options.get_consistency(), std::move(tr_state));
         }).then([] {
             return make_ready_future<shared_ptr<transport::messages::result_message>>(
                     make_shared<transport::messages::result_message::void_message>());
@@ -224,7 +224,8 @@ private:
     future<> execute_without_conditions(
             distributed<service::storage_proxy>& storage,
             std::vector<mutation> mutations,
-            db::consistency_level cl) {
+            db::consistency_level cl,
+            tracing::trace_state_ptr tr_state) {
         // FIXME: do we need to do this?
 #if 0
         // Extract each collection of cfs from it's IMutation and then lazily concatenate all of them into a single Iterable.
@@ -239,7 +240,7 @@ private:
         verify_batch_size(mutations);
 
         bool mutate_atomic = _type == type::LOGGED && mutations.size() > 1;
-        return storage.local().mutate_with_triggers(std::move(mutations), cl, mutate_atomic);
+        return storage.local().mutate_with_triggers(std::move(mutations), cl, mutate_atomic, std::move(tr_state));
     }
 
     future<shared_ptr<transport::messages::result_message>> execute_with_conditions(

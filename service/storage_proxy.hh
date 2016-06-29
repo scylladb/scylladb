@@ -280,8 +280,9 @@ public:
     *
     * @param mutations the Mutations to be applied across the replicas
     * @param consistency_level the consistency level for the operation
+    * @param tr_state trace state handle
     */
-    future<> mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl);
+    future<> mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state = nullptr);
 
     /**
      * Performs the truncate operatoin, which effectively deletes all data from
