@@ -39,8 +39,8 @@ public:
         , _trace_state_ptr(_client_state.trace_state_ptr())
     { }
 
-    void begin_tracing(sstring request, gms::inet_address client, std::unordered_map<sstring, sstring> params) {
-        tracing::begin(_trace_state_ptr, std::move(request), client, std::move(params));
+    void begin_tracing(sstring request, gms::inet_address client) {
+        tracing::begin(_trace_state_ptr, std::move(request), client);
     }
 
     bool is_tracing() const {

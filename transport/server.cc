@@ -755,7 +755,7 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, byt
     auto query = read_long_string_view(buf);
     auto q_state = std::make_unique<cql_query_state>(client_state);
     auto& query_state = q_state->query_state;
-    query_state.begin_tracing(query.to_string(), query_state.get_client_state().get_client_address(), {});
+    query_state.begin_tracing(query.to_string(), query_state.get_client_state().get_client_address());
     q_state->options = read_options(buf);
     query_state.trace("Done reading options");
     auto& options = *q_state->options;

@@ -41,9 +41,11 @@
 #pragma once
 
 #include <deque>
+#include <unordered_set>
 #include "mutation.hh"
 #include "utils/UUID_gen.hh"
 #include "tracing/tracing.hh"
+#include "gms/inet_address.hh"
 
 namespace tracing {
 
@@ -64,10 +66,43 @@ private:
     std::chrono::system_clock::rep _started_at;
     gms::inet_address _client;
     sstring _request;
-    std::unordered_map<sstring, sstring> _params;
     int _pending_trace_events = 0;
     shared_ptr<tracing> _local_tracing_ptr;
     i_tracing_backend_helper& _local_backend;
+
+    struct params_values {
+        std::experimental::optional<std::unordered_set<gms::inet_address>> batchlog_endpoints;
+        std::experimental::optional<api::timestamp_type> user_timestamp;
+        std::experimental::optional<sstring> query;
+        std::experimental::optional<db::consistency_level> cl;
+        std::experimental::optional<db::consistency_level> serial_cl;
+        std::experimental::optional<int32_t> page_size;
+    };
+
+    class params_ptr {
+    private:
+        std::unique_ptr<params_values> _vals;
+
+        params_values* get_ptr_safe() {
+            if (!_vals) {
+                _vals = std::make_unique<params_values>();
+            }
+            return _vals.get();
+        }
+
+    public:
+        explicit operator bool() const {
+            return (bool)_vals;
+        }
+
+        params_values* operator->() {
+            return get_ptr_safe();
+        }
+
+        params_values& operator*() {
+            return *get_ptr_safe();
+        }
+    } _params_ptr;
 
 public:
     trace_state(trace_type type, bool write_on_close, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt)
@@ -110,13 +145,90 @@ private:
         _tracing_began = true;
     }
 
-    void begin(sstring request, gms::inet_address client, std::unordered_map<sstring, sstring> params) {
+    void begin(sstring request, gms::inet_address client) {
         begin();
         _started_at = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         _request = std::move(request);
         _client = std::move(client);
-        _params = std::move(params);
     }
+
+    /**
+     * Stores a batchlog endpoints.
+     *
+     * This value will eventually be stored in a params<string, string> map of a tracing session
+     * with a 'batchlog_endpoints' key.
+     *
+     * @param val the set of batchlog endpoints
+     */
+    void set_batchlog_endpoints(const std::unordered_set<gms::inet_address>& val) {
+        _params_ptr->batchlog_endpoints.emplace(val);
+    }
+
+    /**
+     * Stores a consistency level of a query being traced.
+     *
+     * This value will eventually be stored in a params<string, string> map of a tracing session
+     * with a 'consistency_level' key.
+     *
+     * @param val the consistency level
+     */
+    void set_consistency_level(db::consistency_level val) {
+        _params_ptr->cl.emplace(val);
+    }
+
+    /**
+     * Stores an optional serial consistency level of a query being traced.
+     *
+     * This value will eventually be stored in a params<string, string> map of a tracing session
+     * with a 'serial_consistency_level' key.
+     *
+     * @param val the optional value with a serial consistency level
+     */
+    void set_optional_serial_consistency_level(const std::experimental::optional<db::consistency_level>& val) {
+        if (val) {
+            _params_ptr->serial_cl.emplace(*val);
+        }
+    }
+
+    /**
+     * Stores a page size of a query being traced.
+     *
+     * This value will eventually be stored in a params<string, string> map of a tracing session
+     * with a 'page_size' key.
+     *
+     * @param val the PAGE size
+     */
+    void set_page_size(int32_t val) {
+        if (val > 0) {
+            _params_ptr->page_size.emplace(val);
+        }
+    }
+
+    /**
+     * Store a query string.
+     *
+     * This value will eventually be stored in a params<string, string> map of a tracing session
+     * with a 'query' key.
+     *
+     * @param val the query string
+     */
+    void set_query(const sstring& val) {
+        _params_ptr->query.emplace(val);
+    }
+
+    /**
+     * Store a user provided timestamp.
+     *
+     * This value will eventually be stored in a params<string, string> map of a tracing session
+     * with a 'user_timestamp' key.
+     *
+     * @param val the timestamp
+     */
+    void set_user_timestamp(api::timestamp_type val) {
+        _params_ptr->user_timestamp.emplace(val);
+    }
+
+    std::unordered_map<sstring, sstring> get_params();
 
     /**
      * Special case a simple string case
@@ -135,6 +247,13 @@ private:
 
     template <typename... A>
     friend void trace(const trace_state_ptr& p, A&&... a);
+
+    friend void set_page_size(const trace_state_ptr& p, int32_t val);
+    friend void set_batchlog_endpoints(const trace_state_ptr& p, const std::unordered_set<gms::inet_address>& val);
+    friend void set_consistency_level(const trace_state_ptr& p, db::consistency_level val);
+    friend void set_optional_serial_consistency_level(const trace_state_ptr& p, const std::experimental::optional<db::consistency_level>&val);
+    friend void set_query(const trace_state_ptr& p, const sstring& val);
+    friend void set_user_timestamp(const trace_state_ptr& p, api::timestamp_type val);
 };
 
 void trace_state::trace(sstring message) {
@@ -173,6 +292,42 @@ int trace_state::elapsed() {
     }
 
     return elapsed;
+}
+
+inline void set_page_size(const trace_state_ptr& p, int32_t val) {
+    if (p) {
+        p->set_page_size(val);
+    }
+}
+
+inline void set_batchlog_endpoints(const trace_state_ptr& p, const std::unordered_set<gms::inet_address>& val) {
+    if (p) {
+        p->set_batchlog_endpoints(val);
+    }
+}
+
+inline void set_consistency_level(const trace_state_ptr& p, db::consistency_level val) {
+    if (p) {
+        p->set_consistency_level(val);
+    }
+}
+
+inline void set_optional_serial_consistency_level(const trace_state_ptr& p, const std::experimental::optional<db::consistency_level>& val) {
+    if (p) {
+        p->set_optional_serial_consistency_level(val);
+    }
+}
+
+inline void set_query(const trace_state_ptr& p, const sstring& val) {
+    if (p) {
+        p->set_query(val);
+    }
+}
+
+inline void set_user_timestamp(const trace_state_ptr& p, api::timestamp_type val) {
+    if (p) {
+        p->set_user_timestamp(val);
+    }
 }
 
 template <typename... A>
