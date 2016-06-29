@@ -57,6 +57,7 @@ namespace statements {
 
 class prepared_statement {
 public:
+    sstring raw_cql_statement;
     const ::shared_ptr<cql_statement> statement;
     const std::vector<::shared_ptr<column_specification>> bound_names;
 

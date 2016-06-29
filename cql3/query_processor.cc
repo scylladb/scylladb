@@ -219,6 +219,7 @@ query_processor::store_prepared_statement(const std::experimental::string_view& 
                                                         statementSize,
                                                         MAX_CACHE_PREPARED_MEMORY));
 #endif
+    prepared->raw_cql_statement = query_string.data();
     if (for_thrift) {
         auto statement_id = compute_thrift_id(query_string, keyspace);
         _thrift_prepared_statements.emplace(statement_id, prepared);
