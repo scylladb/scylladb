@@ -204,7 +204,6 @@ fi
 if [ $ENABLE_SERVICE -eq 1 ]; then
     if [ "$ID" = "fedora" ] || [ "$ID" = "centos" ]; then
         systemctl enable scylla-server.service
-        systemctl enable scylla-jmx.service
         systemctl enable collectd.service
     fi
 fi

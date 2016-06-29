@@ -1,5 +1,6 @@
 [Unit]
 Description=Scylla Server
+Wants=scylla-jmx.service
 
 [Service]
 PermissionsStartOnly=true
