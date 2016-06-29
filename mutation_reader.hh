@@ -84,8 +84,23 @@ mutation_reader make_empty_reader();
 // Returns a reader that is lazily constructed on the first call.  Useful
 // when creating the reader involves disk I/O or a shard call
 mutation_reader make_lazy_reader(std::function<mutation_reader ()> make_reader);
-// Restricts a given `mutation_reader` to a concurrency limited by a `semaphore`.
-mutation_reader make_restricted_reader(semaphore& sem, unsigned weight, mutation_reader&& base);
+
+struct restricted_mutation_reader_config {
+    semaphore* sem = nullptr;
+    std::chrono::nanoseconds timeout = {};
+    size_t max_queue_length = std::numeric_limits<size_t>::max();
+    std::function<void ()> raise_queue_overloaded_exception = default_raise_queue_overloaded_exception;
+
+    static void default_raise_queue_overloaded_exception() {
+        throw std::runtime_error("restricted mutation reader queue overload");
+    }
+};
+
+// Restricts a given `mutation_reader` to a concurrency limited according to settings in
+// a restricted_mutation_reader_config.  These settings include a semaphore for limiting the number
+// of active concurrent readers, a timeout for inactive readers, and a maximum queue size for
+// inactive readers.
+mutation_reader make_restricted_reader(const restricted_mutation_reader_config& config, unsigned weight, mutation_reader&& base);
 
 template <typename MutationFilter>
 class filtering_reader : public mutation_reader::impl {

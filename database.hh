@@ -249,7 +249,7 @@ public:
         size_t max_streaming_memtable_size = 5'000'000;
         logalloc::region_group* dirty_memory_region_group = nullptr;
         logalloc::region_group* streaming_dirty_memory_region_group = nullptr;
-        semaphore* read_concurrency_sem = nullptr;
+        restricted_mutation_reader_config read_concurrency_config;
         ::cf_stats* cf_stats = nullptr;
     };
     struct no_commitlog {};
@@ -751,7 +751,7 @@ public:
         size_t max_streaming_memtable_size = 5'000'000;
         logalloc::region_group* dirty_memory_region_group = nullptr;
         logalloc::region_group* streaming_dirty_memory_region_group = nullptr;
-        semaphore* read_concurreny_sem = nullptr;
+        restricted_mutation_reader_config read_concurrency_config;
         ::cf_stats* cf_stats = nullptr;
     };
 private:
@@ -836,6 +836,7 @@ class database {
     struct db_stats {
         uint64_t total_writes = 0;
         uint64_t total_reads = 0;
+        uint64_t sstable_read_queue_overloaded = 0;
     };
 
     lw_shared_ptr<db_stats> _stats;
@@ -846,7 +847,9 @@ class database {
     logalloc::region_group _dirty_memory_region_group;
     logalloc::region_group _streaming_dirty_memory_region_group;
     semaphore _read_concurrency_sem{max_concurrent_reads()};
+    restricted_mutation_reader_config _read_concurrency_config;
     semaphore _system_read_concurrency_sem{max_system_concurrent_reads()};
+    restricted_mutation_reader_config _system_read_concurrency_config;
 
     std::unordered_map<sstring, keyspace> _keyspaces;
     std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
