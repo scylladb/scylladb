@@ -193,15 +193,56 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
         auto& gossiper = gms::get_local_gossiper();
         auto seeds = gms::get_local_gossiper().get_seeds();
         auto my_ep = get_broadcast_address();
-        // If this node is the only seed node, it can not do shadow round to itself
-        // FIXME: Feature check for seed node is complicated. Skip feature
-        // check for seed node for now until we have a proper solution.
-        if (!seeds.count(my_ep)) {
+        auto peer_features = db::system_keyspace::load_peer_features().get0();
+        logger.info("load_peer_features: peer_features size={}", peer_features.size());
+        for (auto& x : peer_features) {
+            logger.info("load_peer_features: peer={}, supported_features={}", x.first, x.second);
+        }
+        auto local_features = get_config_supported_features();
+
+        if (seeds.count(my_ep)) {
+            // This node is a seed node
+            if (peer_features.empty()) {
+                // This is a competely new seed node, skip the check
+                logger.info("Checking remote features skipped, since this node is a new seed node which knows nothing about the cluster");
+            } else {
+                // This is a existing seed node
+                if (seeds.size() == 1) {
+                    // This node is the only seed node, check features with system table
+                    logger.info("Checking remote features with system table, since this node is the only seed node");
+                    gossiper.check_knows_remote_features(local_features, peer_features);
+                } else {
+                    // More than one seed node in the seed list, do shadow round with other seed nodes
+                    bool ok;
+                    try {
+                        logger.info("Checking remote features with gossip");
+                        gossiper.do_shadow_round().get();
+                        ok = true;
+                    } catch (...) {
+                        ok = false;
+                    }
+
+                    if (ok) {
+                        gossiper.check_knows_remote_features(local_features);
+                        gossiper.reset_endpoint_state_map();
+                        for (auto ep : loaded_endpoints) {
+                            gossiper.add_saved_endpoint(ep);
+                        }
+                    } else {
+                        // Check features with system table
+                        logger.info("Checking remote features with gossip failed, fallback to check with system table");
+                        gossiper.check_knows_remote_features(local_features, peer_features);
+                    }
+                }
+            }
+        } else {
+            // This node is a non-seed node
             // Do shadow round to check if this node knows all the features
             // advertised by all other nodes, otherwise this node is too old
             // (missing features) to join the cluser.
+            logger.info("Checking remote features with gossip");
             gossiper.do_shadow_round().get();
-            gossiper.check_knows_remote_features(get_config_supported_features());
+            gossiper.check_knows_remote_features(local_features);
             gossiper.reset_endpoint_state_map();
             for (auto ep : loaded_endpoints) {
                 gossiper.add_saved_endpoint(ep);
@@ -1302,6 +1343,7 @@ future<> storage_service::check_for_endpoint_collision() {
         auto t = gms::gossiper::clk::now();
         bool found_bootstrapping_node = false;
         do {
+            logger.info("Checking remote features with gossip");
             gossiper.do_shadow_round().get();
             gossiper.check_knows_remote_features(get_config_supported_features());
             auto addr = get_broadcast_address();
@@ -1369,6 +1411,7 @@ future<std::unordered_set<token>> storage_service::prepare_replacement_info() {
     }
 
     // make magic happen
+    logger.info("Checking remote features with gossip");
     return gms::get_local_gossiper().do_shadow_round().then([this, replace_address] {
         auto& gossiper = gms::get_local_gossiper();
         gossiper.check_knows_remote_features(get_config_supported_features());
