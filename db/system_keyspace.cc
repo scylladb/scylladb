@@ -804,6 +804,20 @@ future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids() {
     });
 }
 
+future<std::unordered_map<gms::inet_address, sstring>> load_peer_features() {
+    sstring req = "SELECT peer, supported_features FROM system.%s";
+    return execute_cql(req, PEERS).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+        std::unordered_map<gms::inet_address, sstring> ret;
+        for (auto& row : *cql_result) {
+            if (row.has("supported_features")) {
+                ret.emplace(row.get_as<net::ipv4_address>("peer"),
+                        row.get_as<sstring>("supported_features"));
+            }
+        }
+        return ret;
+    });
+}
+
 future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip) {
     sstring req = "INSERT INTO system.%s (peer, preferred_ip) VALUES (?, ?)";
     return execute_cql(req, PEERS, ep.addr(), preferred_ip.addr()).discard_result().then([] {
