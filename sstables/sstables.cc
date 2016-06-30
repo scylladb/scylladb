@@ -1828,6 +1828,7 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_prior
     file_input_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.io_priority_class = pc;
+    options.read_ahead = 4;
     if (_compression) {
         return make_compressed_file_input_stream(_data_file, &_compression,
                 pos, len, std::move(options));
