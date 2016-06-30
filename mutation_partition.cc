@@ -2010,7 +2010,8 @@ public:
         _has_ck_selector = has_ck_selector(_slice.row_ranges(_schema, pk));
         _static_row_is_alive = false;
         _live_rows = 0;
-        _mutation_consumer.emplace(streamed_mutation_freezer(_schema, pk));
+        auto is_reversed = _slice.options.contains(query::partition_slice::option::reversed);
+        _mutation_consumer.emplace(streamed_mutation_freezer(_schema, pk, is_reversed));
     }
 
     void consume(tombstone t) {

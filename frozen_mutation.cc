@@ -141,7 +141,11 @@ stop_iteration streamed_mutation_freezer::consume(static_row&& sr) {
 }
 
 stop_iteration streamed_mutation_freezer::consume(clustering_row&& cr) {
-    _crs.emplace_back(std::move(cr));
+    if (_reversed) {
+        _crs.emplace_front(std::move(cr));
+    } else {
+        _crs.emplace_back(std::move(cr));
+    }
     return stop_iteration::no;
 }
 
@@ -153,8 +157,14 @@ stop_iteration streamed_mutation_freezer::consume(range_tombstone_begin&& rtb) {
 
 stop_iteration streamed_mutation_freezer::consume(range_tombstone_end&& rte) {
     assert(_range_tombstone_begin);
-    _rts.apply(_schema, std::move(_range_tombstone_begin->key()), _range_tombstone_begin->kind(),
-               std::move(rte.key()), rte.kind(), _range_tombstone_begin->tomb());
+    if (_reversed) {
+        _rts.apply(_schema, std::move(rte.key()), flip_bound_kind(rte.kind()),
+                   std::move(_range_tombstone_begin->key()), flip_bound_kind(_range_tombstone_begin->kind()),
+                   _range_tombstone_begin->tomb());
+    } else {
+        _rts.apply(_schema, std::move(_range_tombstone_begin->key()), _range_tombstone_begin->kind(),
+                   std::move(rte.key()), rte.kind(), _range_tombstone_begin->tomb());
+    }
     _range_tombstone_begin = { };
     return stop_iteration::no;
 }

@@ -73,9 +73,11 @@ public:
 
 frozen_mutation freeze(const mutation& m);
 
+// Can receive streamed_mutation in reversed order.
 class streamed_mutation_freezer {
     const schema& _schema;
     partition_key _key;
+    bool _reversed;
 
     tombstone _partition_tombstone;
     stdx::optional<static_row> _sr;
@@ -83,8 +85,8 @@ class streamed_mutation_freezer {
     range_tombstone_list _rts;
     stdx::optional<range_tombstone_begin> _range_tombstone_begin;
 public:
-    streamed_mutation_freezer(const schema& s, const partition_key& key)
-        : _schema(s), _key(key), _rts(s) { }
+    streamed_mutation_freezer(const schema& s, const partition_key& key, bool reversed = false)
+        : _schema(s), _key(key), _reversed(reversed), _rts(s) { }
 
     stop_iteration consume(tombstone pt);
 
