@@ -2214,8 +2214,9 @@ protected:
                     // From that, we can estimate that on this row, for x requested
                     // columns, only l/t end up live after reconciliation. So for next
                     // round we want to ask x column so that x * (l/t) == t, i.e. x = t^2/l.
-                    auto x = [](uint32_t t, uint32_t l) -> uint32_t {
-                        return std::max(query::max_rows, l == 0 ? t + 1 : ((t * t) / l) + 1);
+                    auto x = [](uint64_t t, uint64_t l) -> uint32_t {
+                        auto ret = std::min(static_cast<uint64_t>(query::max_rows), l == 0 ? t + 1 : ((t * t) / l) + 1);
+                        return static_cast<uint32_t>(ret);
                     };
                     if (data_resolver->any_partition_short_read() || data_resolver->increase_per_partition_limit()) {
                         // The number of live rows was bounded by the per partition limit.
