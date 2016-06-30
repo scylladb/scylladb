@@ -750,19 +750,21 @@ private:
         type += ")";
         return type;
     }
-    static std::vector<data_type> get_types(const std::string& thrift_type) {
+    static std::pair<std::vector<data_type>, bool> get_types(const std::string& thrift_type) {
         static const char composite_type[] = "CompositeType";
         std::vector<data_type> ret;
         auto t = sstring_view(thrift_type);
         auto composite_idx = t.find(composite_type);
+        bool is_compound = false;
         if (composite_idx == sstring_view::npos) {
             ret.emplace_back(db::marshal::type_parser::parse(t));
         } else {
             t.remove_prefix(composite_idx + sizeof(composite_type) - 1);
             auto types = db::marshal::type_parser(t).get_type_parameters(false);
             std::move(types.begin(), types.end(), std::back_inserter(ret));
+            is_compound = true;
         }
-        return ret;
+        return std::make_pair(std::move(ret), is_compound);
     }
     static CqlResult to_thrift_result(const cql3::result_set& rs) {
         CqlResult result;
@@ -889,7 +891,7 @@ private:
         schema_builder builder(ks_name, cf_def.name, id);
 
         if (cf_def.__isset.key_validation_class) {
-            auto pk_types = get_types(cf_def.key_validation_class);
+            auto pk_types = std::move(get_types(cf_def.key_validation_class).first);
             if (pk_types.size() == 1 && cf_def.__isset.key_alias) {
                 builder.with_column(to_bytes(cf_def.key_alias), std::move(pk_types.back()), column_kind::partition_key);
             } else {
@@ -904,8 +906,11 @@ private:
         data_type regular_column_name_type;
         if (cf_def.column_metadata.empty()) {
             // Dynamic CF
+            builder.set_is_dense(true);
             regular_column_name_type = utf8_type;
-            auto ck_types = get_types(cf_def.comparator_type);
+            auto p = get_types(cf_def.comparator_type);
+            auto ck_types = std::move(p.first);
+            builder.set_is_compound(p.second);
             for (uint32_t i = 0; i < ck_types.size(); ++i) {
                 builder.with_column(to_bytes("column" + (i + 1)), std::move(ck_types[i]), column_kind::clustering_key);
             }
@@ -972,7 +977,7 @@ private:
         if (cf_def.__isset.max_index_interval) {
             builder.set_max_index_interval(cf_def.max_index_interval);
         }
-        return builder.build(schema_builder::compact_storage::yes);
+        return builder.build();
     }
     static lw_shared_ptr<keyspace_metadata> keyspace_from_thrift(const KsDef& ks_def) {
         thrift_validation::validate_ks_def(ks_def);
