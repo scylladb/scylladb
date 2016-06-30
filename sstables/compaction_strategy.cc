@@ -214,6 +214,9 @@ public:
     virtual bool parallel_compaction() const {
         return true;
     }
+    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(schema_ptr schema) const {
+        return std::make_unique<bag_sstable_set>();
+    }
 };
 
 //
@@ -567,6 +570,9 @@ public:
     virtual compaction_strategy_type type() const {
         return compaction_strategy_type::leveled;
     }
+    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(schema_ptr schema) const override {
+        return std::make_unique<partitioned_sstable_set>(std::move(schema));
+    }
 };
 
 compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) {
@@ -603,6 +609,13 @@ compaction_descriptor compaction_strategy::get_sstables_for_compaction(column_fa
 }
 bool compaction_strategy::parallel_compaction() const {
     return _compaction_strategy_impl->parallel_compaction();
+}
+
+sstable_set
+compaction_strategy::make_sstable_set(schema_ptr schema) const {
+    return sstable_set(
+            _compaction_strategy_impl->make_sstable_set(std::move(schema)),
+            make_lw_shared<sstable_list>());
 }
 
 compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options) {
