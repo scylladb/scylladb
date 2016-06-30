@@ -46,10 +46,68 @@
 #include "schema.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "leveled_manifest.hh"
+#include "sstable_set.hh"
 
 namespace sstables {
 
 extern logging::logger logger;
+
+class sstable_set_impl {
+public:
+    virtual ~sstable_set_impl() {}
+    virtual std::unique_ptr<sstable_set_impl> clone() const = 0;
+    virtual std::vector<shared_sstable> select(const query::partition_range& range) const = 0;
+    virtual void insert(shared_sstable sst) = 0;
+    virtual void erase(shared_sstable sst) = 0;
+};
+
+sstable_set::sstable_set(std::unique_ptr<sstable_set_impl> impl, lw_shared_ptr<sstable_list> all)
+        : _impl(std::move(impl))
+        , _all(std::move(all)) {
+}
+
+sstable_set::sstable_set(const sstable_set& x)
+        : _impl(x._impl->clone())
+        , _all(make_lw_shared(sstable_list(*x._all))) {
+}
+
+sstable_set::sstable_set(sstable_set&&) noexcept = default;
+
+sstable_set&
+sstable_set::operator=(const sstable_set& x) {
+    if (this != &x) {
+        auto tmp = sstable_set(x);
+        *this = std::move(tmp);
+    }
+    return *this;
+}
+
+sstable_set&
+sstable_set::operator=(sstable_set&&) noexcept = default;
+
+std::vector<shared_sstable>
+sstable_set::select(const query::partition_range& range) const {
+    return _impl->select(range);
+}
+
+void
+sstable_set::insert(shared_sstable sst) {
+    _impl->insert(sst);
+    try {
+        _all->insert(sst);
+    } catch (...) {
+        _impl->erase(sst);
+        throw;
+    }
+}
+
+void
+sstable_set::erase(shared_sstable sst) {
+    _impl->erase(sst);
+    _all->erase(sst);
+}
+
+sstable_set::~sstable_set() = default;
 
 class compaction_strategy_impl {
 public:
