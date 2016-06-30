@@ -190,7 +190,7 @@ public:
         , _ck_filtering(ck_filtering)
     {
         std::vector<mutation_reader> readers;
-        for (const lw_shared_ptr<sstables::sstable>& sst : *_sstables->all()) {
+        for (const lw_shared_ptr<sstables::sstable>& sst : _sstables->select(pr)) {
             // FIXME: make sstable::read_range_rows() return ::mutation_reader so that we can drop this wrapper.
             mutation_reader reader =
                 make_mutation_reader<sstable_range_wrapping_reader>(sst, s, pr, _ck_filtering, _pc);
@@ -211,6 +211,7 @@ public:
 
 class single_key_sstable_reader final : public mutation_reader::impl {
     schema_ptr _schema;
+    dht::ring_position _rp;
     sstables::key _key;
     std::vector<streamed_mutation> _mutations;
     bool _done = false;
@@ -226,6 +227,7 @@ public:
                               query::clustering_key_filtering_context ck_filtering,
                               const io_priority_class& pc)
         : _schema(std::move(schema))
+        , _rp(dht::global_partitioner().decorate_key(*_schema, key))
         , _key(sstables::key::from_partition_key(*_schema, key))
         , _sstables(std::move(sstables))
         , _pc(pc)
@@ -236,7 +238,7 @@ public:
         if (_done) {
             return make_ready_future<streamed_mutation_opt>();
         }
-        return parallel_for_each(*_sstables->all(),
+        return parallel_for_each(_sstables->select(query::partition_range(_rp)),
             [this](const lw_shared_ptr<sstables::sstable>& sstable) {
                 return sstable->read_row(_schema, _key, _ck_filtering, _pc).then([this](auto smo) {
                     if (smo) {
