@@ -290,5 +290,9 @@ public:
             }
         }
     }
+
+    future<> close() {
+        return _input.close();
+    }
 };
 }

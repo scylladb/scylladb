@@ -357,6 +357,12 @@ public:
     impl(row_consumer& consumer,
             input_stream<char>&& input, uint64_t maxlen) :
                 _ctx(new data_consume_rows_context(consumer, std::move(input), maxlen)) { }
+    ~impl() {
+        if (_ctx) {
+            auto f = _ctx->close();
+            f.handle_exception([ctx = std::move(_ctx)] (auto) { });
+        }
+    }
     future<> read() {
         return _ctx->consume_input(*_ctx);
     }
