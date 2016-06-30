@@ -194,7 +194,9 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
         auto seeds = gms::get_local_gossiper().get_seeds();
         auto my_ep = get_broadcast_address();
         // If this node is the only seed node, it can not do shadow round to itself
-        if (!(seeds.count(my_ep) && seeds.size() == 1)) {
+        // FIXME: Feature check for seed node is complicated. Skip feature
+        // check for seed node for now until we have a proper solution.
+        if (!seeds.count(my_ep)) {
             // Do shadow round to check if this node knows all the features
             // advertised by all other nodes, otherwise this node is too old
             // (missing features) to join the cluser.
