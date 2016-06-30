@@ -1,4 +1,5 @@
 import urwid
+import logging
 
 
 class UserInput(object):
@@ -13,8 +14,11 @@ class UserInput(object):
         self._mainLoop = loop
 
     def __call__(self, keypress):
+        logging.debug('keypress={}'.format(keypress))
         if keypress in ('q', 'Q'):
             raise urwid.ExitMainLoop()
+        if type(keypress) is not str:
+            return
         if keypress.upper() not in self._viewMap:
             return
 
