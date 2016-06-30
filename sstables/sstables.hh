@@ -571,7 +571,7 @@ public:
 };
 
 using shared_sstable = lw_shared_ptr<sstable>;
-using sstable_list = std::map<int64_t, shared_sstable>;
+using sstable_list = std::unordered_set<shared_sstable>;
 
 ::key_reader make_key_reader(schema_ptr s, shared_sstable sst, const query::partition_range& range,
                              const io_priority_class& pc = default_priority_class());

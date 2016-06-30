@@ -47,6 +47,7 @@
 #include <boost/range/algorithm/heap_algorithm.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/find.hpp>
+#include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "frozen_mutation.hh"
 #include "mutation_partition_applier.hh"
@@ -128,7 +129,7 @@ partition_presence_checker
 column_family::make_partition_presence_checker(sstables::shared_sstable exclude_sstable) {
     return [this, exclude_sstable = std::move(exclude_sstable)] (partition_key_view key) {
         auto exclude = [e = std::move(exclude_sstable)] (auto s) { return s != e; };
-        for (auto&& s : boost::make_iterator_range(*_sstables) | boost::adaptors::map_values | boost::adaptors::filtered(exclude)) {
+        for (auto&& s : *_sstables | boost::adaptors::filtered(exclude)) {
             if (s->filter_has_key(*_schema, key)) {
                 return partition_presence_checker_result::maybe_exists;
             }
@@ -188,7 +189,7 @@ public:
         , _ck_filtering(ck_filtering)
     {
         std::vector<mutation_reader> readers;
-        for (const lw_shared_ptr<sstables::sstable>& sst : *_sstables | boost::adaptors::map_values) {
+        for (const lw_shared_ptr<sstables::sstable>& sst : *_sstables) {
             // FIXME: make sstable::read_range_rows() return ::mutation_reader so that we can drop this wrapper.
             mutation_reader reader =
                 make_mutation_reader<sstable_range_wrapping_reader>(sst, s, pr, _ck_filtering, _pc);
@@ -234,7 +235,7 @@ public:
         if (_done) {
             return make_ready_future<streamed_mutation_opt>();
         }
-        return parallel_for_each(*_sstables | boost::adaptors::map_values,
+        return parallel_for_each(*_sstables,
             [this](const lw_shared_ptr<sstables::sstable>& sstable) {
                 return sstable->read_row(_schema, _key, _ck_filtering, _pc).then([this](auto smo) {
                     if (smo) {
@@ -281,8 +282,7 @@ key_source column_family::sstables_as_key_source() const {
     return key_source([this] (const query::partition_range& range, const io_priority_class& pc) {
         std::vector<key_reader> readers;
         readers.reserve(_sstables->size());
-        std::transform(_sstables->begin(), _sstables->end(), std::back_inserter(readers), [&] (auto&& entry) {
-            auto& sst = entry.second;
+        std::transform(_sstables->begin(), _sstables->end(), std::back_inserter(readers), [&] (auto&& sst) {
             auto rd = sstables::make_key_reader(_schema, sst, range, pc);
             if (sst->is_shared()) {
                 rd = make_filtering_reader(std::move(rd), [] (const dht::decorated_key& dk) {
@@ -587,11 +587,11 @@ future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sst
     update_sstables_known_generation(comps.generation);
 
     {
-        auto i = _sstables->find(comps.generation);
+        auto i = boost::range::find_if(*_sstables, [gen = comps.generation] (sstables::shared_sstable sst) { return sst->generation() == gen; });
         if (i != _sstables->end()) {
             auto new_toc = sstdir + "/" + fname;
             throw std::runtime_error(sprint("Attempted to add sstable generation %d twice: new=%s existing=%s",
-                                            comps.generation, new_toc, i->second->toc_filename()));
+                                            comps.generation, new_toc, (*i)->toc_filename()));
         }
     }
 
@@ -623,11 +623,10 @@ void column_family::add_sstable(sstables::sstable&& sstable) {
 }
 
 void column_family::add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
-    auto generation = sstable->generation();
     // allow in-progress reads to continue using old list
     _sstables = make_lw_shared<sstable_list>(*_sstables);
     update_stats_for_new_sstable(sstable->bytes_on_disk());
-    _sstables->emplace(generation, std::move(sstable));
+    _sstables->insert(std::move(sstable));
 }
 
 future<>
@@ -851,7 +850,7 @@ column_family::stop() {
 
 future<std::vector<sstables::entry_descriptor>> column_family::flush_upload_dir() {
     struct work {
-        sstable_list sstables;
+        std::map<int64_t, sstables::shared_sstable> sstables;
         std::unordered_map<int64_t, sstables::entry_descriptor> descriptors;
         std::vector<sstables::entry_descriptor> flushed;
     };
@@ -900,7 +899,7 @@ column_family::reshuffle_sstables(std::set<int64_t> all_generations, int64_t sta
     struct work {
         int64_t current_gen;
         std::set<int64_t> all_generations; // Stores generation of all live sstables in the system.
-        sstable_list sstables;
+        std::map<int64_t, sstables::shared_sstable> sstables;
         std::unordered_map<int64_t, sstables::entry_descriptor> descriptors;
         std::vector<sstables::entry_descriptor> reshuffled;
         work(int64_t start, std::set<int64_t> gens)
@@ -963,7 +962,7 @@ void column_family::rebuild_statistics() {
                     // this might seem dangerous, but "move" here just avoids constness,
                     // making the two ranges compatible when compiling with boost 1.55.
                     // Noone is actually moving anything...
-                                         std::move(*_sstables) | boost::adaptors::map_values)) {
+                                         std::move(*_sstables))) {
         update_stats_for_new_sstable(tab->data_size());
     }
 }
@@ -994,10 +993,10 @@ column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>&
     // this might seem dangerous, but "move" here just avoids constness,
     // making the two ranges compatible when compiling with boost 1.55.
     // Noone is actually moving anything...
-    for (auto&& tab : boost::range::join(new_sstables, std::move(*current_sstables) | boost::adaptors::map_values)) {
+    for (auto&& tab : boost::range::join(new_sstables, std::move(*current_sstables))) {
         // Checks if oldtab is a sstable not being compacted.
         if (!s.count(tab)) {
-            new_sstable_list->emplace(tab->generation(), tab);
+            new_sstable_list->insert(tab);
         } else {
             new_compacted_but_not_deleted.push_back(tab);
         }
@@ -1110,8 +1109,8 @@ future<>
 column_family::compact_all_sstables() {
     std::vector<sstables::shared_sstable> sstables;
     sstables.reserve(_sstables->size());
-    for (auto&& entry : *_sstables) {
-        sstables.push_back(entry.second);
+    for (auto&& sst : *_sstables) {
+        sstables.push_back(sst);
     }
     // FIXME: check if the lower bound min_compaction_threshold() from schema
     // should be taken into account before proceeding with compaction.
@@ -1171,7 +1170,7 @@ lw_shared_ptr<sstable_list> column_family::get_sstables_including_compacted_unde
     }
     auto ret = make_lw_shared(*_sstables);
     for (auto&& s : _sstables_compacted_but_not_deleted) {
-        ret->insert(std::make_pair(s->generation(), s));
+        ret->insert(s);
     }
     return ret;
 }
@@ -2476,7 +2475,7 @@ seal_snapshot(sstring jsondir) {
 
 future<> column_family::snapshot(sstring name) {
     return flush().then([this, name = std::move(name)]() {
-        auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables | boost::adaptors::map_values);
+        auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables);
         return do_with(std::move(tables), [this, name](std::vector<sstables::shared_sstable> & tables) {
             auto jsondir = _config.datadir + "/snapshots/" + name;
 
@@ -2743,12 +2742,12 @@ future<db::replay_position> column_family::discard_sstables(db_clock::time_point
         std::vector<sstables::shared_sstable> remove;
 
         for (auto&p : *_sstables) {
-            if (p.second->max_data_age() <= gc_trunc) {
-                rp = std::max(p.second->get_stats_metadata().position, rp);
-                remove.emplace_back(p.second);
+            if (p->max_data_age() <= gc_trunc) {
+                rp = std::max(p->get_stats_metadata().position, rp);
+                remove.emplace_back(p);
                 continue;
             }
-            pruned->emplace(p.first, p.second);
+            pruned->insert(p);
         }
 
         _sstables = std::move(pruned);

@@ -467,7 +467,7 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
     auto sstables = db.local().find_column_family(keyspace, cf).get_sstables();
     uint64_t estimated_partitions = 0;
     for (auto sst : *sstables) {
-        estimated_partitions += sst.second->get_estimated_key_count();
+        estimated_partitions += sst->get_estimated_key_count();
     }
     // This node contains replicas of rf * vnodes ranges like this one, so
     // estimate the number of partitions in just this range:

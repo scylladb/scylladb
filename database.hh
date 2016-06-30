@@ -516,7 +516,11 @@ public:
             if (_sstables->empty()) {
                 return make_ready_future<int64_t>(0);
             }
-            return make_ready_future<int64_t>((*_sstables->rbegin()).first);
+            int64_t max = 0;
+            for (auto&& s : *_sstables) {
+                max = std::max(max, s->generation());
+            }
+            return make_ready_future<int64_t>(max);
         });
     }
 

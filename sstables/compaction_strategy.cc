@@ -358,7 +358,7 @@ std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(lw_sha
     std::vector<sstables::shared_sstable> sstables;
     sstables.reserve(candidates->size());
     for (auto& entry : *candidates) {
-        sstables.push_back(entry.second);
+        sstables.push_back(entry);
     }
 
     auto buckets = cs.get_buckets(sstables, DEFAULT_MAX_COMPACTION_THRESHOLD);

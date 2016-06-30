@@ -44,6 +44,7 @@
 #include <stdio.h>
 #include <ftw.h>
 #include <unistd.h>
+#include <boost/range/algorithm/find_if.hpp>
 
 using namespace sstables;
 
@@ -1160,7 +1161,7 @@ SEASTAR_TEST_CASE(compact) {
 static lw_shared_ptr<sstable_list> create_sstable_list(std::vector<sstables::shared_sstable>& sstables) {
     sstable_list list;
     for (auto& sst : sstables) {
-        list.insert({sst->generation(), sst});
+        list.insert(sst);
     }
     return make_lw_shared<sstable_list>(std::move(list));
 }
@@ -1170,7 +1171,7 @@ static std::vector<sstables::shared_sstable> get_candidates_for_leveled_strategy
     std::vector<sstables::shared_sstable> candidates;
     candidates.reserve(cf.sstables_count());
     for (auto& entry : *cf.get_sstables()) {
-        candidates.push_back(entry.second);
+        candidates.push_back(entry);
     }
     return candidates;
 }
@@ -1676,11 +1677,10 @@ static bool key_range_overlaps(sstring a, sstring b, sstring c, sstring d) {
 
 static shared_sstable get_sstable(const lw_shared_ptr<column_family>& cf, int64_t generation) {
     auto sstables = cf->get_sstables();
-    auto entry = sstables->find(generation);
+    auto entry = boost::range::find_if(*sstables, [generation] (shared_sstable sst) { return generation == sst->generation(); });
     assert(entry != sstables->end());
-    assert(entry->first == generation);
-    assert(entry->second->generation() == generation);
-    return entry->second;
+    assert((*entry)->generation() == generation);
+    return *entry;
 }
 
 static bool sstable_overlaps(const lw_shared_ptr<column_family>& cf, int64_t gen1, int64_t gen2) {
