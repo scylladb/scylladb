@@ -759,10 +759,17 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, byt
     auto query = read_long_string_view(buf);
     auto q_state = std::make_unique<cql_query_state>(client_state);
     auto& query_state = q_state->query_state;
-    tracing::begin(query_state.get_trace_state(), query.to_string(), query_state.get_client_state().get_client_address());
     q_state->options = read_options(buf);
-    tracing::trace(query_state.get_trace_state(), "Done reading options");
     auto& options = *q_state->options;
+
+    tracing::set_page_size(query_state.get_trace_state(), options.get_page_size());
+    tracing::set_consistency_level(query_state.get_trace_state(), options.get_consistency());
+    tracing::set_optional_serial_consistency_level(query_state.get_trace_state(), options.get_serial_consistency());
+    tracing::set_query(query_state.get_trace_state(), query.to_string());
+    tracing::set_user_timestamp(query_state.get_trace_state(), options.get_specific_options().timestamp);
+
+    tracing::begin(query_state.get_trace_state(), "Execute CQL3 query", query_state.get_client_state().get_client_address());
+
     return _server._query_processor.local().process(query, query_state, options).then([this, stream, buf = std::move(buf), &query_state] (auto msg) {
          tracing::trace(query_state.get_trace_state(), "Done processing - preparing a result");
          return this->make_result(stream, msg);
