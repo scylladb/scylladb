@@ -1797,6 +1797,19 @@ void gossiper::check_knows_remote_features(sstring local_features_string) const 
     }
 }
 
+void gossiper::check_knows_remote_features(sstring local_features_string, std::unordered_map<inet_address, sstring> peer_features_string) const {
+    std::set<sstring> local_features;
+    boost::split(local_features, local_features_string, boost::is_any_of(","));
+    auto local_endpoint = get_broadcast_address();
+    auto common_features = get_supported_features(peer_features_string);
+    if (boost::range::includes(local_features, common_features)) {
+        logger.info("Feature check passed. Local node {} features = {}, Remote common_features = {}",
+                local_endpoint, local_features, common_features);
+    } else {
+        throw std::runtime_error(sprint("Feature check failed. This node can not join the cluster because it does not understand the feature. Local node %s features = %s, Remote common_features = %s", local_endpoint, local_features, common_features));
+    }
+}
+
 static bool check_features(std::set<sstring> features, std::set<sstring> need_features) {
     logger.info("Checking if need_features {} in features {}", need_features, features);
     return boost::range::includes(features, need_features);

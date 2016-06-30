@@ -532,6 +532,7 @@ public:
     // Wait for features are available on a particular node
     future<> wait_for_feature_on_node(std::set<sstring> features, inet_address endpoint);
     void check_knows_remote_features(sstring local_features_string) const;
+    void check_knows_remote_features(sstring local_features_string, std::unordered_map<inet_address, sstring> peer_features_string) const;
 private:
     void register_feature(feature* f);
     void unregister_feature(feature* f);
