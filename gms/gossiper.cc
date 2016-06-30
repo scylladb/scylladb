@@ -1755,6 +1755,35 @@ std::set<sstring> gossiper::get_supported_features() const {
     return common_features;
 }
 
+std::set<sstring> gossiper::get_supported_features(std::unordered_map<gms::inet_address, sstring> peer_features_string) const {
+    std::set<sstring> common_features;
+    // Convert feature string split by "," to std::set
+    std::unordered_map<gms::inet_address, std::set<sstring>> features_map;
+    for (auto& x : peer_features_string) {
+        std::set<sstring> features;
+        boost::split(features, x.second, boost::is_any_of(","));
+        features.erase("");
+        if (features.empty()) {
+            return std::set<sstring>();
+        }
+        if (common_features.empty()) {
+            common_features = features;
+        }
+        features_map.emplace(x.first, features);
+    }
+
+    for (auto& x : features_map) {
+        auto& features = x.second;
+        std::set<sstring> result;
+        std::set_intersection(features.begin(), features.end(),
+                common_features.begin(), common_features.end(),
+                std::inserter(result, result.end()));
+        common_features = std::move(result);
+    }
+    common_features.erase("");
+    return common_features;
+}
+
 void gossiper::check_knows_remote_features(sstring local_features_string) const {
     std::set<sstring> local_features;
     boost::split(local_features, local_features_string, boost::is_any_of(","));
