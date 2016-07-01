@@ -233,14 +233,17 @@ public:
 
     // Write sstable components from a memtable.
     future<> write_components(memtable& mt, bool backup = false,
-                              const io_priority_class& pc = default_priority_class());
+                              const io_priority_class& pc = default_priority_class(), bool leave_unsealed = false);
 
     future<> write_components(::mutation_reader mr,
             uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, bool backup = false,
-            const io_priority_class& pc = default_priority_class());
+            const io_priority_class& pc = default_priority_class(), bool leave_unsealed = false);
 
     sstable_writer get_writer(const schema& s, uint64_t estimated_partitions, uint64_t max_sstable_size,
-                              bool backup = false, const io_priority_class& pc = default_priority_class());
+                              bool backup = false, const io_priority_class& pc = default_priority_class(),
+                              bool leave_unsealed = false);
+
+    future<> seal_sstable(bool backup);
 
     uint64_t get_estimated_key_count() const {
         return ((uint64_t)_summary.header.size_at_full_sampling + 1) *
@@ -684,6 +687,7 @@ class sstable_writer {
     const schema& _schema;
     const io_priority_class& _pc;
     bool _backup;
+    bool _leave_unsealed;
     bool _compression_enabled;
     shared_ptr<file_writer> _writer;
     stdx::optional<components_writer> _components_writer;
@@ -692,7 +696,7 @@ private:
     void finish_file_writer();
 public:
     sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
-                   uint64_t max_sstable_size, bool backup, const io_priority_class& pc);
+                   uint64_t max_sstable_size, bool backup, bool leave_unsealed, const io_priority_class& pc);
     void consume_new_partition(const dht::decorated_key& dk) { return _components_writer->consume_new_partition(dk); }
     void consume(tombstone t) { _components_writer->consume(t); }
     stop_iteration consume(static_row&& sr) { return _components_writer->consume(std::move(sr)); }

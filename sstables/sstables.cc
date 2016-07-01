@@ -1537,10 +1537,10 @@ void components_writer::consume_end_of_stream() {
     seal_statistics(_sst._statistics, _sst._collector, dht::global_partitioner().name(), _schema.bloom_filter_fp_chance());
 }
 
-future<> sstable::write_components(memtable& mt, bool backup, const io_priority_class& pc) {
+future<> sstable::write_components(memtable& mt, bool backup, const io_priority_class& pc, bool leave_unsealed) {
     _collector.set_replay_position(mt.replay_position());
     return write_components(mt.make_reader(mt.schema()),
-            mt.partition_count(), mt.schema(), std::numeric_limits<uint64_t>::max(), backup, pc);
+            mt.partition_count(), mt.schema(), std::numeric_limits<uint64_t>::max(), backup, pc, leave_unsealed);
 }
 
 void sstable_writer::prepare_file_writer()
@@ -1572,11 +1572,12 @@ void sstable_writer::finish_file_writer()
 }
 
 sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
-                               uint64_t max_sstable_size, bool backup, const io_priority_class& pc)
+                               uint64_t max_sstable_size, bool backup, bool leave_unsealed, const io_priority_class& pc)
     : _sst(sst)
     , _schema(s)
     , _pc(pc)
     , _backup(backup)
+    , _leave_unsealed(leave_unsealed)
 {
     _sst.generate_toc(_schema.get_compressor_params().get_compressor(), _schema.bloom_filter_fp_chance());
     _sst.write_toc(_pc);
@@ -1596,25 +1597,35 @@ void sstable_writer::consume_end_of_stream()
     _sst.write_statistics(_pc);
     // NOTE: write_compression means maybe_write_compression.
     _sst.write_compression(_pc);
-    _sst.seal_sstable().get();
 
-    if (_backup) {
-        auto dir = _sst.get_dir() + "/backups/";
-        sstable_write_io_check(touch_directory, dir).get();
-        _sst.create_links(dir).get();
+    if (!_leave_unsealed) {
+        _sst.seal_sstable(_backup).get();
     }
 }
 
-sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partitions, uint64_t max_sstable_size,
-                                   bool backup, const io_priority_class& pc)
+future<> sstable::seal_sstable(bool backup)
 {
-    return sstable_writer(*this, s, estimated_partitions, max_sstable_size, backup, pc);
+    return seal_sstable().then([this, backup] {
+        if (backup) {
+            auto dir = get_dir() + "/backups/";
+            return sstable_write_io_check(touch_directory, dir).then([this, dir] {
+                return create_links(dir);
+            });
+        }
+        return make_ready_future<>();
+    });
+}
+
+sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partitions, uint64_t max_sstable_size,
+                                   bool backup, const io_priority_class& pc, bool leave_unsealed)
+{
+    return sstable_writer(*this, s, estimated_partitions, max_sstable_size, backup, leave_unsealed, pc);
 }
 
 future<> sstable::write_components(::mutation_reader mr,
-        uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, bool backup, const io_priority_class& pc) {
-    return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), max_sstable_size, backup, &pc] () mutable {
-        auto wr = get_writer(*schema, estimated_partitions, max_sstable_size, backup, pc);
+        uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, bool backup, const io_priority_class& pc, bool leave_unsealed) {
+    return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), max_sstable_size, backup, &pc, leave_unsealed] () mutable {
+        auto wr = get_writer(*schema, estimated_partitions, max_sstable_size, backup, pc, leave_unsealed);
         consume_flattened_in_thread(mr, wr);
     });
 }
