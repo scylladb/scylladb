@@ -393,7 +393,7 @@ private:
 
     void generate_toc(compressor c, double filter_fp_chance);
     void write_toc(const io_priority_class& pc);
-    void seal_sstable();
+    future<> seal_sstable();
 
     future<> read_compression(const io_priority_class& pc);
     void write_compression(const io_priority_class& pc);

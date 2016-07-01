@@ -817,23 +817,26 @@ void sstable::write_toc(const io_priority_class& pc) {
     });
 }
 
-void sstable::seal_sstable() {
+future<> sstable::seal_sstable() {
     // SSTable sealing is about renaming temporary TOC file after guaranteeing
     // that each component reached the disk safely.
-
-    file dir_f = open_checked_directory(sstable_write_error, _dir).get0();
-
-    sstable_write_io_check([&] {
+    return open_checked_directory(sstable_write_error, _dir).then([this] (file dir_f) {
         // Guarantee that every component of this sstable reached the disk.
-        dir_f.flush().get();
-        // Rename TOC because it's no longer temporary.
-        engine().rename_file(filename(sstable::component_type::TemporaryTOC), filename(sstable::component_type::TOC)).get();
-        // Guarantee that the changes above reached the disk.
-        dir_f.flush().get();
-        dir_f.close().get();
+        return sstable_write_io_check([&] { return dir_f.flush(); }).then([this] {
+            // Rename TOC because it's no longer temporary.
+            return sstable_write_io_check([&] {
+                return engine().rename_file(filename(sstable::component_type::TemporaryTOC), filename(sstable::component_type::TOC));
+            });
+        }).then([this, dir_f] () mutable {
+            // Guarantee that the changes above reached the disk.
+            return sstable_write_io_check([&] { return dir_f.flush(); });
+        }).then([this, dir_f] () mutable {
+            return sstable_write_io_check([&] { return dir_f.close(); });
+        }).then([this, dir_f] {
+            // If this point was reached, sstable should be safe in disk.
+            sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", _generation, _ks, _cf);
+        });
     });
-    // If this point was reached, sstable should be safe in disk.
-    sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", _generation, _ks, _cf);
 }
 
 void write_crc(const sstring file_path, checksum& c) {
@@ -1593,7 +1596,7 @@ void sstable_writer::consume_end_of_stream()
     _sst.write_statistics(_pc);
     // NOTE: write_compression means maybe_write_compression.
     _sst.write_compression(_pc);
-    _sst.seal_sstable();
+    _sst.seal_sstable().get();
 
     if (_backup) {
         auto dir = _sst.get_dir() + "/backups/";
