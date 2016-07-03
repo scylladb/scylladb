@@ -186,6 +186,10 @@ public:
         return *this;
     }
 
+    int64_t estimated_sum() const {
+        return mean * count;
+    }
+
     friend ihistogram operator +(ihistogram a, const ihistogram& b);
 };
 
