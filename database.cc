@@ -1142,7 +1142,14 @@ future<> column_family::run_compaction(sstables::compaction_descriptor descripto
 
 void column_family::set_compaction_strategy(sstables::compaction_strategy_type strategy) {
     dblog.info("Setting compaction strategy of {}.{} to {}", _schema->ks_name(), _schema->cf_name(), sstables::compaction_strategy::name(strategy));
-    _compaction_strategy = make_compaction_strategy(strategy, _schema->compaction_strategy_options());
+    auto new_cs = make_compaction_strategy(strategy, _schema->compaction_strategy_options());
+    auto new_sstables = new_cs.make_sstable_set(_schema);
+    for (auto&& s : *_sstables->all()) {
+        new_sstables.insert(s);
+    }
+    // now exception safe:
+    _compaction_strategy = std::move(new_cs);
+    _sstables = std::move(new_sstables);
 }
 
 size_t column_family::sstables_count() {
