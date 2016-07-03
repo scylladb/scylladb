@@ -116,6 +116,7 @@ inline
 httpd::utils_json::histogram to_json(const utils::ihistogram& val) {
     httpd::utils_json::histogram h;
     h = val;
+    h.sum = val.estimated_sum();
     return h;
 }
 
@@ -129,7 +130,7 @@ httpd::utils_json::rate_moving_average meter_to_json(const utils::rate_moving_av
 inline
 httpd::utils_json::rate_moving_average_and_histogram timer_to_json(const utils::rate_moving_average_and_histogram& val) {
     httpd::utils_json::rate_moving_average_and_histogram h;
-    h.hist = val.hist;
+    h.hist = to_json(val.hist);
     h.meter = meter_to_json(val.rate);
     return h;
 }
