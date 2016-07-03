@@ -14,12 +14,6 @@ import signal
 import urwid
 
 
-def halt(* args):
-    quit()
-
-signal.signal(signal.SIGINT, halt)
-
-
 def shell():
     try:
         import IPython
@@ -41,7 +35,10 @@ def main(metricPatterns, interval, collectd):
     liveDataThread = threading.Thread(target=lambda: liveData.go(loop))
     liveDataThread.daemon = True
     liveDataThread.start()
-    loop.run()
+    try:
+        loop.run()
+    except KeyboardInterrupt:
+        pass
 
 if __name__ == '__main__':
     description = '\n'.join(['A top-like tool for scylladb collectd metrics.',
