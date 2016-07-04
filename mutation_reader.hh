@@ -244,8 +244,8 @@ future<stop_iteration> do_consume_streamed_mutation_flattened(streamed_mutation&
 /*
 template<typename T>
 concept bool FlattenedConsumer() {
-    return StreamedMutationConsumer() && requires(T obj, const partition_key& pk) {
-        obj.consume_new_partition(pk);
+    return StreamedMutationConsumer() && requires(T obj, const dht::decorated_key& dk) {
+        obj.consume_new_partition(dk);
         obj.consume_end_of_partition();
     };
 }
@@ -264,7 +264,7 @@ auto consume_flattened(mutation_reader mr, Consumer c, bool reverse_mutations = 
                 } else {
                     sm.emplace(reverse_streamed_mutation(std::move(*smopt)));
                 }
-                c.consume_new_partition(sm->key());
+                c.consume_new_partition(sm->decorated_key());
                 if (sm->partition_tombstone()) {
                     c.consume(sm->partition_tombstone());
                 }
@@ -276,3 +276,54 @@ auto consume_flattened(mutation_reader mr, Consumer c, bool reverse_mutations = 
     });
 }
 
+/*
+template<typename T>
+concept bool StreamedMutationFilter() {
+    return requires(T obj, const streamed_mutation& sm) {
+        { filter(sm); } -> bool;
+    };
+}
+*/
+// This version of consume_flattened() must be run inside a thread and
+// guarantees that all Consumer functions will also be called in the same thread
+// context.
+template<typename Consumer, typename StreamedMutationFilter>
+auto consume_flattened_in_thread(mutation_reader& mr, Consumer& c, StreamedMutationFilter&& filter)
+{
+    while (true) {
+        auto smopt = mr().get0();
+        if (!smopt) {
+            break;
+        }
+        auto& sm = *smopt;
+        if (!filter(sm)) {
+            continue;
+        }
+        c.consume_new_partition(sm.decorated_key());
+        if (sm.partition_tombstone()) {
+            c.consume(sm.partition_tombstone());
+        }
+        do {
+            if (sm.is_buffer_empty()) {
+                if (sm.is_end_of_stream()) {
+                    break;
+                }
+                sm.fill_buffer().get0();
+            } else {
+                if (sm.pop_mutation_fragment().consume(c) == stop_iteration::yes) {
+                    break;
+                }
+            }
+        } while (true);
+        if (c.consume_end_of_partition() == stop_iteration::yes) {
+            break;
+        }
+    }
+    return c.consume_end_of_stream();
+}
+
+template<typename Consumer>
+auto consume_flattened_in_thread(mutation_reader& mr, Consumer& c)
+{
+    return consume_flattened_in_thread(mr, c, [] (auto&&) { return true; });
+}

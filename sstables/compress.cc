@@ -34,6 +34,8 @@
 
 #include "unimplemented.hh"
 
+namespace stdx = std::experimental;
+
 namespace sstables {
 
 void compression::update(uint64_t compressed_file_length) {
@@ -218,7 +220,7 @@ size_t compress_max_size_snappy(size_t input_len) {
 }
 
 class compressed_file_data_source_impl : public data_source_impl {
-    input_stream<char> _input_stream;
+    stdx::optional<input_stream<char>> _input_stream;
     sstables::compression* _compression_metadata;
     uint64_t _pos;
     uint64_t _beg_pos;
@@ -263,7 +265,7 @@ public:
         if (_pos != _beg_pos && addr.offset != 0) {
             throw std::runtime_error("compressed reader out of sync");
         }
-        return _input_stream.read_exactly(addr.chunk_len).
+        return _input_stream->read_exactly(addr.chunk_len).
             then([this, addr](temporary_buffer<char> buf) {
                 // The last 4 bytes of the chunk are the adler32 checksum
                 // of the rest of the (compressed) chunk.
@@ -290,6 +292,13 @@ public:
                 _pos += out.size();
                 return out;
         });
+    }
+
+    virtual future<> close() override {
+        if (!_input_stream) {
+            return make_ready_future<>();
+        }
+        return _input_stream->close();
     }
 };
 
