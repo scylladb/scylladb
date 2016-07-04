@@ -124,7 +124,7 @@ future<> db::commitlog_replayer::impl::init() {
         return do_with(shard_rpm_map{}, [this, &qp](shard_rpm_map& map) {
             return parallel_for_each(qp.db().local().get_column_families(), [&map, &qp](auto& cfp) {
                 auto uuid = cfp.first;
-                for (auto& sst : *cfp.second->get_sstables() | boost::adaptors::map_values) {
+                for (auto& sst : *cfp.second->get_sstables()) {
                     try {
                         auto p = sst->get_stats_metadata().position;
                         logger.trace("sstable {} -> rp {}", sst->get_filename(), p);

@@ -46,10 +46,165 @@
 #include "schema.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "leveled_manifest.hh"
+#include "sstable_set.hh"
+#include "compatible_ring_position.hh"
+#include <boost/range/algorithm/find.hpp>
+#include <boost/icl/interval_map.hpp>
 
 namespace sstables {
 
 extern logging::logger logger;
+
+class sstable_set_impl {
+public:
+    virtual ~sstable_set_impl() {}
+    virtual std::unique_ptr<sstable_set_impl> clone() const = 0;
+    virtual std::vector<shared_sstable> select(const query::partition_range& range) const = 0;
+    virtual void insert(shared_sstable sst) = 0;
+    virtual void erase(shared_sstable sst) = 0;
+};
+
+sstable_set::sstable_set(std::unique_ptr<sstable_set_impl> impl, lw_shared_ptr<sstable_list> all)
+        : _impl(std::move(impl))
+        , _all(std::move(all)) {
+}
+
+sstable_set::sstable_set(const sstable_set& x)
+        : _impl(x._impl->clone())
+        , _all(make_lw_shared(sstable_list(*x._all))) {
+}
+
+sstable_set::sstable_set(sstable_set&&) noexcept = default;
+
+sstable_set&
+sstable_set::operator=(const sstable_set& x) {
+    if (this != &x) {
+        auto tmp = sstable_set(x);
+        *this = std::move(tmp);
+    }
+    return *this;
+}
+
+sstable_set&
+sstable_set::operator=(sstable_set&&) noexcept = default;
+
+std::vector<shared_sstable>
+sstable_set::select(const query::partition_range& range) const {
+    return _impl->select(range);
+}
+
+void
+sstable_set::insert(shared_sstable sst) {
+    _impl->insert(sst);
+    try {
+        _all->insert(sst);
+    } catch (...) {
+        _impl->erase(sst);
+        throw;
+    }
+}
+
+void
+sstable_set::erase(shared_sstable sst) {
+    _impl->erase(sst);
+    _all->erase(sst);
+}
+
+sstable_set::~sstable_set() = default;
+
+// default sstable_set, not specialized for anything
+class bag_sstable_set : public sstable_set_impl {
+    // erasing is slow, but select() is fast
+    std::vector<shared_sstable> _sstables;
+public:
+    virtual std::unique_ptr<sstable_set_impl> clone() const override {
+        return std::make_unique<bag_sstable_set>(*this);
+    }
+    virtual std::vector<shared_sstable> select(const query::partition_range& range) const override {
+        return _sstables;
+    }
+    virtual void insert(shared_sstable sst) override {
+        _sstables.push_back(std::move(sst));
+    }
+    virtual void erase(shared_sstable sst) override {
+        _sstables.erase(boost::find(_sstables, sst));
+    }
+};
+
+// specialized when sstables are partitioned in the token range space
+// e.g. leveled compaction strategy
+class partitioned_sstable_set : public sstable_set_impl {
+    using value_set = std::unordered_set<shared_sstable>;
+    using interval_map_type = boost::icl::interval_map<compatible_ring_position, value_set>;
+    using interval_type = interval_map_type::interval_type;
+    using map_iterator = interval_map_type::const_iterator;
+private:
+    schema_ptr _schema;
+    interval_map_type _sstables;
+private:
+    interval_type make_interval(const query::partition_range& range) const {
+        return interval_type::closed(
+                compatible_ring_position(*_schema, range.start()->value()),
+                compatible_ring_position(*_schema, range.end()->value()));
+    }
+    interval_type singular(const dht::ring_position& rp) const {
+        auto crp = compatible_ring_position(*_schema, rp);
+        return interval_type::closed(crp, crp);
+    }
+    std::pair<map_iterator, map_iterator> query(const query::partition_range& range) const {
+        if (range.start() && range.end()) {
+            return _sstables.equal_range(make_interval(range));
+        }
+        else if (range.start() && !range.end()) {
+            auto start = singular(range.start()->value());
+            return { _sstables.lower_bound(start), _sstables.end() };
+        } else if (!range.start() && range.end()) {
+            auto end = singular(range.end()->value());
+            return { _sstables.begin(), _sstables.upper_bound(end) };
+        } else {
+            return { _sstables.begin(), _sstables.end() };
+        }
+    }
+public:
+    explicit partitioned_sstable_set(schema_ptr schema)
+            : _schema(std::move(schema)) {
+    }
+    virtual std::unique_ptr<sstable_set_impl> clone() const override {
+        return std::make_unique<partitioned_sstable_set>(*this);
+    }
+    virtual std::vector<shared_sstable> select(const query::partition_range& range) const override {
+        auto ipair = query(range);
+        auto b = std::move(ipair.first);
+        auto e = std::move(ipair.second);
+        value_set result;
+        while (b != e) {
+            boost::copy(b++->second, std::inserter(result, result.end()));
+        }
+        return std::vector<shared_sstable>(result.begin(), result.end());
+    }
+    virtual void insert(shared_sstable sst) override {
+        auto first = sst->get_first_decorated_key(*_schema).token();
+        auto last = sst->get_last_decorated_key(*_schema).token();
+        using bound = query::partition_range::bound;
+        _sstables.add({
+                make_interval(
+                        query::partition_range(
+                                bound(dht::ring_position::starting_at(first)),
+                                bound(dht::ring_position::ending_at(last)))),
+                value_set({sst})});
+    }
+    virtual void erase(shared_sstable sst) override {
+        auto first = sst->get_first_decorated_key(*_schema).token();
+        auto last = sst->get_last_decorated_key(*_schema).token();
+        using bound = query::partition_range::bound;
+        _sstables.subtract({
+                make_interval(
+                        query::partition_range(
+                                bound(dht::ring_position::starting_at(first)),
+                                bound(dht::ring_position::ending_at(last)))),
+                value_set({sst})});
+    }
+};
 
 class compaction_strategy_impl {
 public:
@@ -58,6 +213,9 @@ public:
     virtual compaction_strategy_type type() const = 0;
     virtual bool parallel_compaction() const {
         return true;
+    }
+    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(schema_ptr schema) const {
+        return std::make_unique<bag_sstable_set>();
     }
 };
 
@@ -358,7 +516,7 @@ std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(lw_sha
     std::vector<sstables::shared_sstable> sstables;
     sstables.reserve(candidates->size());
     for (auto& entry : *candidates) {
-        sstables.push_back(entry.second);
+        sstables.push_back(entry);
     }
 
     auto buckets = cs.get_buckets(sstables, DEFAULT_MAX_COMPACTION_THRESHOLD);
@@ -412,6 +570,9 @@ public:
     virtual compaction_strategy_type type() const {
         return compaction_strategy_type::leveled;
     }
+    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(schema_ptr schema) const override {
+        return std::make_unique<partitioned_sstable_set>(std::move(schema));
+    }
 };
 
 compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) {
@@ -448,6 +609,13 @@ compaction_descriptor compaction_strategy::get_sstables_for_compaction(column_fa
 }
 bool compaction_strategy::parallel_compaction() const {
     return _compaction_strategy_impl->parallel_compaction();
+}
+
+sstable_set
+compaction_strategy::make_sstable_set(schema_ptr schema) const {
+    return sstable_set(
+            _compaction_strategy_impl->make_sstable_set(std::move(schema)),
+            make_lw_shared<sstable_list>());
 }
 
 compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options) {

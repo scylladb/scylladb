@@ -69,6 +69,7 @@
 #include "utils/histogram.hh"
 #include "sstables/estimated_histogram.hh"
 #include "sstables/compaction.hh"
+#include "sstables/sstable_set.hh"
 #include "key_reader.hh"
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/shared_future.hh>
@@ -338,8 +339,9 @@ private:
     lw_shared_ptr<memtable_list> make_memtable_list();
     lw_shared_ptr<memtable_list> make_streaming_memtable_list();
 
+    sstables::compaction_strategy _compaction_strategy;
     // generation -> sstable. Ordered by key so we can easily get the most recent.
-    lw_shared_ptr<sstable_list> _sstables;
+    lw_shared_ptr<sstables::sstable_set> _sstables;
     // sstables that have been compacted (so don't look up in query) but
     // have not been deleted yet, so must not GC any tombstones in other sstables
     // that may delete data in these sstables:
@@ -360,7 +362,6 @@ private:
     db::replay_position _highest_flushed_rp;
     // Provided by the database that owns this commitlog
     db::commitlog* _commitlog;
-    sstables::compaction_strategy _compaction_strategy;
     compaction_manager& _compaction_manager;
     int _compaction_disabled = 0;
     class memtable_flush_queue;
@@ -513,10 +514,14 @@ public:
     future<int64_t> disable_sstable_write() {
         _sstable_writes_disabled_at = std::chrono::steady_clock::now();
         return _sstables_lock.write_lock().then([this] {
-            if (_sstables->empty()) {
+            if (_sstables->all()->empty()) {
                 return make_ready_future<int64_t>(0);
             }
-            return make_ready_future<int64_t>((*_sstables->rbegin()).first);
+            int64_t max = 0;
+            for (auto&& s : *_sstables->all()) {
+                max = std::max(max, s->generation());
+            }
+            return make_ready_future<int64_t>(max);
         });
     }
 

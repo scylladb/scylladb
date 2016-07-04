@@ -37,8 +37,7 @@ public:
     column_family_test(lw_shared_ptr<column_family> cf) : _cf(cf) {}
 
     void add_sstable(sstables::sstable&& sstable) {
-        auto generation = sstable.generation();
-        _cf->_sstables->emplace(generation, make_lw_shared(std::move(sstable)));
+        _cf->_sstables->insert(make_lw_shared(std::move(sstable)));
     }
 };
 

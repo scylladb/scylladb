@@ -135,8 +135,7 @@ lw_shared_ptr<compaction_manager::task> compaction_manager::task_start(column_fa
 
             candidates.reserve(cf.sstables_count());
             // Filter out sstables that are being compacted.
-            for (auto& entry : *cf.get_sstables()) {
-                auto& sst = entry.second;
+            for (auto& sst : *cf.get_sstables()) {
                 if (!_compacting_sstables.count(sst)) {
                     candidates.push_back(sst);
                 }

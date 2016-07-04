@@ -22,6 +22,8 @@
 #pragma once
 
 class column_family;
+class schema;
+using schema_ptr = lw_shared_ptr<const schema>;
 
 namespace sstables {
 
@@ -35,6 +37,7 @@ enum class compaction_strategy_type {
 
 class compaction_strategy_impl;
 class sstable;
+class sstable_set;
 struct compaction_descriptor;
 
 class compaction_strategy {
@@ -90,6 +93,8 @@ public:
     sstring name() const {
         return name(type());
     }
+
+    sstable_set make_sstable_set(schema_ptr schema) const;
 };
 
 // Creates a compaction_strategy object from one of the strategies available.

@@ -2611,7 +2611,7 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
             auto& cf = db.find_column_family(ks_name, cf_name);
             std::set<int64_t> generations;
             for (auto& p : *(cf.get_sstables())) {
-                generations.insert(p.second->generation());
+                generations.insert(p->generation());
             }
             return make_ready_future<std::set<int64_t>>(std::move(generations));
         }).then([this, max_seen_sstable, ks_name, cf_name] (std::set<int64_t> all_generations) {
