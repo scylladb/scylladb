@@ -1839,7 +1839,9 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_prior
 
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, const io_priority_class& pc) {
     return do_with(data_stream(pos, len, pc), [len] (auto& stream) {
-        return stream.read_exactly(len);
+        return stream.read_exactly(len).finally([&stream] {
+            return stream.close();
+        });
     });
 }
 
