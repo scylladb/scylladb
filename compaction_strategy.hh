@@ -57,6 +57,9 @@ public:
     // Return if parallel compaction is allowed by strategy.
     bool parallel_compaction() const;
 
+    // An estimation of number of compaction for strategy to be satisfied.
+    int64_t estimated_pending_compactions(column_family& cf) const;
+
     static sstring name(compaction_strategy_type type) {
         switch (type) {
         case compaction_strategy_type::null:

@@ -746,24 +746,17 @@ public:
         }
         return _generations[level];
     }
-#if 0
-    public synchronized int getEstimatedTasks()
-    {
-        long tasks = 0;
-        long[] estimated = new long[generations.length];
 
-        for (int i = generations.length - 1; i >= 0; i--)
-        {
-            List<SSTableReader> sstables = getLevel(i);
-            estimated[i] = Math.max(0L, SSTableReader.getTotalBytes(sstables) - maxBytesForLevel(i)) / maxSSTableSizeInBytes;
-            tasks += estimated[i];
+    int64_t get_estimated_tasks() {
+        int64_t tasks = 0;
+
+        for (auto i = _generations.size() - 1; i >= 0; i--) {
+            const auto& sstables = get_level(i);
+            tasks += std::max(0UL, get_total_bytes(sstables) - max_bytes_for_level(i)) / _max_sstable_size_in_bytes;
         }
-
-        logger.debug("Estimating {} compactions to do for {}.{}",
-                     Arrays.toString(estimated), cfs.keyspace.getName(), cfs.name);
-        return Ints.checkedCast(tasks);
+        return tasks;
     }
-#endif
+
     int get_next_level(const std::vector<sstables::shared_sstable>& sstables) {
         int maximum_level = std::numeric_limits<int>::min();
         int minimum_level = std::numeric_limits<int>::max();

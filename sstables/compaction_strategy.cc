@@ -214,6 +214,7 @@ public:
     virtual bool parallel_compaction() const {
         return true;
     }
+    virtual int64_t estimated_pending_compactions(column_family& cf) const = 0;
     virtual std::unique_ptr<sstable_set_impl> make_sstable_set(schema_ptr schema) const {
         return std::make_unique<bag_sstable_set>();
     }
@@ -229,6 +230,10 @@ public:
         return sstables::compaction_descriptor();
     }
 
+    virtual int64_t estimated_pending_compactions(column_family& cf) const override {
+        return 0;
+    }
+
     virtual compaction_strategy_type type() const {
         return compaction_strategy_type::null;
     }
@@ -238,16 +243,18 @@ public:
 // Major compaction strategy is about compacting all available sstables into one.
 //
 class major_compaction_strategy : public compaction_strategy_impl {
+    static constexpr size_t min_compact_threshold = 2;
 public:
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override {
-        static constexpr size_t min_compact_threshold = 2;
-
         // At least, two sstables must be available for compaction to take place.
         if (cfs.sstables_count() < min_compact_threshold) {
             return sstables::compaction_descriptor();
         }
-
         return sstables::compaction_descriptor(std::move(candidates));
+    }
+
+    virtual int64_t estimated_pending_compactions(column_family& cf) const override {
+        return (cf.sstables_count() < min_compact_threshold) ? 0 : 1;
     }
 
     virtual compaction_strategy_type type() const {
@@ -349,10 +356,10 @@ class size_tiered_compaction_strategy : public compaction_strategy_impl {
     size_tiered_compaction_strategy_options _options;
 
     // Return a list of pair of shared_sstable and its respective size.
-    std::vector<std::pair<sstables::shared_sstable, uint64_t>> create_sstable_and_length_pairs(const std::vector<sstables::shared_sstable>& sstables);
+    std::vector<std::pair<sstables::shared_sstable, uint64_t>> create_sstable_and_length_pairs(const std::vector<sstables::shared_sstable>& sstables) const;
 
     // Group files of similar size into buckets.
-    std::vector<std::vector<sstables::shared_sstable>> get_buckets(const std::vector<sstables::shared_sstable>& sstables, unsigned max_threshold);
+    std::vector<std::vector<sstables::shared_sstable>> get_buckets(const std::vector<sstables::shared_sstable>& sstables, unsigned max_threshold) const;
 
     // Maybe return a bucket of sstables to compact
     std::vector<sstables::shared_sstable>
@@ -377,6 +384,8 @@ public:
 
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override;
 
+    virtual int64_t estimated_pending_compactions(column_family& cf) const override;
+
     friend std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(lw_shared_ptr<sstable_list>);
     friend std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(const std::list<sstables::shared_sstable>&);
 
@@ -386,7 +395,7 @@ public:
 };
 
 std::vector<std::pair<sstables::shared_sstable, uint64_t>>
-size_tiered_compaction_strategy::create_sstable_and_length_pairs(const std::vector<sstables::shared_sstable>& sstables) {
+size_tiered_compaction_strategy::create_sstable_and_length_pairs(const std::vector<sstables::shared_sstable>& sstables) const {
 
     std::vector<std::pair<sstables::shared_sstable, uint64_t>> sstable_length_pairs;
     sstable_length_pairs.reserve(sstables.size());
@@ -402,7 +411,7 @@ size_tiered_compaction_strategy::create_sstable_and_length_pairs(const std::vect
 }
 
 std::vector<std::vector<sstables::shared_sstable>>
-size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_sstable>& sstables, unsigned max_threshold) {
+size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_sstable>& sstables, unsigned max_threshold) const {
     // sstables sorted by size of its data file.
     auto sorted_sstables = create_sstable_and_length_pairs(sstables);
 
@@ -510,6 +519,25 @@ compaction_descriptor size_tiered_compaction_strategy::get_sstables_for_compacti
     return sstables::compaction_descriptor(std::move(most_interesting));
 }
 
+int64_t size_tiered_compaction_strategy::estimated_pending_compactions(column_family& cf) const {
+    int min_threshold = cf.schema()->min_compaction_threshold();
+    int max_threshold = cf.schema()->max_compaction_threshold();
+    std::vector<sstables::shared_sstable> sstables;
+    int64_t n = 0;
+
+    sstables.reserve(cf.sstables_count());
+    for (auto& entry : *cf.get_sstables()) {
+        sstables.push_back(entry);
+    }
+
+    for (auto& bucket : get_buckets(sstables, max_threshold)) {
+        if (bucket.size() >= size_t(min_threshold)) {
+            n += std::ceil(double(bucket.size()) / max_threshold);
+        }
+    }
+    return n;
+}
+
 std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(lw_shared_ptr<sstable_list> candidates) {
     size_tiered_compaction_strategy cs;
 
@@ -563,6 +591,8 @@ public:
 
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override;
 
+    virtual int64_t estimated_pending_compactions(column_family& cf) const override;
+
     virtual bool parallel_compaction() const override {
         return false;
     }
@@ -593,6 +623,16 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(c
     return std::move(candidate);
 }
 
+int64_t leveled_compaction_strategy::estimated_pending_compactions(column_family& cf) const {
+    std::vector<sstables::shared_sstable> sstables;
+    sstables.reserve(cf.sstables_count());
+    for (auto& entry : *cf.get_sstables()) {
+        sstables.push_back(entry);
+    }
+    leveled_manifest manifest = leveled_manifest::create(cf, sstables, _max_sstable_size_in_mb);
+    return manifest.get_estimated_tasks();
+}
+
 compaction_strategy::compaction_strategy(::shared_ptr<compaction_strategy_impl> impl)
     : _compaction_strategy_impl(std::move(impl)) {}
 compaction_strategy::compaction_strategy() = default;
@@ -604,11 +644,17 @@ compaction_strategy& compaction_strategy::operator=(compaction_strategy&&) = def
 compaction_strategy_type compaction_strategy::type() const {
     return _compaction_strategy_impl->type();
 }
+
 compaction_descriptor compaction_strategy::get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) {
     return _compaction_strategy_impl->get_sstables_for_compaction(cfs, std::move(candidates));
 }
+
 bool compaction_strategy::parallel_compaction() const {
     return _compaction_strategy_impl->parallel_compaction();
+}
+
+int64_t compaction_strategy::estimated_pending_compactions(column_family& cf) const {
+    return _compaction_strategy_impl->estimated_pending_compactions(cf);
 }
 
 sstable_set
