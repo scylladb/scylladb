@@ -41,6 +41,7 @@
 
 #pragma once
 
+#include "utils/hash.hh"
 #include <iosfwd>
 #include <set>
 #include <seastar/core/sstring.hh>
@@ -137,6 +138,10 @@ public:
 
     bool operator==(const data_resource&) const;
     bool operator<(const data_resource&) const;
+
+    size_t hash_value() const {
+        return utils::tuple_hash()(_ks, _cf);
+    }
 };
 
 /**
