@@ -1408,7 +1408,7 @@ future<> gossiper::do_shadow_round() {
             }
             auto& ss = service::get_local_storage_service();
             sleep(std::chrono::seconds(1)).get();
-            if (clk::now() > t + ss.get_ring_delay() * 60) {
+            if (clk::now() > t + ss.get_ring_delay() * 10) {
                 throw std::runtime_error(sprint("Unable to gossip with any seeds (ShadowRound)"));
             }
             if (this->_in_shadow_round) {
