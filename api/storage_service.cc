@@ -31,6 +31,7 @@
 #include "locator/snitch_base.hh"
 #include "column_family.hh"
 #include "log.hh"
+#include "release.hh"
 
 namespace api {
 
@@ -121,6 +122,9 @@ void set_storage_service(http_context& ctx, routes& r) {
         return service::get_local_storage_service().get_release_version();
     });
 
+    ss::get_scylla_release_version.set(r, [](const_req req) {
+        return scylla_version();
+    });
     ss::get_schema_version.set(r, [](const_req req) {
         return service::get_local_storage_service().get_schema_version();
     });

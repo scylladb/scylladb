@@ -178,6 +178,22 @@
          ]
       },
       {
+         "path":"/storage_service/scylla_release_version",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Fetch a string representation of the Scylla version.",
+               "type":"string",
+               "nickname":"get_scylla_release_version",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/schema_version",
          "operations":[
             {
