@@ -97,7 +97,7 @@ namespace std {
 template <>
 struct hash<auth::data_resource> {
     size_t operator()(const auth::data_resource & v) const {
-        return std::hash<sstring>()(v.name());
+        return v.hash_value();
     }
 };
 
