@@ -422,8 +422,6 @@ private:
 
     future<index_list> read_indexes(uint64_t summary_idx, const io_priority_class& pc);
 
-    input_stream<char> data_stream_at(uint64_t pos, uint64_t buf_size, const io_priority_class& pc);
-
     // Return an input_stream which reads exactly the specified byte range
     // from the data file (after uncompression, if the file is compressed).
     // Unlike data_read() below, this method does not read the entire byte
