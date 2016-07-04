@@ -308,6 +308,7 @@ public:
     // note: somewhat dangerous, consider a factory function instead
     explicit data_value(bytes);
     data_value(sstring);
+    data_value(const char*);
     data_value(bool);
     data_value(int32_t);
     data_value(int64_t);
