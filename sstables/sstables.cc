@@ -1068,14 +1068,14 @@ future<> sstable::load() {
 
 // @clustering_key: it's expected that clustering key is already in its composite form.
 // NOTE: empty clustering key means that there is no clustering key.
-void sstable::write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite_marker m) {
+void sstable::write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker) {
     // FIXME: min_components and max_components also keep track of clustering
     // prefix, so we must merge clustering_key and column_names somehow and
     // pass the result to the functions below.
     column_name_helper::min_max_components(_c_stats.min_column_names, _c_stats.max_column_names, column_names);
 
     // was defined in the schema, for example.
-    auto c= composite::from_exploded(column_names, m);
+    auto c = composite::from_exploded(column_names, marker);
     auto ck_bview = bytes_view(clustering_key);
 
     // The marker is not a component, so if the last component is empty (IOW,
@@ -1197,14 +1197,14 @@ void sstable::write_range_tombstone(file_writer& out,
     }
 
     auto start_marker = start_kind == bound_kind::excl_start
-                      ? composite_marker::end_range
-                      : composite_marker::start_range;
+                      ? composite::eoc::end
+                      : composite::eoc::start;
     write_column_name(out, start, suffix, start_marker);
     column_mask mask = column_mask::range_tombstone;
     write(out, mask);
     auto end_marker = end_kind == bound_kind::excl_end
-                    ? composite_marker::start_range
-                    : composite_marker::end_range;
+                    ? composite::eoc::start
+                    : composite::eoc::end;
     write_column_name(out, end, suffix, end_marker);
     uint64_t timestamp = t.timestamp;
     uint32_t deletion_time = t.deletion_time.time_since_epoch().count();

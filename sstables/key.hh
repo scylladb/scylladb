@@ -111,36 +111,4 @@ inline key maximum_key() {
     return key(key::kind::after_all_keys);
 };
 
-class composite_view {
-    bytes_view _bytes;
-public:
-    composite_view(bytes_view b) : _bytes(b) {}
-
-    std::vector<bytes> explode() const;
-
-    explicit operator bytes_view() const {
-        return _bytes;
-    }
-};
-
-class composite {
-    bytes _bytes;
-public:
-    composite (bytes&& b) : _bytes(std::move(b)) {}
-    template <typename Describer>
-    auto describe_type(Describer f) const { return f(const_cast<bytes&>(_bytes)); }
-
-    static composite from_bytes(bytes b) { return composite(std::move(b)); }
-    template <typename ClusteringElement>
-    static composite from_clustering_element(const schema& s, const ClusteringElement& ce);
-    static composite from_exploded(const std::vector<bytes_view>& v, composite_marker m = composite_marker::none);
-    static composite static_prefix(const schema& s);
-    size_t size() const { return _bytes.size(); }
-    explicit operator bytes_view() const {
-        return _bytes;
-    }
-    operator composite_view() const {
-        return composite_view(_bytes);
-    }
-};
 }

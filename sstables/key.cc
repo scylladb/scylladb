@@ -151,29 +151,6 @@ key::to_partition_key(const schema& s) {
     return partition_key::from_exploded(s, explode(s));
 }
 
-template <typename ClusteringElement>
-composite composite::from_clustering_element(const schema& s, const ClusteringElement& ce) {
-    return from_components(ce.begin(s), ce.end(s), sstable_serializer());
-}
-
-template composite composite::from_clustering_element(const schema& s, const clustering_key_prefix& ck);
-
-composite composite::from_exploded(const std::vector<bytes_view>& v, composite_marker m) {
-    if (v.size() == 0) {
-        return bytes(size_t(1), bytes::value_type(m));
-    }
-    auto b = from_components(v.begin(), v.end(), sstable_serializer());
-    b.back() = bytes::value_type(m);
-    return composite(std::move(b));
-}
-
-composite composite::static_prefix(const schema& s) {
-    static bytes static_marker(size_t(2), bytes::value_type(0xff));
-
-    std::vector<bytes_view> sv(s.clustering_key_size());
-    return static_marker + from_components(sv.begin(), sv.end(), sstable_serializer());
-}
-
 inline
 std::vector<bytes> explode_composite(bytes_view _bytes) {
     std::vector<bytes> ret;
@@ -205,10 +182,6 @@ std::vector<bytes> key_view::explode(const schema& s) const {
         return { to_bytes(_bytes) };
     }
 
-    return explode_composite(_bytes);
-}
-
-std::vector<bytes> composite_view::explode() const {
     return explode_composite(_bytes);
 }
 
