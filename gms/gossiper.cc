@@ -1712,6 +1712,13 @@ bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
     return !unsafe_statuses.count(status);
 }
 
+std::set<sstring> to_feature_set(sstring features_string) {
+    std::set<sstring> features;
+    boost::split(features, features_string, boost::is_any_of(","));
+    features.erase("");
+    return features;
+}
+
 std::set<sstring> gossiper::get_supported_features(inet_address endpoint) const {
     std::set<sstring> features;
     auto ep_state = get_endpoint_state_for_endpoint(endpoint);
@@ -1722,9 +1729,7 @@ std::set<sstring> gossiper::get_supported_features(inet_address endpoint) const 
     if (!app_state) {
         return features;
     }
-    boost::split(features, app_state->value, boost::is_any_of(","));
-    features.erase("");
-    return features;
+    return to_feature_set(app_state->value);
 }
 
 std::set<sstring> gossiper::get_supported_features() const {
@@ -1760,9 +1765,7 @@ std::set<sstring> gossiper::get_supported_features(std::unordered_map<gms::inet_
     // Convert feature string split by "," to std::set
     std::unordered_map<gms::inet_address, std::set<sstring>> features_map;
     for (auto& x : peer_features_string) {
-        std::set<sstring> features;
-        boost::split(features, x.second, boost::is_any_of(","));
-        features.erase("");
+        std::set<sstring> features = to_feature_set(x.second);
         if (features.empty()) {
             return std::set<sstring>();
         }
@@ -1785,8 +1788,7 @@ std::set<sstring> gossiper::get_supported_features(std::unordered_map<gms::inet_
 }
 
 void gossiper::check_knows_remote_features(sstring local_features_string) const {
-    std::set<sstring> local_features;
-    boost::split(local_features, local_features_string, boost::is_any_of(","));
+    std::set<sstring> local_features = to_feature_set(local_features_string);
     auto local_endpoint = get_broadcast_address();
     auto common_features = get_supported_features();
     if (boost::range::includes(local_features, common_features)) {
@@ -1798,8 +1800,7 @@ void gossiper::check_knows_remote_features(sstring local_features_string) const 
 }
 
 void gossiper::check_knows_remote_features(sstring local_features_string, std::unordered_map<inet_address, sstring> peer_features_string) const {
-    std::set<sstring> local_features;
-    boost::split(local_features, local_features_string, boost::is_any_of(","));
+    std::set<sstring> local_features = to_feature_set(local_features_string);
     auto local_endpoint = get_broadcast_address();
     auto common_features = get_supported_features(peer_features_string);
     if (boost::range::includes(local_features, common_features)) {
