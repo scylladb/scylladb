@@ -108,11 +108,11 @@ public:
     virtual future<> start() override;
 
     virtual future<> stop() override {
-        flush();
+        kick();
         return _pending_writes.close();
     };
 
-    virtual void store_session_record(const utils::UUID& session_id,
+    virtual void write_session_record(const utils::UUID& session_id,
                                       gms::inet_address client,
                                       std::unordered_map<sstring, sstring> parameters,
                                       sstring request,
@@ -121,13 +121,13 @@ public:
                                       int elapsed,
                                       gc_clock::duration ttl) override;
 
-    virtual void store_event_record(const utils::UUID& session_id,
+    virtual void write_event_record(const utils::UUID& session_id,
                                     sstring message,
                                     int elapsed,
                                     gc_clock::duration ttl) override;
 
 private:
-    virtual void flush() override;
+    virtual void kick() override;
 
     /**
      * Tries to create a table with a given name and using the provided CQL

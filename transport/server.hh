@@ -139,8 +139,8 @@ private:
 
         enum class tracing_request_type : uint8_t {
             not_requested,
-            no_flush_on_close,
-            flush_on_close
+            no_write_on_close,
+            write_on_close
         };
 
         state _state = state::UNINITIALIZED;

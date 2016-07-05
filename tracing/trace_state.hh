@@ -53,7 +53,7 @@ class trace_state final {
 private:
     utils::UUID _session_id;
     trace_type _type;
-    bool _flush_on_close;
+    bool _write_on_close;
     // Used for calculation of time passed since the beginning of a tracing
     // session till each tracing event.
     clock_type::time_point _start;
@@ -68,10 +68,10 @@ private:
     int _pending_trace_events = 0;
 
 public:
-    trace_state(trace_type type, bool flush_on_close, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt)
+    trace_state(trace_type type, bool write_on_close, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt)
         : _session_id(session_id ? *session_id : utils::UUID_gen::get_time_UUID())
         , _type(type)
-        , _flush_on_close(flush_on_close)
+        , _write_on_close(write_on_close)
         , _ttl(ttl_by_type(_type))
         , _primary(!session_id)
     { }
@@ -86,8 +86,8 @@ public:
         return _type;
     }
 
-    bool get_flush_on_close() const {
-        return _flush_on_close;
+    bool get_write_on_close() const {
+        return _write_on_close;
     }
 
 private:
@@ -133,7 +133,7 @@ void trace_state::trace(sstring message) {
     }
 
     ++_pending_trace_events;
-    tracing::get_local_tracing_instance().backend_helper().store_event_record(_session_id, std::move(message), elapsed(), _ttl);
+    tracing::get_local_tracing_instance().backend_helper().write_event_record(_session_id, std::move(message), elapsed(), _ttl);
 }
 
 int trace_state::elapsed() {

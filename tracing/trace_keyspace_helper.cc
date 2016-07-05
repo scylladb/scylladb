@@ -171,7 +171,7 @@ future<> trace_keyspace_helper::start() {
     }
 }
 
-void trace_keyspace_helper::store_session_record(const utils::UUID& session_id,
+void trace_keyspace_helper::write_session_record(const utils::UUID& session_id,
                                                  gms::inet_address client,
                                                  std::unordered_map<sstring, sstring> parameters,
                                                  sstring request,
@@ -188,7 +188,7 @@ void trace_keyspace_helper::store_session_record(const utils::UUID& session_id,
     }
 }
 
-void trace_keyspace_helper::store_event_record(const utils::UUID& session_id,
+void trace_keyspace_helper::write_event_record(const utils::UUID& session_id,
                                                sstring message,
                                                int elapsed,
                                                gc_clock::duration ttl) {
@@ -280,12 +280,12 @@ future<> trace_keyspace_helper::flush_one_session_mutations(utils::UUID session_
     });
 }
 
-void trace_keyspace_helper::flush() {
+void trace_keyspace_helper::kick() {
     logger.debug("flushing {} sessions", _mutation_makers.size());
     parallel_for_each(_mutation_makers,[this](decltype(_mutation_makers)::value_type& uuid_mutation_makers) {
         return with_gate(_pending_writes, [this, &uuid_mutation_makers]  {
             logger.debug("{}: flushing traces", uuid_mutation_makers.first);
-            return this->flush_one_session_mutations(uuid_mutation_makers.first, uuid_mutation_makers.second).finally([] { tracing::get_local_tracing_instance().flush_complete(); });
+            return this->flush_one_session_mutations(uuid_mutation_makers.first, uuid_mutation_makers.second).finally([] { tracing::get_local_tracing_instance().write_complete(); });
         }).handle_exception([this] (auto ep) {
             try {
                 ++_stats.tracing_errors;

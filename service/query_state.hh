@@ -55,8 +55,8 @@ public:
         return _trace_state_ptr->get_type();
     }
 
-    bool flush_trace_on_close() const {
-        return _trace_state_ptr->get_flush_on_close();
+    bool write_trace_on_close() const {
+        return _trace_state_ptr->get_write_on_close();
     }
 
     void trace(const sstring& message) {

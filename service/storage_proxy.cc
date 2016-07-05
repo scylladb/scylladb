@@ -3214,7 +3214,7 @@ void storage_proxy::init_messaging_service() {
     ms.register_read_data([] (const rpc::client_info& cinfo, query::read_command cmd, query::partition_range pr) {
         tracing::trace_state_ptr trace_state_ptr;
         if (cmd.trace_info) {
-            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(cmd.trace_info->type, cmd.trace_info->flush_on_close, cmd.trace_info->session_id);
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(cmd.trace_info->type, cmd.trace_info->write_on_close, cmd.trace_info->session_id);
             auto msg = sprint("read_data: message received from /%s", net::messaging_service::get_source(cinfo).addr);
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, std::move(msg));
@@ -3231,7 +3231,7 @@ void storage_proxy::init_messaging_service() {
     ms.register_read_mutation_data([] (const rpc::client_info& cinfo, query::read_command cmd, query::partition_range pr) {
         tracing::trace_state_ptr trace_state_ptr;
         if (cmd.trace_info) {
-            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(cmd.trace_info->type, cmd.trace_info->flush_on_close, cmd.trace_info->session_id);
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(cmd.trace_info->type, cmd.trace_info->write_on_close, cmd.trace_info->session_id);
             auto msg = sprint("read_mutation_data: message received from /%s", net::messaging_service::get_source(cinfo).addr);
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, std::move(msg));
@@ -3247,7 +3247,7 @@ void storage_proxy::init_messaging_service() {
     ms.register_read_digest([] (const rpc::client_info& cinfo, query::read_command cmd, query::partition_range pr) {
         tracing::trace_state_ptr trace_state_ptr;
         if (cmd.trace_info) {
-            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(cmd.trace_info->type, cmd.trace_info->flush_on_close, cmd.trace_info->session_id);
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(cmd.trace_info->type, cmd.trace_info->write_on_close, cmd.trace_info->session_id);
             auto msg = sprint("read_digest: message received from /%s", net::messaging_service::get_source(cinfo).addr);
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, std::move(msg));

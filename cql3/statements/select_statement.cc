@@ -229,7 +229,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
         make_partition_slice(options), limit, to_gc_clock(now), std::experimental::nullopt, query::max_partitions, options.get_timestamp(state));
 
     if (state.is_tracing()) {
-        command->trace_info.emplace(std::move(state.tracing_session_id()), state.trace_type(), state.flush_trace_on_close());
+        command->trace_info.emplace(std::move(state.tracing_session_id()), state.trace_type(), state.write_trace_on_close());
     }
 
     int32_t page_size = options.get_page_size();

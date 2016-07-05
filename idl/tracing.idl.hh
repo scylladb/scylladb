@@ -29,7 +29,7 @@ enum class trace_type : uint8_t {
 class trace_info {
     utils::UUID session_id;
     tracing::trace_type type;
-    bool flush_on_close;
+    bool write_on_close;
 };
 }
 

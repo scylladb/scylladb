@@ -60,13 +60,13 @@ trace_state::~trace_state() {
             // then do nothing - they will create a lot of session_record events
             // and we do want to know about it.
             ++_pending_trace_events;
-            tracing::get_local_tracing_instance().backend_helper().store_session_record(_session_id, _client, std::move(_params), std::move(_request), _started_at, _type, elapsed(), _ttl);
+            tracing::get_local_tracing_instance().backend_helper().write_session_record(_session_id, _client, std::move(_params), std::move(_request), _started_at, _type, elapsed(), _ttl);
         }
 
         tracing::get_local_tracing_instance().end_session();
 
-        if (_flush_on_close) {
-            tracing::get_local_tracing_instance().flush_pending_records();
+        if (_write_on_close) {
+            tracing::get_local_tracing_instance().write_pending_records();
         }
 
         // update some stats and get out...

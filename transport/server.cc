@@ -465,7 +465,7 @@ future<response_type>
 
     if (tracing_request != tracing_request_type::not_requested) {
         if (cqlop == cql_binary_opcode::QUERY) {
-            client_state.create_tracing_session(tracing::trace_type::QUERY, tracing_request == tracing_request_type::flush_on_close);
+            client_state.create_tracing_session(tracing::trace_type::QUERY, tracing_request == tracing_request_type::write_on_close);
         }
     }
 
@@ -620,9 +620,9 @@ future<> cql_server::connection::process_request() {
         if (f.flags & cql_frame_flags::tracing) {
             // If tracing is requested for a specific CQL command - flush
             // tracing info right after the command is over.
-            tracing_requested = tracing_request_type::flush_on_close;
+            tracing_requested = tracing_request_type::write_on_close;
         } else if (tracing::tracing::get_local_tracing_instance().trace_next_query()) {
-            tracing_requested = tracing_request_type::no_flush_on_close;
+            tracing_requested = tracing_request_type::no_write_on_close;
         }
 
         auto op = f.opcode;
