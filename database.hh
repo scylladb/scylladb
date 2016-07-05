@@ -102,8 +102,14 @@ void make(database& db, bool durable, bool volatile_testing_only);
 class replay_position_reordered_exception : public std::exception {};
 
 using shared_memtable = lw_shared_ptr<memtable>;
+class memtable_list;
 
-class dirty_memory_manager: private logalloc::region_group_reclaimer {
+class dirty_memory_manager: public logalloc::region_group_reclaimer {
+    // We need a separate boolean, because from the LSA point of view, pressure may still be
+    // mounting, in which case the pressure flag could be set back on if we force it off.
+    bool _db_shutdown_requested = false;
+
+    database& _db;
     logalloc::region_group _region_group;
 
     // We would like to serialize the flushing of memtables. While flushing many memtables
@@ -129,16 +135,22 @@ class dirty_memory_manager: private logalloc::region_group_reclaimer {
 
     seastar::gate _waiting_flush_gate;
     std::vector<shared_memtable> _pending_flushes;
+    void maybe_do_active_flush();
+protected:
+    virtual memtable_list& get_memtable_list(column_family& cf) = 0;
+    virtual void start_reclaiming() override;
 public:
     future<> shutdown();
-    dirty_memory_manager(size_t threshold, size_t concurrency)
+    dirty_memory_manager(database& db, size_t threshold, size_t concurrency)
                                            : logalloc::region_group_reclaimer(threshold)
+                                           , _db(db)
                                            , _region_group(*this)
                                            , _concurrency(concurrency)
                                            , _flush_serializer(concurrency) {}
 
-    dirty_memory_manager(dirty_memory_manager *parent, size_t threshold, size_t concurrency)
+    dirty_memory_manager(database& db, dirty_memory_manager *parent, size_t threshold, size_t concurrency)
                                                                          : logalloc::region_group_reclaimer(threshold)
+                                                                         , _db(db)
                                                                          , _region_group(&parent->_region_group, *this)
                                                                          , _concurrency(concurrency)
                                                                          , _flush_serializer(concurrency) {}
@@ -153,22 +165,26 @@ public:
     template <typename Func>
     future<> serialize_flush(Func&& func) {
         return seastar::with_gate(_waiting_flush_gate,  [this, func] () mutable {
-            return with_semaphore(_flush_serializer, 1, func);
+            return with_semaphore(_flush_serializer, 1, func).finally([this] {
+                maybe_do_active_flush();
+            });
         });
     }
 };
 
 class streaming_dirty_memory_manager: public dirty_memory_manager {
+    virtual memtable_list& get_memtable_list(column_family& cf) override;
 public:
-    streaming_dirty_memory_manager(dirty_memory_manager *parent, size_t threshold) : dirty_memory_manager(parent, threshold, 2) {}
+    streaming_dirty_memory_manager(database& db, dirty_memory_manager *parent, size_t threshold) : dirty_memory_manager(db, parent, threshold, 2) {}
 };
 
 class memtable_dirty_memory_manager: public dirty_memory_manager {
+    virtual memtable_list& get_memtable_list(column_family& cf) override;
 public:
-    memtable_dirty_memory_manager(dirty_memory_manager* parent, size_t threshold) : dirty_memory_manager(parent, threshold, 4) {}
+    memtable_dirty_memory_manager(database& db, dirty_memory_manager* parent, size_t threshold) : dirty_memory_manager(db, parent, threshold, 4) {}
     // This constructor will be called for the system tables (no parent). Its flushes are usually drive by us
     // and not the user, and tend to be small in size. So we'll allow only two slots.
-    memtable_dirty_memory_manager(size_t threshold) : dirty_memory_manager(threshold, 2) {}
+    memtable_dirty_memory_manager(database& db, size_t threshold) : dirty_memory_manager(db, threshold, 2) {}
 };
 
 // We could just add all memtables, regardless of types, to a single list, and
@@ -351,6 +367,9 @@ private:
     // memory throttling mechanism, guaranteeing we will not overload the
     // server.
     lw_shared_ptr<memtable_list> _streaming_memtables;
+
+    friend class memtable_dirty_memory_manager;
+    friend class streaming_dirty_memory_manager;
 
     lw_shared_ptr<memtable_list> make_memory_only_memtable_list();
     lw_shared_ptr<memtable_list> make_memtable_list();

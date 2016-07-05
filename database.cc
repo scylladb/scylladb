@@ -1336,9 +1336,9 @@ database::database(const db::config& cfg)
     // Note that even if we didn't allow extra memory, we would still want to keep system requests
     // in a different region group. This is because throttled requests are serviced in FIFO order,
     // and we don't want system requests to be waiting for a long time behind user requests.
-    , _system_dirty_memory_manager(_memtable_total_space + (10 << 20))
-    , _dirty_memory_manager(&_system_dirty_memory_manager, _memtable_total_space)
-    , _streaming_dirty_memory_manager(&_dirty_memory_manager, _streaming_memtable_total_space)
+    , _system_dirty_memory_manager(*this, _memtable_total_space + (10 << 20))
+    , _dirty_memory_manager(*this, &_system_dirty_memory_manager, _memtable_total_space)
+    , _streaming_dirty_memory_manager(*this, &_dirty_memory_manager, _streaming_memtable_total_space)
     , _version(empty_version)
     , _enable_incremental_backups(cfg.incremental_backups())
 {
@@ -2114,9 +2114,52 @@ column_family::check_valid_rp(const db::replay_position& rp) const {
 }
 
 future<> dirty_memory_manager::shutdown() {
+    _db_shutdown_requested = true;
     return _waiting_flush_gate.close().then([this] {
         return _region_group.shutdown();
     });
+}
+
+void dirty_memory_manager::maybe_do_active_flush() {
+    if (!under_pressure() || _db_shutdown_requested) {
+        return;
+    }
+
+    // Flush already ongoing. We don't need to initiate an active flush at this moment.
+    if (_flush_serializer.current() != _concurrency) {
+        return;
+    }
+
+    // There are many criteria that can be used to select what is the best memtable to
+    // flush. Most of the time we want some coordination with the commitlog to allow us to
+    // release commitlog segments as early as we can.
+    //
+    // But during pressure condition, we'll just pick the CF that holds the largest
+    // memtable. The advantage of doing this is that this is objectively the one that will
+    // release the biggest amount of memory and is less likely to be generating tiny
+    // SSTables. The disadvantage is that right now, because we only release memory when the
+    // SSTable is fully written, that may take a bit of time to happen.
+    //
+    // However, since we'll very soon have a mechanism in place to account for the memory
+    // that was already written in one form or another, that disadvantage is mitigated.
+    memtable& biggest_memtable = memtable::from_region(*_region_group.get_largest_region());
+    auto& biggest_cf = _db.find_column_family(biggest_memtable.schema());
+    memtable_list& mtlist = get_memtable_list(biggest_cf);
+    // Please note that this will eventually take the semaphore and prevent two concurrent flushes.
+    // We don't need any other extra protection.
+    mtlist.seal_active_memtable(memtable_list::flush_behavior::immediate);
+}
+
+memtable_list& memtable_dirty_memory_manager::get_memtable_list(column_family& cf) {
+    return *(cf._memtables);
+}
+
+memtable_list& streaming_dirty_memory_manager::get_memtable_list(column_family& cf) {
+    return *(cf._streaming_memtables);
+}
+
+void dirty_memory_manager::start_reclaiming() {
+    maybe_do_active_flush();
 }
 
 future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position rp) {
