@@ -92,21 +92,21 @@ lw_shared_ptr<memtable_list>
 column_family::make_memory_only_memtable_list() {
     auto seal = [this] (memtable_list::flush_behavior ignored) { return make_ready_future<>(); };
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_memtable_size, _config.dirty_memory_region_group, _memtables_serializer);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_memtable_size, _config.dirty_memory_manager);
 }
 
 lw_shared_ptr<memtable_list>
 column_family::make_memtable_list() {
     auto seal = [this] (memtable_list::flush_behavior behavior) { return seal_active_memtable(behavior); };
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_memtable_size, _config.dirty_memory_region_group, _memtables_serializer);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_memtable_size, _config.dirty_memory_manager);
 }
 
 lw_shared_ptr<memtable_list>
 column_family::make_streaming_memtable_list() {
     auto seal = [this] (memtable_list::flush_behavior behavior) { return seal_active_streaming_memtable(behavior); };
     auto get_schema =  [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_streaming_memtable_size, _config.streaming_dirty_memory_region_group, _streaming_serializer);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_streaming_memtable_size, _config.streaming_dirty_memory_manager);
 }
 
 column_family::column_family(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager)
@@ -1329,10 +1329,8 @@ database::database(const db::config& cfg)
         return memtable_total_space;
     }())
     , _streaming_memtable_total_space(_memtable_total_space / 4)
-    , _dirty_memory_region_group_reclaimer(_memtable_total_space)
-    , _streaming_dirty_memory_region_group_reclaimer(_streaming_memtable_total_space)
-    , _dirty_memory_region_group(_dirty_memory_region_group_reclaimer)
-    , _streaming_dirty_memory_region_group(&_dirty_memory_region_group, _streaming_dirty_memory_region_group_reclaimer)
+    , _dirty_memory_manager(_memtable_total_space)
+    , _streaming_dirty_memory_manager(&_dirty_memory_manager, _streaming_memtable_total_space)
     , _version(empty_version)
     , _enable_incremental_backups(cfg.incremental_backups())
 {
@@ -1349,7 +1347,7 @@ database::setup_collectd() {
                 , scollectd::per_cpu_plugin_instance
                 , "bytes", "dirty")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
-            return _dirty_memory_region_group.memory_used();
+            return dirty_memory_region_group().memory_used();
     })));
 
     _collectd.push_back(
@@ -1778,8 +1776,8 @@ keyspace::make_column_family_config(const schema& s) const {
     cfg.enable_cache = _config.enable_cache;
     cfg.max_memtable_size = _config.max_memtable_size;
     cfg.max_streaming_memtable_size = _config.max_streaming_memtable_size;
-    cfg.dirty_memory_region_group = _config.dirty_memory_region_group;
-    cfg.streaming_dirty_memory_region_group = _config.streaming_dirty_memory_region_group;
+    cfg.dirty_memory_manager = _config.dirty_memory_manager;
+    cfg.streaming_dirty_memory_manager = _config.streaming_dirty_memory_manager;
     cfg.read_concurrency_config = _config.read_concurrency_config;
     cfg.cf_stats = _config.cf_stats;
     cfg.enable_incremental_backups = _config.enable_incremental_backups;
@@ -2107,8 +2105,14 @@ column_family::check_valid_rp(const db::replay_position& rp) const {
     }
 }
 
+future<> dirty_memory_manager::shutdown() {
+    return _waiting_flush_gate.close().then([this] {
+        return _region_group.shutdown();
+    });
+}
+
 future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position rp) {
-    return _dirty_memory_region_group.run_when_memory_available([this, &m, m_schema = std::move(m_schema), rp = std::move(rp)] {
+    return _dirty_memory_manager.region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), rp = std::move(rp)] {
         try {
             auto& cf = find_column_family(m.column_family_id());
             cf.apply(m, m_schema, rp);
@@ -2161,7 +2165,7 @@ future<> database::apply_streaming_mutation(schema_ptr s, const frozen_mutation&
         throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
                                  s->ks_name(), s->cf_name(), s->version()));
     }
-    return _streaming_dirty_memory_region_group.run_when_memory_available([this, &m, s = std::move(s)] {
+    return _streaming_dirty_memory_manager.region_group().run_when_memory_available([this, &m, s = std::move(s)] {
         auto uuid = m.column_family_id();
         auto& cf = find_column_family(uuid);
         cf.apply_streaming_mutation(s, std::move(m));
@@ -2193,8 +2197,8 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
         // All writes should go to the main memtable list if we're not durable
         cfg.max_streaming_memtable_size = 0;
     }
-    cfg.dirty_memory_region_group = &_dirty_memory_region_group;
-    cfg.streaming_dirty_memory_region_group = &_streaming_dirty_memory_region_group;
+    cfg.dirty_memory_manager = &_dirty_memory_manager;
+    cfg.streaming_dirty_memory_manager = &_streaming_dirty_memory_manager;
     cfg.read_concurrency_config.sem = &_read_concurrency_sem;
     cfg.read_concurrency_config.timeout = _cfg->read_request_timeout_in_ms() * 1ms;
     // Assume a queued read takes up 1kB of memory, and allow 2% of memory to be filled up with such reads.
@@ -2268,9 +2272,9 @@ database::stop() {
             return val_pair.second->stop();
         });
     }).then([this] {
-        return _dirty_memory_region_group.shutdown();
+        return _dirty_memory_manager.shutdown();
     }).then([this] {
-        return _streaming_dirty_memory_region_group.shutdown();
+        return _streaming_dirty_memory_manager.shutdown();
     });
 }
 
