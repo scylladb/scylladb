@@ -687,6 +687,8 @@ column_family::seal_active_streaming_memtable_immediate() {
     }
     _streaming_memtables->add_memtable();
     _streaming_memtables->erase(old);
+
+    auto guard = _streaming_flush_phaser.start();
     return with_gate(_streaming_flush_gate, [this, old] {
         _delayed_streaming_flush.cancel();
 
@@ -735,7 +737,7 @@ column_family::seal_active_streaming_memtable_immediate() {
         });
 
         return f;
-    });
+    }).finally([guard = std::move(guard)] { });
 }
 
 future<>
@@ -2734,7 +2736,9 @@ future<> column_family::flush_streaming_mutations(std::vector<query::partition_r
     // need this code to go away as soon as we can (see FIXME above). So the double gate is a better
     // temporary counter measure.
     return with_gate(_streaming_flush_gate, [this, ranges = std::move(ranges)] {
-        return _streaming_memtables->seal_active_memtable(memtable_list::flush_behavior::delayed).finally([this, ranges = std::move(ranges)] {
+        return _streaming_memtables->seal_active_memtable(memtable_list::flush_behavior::delayed).finally([this] {
+            return _streaming_flush_phaser.advance_and_await();
+        }).finally([this, ranges = std::move(ranges)] {
             if (!_config.enable_cache) {
                 return make_ready_future<>();
             }

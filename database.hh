@@ -371,6 +371,7 @@ private:
     // memory throttling mechanism, guaranteeing we will not overload the
     // server.
     lw_shared_ptr<memtable_list> _streaming_memtables;
+    utils::phased_barrier _streaming_flush_phaser;
 
     friend class memtable_dirty_memory_manager;
     friend class streaming_dirty_memory_manager;
