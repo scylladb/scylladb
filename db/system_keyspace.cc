@@ -769,22 +769,19 @@ future<std::unordered_set<dht::token>> update_local_tokens(
 
 future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> load_tokens() {
     sstring req = "SELECT peer, tokens FROM system.%s";
-    return execute_cql(req, PEERS).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
-        auto ret = make_lw_shared<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>>();
-        return do_for_each(*msg, [ret] (auto& row) {
-            auto peer = gms::inet_address(row.template get_as<net::ipv4_address>("peer"));
+    return execute_cql(req, PEERS).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+        std::unordered_map<gms::inet_address, std::unordered_set<dht::token>> ret;
+        for (auto& row : *cql_result) {
+            auto peer = gms::inet_address(row.get_as<net::ipv4_address>("peer"));
             if (row.has("tokens")) {
                 auto blob = row.get_blob("tokens");
                 auto cdef = peers()->get_column_definition("tokens");
                 auto deserialized = cdef->type->deserialize(blob);
                 auto tokens = value_cast<set_type_impl::native_type>(deserialized);
-
-                ret->emplace(peer, decode_tokens(tokens));
+                ret.emplace(peer, decode_tokens(tokens));
             }
-            return make_ready_future<>();
-        }).then([ret, msg] () mutable {
-            return std::move(*ret);
-        });
+        }
+        return ret;
     });
 }
 
