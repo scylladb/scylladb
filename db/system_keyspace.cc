@@ -787,17 +787,15 @@ future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> lo
 
 future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids() {
     sstring req = "SELECT peer, host_id FROM system.%s";
-    return execute_cql(req, PEERS).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
-        auto ret = make_lw_shared<std::unordered_map<gms::inet_address, utils::UUID>>();
-        return do_for_each(*msg, [ret] (auto& row) {
-            auto peer = gms::inet_address(row.template get_as<net::ipv4_address>("peer"));
+    return execute_cql(req, PEERS).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+        std::unordered_map<gms::inet_address, utils::UUID> ret;
+        for (auto& row : *cql_result) {
+            auto peer = gms::inet_address(row.get_as<net::ipv4_address>("peer"));
             if (row.has("host_id")) {
-                ret->emplace(peer, row.template get_as<utils::UUID>("host_id"));
+                ret.emplace(peer, row.get_as<utils::UUID>("host_id"));
             }
-            return make_ready_future<>();
-        }).then([ret, msg] () mutable {
-            return std::move(*ret);
-        });
+        }
+        return ret;
     });
 }
 
