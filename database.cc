@@ -1329,7 +1329,15 @@ database::database(const db::config& cfg)
         return memtable_total_space;
     }())
     , _streaming_memtable_total_space(_memtable_total_space / 4)
-    , _dirty_memory_manager(_memtable_total_space)
+    // Allow system tables a pool of 10 MB extra memory to write over the threshold. Under normal
+    // circumnstances it won't matter, but when we throttle, some system requests will be able to
+    // keep being serviced even if user requests are not.
+    //
+    // Note that even if we didn't allow extra memory, we would still want to keep system requests
+    // in a different region group. This is because throttled requests are serviced in FIFO order,
+    // and we don't want system requests to be waiting for a long time behind user requests.
+    , _system_dirty_memory_manager(_memtable_total_space + (10 << 20))
+    , _dirty_memory_manager(&_system_dirty_memory_manager, _memtable_total_space)
     , _streaming_dirty_memory_manager(&_dirty_memory_manager, _streaming_memtable_total_space)
     , _version(empty_version)
     , _enable_incremental_backups(cfg.incremental_backups())
@@ -2271,6 +2279,8 @@ database::stop() {
         return parallel_for_each(_column_families, [this] (auto& val_pair) {
             return val_pair.second->stop();
         });
+    }).then([this] {
+        return _system_dirty_memory_manager.shutdown();
     }).then([this] {
         return _dirty_memory_manager.shutdown();
     }).then([this] {

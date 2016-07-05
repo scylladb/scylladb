@@ -165,7 +165,10 @@ public:
 
 class memtable_dirty_memory_manager: public dirty_memory_manager {
 public:
-    memtable_dirty_memory_manager(size_t threshold) : dirty_memory_manager(threshold, 4) {}
+    memtable_dirty_memory_manager(dirty_memory_manager* parent, size_t threshold) : dirty_memory_manager(parent, threshold, 4) {}
+    // This constructor will be called for the system tables (no parent). Its flushes are usually drive by us
+    // and not the user, and tend to be small in size. So we'll allow only two slots.
+    memtable_dirty_memory_manager(size_t threshold) : dirty_memory_manager(threshold, 2) {}
 };
 
 // We could just add all memtables, regardless of types, to a single list, and
@@ -902,6 +905,7 @@ class database {
     std::unique_ptr<db::config> _cfg;
     size_t _memtable_total_space = 500 << 20;
     size_t _streaming_memtable_total_space = 500 << 20;
+    memtable_dirty_memory_manager _system_dirty_memory_manager;
     memtable_dirty_memory_manager _dirty_memory_manager;
     streaming_dirty_memory_manager _streaming_dirty_memory_manager;
     semaphore _read_concurrency_sem{max_concurrent_reads()};
