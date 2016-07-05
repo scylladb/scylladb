@@ -99,7 +99,7 @@ private:
     scollectd::registrations _registrations;
 
 public:
-    trace_keyspace_helper();
+    trace_keyspace_helper(tracing& tr);
     virtual ~trace_keyspace_helper() {}
 
     // Create keyspace and tables.

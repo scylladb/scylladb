@@ -102,6 +102,11 @@ public:
 struct i_tracing_backend_helper {
     using wall_clock = std::chrono::system_clock;
 
+protected:
+    tracing& _local_tracing;
+
+public:
+    i_tracing_backend_helper(tracing& tr) : _local_tracing(tr) {}
     virtual ~i_tracing_backend_helper() {}
     virtual future<> start() = 0;
     virtual future<> stop() = 0;

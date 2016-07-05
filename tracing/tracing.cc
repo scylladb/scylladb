@@ -88,7 +88,7 @@ tracing::tracing(const sstring& tracing_backend_helper_class_name)
                     , scollectd::make_typed(scollectd::data_type::GAUGE, _flushing_sessions))}
         , _gen(std::random_device()()) {
     try {
-        _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(tracing_backend_helper_class_name);
+        _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(tracing_backend_helper_class_name, *this);
     } catch (no_such_class& e) {
         logger.error("Can't create tracing backend helper {}: not supported", tracing_backend_helper_class_name);
         throw;

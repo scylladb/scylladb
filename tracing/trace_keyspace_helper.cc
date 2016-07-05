@@ -52,8 +52,9 @@ const sstring trace_keyspace_helper::KEYSPACE_NAME("system_traces");
 const sstring trace_keyspace_helper::SESSIONS("sessions");
 const sstring trace_keyspace_helper::EVENTS("events");
 
-trace_keyspace_helper::trace_keyspace_helper()
-            : _registrations{
+trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
+            : i_tracing_backend_helper(tr)
+            , _registrations{
         scollectd::add_polled_metric(scollectd::type_instance_id("tracing_keyspace_helper"
                         , scollectd::per_cpu_plugin_instance
                         , "total_operations", "tracing_errors")
@@ -195,7 +196,7 @@ void trace_keyspace_helper::write_event_record(const utils::UUID& session_id,
                                                wall_clock::time_point event_time_point) {
     try {
         _mutation_makers[session_id].second.makers.emplace_back([message = std::move(message), elapsed, ttl, event_time_point, this] (const utils::UUID& session_id) mutable {
-            return make_event_mutation(session_id, message, elapsed, tracing::get_local_tracing_instance().get_thread_name(), ttl, event_time_point);
+            return make_event_mutation(session_id, message, elapsed, _local_tracing.get_thread_name(), ttl, event_time_point);
         });
     } catch (...) {
         // OOM: ignore
@@ -291,7 +292,7 @@ void trace_keyspace_helper::kick() {
     parallel_for_each(_mutation_makers,[this](decltype(_mutation_makers)::value_type& uuid_mutation_makers) {
         return with_gate(_pending_writes, [this, &uuid_mutation_makers]  {
             logger.debug("{}: flushing traces", uuid_mutation_makers.first);
-            return this->flush_one_session_mutations(uuid_mutation_makers.first, uuid_mutation_makers.second).finally([] { tracing::get_local_tracing_instance().write_complete(); });
+            return this->flush_one_session_mutations(uuid_mutation_makers.first, uuid_mutation_makers.second).finally([this] { _local_tracing.write_complete(); });
         }).handle_exception([this] (auto ep) {
             try {
                 ++_stats.tracing_errors;
@@ -314,7 +315,7 @@ void trace_keyspace_helper::kick() {
     _mutation_makers.clear();
 }
 
-using registry = class_registrator<i_tracing_backend_helper, trace_keyspace_helper>;
+using registry = class_registrator<i_tracing_backend_helper, trace_keyspace_helper, tracing&>;
 static registry registrator1("trace_keyspace_helper");
 
 }
