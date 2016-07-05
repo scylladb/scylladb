@@ -1753,7 +1753,7 @@ std::set<sstring> gossiper::get_supported_features() const {
         std::set<sstring> result;
         std::set_intersection(features.begin(), features.end(),
                 common_features.begin(), common_features.end(),
-                std::inserter(result, result.begin()));
+                std::inserter(result, result.end()));
         common_features = std::move(result);
     }
     common_features.erase("");
