@@ -1408,7 +1408,7 @@ future<> gossiper::do_shadow_round() {
             }
             auto& ss = service::get_local_storage_service();
             sleep(std::chrono::seconds(1)).get();
-            if (clk::now() > t + ss.get_ring_delay() * 60) {
+            if (clk::now() > t + ss.get_ring_delay() * 10) {
                 throw std::runtime_error(sprint("Unable to gossip with any seeds (ShadowRound)"));
             }
             if (this->_in_shadow_round) {
@@ -1712,6 +1712,13 @@ bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
     return !unsafe_statuses.count(status);
 }
 
+std::set<sstring> to_feature_set(sstring features_string) {
+    std::set<sstring> features;
+    boost::split(features, features_string, boost::is_any_of(","));
+    features.erase("");
+    return features;
+}
+
 std::set<sstring> gossiper::get_supported_features(inet_address endpoint) const {
     std::set<sstring> features;
     auto ep_state = get_endpoint_state_for_endpoint(endpoint);
@@ -1722,9 +1729,7 @@ std::set<sstring> gossiper::get_supported_features(inet_address endpoint) const 
     if (!app_state) {
         return features;
     }
-    boost::split(features, app_state->value, boost::is_any_of(","));
-    features.erase("");
-    return features;
+    return to_feature_set(app_state->value);
 }
 
 std::set<sstring> gossiper::get_supported_features() const {
@@ -1748,7 +1753,34 @@ std::set<sstring> gossiper::get_supported_features() const {
         std::set<sstring> result;
         std::set_intersection(features.begin(), features.end(),
                 common_features.begin(), common_features.end(),
-                std::inserter(result, result.begin()));
+                std::inserter(result, result.end()));
+        common_features = std::move(result);
+    }
+    common_features.erase("");
+    return common_features;
+}
+
+std::set<sstring> gossiper::get_supported_features(std::unordered_map<gms::inet_address, sstring> peer_features_string) const {
+    std::set<sstring> common_features;
+    // Convert feature string split by "," to std::set
+    std::unordered_map<gms::inet_address, std::set<sstring>> features_map;
+    for (auto& x : peer_features_string) {
+        std::set<sstring> features = to_feature_set(x.second);
+        if (features.empty()) {
+            return std::set<sstring>();
+        }
+        if (common_features.empty()) {
+            common_features = features;
+        }
+        features_map.emplace(x.first, features);
+    }
+
+    for (auto& x : features_map) {
+        auto& features = x.second;
+        std::set<sstring> result;
+        std::set_intersection(features.begin(), features.end(),
+                common_features.begin(), common_features.end(),
+                std::inserter(result, result.end()));
         common_features = std::move(result);
     }
     common_features.erase("");
@@ -1756,10 +1788,21 @@ std::set<sstring> gossiper::get_supported_features() const {
 }
 
 void gossiper::check_knows_remote_features(sstring local_features_string) const {
-    std::set<sstring> local_features;
-    boost::split(local_features, local_features_string, boost::is_any_of(","));
+    std::set<sstring> local_features = to_feature_set(local_features_string);
     auto local_endpoint = get_broadcast_address();
     auto common_features = get_supported_features();
+    if (boost::range::includes(local_features, common_features)) {
+        logger.info("Feature check passed. Local node {} features = {}, Remote common_features = {}",
+                local_endpoint, local_features, common_features);
+    } else {
+        throw std::runtime_error(sprint("Feature check failed. This node can not join the cluster because it does not understand the feature. Local node %s features = %s, Remote common_features = %s", local_endpoint, local_features, common_features));
+    }
+}
+
+void gossiper::check_knows_remote_features(sstring local_features_string, std::unordered_map<inet_address, sstring> peer_features_string) const {
+    std::set<sstring> local_features = to_feature_set(local_features_string);
+    auto local_endpoint = get_broadcast_address();
+    auto common_features = get_supported_features(peer_features_string);
     if (boost::range::includes(local_features, common_features)) {
         logger.info("Feature check passed. Local node {} features = {}, Remote common_features = {}",
                 local_endpoint, local_features, common_features);
