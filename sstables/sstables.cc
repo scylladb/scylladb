@@ -892,7 +892,7 @@ future<index_list> sstable::read_indexes(uint64_t summary_idx, const io_priority
         // TODO: it's redundant to constrain the consumer here to stop at
         // index_size()-position, the input stream is already constrained.
         auto ctx = make_lw_shared<index_consume_entry_context<index_consumer>>(ic, std::move(stream), this->index_size() - position);
-        return ctx->consume_input(*ctx).then([ctx] {
+        return ctx->consume_input(*ctx).finally([ctx] {
             return ctx->close();
         }).then([ctx, &ic] {
             return make_ready_future<index_list>(std::move(ic.indexes));
@@ -1650,7 +1650,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                 auto stream = make_file_input_stream(index_file, 0, size, std::move(options));
                 return do_with(summary_generator(_summary), [this, &pc, stream = std::move(stream), size] (summary_generator& s) mutable {
                     auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(s, std::move(stream), size);
-                    return ctx->consume_input(*ctx).then([ctx] {
+                    return ctx->consume_input(*ctx).finally([ctx] {
                         return ctx->close();
                     }).then([this, ctx, &s] {
                         seal_summary(_summary, std::move(s.first_key), std::move(s.last_key));
@@ -1808,22 +1808,6 @@ sstable::component_type sstable::component_from_sstring(sstring &s) {
     return reverse_map(s, _component_map);
 }
 
-// NOTE: Prefer using data_stream() if you know the byte position at which the
-// read will stop. Knowing the end allows data_stream() to use a large a read-
-// ahead buffer before reaching the end, but not over-read at the end, so
-// data_stream() is more efficient than data_stream_at().
-input_stream<char> sstable::data_stream_at(uint64_t pos, uint64_t buf_size, const io_priority_class& pc) {
-    file_input_stream_options options;
-    options.buffer_size = buf_size;
-    options.io_priority_class = pc;
-    if (_compression) {
-        return make_compressed_file_input_stream(_data_file, &_compression,
-                pos, _compression.data_len - pos, std::move(options));
-    } else {
-        return make_file_input_stream(_data_file, pos, std::move(options));
-    }
-}
-
 input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_priority_class& pc) {
     file_input_stream_options options;
     options.buffer_size = sstable_buffer_size;
@@ -1839,7 +1823,9 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_prior
 
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, const io_priority_class& pc) {
     return do_with(data_stream(pos, len, pc), [len] (auto& stream) {
-        return stream.read_exactly(len);
+        return stream.read_exactly(len).finally([&stream] {
+            return stream.close();
+        });
     });
 }
 
