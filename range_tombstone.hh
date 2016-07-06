@@ -22,6 +22,7 @@
 #pragma once
 
 #include <boost/intrusive/set.hpp>
+#include <boost/range/algorithm.hpp>
 #include <experimental/optional>
 #include "hashing.hh"
 #include "keys.hh"
@@ -241,4 +242,48 @@ private:
             container_type::node_algorithms::init(other_link.this_ptr());
         }
     }
+};
+
+// This is a helper intended for accumulating tombstones from a streamed
+// mutation and determining what is the tombstone for a given clustering row.
+//
+// After apply(rt) or tombstone_for_row(ck) are called there are followng
+// restrictions for subsequent calls:
+//  - apply(rt1) can be invoked only if rt.start_bound() < rt1.start_bound()
+//    and ck < rt1.start_bound()
+//  - tombstone_for_row(ck1) can be invoked only if rt.start_bound() < ck1
+//    and ck < ck1
+//
+// In other words position in partition of the mutation fragments passed to the
+// accumulator must be increasing.
+class range_tombstone_accumulator {
+    bound_view::compare _cmp;
+    tombstone _partition_tombstone;
+    std::deque<range_tombstone> _range_tombstones;
+    tombstone _current_tombstone;
+    bool _reversed;
+private:
+    void update_current_tombstone();
+    void drop_unneeded_tombstones(const clustering_key_prefix& ck, int w = 0);
+public:
+    range_tombstone_accumulator(const schema& s, bool reversed)
+        : _cmp(s), _reversed(reversed) { }
+
+    void set_partition_tombstone(tombstone t) {
+        _partition_tombstone = t;
+        update_current_tombstone();
+    }
+
+    tombstone get_partition_tombstone() const {
+        return _partition_tombstone;
+    }
+
+    tombstone tombstone_for_row(const clustering_key_prefix& ck) {
+        drop_unneeded_tombstones(ck);
+        return _current_tombstone;
+    }
+
+    void apply(const range_tombstone& rt);
+
+    void clear();
 };
