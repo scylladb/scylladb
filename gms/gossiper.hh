@@ -520,17 +520,17 @@ private:
     condition_variable _features_condvar;
     std::unordered_map<sstring, std::vector<feature*>> _registered_features;
     friend class feature;
-public:
     // Get features supported by a particular node
     std::set<sstring> get_supported_features(inet_address endpoint) const;
     // Get features supported by all the nodes this node knows about
     std::set<sstring> get_supported_features() const;
     // Get features supported by all the nodes listed in the address/feature map
-    std::set<sstring> get_supported_features(std::unordered_map<gms::inet_address, sstring> peer_features_string) const;
+    static std::set<sstring> get_supported_features(std::unordered_map<gms::inet_address, sstring> peer_features_string);
     // Wait for features are available on all nodes this node knows about
     future<> wait_for_feature_on_all_node(std::set<sstring> features);
     // Wait for features are available on a particular node
     future<> wait_for_feature_on_node(std::set<sstring> features, inet_address endpoint);
+public:
     void check_knows_remote_features(sstring local_features_string) const;
     void check_knows_remote_features(sstring local_features_string, std::unordered_map<inet_address, sstring> peer_features_string) const;
 private:

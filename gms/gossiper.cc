@@ -1760,7 +1760,7 @@ std::set<sstring> gossiper::get_supported_features() const {
     return common_features;
 }
 
-std::set<sstring> gossiper::get_supported_features(std::unordered_map<gms::inet_address, sstring> peer_features_string) const {
+std::set<sstring> gossiper::get_supported_features(std::unordered_map<gms::inet_address, sstring> peer_features_string) {
     std::set<sstring> common_features;
     // Convert feature string split by "," to std::set
     std::unordered_map<gms::inet_address, std::set<sstring>> features_map;
