@@ -122,12 +122,15 @@ static void delete_sstables_for_interrupted_compaction(std::vector<shared_sstabl
 }
 
 static std::vector<shared_sstable> get_uncompacting_sstables(column_family& cf, std::vector<shared_sstable>& sstables) {
-    auto all_sstables = cf.get_sstables_including_compacted_undeleted();
+    auto all_sstables = boost::copy_range<std::vector<shared_sstable>>(*cf.get_sstables_including_compacted_undeleted());
+    boost::sort(all_sstables, [] (const shared_sstable& x, const shared_sstable& y) {
+        return x->generation() < y->generation();
+    });
     std::sort(sstables.begin(), sstables.end(), [] (const shared_sstable& x, const shared_sstable& y) {
         return x->generation() < y->generation();
     });
     std::vector<shared_sstable> not_compacted_sstables;
-    boost::set_difference(*all_sstables, sstables,
+    boost::set_difference(all_sstables, sstables,
         std::back_inserter(not_compacted_sstables), [] (const shared_sstable& x, const shared_sstable& y) {
             return x->generation() < y->generation();
         });
