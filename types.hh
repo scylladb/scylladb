@@ -1152,6 +1152,12 @@ to_bytes(const std::string& x) {
 }
 
 inline
+bytes_view
+to_bytes_view(const std::string& x) {
+    return bytes_view(reinterpret_cast<const int8_t*>(x.data()), x.size());
+}
+
+inline
 bytes
 to_bytes(bytes_view x) {
     return bytes(x.begin(), x.size());
