@@ -113,6 +113,13 @@ column_family::make_streaming_memtable_list() {
     return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_streaming_memtable_size, _config.streaming_dirty_memory_manager);
 }
 
+lw_shared_ptr<memtable_list>
+column_family::make_streaming_memtable_big_list(streaming_memtable_big& smb) {
+    auto seal = [this, &smb] (memtable_list::flush_behavior) { return seal_active_streaming_memtable_big(smb); };
+    auto get_schema =  [this] { return schema(); };
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_streaming_memtable_size, _config.streaming_dirty_memory_manager);
+}
+
 column_family::column_family(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager)
     : _schema(std::move(schema))
     , _config(std::move(config))
@@ -165,6 +172,11 @@ logalloc::occupancy_stats column_family::occupancy() const {
     }
     for (auto m : *_streaming_memtables) {
         res += m->region().occupancy();
+    }
+    for (auto smb : _streaming_memtables_big) {
+        for (auto m : *smb.second->memtables) {
+            res += m->region().occupancy();
+        }
     }
     return res;
 }
@@ -738,6 +750,35 @@ column_family::seal_active_streaming_memtable_immediate() {
 
         return f;
     }).finally([guard = std::move(guard)] { });
+}
+
+future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_big& smb) {
+    auto old = smb.memtables->back();
+    if (old->empty()) {
+        return make_ready_future<>();
+    }
+    smb.memtables->add_memtable();
+    smb.memtables->erase(old);
+    return with_gate(_streaming_flush_gate, [this, old, &smb] {
+        return with_gate(smb.flush_in_progress, [this, old, &smb] {
+            return with_lock(_sstables_lock.for_read(), [this, old, &smb] {
+                auto newtab = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(),
+                                                                _config.datadir, calculate_generation_for_new_table(),
+                                                                sstables::sstable::version_types::ka,
+                                                                sstables::sstable::format_types::big);
+
+                newtab->set_unshared();
+
+                auto&& priority = service::get_local_streaming_write_priority();
+                return newtab->write_components(*old, incremental_backups_enabled(), priority, true).then([this, newtab, old, &smb] {
+                    smb.sstables.emplace_back(newtab);
+                }).handle_exception([] (auto ep) {
+                    dblog.error("failed to write streamed sstable: {}", ep);
+                    return make_exception_future<>(ep);
+                });
+            });
+        });
+    });
 }
 
 future<>
@@ -2107,9 +2148,24 @@ column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const
     }
 }
 
-void column_family::apply_streaming_mutation(schema_ptr m_schema, utils::UUID plan_id, const frozen_mutation& m) {
+void column_family::apply_streaming_mutation(schema_ptr m_schema, utils::UUID plan_id, const frozen_mutation& m, bool fragmented) {
+    if (fragmented) {
+        apply_streaming_big_mutation(std::move(m_schema), plan_id, m);
+        return;
+    }
     _streaming_memtables->active_memtable().apply(m, m_schema);
     _streaming_memtables->seal_on_overflow();
+}
+
+void column_family::apply_streaming_big_mutation(schema_ptr m_schema, utils::UUID plan_id, const frozen_mutation& m) {
+    auto it = _streaming_memtables_big.find(plan_id);
+    if (it == _streaming_memtables_big.end()) {
+        it = _streaming_memtables_big.emplace(plan_id, make_lw_shared<streaming_memtable_big>()).first;
+        it->second->memtables = _config.enable_disk_writes ? make_streaming_memtable_big_list(*it->second) : make_memory_only_memtable_list();
+    }
+    auto entry = it->second;
+    entry->memtables->active_memtable().apply(m, m_schema);
+    entry->memtables->seal_on_overflow();
 }
 
 void
@@ -2217,15 +2273,15 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m) {
     });
 }
 
-future<> database::apply_streaming_mutation(schema_ptr s, utils::UUID plan_id, const frozen_mutation& m) {
+future<> database::apply_streaming_mutation(schema_ptr s, utils::UUID plan_id, const frozen_mutation& m, bool fragmented) {
     if (!s->is_synced()) {
         throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
                                  s->ks_name(), s->cf_name(), s->version()));
     }
-    return _streaming_dirty_memory_manager.region_group().run_when_memory_available([this, &m, plan_id, s = std::move(s)] {
+    return _streaming_dirty_memory_manager.region_group().run_when_memory_available([this, &m, plan_id, fragmented, s = std::move(s)] {
         auto uuid = m.column_family_id();
         auto& cf = find_column_family(uuid);
-        cf.apply_streaming_mutation(s, plan_id, std::move(m));
+        cf.apply_streaming_mutation(s, plan_id, std::move(m), fragmented);
     });
 }
 
@@ -2735,8 +2791,10 @@ future<> column_family::flush_streaming_mutations(utils::UUID plan_id, std::vect
     // be to change seal_active_streaming_memtable_delayed to take a range parameter. However, we
     // need this code to go away as soon as we can (see FIXME above). So the double gate is a better
     // temporary counter measure.
-    return with_gate(_streaming_flush_gate, [this, ranges = std::move(ranges)] {
-        return _streaming_memtables->seal_active_memtable(memtable_list::flush_behavior::delayed).finally([this] {
+    return with_gate(_streaming_flush_gate, [this, plan_id, ranges = std::move(ranges)] {
+        return flush_streaming_big_mutations(plan_id).then([this] {
+            return _streaming_memtables->seal_active_memtable(memtable_list::flush_behavior::delayed);
+        }).finally([this] {
             return _streaming_flush_phaser.advance_and_await();
         }).finally([this, ranges = std::move(ranges)] {
             if (!_config.enable_cache) {
@@ -2751,11 +2809,49 @@ future<> column_family::flush_streaming_mutations(utils::UUID plan_id, std::vect
     });
 }
 
+future<> column_family::flush_streaming_big_mutations(utils::UUID plan_id) {
+    auto it = _streaming_memtables_big.find(plan_id);
+    if (it == _streaming_memtables_big.end()) {
+        return make_ready_future<>();
+    }
+    auto entry = it->second;
+    _streaming_memtables_big.erase(it);
+    return entry->memtables->seal_active_memtable(memtable_list::flush_behavior::immediate).then([entry] {
+        return entry->flush_in_progress.close();
+    }).then([this, entry] {
+        return parallel_for_each(entry->sstables, [this] (auto& sst) {
+            return sst->seal_sstable(this->incremental_backups_enabled()).then([sst] {
+                return sst->open_data();
+            });
+        }).then([this, entry] {
+            for (auto&& sst : entry->sstables) {
+                add_sstable(sst);
+            }
+            trigger_compaction();
+        });
+    });
+}
+
+future<> column_family::fail_streaming_mutations(utils::UUID plan_id) {
+    auto it = _streaming_memtables_big.find(plan_id);
+    if (it == _streaming_memtables_big.end()) {
+        return make_ready_future<>();
+    }
+    auto entry = it->second;
+    _streaming_memtables_big.erase(it);
+    return entry->flush_in_progress.close().then([this, entry] {
+        for (auto&& sst : entry->sstables) {
+            sst->mark_for_deletion();
+        }
+    });
+}
+
 future<> column_family::clear() {
     _memtables->clear();
     _memtables->add_memtable();
     _streaming_memtables->clear();
     _streaming_memtables->add_memtable();
+    _streaming_memtables_big.clear();
     return _cache.clear();
 }
 
@@ -2836,6 +2932,12 @@ void column_family::set_schema(schema_ptr s) {
 
     for (auto& m : *_streaming_memtables) {
         m->set_schema(s);
+    }
+
+    for (auto smb : _streaming_memtables_big) {
+        for (auto m : *smb.second->memtables) {
+            m->set_schema(s);
+        }
     }
 
     _cache.set_schema(s);

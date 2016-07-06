@@ -254,7 +254,7 @@ public:
     future<> mutate_locally(const schema_ptr&, const frozen_mutation& m);
     future<> mutate_locally(std::vector<mutation> mutations);
 
-    future<> mutate_streaming_mutation(const schema_ptr&, utils::UUID plan_id, const frozen_mutation& m);
+    future<> mutate_streaming_mutation(const schema_ptr&, utils::UUID plan_id, const frozen_mutation& m, bool fragmented);
 
     /**
     * Use this method to have these Mutations applied
