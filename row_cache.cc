@@ -28,6 +28,7 @@
 #include "memtable.hh"
 #include <chrono>
 #include "utils/move.hh"
+#include <boost/version.hpp>
 
 using namespace std::chrono_literals;
 
@@ -584,8 +585,25 @@ class scanning_and_populating_reader final : public mutation_reader::impl{
                 return make_ready_future<streamed_mutation_opt>(std::move(mo));
             });
         }
+#if BOOST_VERSION < 105600
+        struct thunk {
+            using result_type = void;
+            state_machine* sm;
+            std::experimental::optional<future<streamed_mutation_opt>> ret;
+            template <typename T>
+            void operator()(T& foo) {
+                ret = sm->operator()(foo);
+            }
+        };
+#endif
         future<streamed_mutation_opt> operator()() {
+#if BOOST_VERSION >= 105600
             return boost::apply_visitor(*this, _state);
+#else
+            thunk thunkit{this};
+            boost::apply_visitor(thunkit, _state);
+            return std::move(thunkit.ret.value());
+#endif
         }
     };
 
