@@ -110,4 +110,12 @@ namespace sstables {
 
     std::vector<sstables::shared_sstable>
     size_tiered_most_interesting_bucket(const std::list<sstables::shared_sstable>& candidates);
+
+    // Return list of expired sstables for column family cf.
+    // A sstable is fully expired *iff* its max_local_deletion_time precedes gc_before and its
+    // max timestamp is lower than any other relevant sstable.
+    // In simpler words, a sstable is fully expired if all of its live cells with TTL is expired
+    // and possibly doesn't contain any tombstone that covers cells in other sstables.
+    std::vector<sstables::shared_sstable>
+    get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstable>& compacting, int32_t gc_before);
 }
