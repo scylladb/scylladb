@@ -91,7 +91,7 @@ public:
 };
 
 // Managed by lw_shared_ptr<>.
-class memtable final : public enable_lw_shared_from_this<memtable> {
+class memtable final : public enable_lw_shared_from_this<memtable>, private logalloc::region {
 public:
     using partitions_type = bi::set<memtable_entry,
         bi::member_hook<memtable_entry, bi::set_member_hook<>, &memtable_entry::_link>,
@@ -99,7 +99,6 @@ public:
 private:
     schema_ptr _schema;
     logalloc::allocating_section _read_section;
-    mutable logalloc::region _region;
     logalloc::allocating_section _allocating_section;
     partitions_type partitions;
     db::replay_position _replay_position;
@@ -123,8 +122,13 @@ public:
     void apply(const mutation& m, const db::replay_position& = db::replay_position());
     // The mutation is upgraded to current schema.
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& = db::replay_position());
+
+    static memtable& from_region(logalloc::region& r) {
+        return static_cast<memtable&>(r);
+    }
+
     const logalloc::region& region() const {
-        return _region;
+        return *this;
     }
 public:
     size_t partition_count() const;

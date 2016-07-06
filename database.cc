@@ -92,21 +92,21 @@ lw_shared_ptr<memtable_list>
 column_family::make_memory_only_memtable_list() {
     auto seal = [this] (memtable_list::flush_behavior ignored) { return make_ready_future<>(); };
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_memtable_size, _config.dirty_memory_region_group, _memtables_serializer);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_memtable_size, _config.dirty_memory_manager);
 }
 
 lw_shared_ptr<memtable_list>
 column_family::make_memtable_list() {
     auto seal = [this] (memtable_list::flush_behavior behavior) { return seal_active_memtable(behavior); };
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_memtable_size, _config.dirty_memory_region_group, _memtables_serializer);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_memtable_size, _config.dirty_memory_manager);
 }
 
 lw_shared_ptr<memtable_list>
 column_family::make_streaming_memtable_list() {
     auto seal = [this] (memtable_list::flush_behavior behavior) { return seal_active_streaming_memtable(behavior); };
     auto get_schema =  [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_streaming_memtable_size, _config.streaming_dirty_memory_region_group, _streaming_serializer);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_streaming_memtable_size, _config.streaming_dirty_memory_manager);
 }
 
 column_family::column_family(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager)
@@ -1329,14 +1329,18 @@ database::database(const db::config& cfg)
         return memtable_total_space;
     }())
     , _streaming_memtable_total_space(_memtable_total_space / 4)
-    , _streaming_dirty_memory_region_group(&_dirty_memory_region_group)
+    // Allow system tables a pool of 10 MB extra memory to write over the threshold. Under normal
+    // circumnstances it won't matter, but when we throttle, some system requests will be able to
+    // keep being serviced even if user requests are not.
+    //
+    // Note that even if we didn't allow extra memory, we would still want to keep system requests
+    // in a different region group. This is because throttled requests are serviced in FIFO order,
+    // and we don't want system requests to be waiting for a long time behind user requests.
+    , _system_dirty_memory_manager(*this, _memtable_total_space + (10 << 20))
+    , _dirty_memory_manager(*this, &_system_dirty_memory_manager, _memtable_total_space)
+    , _streaming_dirty_memory_manager(*this, &_dirty_memory_manager, _streaming_memtable_total_space)
     , _version(empty_version)
     , _enable_incremental_backups(cfg.incremental_backups())
-    , _memtables_throttler(_memtable_total_space, _dirty_memory_region_group)
-    , _streaming_throttler(_streaming_memtable_total_space,
-                           _streaming_dirty_memory_region_group,
-                           &_memtables_throttler
-    )
 {
     _compaction_manager.start();
     setup_collectd();
@@ -1351,7 +1355,7 @@ database::setup_collectd() {
                 , scollectd::per_cpu_plugin_instance
                 , "bytes", "dirty")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
-            return _dirty_memory_region_group.memory_used();
+            return dirty_memory_region_group().memory_used();
     })));
 
     _collectd.push_back(
@@ -1780,8 +1784,8 @@ keyspace::make_column_family_config(const schema& s) const {
     cfg.enable_cache = _config.enable_cache;
     cfg.max_memtable_size = _config.max_memtable_size;
     cfg.max_streaming_memtable_size = _config.max_streaming_memtable_size;
-    cfg.dirty_memory_region_group = _config.dirty_memory_region_group;
-    cfg.streaming_dirty_memory_region_group = _config.streaming_dirty_memory_region_group;
+    cfg.dirty_memory_manager = _config.dirty_memory_manager;
+    cfg.streaming_dirty_memory_manager = _config.streaming_dirty_memory_manager;
     cfg.read_concurrency_config = _config.read_concurrency_config;
     cfg.cf_stats = _config.cf_stats;
     cfg.enable_incremental_backups = _config.enable_incremental_backups;
@@ -2109,14 +2113,64 @@ column_family::check_valid_rp(const db::replay_position& rp) const {
     }
 }
 
-future<> database::apply_in_memory(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& rp) {
-    try {
-        auto& cf = find_column_family(m.column_family_id());
-        cf.apply(m, m_schema, rp);
-    } catch (no_such_column_family&) {
-        dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
+future<> dirty_memory_manager::shutdown() {
+    _db_shutdown_requested = true;
+    return _waiting_flush_gate.close().then([this] {
+        return _region_group.shutdown();
+    });
+}
+
+void dirty_memory_manager::maybe_do_active_flush() {
+    if (!under_pressure() || _db_shutdown_requested) {
+        return;
     }
-    return make_ready_future<>();
+
+    // Flush already ongoing. We don't need to initiate an active flush at this moment.
+    if (_flush_serializer.current() != _concurrency) {
+        return;
+    }
+
+    // There are many criteria that can be used to select what is the best memtable to
+    // flush. Most of the time we want some coordination with the commitlog to allow us to
+    // release commitlog segments as early as we can.
+    //
+    // But during pressure condition, we'll just pick the CF that holds the largest
+    // memtable. The advantage of doing this is that this is objectively the one that will
+    // release the biggest amount of memory and is less likely to be generating tiny
+    // SSTables. The disadvantage is that right now, because we only release memory when the
+    // SSTable is fully written, that may take a bit of time to happen.
+    //
+    // However, since we'll very soon have a mechanism in place to account for the memory
+    // that was already written in one form or another, that disadvantage is mitigated.
+    memtable& biggest_memtable = memtable::from_region(*_region_group.get_largest_region());
+    auto& biggest_cf = _db.find_column_family(biggest_memtable.schema());
+    memtable_list& mtlist = get_memtable_list(biggest_cf);
+    // Please note that this will eventually take the semaphore and prevent two concurrent flushes.
+    // We don't need any other extra protection.
+    mtlist.seal_active_memtable(memtable_list::flush_behavior::immediate);
+}
+
+memtable_list& memtable_dirty_memory_manager::get_memtable_list(column_family& cf) {
+    return *(cf._memtables);
+}
+
+memtable_list& streaming_dirty_memory_manager::get_memtable_list(column_family& cf) {
+    return *(cf._streaming_memtables);
+}
+
+void dirty_memory_manager::start_reclaiming() {
+    maybe_do_active_flush();
+}
+
+future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position rp) {
+    return _dirty_memory_manager.region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), rp = std::move(rp)] {
+        try {
+            auto& cf = find_column_family(m.column_family_id());
+            cf.apply(m, m_schema, rp);
+        } catch (no_such_column_family&) {
+            dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
+        }
+    });
 }
 
 future<> database::do_apply(schema_ptr s, const frozen_mutation& m) {
@@ -2148,43 +2202,11 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m) {
     return apply_in_memory(m, s, db::replay_position());
 }
 
-future<> throttle_state::throttle() {
-    if (!should_throttle() && _throttled_requests.empty()) {
-        // All is well, go ahead
-        return make_ready_future<>();
-    }
-    // We must throttle, wait a bit
-    if (_throttled_requests.empty()) {
-        _throttling_timer.arm_periodic(10ms);
-    }
-    _throttled_requests.emplace_back();
-    return _throttled_requests.back().get_future();
-}
-
-void throttle_state::unthrottle() {
-    // Release one request per free 1MB we have
-    // FIXME: improve this
-    if (should_throttle()) {
-        return;
-    }
-    size_t avail = std::max((_max_space - _region_group.memory_used()) >> 20, size_t(1));
-    avail = std::min(_throttled_requests.size(), avail);
-    for (size_t i = 0; i < avail; ++i) {
-        _throttled_requests.front().set_value();
-        _throttled_requests.pop_front();
-    }
-    if (_throttled_requests.empty()) {
-        _throttling_timer.cancel();
-    }
-}
-
 future<> database::apply(schema_ptr s, const frozen_mutation& m) {
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
     }
-    return _memtables_throttler.throttle().then([this, &m, s = std::move(s)] {
-        return do_apply(std::move(s), m);
-    }).then([this, s = _stats] {
+    return do_apply(std::move(s), m).then([this, s = _stats] {
         ++s->total_writes;
     });
 }
@@ -2194,23 +2216,7 @@ future<> database::apply_streaming_mutation(schema_ptr s, const frozen_mutation&
         throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
                                  s->ks_name(), s->cf_name(), s->version()));
     }
-
-    // TODO (maybe): This will use the same memory region group as memtables, so when
-    // one of them throttles, both will.
-    //
-    // It would be possible to provide further QoS for CQL originated memtables
-    // by keeping the streaming memtables into a different region group, with its own
-    // separate limit.
-    //
-    // Because, however, there are many other limits in play that may kick in,
-    // I am not convinced that this will ever be a problem.
-    //
-    // If we do find ourselves in the situation that we are throttling incoming
-    // writes due to high level of streaming writes, and we are sure that this
-    // is the best solution, we can just change the memtable creation method so
-    // that each kind of memtable creates from a different region group - and then
-    // update the throttle conditions accordingly.
-    return _streaming_throttler.throttle().then([this, &m, s = std::move(s)] {
+    return _streaming_dirty_memory_manager.region_group().run_when_memory_available([this, &m, s = std::move(s)] {
         auto uuid = m.column_family_id();
         auto& cf = find_column_family(uuid);
         cf.apply_streaming_mutation(s, std::move(m));
@@ -2242,8 +2248,8 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
         // All writes should go to the main memtable list if we're not durable
         cfg.max_streaming_memtable_size = 0;
     }
-    cfg.dirty_memory_region_group = &_dirty_memory_region_group;
-    cfg.streaming_dirty_memory_region_group = &_streaming_dirty_memory_region_group;
+    cfg.dirty_memory_manager = &_dirty_memory_manager;
+    cfg.streaming_dirty_memory_manager = &_streaming_dirty_memory_manager;
     cfg.read_concurrency_config.sem = &_read_concurrency_sem;
     cfg.read_concurrency_config.timeout = _cfg->read_request_timeout_in_ms() * 1ms;
     // Assume a queued read takes up 1kB of memory, and allow 2% of memory to be filled up with such reads.
@@ -2316,6 +2322,12 @@ database::stop() {
         return parallel_for_each(_column_families, [this] (auto& val_pair) {
             return val_pair.second->stop();
         });
+    }).then([this] {
+        return _system_dirty_memory_manager.shutdown();
+    }).then([this] {
+        return _dirty_memory_manager.shutdown();
+    }).then([this] {
+        return _streaming_dirty_memory_manager.shutdown();
     });
 }
 

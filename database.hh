@@ -99,35 +99,93 @@ void make(database& db, bool durable, bool volatile_testing_only);
 }
 }
 
-class throttle_state {
-    size_t _max_space;
-    logalloc::region_group& _region_group;
-    throttle_state* _parent;
+class replay_position_reordered_exception : public std::exception {};
 
-    circular_buffer<promise<>> _throttled_requests;
-    timer<> _throttling_timer{[this] { unthrottle(); }};
-    void unthrottle();
-    bool should_throttle() const {
-        if (_region_group.memory_used() > _max_space) {
-            return true;
-        }
-        if (_parent) {
-            return _parent->should_throttle();
-        }
-        return false;
-    }
+using shared_memtable = lw_shared_ptr<memtable>;
+class memtable_list;
+
+class dirty_memory_manager: public logalloc::region_group_reclaimer {
+    // We need a separate boolean, because from the LSA point of view, pressure may still be
+    // mounting, in which case the pressure flag could be set back on if we force it off.
+    bool _db_shutdown_requested = false;
+
+    database& _db;
+    logalloc::region_group _region_group;
+
+    // We would like to serialize the flushing of memtables. While flushing many memtables
+    // simultaneously can sustain high levels of throughput, the memory is not freed until the
+    // memtable is totally gone. That means that if we have throttled requests, they will stay
+    // throttled for a long time. Even when we have virtual dirty, that only provides a rough
+    // estimate, and we can't release requests that early.
+    //
+    // Ideally, we'd allow one memtable flush per shard (or per database object), and write-behind
+    // would take care of the rest. But that still has issues, so we'll limit parallelism to some
+    // number (4), that we will hopefully reduce to 1 when write behind works.
+    //
+    // When streaming is going on, we'll separate half of that for the streaming code, which
+    // effectively increases the total to 6. That is a bit ugly and a bit redundant with the I/O
+    // Scheduler, but it's the easiest way not to hurt the common case (no streaming) and will have
+    // to do for the moment. Hopefully we can set both to 1 soon (with write behind)
+    //
+    // FIXME: enable write behind and set both to 1. Right now we will take advantage of the fact
+    // that memtables and streaming will use different specialized classes here and set them as
+    // default values here.
+    size_t _concurrency;
+    semaphore _flush_serializer;
+
+    seastar::gate _waiting_flush_gate;
+    std::vector<shared_memtable> _pending_flushes;
+    void maybe_do_active_flush();
+protected:
+    virtual memtable_list& get_memtable_list(column_family& cf) = 0;
+    virtual void start_reclaiming() override;
 public:
-    throttle_state(size_t max_space, logalloc::region_group& region, throttle_state* parent = nullptr)
-        : _max_space(max_space)
-        , _region_group(region)
-        , _parent(parent)
-    {}
+    future<> shutdown();
+    dirty_memory_manager(database& db, size_t threshold, size_t concurrency)
+                                           : logalloc::region_group_reclaimer(threshold)
+                                           , _db(db)
+                                           , _region_group(*this)
+                                           , _concurrency(concurrency)
+                                           , _flush_serializer(concurrency) {}
 
-    future<> throttle();
+    dirty_memory_manager(database& db, dirty_memory_manager *parent, size_t threshold, size_t concurrency)
+                                                                         : logalloc::region_group_reclaimer(threshold)
+                                                                         , _db(db)
+                                                                         , _region_group(&parent->_region_group, *this)
+                                                                         , _concurrency(concurrency)
+                                                                         , _flush_serializer(concurrency) {}
+    logalloc::region_group& region_group() {
+        return _region_group;
+    }
+
+    const logalloc::region_group& region_group() const {
+        return _region_group;
+    }
+
+    template <typename Func>
+    future<> serialize_flush(Func&& func) {
+        return seastar::with_gate(_waiting_flush_gate,  [this, func] () mutable {
+            return with_semaphore(_flush_serializer, 1, func).finally([this] {
+                maybe_do_active_flush();
+            });
+        });
+    }
 };
 
+class streaming_dirty_memory_manager: public dirty_memory_manager {
+    virtual memtable_list& get_memtable_list(column_family& cf) override;
+public:
+    streaming_dirty_memory_manager(database& db, dirty_memory_manager *parent, size_t threshold) : dirty_memory_manager(db, parent, threshold, 2) {}
+};
 
-class replay_position_reordered_exception : public std::exception {};
+class memtable_dirty_memory_manager: public dirty_memory_manager {
+    virtual memtable_list& get_memtable_list(column_family& cf) override;
+public:
+    memtable_dirty_memory_manager(database& db, dirty_memory_manager* parent, size_t threshold) : dirty_memory_manager(db, parent, threshold, 4) {}
+    // This constructor will be called for the system tables (no parent). Its flushes are usually drive by us
+    // and not the user, and tend to be small in size. So we'll allow only two slots.
+    memtable_dirty_memory_manager(database& db, size_t threshold) : dirty_memory_manager(db, threshold, 2) {}
+};
 
 // We could just add all memtables, regardless of types, to a single list, and
 // then filter them out when we read them. Here's why I have chosen not to do
@@ -151,21 +209,18 @@ class memtable_list {
 public:
     enum class flush_behavior { delayed, immediate };
 private:
-    using shared_memtable = lw_shared_ptr<memtable>;
     std::vector<shared_memtable> _memtables;
     std::function<future<> (flush_behavior)> _seal_fn;
     std::function<schema_ptr()> _current_schema;
     size_t _max_memtable_size;
-    logalloc::region_group* _dirty_memory_region_group;
-    semaphore& _region_group_serializer;
+    dirty_memory_manager* _dirty_memory_manager;
 public:
-    memtable_list(std::function<future<> (flush_behavior)> seal_fn, std::function<schema_ptr()> cs, size_t max_memtable_size, logalloc::region_group* region_group, semaphore& sem)
+    memtable_list(std::function<future<> (flush_behavior)> seal_fn, std::function<schema_ptr()> cs, size_t max_memtable_size, dirty_memory_manager* dirty_memory_manager)
         : _memtables({})
         , _seal_fn(seal_fn)
         , _current_schema(cs)
         , _max_memtable_size(max_memtable_size)
-        , _dirty_memory_region_group(region_group)
-        , _region_group_serializer(sem) {
+        , _dirty_memory_manager(dirty_memory_manager) {
         add_memtable();
     }
 
@@ -191,11 +246,7 @@ public:
         if (behavior == flush_behavior::delayed) {
             return _seal_fn(behavior);
         }
-        return _region_group_serializer.wait().then([this] {
-            return _seal_fn(flush_behavior::immediate);
-        }).finally([this] {
-            _region_group_serializer.signal();
-        });
+        return _dirty_memory_manager->serialize_flush([this] { return _seal_fn(flush_behavior::immediate); });
     }
 
     auto begin() noexcept {
@@ -235,7 +286,7 @@ public:
     }
 private:
     lw_shared_ptr<memtable> new_memtable() {
-        return make_lw_shared<memtable>(_current_schema(), _dirty_memory_region_group);
+        return make_lw_shared<memtable>(_current_schema(), &(_dirty_memory_manager->region_group()));
     }
 };
 
@@ -262,8 +313,8 @@ public:
         bool enable_incremental_backups = false;
         size_t max_memtable_size = 5'000'000;
         size_t max_streaming_memtable_size = 5'000'000;
-        logalloc::region_group* dirty_memory_region_group = nullptr;
-        logalloc::region_group* streaming_dirty_memory_region_group = nullptr;
+        ::dirty_memory_manager* dirty_memory_manager = nullptr;
+        ::dirty_memory_manager* streaming_dirty_memory_manager = nullptr;
         restricted_mutation_reader_config read_concurrency_config;
         ::cf_stats* cf_stats = nullptr;
     };
@@ -296,24 +347,6 @@ private:
     config _config;
     stats _stats;
 
-    // We would like to serialize the flushing of memtables. While flushing many memtables
-    // simultaneously can sustain high levels of throughput, the memory is not freed until the
-    // memtable is totally gone. That means that if we have throttled requests, they will stay
-    // throttled for a long time. Even when we have virtual dirty, that only provides a rough
-    // estimate, and we can't release requests that early.
-    //
-    // Ideally, we'd allow one memtable flush per shard (or per database object), and write-behind
-    // would take care of the rest. But that still has issues, so we'll limit parallelism to some
-    // number (4), that we will hopefully reduce to 1 when write behind works.
-    //
-    // When streaming is going on, we'll separate half of that for the streaming code, which
-    // effectively increases the total to 6. That is a bit ugly and a bit redundant with the I/O
-    // Scheduler, but it's the easiest way not to hurt the common case (no streaming) and will have
-    // to do for the moment. Hopefully we can set both to 1 soon (with write behind)
-    //
-    // FIXME: enable write behind and set both to 1.
-    semaphore _memtables_serializer = { 4 };
-    semaphore _streaming_serializer = { 2 };
     lw_shared_ptr<memtable_list> _memtables;
 
     // In older incarnations, we simply commited the mutations to memtables.
@@ -334,6 +367,9 @@ private:
     // memory throttling mechanism, guaranteeing we will not overload the
     // server.
     lw_shared_ptr<memtable_list> _streaming_memtables;
+
+    friend class memtable_dirty_memory_manager;
+    friend class streaming_dirty_memory_manager;
 
     lw_shared_ptr<memtable_list> make_memory_only_memtable_list();
     lw_shared_ptr<memtable_list> make_memtable_list();
@@ -793,8 +829,8 @@ public:
         bool enable_incremental_backups = false;
         size_t max_memtable_size = 5'000'000;
         size_t max_streaming_memtable_size = 5'000'000;
-        logalloc::region_group* dirty_memory_region_group = nullptr;
-        logalloc::region_group* streaming_dirty_memory_region_group = nullptr;
+        ::dirty_memory_manager* dirty_memory_manager = nullptr;
+        ::dirty_memory_manager* streaming_dirty_memory_manager = nullptr;
         restricted_mutation_reader_config read_concurrency_config;
         ::cf_stats* cf_stats = nullptr;
     };
@@ -888,8 +924,9 @@ class database {
     std::unique_ptr<db::config> _cfg;
     size_t _memtable_total_space = 500 << 20;
     size_t _streaming_memtable_total_space = 500 << 20;
-    logalloc::region_group _dirty_memory_region_group;
-    logalloc::region_group _streaming_dirty_memory_region_group;
+    memtable_dirty_memory_manager _system_dirty_memory_manager;
+    memtable_dirty_memory_manager _dirty_memory_manager;
+    streaming_dirty_memory_manager _streaming_dirty_memory_manager;
     semaphore _read_concurrency_sem{max_concurrent_reads()};
     restricted_mutation_reader_config _read_concurrency_config;
     semaphore _system_read_concurrency_sem{max_system_concurrent_reads()};
@@ -906,7 +943,7 @@ class database {
     bool _enable_incremental_backups = false;
 
     future<> init_commitlog();
-    future<> apply_in_memory(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position&);
+    future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position);
     future<> populate(sstring datadir);
     future<> populate_keyspace(sstring datadir, sstring ks_name);
 
@@ -917,9 +954,6 @@ private:
     void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
     friend void db::system_keyspace::make(database& db, bool durable, bool volatile_testing_only);
     void setup_collectd();
-
-    throttle_state _memtables_throttler;
-    throttle_state _streaming_throttler;
 
     future<> do_apply(schema_ptr, const frozen_mutation&);
 public:
@@ -1033,7 +1067,7 @@ public:
     future<> drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func);
 
     const logalloc::region_group& dirty_memory_region_group() const {
-        return _dirty_memory_region_group;
+        return _dirty_memory_manager.region_group();
     }
 
     std::unordered_set<sstring> get_initial_tokens();

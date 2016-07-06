@@ -698,7 +698,7 @@ future<> row_cache::clear() {
 }
 
 future<> row_cache::update(memtable& m, partition_presence_checker presence_checker) {
-    _tracker.region().merge(m._region); // Now all data in memtable belongs to cache
+    _tracker.region().merge(m); // Now all data in memtable belongs to cache
     auto attr = seastar::thread_attributes();
     attr.scheduling_group = &_update_thread_scheduling_group;
     auto t = seastar::thread(attr, [this, &m, presence_checker = std::move(presence_checker)] {
