@@ -1667,6 +1667,13 @@ static void add_sstable_for_leveled_test(lw_shared_ptr<column_family>& cf, int64
     column_family_test(cf).add_sstable(std::move(*sst));
 }
 
+static lw_shared_ptr<sstable> add_sstable_for_overlapping_test(lw_shared_ptr<column_family>& cf, int64_t gen, sstring first_key, sstring last_key) {
+    auto sst = make_lw_shared<sstable>("ks", "cf", "", gen, la, big);
+    sstables::test(sst).set_values_for_leveled_strategy(0, 0, 0, std::move(first_key), std::move(last_key));
+    column_family_test(cf).add_sstable(sst);
+    return sst;
+}
+
 // ranges: [a,b] and [c,d]
 // returns true if token ranges overlap.
 static bool key_range_overlaps(sstring a, sstring b, sstring c, sstring d) {
@@ -2011,6 +2018,34 @@ SEASTAR_TEST_CASE(leveled_07) {
     auto& sst = l0.front();
     BOOST_REQUIRE(sst->generation() == 2);
     BOOST_REQUIRE(sst->get_sstable_level() == 0);
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(check_overlapping) {
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
+
+    column_family::config cfg;
+    compaction_manager cm;
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm);
+
+    auto key_and_token_pair = token_generation_for_current_shard(4);
+    auto min_key = key_and_token_pair[0].first;
+    auto max_key = key_and_token_pair[key_and_token_pair.size()-1].first;
+
+    auto sst1 = add_sstable_for_overlapping_test(cf, /*gen*/1, min_key, key_and_token_pair[1].first);
+    auto sst2 = add_sstable_for_overlapping_test(cf, /*gen*/2, min_key, key_and_token_pair[2].first);
+    auto sst3 = add_sstable_for_overlapping_test(cf, /*gen*/3, key_and_token_pair[3].first, max_key);
+    auto sst4 = add_sstable_for_overlapping_test(cf, /*gen*/4, min_key, max_key);
+    BOOST_REQUIRE(cf->get_sstables()->size() == 4);
+
+    std::vector<shared_sstable> compacting = { sst1, sst2 };
+    std::vector<shared_sstable> uncompacting = { sst3, sst4 };
+
+    auto overlapping_sstables = leveled_manifest::overlapping(*s, compacting, uncompacting);
+    BOOST_REQUIRE(overlapping_sstables.size() == 1);
+    BOOST_REQUIRE(overlapping_sstables.front()->generation() == 4);
 
     return make_ready_future<>();
 }

@@ -39,6 +39,10 @@ public:
     void add_sstable(sstables::sstable&& sstable) {
         _cf->_sstables->insert(make_lw_shared(std::move(sstable)));
     }
+
+    void add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
+        _cf->_sstables->insert(std::move(sstable));
+    }
 };
 
 namespace sstables {
