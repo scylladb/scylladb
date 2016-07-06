@@ -32,7 +32,7 @@ enum class compaction_strategy_type {
     major,
     size_tiered,
     leveled,
-    // FIXME: Add support to DateTiered.
+    date_tiered,
 };
 
 class compaction_strategy_impl;
@@ -70,6 +70,8 @@ public:
             return "SizeTieredCompactionStrategy";
         case compaction_strategy_type::leveled:
             return "LeveledCompactionStrategy";
+        case compaction_strategy_type::date_tiered:
+            return "DateTieredCompactionStrategy";
         default:
             throw std::runtime_error("Invalid Compaction Strategy");
         }
@@ -86,6 +88,8 @@ public:
             return compaction_strategy_type::size_tiered;
         } else if (short_name == "LeveledCompactionStrategy") {
             return compaction_strategy_type::leveled;
+        } else if (short_name == "DateTieredCompactionStrategy") {
+            return compaction_strategy_type::date_tiered;
         } else {
             throw exceptions::configuration_exception(sprint("Unable to find compaction strategy class '%s'", name));
         }
