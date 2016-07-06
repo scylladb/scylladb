@@ -269,7 +269,8 @@ public:
                         schema,
                         cmd,
                         std::move(pranges),
-                        cl_from_thrift(consistency_level)).then([schema, cmd, cell_limit](auto result) {
+                        cl_from_thrift(consistency_level),
+                        nullptr).then([schema, cmd, cell_limit](auto result) {
                     return query::result_view::do_with(*result, [schema, cmd, cell_limit](query::result_view v) {
                         column_aggregator aggregator(*schema, cmd->slice, cell_limit);
                         v.consume(cmd->slice, aggregator);
@@ -294,7 +295,8 @@ public:
                         schema,
                         cmd,
                         std::move(pranges),
-                        cl_from_thrift(consistency_level)).then([schema, cmd, cell_limit](auto&& result) {
+                        cl_from_thrift(consistency_level),
+                        nullptr).then([schema, cmd, cell_limit](auto&& result) {
                     return query::result_view::do_with(*result, [schema, cmd, cell_limit](query::result_view v) {
                         column_counter counter(*schema, cmd->slice, cell_limit);
                         v.consume(cmd->slice, counter);
@@ -333,7 +335,8 @@ public:
                         schema,
                         cmd,
                         {std::move(prange)},
-                        cl_from_thrift(consistency_level)).then([schema, cmd](auto result) {
+                        cl_from_thrift(consistency_level),
+                        nullptr).then([schema, cmd](auto result) {
                     return query::result_view::do_with(*result, [schema, cmd](query::result_view v) {
                         return to_key_slices(*schema, cmd->slice, v, std::numeric_limits<uint32_t>::max());
                     });
@@ -393,7 +396,7 @@ public:
             start_key = range.start()->value().key();
             range = query::partition_range::make_singular(std::move(range.start()->value()));
         }
-        return service::get_local_storage_proxy().query(schema, cmd, {std::move(range)}, consistency_level).then([schema, cmd, column_limit](auto result) {
+        return service::get_local_storage_proxy().query(schema, cmd, {std::move(range)}, consistency_level, nullptr).then([schema, cmd, column_limit](auto result) {
             return query::result_view::do_with(*result, [schema, cmd, column_limit](query::result_view v) {
                 return to_key_slices(*schema, cmd->slice, v, column_limit);
             });
@@ -460,7 +463,7 @@ public:
             mutation m_to_apply(key_from_thrift(*schema, to_bytes_view(key)), schema);
             add_to_mutation(*schema, column, m_to_apply);
             return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY).then([m_to_apply = std::move(m_to_apply), consistency_level] {
-                return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level));
+                return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), nullptr);
             });
         });
     }
@@ -496,7 +499,7 @@ public:
             }
 
             return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY).then([m_to_apply = std::move(m_to_apply), consistency_level] {
-                return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level));
+                return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), nullptr);
             });
         });
     }
@@ -513,7 +516,7 @@ public:
             return parallel_for_each(std::move(p.second), [this](auto&& schema) {
                 return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY);
             }).then([muts = std::move(p.first), consistency_level] {
-                return service::get_local_storage_proxy().mutate(std::move(muts), cl_from_thrift(consistency_level));
+                return service::get_local_storage_proxy().mutate(std::move(muts), cl_from_thrift(consistency_level), nullptr);
             });
         });
     }
@@ -524,7 +527,7 @@ public:
             return parallel_for_each(std::move(p.second), [this](auto&& schema) {
                 return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY);
             }).then([muts = std::move(p.first), consistency_level] {
-                return service::get_local_storage_proxy().mutate_atomically(std::move(muts), cl_from_thrift(consistency_level));
+                return service::get_local_storage_proxy().mutate_atomically(std::move(muts), cl_from_thrift(consistency_level), nullptr);
             });
         });
     }
@@ -593,7 +596,8 @@ public:
                         schema,
                         cmd,
                         {query::partition_range::make_singular(dk)},
-                        cl_from_thrift(cl)).then([schema, cmd, column_limit](auto result) {
+                        cl_from_thrift(cl),
+                        nullptr).then([schema, cmd, column_limit](auto result) {
                     return query::result_view::do_with(*result, [schema, cmd, column_limit](query::result_view v) {
                         column_aggregator aggregator(*schema, cmd->slice, column_limit);
                         v.consume(cmd->slice, aggregator);

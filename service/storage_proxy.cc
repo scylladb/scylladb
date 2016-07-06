@@ -201,8 +201,8 @@ protected:
     }
 public:
     abstract_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
-            std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets,
-            size_t pending_endpoints = 0, std::vector<gms::inet_address> dead_endpoints = {}, tracing::trace_state_ptr trace_state = nullptr)
+            std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets, tracing::trace_state_ptr trace_state,
+            size_t pending_endpoints = 0, std::vector<gms::inet_address> dead_endpoints = {})
             : _id(p->_next_response_id++), _proxy(std::move(p)), _trace_state(trace_state), _cl(cl), _ks(ks), _type(type), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
               _pending_endpoints(pending_endpoints), _dead_endpoints(std::move(dead_endpoints)) {
     }
@@ -281,7 +281,7 @@ public:
             std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets,
             std::vector<gms::inet_address> pending_endpoints, std::vector<gms::inet_address> dead_endpoints, tracing::trace_state_ptr tr_state) :
                 abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh),
-                        std::move(targets), boost::range::count_if(pending_endpoints, db::is_local), std::move(dead_endpoints), std::move(tr_state)) {}
+                        std::move(targets), std::move(tr_state), boost::range::count_if(pending_endpoints, db::is_local), std::move(dead_endpoints)) {}
 };
 
 class write_response_handler : public abstract_write_response_handler {
@@ -290,7 +290,7 @@ public:
             std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets,
             std::vector<gms::inet_address> pending_endpoints, std::vector<gms::inet_address> dead_endpoints, tracing::trace_state_ptr tr_state) :
                 abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh),
-                        std::move(targets), pending_endpoints.size(), std::move(dead_endpoints), std::move(tr_state)) {}
+                        std::move(targets), std::move(tr_state), pending_endpoints.size(), std::move(dead_endpoints)) {}
 };
 
 class datacenter_sync_write_response_handler : public abstract_write_response_handler {
@@ -309,7 +309,7 @@ public:
     datacenter_sync_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
             std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets, std::vector<gms::inet_address> pending_endpoints,
             std::vector<gms::inet_address> dead_endpoints, tracing::trace_state_ptr tr_state) :
-        abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh), targets, 0, dead_endpoints, std::move(tr_state)) {
+        abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh), targets, std::move(tr_state), 0, dead_endpoints) {
         auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
         for (auto& target : targets) {

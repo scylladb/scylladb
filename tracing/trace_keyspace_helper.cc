@@ -273,14 +273,14 @@ future<> trace_keyspace_helper::flush_one_session_mutations(utils::UUID session_
             logger.debug("{}: events number is {}", session_id, events_makers.size());
             mutation m((*events_makers.begin())(session_id));
             std::for_each(std::next(events_makers.begin()), events_makers.end(), [&m, &session_id] (const mutation_maker& maker) mutable { m.apply(maker(session_id)); });
-            return service::get_local_storage_proxy().mutate({std::move(m)}, db::consistency_level::ANY);
+            return service::get_local_storage_proxy().mutate({std::move(m)}, db::consistency_level::ANY, nullptr);
         } else {
             return make_ready_future<>();
         }
     }).then([session_id = std::move(session_id), session_maker = std::move(mutation_makers.first)] {
         if (session_maker) {
             logger.debug("{}: storing a session event", session_id);
-            return service::get_local_storage_proxy().mutate({session_maker(session_id)}, db::consistency_level::ANY);
+            return service::get_local_storage_proxy().mutate({session_maker(session_id)}, db::consistency_level::ANY, nullptr);
         } else {
             return make_ready_future<>();
         }
