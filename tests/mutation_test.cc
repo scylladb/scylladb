@@ -777,6 +777,10 @@ public:
         _delegate.free(ptr);
     }
 
+    virtual size_t object_memory_size_in_allocator(const void* obj) const noexcept override {
+        return _delegate.object_memory_size_in_allocator(obj);
+    }
+
     // Counts allocation attempts which are not failed due to fail_at().
     uint64_t alloc_count() const {
         return _alloc_count;
