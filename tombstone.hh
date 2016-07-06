@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <functional>
+
 #include "timestamp.hh"
 #include "gc_clock.hh"
 #include "hashing.hh"
@@ -118,3 +120,8 @@ struct appending_hash<tombstone> {
         feed_hash(h, t.deletion_time);
     }
 };
+
+// Determines whether tombstone may be GC-ed.
+using can_gc_fn = std::function<bool(tombstone)>;
+
+static can_gc_fn always_gc = [] (tombstone) { return true; };

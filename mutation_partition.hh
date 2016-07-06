@@ -255,7 +255,7 @@ public:
     // and max_purgeable. Removes cells covered by tomb.
     // Returns true iff there are any live cells left.
     bool compact_and_expire(const schema& s, column_kind kind, tombstone tomb, gc_clock::time_point query_time,
-        api::timestamp_type max_purgeable, gc_clock::time_point gc_before);
+        can_gc_fn&, gc_clock::time_point gc_before);
 
     row difference(const schema&, column_kind, const row& other) const;
 
@@ -344,7 +344,7 @@ public:
     // tombstones.
     // Returns true if row marker is live.
     bool compact_and_expire(tombstone tomb, gc_clock::time_point now,
-            api::timestamp_type max_purgeable, gc_clock::time_point gc_before) {
+            can_gc_fn& can_gc, gc_clock::time_point gc_before) {
         if (is_missing()) {
             return false;
         }
@@ -356,7 +356,7 @@ public:
             _expiry -= _ttl;
             _ttl = dead;
         }
-        if (_ttl == dead && _timestamp < max_purgeable && _expiry < gc_before) {
+        if (_ttl == dead && _expiry < gc_before && can_gc(tombstone(_timestamp, _expiry))) {
             _timestamp = api::missing_timestamp;
         }
         return !is_missing() && _ttl != dead;
@@ -626,7 +626,7 @@ private:
         const std::vector<query::clustering_range>& row_ranges,
         bool reverse,
         uint32_t row_limit,
-        api::timestamp_type max_purgeable);
+        can_gc_fn&);
 
     // Calls func for each row entry inside row_ranges until func returns stop_iteration::yes.
     // Removes all entries for which func didn't return stop_iteration::no or wasn't called at all.
@@ -661,7 +661,7 @@ public:
     //   - expires cells based on compaction_time
     //   - drops cells covered by higher-level tombstones
     //   - drops expired tombstones which timestamp is before max_purgeable
-    void compact_for_compaction(const schema& s, api::timestamp_type max_purgeable,
+    void compact_for_compaction(const schema& s, can_gc_fn&,
         gc_clock::time_point compaction_time);
 
     // Returns the minimal mutation_partition that when applied to "other" will

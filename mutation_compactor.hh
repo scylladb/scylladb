@@ -66,7 +66,8 @@ class compact_mutation {
     gc_clock::time_point _query_time;
     gc_clock::time_point _gc_before;
     std::function<api::timestamp_type(const dht::decorated_key&)> _get_max_purgeable;
-    api::timestamp_type _max_purgeable = api::max_timestamp;
+    can_gc_fn _can_gc;
+    api::timestamp_type _max_purgeable = api::missing_timestamp;
     const query::partition_slice& _slice;
     uint32_t _row_limit{};
     uint32_t _partition_limit{};
@@ -103,14 +104,30 @@ private:
     }
 
     bool can_purge_tombstone(const tombstone& t) {
-        return (!sstable_compaction() || t.timestamp < _max_purgeable) && t.deletion_time < _gc_before;
+        return t.deletion_time < _gc_before && can_gc(t);
+    };
+
+    bool can_gc(tombstone t) {
+        if (!sstable_compaction()) {
+            return true;
+        }
+        if (!t) {
+            return false;
+        }
+        if (_max_purgeable == api::missing_timestamp) {
+            _max_purgeable = _get_max_purgeable(*_dk);
+        }
+        return t.timestamp < _max_purgeable;
     };
 public:
+    compact_mutation(compact_mutation&&) = delete; // Because 'this' is captured
+
     compact_mutation(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint32_t limit,
               uint32_t partition_limit, CompactedMutationsConsumer consumer)
         : _schema(s)
         , _query_time(query_time)
         , _gc_before(query_time - s.gc_grace_seconds())
+        , _can_gc(always_gc)
         , _slice(slice)
         , _row_limit(limit)
         , _partition_limit(partition_limit)
@@ -126,6 +143,7 @@ public:
         , _query_time(compaction_time)
         , _gc_before(_query_time - s.gc_grace_seconds())
         , _get_max_purgeable(std::move(get_max_purgeable))
+        , _can_gc([this] (tombstone t) { return can_gc(t); })
         , _slice(query::full_slice)
         , _consumer(std::move(consumer))
     {
@@ -143,9 +161,7 @@ public:
         _current_tombstone = { };
         _partition_tombstone = { };
         _current_partition_limit = std::min(_row_limit, _partition_row_limit);
-        if (sstable_compaction()) {
-            _max_purgeable = _get_max_purgeable(dk);
-        }
+        _max_purgeable = api::missing_timestamp;
     }
 
     void consume(tombstone t) {
@@ -159,7 +175,7 @@ public:
     stop_iteration consume(static_row&& sr) {
         bool is_live = sr.cells().compact_and_expire(_schema, column_kind::static_column,
                                                      _partition_tombstone,
-                                                     _query_time, _max_purgeable, _gc_before);
+                                                     _query_time, _can_gc, _gc_before);
         _static_row_live = is_live;
         if (is_live || (!only_live() && !sr.empty())) {
             partition_is_not_empty();
@@ -174,8 +190,8 @@ public:
         if (cr.tomb() <= _current_tombstone || can_purge_tombstone(cr.tomb())) {
             cr.remove_tombstone();
         }
-        bool is_live = cr.marker().compact_and_expire(t, _query_time, _max_purgeable, _gc_before);
-        is_live |= cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, _max_purgeable, _gc_before);
+        bool is_live = cr.marker().compact_and_expire(t, _query_time, _can_gc, _gc_before);
+        is_live |= cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, _can_gc, _gc_before);
         if (only_live() && is_live) {
             partition_is_not_empty();
             _consumer.consume(std::move(cr), true);

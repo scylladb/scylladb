@@ -1045,7 +1045,7 @@ SEASTAR_TEST_CASE(test_mutation_hash) {
 
 static mutation compacted(const mutation& m) {
     auto result = m;
-    result.partition().compact_for_compaction(*result.schema(), api::max_timestamp, gc_clock::now());
+    result.partition().compact_for_compaction(*result.schema(), always_gc, gc_clock::now());
     return result;
 }
 
@@ -1307,7 +1307,7 @@ SEASTAR_TEST_CASE(test_tombstone_purge) {
     tombstone tomb(api::new_timestamp(), gc_clock::now() - std::chrono::seconds(1));
     m.partition().apply(tomb);
     BOOST_REQUIRE(!m.partition().empty());
-    m.partition().compact_for_compaction(*s, api::max_timestamp, gc_clock::now());
+    m.partition().compact_for_compaction(*s, always_gc, gc_clock::now());
     // Check that row was covered by tombstone.
     BOOST_REQUIRE(m.partition().empty());
     // Check that tombstone was purged after compact_for_compaction().
