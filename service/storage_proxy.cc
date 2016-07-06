@@ -964,10 +964,10 @@ storage_proxy::mutate_locally(std::vector<mutation> mutations) {
 }
 
 future<>
-storage_proxy::mutate_streaming_mutation(const schema_ptr& s, const frozen_mutation& m) {
+storage_proxy::mutate_streaming_mutation(const schema_ptr& s, utils::UUID plan_id, const frozen_mutation& m) {
     auto shard = _db.local().shard_of(m);
-    return _db.invoke_on(shard, [&m, gs = global_schema_ptr(s)] (database& db) mutable -> future<> {
-        return db.apply_streaming_mutation(gs, m);
+    return _db.invoke_on(shard, [&m, plan_id, gs = global_schema_ptr(s)] (database& db) mutable -> future<> {
+        return db.apply_streaming_mutation(gs, plan_id, m);
     });
 }
 

@@ -2107,7 +2107,7 @@ column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const
     }
 }
 
-void column_family::apply_streaming_mutation(schema_ptr m_schema, const frozen_mutation& m) {
+void column_family::apply_streaming_mutation(schema_ptr m_schema, utils::UUID plan_id, const frozen_mutation& m) {
     _streaming_memtables->active_memtable().apply(m, m_schema);
     _streaming_memtables->seal_on_overflow();
 }
@@ -2217,15 +2217,15 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m) {
     });
 }
 
-future<> database::apply_streaming_mutation(schema_ptr s, const frozen_mutation& m) {
+future<> database::apply_streaming_mutation(schema_ptr s, utils::UUID plan_id, const frozen_mutation& m) {
     if (!s->is_synced()) {
         throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
                                  s->ks_name(), s->cf_name(), s->version()));
     }
-    return _streaming_dirty_memory_manager.region_group().run_when_memory_available([this, &m, s = std::move(s)] {
+    return _streaming_dirty_memory_manager.region_group().run_when_memory_available([this, &m, plan_id, s = std::move(s)] {
         auto uuid = m.column_family_id();
         auto& cf = find_column_family(uuid);
-        cf.apply_streaming_mutation(s, std::move(m));
+        cf.apply_streaming_mutation(s, plan_id, std::move(m));
     });
 }
 
@@ -2730,7 +2730,7 @@ future<> column_family::flush(const db::replay_position& pos) {
 // so we always flush. When we can differentiate those streams, we should not
 // be indiscriminately touching the cache during repair. We will just have to
 // invalidate the entries that are relevant to things we already have in the cache.
-future<> column_family::flush_streaming_mutations(std::vector<query::partition_range> ranges) {
+future<> column_family::flush_streaming_mutations(utils::UUID plan_id, std::vector<query::partition_range> ranges) {
     // This will effectively take the gate twice for this call. The proper way to fix that would
     // be to change seal_active_streaming_memtable_delayed to take a range parameter. However, we
     // need this code to go away as soon as we can (see FIXME above). So the double gate is a better

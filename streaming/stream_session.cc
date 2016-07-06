@@ -129,7 +129,7 @@ void stream_session::init_messaging_service_handler() {
                                 plan_id, from.addr, cf_id);
                     return make_ready_future<>();
                 }
-                return service::get_storage_proxy().local().mutate_streaming_mutation(std::move(s), fm).then_wrapped([plan_id, cf_id, from] (auto&& f) {
+                return service::get_storage_proxy().local().mutate_streaming_mutation(std::move(s), plan_id, fm).then_wrapped([plan_id, cf_id, from] (auto&& f) {
                     try {
                         f.get();
                         return make_ready_future<>();
@@ -162,7 +162,7 @@ void stream_session::init_messaging_service_handler() {
                     for (auto& range : ranges) {
                         query_ranges.push_back(query::to_partition_range(range));
                     }
-                    return cf.flush_streaming_mutations(std::move(query_ranges));
+                    return cf.flush_streaming_mutations(plan_id, std::move(query_ranges));
                 } catch (no_such_column_family) {
                     sslog.warn("[Stream #{}] STREAM_MUTATION_DONE from {}: cf_id={} is missing, assume the table is dropped",
                                 plan_id, from, cf_id);

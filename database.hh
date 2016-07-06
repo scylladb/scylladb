@@ -531,7 +531,7 @@ public:
     // The mutation is always upgraded to current schema.
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& = db::replay_position());
     void apply(const mutation& m, const db::replay_position& = db::replay_position());
-    void apply_streaming_mutation(schema_ptr, const frozen_mutation&);
+    void apply_streaming_mutation(schema_ptr, utils::UUID plan_id, const frozen_mutation&);
 
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(schema_ptr,
@@ -544,7 +544,7 @@ public:
     future<> stop();
     future<> flush();
     future<> flush(const db::replay_position&);
-    future<> flush_streaming_mutations(std::vector<query::partition_range> ranges = std::vector<query::partition_range>{});
+    future<> flush_streaming_mutations(utils::UUID plan_id, std::vector<query::partition_range> ranges = std::vector<query::partition_range>{});
     future<> clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);
 
@@ -1028,7 +1028,7 @@ public:
     future<lw_shared_ptr<query::result>> query(schema_ptr, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges);
     future<reconcilable_result> query_mutations(schema_ptr, const query::read_command& cmd, const query::partition_range& range);
     future<> apply(schema_ptr, const frozen_mutation&);
-    future<> apply_streaming_mutation(schema_ptr, const frozen_mutation&);
+    future<> apply_streaming_mutation(schema_ptr, utils::UUID plan_id, const frozen_mutation&);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
     const sstring& get_snitch_name() const;
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names);
