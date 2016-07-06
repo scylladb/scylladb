@@ -109,7 +109,7 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
     // mounting, in which case the pressure flag could be set back on if we force it off.
     bool _db_shutdown_requested = false;
 
-    database& _db;
+    database* _db;
     logalloc::region_group _region_group;
 
     // We would like to serialize the flushing of memtables. While flushing many memtables
@@ -141,14 +141,15 @@ protected:
     virtual void start_reclaiming() override;
 public:
     future<> shutdown();
-    dirty_memory_manager(database& db, size_t threshold, size_t concurrency)
+
+    dirty_memory_manager(database* db, size_t threshold, size_t concurrency)
                                            : logalloc::region_group_reclaimer(threshold)
                                            , _db(db)
                                            , _region_group(*this)
                                            , _concurrency(concurrency)
                                            , _flush_serializer(concurrency) {}
 
-    dirty_memory_manager(database& db, dirty_memory_manager *parent, size_t threshold, size_t concurrency)
+    dirty_memory_manager(database* db, dirty_memory_manager *parent, size_t threshold, size_t concurrency)
                                                                          : logalloc::region_group_reclaimer(threshold)
                                                                          , _db(db)
                                                                          , _region_group(&parent->_region_group, *this)
@@ -175,17 +176,20 @@ public:
 class streaming_dirty_memory_manager: public dirty_memory_manager {
     virtual memtable_list& get_memtable_list(column_family& cf) override;
 public:
-    streaming_dirty_memory_manager(database& db, dirty_memory_manager *parent, size_t threshold) : dirty_memory_manager(db, parent, threshold, 2) {}
+    streaming_dirty_memory_manager(database& db, dirty_memory_manager *parent, size_t threshold) : dirty_memory_manager(&db, parent, threshold, 2) {}
 };
 
 class memtable_dirty_memory_manager: public dirty_memory_manager {
     virtual memtable_list& get_memtable_list(column_family& cf) override;
 public:
-    memtable_dirty_memory_manager(database& db, dirty_memory_manager* parent, size_t threshold) : dirty_memory_manager(db, parent, threshold, 4) {}
+    memtable_dirty_memory_manager(database& db, dirty_memory_manager* parent, size_t threshold) : dirty_memory_manager(&db, parent, threshold, 4) {}
     // This constructor will be called for the system tables (no parent). Its flushes are usually drive by us
     // and not the user, and tend to be small in size. So we'll allow only two slots.
-    memtable_dirty_memory_manager(database& db, size_t threshold) : dirty_memory_manager(db, threshold, 2) {}
+    memtable_dirty_memory_manager(database& db, size_t threshold) : dirty_memory_manager(&db, threshold, 2) {}
+    memtable_dirty_memory_manager() : dirty_memory_manager(nullptr, std::numeric_limits<size_t>::max(), 4) {}
 };
+
+extern thread_local memtable_dirty_memory_manager default_dirty_memory_manager;
 
 // We could just add all memtables, regardless of types, to a single list, and
 // then filter them out when we read them. Here's why I have chosen not to do
@@ -313,8 +317,8 @@ public:
         bool enable_incremental_backups = false;
         size_t max_memtable_size = 5'000'000;
         size_t max_streaming_memtable_size = 5'000'000;
-        ::dirty_memory_manager* dirty_memory_manager = nullptr;
-        ::dirty_memory_manager* streaming_dirty_memory_manager = nullptr;
+        ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
+        ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
         restricted_mutation_reader_config read_concurrency_config;
         ::cf_stats* cf_stats = nullptr;
     };
@@ -829,8 +833,8 @@ public:
         bool enable_incremental_backups = false;
         size_t max_memtable_size = 5'000'000;
         size_t max_streaming_memtable_size = 5'000'000;
-        ::dirty_memory_manager* dirty_memory_manager = nullptr;
-        ::dirty_memory_manager* streaming_dirty_memory_manager = nullptr;
+        ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
+        ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
         restricted_mutation_reader_config read_concurrency_config;
         ::cf_stats* cf_stats = nullptr;
     };

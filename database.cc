@@ -88,6 +88,10 @@ public:
     }
 };
 
+// Used for tests where the CF exists without a database object. We need to pass a valid
+// dirty_memory manager in that case.
+thread_local memtable_dirty_memory_manager default_dirty_memory_manager;
+
 lw_shared_ptr<memtable_list>
 column_family::make_memory_only_memtable_list() {
     auto seal = [this] (memtable_list::flush_behavior ignored) { return make_ready_future<>(); };
@@ -2121,7 +2125,7 @@ future<> dirty_memory_manager::shutdown() {
 }
 
 void dirty_memory_manager::maybe_do_active_flush() {
-    if (!under_pressure() || _db_shutdown_requested) {
+    if (!_db || !under_pressure() || _db_shutdown_requested) {
         return;
     }
 
@@ -2143,7 +2147,7 @@ void dirty_memory_manager::maybe_do_active_flush() {
     // However, since we'll very soon have a mechanism in place to account for the memory
     // that was already written in one form or another, that disadvantage is mitigated.
     memtable& biggest_memtable = memtable::from_region(*_region_group.get_largest_region());
-    auto& biggest_cf = _db.find_column_family(biggest_memtable.schema());
+    auto& biggest_cf = _db->find_column_family(biggest_memtable.schema());
     memtable_list& mtlist = get_memtable_list(biggest_cf);
     // Please note that this will eventually take the semaphore and prevent two concurrent flushes.
     // We don't need any other extra protection.
