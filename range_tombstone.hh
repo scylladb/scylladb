@@ -22,11 +22,13 @@
 #pragma once
 
 #include <boost/intrusive/set.hpp>
+#include <experimental/optional>
 #include "hashing.hh"
 #include "keys.hh"
 #include "tombstone.hh"
 
 namespace bi = boost::intrusive;
+namespace stdx = std::experimental;
 
 /**
  * Represents the kind of bound in a range tombstone.
@@ -216,6 +218,14 @@ public:
         return start.is_full(s) && start_kind == bound_kind::incl_start
             && end_kind == bound_kind::incl_end && start.equal(s, end);
     }
+
+    // Applies src to this. The tombstones may be overlapping.
+    // If the tombstone with larger timestamp has the smaller range the remainder
+    // is returned, it guaranteed not to overlap with this.
+    // The start bounds of this and src are required to be equal. The start bound
+    // of this is not changed. The start bound of the remainder (if there is any)
+    // is larger than the end bound of this.
+    stdx::optional<range_tombstone> apply(const schema& s, range_tombstone&& src);
 private:
     void move_assign(range_tombstone&& rt) {
         start = std::move(rt.start);

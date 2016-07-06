@@ -68,3 +68,22 @@ std::ostream& operator<<(std::ostream& out, const range_tombstone& rt) {
         return out << "{range_tombstone: none}";
     }
 }
+
+stdx::optional<range_tombstone> range_tombstone::apply(const schema& s, range_tombstone&& src)
+{
+    bound_view::compare cmp(s);
+    if (tomb == src.tomb) {
+        if (cmp(end_bound(), src.end_bound())) {
+            end = std::move(src.end);
+            end_kind = src.end_kind;
+        }
+        return { };
+    }
+    if (tomb < src.tomb) {
+        std::swap(*this, src);
+    }
+    if (cmp(end_bound(), src.end_bound())) {
+        return range_tombstone(end, invert_kind(end_kind), std::move(src.end), src.end_kind, src.tomb);
+    }
+    return { };
+}
