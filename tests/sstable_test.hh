@@ -39,6 +39,10 @@ public:
     void add_sstable(sstables::sstable&& sstable) {
         _cf->_sstables->insert(make_lw_shared(std::move(sstable)));
     }
+
+    void add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
+        _cf->_sstables->insert(std::move(sstable));
+    }
 };
 
 namespace sstables {
@@ -129,6 +133,12 @@ public:
         // leveled strategy sorts sstables by age using max_timestamp, let's set it to 0.
         stats.max_timestamp = max_timestamp;
         stats.sstable_level = sstable_level;
+        _sst->_statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
+        _sst->_summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
+        _sst->_summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
+    }
+
+    void set_values(sstring first_key, sstring last_key, stats_metadata stats) {
         _sst->_statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
         _sst->_summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
         _sst->_summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());

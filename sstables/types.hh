@@ -186,7 +186,7 @@ struct ka_stats_metadata : public metadata {
     db::replay_position position;
     int64_t min_timestamp;
     int64_t max_timestamp;
-    uint32_t max_local_deletion_time;
+    int32_t max_local_deletion_time;
     double compression_ratio;
     streaming_histogram estimated_tombstone_drop_time;
     uint32_t sstable_level;

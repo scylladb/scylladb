@@ -61,6 +61,7 @@
 #include "service/priority_manager.hh"
 #include "db_clock.hh"
 #include "mutation_compactor.hh"
+#include "leveled_manifest.hh"
 
 namespace sstables {
 
@@ -118,6 +119,19 @@ static void delete_sstables_for_interrupted_compaction(std::vector<shared_sstabl
         logger.debug("Deleting sstable {} of interrupted compaction for {}.{}", sst->get_filename(), ks, cf);
         sst->mark_for_deletion();
     }
+}
+
+static std::vector<shared_sstable> get_uncompacting_sstables(column_family& cf, std::vector<shared_sstable>& sstables) {
+    auto all_sstables = cf.get_sstables_including_compacted_undeleted();
+    std::sort(sstables.begin(), sstables.end(), [] (const shared_sstable& x, const shared_sstable& y) {
+        return x->generation() < y->generation();
+    });
+    std::vector<shared_sstable> not_compacted_sstables;
+    boost::set_difference(*all_sstables, sstables,
+        std::back_inserter(not_compacted_sstables), [] (const shared_sstable& x, const shared_sstable& y) {
+            return x->generation() < y->generation();
+        });
+    return not_compacted_sstables;
 }
 
 class compacting_sstable_writer {
@@ -217,15 +231,7 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
 
         db::replay_position rp;
 
-        auto all_sstables = cf.get_sstables_including_compacted_undeleted();
-        std::sort(sstables.begin(), sstables.end(), [] (const shared_sstable& x, const shared_sstable& y) {
-            return x->generation() < y->generation();
-        });
-        std::vector<shared_sstable> not_compacted_sstables;
-        boost::set_difference(*all_sstables, sstables,
-            std::back_inserter(not_compacted_sstables), [] (const shared_sstable& x, const shared_sstable& y) {
-                return x->generation() < y->generation();
-            });
+        std::vector<shared_sstable> not_compacted_sstables = get_uncompacting_sstables(cf, sstables);
 
         auto schema = cf.schema();
         for (auto sst : sstables) {
@@ -341,6 +347,53 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
         // Return vector with newly created sstable(s).
         return std::move(info->new_sstables);
     });
+}
+
+std::vector<sstables::shared_sstable>
+get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstable>& compacting, int32_t gc_before) {
+    logger.debug("Checking droppable sstables in {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name());
+
+    if (compacting.empty()) {
+        return {};
+    }
+
+    std::list<sstables::shared_sstable> candidates;
+    auto uncompacting_sstables = get_uncompacting_sstables(cf, compacting);
+    // Get list of uncompacting sstables that overlap the ones being compacted.
+    std::vector<sstables::shared_sstable> overlapping = leveled_manifest::overlapping(*cf.schema(), compacting, uncompacting_sstables);
+    int64_t min_timestamp = std::numeric_limits<int64_t>::max();
+
+    for (auto& sstable : overlapping) {
+        if (sstable->get_stats_metadata().max_local_deletion_time >= gc_before) {
+            min_timestamp = std::min(min_timestamp, sstable->get_stats_metadata().min_timestamp);
+        }
+    }
+
+    // SStables that do not contain live data is added to list of possibly expired sstables.
+    for (auto& candidate : compacting) {
+        logger.debug("Checking if candidate of generation {} and max_deletion_time {} is expired, gc_before is {}",
+                    candidate->generation(), candidate->get_stats_metadata().max_local_deletion_time, gc_before);
+        if (candidate->get_stats_metadata().max_local_deletion_time < gc_before) {
+            logger.debug("Adding candidate of generation {} to list of possibly expired sstables", candidate->generation());
+            candidates.push_back(candidate);
+        } else {
+            min_timestamp = std::min(min_timestamp, candidate->get_stats_metadata().min_timestamp);
+        }
+    }
+
+    auto it = candidates.begin();
+    while (it != candidates.end()) {
+        auto& candidate = *it;
+        // Remove from list any candidate that may contain a tombstone that covers older data.
+        if (candidate->get_stats_metadata().max_timestamp >= min_timestamp) {
+            it = candidates.erase(it);
+        } else {
+            logger.debug("Dropping expired SSTable {} (maxLocalDeletionTime={}, gcBefore={})",
+                    candidate->get_filename(), candidate->get_stats_metadata().max_local_deletion_time, gc_before);
+            it++;
+        }
+    }
+    return std::vector<sstables::shared_sstable>(candidates.begin(), candidates.end());
 }
 
 }

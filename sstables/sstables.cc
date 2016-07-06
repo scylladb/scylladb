@@ -1124,6 +1124,7 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell) {
         uint32_t deletion_time_size = sizeof(uint32_t);
         uint32_t deletion_time = cell.deletion_time().time_since_epoch().count();
 
+        _c_stats.update_max_local_deletion_time(deletion_time);
         _c_stats.tombstone_histogram.update(deletion_time);
 
         write(out, mask, timestamp, deletion_time_size, deletion_time);
@@ -1135,12 +1136,16 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell) {
         uint32_t expiration = cell.expiry().time_since_epoch().count();
         disk_string_view<uint32_t> cell_value { cell.value() };
 
+        _c_stats.update_max_local_deletion_time(expiration);
+
         write(out, mask, ttl, expiration, timestamp, cell_value);
     } else {
         // regular cell
 
         column_mask mask = column_mask::none;
         disk_string_view<uint32_t> cell_value { cell.value() };
+
+        _c_stats.update_max_local_deletion_time(std::numeric_limits<int>::max());
 
         write(out, mask, timestamp, cell_value);
     }
@@ -1202,6 +1207,7 @@ void sstable::write_range_tombstone(file_writer& out,
     uint32_t deletion_time = t.deletion_time.time_since_epoch().count();
 
     update_cell_stats(_c_stats, timestamp);
+    _c_stats.update_max_local_deletion_time(deletion_time);
     _c_stats.tombstone_histogram.update(deletion_time);
 
     write(out, deletion_time, timestamp);
