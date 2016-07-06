@@ -338,6 +338,7 @@ private:
     bool maybe_completed();
     void prepare_receiving(stream_summary& summary);
     void start_streaming_files();
+    future<> receiving_failed(UUID cf_id);
 };
 
 } // namespace streaming

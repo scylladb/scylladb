@@ -545,6 +545,7 @@ public:
     future<> flush();
     future<> flush(const db::replay_position&);
     future<> flush_streaming_mutations(utils::UUID plan_id, std::vector<query::partition_range> ranges = std::vector<query::partition_range>{});
+    future<> fail_streaming_mutations(utils::UUID plan_id) { return make_ready_future<>(); }
     future<> clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);
 

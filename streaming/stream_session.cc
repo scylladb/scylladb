@@ -424,6 +424,18 @@ void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::ra
     }
 }
 
+future<> stream_session::receiving_failed(UUID cf_id)
+{
+    return get_db().invoke_on_all([cf_id, plan_id = plan_id()] (database& db) {
+        try {
+            auto& cf = db.find_column_family(cf_id);
+            return cf.fail_streaming_mutations(plan_id);
+        } catch (no_such_column_family) {
+            return make_ready_future<>();
+        }
+    });
+}
+
 void stream_session::close_session(stream_session_state final_state) {
     sslog.debug("[Stream #{}] close_session session={}, state={}, is_aborted={}", plan_id(), this, final_state, _is_aborted);
     if (!_is_aborted) {
@@ -439,6 +451,7 @@ void stream_session::close_session(stream_session_state final_state) {
             for (auto& x : _receivers) {
                 stream_receive_task& task = x.second;
                 sslog.debug("[Stream #{}] close_session session={}, state={}, abort stream_receive_task cf_id={}", plan_id(), this, final_state, task.cf_id);
+                receiving_failed(x.first);
                 task.abort();
             }
         }
