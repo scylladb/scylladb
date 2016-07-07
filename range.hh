@@ -24,6 +24,7 @@
 #include <experimental/optional>
 #include <iostream>
 #include <boost/range/algorithm/copy.hpp>
+#include <boost/range/adaptor/sliced.hpp>
 
 template<typename T>
 class range_bound {
@@ -92,6 +93,12 @@ private:
     static bool less_than_or_equal(start_bound_ref first, start_bound_ref second, Comparator&& cmp) {
         return !first.b || (second.b && cmp(first.b->value(), second.b->value())
                                         <= -(!first.b->is_inclusive() && second.b->is_inclusive()));
+    }
+
+    template<typename Comparator>
+    static bool less_than(start_bound_ref first, start_bound_ref second, Comparator&& cmp) {
+        return second.b && (!first.b || cmp(first.b->value(), second.b->value())
+                                        < (first.b->is_inclusive() && !second.b->is_inclusive()));
     }
 
     template<typename Comparator>
@@ -351,6 +358,51 @@ public:
     }
     bool operator==(const range& other) const {
         return (_start == other._start) && (_end == other._end) && (_singular == other._singular);
+    }
+
+    // Takes a vector of possibly overlapping ranges and returns a vector containing
+    // a set of non-overlapping ranges covering the same values.
+    template<typename Comparator>
+    static std::vector<range<T>> deoverlap(std::vector<range<T>> ranges, Comparator&& cmp) {
+        auto size = ranges.size();
+        if (size <= 1) {
+            return ranges;
+        }
+
+        for (auto it = ranges.begin(); it != ranges.end(); ++it) {
+            if ((*it).is_wrap_around(cmp)) {
+                auto&& unwrapped = it->unwrap();
+                it = ranges.erase(it);
+                it = ranges.emplace(it, std::move(unwrapped.first));
+                it = ranges.emplace(it, std::move(unwrapped.second));
+            }
+        }
+
+        std::sort(ranges.begin(), ranges.end(), [&](auto&& r1, auto&& r2) {
+            return range<T>::less_than(r1.start_bound(), r2.start_bound(), cmp);
+        });
+
+        std::vector<range<T>> deoverlapped_ranges;
+        deoverlapped_ranges.reserve(size);
+
+        auto&& current = ranges[0];
+        for (auto&& r : ranges | boost::adaptors::sliced(1, ranges.size())) {
+            bool includes_end = greater_than_or_equal(r.end_bound(), current.start_bound(), cmp)
+                                && greater_than_or_equal(current.end_bound(), r.end_bound(), cmp);
+            if (includes_end) {
+                continue; // last.start <= r.start <= r.end <= last.end
+            }
+            bool includes_start = greater_than_or_equal(current.end_bound(), r.start_bound(), cmp);
+            if (includes_start) {
+                current = range<T>(std::move(current.start()), std::move(r.end()));
+            } else {
+                deoverlapped_ranges.emplace_back(std::move(current));
+                current = std::move(r);
+            }
+        }
+
+        deoverlapped_ranges.emplace_back(std::move(current));
+        return deoverlapped_ranges;
     }
 
     template<typename U>
