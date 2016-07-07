@@ -2248,17 +2248,19 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m) {
     if (cf.commitlog() != nullptr) {
         commitlog_entry_writer cew(s, m);
         return cf.commitlog()->add_entry(uuid, cew).then([&m, this, s](auto rp) {
-            try {
-                return this->apply_in_memory(m, s, rp);
-            } catch (replay_position_reordered_exception&) {
-                // expensive, but we're assuming this is super rare.
-                // if we failed to apply the mutation due to future re-ordering
-                // (which should be the ever only reason for rp mismatch in CF)
-                // let's just try again, add the mutation to the CL once more,
-                // and assume success in inevitable eventually.
-                dblog.debug("replay_position reordering detected");
-                return this->apply(s, m);
-            }
+            return this->apply_in_memory(m, s, rp).handle_exception([this, s, &m] (auto ep) {
+                try {
+                    std::rethrow_exception(ep);
+                } catch (replay_position_reordered_exception&) {
+                    // expensive, but we're assuming this is super rare.
+                    // if we failed to apply the mutation due to future re-ordering
+                    // (which should be the ever only reason for rp mismatch in CF)
+                    // let's just try again, add the mutation to the CL once more,
+                    // and assume success in inevitable eventually.
+                    dblog.debug("replay_position reordering detected");
+                    return this->apply(s, m);
+                }
+            });
         });
     }
     return apply_in_memory(m, s, db::replay_position());
