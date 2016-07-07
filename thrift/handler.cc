@@ -412,6 +412,7 @@ public:
 
     void get_indexed_slices(tcxx::function<void(std::vector<KeySlice>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const ColumnParent& column_parent, const IndexClause& index_clause, const SlicePredicate& column_predicate, const ConsistencyLevel::type consistency_level) {
         std::vector<KeySlice>  _return;
+        warn(unimplemented::cause::INDEXES);
         // FIXME: implement
         return pass_unimplemented(exn_cob);
     }
@@ -430,12 +431,14 @@ public:
     }
 
     void add(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnParent& column_parent, const CounterColumn& column, const ConsistencyLevel::type consistency_level) {
+        warn(unimplemented::cause::COUNTERS);
         // FIXME: implement
         return pass_unimplemented(exn_cob);
     }
 
     void cas(tcxx::function<void(CASResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const std::string& column_family, const std::vector<Column> & expected, const std::vector<Column> & updates, const ConsistencyLevel::type serial_consistency_level, const ConsistencyLevel::type commit_consistency_level) {
         CASResult _return;
+        warn(unimplemented::cause::LWT);
         // FIXME: implement
         return pass_unimplemented(exn_cob);
     }
@@ -463,6 +466,7 @@ public:
     }
 
     void remove_counter(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnPath& path, const ConsistencyLevel::type consistency_level) {
+        warn(unimplemented::cause::COUNTERS);
         // FIXME: implement
         return pass_unimplemented(exn_cob);
     }
