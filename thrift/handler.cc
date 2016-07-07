@@ -742,7 +742,9 @@ public:
         return with_cob(std::move(cob), std::move(exn_cob), [&] {
             auto cf = _db.local().find_schema(cf_def.keyspace, cf_def.name);
 
-            // FIXME: don't update a non thrift-compatible CQL3 table.
+            if (cf->is_cql3_table()) {
+                throw make_exception<InvalidRequestException>("Cannot modify CQL3 table {} as it may break the schema. You should use cqlsh to modify CQL3 tables instead.", cf_def.name);
+            }
 
             auto s = schema_from_thrift(cf_def, cf_def.keyspace, cf->id());
             return service::get_local_migration_manager().announce_column_family_update(std::move(s), true, false).then([this] {
@@ -958,8 +960,10 @@ private:
         def.__set_strategy_options(make_options(meta->strategy_options()));
         std::vector<CfDef> cfs;
         for (auto&& cf : meta->cf_meta_data()) {
-            // FIXME: skip cql3 column families
             auto&& s = cf.second;
+            if (s->is_cql3_table()) {
+                continue;
+            }
             CfDef cf_def;
             cf_def.__set_keyspace(s->ks_name());
             cf_def.__set_name(s->cf_name());
