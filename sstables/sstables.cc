@@ -1547,9 +1547,9 @@ void sstable_writer::prepare_file_writer()
 {
     file_output_stream_options options;
     options.io_priority_class = _pc;
+    options.buffer_size = _sst.sstable_buffer_size;
 
     if (!_compression_enabled) {
-        options.buffer_size = _sst.sstable_buffer_size;
         _writer = make_shared<checksummed_file_writer>(_sst._data_file, std::move(options), true);
     } else {
         prepare_compression(_sst._compression, _schema);
