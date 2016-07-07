@@ -139,6 +139,12 @@ private:
      */
     inline int elapsed();
 
+    /**
+     * Initiates a tracing session.
+     *
+     * Starts the tracing session time measurments.
+     * This overload is meant for secondary sessions.
+     */
     void begin() {
         std::atomic_signal_fence(std::memory_order::memory_order_seq_cst);
         _start = clock_type::now();
@@ -146,6 +152,15 @@ private:
         _tracing_began = true;
     }
 
+    /**
+     * Initiates a tracing session.
+     *
+     * Starts the tracing session time measurments.
+     * This overload is meant for primary sessions.
+     *
+     * @param request description of a request being traces
+     * @param client address of a client the traced request came from
+     */
     void begin(sstring request, gms::inet_address client) {
         begin();
         _started_at = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -237,14 +252,30 @@ private:
     std::unordered_map<sstring, sstring> get_params();
 
     /**
-     * Special case a simple string case
-     * @param msg
+     * Add a single trace entry - a special case for a simple string.
+     *
+     * @param msg trace message
      */
     inline void trace(sstring msg);
     inline void trace(const char* msg) {
         trace(sstring(msg));
     }
 
+    /**
+     * Add a single trace entry - printf-like version
+     *
+     * Add a single trace entry with a message given in a printf-like way:
+     * format string with positional parameters.
+     *
+     * @note Both format string and positional parameters are going to be copied
+     * and the final string is going to built later. A caller has to take this
+     * into an account and make sure that positional parameters are both
+     * copiable and that their copying is not expensive.
+     *
+     * @tparam A
+     * @param fmt format string
+     * @param a positional parameters
+     */
     template <typename... A>
     inline void trace(const char* fmt, A&&... a);
 
@@ -336,6 +367,16 @@ inline void set_user_timestamp(const trace_state_ptr& p, api::timestamp_type val
     }
 }
 
+/**
+ * A helper for conditional invoking trace_state::begin() functions.
+ *
+ * If trace state is initialized the operation takes place immediatelly,
+ * otherwise nothing happens.
+ *
+ * @tparam A
+ * @param p trace state handle
+ * @param a optional parameters for trace_state::begin()
+ */
 template <typename... A>
 inline void begin(const trace_state_ptr& p, A&&... a) {
     if (p) {
@@ -343,6 +384,24 @@ inline void begin(const trace_state_ptr& p, A&&... a) {
     }
 }
 
+/**
+ * A helper for conditional invoking trace_state::trace() function.
+ *
+ * Create a trace entry if a given trace state @param p is initialized.
+ * Otherwise, it @param p is not initialized - do nothing.
+ * Trace message may be passed as a printf-like format string with the
+ * corresponding positional parameters.
+ *
+ * If @param p is initialized both trace message string and positional
+ * parameters are going to be copied and the final string is going to be build
+ * later. Therefore a caller has to take this into an account and make sure
+ * that positional parameters are both copiable and that the copy is not
+ * expensive.
+ *
+ * @param A
+ * @param p trace state handle
+ * @param a trace message format string with optional parameters
+ */
 template <typename... A>
 inline void trace(const trace_state_ptr& p, A&&... a) {
     if (p) {
