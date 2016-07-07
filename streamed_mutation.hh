@@ -89,6 +89,10 @@ public:
     }
 
     position_in_partition position() const;
+
+    size_t memory_usage() const {
+        return _ck.memory_usage() + _cells.memory_usage();
+    }
 };
 
 class static_row {
@@ -115,6 +119,10 @@ public:
     }
 
     position_in_partition position() const;
+
+    size_t memory_usage() const {
+        return _cells.memory_usage();
+    }
 };
 
 class range_tombstone_begin {
@@ -137,6 +145,10 @@ public:
     }
 
     position_in_partition position() const;
+
+    size_t memory_usage() const {
+        return _ck.memory_usage();
+    }
 };
 
 class range_tombstone_end {
@@ -153,6 +165,10 @@ public:
     bound_view bound() const { return bound_view(_ck, _kind); }
 
     position_in_partition position() const;
+
+    size_t memory_usage() const {
+        return _ck.memory_usage();
+    }
 };
 
 class mutation_fragment {
@@ -245,7 +261,7 @@ public:
     }
     */
     template<typename Consumer>
-    auto consume(Consumer& consumer) && {
+    decltype(auto) consume(Consumer& consumer) && {
         switch (_kind) {
         case kind::static_row:
             return consumer.consume(std::move(_data->_static_row));
@@ -257,6 +273,36 @@ public:
             return consumer.consume(std::move(_data->_range_tombstone_end));
         }
         abort();
+    }
+
+    /*
+    template<typename T, typename ReturnType>
+    concept bool MutationFragmentVisitor() {
+        return requires(T t, const static_row& sr, const clustering_row& cr, const range_tombstone_begin& rtb, const range_tombstone_end& rte) {
+            { t(sr) } -> ReturnType;
+            { t(cr) } -> ReturnType;
+            { t(rtb) } -> ReturnType;
+            { t(rte) } -> ReturnType;
+        };
+    }
+    */
+    template<typename Visitor>
+    decltype(auto) visit(Visitor&& visitor) const {
+        switch (_kind) {
+        case kind::static_row:
+            return visitor(as_static_row());
+        case kind::clustering_row:
+            return visitor(as_clustering_row());
+        case kind::range_tombstone_begin:
+            return visitor(as_range_tombstone_begin());
+        case kind::range_tombstone_end:
+            return visitor(as_range_tombstone_end());
+        }
+        abort();
+    }
+
+    size_t memory_usage() const {
+        return sizeof(data) + visit([] (auto& mf) { return mf.memory_usage(); });
     }
 };
 

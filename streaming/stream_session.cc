@@ -114,28 +114,29 @@ void stream_session::init_messaging_service_handler() {
             return make_ready_future<>();
         });
     });
-    ms().register_stream_mutation([] (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id) {
+    ms().register_stream_mutation([] (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id, rpc::optional<bool> fragmented_opt) {
         auto from = net::messaging_service::get_source(cinfo);
-        return do_with(std::move(fm), [plan_id, from] (const auto& fm) {
+        auto fragmented = fragmented_opt && *fragmented_opt;
+        return do_with(std::move(fm), [plan_id, from, fragmented] (const auto& fm) {
             auto fm_size = fm.representation().size();
             get_local_stream_manager().update_progress(plan_id, from.addr, progress_info::direction::IN, fm_size);
-            return service::get_schema_for_write(fm.schema_version(), from).then([plan_id, from, &fm] (schema_ptr s) {
+            return service::get_schema_for_write(fm.schema_version(), from).then([plan_id, from, &fm, fragmented] (schema_ptr s) {
                 auto cf_id = fm.column_family_id();
                 sslog.debug("[Stream #{}] GOT STREAM_MUTATION from {}: cf_id={}", plan_id, from.addr, cf_id);
 
                 auto& db = service::get_local_storage_proxy().get_db().local();
                 if (!db.column_family_exists(cf_id)) {
                     sslog.warn("[Stream #{}] STREAM_MUTATION from {}: cf_id={} is missing, assume the table is dropped",
-                                plan_id, from.addr, cf_id);
+                               plan_id, from.addr, cf_id);
                     return make_ready_future<>();
                 }
-                return service::get_storage_proxy().local().mutate_streaming_mutation(std::move(s), fm).then_wrapped([plan_id, cf_id, from] (auto&& f) {
+                return service::get_storage_proxy().local().mutate_streaming_mutation(std::move(s), plan_id, fm, fragmented).then_wrapped([plan_id, cf_id, from] (auto&& f) {
                     try {
                         f.get();
                         return make_ready_future<>();
                     } catch (no_such_column_family) {
                         sslog.warn("[Stream #{}] STREAM_MUTATION from {}: cf_id={} is missing, assume the table is dropped",
-                                plan_id, from.addr, cf_id);
+                                   plan_id, from.addr, cf_id);
                         return make_ready_future<>();
                     } catch (...) {
                         throw;
@@ -162,7 +163,7 @@ void stream_session::init_messaging_service_handler() {
                     for (auto& range : ranges) {
                         query_ranges.push_back(query::to_partition_range(range));
                     }
-                    return cf.flush_streaming_mutations(std::move(query_ranges));
+                    return cf.flush_streaming_mutations(plan_id, std::move(query_ranges));
                 } catch (no_such_column_family) {
                     sslog.warn("[Stream #{}] STREAM_MUTATION_DONE from {}: cf_id={} is missing, assume the table is dropped",
                                 plan_id, from, cf_id);
@@ -424,6 +425,18 @@ void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::ra
     }
 }
 
+future<> stream_session::receiving_failed(UUID cf_id)
+{
+    return get_db().invoke_on_all([cf_id, plan_id = plan_id()] (database& db) {
+        try {
+            auto& cf = db.find_column_family(cf_id);
+            return cf.fail_streaming_mutations(plan_id);
+        } catch (no_such_column_family) {
+            return make_ready_future<>();
+        }
+    });
+}
+
 void stream_session::close_session(stream_session_state final_state) {
     sslog.debug("[Stream #{}] close_session session={}, state={}, is_aborted={}", plan_id(), this, final_state, _is_aborted);
     if (!_is_aborted) {
@@ -439,6 +452,7 @@ void stream_session::close_session(stream_session_state final_state) {
             for (auto& x : _receivers) {
                 stream_receive_task& task = x.second;
                 sslog.debug("[Stream #{}] close_session session={}, state={}, abort stream_receive_task cf_id={}", plan_id(), this, final_state, task.cf_id);
+                receiving_failed(x.first);
                 task.abort();
             }
         }

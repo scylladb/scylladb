@@ -116,7 +116,7 @@ public:
             sst->write_compression(default_priority_class());
             sst->write_filter(default_priority_class());
             sst->write_summary(default_priority_class());
-            sst->seal_sstable();
+            sst->seal_sstable().get();
         });
     }
 

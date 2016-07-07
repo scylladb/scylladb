@@ -644,13 +644,13 @@ future<> messaging_service::send_prepare_done_message(msg_addr id, UUID plan_id,
 }
 
 // STREAM_MUTATION
-void messaging_service::register_stream_mutation(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id)>&& func) {
+void messaging_service::register_stream_mutation(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id, rpc::optional<bool> fragmented)>&& func) {
     register_handler(this, messaging_verb::STREAM_MUTATION, std::move(func));
 }
-future<> messaging_service::send_stream_mutation(msg_addr id, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id) {
+future<> messaging_service::send_stream_mutation(msg_addr id, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id, bool fragmented) {
     return send_message_timeout_and_retry<void>(this, messaging_verb::STREAM_MUTATION, id,
         streaming_timeout, streaming_nr_retry, streaming_wait_before_retry,
-        plan_id, std::move(fm), dst_cpu_id);
+        plan_id, std::move(fm), dst_cpu_id, fragmented);
 }
 
 // STREAM_MUTATION_DONE

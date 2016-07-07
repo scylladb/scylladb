@@ -105,3 +105,49 @@ SEASTAR_TEST_CASE(test_freezing_streamed_mutations) {
     });
 }
 
+SEASTAR_TEST_CASE(test_fragmenting_and_freezing_streamed_mutations) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+
+        for_each_mutation([&] (const mutation& m) {
+            std::vector<frozen_mutation> fms;
+
+            fragment_and_freeze(streamed_mutation_from_mutation(mutation(m)), [&] (auto fm, bool frag) {
+                BOOST_REQUIRE(!frag);
+                fms.emplace_back(std::move(fm));
+                return make_ready_future<>();
+            }, std::numeric_limits<size_t>::max()).get0();
+
+            BOOST_REQUIRE_EQUAL(fms.size(), 1);
+
+            auto m1 = fms.back().unfreeze(m.schema());
+            BOOST_REQUIRE_EQUAL(m, m1);
+
+            fms.clear();
+
+            stdx::optional<bool> fragmented;
+            fragment_and_freeze(streamed_mutation_from_mutation(mutation(m)), [&] (auto fm, bool frag) {
+                BOOST_REQUIRE(!fragmented || *fragmented == frag);
+                *fragmented = frag;
+                fms.emplace_back(std::move(fm));
+                return make_ready_future<>();
+            }, 1).get0();
+
+            auto expected_fragments = m.partition().clustered_rows().size()
+                                      + m.partition().row_tombstones().size()
+                                      + !m.partition().static_row().empty();
+            BOOST_REQUIRE_EQUAL(fms.size(), std::max(expected_fragments, size_t(1)));
+            BOOST_REQUIRE(expected_fragments < 2 || *fragmented);
+
+            auto m2 = fms.back().unfreeze(m.schema());
+            fms.pop_back();
+            while (!fms.empty()) {
+                m2.partition().apply(*m.schema(), fms.back().partition(), *m.schema());
+                fms.pop_back();
+            }
+            BOOST_REQUIRE_EQUAL(m, m2);
+        });
+    });
+}
+
+
