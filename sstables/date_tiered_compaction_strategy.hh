@@ -49,11 +49,11 @@
 #include "sstables.hh"
 #include "compaction.hh"
 
+static constexpr double DEFAULT_MAX_SSTABLE_AGE_DAYS = 365;
+static constexpr int64_t DEFAULT_BASE_TIME_SECONDS = 60;
+
 class date_tiered_manifest {
     static logging::logger logger;
-
-    static constexpr double DEFAULT_MAX_SSTABLE_AGE_DAYS = 365;
-    static constexpr int64_t DEFAULT_BASE_TIME_SECONDS = 60;
 
     // TODO: implement date_tiered_compaction_strategy_options.
     db_clock::duration _max_sstable_age;
