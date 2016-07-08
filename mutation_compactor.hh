@@ -60,7 +60,7 @@ concept bool CompactedMutationsConsumer() {
 // emit_only_live::yes will cause compact_for_query to emit only live
 // static and clustering rows. It doesn't affect the way range tombstones are
 // emitted.
-template<emit_only_live_rows OnlyLive, compact_for_sstables SSTableCompaction, typename Consumer>
+template<emit_only_live_rows OnlyLive, compact_for_sstables SSTableCompaction, typename CompactedMutationsConsumer>
 class compact_mutation {
     const schema& _schema;
     gc_clock::time_point _query_time;
@@ -72,7 +72,7 @@ class compact_mutation {
     uint32_t _partition_limit{};
     uint32_t _partition_row_limit{};
 
-    Consumer _consumer;
+    CompactedMutationsConsumer _consumer;
     tombstone _partition_tombstone;
     tombstone _current_tombstone;
 
@@ -107,7 +107,7 @@ private:
     };
 public:
     compact_mutation(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint32_t limit,
-              uint32_t partition_limit, Consumer consumer)
+              uint32_t partition_limit, CompactedMutationsConsumer consumer)
         : _schema(s)
         , _query_time(query_time)
         , _gc_before(query_time - s.gc_grace_seconds())
@@ -120,7 +120,7 @@ public:
         static_assert(!sstable_compaction(), "This constructor cannot be used for sstable compaction.");
     }
 
-    compact_mutation(const schema& s, gc_clock::time_point compaction_time, Consumer consumer,
+    compact_mutation(const schema& s, gc_clock::time_point compaction_time, CompactedMutationsConsumer consumer,
                      std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable)
         : _schema(s)
         , _query_time(compaction_time)
@@ -239,12 +239,12 @@ public:
     }
 };
 
-template<emit_only_live_rows only_live, typename Consumer>
-struct compact_for_query : compact_mutation<only_live, compact_for_sstables::no, Consumer> {
-    using compact_mutation<only_live, compact_for_sstables::no, Consumer>::compact_mutation;
+template<emit_only_live_rows only_live, typename CompactedMutationsConsumer>
+struct compact_for_query : compact_mutation<only_live, compact_for_sstables::no, CompactedMutationsConsumer> {
+    using compact_mutation<only_live, compact_for_sstables::no, CompactedMutationsConsumer>::compact_mutation;
 };
 
-template<typename Consumer>
-struct compact_for_compaction : compact_mutation<emit_only_live_rows::no, compact_for_sstables::yes, Consumer> {
-    using compact_mutation<emit_only_live_rows::no, compact_for_sstables::yes, Consumer>::compact_mutation;
+template<typename CompactedMutationsConsumer>
+struct compact_for_compaction : compact_mutation<emit_only_live_rows::no, compact_for_sstables::yes, CompactedMutationsConsumer> {
+    using compact_mutation<emit_only_live_rows::no, compact_for_sstables::yes, CompactedMutationsConsumer>::compact_mutation;
 };

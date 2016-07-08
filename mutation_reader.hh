@@ -250,8 +250,8 @@ concept bool FlattenedConsumer() {
     };
 }
 */
-template<typename Consumer>
-auto consume_flattened(mutation_reader mr, Consumer c, bool reverse_mutations = false)
+template<typename FlattenedConsumer>
+auto consume_flattened(mutation_reader mr, FlattenedConsumer&& c, bool reverse_mutations = false)
 {
     return do_with(std::move(mr), std::move(c), stdx::optional<streamed_mutation>(), [reverse_mutations] (auto& mr, auto& c, auto& sm) {
         return repeat([&, reverse_mutations] {
@@ -285,10 +285,10 @@ concept bool StreamedMutationFilter() {
 }
 */
 // This version of consume_flattened() must be run inside a thread and
-// guarantees that all Consumer functions will also be called in the same thread
+// guarantees that all FlattenedConsumer functions will also be called in the same thread
 // context.
-template<typename Consumer, typename StreamedMutationFilter>
-auto consume_flattened_in_thread(mutation_reader& mr, Consumer& c, StreamedMutationFilter&& filter)
+template<typename FlattenedConsumer, typename StreamedMutationFilter>
+auto consume_flattened_in_thread(mutation_reader& mr, FlattenedConsumer& c, StreamedMutationFilter&& filter)
 {
     while (true) {
         auto smopt = mr().get0();
@@ -322,8 +322,8 @@ auto consume_flattened_in_thread(mutation_reader& mr, Consumer& c, StreamedMutat
     return c.consume_end_of_stream();
 }
 
-template<typename Consumer>
-auto consume_flattened_in_thread(mutation_reader& mr, Consumer& c)
+template<typename FlattenedConsumer>
+auto consume_flattened_in_thread(mutation_reader& mr, FlattenedConsumer& c)
 {
     return consume_flattened_in_thread(mr, c, [] (auto&&) { return true; });
 }
