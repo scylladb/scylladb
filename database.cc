@@ -703,11 +703,11 @@ column_family::seal_active_streaming_memtable_immediate() {
     auto guard = _streaming_flush_phaser.start();
     return with_gate(_streaming_flush_gate, [this, old] {
         _delayed_streaming_flush.cancel();
-
         auto current_waiters = std::exchange(_waiting_streaming_flushes, shared_promise<>());
         auto f = current_waiters.get_shared_future(); // for this seal
 
-        with_lock(_sstables_lock.for_read(), [this, old] {
+        _config.streaming_dirty_memory_manager->serialize_flush([this, old] {
+          return with_lock(_sstables_lock.for_read(), [this, old] {
             auto newtab = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(),
                 _config.datadir, calculate_generation_for_new_table(),
                 sstables::sstable::version_types::ka,
@@ -740,6 +740,7 @@ column_family::seal_active_streaming_memtable_immediate() {
             });
             // We will also not have any retry logic. If we fail here, we'll fail the streaming and let
             // the upper layers know. They can then apply any logic they want here.
+          });
         }).then_wrapped([this, current_waiters = std::move(current_waiters)] (future <> f) mutable {
             if (f.failed()) {
                 current_waiters.set_exception(f.get_exception());
@@ -798,12 +799,14 @@ column_family::seal_active_memtable(memtable_list::flush_behavior ignored) {
     _highest_flushed_rp = old->replay_position();
 
     return _flush_queue->run_cf_flush(old->replay_position(), [old, this] {
+      return _config.dirty_memory_manager->serialize_flush([this, old] {
         return repeat([this, old] {
             return with_lock(_sstables_lock.for_read(), [this, old] {
                 _flush_queue->check_open_gate();
                 return try_flush_memtable_to_sstable(old);
             });
         });
+      });
     }, [old, this] {
         if (_commitlog) {
             _commitlog->discard_completed_segments(_schema->id(), old->replay_position());

@@ -245,12 +245,7 @@ public:
     }
 
     future<> seal_active_memtable(flush_behavior behavior) {
-        // We may need a lot of delayed flushes to get to the point where we force an immediate
-        // flush. So just let it go immediately.
-        if (behavior == flush_behavior::delayed) {
-            return _seal_fn(behavior);
-        }
-        return _dirty_memory_manager->serialize_flush([this] { return _seal_fn(flush_behavior::immediate); });
+        return _seal_fn(behavior);
     }
 
     auto begin() noexcept {
