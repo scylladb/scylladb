@@ -227,6 +227,8 @@ public:
     // of this is not changed. The start bound of the remainder (if there is any)
     // is larger than the end bound of this.
     stdx::optional<range_tombstone> apply(const schema& s, range_tombstone&& src);
+
+    size_t memory_usage() const { return start.memory_usage() + end.memory_usage(); }
 private:
     void move_assign(range_tombstone&& rt) {
         start = std::move(rt.start);
