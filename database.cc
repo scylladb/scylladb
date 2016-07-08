@@ -848,7 +848,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
     }).then_wrapped([this, old, newtab, memtable_size] (future<> ret) {
         _config.cf_stats->pending_memtables_flushes_count--;
         _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
-        dblog.debug("Flushing done");
+        dblog.debug("Flushing to {} done", newtab->get_filename());
         try {
             ret.get();
 
@@ -860,20 +860,20 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
 
             trigger_compaction();
 
-            return update_cache(*old, newtab).then_wrapped([this, old] (future<> f) {
+            return update_cache(*old, newtab).then_wrapped([this, newtab, old] (future<> f) {
                 try {
                     f.get();
                 } catch(...) {
-                    dblog.error("failed to move memtable to cache: {}", std::current_exception());
+                    dblog.error("failed to move memtable for {} to cache: {}", newtab->get_filename(), std::current_exception());
                 }
 
                 _memtables->erase(old);
-                dblog.debug("Memtable replaced");
+                dblog.debug("Memtable for {} replaced", newtab->get_filename());
 
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             });
         } catch (...) {
-            dblog.error("failed to write sstable: {}", std::current_exception());
+            dblog.error("failed to write sstable {}: {}", newtab->get_filename(), std::current_exception());
         }
         return sleep(10s).then([] {
             return make_ready_future<stop_iteration>(stop_iteration::no);
