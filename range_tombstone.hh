@@ -229,6 +229,15 @@ public:
     stdx::optional<range_tombstone> apply(const schema& s, range_tombstone&& src);
 
     size_t memory_usage() const { return start.memory_usage() + end.memory_usage(); }
+
+    // Flips start and end bound so that range tombstone can be used in reversed
+    // streams.
+    void flip() {
+        std::swap(start, end);
+        std::swap(start_kind, end_kind);
+        start_kind = flip_bound_kind(start_kind);
+        end_kind = flip_bound_kind(end_kind);
+    }
 private:
     void move_assign(range_tombstone&& rt) {
         start = std::move(rt.start);
