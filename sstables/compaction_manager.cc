@@ -112,6 +112,18 @@ void compaction_manager::deregister_weight(column_family* cf, int weight) {
     it->second.erase(weight);
 }
 
+std::vector<sstables::shared_sstable> compaction_manager::get_candidates(const column_family& cf) {
+    std::vector<sstables::shared_sstable> candidates;
+    candidates.reserve(cf.sstables_count());
+    // Filter out sstables that are being compacted.
+    for (auto& sst : *cf.get_sstables()) {
+        if (!_compacting_sstables.count(sst)) {
+            candidates.push_back(sst);
+        }
+    }
+    return candidates;
+}
+
 lw_shared_ptr<compaction_manager::task> compaction_manager::task_start(column_family* cf, bool cleanup) {
     // NOTE: Compaction code runs in parallel to the rest of the system.
     // When it's time to shutdown, we need to prevent any new compaction
@@ -130,15 +142,7 @@ lw_shared_ptr<compaction_manager::task> compaction_manager::task_start(column_fa
         }
 
         column_family& cf = *task->compacting_cf;
-        std::vector<sstables::shared_sstable> candidates; // candidates for compaction
-
-        candidates.reserve(cf.sstables_count());
-        // Filter out sstables that are being compacted.
-        for (auto& sst : *cf.get_sstables()) {
-            if (!_compacting_sstables.count(sst)) {
-                candidates.push_back(sst);
-            }
-        }
+        std::vector<sstables::shared_sstable> candidates = get_candidates(cf);
 
         sstables::compaction_descriptor descriptor;
         // Created to erase sstables from _compacting_sstables after compaction finishes.
