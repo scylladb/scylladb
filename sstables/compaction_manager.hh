@@ -49,7 +49,6 @@ private:
     struct task {
         column_family* compacting_cf = nullptr;
         shared_future<> compaction_done = make_ready_future<>();
-        seastar::gate compaction_gate;
         exponential_backoff_retry compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
         bool stopping = false;
         bool cleanup = false;

@@ -124,79 +124,74 @@ lw_shared_ptr<compaction_manager::task> compaction_manager::task_start(column_fa
     _stats.pending_tasks++;
 
     task->compaction_done = repeat([this, task] {
-        return seastar::with_gate(task->compaction_gate, [this, task] {
-            if (_stopped || task->stopping) {
-                _stats.pending_tasks--;
-                return make_ready_future<>();
-            }
-
-            column_family& cf = *task->compacting_cf;
-            std::vector<sstables::shared_sstable> candidates; // candidates for compaction
-
-            candidates.reserve(cf.sstables_count());
-            // Filter out sstables that are being compacted.
-            for (auto& sst : *cf.get_sstables()) {
-                if (!_compacting_sstables.count(sst)) {
-                    candidates.push_back(sst);
-                }
-            }
-
-            sstables::compaction_descriptor descriptor;
-            // Created to erase sstables from _compacting_sstables after compaction finishes.
-            std::vector<sstables::shared_sstable> sstables_to_compact;
-            int weight = -1;
-            auto keep_track_of_compacting_sstables = [this, &sstables_to_compact, &descriptor] {
-                sstables_to_compact.reserve(descriptor.sstables.size());
-                for (auto& sst : descriptor.sstables) {
-                    sstables_to_compact.push_back(sst);
-                    _compacting_sstables.insert(sst);
-                }
-            };
-
-            future<> operation = make_ready_future<>();
-            if (task->cleanup) {
-                descriptor = sstables::compaction_descriptor(std::move(candidates));
-                keep_track_of_compacting_sstables();
-                operation = cf.cleanup_sstables(std::move(descriptor));
-            } else {
-                sstables::compaction_strategy cs = cf.get_compaction_strategy();
-                descriptor = cs.get_sstables_for_compaction(cf, std::move(candidates));
-                weight = trim_to_compact(&cf, descriptor);
-                // Stop compaction task immediately if strategy is satisfied or job cannot run in parallel.
-                if (descriptor.sstables.empty() || !try_to_register_weight(&cf, weight, cs.parallel_compaction())) {
-                    task->stopping = true;
-                    _stats.pending_tasks--;
-                    cmlog.debug("Refused compaction job ({} sstable(s)) of weight {} for {}.{}",
-                        descriptor.sstables.size(), weight, cf.schema()->ks_name(), cf.schema()->cf_name());
-                    return make_ready_future<>();
-                }
-                keep_track_of_compacting_sstables();
-                cmlog.debug("Accepted compaction job ({} sstable(s)) of weight {} for {}.{}",
-                    descriptor.sstables.size(), weight, cf.schema()->ks_name(), cf.schema()->cf_name());
-                operation = cf.run_compaction(std::move(descriptor));
-            }
-
+        if (_stopped || task->stopping) {
             _stats.pending_tasks--;
-            _stats.active_tasks++;
-            return operation.then([this, task] {
-                _stats.completed_tasks++;
-                task->compaction_retry.reset();
-                return make_ready_future<>();
-            }).finally([this, task, weight, sstables_to_compact = std::move(sstables_to_compact)] {
-                // Remove compacted sstables from the set of compacting sstables.
-                for (auto& sst : sstables_to_compact) {
-                    _compacting_sstables.erase(sst);
-                }
-                if (weight != -1) {
-                    deregister_weight(task->compacting_cf, weight);
-                }
-                _stats.active_tasks--;
-            });
-        }).then_wrapped([this, task] (future<> f) {
-            bool retry = false;
+            return make_ready_future<stop_iteration>(stop_iteration::yes);
+        }
 
-            // seastar::gate_closed_exception is used for regular termination
-            // of the fiber.
+        column_family& cf = *task->compacting_cf;
+        std::vector<sstables::shared_sstable> candidates; // candidates for compaction
+
+        candidates.reserve(cf.sstables_count());
+        // Filter out sstables that are being compacted.
+        for (auto& sst : *cf.get_sstables()) {
+            if (!_compacting_sstables.count(sst)) {
+                candidates.push_back(sst);
+            }
+        }
+
+        sstables::compaction_descriptor descriptor;
+        // Created to erase sstables from _compacting_sstables after compaction finishes.
+        std::vector<sstables::shared_sstable> sstables_to_compact;
+        int weight = -1;
+        auto keep_track_of_compacting_sstables = [this, &sstables_to_compact, &descriptor] {
+            sstables_to_compact.reserve(descriptor.sstables.size());
+            for (auto& sst : descriptor.sstables) {
+                sstables_to_compact.push_back(sst);
+                _compacting_sstables.insert(sst);
+            }
+        };
+
+        future<> operation = make_ready_future<>();
+        if (task->cleanup) {
+            descriptor = sstables::compaction_descriptor(std::move(candidates));
+            keep_track_of_compacting_sstables();
+            operation = cf.cleanup_sstables(std::move(descriptor));
+        } else {
+            sstables::compaction_strategy cs = cf.get_compaction_strategy();
+            descriptor = cs.get_sstables_for_compaction(cf, std::move(candidates));
+            weight = trim_to_compact(&cf, descriptor);
+            // Stop compaction task immediately if strategy is satisfied or job cannot run in parallel.
+            if (descriptor.sstables.empty() || !try_to_register_weight(&cf, weight, cs.parallel_compaction())) {
+                task->stopping = true;
+                _stats.pending_tasks--;
+                cmlog.debug("Refused compaction job ({} sstable(s)) of weight {} for {}.{}",
+                    descriptor.sstables.size(), weight, cf.schema()->ks_name(), cf.schema()->cf_name());
+                return make_ready_future<stop_iteration>(stop_iteration::yes);
+            }
+            keep_track_of_compacting_sstables();
+            cmlog.debug("Accepted compaction job ({} sstable(s)) of weight {} for {}.{}",
+                descriptor.sstables.size(), weight, cf.schema()->ks_name(), cf.schema()->cf_name());
+            operation = cf.run_compaction(std::move(descriptor));
+        }
+
+        _stats.pending_tasks--;
+        _stats.active_tasks++;
+        return operation.then([this, task] {
+            _stats.completed_tasks++;
+            task->compaction_retry.reset();
+            return make_ready_future<>();
+        }).then_wrapped([this, task, weight, sstables_to_compact = std::move(sstables_to_compact)] (future<> f) {
+            // Remove compacted sstables from the set of compacting sstables.
+            for (auto& sst : sstables_to_compact) {
+                _compacting_sstables.erase(sst);
+            }
+            if (weight != -1) {
+                deregister_weight(task->compacting_cf, weight);
+            }
+            _stats.active_tasks--;
+
+            bool retry_after_error = false;
             try {
                 f.get();
             } catch (seastar::gate_closed_exception& e) {
@@ -204,19 +199,18 @@ lw_shared_ptr<compaction_manager::task> compaction_manager::task_start(column_fa
                 throw;
             } catch (sstables::compaction_stop_exception& e) {
                 cmlog.info("compaction info: {}", e.what());
-                retry = true;
+                retry_after_error = true;
             } catch (std::exception& e) {
                 cmlog.error("compaction failed: {}", e.what());
-                retry = true;
+                retry_after_error = true;
             } catch (...) {
                 cmlog.error("compaction failed: unknown error");
-                retry = true;
+                retry_after_error = true;
             }
 
-            // We shouldn't retry compaction if task was asked to stop or
-            // compaction manager was stopped.
+            // We shouldn't retry compaction if task was asked to stop or compaction manager was stopped.
             if (!_stopped && !task->stopping) {
-                if (retry) {
+                if (retry_after_error) {
                     cmlog.info("compaction task handler sleeping for {} seconds",
                         std::chrono::duration_cast<std::chrono::seconds>(task->compaction_retry.sleep_time()).count());
                     _stats.errors++;
@@ -231,17 +225,14 @@ lw_shared_ptr<compaction_manager::task> compaction_manager::task_start(column_fa
             }
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         });
-    }).then_wrapped([] (future<> f) {
+    }).then_wrapped([this, task] (future<> f) {
+        _tasks.remove(task);
         try {
             f.get();
-        } catch (seastar::gate_closed_exception& e) {
-            // exception logged in keep_doing.
         } catch (...) {
             // this shouldn't happen, let's log it anyway.
             cmlog.error("compaction task: unexpected error");
         }
-    }).finally([this, task] {
-        _tasks.remove(task);
     });
     return task;
 }
@@ -293,13 +284,10 @@ void compaction_manager::submit_sstable_rewrite(column_family* cf, sstables::sha
 
 future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> task) {
     task->stopping = true;
-    return task->compaction_gate.close().then([task] {
-        auto f = task->compaction_done.get_future();
-        return f.then([task] {
-            task->compaction_gate = seastar::gate();
-            task->stopping = false;
-            return make_ready_future<>();
-        });
+    auto f = task->compaction_done.get_future();
+    return f.then([task] {
+        task->stopping = false;
+        return make_ready_future<>();
     });
 }
 
