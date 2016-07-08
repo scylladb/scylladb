@@ -219,6 +219,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
                         gossiper.do_shadow_round().get();
                         ok = true;
                     } catch (...) {
+                        gossiper.finish_shadow_round();
                         ok = false;
                     }
 
