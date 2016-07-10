@@ -281,7 +281,8 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
             return get_max_purgeable_timestamp(schema, not_compacted_sstables, dk);
         };
         auto cr = compacting_sstable_writer(*schema, creator, partitions_per_sstable, max_sstable_size, sstable_level, rp, std::move(ancestors), *info);
-        auto cfc = compact_for_compaction<compacting_sstable_writer>(*schema, gc_clock::now(), std::move(cr), get_max_purgeable);
+        auto cfc = make_stable_flattened_mutations_consumer<compact_for_compaction<compacting_sstable_writer>>(
+                *schema, gc_clock::now(), std::move(cr), get_max_purgeable);
 
         auto filter = [cleanup, sorted_owned_ranges = std::move(owned_ranges)] (const streamed_mutation& sm) {
             if (dht::shard_of(sm.decorated_key().token()) != engine().cpu_id()) {

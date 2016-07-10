@@ -250,8 +250,8 @@ concept bool FlattenedConsumer() {
     };
 }
 */
-template<typename Consumer>
-auto consume_flattened(mutation_reader mr, Consumer c, bool reverse_mutations = false)
+template<typename FlattenedConsumer>
+auto consume_flattened(mutation_reader mr, FlattenedConsumer&& c, bool reverse_mutations = false)
 {
     return do_with(std::move(mr), std::move(c), stdx::optional<streamed_mutation>(), [reverse_mutations] (auto& mr, auto& c, auto& sm) {
         return repeat([&, reverse_mutations] {
@@ -285,10 +285,10 @@ concept bool StreamedMutationFilter() {
 }
 */
 // This version of consume_flattened() must be run inside a thread and
-// guarantees that all Consumer functions will also be called in the same thread
+// guarantees that all FlattenedConsumer functions will also be called in the same thread
 // context.
-template<typename Consumer, typename StreamedMutationFilter>
-auto consume_flattened_in_thread(mutation_reader& mr, Consumer& c, StreamedMutationFilter&& filter)
+template<typename FlattenedConsumer, typename StreamedMutationFilter>
+auto consume_flattened_in_thread(mutation_reader& mr, FlattenedConsumer& c, StreamedMutationFilter&& filter)
 {
     while (true) {
         auto smopt = mr().get0();
@@ -322,8 +322,29 @@ auto consume_flattened_in_thread(mutation_reader& mr, Consumer& c, StreamedMutat
     return c.consume_end_of_stream();
 }
 
-template<typename Consumer>
-auto consume_flattened_in_thread(mutation_reader& mr, Consumer& c)
+template<typename FlattenedConsumer>
+auto consume_flattened_in_thread(mutation_reader& mr, FlattenedConsumer& c)
 {
     return consume_flattened_in_thread(mr, c, [] (auto&&) { return true; });
+}
+
+// Adapts a non-movable FlattenedConsumer to a movable one.
+template<typename FlattenedConsumer>
+class stable_flattened_mutations_consumer {
+    std::unique_ptr<FlattenedConsumer> _ptr;
+public:
+    stable_flattened_mutations_consumer(std::unique_ptr<FlattenedConsumer> ptr) : _ptr(std::move(ptr)) {}
+    auto consume_new_partition(const dht::decorated_key& dk) { return _ptr->consume_new_partition(dk); }
+    auto consume(tombstone t) { return _ptr->consume(t); }
+    auto consume(static_row&& sr) { return _ptr->consume(std::move(sr)); }
+    auto consume(clustering_row&& cr) { return _ptr->consume(std::move(cr)); }
+    auto consume(range_tombstone_begin&& rtb) { return _ptr->consume(std::move(rtb)); }
+    auto consume(range_tombstone_end&& rte) { return _ptr->consume(std::move(rte)); }
+    auto consume_end_of_partition() { return _ptr->consume_end_of_partition(); }
+    auto consume_end_of_stream() { return _ptr->consume_end_of_stream(); }
+};
+
+template<typename FlattenedConsumer, typename... Args>
+stable_flattened_mutations_consumer<FlattenedConsumer> make_stable_flattened_mutations_consumer(Args&&... args) {
+    return { std::make_unique<FlattenedConsumer>(std::forward<Args>(args)...) };
 }

@@ -1914,7 +1914,7 @@ do_serialize_mutation_form(
 }
 
 bool collection_type_impl::mutation::compact_and_expire(tombstone base_tomb, gc_clock::time_point query_time,
-    api::timestamp_type max_purgeable, gc_clock::time_point gc_before)
+    can_gc_fn& can_gc, gc_clock::time_point gc_before)
 {
     bool any_live = false;
     tomb.apply(base_tomb);
@@ -1928,7 +1928,7 @@ bool collection_type_impl::mutation::compact_and_expire(tombstone base_tomb, gc_
             survivors.emplace_back(std::make_pair(
                 std::move(name_and_cell.first), atomic_cell::make_dead(cell.timestamp(), cell.deletion_time())));
         } else if (!cell.is_live()) {
-            if (cell.timestamp() >= max_purgeable || cell.deletion_time() >= gc_before) {
+            if (cell.deletion_time() >= gc_before || !can_gc(tombstone(cell.timestamp(), cell.deletion_time()))) {
                 survivors.emplace_back(std::move(name_and_cell));
             }
         } else {
@@ -1937,7 +1937,7 @@ bool collection_type_impl::mutation::compact_and_expire(tombstone base_tomb, gc_
         }
     }
     cells = std::move(survivors);
-    if (tomb.timestamp < max_purgeable && tomb.deletion_time < gc_before) {
+    if (tomb.deletion_time < gc_before && can_gc(tomb)) {
         tomb = tombstone();
     }
     return any_live;

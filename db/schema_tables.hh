@@ -156,7 +156,7 @@ void feed_hash_for_schema_digest(Hasher& h, const mutation& m) {
     // See https://issues.apache.org/jira/browse/CASSANDRA-6862.
     // We achieve similar effect with compact_for_compaction().
     mutation m_compacted(m);
-    m_compacted.partition().compact_for_compaction(*m.schema(), api::max_timestamp, gc_clock::time_point::max());
+    m_compacted.partition().compact_for_compaction(*m.schema(), always_gc, gc_clock::time_point::max());
     feed_hash(h, m_compacted);
 }
 

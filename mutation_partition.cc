@@ -1144,30 +1144,30 @@ uint32_t mutation_partition::do_compact(const schema& s,
     const std::vector<query::clustering_range>& row_ranges,
     bool reverse,
     uint32_t row_limit,
-    api::timestamp_type max_purgeable)
+    can_gc_fn& can_gc)
 {
     assert(row_limit > 0);
 
     auto gc_before = query_time - s.gc_grace_seconds();
 
+    auto should_purge_tombstone = [&] (const tombstone& t) {
+        return t.deletion_time < gc_before && can_gc(t);
+    };
+
     bool static_row_live = _static_row.compact_and_expire(s, column_kind::static_column, _tombstone,
-        query_time, max_purgeable, gc_before);
+        query_time, can_gc, gc_before);
 
     uint32_t row_count = 0;
-
-    auto can_purge_tombstone = [&] (const tombstone& t) {
-        return t.timestamp < max_purgeable && t.deletion_time < gc_before;
-    };
 
     auto row_callback = [&] (rows_entry& e) {
         deletable_row& row = e.row();
 
         tombstone tomb = tombstone_for_row(s, e);
 
-        bool is_live = row.cells().compact_and_expire(s, column_kind::regular_column, tomb, query_time, max_purgeable, gc_before);
-        is_live |= row.marker().compact_and_expire(tomb, query_time, max_purgeable, gc_before);
+        bool is_live = row.cells().compact_and_expire(s, column_kind::regular_column, tomb, query_time, can_gc, gc_before);
+        is_live |= row.marker().compact_and_expire(tomb, query_time, can_gc, gc_before);
 
-        if (can_purge_tombstone(row.deleted_at())) {
+        if (should_purge_tombstone(row.deleted_at())) {
             row.remove_tombstone();
         }
 
@@ -1198,9 +1198,9 @@ uint32_t mutation_partition::do_compact(const schema& s,
     }
 
     _row_tombstones.erase_where([&] (auto&& rt) {
-        return can_purge_tombstone(rt.tomb) || rt.tomb.timestamp <= _tombstone.timestamp;
+        return should_purge_tombstone(rt.tomb) || rt.tomb.timestamp <= _tombstone.timestamp;
     });
-    if (can_purge_tombstone(_tombstone)) {
+    if (should_purge_tombstone(_tombstone)) {
         _tombstone = tombstone();
     }
 
@@ -1217,17 +1217,17 @@ mutation_partition::compact_for_query(
     bool reverse,
     uint32_t row_limit)
 {
-    return do_compact(s, query_time, row_ranges, reverse, row_limit, api::max_timestamp);
+    return do_compact(s, query_time, row_ranges, reverse, row_limit, always_gc);
 }
 
 void mutation_partition::compact_for_compaction(const schema& s,
-    api::timestamp_type max_purgeable, gc_clock::time_point compaction_time)
+    can_gc_fn& can_gc, gc_clock::time_point compaction_time)
 {
     static const std::vector<query::clustering_range> all_rows = {
         query::clustering_range::make_open_ended_both_sides()
     };
 
-    do_compact(s, compaction_time, all_rows, false, query::max_rows, max_purgeable);
+    do_compact(s, compaction_time, all_rows, false, query::max_rows, can_gc);
 }
 
 // Returns true if there is no live data or tombstones.
@@ -1486,7 +1486,7 @@ void row::revert(const schema& s, column_kind kind, row& other) noexcept {
 }
 
 bool row::compact_and_expire(const schema& s, column_kind kind, tombstone tomb, gc_clock::time_point query_time,
-    api::timestamp_type max_purgeable, gc_clock::time_point gc_before)
+    can_gc_fn& can_gc, gc_clock::time_point gc_before)
 {
     bool any_live = false;
     remove_if([&] (column_id id, atomic_cell_or_collection& c) {
@@ -1499,7 +1499,7 @@ bool row::compact_and_expire(const schema& s, column_kind kind, tombstone tomb, 
             } else if (cell.has_expired(query_time)) {
                 c = atomic_cell::make_dead(cell.timestamp(), cell.deletion_time());
             } else if (!cell.is_live()) {
-                erase = cell.timestamp() < max_purgeable && cell.deletion_time() < gc_before;
+                erase = cell.deletion_time() < gc_before && can_gc(tombstone(cell.timestamp(), cell.deletion_time()));
             } else {
                 any_live |= true;
             }
@@ -1508,7 +1508,7 @@ bool row::compact_and_expire(const schema& s, column_kind kind, tombstone tomb, 
             auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
             auto m_view = ctype->deserialize_mutation_form(cell);
             collection_type_impl::mutation m = m_view.materialize();
-            any_live |= m.compact_and_expire(tomb, query_time, max_purgeable, gc_before);
+            any_live |= m.compact_and_expire(tomb, query_time, can_gc, gc_before);
             if (m.cells.empty() && m.tomb <= tomb) {
                 erase = true;
             } else {
@@ -1814,7 +1814,8 @@ future<data_query_result> data_query(schema_ptr s, const mutation_source& source
     auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
 
     auto qrb = query_result_builder(*s, builder);
-    auto cfq = compact_for_query<emit_only_live_rows::yes, query_result_builder>(*s, query_time, slice, row_limit, partition_limit, std::move(qrb));
+    auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::yes, query_result_builder>>(
+            *s, query_time, slice, row_limit, partition_limit, std::move(qrb));
 
     auto reader = source(s, range, query::clustering_key_filtering_context::create(s, slice), service::get_local_sstable_query_read_priority());
     return consume_flattened(std::move(reader), std::move(cfq), is_reversed);
@@ -1890,7 +1891,8 @@ mutation_query(schema_ptr s,
     auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
 
     auto rrb = reconcilable_result_builder(*s, slice);
-    auto cfq = compact_for_query<emit_only_live_rows::no, reconcilable_result_builder>(*s, query_time, slice, row_limit, partition_limit, std::move(rrb));
+    auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::no, reconcilable_result_builder>>(
+            *s, query_time, slice, row_limit, partition_limit, std::move(rrb));
 
     auto reader = source(s, range, query::clustering_key_filtering_context::create(s, slice), service::get_local_sstable_query_read_priority());
     return consume_flattened(std::move(reader), std::move(cfq), is_reversed);
