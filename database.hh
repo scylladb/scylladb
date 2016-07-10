@@ -648,9 +648,9 @@ public:
         _config.enable_incremental_backups = val;
     }
 
-    lw_shared_ptr<sstable_list> get_sstables();
-    lw_shared_ptr<sstable_list> get_sstables_including_compacted_undeleted();
-    size_t sstables_count();
+    lw_shared_ptr<sstable_list> get_sstables() const;
+    lw_shared_ptr<sstable_list> get_sstables_including_compacted_undeleted() const;
+    size_t sstables_count() const;
     int64_t get_unleveled_sstables() const;
 
     void start_compaction();

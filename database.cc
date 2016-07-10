@@ -1202,7 +1202,7 @@ void column_family::set_compaction_strategy(sstables::compaction_strategy_type s
     _sstables = std::move(new_sstables);
 }
 
-size_t column_family::sstables_count() {
+size_t column_family::sstables_count() const {
     return _sstables->all()->size();
 }
 
@@ -1213,7 +1213,7 @@ int64_t column_family::get_unleveled_sstables() const {
     return 0;
 }
 
-lw_shared_ptr<sstable_list> column_family::get_sstables() {
+lw_shared_ptr<sstable_list> column_family::get_sstables() const {
     return _sstables->all();
 }
 
@@ -1224,7 +1224,7 @@ lw_shared_ptr<sstable_list> column_family::get_sstables() {
 // As long as we haven't deleted them, compaction needs to ensure it doesn't
 // garbage-collect a tombstone that covers data in an sstable that may not be
 // successfully deleted.
-lw_shared_ptr<sstable_list> column_family::get_sstables_including_compacted_undeleted() {
+lw_shared_ptr<sstable_list> column_family::get_sstables_including_compacted_undeleted() const {
     if (_sstables_compacted_but_not_deleted.empty()) {
         return get_sstables();
     }

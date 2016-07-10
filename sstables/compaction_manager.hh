@@ -49,7 +49,6 @@ private:
     struct task {
         column_family* compacting_cf = nullptr;
         shared_future<> compaction_done = make_ready_future<>();
-        seastar::gate compaction_gate;
         exponential_backoff_retry compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
         bool stopping = false;
         bool cleanup = false;
@@ -74,12 +73,7 @@ private:
     // That's used to allow parallel compaction on the same column family.
     std::unordered_map<column_family*, std::unordered_set<int>> _weight_tracker;
 private:
-    lw_shared_ptr<task> task_start(column_family* cf, bool cleanup);
     future<> task_stop(lw_shared_ptr<task> task);
-
-    // Returns if this compaction manager is accepting new requests.
-    // It will not accept new requests in case the manager was stopped.
-    bool can_submit();
 
     // Return true if weight is not registered. If parallel_compaction is not
     // true, only one weight is allowed to be registered.
@@ -91,6 +85,20 @@ private:
     // weight is not taken or its size is equal to minimum threshold.
     // Return weight of compaction job.
     int trim_to_compact(column_family* cf, sstables::compaction_descriptor& descriptor);
+
+    // Get candidates for compaction strategy, which are all sstables but the ones being compacted.
+    std::vector<sstables::shared_sstable> get_candidates(const column_family& cf);
+
+    void register_compacting_sstables(const std::vector<sstables::shared_sstable>& sstables);
+    void deregister_compacting_sstables(const std::vector<sstables::shared_sstable>& sstables);
+
+    // Return true if compaction manager and task weren't asked to stop.
+    inline bool can_proceed(const lw_shared_ptr<task>& task);
+
+    // Check if column family is being cleaned up.
+    inline bool check_for_cleanup(column_family *cf);
+
+    inline future<> put_task_to_sleep(lw_shared_ptr<task>& task);
 public:
     compaction_manager();
     ~compaction_manager();
