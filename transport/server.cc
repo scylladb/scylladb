@@ -195,6 +195,7 @@ public:
     void write_long(int64_t n);
     void write_short(uint16_t n);
     void write_string(const sstring& s);
+    void write_bytes_as_string(bytes_view s);
     void write_long_string(const sstring& s);
     void write_uuid(utils::UUID uuid);
     void write_string_list(std::vector<sstring> string_list);
@@ -1441,6 +1442,12 @@ void cql_server::response::write_string(const sstring& s)
     _body.insert(_body.end(), s.begin(), s.end());
 }
 
+void cql_server::response::write_bytes_as_string(bytes_view s)
+{
+    write_short(cast_if_fits<uint16_t>(s.size()));
+    _body.insert(_body.end(), s.begin(), s.end());
+}
+
 void cql_server::response::write_long_string(const sstring& s)
 {
     write_int(cast_if_fits<int32_t>(s.size()));
@@ -1586,6 +1593,18 @@ public:
 
         if (type->is_reversed()) {
             fail(unimplemented::cause::REVERSED);
+        }
+        if (type->is_user_type()) {
+            r.write_short(uint16_t(type_id::UDT));
+            auto udt = static_pointer_cast<const user_type_impl>(type);
+            r.write_string(udt->_keyspace);
+            r.write_bytes_as_string(udt->_name);
+            r.write_short(udt->size());
+            for (auto&& i : boost::irange<size_t>(0, udt->size())) {
+                r.write_bytes_as_string(udt->field_name(i));
+                encode(r, udt->field_type(i));
+            }
+            return;
         }
         if (type->is_tuple()) {
             r.write_short(uint16_t(type_id::TUPLE));
