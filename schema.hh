@@ -264,13 +264,14 @@ public:
 class schema_builder;
 
 /*
- * Sub-schema for thrift aspects, i.e. not currently supported stuff.
- * But might be, and should be kept isolated (and starved)
+ * Sub-schema for thrift aspects. Should be kept isolated (and starved)
  */
 class thrift_schema {
     bool _compound = true;
+    bool _is_dynamic = false;
 public:
     bool has_compound_comparator() const;
+    bool is_dynamic() const;
     friend class schema;
 };
 
