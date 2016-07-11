@@ -1,0 +1,74 @@
+#!/usr/bin/python3
+#
+# Copyright (C) 2016 ScyllaDB
+#
+
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+import argparse
+import json
+import urllib
+import requests
+
+VERSION = "1.0"
+quiet = False
+# Temporary url for the review
+version_url = "https://i6a5h9l1kl.execute-api.us-east-1.amazonaws.com/prod/check_version"
+
+def trace(*vals):
+    print(''.join(vals))
+
+def traceln(*vals):
+    trace(*(vals + ('\n',)))
+
+def help(args):
+    parser.print_help()
+
+def get_json_from_url(path):
+    req = urllib.request.Request(path)
+    try:
+        response = urllib.request.urlopen(req)
+        data = response.read()
+        encoding = response.info().get_content_charset('utf-8')
+        return json.loads(data.decode(encoding))
+    except urllib.error.URLError as e:
+        pass
+    return ""
+
+def get_api(path):
+    return get_json_from_url("http://localhost:10000" + path)
+
+def check_version(ar):
+    current_version = get_api('/storage_service/scylla_release_version')
+    latest_version = get_json_from_url(version_url)["version"]
+    
+    if current_version != latest_version:
+        traceln("A new version was found, current version=", current_version, " latest version=", latest_version)
+
+parser = argparse.ArgumentParser(description='ScyllaDB help report tool', conflict_handler="resolve")
+parser.add_argument('-q', '--quiet', action='store_true', default=False, help='Quiet mode')
+
+subparsers = parser.add_subparsers(help='Available commands')
+parser_help = subparsers.add_parser('help', help='Display help information')
+parser_help.set_defaults(func=help)
+parser_system = subparsers.add_parser('version', help='Check if the current running version is the latest one')
+parser_system.set_defaults(func=check_version)
+
+args = parser.parse_args()
+quiet = args.quiet
+args.func(args)
