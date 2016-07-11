@@ -122,12 +122,6 @@ private:
     mutation_fragment_opt _in_progress;
     mutation_fragment_opt _ready;
 
-    // We want to emit both range_tombstone_begin and range_tombstone_end at the
-    // same time since it is how they appear in the sstables. Hence, the need for
-    // another _in_progress/_ready pair.
-    stdx::optional<range_tombstone_end> _range_tombstone_end_in_progress;
-    stdx::optional<range_tombstone_end> _range_tombstone_end_ready;
-
     stdx::optional<new_mutation> _mutation;
     bool _is_mutation_end;
 
@@ -323,15 +317,11 @@ public:
         // If _ready is already set we have a bug: get_mutation_fragment()
         // was not called, and below we will lose one clustering row!
         assert(!_ready);
-        assert(!_range_tombstone_end_ready);
         if (!_skip_clustering_row) {
             _ready = move_and_disengage(_in_progress);
-            _range_tombstone_end_ready = move_and_disengage(_range_tombstone_end_in_progress);
         } else {
             _in_progress = { };
             _ready = { };
-            _range_tombstone_end_in_progress = { };
-            _range_tombstone_end_ready = { };
         }
         _skip_clustering_row = false;
     }
@@ -539,14 +529,11 @@ public:
                 }
                 return ret;
             } else {
-                auto rtb = range_tombstone_begin(std::move(start_ck), start_kind, tombstone(deltime));
-                auto rte = range_tombstone_end(std::move(end), end_kind);
+                auto rt = range_tombstone(std::move(start_ck), start_kind, std::move(end), end_kind, tombstone(deltime));
                 if (flush_if_needed_for_range_tombstone() == proceed::yes) {
-                    _ready = mutation_fragment(std::move(rtb));
-                    _range_tombstone_end_ready = std::move(rte);
+                    _ready = mutation_fragment(std::move(rt));
                 } else {
-                    _in_progress = mutation_fragment(std::move(rtb));
-                    _range_tombstone_end_in_progress = std::move(rte);
+                    _in_progress = mutation_fragment(std::move(rt));
                 }
                 return proceed::no;
             }
@@ -580,17 +567,11 @@ public:
         return move_and_disengage(_ready);
     }
 
-    stdx::optional<range_tombstone_end> get_range_tombstone_end() {
-        return move_and_disengage(_range_tombstone_end_ready);
-    }
-
     void skip_partition() {
         _pending_collection = { };
         _in_progress = { };
         _ready = { };
-        _range_tombstone_end_in_progress = { };
-        _range_tombstone_end_ready = { };
-        
+
         _skip_partition = true;
     }
 };
@@ -621,11 +602,8 @@ private:
                 _finished = true;
             }
             auto mf = _consumer.get_mutation_fragment();
-            if (mf && mf->is_range_tombstone_begin()) {
-                auto& rtb = mf->as_range_tombstone_begin();
-                auto rte = *_consumer.get_range_tombstone_end();
-                auto rt = range_tombstone(std::move(rtb.key()), rtb.kind(), std::move(rte.key()), rte.kind(), rtb.tomb());
-                _range_tombstones.apply(std::move(rt));
+            if (mf && mf->is_range_tombstone()) {
+                _range_tombstones.apply(std::move(mf->as_range_tombstone()));
             } else {
                 _next_candidate = std::move(mf);
             }

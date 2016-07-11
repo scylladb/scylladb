@@ -1640,24 +1640,21 @@ void row_marker::revert(row_marker& rm) noexcept {
 class mutation_querier {
     const schema& _schema;
     query::result::partition_writer& _pw;
-    tombstone _partition_tombstone;
-    tombstone _current_tombstone;
     ser::qr_partition__static_row__cells _static_cells_wr;
     bool _live_data_in_static_row{};
     uint32_t _live_clustering_rows = 0;
     stdx::optional<ser::qr_partition__rows> _rows_wr;
 private:
-    void query_static_row(const row& r);
+    void query_static_row(const row& r, tombstone current_tombstone);
     void prepare_writers();
 public:
     mutation_querier(const schema& s, query::result::partition_writer& pw);
-    void consume(tombstone t);
+    void consume(tombstone) { }
     // Requires that sr.has_any_live_data()
-    stop_iteration consume(static_row&& sr);
+    stop_iteration consume(static_row&& sr, tombstone current_tombstone);
     // Requires that cr.has_any_live_data()
-    stop_iteration consume(clustering_row&& cr);
-    stop_iteration consume(range_tombstone_begin&& rt);
-    stop_iteration consume(range_tombstone_end&& rt);
+    stop_iteration consume(clustering_row&& cr, tombstone current_tombstone);
+    stop_iteration consume(range_tombstone&&) { return stop_iteration::no; }
     uint32_t consume_end_of_stream();
 };
 
@@ -1668,12 +1665,7 @@ mutation_querier::mutation_querier(const schema& s, query::result::partition_wri
 {
 }
 
-void mutation_querier::consume(tombstone t) {
-    _partition_tombstone = t;
-    _current_tombstone = t;
-}
-
-void mutation_querier::query_static_row(const row& r)
+void mutation_querier::query_static_row(const row& r, tombstone current_tombstone)
 {
     const query::partition_slice& slice = _pw.slice();
     if (!slice.static_columns.empty()) {
@@ -1682,49 +1674,39 @@ void mutation_querier::query_static_row(const row& r)
                                     r, slice.static_columns, _static_cells_wr);
         }
         if (_pw.requested_digest()) {
-            ::feed_hash(_pw.digest(), _partition_tombstone);
+            ::feed_hash(_pw.digest(), current_tombstone);
             auto t = hash_row_slice(_pw.digest(), _schema, column_kind::static_column,
                                     r, slice.static_columns);
-            _pw.last_modified() = std::max({_pw.last_modified(), _partition_tombstone.timestamp, t});
+            _pw.last_modified() = std::max({_pw.last_modified(), current_tombstone.timestamp, t});
         }
     }
     _rows_wr.emplace(std::move(_static_cells_wr).end_cells().end_static_row().start_rows());
 }
 
-stop_iteration mutation_querier::consume(static_row&& sr) {
-    query_static_row(sr.cells());
+stop_iteration mutation_querier::consume(static_row&& sr, tombstone current_tombstone) {
+    query_static_row(sr.cells(), current_tombstone);
     _live_data_in_static_row = true;
-    return stop_iteration::no;
-}
-
-stop_iteration mutation_querier::consume(range_tombstone_begin&& rt) {
-    _current_tombstone.apply(rt.tomb());
-    return stop_iteration::no;
-}
-
-stop_iteration mutation_querier::consume(range_tombstone_end&& rt) {
-    _current_tombstone = _partition_tombstone;
     return stop_iteration::no;
 }
 
 void mutation_querier::prepare_writers() {
     if (!_rows_wr) {
         row empty_row;
-        query_static_row(empty_row);
+        query_static_row(empty_row, { });
         _live_data_in_static_row = false;
     }
 }
 
-stop_iteration mutation_querier::consume(clustering_row&& cr) {
+stop_iteration mutation_querier::consume(clustering_row&& cr, tombstone current_tombstone) {
     prepare_writers();
 
     const query::partition_slice& slice = _pw.slice();
 
     if (_pw.requested_digest()) {
         cr.key().feed_hash(_pw.digest(), _schema);
-        ::feed_hash(_pw.digest(), _current_tombstone);
+        ::feed_hash(_pw.digest(), current_tombstone);
         auto t = hash_row_slice(_pw.digest(), _schema, column_kind::regular_column, cr.cells(), slice.regular_columns);
-        _pw.last_modified() = std::max({_pw.last_modified(), _current_tombstone.timestamp, t});
+        _pw.last_modified() = std::max({_pw.last_modified(), current_tombstone.timestamp, t});
     }
 
     if (_pw.requested_result()) {
@@ -1780,16 +1762,13 @@ public:
     void consume(tombstone t) {
         _mutation_consumer->consume(t);
     }
-    void consume(static_row&& sr, bool) {
-        _mutation_consumer->consume(std::move(sr));
+    void consume(static_row&& sr, tombstone t, bool) {
+        _mutation_consumer->consume(std::move(sr), t);
     }
-    void consume(clustering_row&& cr, bool) {
-        _mutation_consumer->consume(std::move(cr));
+    void consume(clustering_row&& cr, tombstone t,  bool) {
+        _mutation_consumer->consume(std::move(cr), t);
     }
-    void consume(range_tombstone_begin&& rt) {
-        _mutation_consumer->consume(std::move(rt));
-    }
-    void consume(range_tombstone_end&& rt) {
+    void consume(range_tombstone&& rt) {
         _mutation_consumer->consume(std::move(rt));
     }
 
@@ -1847,18 +1826,15 @@ public:
     void consume(tombstone t) {
         _mutation_consumer->consume(t);
     }
-    void consume(static_row&& sr, bool is_alive) {
+    void consume(static_row&& sr, tombstone, bool is_alive) {
         _static_row_is_alive = is_alive;
         _mutation_consumer->consume(std::move(sr));
     }
-    void consume(clustering_row&& cr, bool is_alive) {
+    void consume(clustering_row&& cr, tombstone, bool is_alive) {
         _live_rows += is_alive;
         _mutation_consumer->consume(std::move(cr));
     }
-    void consume(range_tombstone_begin&& rt) {
-        _mutation_consumer->consume(std::move(rt));
-    }
-    void consume(range_tombstone_end&& rt) {
+    void consume(range_tombstone&& rt) {
         _mutation_consumer->consume(std::move(rt));
     }
 

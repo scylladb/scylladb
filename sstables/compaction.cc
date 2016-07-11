@@ -192,10 +192,9 @@ public:
     }
 
     void consume(tombstone t) { _writer->consume(t); }
-    stop_iteration consume(static_row&& sr, bool) { return _writer->consume(std::move(sr)); }
-    stop_iteration consume(clustering_row&& cr, bool) { return _writer->consume(std::move(cr)); }
-    stop_iteration consume(range_tombstone_begin&& rtb) { return _writer->consume(std::move(rtb)); }
-    stop_iteration consume(range_tombstone_end&& rte) { return _writer->consume(std::move(rte)); }
+    stop_iteration consume(static_row&& sr, tombstone, bool) { return _writer->consume(std::move(sr)); }
+    stop_iteration consume(clustering_row&& cr, tombstone, bool) { return _writer->consume(std::move(cr)); }
+    stop_iteration consume(range_tombstone&& rt) { return _writer->consume(std::move(rt)); }
 
     stop_iteration consume_end_of_partition() {
         auto ret = _writer->consume_end_of_partition();

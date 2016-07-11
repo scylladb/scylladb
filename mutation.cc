@@ -217,7 +217,6 @@ future<mutation_opt> mutation_from_streamed_mutation(streamed_mutation_opt sm)
 {
     class rebuilder {
         mutation& _m;
-        stdx::optional<range_tombstone_begin> _rt_in_progress;
     public:
         rebuilder(mutation& m) : _m(m) { }
 
@@ -231,19 +230,8 @@ future<mutation_opt> mutation_from_streamed_mutation(streamed_mutation_opt sm)
             return stop_iteration::no;
         }
 
-        stop_iteration consume(range_tombstone_begin rtb) {
-            assert(!_rt_in_progress);
-            _rt_in_progress = std::move(rtb);
-            return stop_iteration::no;
-        }
-
-        stop_iteration consume(range_tombstone_end&& rte) {
-            assert(_rt_in_progress);
-            auto rt = range_tombstone(std::move(_rt_in_progress->key()), _rt_in_progress->kind(),
-                                      std::move(rte.key()), rte.kind(),
-                                      _rt_in_progress->tomb());
+        stop_iteration consume(range_tombstone&& rt) {
             _m.partition().apply_row_tombstone(*_m.schema(), std::move(rt));
-            _rt_in_progress = { };
             return stop_iteration::no;
         }
 
@@ -255,9 +243,7 @@ future<mutation_opt> mutation_from_streamed_mutation(streamed_mutation_opt sm)
             return stop_iteration::no;
         }
 
-        void consume_end_of_stream() {
-            assert(!_rt_in_progress);
-        }
+        void consume_end_of_stream() { }
     };
 
     struct data {

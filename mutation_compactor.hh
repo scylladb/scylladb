@@ -44,14 +44,13 @@ enum class compact_for_sstables {
 template<typename T>
 concept bool CompactedMutationsConsumer() {
     return requires(T obj, tombstone t, const dht::decorated_key& dk, static_row sr,
-        clustering_row cr, range_tombstone_begin rtb, range_tombstone_end rte, bool is_alive)
+        clustering_row cr, range_tombstone_begin rt, tombstone current_tombstone, bool is_alive)
     {
         obj.consume_new_partition(dk);
         obj.consume(t);
-        obj.consume(std::move(sr), is_alive);
-        obj.consume(std::move(cr), is_alive);
-        obj.consume(std::move(rtb));
-        obj.consume(std::move(rte));
+        obj.consume(std::move(sr), current_tombstone, is_alive);
+        obj.consume(std::move(cr), current_tombstone, is_alive);
+        obj.consume(std::move(rt));
         obj.consume_end_of_partition();
         obj.consume_end_of_stream();
     };
@@ -74,8 +73,7 @@ class compact_mutation {
     uint32_t _partition_row_limit{};
 
     CompactedMutationsConsumer _consumer;
-    tombstone _partition_tombstone;
-    tombstone _current_tombstone;
+    range_tombstone_accumulator _range_tombstones;
 
     bool _static_row_live{};
     uint32_t _rows_in_current_partition;
@@ -83,7 +81,6 @@ class compact_mutation {
     bool _empty_partition{};
     const dht::decorated_key* _dk;
     bool _has_ck_selector{};
-    bool _current_tombstone_emitted{};
 private:
     static constexpr bool only_live() {
         return OnlyLive == emit_only_live_rows::yes;
@@ -96,8 +93,8 @@ private:
         if (_empty_partition) {
             _empty_partition = false;
             _consumer.consume_new_partition(*_dk);
-            auto pt = _partition_tombstone;
-            if (!can_purge_tombstone(pt)) {
+            auto pt = _range_tombstones.get_partition_tombstone();
+            if (pt && !can_purge_tombstone(pt)) {
                 _consumer.consume(pt);
             }
         }
@@ -133,6 +130,7 @@ public:
         , _partition_limit(partition_limit)
         , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
         , _consumer(std::move(consumer))
+        , _range_tombstones(s, _slice.options.contains(query::partition_slice::option::reversed))
     {
         static_assert(!sstable_compaction(), "This constructor cannot be used for sstable compaction.");
     }
@@ -146,6 +144,7 @@ public:
         , _can_gc([this] (tombstone t) { return can_gc(t); })
         , _slice(query::full_slice)
         , _consumer(std::move(consumer))
+        , _range_tombstones(s, false)
     {
         static_assert(sstable_compaction(), "This constructor can only be used for sstable compaction.");
         static_assert(!only_live(), "SSTable compaction cannot be run with emit_only_live_rows::yes.");
@@ -158,43 +157,43 @@ public:
         _empty_partition = true;
         _rows_in_current_partition = 0;
         _static_row_live = false;
-        _current_tombstone = { };
-        _partition_tombstone = { };
+        _range_tombstones.clear();
         _current_partition_limit = std::min(_row_limit, _partition_row_limit);
         _max_purgeable = api::missing_timestamp;
     }
 
     void consume(tombstone t) {
-        _partition_tombstone = t;
-        _current_tombstone = t;
+        _range_tombstones.set_partition_tombstone(t);
         if (!only_live() && !can_purge_tombstone(t)) {
             partition_is_not_empty();
         }
     }
 
     stop_iteration consume(static_row&& sr) {
+        auto current_tombstone = _range_tombstones.get_partition_tombstone();
         bool is_live = sr.cells().compact_and_expire(_schema, column_kind::static_column,
-                                                     _partition_tombstone,
+                                                     current_tombstone,
                                                      _query_time, _can_gc, _gc_before);
         _static_row_live = is_live;
         if (is_live || (!only_live() && !sr.empty())) {
             partition_is_not_empty();
-            _consumer.consume(std::move(sr), is_live);
+            _consumer.consume(std::move(sr), current_tombstone, is_live);
         }
         return stop_iteration::no;
     }
 
     stop_iteration consume(clustering_row&& cr) {
-        auto t = _current_tombstone;
+        auto current_tombstone = _range_tombstones.tombstone_for_row(cr.key());
+        auto t = current_tombstone;
         t.apply(cr.tomb());
-        if (cr.tomb() <= _current_tombstone || can_purge_tombstone(cr.tomb())) {
+        if (cr.tomb() <= current_tombstone || can_purge_tombstone(cr.tomb())) {
             cr.remove_tombstone();
         }
         bool is_live = cr.marker().compact_and_expire(t, _query_time, _can_gc, _gc_before);
         is_live |= cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, _can_gc, _gc_before);
         if (only_live() && is_live) {
             partition_is_not_empty();
-            _consumer.consume(std::move(cr), true);
+            _consumer.consume(std::move(cr), t, true);
             if (++_rows_in_current_partition == _current_partition_limit) {
                 return stop_iteration::yes;
             }
@@ -207,28 +206,19 @@ public:
             }
             if (!cr.empty()) {
                 partition_is_not_empty();
-                _consumer.consume(std::move(cr), is_live);
+                _consumer.consume(std::move(cr), t, is_live);
             }
         }
         return stop_iteration::no;
     }
 
-    stop_iteration consume(range_tombstone_begin&& rt) {
-        _current_tombstone.apply(rt.tomb());
-        if (!can_purge_tombstone(rt.tomb()) && rt.tomb() > _partition_tombstone) {
+    stop_iteration consume(range_tombstone&& rt) {
+        _range_tombstones.apply(rt);
+        // FIXME: drop tombstone if it is fully covered by other range tombstones
+        if (!can_purge_tombstone(rt.tomb) && rt.tomb > _range_tombstones.get_partition_tombstone()) {
             partition_is_not_empty();
             _consumer.consume(std::move(rt));
-            _current_tombstone_emitted = true;
         }
-        return stop_iteration::no;
-    }
-
-    stop_iteration consume(range_tombstone_end&& rt) {
-        if (_current_tombstone_emitted) {
-            _consumer.consume(std::move(rt));
-            _current_tombstone_emitted = false;
-        }
-        _current_tombstone = _partition_tombstone;
         return stop_iteration::no;
     }
 

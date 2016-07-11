@@ -1405,13 +1405,6 @@ file_writer components_writer::index_file_writer(sstable& sst, const io_priority
     return file_writer(sst._index_file, std::move(options));
 }
 
-void components_writer::flush_deferred_rows() {
-    while (!_deferred_rows.empty()) {
-        _sst.write_clustered_row(_out, _schema, _deferred_rows.front());
-        _deferred_rows.pop_front();
-    }
-}
-
 components_writer::components_writer(sstable& sst, const schema& s, file_writer& out,
                                      uint64_t estimated_partitions, uint64_t max_sstable_size,
                                      const io_priority_class& pc)
@@ -1478,32 +1471,19 @@ stop_iteration components_writer::consume(static_row&& sr) {
 
 stop_iteration components_writer::consume(clustering_row&& cr) {
     ensure_tombstone_is_written();
-    if (_rt_in_progress) {
-        _deferred_rows.push_back(std::move(cr));
-    } else {
-        _sst.write_clustered_row(_out, _schema, cr);
-    }
+    _sst.write_clustered_row(_out, _schema, cr);
     return stop_iteration::no;
 }
 
-stop_iteration components_writer::consume(range_tombstone_begin&& rtb) {
+stop_iteration components_writer::consume(range_tombstone&& rt) {
     ensure_tombstone_is_written();
-    assert(!_rt_in_progress);
-    _rt_in_progress = std::move(rtb);
-    return stop_iteration::no;
-}
-
-stop_iteration components_writer::consume(range_tombstone_end&& rte) {
-    auto start = composite::from_clustering_element(_schema, std::move(_rt_in_progress->key()));
-    auto end = composite::from_clustering_element(_schema, std::move(rte.key()));
-    _sst.write_range_tombstone(_out, std::move(start), _rt_in_progress->kind(), std::move(end), rte.kind(), {}, _rt_in_progress->tomb());
-    _rt_in_progress = { };
-    flush_deferred_rows();
+    auto start = composite::from_clustering_element(_schema, std::move(rt.start));
+    auto end = composite::from_clustering_element(_schema, std::move(rt.end));
+    _sst.write_range_tombstone(_out, std::move(start), rt.start_kind, std::move(end), rt.end_kind, {}, rt.tomb);
     return stop_iteration::no;
 }
 
 stop_iteration components_writer::consume_end_of_partition() {
-    assert(!_rt_in_progress);
     ensure_tombstone_is_written();
     int16_t end_of_row = 0;
     write(_out, end_of_row);
