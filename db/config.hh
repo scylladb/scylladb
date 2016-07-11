@@ -168,15 +168,15 @@ public:
             "The name of the cluster; used to prevent machines in one logical cluster from joining another. All nodes participating in a cluster must have the same value."   \
     )                                           \
     val(listen_address, sstring, "localhost", Used,     \
-            "The IP address or hostname that Cassandra binds to for connecting to other Cassandra nodes. Set this parameter or listen_interface, not both. You must change the default setting for multiple nodes to communicate:\n"    \
+            "The IP address or hostname that Scylla binds to for connecting to other Scylla nodes. Set this parameter or listen_interface, not both. You must change the default setting for multiple nodes to communicate:\n"    \
             "\n"    \
-            "Generally set to empty. If the node is properly configured (host name, name resolution, and so on), Cassandra uses InetAddress.getLocalHost() to get the local address from the system.\n" \
+            "Generally set to empty. If the node is properly configured (host name, name resolution, and so on), Scylla uses InetAddress.getLocalHost() to get the local address from the system.\n" \
             "For a single node cluster, you can use the default setting (localhost).\n" \
-            "If Cassandra can't find the correct address, you must specify the IP address or host name.\n"  \
+            "If Scylla can't find the correct address, you must specify the IP address or host name.\n"  \
             "Never specify 0.0.0.0; it is always wrong."  \
     )                                                   \
     val(listen_interface, sstring, "eth0", Unused,  \
-            "The interface that Cassandra binds to for connecting to other Cassandra nodes. Interfaces must correspond to a single address, IP aliasing is not supported. See listen_address."  \
+            "The interface that Scylla binds to for connecting to other Scylla nodes. Interfaces must correspond to a single address, IP aliasing is not supported. See listen_address."  \
     )   \
     /* Default directories */   \
     /* If you have changed any of the default directories during installation, make sure you have root access and set these properties: */  \
@@ -190,7 +190,7 @@ public:
             "The directory location where table key and row caches are stored."  \
     )                                                   \
     /* Commonly used properties */  \
-    /* Properties most frequently used when configuring Cassandra. */   \
+    /* Properties most frequently used when configuring Scylla. */   \
     /* Before starting a node for the first time, you should carefully evaluate your requirements. */   \
     /* Common initialization properties */  \
     /* Note: Be sure to set the properties in the Quick start section as well. */   \
@@ -204,24 +204,24 @@ public:
             , "die", "stop", "stop_commit", "ignore"    \
     )   \
     val(disk_failure_policy, sstring, "stop", Used, \
-            "Sets how Cassandra responds to disk failure. Recommend settings are stop or best_effort.\n"    \
+            "Sets how Scylla responds to disk failure. Recommend settings are stop or best_effort.\n"    \
             "\n"    \
             "\tdie              Shut down gossip and Thrift and kill the JVM for any file system errors or single SSTable errors, so the node can be replaced.\n"   \
             "\tstop_paranoid    Shut down gossip and Thrift even for single SSTable errors.\n"    \
             "\tstop             Shut down gossip and Thrift, leaving the node effectively dead, but available for inspection using JMX.\n"    \
             "\tbest_effort      Stop using the failed disk and respond to requests based on the remaining available SSTables. This means you will see obsolete data at consistency level of ONE.\n"    \
-            "\tignore           Ignores fatal errors and lets the requests fail; all file system errors are logged but otherwise ignored. Cassandra acts as in versions prior to 1.2.\n"    \
+            "\tignore           Ignores fatal errors and lets the requests fail; all file system errors are logged but otherwise ignored. Scylla acts as in versions prior to Cassandra 1.2.\n"    \
             "\n"    \
             "Related information: Handling Disk Failures In Cassandra 1.2 blog and Recovering from a single disk failure using JBOD.\n"    \
             , "die", "stop_paranoid", "stop", "best_effort", "ignore"   \
     )   \
     val(endpoint_snitch, sstring, "org.apache.cassandra.locator.SimpleSnitch", Used,  \
-            "Set to a class that implements the IEndpointSnitch. Cassandra uses snitches for locating nodes and routing requests.\n\n"    \
+            "Set to a class that implements the IEndpointSnitch. Scylla uses snitches for locating nodes and routing requests.\n\n"    \
             "\tSimpleSnitch: Use for single-data center deployments or single-zone in public clouds. Does not recognize data center or rack information. It treats strategy order as proximity, which can improve cache locality when disabling read repair.\n\n"    \
             "\tGossipingPropertyFileSnitch: Recommended for production. The rack and data center for the local node are defined in the cassandra-rackdc.properties file and propagated to other nodes via gossip. To allow migration from the PropertyFileSnitch, it uses the cassandra-topology.properties file if it is present.\n\n"    \
             /*"\tPropertyFileSnitch: Determines proximity by rack and data center, which are explicitly configured in the cassandra-topology.properties file.\n\n"    */\
             /*"\tEc2Snitch: For EC2 deployments in a single region. Loads region and availability zone information from the EC2 API. The region is treated as the data center and the availability zone as the rack. Uses only private IPs. Subsequently it does not work across multiple regions.\n\n"    */\
-            /*"\tEc2MultiRegionSnitch: Uses public IPs as the broadcast_address to allow cross-region connectivity. This means you must also set seed addresses to the public IP and open the storage_port or ssl_storage_port on the public IP firewall. For intra-region traffic, Cassandra switches to the private IP after establishing a connection.\n\n"    */\
+            /*"\tEc2MultiRegionSnitch: Uses public IPs as the broadcast_address to allow cross-region connectivity. This means you must also set seed addresses to the public IP and open the storage_port or ssl_storage_port on the public IP firewall. For intra-region traffic, Scylla switches to the private IP after establishing a connection.\n\n"    */\
             "\tRackInferringSnitch: Proximity is determined by rack and data center, which are assumed to correspond to the 3rd and 2nd octet of each node's IP address, respectively. This snitch is best used as an example for writing a custom snitch class (unless this happens to match your deployment conventions).\n" \
             "\n"    \
             "Related information: Snitches\n"    \
@@ -239,10 +239,10 @@ public:
             "The listen address for client connections. Interfaces must correspond to a single address, IP aliasing is not supported. See rpc_address." \
     )   \
     val(seed_provider, seed_provider_type, seed_provider_type("org.apache.cassandra.locator.SimpleSeedProvider"), Used, \
-            "The addresses of hosts deemed contact points. Cassandra nodes use the -seeds list to find each other and learn the topology of the ring.\n"    \
+            "The addresses of hosts deemed contact points. Scylla nodes use the -seeds list to find each other and learn the topology of the ring.\n"    \
             "\n"    \
             "  class_name (Default: org.apache.cassandra.locator.SimpleSeedProvider)\n" \
-            "  \tThe class within Cassandra that handles the seed logic. It can be customized, but this is typically not required.\n"   \
+            "  \tThe class within Scylla that handles the seed logic. It can be customized, but this is typically not required.\n"   \
             "  \t- seeds (Default: 127.0.0.1)    A comma-delimited list of IP addresses used by gossip for bootstrapping new nodes joining a cluster. When running multiple nodes, you must change the list from the default value. In multiple data-center clusters, the seed list should include at least one node from each data center (replication group). More than a single seed node per data center is recommended for fault tolerance. Otherwise, gossip has to communicate with another data center when bootstrapping a node. Making every node a seed node is not recommended because of increased maintenance and reduced gossip performance. Gossip optimization is not critical, but it is recommended to use a small seed list (approximately three nodes per data center).\n"    \
             "\n"    \
             "Related information: Initializing a multiple node cluster (single data center) and Initializing a multiple node cluster (multiple data centers)."  \
@@ -271,7 +271,7 @@ public:
     )                                                   \
     /* Common automatic backup settings */  \
     val(incremental_backups, bool, false, Used,     \
-            "Backs up data updated since the last snapshot was taken. When enabled, Cassandra creates a hard link to each SSTable flushed or streamed locally in a backups/ subdirectory of the keyspace data. Removing these links is the operator's responsibility.\n"  \
+            "Backs up data updated since the last snapshot was taken. When enabled, Scylla creates a hard link to each SSTable flushed or streamed locally in a backups/ subdirectory of the keyspace data. Removing these links is the operator's responsibility.\n"  \
             "Related information: Enabling incremental backups" \
     )                                                   \
     val(snapshot_before_compaction, bool, false, Unused,     \
@@ -287,10 +287,10 @@ public:
     /* Tuning performance and system reso   urce utilization, including commit log, compaction, memory, disk I/O, CPU, reads, and writes. */    \
     /* Commit log settings */   \
     val(commitlog_sync, sstring, "periodic", Used,     \
-            "The method that Cassandra uses to acknowledge writes in milliseconds:\n"   \
+            "The method that Scylla uses to acknowledge writes in milliseconds:\n"   \
             "\n"    \
             "\tperiodic : Used with commitlog_sync_period_in_ms (Default: 10000 - 10 seconds ) to control how often the commit log is synchronized to disk. Periodic syncs are acknowledged immediately.\n"   \
-            "\tbatch : Used with commitlog_sync_batch_window_in_ms (Default: disabled **) to control how long Cassandra waits for other writes before performing a sync. When using this method, writes are not acknowledged until fsynced to disk.\n"  \
+            "\tbatch : Used with commitlog_sync_batch_window_in_ms (Default: disabled **) to control how long Scylla waits for other writes before performing a sync. When using this method, writes are not acknowledged until fsynced to disk.\n"  \
             "Related information: Durability"   \
     )                                                   \
     val(commitlog_segment_size_in_mb, uint32_t, 64, Used,     \
@@ -306,7 +306,7 @@ public:
             "Controls how long the system waits for other writes before performing a sync in \"batch\" mode."    \
     )   \
     val(commitlog_total_space_in_mb, int64_t, -1, Used,     \
-            "Total space used for commitlogs. If the used space goes above this value, Cassandra rounds up to the next nearest segment multiple and flushes memtables to disk for the oldest commitlog segments, removing those log segments. This reduces the amount of data to replay on startup, and prevents infrequently-updated tables from indefinitely keeping commitlog segments. A small total commitlog space tends to cause more flush activity on less-active tables.\n"  \
+            "Total space used for commitlogs. If the used space goes above this value, Scylla rounds up to the next nearest segment multiple and flushes memtables to disk for the oldest commitlog segments, removing those log segments. This reduces the amount of data to replay on startup, and prevents infrequently-updated tables from indefinitely keeping commitlog segments. A small total commitlog space tends to cause more flush activity on less-active tables.\n"  \
             "Related information: Configuring memtable throughput"  \
     )                                                   \
     /* Compaction settings */   \
@@ -394,7 +394,7 @@ public:
     )   \
     val(broadcast_address, sstring, /* listen_address */, Used, \
             "The IP address a node tells other nodes in the cluster to contact it by. It allows public and private address to be different. For example, use the broadcast_address parameter in topologies where not all nodes have access to other nodes by their private IP addresses.\n" \
-            "If your Cassandra cluster is deployed across multiple Amazon EC2 regions and you use the EC2MultiRegionSnitch , set the broadcast_address to public IP address of the node and the listen_address to the private IP."    \
+            "If your Scylla cluster is deployed across multiple Amazon EC2 regions and you use the EC2MultiRegionSnitch , set the broadcast_address to public IP address of the node and the listen_address to the private IP."    \
     )   \
     val(initial_token, sstring, /* N/A */, Used,     \
             "Used in the single-node-per-token architecture, where a node owns exactly one contiguous range in the ring space. Setting this property overrides num_tokens.\n"   \
@@ -402,13 +402,13 @@ public:
             "This parameter can be used with num_tokens (vnodes ) in special cases such as Restoring from a snapshot." \
     )   \
     val(num_tokens, uint32_t, 1, Used,                \
-            "Defines the number of tokens randomly assigned to this node on the ring when using virtual nodes (vnodes). The more tokens, relative to other nodes, the larger the proportion of data that the node stores. Generally all nodes should have the same number of tokens assuming equal hardware capability. The recommended value is 256. If unspecified (#num_tokens), Cassandra uses 1 (equivalent to #num_tokens : 1) for legacy compatibility and uses the initial_token setting.\n"    \
+            "Defines the number of tokens randomly assigned to this node on the ring when using virtual nodes (vnodes). The more tokens, relative to other nodes, the larger the proportion of data that the node stores. Generally all nodes should have the same number of tokens assuming equal hardware capability. The recommended value is 256. If unspecified (#num_tokens), Scylla uses 1 (equivalent to #num_tokens : 1) for legacy compatibility and uses the initial_token setting.\n"    \
             "If not using vnodes, comment #num_tokens : 256 or set num_tokens : 1 and use initial_token. If you already have an existing cluster with one token per node and wish to migrate to vnodes, see Enabling virtual nodes on an existing production cluster.\n"    \
             "Note: If using DataStax Enterprise, the default setting of this property depends on the type of node and type of install."  \
     )   \
     val(partitioner, sstring, "org.apache.cassandra.dht.Murmur3Partitioner", Used,                \
             "Distributes rows (by partition key) across all nodes in the cluster. Any IPartitioner may be used, including your own as long as it is in the class path. For new clusters use the default partitioner.\n" \
-            "Cassandra provides the following partitioners for backwards compatibility:\n"  \
+            "Scylla provides the following partitioners for backwards compatibility:\n"  \
             "\n"    \
             "\tRandomPartitioner\n" \
             "\tByteOrderedPartitioner\n"    \
@@ -551,7 +551,7 @@ public:
     /* RPC (remote procedure call) settings */  \
     /* Settings for configuring and tuning client connections. */   \
     val(broadcast_rpc_address, sstring, /* unset */, Used,    \
-            "RPC address to broadcast to drivers and other Cassandra nodes. This cannot be set to 0.0.0.0. If blank, it is set to the value of the rpc_address or rpc_interface. If rpc_address or rpc_interfaceis set to 0.0.0.0, this property must be set.\n"    \
+            "RPC address to broadcast to drivers and other Scylla nodes. This cannot be set to 0.0.0.0. If blank, it is set to the value of the rpc_address or rpc_interface. If rpc_address or rpc_interfaceis set to 0.0.0.0, this property must be set.\n"    \
     )   \
     val(rpc_port, uint16_t, 9160, Used,                \
             "Thrift port for client connections."  \
@@ -635,7 +635,7 @@ public:
             "\tweights: (Default: Keyspace: 1)  Takes a list of keyspaces. It sets how many requests are handled during each turn of the RoundRobin, based on the request_scheduler_id."  \
     )   \
     /* Thrift interface properties */   \
-    /* Legacy API for older clients. CQL is a simpler and better API for Cassandra. */  \
+    /* Legacy API for older clients. CQL is a simpler and better API for Scylla. */  \
     val(thrift_framed_transport_size_in_mb, uint32_t, 15, Unused,     \
             "Frame size (maximum field length) for Thrift. The frame is the row or part of the row the application is inserting."  \
     )   \
