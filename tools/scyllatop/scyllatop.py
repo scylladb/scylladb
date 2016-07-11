@@ -42,7 +42,7 @@ def main(metricPatterns, interval, collectd):
 
 if __name__ == '__main__':
     description = '\n'.join(['A top-like tool for scylladb collectd metrics.',
-                             'Keyborad shortcuts: S - simple view, M - aggregate over multiple cores, Q -quits',
+                             'Keyboard shortcuts: S - simple view, M - aggregate over multiple cores, Q -quits',
                              '',
                              'You need to configure the unix-sock plugin for collectd'
                              'before you can use this, use the --print-config option to give you a configuration example',
