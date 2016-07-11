@@ -99,7 +99,9 @@ public:
 
 future<frozen_mutation> freeze(streamed_mutation sm);
 
+static constexpr size_t default_frozen_fragment_size = 128 * 1024;
+
 using frozen_mutation_consumer_fn = std::function<future<>(frozen_mutation, bool)>;
 future<> fragment_and_freeze(streamed_mutation sm, frozen_mutation_consumer_fn c,
-                             size_t fragment_size = 128 * 1024);
+                             size_t fragment_size = default_frozen_fragment_size);
 

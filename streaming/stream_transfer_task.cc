@@ -49,6 +49,7 @@
 #include "dht/i_partitioner.hh"
 #include "service/priority_manager.hh"
 #include <boost/range/irange.hpp>
+#include "service/storage_service.hh"
 
 namespace streaming {
 
@@ -113,10 +114,15 @@ future<> send_mutations(auto si) {
         return repeat([si, &reader] () {
             return reader().then([si] (auto smopt) {
                 if (smopt && si->db.column_family_exists(si->cf_id)) {
+                    size_t fragment_size = default_frozen_fragment_size;
+                    // Mutations cannot be sent fragmented if the receiving side doesn't support that.
+                    if (!service::get_local_storage_service().cluster_supports_large_partitions()) {
+                        fragment_size = std::numeric_limits<size_t>::max();
+                    }
                     return fragment_and_freeze(std::move(*smopt), [si] (auto fm, bool fragmented) {
                         si->mutations_nr++;
                         return do_send_mutations(si, std::move(fm), fragmented);
-                    }).then([] { return stop_iteration::no; });
+                    }, fragment_size).then([] { return stop_iteration::no; });
                 } else {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
