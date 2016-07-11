@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Scylla Housekeeping daily
+After=scylla-server.service
+BindsTo=scylla-server.service
+
+[Timer]
+OnUnitActiveSec=1d
+
+[Install]
+WantedBy=timers.target
