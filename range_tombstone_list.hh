@@ -107,8 +107,14 @@ public:
     range_tombstones_type& tombstones() {
         return _tombstones;
     }
+    auto begin() {
+        return _tombstones.begin();
+    }
     auto begin() const {
         return _tombstones.begin();
+    }
+    auto end() {
+        return _tombstones.end();
     }
     auto end() const {
         return _tombstones.end();
