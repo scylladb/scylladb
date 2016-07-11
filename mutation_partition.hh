@@ -682,6 +682,8 @@ public:
     // return a set of rows_entry where each entry represents a CQL row sharing the same clustering key.
     const rows_type& clustered_rows() const { return _rows; }
     const range_tombstone_list& row_tombstones() const { return _row_tombstones; }
+    rows_type& clustered_rows() { return _rows; }
+    range_tombstone_list& row_tombstones() { return _row_tombstones; }
     const row* find_row(const clustering_key& key) const;
     tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key) const;
     tombstone tombstone_for_row(const schema& schema, const clustering_key& key) const;
