@@ -519,17 +519,19 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
 
             check_in_shutdown();
             return parallelism_semaphore.wait(1).then([&completion, &success, &db, &neighbors, &keyspace, &cf, &range] {
+                auto checksum_type = service::get_local_storage_service().cluster_supports_large_partitions()
+                                     ? repair_checksum::streamed : repair_checksum::legacy;
 
                 // Ask this node, and all neighbors, to calculate checksums in
                 // this range. When all are done, compare the results, and if
                 // there are any differences, sync the content of this range.
                 std::vector<future<partition_checksum>> checksums;
                 checksums.reserve(1 + neighbors.size());
-                checksums.push_back(checksum_range(db, keyspace, cf, range, repair_checksum::legacy));
+                checksums.push_back(checksum_range(db, keyspace, cf, range, checksum_type));
                 for (auto&& neighbor : neighbors) {
                     checksums.push_back(
                             net::get_local_messaging_service().send_repair_checksum_range(
-                                    net::msg_addr{neighbor},keyspace, cf, range, repair_checksum::legacy));
+                                    net::msg_addr{neighbor},keyspace, cf, range, checksum_type));
                 }
 
                 completion.enter();
