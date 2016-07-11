@@ -489,6 +489,7 @@ int main(int ac, char** av) {
                     , trust_store
                     , cert
                     , key
+                    , cfg->internode_compression()
                     , seed_provider
                     , cluster_name
                     , phi);

@@ -519,7 +519,7 @@ public:
     val(internode_recv_buff_size_in_bytes, uint32_t, 0, Unused,     \
             "Sets the receiving socket buffer size in bytes for inter-node calls."  \
     )   \
-    val(internode_compression, sstring, "all", Unused,     \
+    val(internode_compression, sstring, "none", Used,     \
             "Controls whether traffic between nodes is compressed. The valid values are:\n" \
             "\n"    \
             "\tall: All traffic is compressed.\n"   \

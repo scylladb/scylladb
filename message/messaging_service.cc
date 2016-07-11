@@ -67,6 +67,8 @@
 #include "idl/read_command.dist.impl.hh"
 #include "idl/range.dist.impl.hh"
 #include "idl/partition_checksum.dist.impl.hh"
+#include "rpc/lz4_compressor.hh"
+#include "rpc/multi_algo_compressor_factory.hh"
 
 namespace net {
 
@@ -107,6 +109,9 @@ using gossip_digest_ack = gms::gossip_digest_ack;
 using gossip_digest_ack2 = gms::gossip_digest_ack2;
 using rpc_protocol = rpc::protocol<serializer, messaging_verb>;
 using namespace std::chrono_literals;
+
+static rpc::lz4_compressor::factory lz4_compressor_factory;
+static rpc::multi_algo_compressor_factory compressor_factory(&lz4_compressor_factory);
 
 struct messaging_service::rpc_protocol_wrapper : public rpc_protocol { using rpc_protocol::rpc_protocol; };
 
@@ -212,7 +217,7 @@ void register_handler(messaging_service* ms, messaging_verb verb, Func&& func) {
 }
 
 messaging_service::messaging_service(gms::inet_address ip, uint16_t port, bool listen_now)
-    : messaging_service(std::move(ip), port, encrypt_what::none, 0, nullptr, listen_now)
+    : messaging_service(std::move(ip), port, encrypt_what::none, compress_what::none, 0, nullptr, listen_now)
 {}
 
 static
@@ -226,15 +231,19 @@ rpc_resource_limits() {
 }
 
 void messaging_service::start_listen() {
+    rpc::server_options so;
+    if (_compress_what != compress_what::none) {
+        so.compressor_factory = &compressor_factory;
+    }
     if (!_server) {
         auto addr = ipv4_addr{_listen_address.raw_addr(), _port};
         _server = std::unique_ptr<rpc_protocol_server_wrapper>(new rpc_protocol_server_wrapper(*_rpc,
-                addr, rpc_resource_limits()));
+                so, addr, rpc_resource_limits()));
     }
 
     if (!_server_tls) {
         _server_tls = std::unique_ptr<rpc_protocol_server_wrapper>(
-            [this] () -> std::unique_ptr<rpc_protocol_server_wrapper>{
+            [this, &so] () -> std::unique_ptr<rpc_protocol_server_wrapper>{
                 if (_encrypt_what == encrypt_what::none) {
                     return nullptr;
                 }
@@ -242,7 +251,7 @@ void messaging_service::start_listen() {
                 lo.reuse_address = true;
                 auto addr = make_ipv4_address(ipv4_addr{_listen_address.raw_addr(), _ssl_port});
                 return std::make_unique<rpc_protocol_server_wrapper>(*_rpc,
-                        seastar::tls::listen(_credentials, addr, lo));
+                        so, seastar::tls::listen(_credentials, addr, lo));
         }());
     }
 }
@@ -250,14 +259,15 @@ void messaging_service::start_listen() {
 messaging_service::messaging_service(gms::inet_address ip
         , uint16_t port
         , encrypt_what ew
+        , compress_what cw
         , uint16_t ssl_port
         , std::shared_ptr<seastar::tls::credentials_builder> credentials
-        , bool listen_now
-        )
+        , bool listen_now)
     : _listen_address(ip)
     , _port(port)
     , _ssl_port(ssl_port)
     , _encrypt_what(ew)
+    , _compress_what(cw)
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _credentials(credentials ? credentials->build_server_credentials() : nullptr)
 {
@@ -431,12 +441,29 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
                         != snitch_ptr->get_rack(utils::fb_utilities::get_broadcast_address());
     }();
 
+    auto must_compress = [&id, this] {
+        if (_compress_what == compress_what::none) {
+            return false;
+        }
+
+        if (_compress_what == compress_what::dc) {
+            auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+            return snitch_ptr->get_datacenter(id.addr)
+                            != snitch_ptr->get_datacenter(utils::fb_utilities::get_broadcast_address());
+        }
+
+        return true;
+    }();
+
     auto remote_addr = ipv4_addr(get_preferred_ip(id.addr).raw_addr(), must_encrypt ? _ssl_port : _port);
     auto local_addr = ipv4_addr{_listen_address.raw_addr(), 0};
 
     rpc::client_options opts;
     // send keepalive messages each minute if connection is idle, drop connection after 10 failures
     opts.keepalive = std::experimental::optional<net::tcp_keepalive_params>({60s, 60s, 10});
+    if (must_compress) {
+        opts.compressor_factory = &compressor_factory;
+    }
 
     auto client = must_encrypt ?
                     ::make_shared<rpc_protocol_client_wrapper>(*_rpc, std::move(opts),

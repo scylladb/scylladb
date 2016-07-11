@@ -167,11 +167,18 @@ public:
         all,
     };
 
+    enum class compress_what {
+        none,
+        dc,
+        all,
+    };
+
 private:
     gms::inet_address _listen_address;
     uint16_t _port;
     uint16_t _ssl_port;
     encrypt_what _encrypt_what;
+    compress_what _compress_what;
     // map: Node broadcast address -> Node internal IP for communication within the same data center
     std::unordered_map<gms::inet_address, gms::inet_address> _preferred_ip_cache;
     std::unique_ptr<rpc_protocol_wrapper> _rpc;
@@ -186,7 +193,7 @@ public:
 public:
     messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"),
             uint16_t port = 7000, bool listen_now = true);
-    messaging_service(gms::inet_address ip, uint16_t port, encrypt_what,
+    messaging_service(gms::inet_address ip, uint16_t port, encrypt_what, compress_what,
             uint16_t ssl_port, std::shared_ptr<seastar::tls::credentials_builder>,
             bool listen_now = true);
     ~messaging_service();

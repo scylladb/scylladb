@@ -45,6 +45,7 @@ void init_ms_fd_gossiper(sstring listen_address
                 , sstring ms_trust_store
                 , sstring ms_cert
                 , sstring ms_key
+                , sstring ms_compress
                 , db::seed_provider_type seed_provider
                 , sstring cluster_name
                 , double phi)
@@ -52,6 +53,7 @@ void init_ms_fd_gossiper(sstring listen_address
     const gms::inet_address listen(listen_address);
 
     using encrypt_what = net::messaging_service::encrypt_what;
+    using compress_what = net::messaging_service::compress_what;
     using namespace seastar::tls;
 
     encrypt_what ew = encrypt_what::none;
@@ -61,6 +63,13 @@ void init_ms_fd_gossiper(sstring listen_address
         ew = encrypt_what::dc;
     } else if (ms_encrypt_what == "rack") {
         ew = encrypt_what::rack;
+    }
+
+    compress_what cw = compress_what::none;
+    if (ms_compress == "all") {
+        cw = compress_what::all;
+    } else if (ms_compress == "dc") {
+        cw = compress_what::dc;
     }
 
     future<> f = make_ready_future<>();
@@ -81,7 +90,7 @@ void init_ms_fd_gossiper(sstring listen_address
     // Init messaging_service
     // Delay listening messaging_service until gossip message handlers are registered
     bool listen_now = false;
-    net::get_messaging_service().start(listen, storage_port, ew, ssl_storage_port, creds, listen_now).get();
+    net::get_messaging_service().start(listen, storage_port, ew, cw, ssl_storage_port, creds, listen_now).get();
 
     // #293 - do not stop anything
     //engine().at_exit([] { return net::get_messaging_service().stop(); });
