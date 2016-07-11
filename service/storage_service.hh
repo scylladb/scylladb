@@ -268,6 +268,7 @@ private:
     std::unordered_set<token> _bootstrap_tokens;
 
     gms::feature _range_tombstones_feature;
+    gms::feature _large_partitions_feature;
 
 public:
     void finish_bootstrapping() {
@@ -2364,6 +2365,10 @@ public:
 
     bool cluster_supports_range_tombstones() {
         return bool(_range_tombstones_feature);
+    }
+
+    bool cluster_supports_large_partitions() const {
+        return bool(_large_partitions_feature);
     }
 };
 
