@@ -550,7 +550,8 @@ public:
         replay_position rp(_desc.id, position_type(pos));
 
         // Run like this to ensure flush ordering, and making flushes "waitable"
-        return _pending_ops.run_with_ordered_post_op(rp, [] { return make_ready_future<>(); }, [this, pos, me] {
+        return _pending_ops.run_with_ordered_post_op(rp, [] { return make_ready_future<>(); }, [this, pos, me, rp] {
+            assert(_pending_ops.has_operation(rp));
             return do_flush(pos);
         });
     }
@@ -717,7 +718,8 @@ public:
             }).finally([this]() {
                 end_write(); // release
             });
-        }, [me, flush_after, top] { // lambda instead of bind, so we keep "me" alive.
+        }, [me, flush_after, top, rp] { // lambda instead of bind, so we keep "me" alive.
+            assert(me->_pending_ops.has_operation(rp));
             return flush_after ? me->do_flush(top) : make_ready_future<sseg_ptr>(me);
         });
     }
@@ -747,7 +749,13 @@ public:
      * buffer memory usage might grow...
      */
     bool must_wait_for_alloc() {
-        return _write_waiters > 0;
+        // Note: write_waiters is decremented _after_ both semaphores and
+        // flush queue might be cleared. So we should not look only at it.
+        // But we still don't want to look at "should_wait_for_write" directly,
+        // since that is "global" and includes other segments, and we want to
+        // know if _this_ segment has blocking write ops pending.
+        // So we also check that the flush queue is non-empty.
+        return _write_waiters > 0 && !_pending_ops.empty();
     }
 
     future<sseg_ptr> wait_for_alloc() {
