@@ -375,8 +375,14 @@ public:
         bool operator()(const range_tombstone& a, const mutation_fragment& b) const {
             return b.row_type_weight() && _cmp(a.start, weight(a.start_kind), b.key(), b.bound_kind_weight());
         }
+        bool operator()(const mutation_fragment& a, const range_tombstone& b) const {
+            return !a.row_type_weight() || _cmp(a.key(), a.bound_kind_weight(), b.start, weight(b.start_kind));
+        }
         bool operator()(const bound_view& a, const rows_entry& b) const {
             return _cmp(a.prefix, weight(a.kind), b.key(), 0);
+        }
+        bool operator()(const rows_entry& a, const bound_view& b) const {
+            return _cmp(a.key(), 0, b.prefix, weight(b.kind));
         }
         bool operator()(const bound_view& a, const mutation_fragment& b) const {
             return b.row_type_weight() && _cmp(a.prefix, weight(a.kind), b.key(), b.bound_kind_weight());
