@@ -226,7 +226,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
     auto now = db_clock::now();
 
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
-        make_partition_slice(options), limit, to_gc_clock(now), std::experimental::nullopt, options.get_timestamp(state));
+        make_partition_slice(options), limit, to_gc_clock(now), std::experimental::nullopt, query::max_partitions, options.get_timestamp(state));
 
     if (state.is_tracing()) {
         command->trace_info.emplace(std::move(state.tracing_session_id()), state.trace_type(), state.flush_trace_on_close());
@@ -328,7 +328,7 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy,
     int32_t limit = get_limit(options);
     auto now = db_clock::now();
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
-        make_partition_slice(options), limit, to_gc_clock(now), std::experimental::nullopt, options.get_timestamp(state));
+        make_partition_slice(options), limit, to_gc_clock(now), std::experimental::nullopt, query::max_partitions, options.get_timestamp(state));
     auto partition_ranges = _restrictions->get_partition_key_ranges(options);
 
     if (needs_post_query_ordering() && _limit) {
