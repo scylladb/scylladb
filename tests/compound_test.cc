@@ -26,6 +26,7 @@
 #include "compound.hh"
 #include "compound_compat.hh"
 #include "tests/range_assert.hh"
+#include "schema_builder.hh"
 
 #include "disk-error-handler.hh"
 
@@ -233,4 +234,69 @@ BOOST_AUTO_TEST_CASE(test_legacy_ordering_of_composites) {
 
     BOOST_REQUIRE(cmp(make("", "A"), make("A", "A")) < 0);
     BOOST_REQUIRE(cmp(make("A", ""), make("A", "A")) < 0);
+}
+
+BOOST_AUTO_TEST_CASE(test_enconding_of_legacy_composites) {
+    using components = std::vector<composite::component>;
+
+    BOOST_REQUIRE_EQUAL(composite(bytes({'\x00', '\x03', 'e', 'l', '1', '\x00'})).components(),
+                        components({std::make_pair(bytes("el1"), composite::eoc::none)}));
+    BOOST_REQUIRE_EQUAL(composite(bytes({'\x00', '\x00', '\x01'})).components(),
+                        components({std::make_pair(bytes(""), composite::eoc::end)}));
+    BOOST_REQUIRE_EQUAL(composite(bytes({'\x00', '\x05', 'e', 'l', 'e', 'm', '1', '\xff'})).components(),
+                        components({std::make_pair(bytes("elem1"), composite::eoc::start)}));
+    BOOST_REQUIRE_EQUAL(composite(bytes({'\x00', '\x03', 'e', 'l', '1', '\x05'})).components(),
+                        components({std::make_pair(bytes("el1"), composite::eoc::end)}));
+
+
+    BOOST_REQUIRE_EQUAL(composite(bytes({'\x00', '\x03', 'e', 'l', '1', '\x00', '\x00', '\x05', 'e', 'l', 'e', 'm', '2', '\x01'})).components(),
+                        components({std::make_pair(bytes("el1"), composite::eoc::none),
+                                    std::make_pair(bytes("elem2"), composite::eoc::end)}));
+
+    BOOST_REQUIRE_EQUAL(composite(bytes({'\x00', '\x03', 'e', 'l', '1', '\xff', '\x00', '\x00', '\x01'})).components(),
+                        components({std::make_pair(bytes("el1"), composite::eoc::start),
+                                    std::make_pair(bytes(""), composite::eoc::end)}));
+}
+
+BOOST_AUTO_TEST_CASE(test_enconding_of_singular_composite) {
+    using components = std::vector<composite::component>;
+
+    BOOST_REQUIRE_EQUAL(composite(bytes({'e', 'l', '1'}), false).components(),
+                        components({std::make_pair(bytes("el1"), composite::eoc::none)}));
+
+    BOOST_REQUIRE_EQUAL(composite(composite::serialize_value(std::vector<bytes>({bytes({'e', 'l', '1'})}), false), false).components(),
+                        components({std::make_pair(bytes("el1"), composite::eoc::none)}));
+}
+
+BOOST_AUTO_TEST_CASE(test_enconding_of_static_composite) {
+    using components = std::vector<composite::component>;
+
+    auto s = schema_builder("ks", "cf")
+        .with_column("pk", bytes_type, column_kind::partition_key)
+        .with_column("ck", bytes_type, column_kind::clustering_key)
+        .with_column("v", bytes_type, column_kind::regular_column)
+        .build();
+    auto c = composite::static_prefix(*s);
+    BOOST_REQUIRE(c.is_static());
+    components cs;
+    for (auto&& p : c.components()) {
+        cs.push_back(std::make_pair(to_bytes(p.first), p.second));
+    }
+    BOOST_REQUIRE_EQUAL(cs, components({std::make_pair(bytes(""), composite::eoc::none)}));
+}
+
+BOOST_AUTO_TEST_CASE(test_composite_serialize_value) {
+    BOOST_REQUIRE_EQUAL(composite::serialize_value(std::vector<bytes>({bytes({'e', 'l', '1'})})),
+                        bytes({'\x00', '\x03', 'e', 'l', '1', '\x00'}));
+}
+
+BOOST_AUTO_TEST_CASE(test_composite_from_exploded) {
+    using components = std::vector<composite::component>;
+    BOOST_REQUIRE_EQUAL(composite::from_exploded({bytes_view(bytes({'e', 'l', '1'}))}, composite::eoc::start).components(),
+                        components({std::make_pair(bytes("el1"), composite::eoc::start)}));
+}
+
+BOOST_AUTO_TEST_CASE(test_composite_view_explode) {
+    BOOST_REQUIRE_EQUAL(composite_view(composite(bytes({'\x00', '\x03', 'e', 'l', '1', '\x00'}))).explode(),
+                        std::vector<bytes>({bytes({'e', 'l', '1'})}));
 }

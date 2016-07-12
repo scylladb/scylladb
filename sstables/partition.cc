@@ -477,15 +477,15 @@ public:
     }
 
     static bound_kind start_marker_to_bound_kind(bytes_view component) {
-        auto found = composite_marker(component.back());
+        auto found = composite::eoc(component.back());
         switch (found) {
         // start_col may have composite_marker::none in sstables
         // from older versions of Cassandra (see CASSANDRA-7593).
-        case composite_marker::none:
+        case composite::eoc::none:
             return bound_kind::incl_start;
-        case composite_marker::start_range:
+        case composite::eoc::start:
             return bound_kind::incl_start;
-        case composite_marker::end_range:
+        case composite::eoc::end:
             return bound_kind::excl_start;
         default:
             throw malformed_sstable_exception(sprint("Unexpected start composite marker %d\n", uint16_t(uint8_t(found))));
@@ -493,15 +493,15 @@ public:
     }
 
     static bound_kind end_marker_to_bound_kind(bytes_view component) {
-        auto found = composite_marker(component.back());
+        auto found = composite::eoc(component.back());
         switch (found) {
         // start_col may have composite_marker::none in sstables
         // from older versions of Cassandra (see CASSANDRA-7593).
-        case composite_marker::none:
+        case composite::eoc::none:
             return bound_kind::incl_end;
-        case composite_marker::start_range:
+        case composite::eoc::start:
             return bound_kind::excl_end;
-        case composite_marker::end_range:
+        case composite::eoc::end:
             return bound_kind::incl_end;
         default:
             throw malformed_sstable_exception(sprint("Unexpected start composite marker %d\n", uint16_t(uint8_t(found))));
