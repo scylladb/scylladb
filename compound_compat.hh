@@ -473,6 +473,10 @@ public:
     { }
 
     std::vector<bytes> explode() const {
+        if (!_is_compound) {
+            return { to_bytes(_bytes) };
+        }
+
         std::vector<bytes> ret;
         for (auto it = begin(), e = end(); it != e; ) {
             ret.push_back(to_bytes(it->first));

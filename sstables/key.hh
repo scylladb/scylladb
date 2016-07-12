@@ -30,37 +30,32 @@
 namespace sstables {
 
 class key_view {
-    composite_view _c;
+    bytes_view _bytes;
 public:
-    key_view(bytes_view b) : _c(composite_view(b)) {}
-    key_view(composite_view c) : _c(c) {}
-    key_view() : _c() {}
+    key_view(bytes_view b) : _bytes(b) {}
+    key_view() : _bytes() {}
 
     std::vector<bytes> explode(const schema& s) const {
-        if (s.partition_key_size() == 1) {
-            return { to_bytes(static_cast<bytes_view>(_c)) };
-        }
-        return _c.explode();
+        return composite_view(_bytes, s.partition_key_size() > 1).explode();
     }
 
-    bool operator==(const key_view& k) const { return k._c == _c; }
+    bool operator==(const key_view& k) const { return k._bytes == _bytes; }
     bool operator!=(const key_view& k) const { return !(k == *this); }
 
-    bool empty() { return _c.empty(); }
+    bool empty() { return _bytes.empty(); }
 
     explicit operator bytes_view() const {
-        return static_cast<bytes_view>(_c);
+        return _bytes;
     }
 
     int tri_compare(key_view other) const {
-        return compare_unsigned(static_cast<bytes_view>(_c), static_cast<bytes_view>(other));
+        return compare_unsigned(_bytes, other._bytes);
     }
 
     int tri_compare(const schema& s, partition_key_view other) const {
         auto lf = other.legacy_form(s);
-        auto bytes = static_cast<bytes_view>(_c);
         return lexicographical_tri_compare(
-            bytes.begin(), bytes.end(), lf.begin(), lf.end(),
+            _bytes.begin(), _bytes.end(), lf.begin(), lf.end(),
             [] (uint8_t b1, uint8_t b2) { return (int)b1 - b2; });
     }
 };
@@ -75,18 +70,20 @@ class key {
         after_all_keys,
     };
     kind _kind;
-    composite _c;
+    bytes _bytes;
+private:
+    static bool is_compound(const schema& s) {
+        return s.partition_key_size() > 1;
+    }
 public:
-    key(bytes&& c) : _kind(kind::regular), _c(composite(std::move(c))) {}
-    key(composite&& c) : _kind(kind::regular), _c(std::move(c)) {}
+    key(bytes&& b) : _kind(kind::regular), _bytes(std::move(b)) {}
     key(kind k) : _kind(k) {}
     static key from_bytes(bytes b) {
-        return key(composite(std::move(b)));
+        return key(std::move(b));
     }
     template <typename RangeOfSerializedComponents>
     static key make_key(const schema& s, RangeOfSerializedComponents&& values) {
-        bool is_compound = s.partition_key_type()->types().size() > 1;
-        return key(composite(composite::serialize_value(std::forward<decltype(values)>(values), is_compound), is_compound));
+        return key(composite::serialize_value(std::forward<decltype(values)>(values), is_compound(s)));
     }
     static key from_deeply_exploded(const schema& s, const std::vector<data_value>& v) {
         return make_key(s, v);
@@ -106,7 +103,7 @@ public:
     }
 
     std::vector<bytes> explode(const schema& s) const {
-        return key_view(_c).explode(s);
+        return composite_view(_bytes, is_compound(s)).explode();
     }
 
     int32_t tri_compare(key_view k) const {
@@ -116,16 +113,16 @@ public:
         if (_kind == kind::after_all_keys) {
             return 1;
         }
-        return key_view(_c).tri_compare(k);
+        return key_view(_bytes).tri_compare(k);
     }
     operator key_view() const {
-        return key_view(_c);
+        return key_view(_bytes);
     }
     explicit operator bytes_view() const {
-        return static_cast<bytes_view>(_c);
+        return _bytes;
     }
     const bytes& get_bytes() const {
-        return _c.get_bytes();
+        return _bytes;
     }
     friend key minimum_key();
     friend key maximum_key();
