@@ -699,9 +699,9 @@ public:
         if (s.empty()) {
             return bytes();
         }
-        int64_t ts = timestamp_from_string(s);
+        int64_t ts = net::hton(timestamp_from_string(s));
         bytes b(bytes::initialized_later(), sizeof(int64_t));
-        *unaligned_cast<int64_t*>(b.begin()) = net::hton(ts);
+        std::copy_n(reinterpret_cast<const int8_t*>(&ts), sizeof(ts), b.begin());
         return b;
     }
     virtual sstring to_string(const bytes& b) const override {
@@ -2604,8 +2604,8 @@ static bytes concat_fields(const std::vector<bytes>& fields, const std::vector<i
     bytes result{bytes::initialized_later(), result_size};
     bytes::iterator it = result.begin();
     for (std::size_t i = 0; i < fields.size(); ++i) {
-        *unaligned_cast<int32_t*>(it) = net::hton(field_len[i]);
-        it += 4;
+        int32_t tmp = net::hton(field_len[i]);
+        it = std::copy_n(reinterpret_cast<const int8_t*>(&tmp), sizeof(tmp), it);
         if (field_len[i] > 0) {
             it = std::copy(std::begin(fields[i]), std::end(fields[i]), it);
         }
