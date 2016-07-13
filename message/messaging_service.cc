@@ -875,18 +875,18 @@ future<> messaging_service::send_replication_finished(msg_addr id, inet_address 
 // Wrapper for REPAIR_CHECKSUM_RANGE
 void messaging_service::register_repair_checksum_range(
         std::function<future<partition_checksum> (sstring keyspace,
-                sstring cf, query::range<dht::token> range)>&& f) {
+                sstring cf, query::range<dht::token> range, rpc::optional<repair_checksum> hash_version)>&& f) {
     register_handler(this, messaging_verb::REPAIR_CHECKSUM_RANGE, std::move(f));
 }
 void messaging_service::unregister_repair_checksum_range() {
     _rpc->unregister_handler(messaging_verb::REPAIR_CHECKSUM_RANGE);
 }
 future<partition_checksum> messaging_service::send_repair_checksum_range(
-        msg_addr id, sstring keyspace, sstring cf, ::range<dht::token> range)
+        msg_addr id, sstring keyspace, sstring cf, ::range<dht::token> range, repair_checksum hash_version)
 {
     return send_message<partition_checksum>(this,
             messaging_verb::REPAIR_CHECKSUM_RANGE, std::move(id),
-            std::move(keyspace), std::move(cf), std::move(range));
+            std::move(keyspace), std::move(cf), std::move(range), hash_version);
 }
 
 } // namespace net

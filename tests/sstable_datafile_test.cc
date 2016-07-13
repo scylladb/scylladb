@@ -2615,28 +2615,21 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
             BOOST_REQUIRE(ck_eq(mfopt->key(), ck));
         };
 
-        then_expect(kind::range_tombstone_begin, { 0 });
-        then_expect(kind::range_tombstone_end, { 0 });
+        then_expect(kind::range_tombstone, { 0 });
         then_expect(kind::clustering_row, { 1 });
         then_expect(kind::clustering_row, { 1, 1 });
         then_expect(kind::clustering_row, { 1, 2 });
         then_expect(kind::clustering_row, { 1, 2, 3 });
-        then_expect(kind::range_tombstone_begin, { 1, 3 });
+        then_expect(kind::range_tombstone, { 1, 3 });
         then_expect(kind::clustering_row, { 1, 3 });
         then_expect(kind::clustering_row, { 1, 3, 4 });
-        then_expect(kind::range_tombstone_end, { 1, 3 });
         then_expect(kind::clustering_row, { 1, 4 });
         then_expect(kind::clustering_row, { 1, 4, 0 });
-        then_expect(kind::range_tombstone_begin, { 2 });
-        then_expect(kind::range_tombstone_end, { 2, 1 });
-        then_expect(kind::range_tombstone_begin, { 2, 1 });
-        then_expect(kind::range_tombstone_end, { 2, 1 });
-        then_expect(kind::range_tombstone_begin, { 2, 1 });
-        then_expect(kind::range_tombstone_end, { 2, 2 });
-        then_expect(kind::range_tombstone_begin, { 2, 2 });
-        then_expect(kind::range_tombstone_end, { 2, 2 });
-        then_expect(kind::range_tombstone_begin, { 2, 2 });
-        then_expect(kind::range_tombstone_end, { 2 });
+        then_expect(kind::range_tombstone, { 2 });
+        then_expect(kind::range_tombstone, { 2, 1 });
+        then_expect(kind::range_tombstone, { 2, 1 });
+        then_expect(kind::range_tombstone, { 2, 2 });
+        then_expect(kind::range_tombstone, { 2, 2 });
 
         auto mfopt = sm().get0();
         BOOST_REQUIRE(!mfopt);

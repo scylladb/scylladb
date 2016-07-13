@@ -103,6 +103,7 @@ public:
     explicit static_row(row&& r) : _cells(std::move(r)) { }
 
     row& cells() { return _cells; }
+    const row& cells() const { return _cells; }
 
     bool empty() const {
         return _cells.empty();
@@ -125,59 +126,12 @@ public:
     }
 };
 
-class range_tombstone_begin {
-    clustering_key_prefix _ck;
-    tombstone _t;
-    bound_kind _kind;
-public:
-    range_tombstone_begin(clustering_key_prefix ck, bound_kind kind, tombstone t)
-        : _ck(std::move(ck)), _t(t), _kind(kind) { }
-
-    clustering_key_prefix& key() { return _ck; }
-    const clustering_key_prefix& key() const { return _ck; }
-    bound_kind kind() const { return _kind; }
-
-    bound_view bound() const { return bound_view(_ck, _kind); }
-
-    tombstone tomb() const { return _t; }
-    void apply(range_tombstone_begin&& rtb) {
-        _t.apply(rtb._t);
-    }
-
-    position_in_partition position() const;
-
-    size_t memory_usage() const {
-        return _ck.memory_usage();
-    }
-};
-
-class range_tombstone_end {
-    clustering_key_prefix _ck;
-    bound_kind _kind;
-public:
-    range_tombstone_end(clustering_key_prefix ck, bound_kind kind)
-        : _ck(std::move(ck)), _kind(kind) { }
-
-    clustering_key_prefix& key() { return _ck; }
-    const clustering_key_prefix& key() const { return _ck; }
-    bound_kind kind() const { return _kind; }
-
-    bound_view bound() const { return bound_view(_ck, _kind); }
-
-    position_in_partition position() const;
-
-    size_t memory_usage() const {
-        return _ck.memory_usage();
-    }
-};
-
 class mutation_fragment {
 public:
     enum class kind {
         static_row,
         clustering_row,
-        range_tombstone_begin,
-        range_tombstone_end,
+        range_tombstone,
     };
 private:
     union data {
@@ -186,8 +140,7 @@ private:
 
         static_row _static_row;
         clustering_row _clustering_row;
-        range_tombstone_begin _range_tombstone_begin;
-        range_tombstone_end _range_tombstone_end;
+        range_tombstone _range_tombstone;
     };
 private:
     kind _kind;
@@ -204,8 +157,7 @@ private:
 public:
     mutation_fragment(static_row&& r);
     mutation_fragment(clustering_row&& r);
-    mutation_fragment(range_tombstone_begin&& r);
-    mutation_fragment(range_tombstone_end&& r);
+    mutation_fragment(range_tombstone&& r);
 
     mutation_fragment(const mutation_fragment&) = delete;
     mutation_fragment(mutation_fragment&& other) = default;
@@ -233,30 +185,26 @@ public:
 
     bool is_static_row() const { return _kind == kind::static_row; }
     bool is_clustering_row() const { return _kind == kind::clustering_row; }
-    bool is_range_tombstone_begin() const { return _kind == kind::range_tombstone_begin; }
-    bool is_range_tombstone_end() const { return _kind == kind::range_tombstone_end; }
+    bool is_range_tombstone() const { return _kind == kind::range_tombstone; }
 
     static_row& as_static_row() { return _data->_static_row; }
     clustering_row& as_clustering_row() { return _data->_clustering_row; }
-    range_tombstone_begin& as_range_tombstone_begin() { return _data->_range_tombstone_begin; }
-    range_tombstone_end& as_range_tombstone_end() { return _data->_range_tombstone_end; }
+    range_tombstone& as_range_tombstone() { return _data->_range_tombstone; }
 
     const static_row& as_static_row() const { return _data->_static_row; }
     const clustering_row& as_clustering_row() const { return _data->_clustering_row; }
-    const range_tombstone_begin& as_range_tombstone_begin() const { return _data->_range_tombstone_begin; }
-    const range_tombstone_end& as_range_tombstone_end() const { return _data->_range_tombstone_end; }
+    const range_tombstone& as_range_tombstone() const { return _data->_range_tombstone; }
 
-    // Requirements: mutation_fragment_kind() == mf.mutation_fragment_kind()
+    // Requirements: mutation_fragment_kind() == mf.mutation_fragment_kind() && !is_range_tombstone()
     void apply(const schema& s, mutation_fragment&& mf);
 
     /*
     template<typename T, typename ReturnType>
     concept bool MutationFragmentConsumer() {
-        return requires(T t, static_row sr, clustering_row cr, range_tombstone_begin rtb, range_tombstone_end rte) {
+        return requires(T t, static_row sr, clustering_row cr, range_tombstone rt) {
             { t.consume(std::move(sr)) } -> ReturnType;
             { t.consume(std::move(cr)) } -> ReturnType;
-            { t.consume(std::move(rtb)) } -> ReturnType;
-            { t.consume(std::move(rte)) } -> ReturnType;
+            { t.consume(std::move(rt)) } -> ReturnType;
         };
     }
     */
@@ -267,10 +215,8 @@ public:
             return consumer.consume(std::move(_data->_static_row));
         case kind::clustering_row:
             return consumer.consume(std::move(_data->_clustering_row));
-        case kind::range_tombstone_begin:
-            return consumer.consume(std::move(_data->_range_tombstone_begin));
-        case kind::range_tombstone_end:
-            return consumer.consume(std::move(_data->_range_tombstone_end));
+        case kind::range_tombstone:
+            return consumer.consume(std::move(_data->_range_tombstone));
         }
         abort();
     }
@@ -278,11 +224,10 @@ public:
     /*
     template<typename T, typename ReturnType>
     concept bool MutationFragmentVisitor() {
-        return requires(T t, const static_row& sr, const clustering_row& cr, const range_tombstone_begin& rtb, const range_tombstone_end& rte) {
+        return requires(T t, const static_row& sr, const clustering_row& cr, const range_tombstone& rt) {
             { t(sr) } -> ReturnType;
             { t(cr) } -> ReturnType;
-            { t(rtb) } -> ReturnType;
-            { t(rte) } -> ReturnType;
+            { t(rt) } -> ReturnType;
         };
     }
     */
@@ -293,10 +238,8 @@ public:
             return visitor(as_static_row());
         case kind::clustering_row:
             return visitor(as_clustering_row());
-        case kind::range_tombstone_begin:
-            return visitor(as_range_tombstone_begin());
-        case kind::range_tombstone_end:
-            return visitor(as_range_tombstone_end());
+        case kind::range_tombstone:
+            return visitor(as_range_tombstone());
         }
         abort();
     }
@@ -316,15 +259,12 @@ private:
 public:
     struct static_row_tag_t { };
     struct clustering_row_tag_t { };
-    struct range_tombstone_begin_tag_t { };
-    struct range_tombstone_end_tag_t { };
+    struct range_tombstone_tag_t { };
 
     explicit position_in_partition(static_row_tag_t) { }
     position_in_partition(clustering_row_tag_t, clustering_key_prefix ck)
         : _ck(std::move(ck)) { }
-    position_in_partition(range_tombstone_begin_tag_t, bound_view bv)
-        : _bound_weight(weight(bv.kind)), _ck(bv.prefix) { }
-    position_in_partition(range_tombstone_end_tag_t, bound_view bv)
+    position_in_partition(range_tombstone_tag_t, bound_view bv)
         : _bound_weight(weight(bv.kind)), _ck(bv.prefix) { }
 
     clustering_key_prefix& key() {
@@ -369,14 +309,17 @@ public:
         bool operator()(const rows_entry& a, const rows_entry& b) const {
             return _cmp(a.key(), 0, b.key(), 0);
         }
-        bool operator()(const range_tombstone_end& a, const mutation_fragment& b) const {
-            return b.row_type_weight() && _cmp(a.key(), weight(a.kind()), b.key(), b.bound_kind_weight());
-        }
         bool operator()(const range_tombstone& a, const mutation_fragment& b) const {
             return b.row_type_weight() && _cmp(a.start, weight(a.start_kind), b.key(), b.bound_kind_weight());
         }
+        bool operator()(const mutation_fragment& a, const range_tombstone& b) const {
+            return !a.row_type_weight() || _cmp(a.key(), a.bound_kind_weight(), b.start, weight(b.start_kind));
+        }
         bool operator()(const bound_view& a, const rows_entry& b) const {
             return _cmp(a.prefix, weight(a.kind), b.key(), 0);
+        }
+        bool operator()(const rows_entry& a, const bound_view& b) const {
+            return _cmp(a.key(), 0, b.prefix, weight(b.kind));
         }
         bool operator()(const bound_view& a, const mutation_fragment& b) const {
             return b.row_type_weight() && _cmp(a.prefix, weight(a.kind), b.key(), b.bound_kind_weight());
@@ -424,16 +367,6 @@ inline position_in_partition static_row::position() const
 inline position_in_partition clustering_row::position() const
 {
     return position_in_partition(position_in_partition::clustering_row_tag_t(), _ck);
-}
-
-inline position_in_partition range_tombstone_begin::position() const
-{
-    return position_in_partition(position_in_partition::range_tombstone_begin_tag_t(), bound());
-}
-
-inline position_in_partition range_tombstone_end::position() const
-{
-    return position_in_partition(position_in_partition::range_tombstone_end_tag_t(), bound());
 }
 
 template<>
@@ -615,8 +548,7 @@ class range_tombstone_stream {
     range_tombstone_list _list;
     bool _inside_range_tombstone = false;
 private:
-    mutation_fragment_opt get_next_start();
-    mutation_fragment_opt get_next_end();
+    mutation_fragment_opt do_get_next();
 public:
     range_tombstone_stream(const schema& s) : _schema(s), _cmp(s), _list(s) { }
     mutation_fragment_opt get_next(const rows_entry&);
@@ -628,5 +560,122 @@ public:
     }
     void apply(const range_tombstone_list& list) {
         _list.apply(_schema, list);
+    }
+};
+
+// mutation_hasher is an equivalent of hashing_partition_visitor for
+// streamed mutations.
+//
+// mutation_hasher *IS NOT* compatible with hashing_partition_visitor.
+//
+// streamed_mutations do not guarantee that the emitted range tombstones
+// are disjoint. However, we need to hash them after they are made disjoint
+// because only in such form the hash won't depend on the unpredictable
+// factors (e.g. which sstables contain which parts of the mutation).
+template<typename Hasher>
+class mutation_hasher {
+    const schema& _schema;
+    Hasher& _hasher;
+
+    bound_view::compare _cmp;
+    range_tombstone_list _rt_list;
+    bool _inside_range_tombstone = false;
+private:
+    void consume_cell(const column_definition& col, const atomic_cell_or_collection& cell) {
+        feed_hash(_hasher, col.name());
+        feed_hash(_hasher, col.type->name());
+        if (col.is_atomic()) {
+            feed_hash(_hasher, cell.as_atomic_cell());
+        } else {
+            feed_hash(_hasher, cell.as_collection_mutation());
+        }
+    }
+
+    void consume_range_tombstone_start(const range_tombstone& rt) {
+        rt.start.feed_hash(_hasher, _schema);
+        feed_hash(_hasher, rt.start_kind);
+        feed_hash(_hasher, rt.tomb);
+    }
+
+    void consume_range_tombstone_end(const range_tombstone& rt) {
+        rt.end.feed_hash(_hasher, _schema);
+        feed_hash(_hasher, rt.end_kind);
+    }
+
+    void pop_rt_front() {
+        auto& rt = *_rt_list.tombstones().begin();
+        _rt_list.tombstones().erase(_rt_list.begin());
+        current_deleter<range_tombstone>()(&rt);
+    }
+
+    void consume_range_tombstones_until(const clustering_row& cr) {
+        while (!_rt_list.empty()) {
+            auto it = _rt_list.begin();
+            if (_inside_range_tombstone) {
+                if (_cmp(it->end_bound(), cr.key())) {
+                    consume_range_tombstone_end(*it);
+                    _inside_range_tombstone = false;
+                    pop_rt_front();
+                } else {
+                    break;
+                }
+            } else {
+                if (_cmp(it->start_bound(), cr.key())) {
+                    consume_range_tombstone_start(*it);
+                    _inside_range_tombstone = true;
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    void consume_range_tombstones_until_end() {
+        if (_inside_range_tombstone) {
+            consume_range_tombstone_end(*_rt_list.begin());
+            pop_rt_front();
+        }
+        for (auto&& rt : _rt_list) {
+            consume_range_tombstone_start(rt);
+            consume_range_tombstone_end(rt);
+        }
+    }
+public:
+    mutation_hasher(const schema& s, Hasher& h)
+            : _schema(s), _hasher(h), _cmp(s), _rt_list(s) { }
+
+    stop_iteration consume(tombstone t) {
+        feed_hash(_hasher, t);
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(const static_row& sr) {
+        sr.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+            auto&& col = _schema.static_column_at(id);
+            consume_cell(col, cell);
+        });
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(const clustering_row& cr) {
+        consume_range_tombstones_until(cr);
+
+        cr.key().feed_hash(_hasher, _schema);
+        feed_hash(_hasher, cr.tomb());
+        feed_hash(_hasher, cr.marker());
+        cr.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+            auto&& col = _schema.regular_column_at(id);
+            consume_cell(col, cell);
+        });
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(range_tombstone&& rt) {
+        _rt_list.apply(_schema, std::move(rt));
+        return stop_iteration::no;
+    }
+
+    void consume_end_of_stream() {
+        consume_range_tombstones_until_end();
     }
 };

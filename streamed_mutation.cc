@@ -38,16 +38,10 @@ mutation_fragment::mutation_fragment(clustering_row&& r)
     new (&_data->_clustering_row) clustering_row(std::move(r));
 }
 
-mutation_fragment::mutation_fragment(range_tombstone_begin&& r)
-    : _kind(kind::range_tombstone_begin), _data(std::make_unique<data>())
+mutation_fragment::mutation_fragment(range_tombstone&& r)
+    : _kind(kind::range_tombstone), _data(std::make_unique<data>())
 {
-    new (&_data->_range_tombstone_begin) range_tombstone_begin(std::move(r));
-}
-
-mutation_fragment::mutation_fragment(range_tombstone_end&& r)
-    : _kind(kind::range_tombstone_end), _data(std::make_unique<data>())
-{
-    new (&_data->_range_tombstone_end) range_tombstone_end(std::move(r));
+    new (&_data->_range_tombstone) range_tombstone(std::move(r));
 }
 
 void mutation_fragment::destroy_data() noexcept
@@ -59,35 +53,28 @@ void mutation_fragment::destroy_data() noexcept
     case kind::clustering_row:
         _data->_clustering_row.~clustering_row();
         break;
-    case kind::range_tombstone_begin:
-        _data->_range_tombstone_begin.~range_tombstone_begin();
-        break;
-    case kind::range_tombstone_end:
-        _data->_range_tombstone_end.~range_tombstone_end();
+    case kind::range_tombstone:
+        _data->_range_tombstone.~range_tombstone();
         break;
     }
 }
 
-// C++ does not allow local classes that have template member. The rightful
-// place of this class is inside mutation_fragment::key().
-struct get_mutation_fragment_key_visitor {
-    template<typename T>
-    const clustering_key_prefix& operator()(const T& mf) { return mf.key(); }
-    const clustering_key_prefix& operator()(const static_row& sr) { abort(); }
-};
-
 const clustering_key_prefix& mutation_fragment::key() const
 {
     assert(has_key());
-    return visit(get_mutation_fragment_key_visitor());
+    struct get_key_visitor {
+        const clustering_key_prefix& operator()(const clustering_row& cr) { return cr.key(); }
+        const clustering_key_prefix& operator()(const range_tombstone& rt) { return rt.start; }
+        const clustering_key_prefix& operator()(...) { abort(); }
+    };
+    return visit(get_key_visitor());
 }
 
 int mutation_fragment::bound_kind_weight() const {
     assert(has_key());
     struct get_bound_kind_weight {
         int operator()(const clustering_row&) { return 0; }
-        int operator()(const range_tombstone_begin& rtb) { return weight(rtb.kind()); }
-        int operator()(const range_tombstone_end& rte) { return weight(rte.kind()); }
+        int operator()(const range_tombstone& rt) { return weight(rt.start_kind); }
         int operator()(...) { abort(); }
     };
     return visit(get_bound_kind_weight());
@@ -96,6 +83,7 @@ int mutation_fragment::bound_kind_weight() const {
 void mutation_fragment::apply(const schema& s, mutation_fragment&& mf)
 {
     assert(_kind == mf._kind);
+    assert(!is_range_tombstone());
     switch (_kind) {
     case kind::static_row:
         _data->_static_row.apply(s, std::move(mf._data->_static_row));
@@ -105,20 +93,21 @@ void mutation_fragment::apply(const schema& s, mutation_fragment&& mf)
         _data->_clustering_row.apply(s, std::move(mf._data->_clustering_row));
         mf._data->_clustering_row.~clustering_row();
         break;
-    case kind::range_tombstone_begin:
-        _data->_range_tombstone_begin.apply(std::move(mf._data->_range_tombstone_begin));
-        mf._data->_range_tombstone_begin.~range_tombstone_begin();
-        break;
-    case kind::range_tombstone_end:
-        mf._data->_range_tombstone_end.~range_tombstone_end();
-        break;
+    default: abort();
     }
     mf._data.reset();
 }
 
 position_in_partition mutation_fragment::position() const
 {
-    return visit([] (auto& mf) { return mf.position(); });
+    struct get_position {
+        position_in_partition operator()(const static_row& sr) { return sr.position(); }
+        position_in_partition operator()(const clustering_row& cr) { return cr.position(); }
+        position_in_partition operator()(const range_tombstone& rt) {
+            return position_in_partition(position_in_partition::range_tombstone_tag_t(), rt.start_bound());
+        }
+    };
+    return visit(get_position());
 }
 
 std::ostream& operator<<(std::ostream& os, const streamed_mutation& sm) {
@@ -133,33 +122,19 @@ streamed_mutation streamed_mutation_from_mutation(mutation m)
         mutation _mutation;
         bound_view::compare _cmp;
         bool _static_row_done = false;
-        range_tombstone::container_type::const_iterator _rt_it;
-        range_tombstone::container_type::const_iterator _rt_end;
-        mutation_partition::rows_type::const_iterator _cr_it;
-        mutation_partition::rows_type::const_iterator _cr_end;
-        stdx::optional<range_tombstone_end> _range_tombstone_end;
+        range_tombstone::container_type::iterator _rt_it;
+        range_tombstone::container_type::iterator _rt_end;
+        mutation_partition::rows_type::iterator _cr_it;
+        mutation_partition::rows_type::iterator _cr_end;
     private:
         mutation_fragment_opt read_next() {
             if (_cr_it != _cr_end) {
-                bool return_ck = true;
-                if (_range_tombstone_end) {
-                    return_ck = _cmp(_cr_it->key(), _range_tombstone_end->bound());
-                } else if (_rt_it != _rt_end) {
-                    return_ck = _cmp(_cr_it->key(), _rt_it->start_bound());
-                }
-                if (return_ck) {
+                if (_rt_it == _rt_end || _cmp(_cr_it->key(), _rt_it->start_bound())) {
                     return mutation_fragment(std::move(*_cr_it++));
                 }
             }
-            if (_range_tombstone_end) {
-                auto mf = mutation_fragment(std::move(*_range_tombstone_end));
-                _range_tombstone_end = { };
-                return mf;
-            } else if (_rt_it != _rt_end) {
-                auto rt = std::move(*_rt_it++);
-                _range_tombstone_end = range_tombstone_end(std::move(rt.end), rt.end_kind);
-                mutation_fragment mf = range_tombstone_begin(std::move(rt.start), rt.start_kind, rt.tomb);
-                return mf;
+            if (_rt_it != _rt_end) {
+                return mutation_fragment(std::move(*_rt_it++));
             }
             return { };
         }
@@ -205,29 +180,15 @@ streamed_mutation streamed_mutation_from_mutation(mutation m)
 
 class mutation_merger final : public streamed_mutation::impl {
     std::vector<streamed_mutation> _original_readers;
-    struct streamed_reader {
-        tombstone current_tombstone;
-        streamed_mutation* reader;
-    };
-    std::vector<streamed_reader> _next_readers;
+    std::vector<streamed_mutation*> _next_readers;
     // FIXME: do not store all in-flight clustering rows in memory
     struct row_and_reader {
         mutation_fragment row;
-        streamed_reader reader;
+        streamed_mutation* reader;
     };
     std::vector<row_and_reader> _readers;
-    tombstone _current_tombstone;
+    range_tombstone_stream _deferred_tombstones;
 private:
-    static void update_current_tombstone(streamed_reader& sr, mutation_fragment& mf) {
-        if (mf.is_range_tombstone_begin()) {
-            assert(!sr.current_tombstone);
-            sr.current_tombstone = mf.as_range_tombstone_begin().tomb();
-        } else if (mf.is_range_tombstone_end()) {
-            assert(sr.current_tombstone);
-            sr.current_tombstone = { };
-        }
-    }
-
     void read_next() {
         if (_readers.empty()) {
             _end_of_stream = true;
@@ -237,59 +198,36 @@ private:
         position_in_partition::less_compare cmp(*_schema);
         auto heap_compare = [&] (auto& a, auto& b) { return cmp(b.row, a.row); };
 
-        boost::range::pop_heap(_readers, heap_compare);
-        auto result = std::move(_readers.back().row);
-        update_current_tombstone(_readers.back().reader, result);
-        _next_readers.emplace_back(std::move(_readers.back().reader));
-        _readers.pop_back();
+        auto result = [&] {
+            auto rt = _deferred_tombstones.get_next(_readers.front().row);
+            if (rt) {
+                return std::move(*rt);
+            }
+            boost::range::pop_heap(_readers, heap_compare);
+            auto mf = std::move(_readers.back().row);
+            _next_readers.emplace_back(std::move(_readers.back().reader));
+            _readers.pop_back();
+            return std::move(mf);
+        }();
 
         while (!_readers.empty()) {
             if (cmp(result, _readers.front().row)) {
                 break;
             }
             boost::range::pop_heap(_readers, heap_compare);
-            update_current_tombstone(_readers.back().reader, _readers.back().row);
-            result.apply(*_schema, std::move(_readers.back().row));
+            if (result.is_range_tombstone()) {
+                auto remainder = result.as_range_tombstone().apply(*_schema, std::move(_readers.back().row.as_range_tombstone()));
+                if (remainder) {
+                    _deferred_tombstones.apply(std::move(*remainder));
+                }
+            } else {
+                result.apply(*_schema, std::move(_readers.back().row));
+            }
             _next_readers.emplace_back(std::move(_readers.back().reader));
             _readers.pop_back();
         }
 
-        bool can_emit_result = true;
-        if (result.is_range_tombstone_begin()) {
-            auto new_t = result.as_range_tombstone_begin().tomb();
-            can_emit_result = _current_tombstone < new_t;
-            if (can_emit_result) {
-                if (_current_tombstone) {
-                    auto& rtb = result.as_range_tombstone_begin();
-                    auto rte = range_tombstone_end(rtb.key(), invert_kind(rtb.kind()));
-                    push_mutation_fragment(std::move(rte));
-                }
-                push_mutation_fragment(std::move(result));
-                _current_tombstone = new_t;
-            }
-        } else if (result.is_range_tombstone_end()) {
-            tombstone new_t;
-            for (auto& r_a_r : _readers) {
-                new_t = std::max(new_t, r_a_r.reader.current_tombstone);
-            }
-            for (auto& r : _next_readers) {
-                new_t = std::max(new_t, r.current_tombstone);
-            }
-            can_emit_result = new_t != _current_tombstone;
-            if (can_emit_result) {
-                if (new_t) {
-                    auto& rte = result.as_range_tombstone_end();
-                    auto rtb = range_tombstone_begin(rte.key(), invert_kind(rte.kind()), new_t);
-                    push_mutation_fragment(std::move(result));
-                    push_mutation_fragment(std::move(rtb));
-                } else {
-                    push_mutation_fragment(std::move(result));
-                }
-                _current_tombstone = new_t;
-            }
-        } else {
-            push_mutation_fragment(std::move(result));
-        }
+        push_mutation_fragment(std::move(result));
     }
 
     void do_fill_buffer() {
@@ -297,11 +235,11 @@ private:
         auto heap_compare = [&] (auto& a, auto& b) { return cmp(b.row, a.row); };
 
         for (auto& rd : _next_readers) {
-            if (rd.reader->is_buffer_empty()) {
-                assert(rd.reader->is_end_of_stream());
+            if (rd->is_buffer_empty()) {
+                assert(rd->is_end_of_stream());
                 continue;
             }
-            _readers.emplace_back(row_and_reader { rd.reader->pop_mutation_fragment(), std::move(rd) });
+            _readers.emplace_back(row_and_reader { rd->pop_mutation_fragment(), std::move(rd) });
             boost::range::push_heap(_readers, heap_compare);
         }
         _next_readers.clear();
@@ -311,7 +249,7 @@ private:
     void prefill_buffer() {
         while (!is_end_of_stream() && !is_buffer_full()) {
             for (auto& rd : _next_readers) {
-                if (rd.reader->is_buffer_empty() && !rd.reader->is_end_of_stream()) {
+                if (rd->is_buffer_empty() && !rd->is_end_of_stream()) {
                     return;
                 }
             }
@@ -334,8 +272,8 @@ protected:
         while (!is_end_of_stream() && !is_buffer_full()) {
             std::vector<future<>> more_data;
             for (auto& rd : _next_readers) {
-                if (rd.reader->is_buffer_empty() && !rd.reader->is_end_of_stream()) {
-                    more_data.emplace_back(rd.reader->fill_buffer());
+                if (rd->is_buffer_empty() && !rd->is_end_of_stream()) {
+                    more_data.emplace_back(rd->fill_buffer());
                 }
             }
             if (!more_data.empty()) {
@@ -347,13 +285,13 @@ protected:
     }
 public:
     mutation_merger(schema_ptr s, dht::decorated_key dk, std::vector<streamed_mutation> readers)
-        : streamed_mutation::impl(std::move(s), std::move(dk), merge_partition_tombstones(readers))
-        , _original_readers(std::move(readers))
+        : streamed_mutation::impl(s, std::move(dk), merge_partition_tombstones(readers))
+        , _original_readers(std::move(readers)), _deferred_tombstones(*s)
     {
         _next_readers.reserve(_original_readers.size());
         _readers.reserve(_original_readers.size());
         for (auto& rd : _original_readers) {
-            _next_readers.emplace_back(streamed_reader { { }, &rd });
+            _next_readers.emplace_back(&rd);
         }
         prefill_buffer();
     }
@@ -365,52 +303,35 @@ streamed_mutation merge_mutations(std::vector<streamed_mutation> ms)
     return make_streamed_mutation<mutation_merger>(ms.back().schema(), ms.back().decorated_key(), std::move(ms));
 }
 
-mutation_fragment_opt range_tombstone_stream::get_next_start()
+mutation_fragment_opt range_tombstone_stream::do_get_next()
 {
     auto& rt = *_list.tombstones().begin();
-    auto mf = mutation_fragment(range_tombstone_begin(std::move(rt.start), rt.start_kind, rt.tomb));
-    rt.start = clustering_key::make_empty();
-    rt.start_kind = bound_kind::incl_start;
-    _inside_range_tombstone = true;
-    return mf;
-}
-
-mutation_fragment_opt range_tombstone_stream::get_next_end()
-{
-    auto& rt = *_list.tombstones().begin();
-    auto mf = mutation_fragment(range_tombstone_end(std::move(rt.end), rt.end_kind));
+    auto mf = mutation_fragment(std::move(rt));
     _list.tombstones().erase(_list.begin());
     current_deleter<range_tombstone>()(&rt);
-    _inside_range_tombstone = false;
     return mf;
 }
 
 mutation_fragment_opt range_tombstone_stream::get_next(const rows_entry& re)
 {
-    if (_inside_range_tombstone) {
-        return _cmp(_list.begin()->end_bound(), re) ? get_next_end() : mutation_fragment_opt();
-    } else if (!_list.empty()) {
-        return _cmp(_list.begin()->start_bound(), re) ? get_next_start() : mutation_fragment_opt();
+    if (!_list.empty()) {
+        return !_cmp(re, _list.begin()->start_bound()) ? do_get_next() : mutation_fragment_opt();
     }
     return { };
 }
 
 mutation_fragment_opt range_tombstone_stream::get_next(const mutation_fragment& mf)
 {
-    if (_inside_range_tombstone) {
-        return _cmp(_list.begin()->end_bound(), mf) ? get_next_end() : mutation_fragment_opt();
-    } else if (!_list.empty()) {
-        return _cmp(_list.begin()->start_bound(), mf) ? get_next_start() : mutation_fragment_opt();
+    if (!_list.empty()) {
+        return !_cmp(mf, *_list.begin()) ? do_get_next() : mutation_fragment_opt();
     }
     return { };
 }
 
 mutation_fragment_opt range_tombstone_stream::get_next()
 {
-    if (_inside_range_tombstone) {
-        return get_next_end();
-    } else if (!_list.empty()) {
-        return get_next_start();
+    if (!_list.empty()) {
+        return do_get_next();
     }
     return { };
 }
@@ -420,7 +341,6 @@ streamed_mutation reverse_streamed_mutation(streamed_mutation sm) {
         streamed_mutation_opt _source;
         mutation_fragment_opt _static_row;
         std::stack<mutation_fragment> _mutation_fragments;
-        tombstone _current_tombstone;
     private:
         future<> consume_source() {
             return repeat([&] {
@@ -429,14 +349,10 @@ streamed_mutation reverse_streamed_mutation(streamed_mutation sm) {
                         return stop_iteration::yes;
                     } else if (mf->is_static_row()) {
                         _static_row = std::move(mf);
-                    } else if (mf->is_range_tombstone_begin()) {
-                        auto& rtb = mf->as_range_tombstone_begin();
-                        _mutation_fragments.emplace(range_tombstone_end(std::move(rtb.key()), flip_bound_kind(rtb.kind())));
-                        _current_tombstone = rtb.tomb();
-                    } else if (mf->is_range_tombstone_end()) {
-                        auto& rte = mf->as_range_tombstone_end();
-                        _mutation_fragments.emplace(range_tombstone_begin(std::move(rte.key()), flip_bound_kind(rte.kind()), _current_tombstone));
                     } else {
+                        if (mf->is_range_tombstone()) {
+                            mf->as_range_tombstone().flip();
+                        }
                         _mutation_fragments.emplace(std::move(*mf));
                     }
                     return stop_iteration::no;

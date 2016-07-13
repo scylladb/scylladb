@@ -28,6 +28,7 @@
 #include "streamed_mutation.hh"
 #include "frozen_mutation.hh"
 #include "tests/test_services.hh"
+#include "schema_builder.hh"
 
 #include "disk-error-handler.hh"
 
@@ -150,4 +151,100 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing_streamed_mutations) {
     });
 }
 
+SEASTAR_TEST_CASE(test_range_tombstones_stream) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "cf")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("ck1", int32_type, column_kind::clustering_key)
+                .with_column("ck2", int32_type, column_kind::clustering_key)
+                .with_column("r", int32_type)
+                .build();
+
+        auto pk = partition_key::from_single_value(*s, int32_type->decompose(0));
+        auto create_ck = [&] (std::vector<int> v) {
+            std::vector<bytes> vs;
+            boost::transform(v, std::back_inserter(vs), [] (int x) { return int32_type->decompose(x); });
+            return clustering_key_prefix::from_exploded(*s, std::move(vs));
+        };
+
+        tombstone t0(0, { });
+        tombstone t1(1, { });
+
+        auto rt1 = range_tombstone(create_ck({ 1 }), t0, bound_kind::incl_start, create_ck({ 1, 3 }), bound_kind::incl_end);
+        auto rt2 = range_tombstone(create_ck({ 1, 1 }), t1, bound_kind::incl_start, create_ck({ 1, 3 }), bound_kind::excl_end);
+        auto rt3 = range_tombstone(create_ck({ 1, 1 }), t0,  bound_kind::incl_start, create_ck({ 2 }), bound_kind::incl_end);
+        auto rt4 = range_tombstone(create_ck({ 2 }), t0, bound_kind::excl_start, create_ck({ 2, 2 }), bound_kind::incl_end);
+
+        mutation_fragment cr1 = clustering_row(create_ck({ 0, 0 }));
+        mutation_fragment cr2 = clustering_row(create_ck({ 1, 0 }));
+        mutation_fragment cr3 = clustering_row(create_ck({ 1, 1 }));
+        auto cr4 = rows_entry(create_ck({ 1, 2 }));
+        auto cr5 = rows_entry(create_ck({ 1, 3 }));
+
+        range_tombstone_stream rts(*s);
+        rts.apply(range_tombstone(rt1));
+        rts.apply(range_tombstone(rt2));
+        rts.apply(range_tombstone(rt4));
+
+        mutation_fragment_opt mf = rts.get_next(cr1);
+        BOOST_REQUIRE(!mf);
+
+        mf = rts.get_next(cr2);
+        BOOST_REQUIRE(mf && mf->is_range_tombstone());
+        auto expected1 = range_tombstone(create_ck({ 1 }), t0, bound_kind::incl_start, create_ck({ 1, 1 }), bound_kind::excl_end);
+        BOOST_REQUIRE(mf->as_range_tombstone().equal(*s, expected1));
+
+        mf = rts.get_next(cr2);
+        BOOST_REQUIRE(!mf);
+
+        mf = rts.get_next(mutation_fragment(range_tombstone(rt3)));
+        BOOST_REQUIRE(mf && mf->is_range_tombstone());
+        BOOST_REQUIRE(mf->as_range_tombstone().equal(*s, rt2));
+
+        mf = rts.get_next(cr3);
+        BOOST_REQUIRE(!mf);
+
+        mf = rts.get_next(cr4);
+        BOOST_REQUIRE(!mf);
+
+        mf = rts.get_next(cr5);
+        BOOST_REQUIRE(mf && mf->is_range_tombstone());
+        auto expected2 = range_tombstone(create_ck({ 1, 3 }), t0, bound_kind::incl_start, create_ck({ 1, 3 }), bound_kind::incl_end);
+        BOOST_REQUIRE(mf->as_range_tombstone().equal(*s, expected2));
+
+        mf = rts.get_next();
+        BOOST_REQUIRE(mf && mf->is_range_tombstone());
+        BOOST_REQUIRE(mf->as_range_tombstone().equal(*s, rt4));
+
+        mf = rts.get_next();
+        BOOST_REQUIRE(!mf);
+    });
+}
+
+SEASTAR_TEST_CASE(test_mutation_hash) {
+    return seastar::async([] {
+        for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq) {
+            auto get_hash = [] (streamed_mutation m) {
+                md5_hasher h;
+                m.key().feed_hash(h, *m.schema());
+
+                mutation_hasher<md5_hasher> mh(*m.schema(), h);
+                consume(m, std::move(mh)).get0();
+                return h.finalize();
+            };
+            auto h1 = get_hash(streamed_mutation_from_mutation(mutation(m1)));
+            auto h2 = get_hash(streamed_mutation_from_mutation(mutation(m2)));
+            if (eq) {
+                if (h1 != h2) {
+                    BOOST_FAIL(sprint("Hash should be equal for %s and %s", m1, m2));
+                }
+            } else {
+                // We're using a strong hasher, collision should be unlikely
+                if (h1 == h2) {
+                    BOOST_FAIL(sprint("Hash should be different for %s and %s", m1, m2));
+                }
+            }
+        });
+    });
+}
 

@@ -83,7 +83,6 @@ class streamed_mutation_freezer {
     stdx::optional<static_row> _sr;
     std::deque<clustering_row> _crs;
     range_tombstone_list _rts;
-    stdx::optional<range_tombstone_begin> _range_tombstone_begin;
 public:
     streamed_mutation_freezer(const schema& s, const partition_key& key, bool reversed = false)
         : _schema(s), _key(key), _reversed(reversed), _rts(s) { }
@@ -93,15 +92,16 @@ public:
     stop_iteration consume(static_row&& sr);
     stop_iteration consume(clustering_row&& cr);
 
-    stop_iteration consume(range_tombstone_begin&& rtb);
-    stop_iteration consume(range_tombstone_end&& rte);
+    stop_iteration consume(range_tombstone&& rt);
 
     frozen_mutation consume_end_of_stream();
 };
 
 future<frozen_mutation> freeze(streamed_mutation sm);
 
+static constexpr size_t default_frozen_fragment_size = 128 * 1024;
+
 using frozen_mutation_consumer_fn = std::function<future<>(frozen_mutation, bool)>;
 future<> fragment_and_freeze(streamed_mutation sm, frozen_mutation_consumer_fn c,
-                             size_t fragment_size = 128 * 1024);
+                             size_t fragment_size = default_frozen_fragment_size);
 

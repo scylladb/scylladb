@@ -79,6 +79,7 @@ namespace service {
 static logging::logger logger("storage_service");
 
 static const sstring RANGE_TOMBSTONES_FEATURE = "RANGE_TOMBSTONES";
+static const sstring LARGE_PARTITIONS_FEATURE = "LARGE_PARTITIONS";
 
 distributed<storage_service> _the_storage_service;
 
@@ -97,7 +98,11 @@ sstring storage_service::get_config_supported_features() {
     // Add features supported by this local node. When a new feature is
     // introduced in scylla, update it here, e.g.,
     // return sstring("FEATURE1,FEATURE2")
-    return RANGE_TOMBSTONES_FEATURE;
+    std::vector<sstring> features = {
+        RANGE_TOMBSTONES_FEATURE,
+        LARGE_PARTITIONS_FEATURE,
+    };
+    return join(",", features);
 }
 
 std::set<inet_address> get_seeds() {
@@ -1235,6 +1240,7 @@ future<> storage_service::init_server(int delay) {
 
         get_storage_service().invoke_on_all([] (auto& ss) {
             ss._range_tombstones_feature = gms::feature(RANGE_TOMBSTONES_FEATURE);
+            ss._large_partitions_feature = gms::feature(LARGE_PARTITIONS_FEATURE);
         }).get();
     });
 }

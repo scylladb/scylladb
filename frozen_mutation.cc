@@ -149,23 +149,11 @@ stop_iteration streamed_mutation_freezer::consume(clustering_row&& cr) {
     return stop_iteration::no;
 }
 
-stop_iteration streamed_mutation_freezer::consume(range_tombstone_begin&& rtb) {
-    assert(!_range_tombstone_begin);
-    _range_tombstone_begin = std::move(rtb);
-    return stop_iteration::no;
-}
-
-stop_iteration streamed_mutation_freezer::consume(range_tombstone_end&& rte) {
-    assert(_range_tombstone_begin);
+stop_iteration streamed_mutation_freezer::consume(range_tombstone&& rt) {
     if (_reversed) {
-        _rts.apply(_schema, std::move(rte.key()), flip_bound_kind(rte.kind()),
-                   std::move(_range_tombstone_begin->key()), flip_bound_kind(_range_tombstone_begin->kind()),
-                   _range_tombstone_begin->tomb());
-    } else {
-        _rts.apply(_schema, std::move(_range_tombstone_begin->key()), _range_tombstone_begin->kind(),
-                   std::move(rte.key()), rte.kind(), _range_tombstone_begin->tomb());
+        rt.flip();
     }
-    _range_tombstone_begin = { };
+    _rts.apply(_schema, std::move(rt));
     return stop_iteration::no;
 }
 
@@ -197,7 +185,6 @@ class fragmenting_mutation_freezer {
     stdx::optional<static_row> _sr;
     std::deque<clustering_row> _crs;
     range_tombstone_list _rts;
-    stdx::optional<range_tombstone_begin> _range_tombstone_begin;
 
     frozen_mutation_consumer_fn _consumer;
 
@@ -252,23 +239,13 @@ public:
         return maybe_flush();
     }
 
-    future<stop_iteration> consume(range_tombstone_begin&& rtb) {
-        assert(!_range_tombstone_begin);
-        _range_tombstone_begin = std::move(rtb);
-        return make_ready_future<stop_iteration>(stop_iteration::no);
-    }
-
-    future<stop_iteration> consume(range_tombstone_end&& rte) {
-        assert(_range_tombstone_begin);
-        _dirty_size += _range_tombstone_begin->memory_usage() + rte.memory_usage() + sizeof(range_tombstone);
-        _rts.apply(_schema, std::move(_range_tombstone_begin->key()), _range_tombstone_begin->kind(),
-                   std::move(rte.key()), rte.kind(), _range_tombstone_begin->tomb());
-        _range_tombstone_begin = { };
+    future<stop_iteration> consume(range_tombstone&& rt) {
+        _dirty_size += rt.memory_usage() + sizeof(range_tombstone);
+        _rts.apply(_schema, std::move(rt));
         return maybe_flush();
     }
 
     future<stop_iteration> consume_end_of_stream() {
-        assert(!_range_tombstone_begin);
         if (_dirty_size) {
             return flush().then([] { return stop_iteration::yes; });
         }

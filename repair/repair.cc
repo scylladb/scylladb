@@ -263,11 +263,40 @@ public:
     }
 };
 
+future<partition_checksum> partition_checksum::compute_legacy(streamed_mutation m)
+{
+    return mutation_from_streamed_mutation(std::move(m)).then([] (auto mopt) {
+        assert(mopt);
+        std::array<uint8_t, 32> digest;
+        sha256_hasher h;
+        feed_hash(h, *mopt);
+        h.finalize(digest);
+        return partition_checksum(digest);
+    });
+}
 
-partition_checksum::partition_checksum(const mutation& m) {
-    sha256_hasher h;
-    feed_hash(h, m);
-    h.finalize(_digest);
+future<partition_checksum> partition_checksum::compute_streamed(streamed_mutation m)
+{
+    auto& s = *m.schema();
+    auto h = make_lw_shared<sha256_hasher>();
+    m.key().feed_hash(*h, s);
+    return do_with(std::move(m), [&s, h] (auto& sm) mutable {
+        mutation_hasher<sha256_hasher> mh(s, *h);
+        return consume(sm, std::move(mh)).then([ h ] {
+            std::array<uint8_t, 32> digest;
+            h->finalize(digest);
+            return partition_checksum(digest);
+        });
+    });
+}
+
+future<partition_checksum> partition_checksum::compute(streamed_mutation m, repair_checksum hash_version)
+{
+    switch (hash_version) {
+    case repair_checksum::legacy: return compute_legacy(std::move(m));
+    case repair_checksum::streamed: return compute_streamed(std::move(m));
+    default: throw std::runtime_error(sprint("Unknown hash version: %d", static_cast<int>(hash_version)));
+    }
 }
 
 static inline unaligned<uint64_t>& qword(std::array<uint8_t, 32>& b, int n) {
@@ -324,24 +353,24 @@ std::ostream& operator<<(std::ostream& out, const partition_checksum& c) {
 // data is coming in).
 static future<partition_checksum> checksum_range_shard(database &db,
         const sstring& keyspace_name, const sstring& cf_name,
-        const ::range<dht::token>& range) {
+        const ::range<dht::token>& range, repair_checksum hash_version) {
     auto& cf = db.find_column_family(keyspace_name, cf_name);
-    return do_with(query::to_partition_range(range), [&cf] (const auto& partition_range) {
+    return do_with(query::to_partition_range(range), [&cf, hash_version] (const auto& partition_range) {
         auto reader = cf.make_reader(cf.schema(),
                                      partition_range,
                                      query::no_clustering_key_filtering,
                                      service::get_local_streaming_read_priority());
         return do_with(std::move(reader), partition_checksum(),
-            [] (auto& reader, auto& checksum) {
-            return repeat([&reader, &checksum] () {
-                return reader().then([] (auto sm) {
-                    return mutation_from_streamed_mutation(std::move(sm));
-                }).then([&checksum] (auto mopt) {
+            [hash_version] (auto& reader, auto& checksum) {
+            return repeat([&reader, &checksum, hash_version] () {
+                return reader().then([&checksum, hash_version] (auto mopt) {
                     if (mopt) {
-                        checksum.add(partition_checksum(*mopt));
-                        return stop_iteration::no;
+                        return partition_checksum::compute(std::move(*mopt), hash_version).then([&checksum] (auto pc) {
+                            checksum.add(pc);
+                            return stop_iteration::no;
+                        });
                     } else {
-                        return stop_iteration::yes;
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
                     }
                 });
             }).then([&checksum] {
@@ -364,17 +393,17 @@ static future<partition_checksum> checksum_range_shard(database &db,
 // function is not resolved.
 future<partition_checksum> checksum_range(seastar::sharded<database> &db,
         const sstring& keyspace, const sstring& cf,
-        const ::range<dht::token>& range) {
+        const ::range<dht::token>& range, repair_checksum hash_version) {
     unsigned shard_begin = range.start() ?
             dht::shard_of(range.start()->value()) : 0;
     unsigned shard_end = range.end() ?
             dht::shard_of(range.end()->value())+1 : smp::count;
-    return do_with(partition_checksum(), [shard_begin, shard_end, &db, &keyspace, &cf, &range] (auto& result) {
+    return do_with(partition_checksum(), [shard_begin, shard_end, &db, &keyspace, &cf, &range, hash_version] (auto& result) {
         return parallel_for_each(boost::counting_iterator<int>(shard_begin),
                 boost::counting_iterator<int>(shard_end),
-                [&db, &keyspace, &cf, &range, &result] (unsigned shard) {
-            return db.invoke_on(shard, [&keyspace, &cf, &range] (database& db) {
-                return checksum_range_shard(db, keyspace, cf, range);
+                [&db, &keyspace, &cf, &range, &result, hash_version] (unsigned shard) {
+            return db.invoke_on(shard, [&keyspace, &cf, &range, hash_version] (database& db) {
+                return checksum_range_shard(db, keyspace, cf, range, hash_version);
             }).then([&result] (partition_checksum sum) {
                 result.add(sum);
             });
@@ -490,17 +519,19 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
 
             check_in_shutdown();
             return parallelism_semaphore.wait(1).then([&completion, &success, &db, &neighbors, &keyspace, &cf, &range] {
+                auto checksum_type = service::get_local_storage_service().cluster_supports_large_partitions()
+                                     ? repair_checksum::streamed : repair_checksum::legacy;
 
                 // Ask this node, and all neighbors, to calculate checksums in
                 // this range. When all are done, compare the results, and if
                 // there are any differences, sync the content of this range.
                 std::vector<future<partition_checksum>> checksums;
                 checksums.reserve(1 + neighbors.size());
-                checksums.push_back(checksum_range(db, keyspace, cf, range));
+                checksums.push_back(checksum_range(db, keyspace, cf, range, checksum_type));
                 for (auto&& neighbor : neighbors) {
                     checksums.push_back(
                             net::get_local_messaging_service().send_repair_checksum_range(
-                                    net::msg_addr{neighbor},keyspace, cf, range));
+                                    net::msg_addr{neighbor},keyspace, cf, range, checksum_type));
                 }
 
                 completion.enter();

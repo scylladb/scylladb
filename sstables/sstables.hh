@@ -658,13 +658,9 @@ class components_writer {
     // Remember first and last keys, which we need for the summary file.
     stdx::optional<key> _first_key, _last_key;
     stdx::optional<key> _partition_key;
-
-    stdx::optional<range_tombstone_begin> _rt_in_progress;
-    circular_buffer<clustering_row> _deferred_rows;
 private:
     size_t get_offset();
     file_writer index_file_writer(sstable& sst, const io_priority_class& pc);
-    void flush_deferred_rows();
     void ensure_tombstone_is_written() {
         if (!_tombstone_written) {
             consume(tombstone());
@@ -677,8 +673,7 @@ public:
     void consume(tombstone t);
     stop_iteration consume(static_row&& sr);
     stop_iteration consume(clustering_row&& cr);
-    stop_iteration consume(range_tombstone_begin&& rtb);
-    stop_iteration consume(range_tombstone_end&& rte);
+    stop_iteration consume(range_tombstone&& rt);
     stop_iteration consume_end_of_partition();
     void consume_end_of_stream();
 };
@@ -702,8 +697,7 @@ public:
     void consume(tombstone t) { _components_writer->consume(t); }
     stop_iteration consume(static_row&& sr) { return _components_writer->consume(std::move(sr)); }
     stop_iteration consume(clustering_row&& cr) { return _components_writer->consume(std::move(cr)); }
-    stop_iteration consume(range_tombstone_begin&& rtb) { return _components_writer->consume(std::move(rtb)); }
-    stop_iteration consume(range_tombstone_end&& rte) { return _components_writer->consume(std::move(rte)); }
+    stop_iteration consume(range_tombstone&& rt) { return _components_writer->consume(std::move(rt)); }
     stop_iteration consume_end_of_partition() { return _components_writer->consume_end_of_partition(); }
     void consume_end_of_stream();
 };

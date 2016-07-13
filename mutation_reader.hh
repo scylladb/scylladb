@@ -338,8 +338,7 @@ public:
     auto consume(tombstone t) { return _ptr->consume(t); }
     auto consume(static_row&& sr) { return _ptr->consume(std::move(sr)); }
     auto consume(clustering_row&& cr) { return _ptr->consume(std::move(cr)); }
-    auto consume(range_tombstone_begin&& rtb) { return _ptr->consume(std::move(rtb)); }
-    auto consume(range_tombstone_end&& rte) { return _ptr->consume(std::move(rte)); }
+    auto consume(range_tombstone&& rt) { return _ptr->consume(std::move(rt)); }
     auto consume_end_of_partition() { return _ptr->consume_end_of_partition(); }
     auto consume_end_of_stream() { return _ptr->consume_end_of_stream(); }
 };
