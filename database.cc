@@ -2244,8 +2244,8 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     cfg.streaming_dirty_memory_region_group = &_streaming_dirty_memory_region_group;
     cfg.read_concurrency_config.sem = &_read_concurrency_sem;
     cfg.read_concurrency_config.timeout = _cfg->read_request_timeout_in_ms() * 1ms;
-    // Assume a queued read takes up 1kB of memory, and allow 2% of memory to be filled up with such reads.
-    cfg.read_concurrency_config.max_queue_length = memory::stats().total_memory() * 0.02 / 1000;
+    // Assume a queued read takes up 10kB of memory, and allow 2% of memory to be filled up with such reads.
+    cfg.read_concurrency_config.max_queue_length = memory::stats().total_memory() * 0.02 / 10000;
     cfg.read_concurrency_config.raise_queue_overloaded_exception = [this] {
         ++_stats->sstable_read_queue_overloaded;
         throw std::runtime_error("sstable inactive read queue overloaded");
