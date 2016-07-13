@@ -544,9 +544,7 @@ future<> migration_manager::announce_keyspace_drop(const sstring& ks_name, bool 
         throw exceptions::configuration_exception(sprint("Cannot drop non existing keyspace '%s'.", ks_name));
     }
     auto& keyspace = db.find_keyspace(ks_name);
-#if 0
-    logger.info(String.format("Drop Keyspace '%s'", oldKsm.name));
-#endif
+    logger.info("Drop Keyspace '{}'", ks_name);
     auto&& mutations = db::schema_tables::make_drop_keyspace_mutations(keyspace.metadata(), api::new_timestamp());
     return announce(std::move(mutations), announce_locally);
 }
