@@ -1062,6 +1062,7 @@ private:
             builder.with_column(to_bytes("value"), std::move(vtype));
         } else {
             // Static CF
+            builder.set_is_compound(false);
             regular_column_name_type = db::marshal::type_parser::parse(to_sstring(cf_def.comparator_type));
             for (const ColumnDef& col_def : cf_def.column_metadata) {
                 auto col_name = to_bytes(col_def.name);
