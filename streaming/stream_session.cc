@@ -352,7 +352,7 @@ void stream_session::send_complete_message() {
     this->ms().send_complete_message(id, plan_id, this->dst_cpu_id).then([session, id, plan_id] {
         sslog.debug("[Stream #{}] GOT COMPLETE_MESSAGE Reply from {}", plan_id, id.addr);
     }).handle_exception([session, id, plan_id] (auto ep) {
-        sslog.warn("[Stream #{}] ERROR COMPLETE_MESSAGE Reply from {}: {}", plan_id, id.addr, ep);
+        sslog.warn("[Stream #{}] COMPLETE_MESSAGE for {} has failed: {}", plan_id, id.addr, ep);
         session->on_error();
     });
 }
