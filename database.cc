@@ -363,7 +363,7 @@ column_family::make_reader(schema_ptr s,
     }
 
     std::vector<mutation_reader> readers;
-    readers.reserve(_memtables->size() + _sstables->all()->size());
+    readers.reserve(_memtables->size() + 1);
 
     // We're assuming that cache and memtables are both read atomically
     // for single-key queries, so we don't need to special case memtable
