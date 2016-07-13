@@ -41,7 +41,7 @@
 
 #include "db/consistency_level.hh"
 
-#include <boost/range/algorithm/partition.hpp>
+#include <boost/range/algorithm/stable_partition.hpp>
 #include <boost/range/algorithm/find.hpp>
 #include "exceptions/exceptions.hh"
 #include "core/sstring.hh"
@@ -192,7 +192,7 @@ filter_for_query(consistency_level cl,
      * ones).
      */
     if (is_datacenter_local(cl)) {
-        boost::range::partition(live_endpoints, is_local);
+        boost::range::stable_partition(live_endpoints, is_local);
     }
 
     switch (read_repair) {
