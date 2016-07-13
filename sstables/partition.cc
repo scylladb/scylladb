@@ -320,6 +320,10 @@ public:
 
     void flush() {
         flush_pending_collection(*_schema);
+        // If _ready is already set we have a bug: get_mutation_fragment()
+        // was not called, and below we will lose one clustering row!
+        assert(!_ready);
+        assert(!_range_tombstone_end_ready);
         if (!_skip_clustering_row) {
             _ready = move_and_disengage(_in_progress);
             _range_tombstone_end_ready = move_and_disengage(_range_tombstone_end_in_progress);
