@@ -187,7 +187,8 @@ protected:
                 lw_shared_ptr<std::vector<partition_key>> keys,
                 lw_shared_ptr<exploded_clustering_prefix> prefix,
                 bool local,
-                db::consistency_level cl);
+                db::consistency_level cl,
+                tracing::trace_state_ptr trace_state);
 
 public:
     bool has_conditions();
@@ -330,7 +331,7 @@ public:
      * @return vector of the mutations
      * @throws invalid_request_exception on invalid requests
      */
-    future<std::vector<mutation>> get_mutations(distributed<service::storage_proxy>& proxy, const query_options& options, bool local, int64_t now);
+    future<std::vector<mutation>> get_mutations(distributed<service::storage_proxy>& proxy, const query_options& options, bool local, int64_t now, tracing::trace_state_ptr trace_state);
 
 public:
     future<std::unique_ptr<update_parameters>> make_update_parameters(
@@ -339,7 +340,8 @@ public:
                 lw_shared_ptr<exploded_clustering_prefix> prefix,
                 const query_options& options,
                 bool local,
-                int64_t now);
+                int64_t now,
+                tracing::trace_state_ptr trace_state);
 
 protected:
     /**

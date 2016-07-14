@@ -303,13 +303,13 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
             return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, &options, cmd] (auto pr) {
                 std::vector<query::partition_range> prange { pr };
                 auto command = ::make_lw_shared<query::read_command>(*cmd);
-                return proxy.local().query(_schema, command, std::move(prange), options.get_consistency());
+                return proxy.local().query(_schema, command, std::move(prange), options.get_consistency(), state.get_trace_state());
             }, std::move(merger));
         }).then([this, &options, now, cmd] (auto result) {
             return this->process_results(std::move(result), cmd, options, now);
         });
     } else {
-        return proxy.local().query(_schema, cmd, std::move(partition_ranges), options.get_consistency())
+        return proxy.local().query(_schema, cmd, std::move(partition_ranges), options.get_consistency(), state.get_trace_state())
             .then([this, &options, now, cmd] (auto result) {
                 return this->process_results(std::move(result), cmd, options, now);
             });
@@ -333,13 +333,13 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy,
             return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, command] (auto pr) {
                 std::vector<query::partition_range> prange { pr };
                 auto cmd = ::make_lw_shared<query::read_command>(*command);
-                return proxy.local().query(_schema, cmd, std::move(prange), db::consistency_level::ONE);
+                return proxy.local().query(_schema, cmd, std::move(prange), db::consistency_level::ONE, state.get_trace_state());
             }, std::move(merger));
         }).then([command, this, &options, now] (auto result) {
             return this->process_results(std::move(result), command, options, now);
         }).finally([command] { });
     } else {
-        return proxy.local().query(_schema, command, std::move(partition_ranges), db::consistency_level::ONE).then([command, this, &options, now] (auto result) {
+        return proxy.local().query(_schema, command, std::move(partition_ranges), db::consistency_level::ONE, state.get_trace_state()).then([command, this, &options, now] (auto result) {
             return this->process_results(std::move(result), command, options, now);
         }).finally([command] {});
     }

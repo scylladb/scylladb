@@ -168,16 +168,16 @@ public:
         return _statements;
     }
 private:
-    future<std::vector<mutation>> get_mutations(distributed<service::storage_proxy>& storage, const query_options& options, bool local, api::timestamp_type now) {
+    future<std::vector<mutation>> get_mutations(distributed<service::storage_proxy>& storage, const query_options& options, bool local, api::timestamp_type now, tracing::trace_state_ptr trace_state) {
         // Do not process in parallel because operations like list append/prepend depend on execution order.
-        return do_with(std::vector<mutation>(), [this, &storage, &options, now, local] (auto&& result) {
+        return do_with(std::vector<mutation>(), [this, &storage, &options, now, local, trace_state] (auto&& result) {
             return do_for_each(boost::make_counting_iterator<size_t>(0),
                                boost::make_counting_iterator<size_t>(_statements.size()),
-                               [this, &storage, &options, now, local, &result] (size_t i) {
+                               [this, &storage, &options, now, local, &result, trace_state] (size_t i) {
                 auto&& statement = _statements[i];
                 auto&& statement_options = options.for_statement(i);
                 auto timestamp = _attrs->get_timestamp(now, statement_options);
-                return statement->get_mutations(storage, statement_options, local, timestamp).then([&result] (auto&& more) {
+                return statement->get_mutations(storage, statement_options, local, timestamp, trace_state).then([&result] (auto&& more) {
                     std::move(more.begin(), more.end(), std::back_inserter(result));
                 });
             }).then([&result] {
@@ -213,7 +213,7 @@ private:
             return execute_with_conditions(storage, options, query_state);
         }
 
-        return get_mutations(storage, options, local, now).then([this, &storage, &options, tr_state = query_state.get_trace_state()] (std::vector<mutation> ms) mutable {
+        return get_mutations(storage, options, local, now, query_state.get_trace_state()).then([this, &storage, &options, tr_state = query_state.get_trace_state()] (std::vector<mutation> ms) mutable {
             return execute_without_conditions(storage, std::move(ms), options.get_consistency(), std::move(tr_state));
         }).then([] {
             return make_ready_future<shared_ptr<transport::messages::result_message>>(
