@@ -2428,6 +2428,7 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     std::vector<gms::inet_address> target_replicas = db::filter_for_query(cl, ks, all_replicas, repair_decision);
 
     logger.trace("creating read executor for token {} with all: {} targets: {} rp decision: {}", token, all_replicas, target_replicas, repair_decision);
+    tracing::trace(trace_state, "Creating read executor for token {} with all: {} targets: {} repair decision: {}", token, all_replicas, target_replicas, repair_decision);
 
     // Throw UAE early if we don't have enough replicas.
     db::assure_sufficient_live_nodes(cl, ks, target_replicas);
