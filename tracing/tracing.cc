@@ -145,6 +145,7 @@ void tracing::write_timer_callback() {
 
 future<> tracing::shutdown() {
     logger.info("Asked to shut down");
+    write_pending_records();
     _down = true;
     _write_timer.cancel();
     return _tracing_backend_helper_ptr->stop().then([] {

@@ -218,6 +218,11 @@ public:
     future<> shutdown();
 
     void write_pending_records() {
+        // if service is down - do nothing
+        if (_down) {
+            return;
+        }
+
         _flushing_sessions += _pending_for_write_sessions;
         _pending_for_write_sessions = 0;
         _tracing_backend_helper_ptr->kick();
