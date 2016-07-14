@@ -505,3 +505,96 @@ BOOST_AUTO_TEST_CASE(test_range_interval_map) {
     BOOST_REQUIRE(search_item("8") == true);
     BOOST_REQUIRE(search_item("9") == false);
 }
+
+BOOST_AUTO_TEST_CASE(range_deoverlap_tests) {
+    using ranges = std::vector<range<unsigned>>;
+
+    {
+        ranges rs = { range<unsigned>::make(1, 4), range<unsigned>::make(2, 5) };
+        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        BOOST_REQUIRE_EQUAL(range<unsigned>::make(1, 5), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
+    }
+
+    {
+        ranges rs = { range<unsigned>::make(1, 4), range<unsigned>::make(4, 5) };
+        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        BOOST_REQUIRE_EQUAL(range<unsigned>::make(1, 5), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
+    }
+
+    {
+        ranges rs = { range<unsigned>::make(2, 4), range<unsigned>::make(1, 3) };
+        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        BOOST_REQUIRE_EQUAL(range<unsigned>::make(1, 4), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
+    }
+
+    {
+        ranges rs = { range<unsigned>::make(1, 4), range<unsigned>::make(0, 5), range<unsigned>::make(7, 12), range<unsigned>::make(8, 10) };
+        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        BOOST_REQUIRE_EQUAL(range<unsigned>::make(0, 5), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(range<unsigned>::make(7, 12), deoverlapped[1]);
+        BOOST_REQUIRE_EQUAL(2, deoverlapped.size());
+    }
+
+    {
+        ranges rs = { range<unsigned>::make(1, 4), range<unsigned>({2}, { }) };
+        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        BOOST_REQUIRE_EQUAL(range<unsigned>({1}, { }), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
+    }
+
+    {
+        ranges rs = { range<unsigned>({ }, {4}), range<unsigned>::make(3, 5) };
+        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        BOOST_REQUIRE_EQUAL(range<unsigned>({ }, {5}), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
+    }
+
+    {
+        ranges rs = { range<unsigned>({14}, { }), range<unsigned>({2}, { }) };
+        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        BOOST_REQUIRE_EQUAL(range<unsigned>({2}, { }), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
+    }
+
+    {
+        ranges rs = { range<unsigned>({2}, { }), range<unsigned>({12}, { }) };
+        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        BOOST_REQUIRE_EQUAL(range<unsigned>({2}, { }), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
+    }
+
+    {
+        ranges rs = { range<unsigned>::make(14, 4), range<unsigned>::make(2, 4) };
+        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        BOOST_REQUIRE_EQUAL(range<unsigned>({ }, {4}), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(range<unsigned>({14}, { }), deoverlapped[1]);
+        BOOST_REQUIRE_EQUAL(2, deoverlapped.size());
+    }
+
+    {
+        ranges rs = { range<unsigned>({3}, {{4, false}}), range<unsigned>({{4, false}}, {5}) };
+        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        BOOST_REQUIRE_EQUAL(range<unsigned>({3}, {{4, false}}), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(range<unsigned>({{4, false}}, {5}), deoverlapped[1]);
+        BOOST_REQUIRE_EQUAL(2, deoverlapped.size());
+    }
+
+    {
+        ranges rs = { range<unsigned>({3}, {{4, false}}), range<unsigned>::make(4, 5) };
+        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        BOOST_REQUIRE_EQUAL(range<unsigned>({3}, {{4, false}}), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(range<unsigned>::make(4, 5), deoverlapped[1]);
+        BOOST_REQUIRE_EQUAL(2, deoverlapped.size());
+    }
+
+    {
+        ranges rs = { range<unsigned>::make(3, 4), range<unsigned>({{4, false}}, {5}) };
+        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
+        BOOST_REQUIRE_EQUAL(range<unsigned>::make(3, 4), deoverlapped[0]);
+        BOOST_REQUIRE_EQUAL(range<unsigned>({{4, false}}, {5}), deoverlapped[1]);
+        BOOST_REQUIRE_EQUAL(2, deoverlapped.size());
+    }
+}

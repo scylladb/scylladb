@@ -39,10 +39,11 @@ namespace query {
 class result_atomic_cell_view {
     api::timestamp_type _timestamp;
     expiry_opt _expiry;
+    ttl_opt _ttl;
     bytes_view _value;
 public:
-    result_atomic_cell_view(api::timestamp_type timestamp, expiry_opt expiry, bytes_view value)
-        : _timestamp(timestamp), _expiry(expiry), _value(value) { }
+    result_atomic_cell_view(api::timestamp_type timestamp, expiry_opt expiry, ttl_opt ttl, bytes_view value)
+        : _timestamp(timestamp), _expiry(expiry), _ttl(ttl), _value(value) { }
 
     api::timestamp_type timestamp() const {
         return _timestamp;
@@ -50,6 +51,10 @@ public:
 
     expiry_opt expiry() const {
         return _expiry;
+    }
+
+    ttl_opt ttl() const {
+        return _ttl;
     }
 
     bytes_view value() const {
@@ -82,8 +87,9 @@ public:
             ser::qr_cell_view v = *cell_opt;
             api::timestamp_type timestamp = v.timestamp().value_or(api::missing_timestamp);
             expiry_opt expiry = v.expiry();
+            ttl_opt ttl = v.ttl();
             _tmp_value = v.value();
-            return {result_atomic_cell_view(timestamp, expiry, _tmp_value)};
+            return {result_atomic_cell_view(timestamp, expiry, ttl, _tmp_value)};
         }
         std::experimental::optional<bytes_view> next_collection_cell() {
             auto cell_opt = *_i++;

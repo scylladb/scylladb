@@ -564,14 +564,20 @@ void write_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell
             return std::move(wr).skip_timestamp();
         }
     }();
-    [&, wr = std::move(after_timestamp)] () mutable {
+    auto after_value = [&, wr = std::move(after_timestamp)] () mutable {
         if (slice.options.contains<query::partition_slice::option::send_expiry>() && c.is_live_and_has_ttl()) {
             return std::move(wr).write_expiry(c.expiry());
         } else {
             return std::move(wr).skip_expiry();
         }
-    }().write_value(c.value())
-       .end_qr_cell();
+    }().write_value(c.value());
+    [&, wr = std::move(after_value)] () mutable {
+        if (slice.options.contains<query::partition_slice::option::send_ttl>() && c.is_live_and_has_ttl()) {
+            return std::move(wr).write_ttl(c.ttl());
+        } else {
+            return std::move(wr).skip_ttl();
+        }
+    }().end_qr_cell();
 }
 
 template<typename RowWriter>
@@ -583,6 +589,7 @@ void write_cell(RowWriter& w, const query::partition_slice& slice, const data_ty
     w.add().write().skip_timestamp()
         .skip_expiry()
         .write_value(ctype->to_value(v, slice.cql_format()))
+        .skip_ttl()
         .end_qr_cell();
 }
 

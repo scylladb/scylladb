@@ -6,6 +6,8 @@ class qr_cell stub [[writable]] {
 
     // Specified by CQL binary protocol, according to cql_serialization_format in read_command.
     bytes value;
+
+    std::experimental::optional<gc_clock::duration> ttl [[version 1.3]] = { }; // present when send_ttl option set in partition_slice
 };
 
 class qr_row stub [[writable]] {

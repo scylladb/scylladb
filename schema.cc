@@ -108,6 +108,9 @@ void schema::rebuild() {
         }
         _column_mapping = column_mapping(std::move(cm_columns), static_columns_count());
     }
+
+    thrift()._compound = is_compound();
+    thrift()._is_dynamic = clustering_key_size() > 0;
 }
 
 const column_mapping& schema::get_column_mapping() const {
@@ -154,7 +157,6 @@ schema::schema(const raw_schema& raw)
         }
     };
 
-    thrift()._compound = is_compound();
 
     std::sort(
             _raw._columns.begin() + column_offset(column_kind::static_column),
@@ -462,6 +464,10 @@ generate_legacy_id(const sstring& ks_name, const sstring& cf_name) {
 
 bool thrift_schema::has_compound_comparator() const {
     return _compound;
+}
+
+bool thrift_schema::is_dynamic() const {
+    return _is_dynamic;
 }
 
 schema_builder::schema_builder(const sstring& ks_name, const sstring& cf_name,
