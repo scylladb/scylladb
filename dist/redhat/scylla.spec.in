@@ -50,6 +50,8 @@ python3.4 ./configure.py --disable-xen --enable-dpdk --mode=release --static-std
 %endif
 ninja-build %{?_smp_mflags} build/release/scylla build/release/iotune
 cp dist/common/systemd/scylla-server.service.in build/scylla-server.service
+cp dist/common/systemd/scylla-housekeeping.service.in build/scylla-housekeeping.service
+cp dist/common/systemd/scylla-housekeeping.timer.in build/scylla-housekeeping.timer
 sed -i -e "s#@@SYSCONFDIR@@#/etc/sysconfig#g" build/scylla-server.service
 
 %install
@@ -75,12 +77,14 @@ install -d -m755 $RPM_BUILD_ROOT%{_sysconfdir}/scylla
 install -m644 conf/scylla.yaml $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
 install -m644 conf/cassandra-rackdc.properties $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
 install -m644 build/*.service $RPM_BUILD_ROOT%{_unitdir}/
+install -m644 build/*.timer $RPM_BUILD_ROOT%{_unitdir}/
 install -m755 dist/common/scripts/* $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 seastar/scripts/posix_net_conf.sh  $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 seastar/dpdk/tools/dpdk_nic_bind.py $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 build/release/scylla $RPM_BUILD_ROOT%{_bindir}
 install -m755 build/release/iotune $RPM_BUILD_ROOT%{_bindir}
 install -m755 dist/common/bin/scyllatop $RPM_BUILD_ROOT%{_bindir}
+install -m755 scylla-housekeeping $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -d -m755 $RPM_BUILD_ROOT%{_docdir}/scylla
 install -m644 README.md $RPM_BUILD_ROOT%{_docdir}/scylla/
 install -m644 README-DPDK.md $RPM_BUILD_ROOT%{_docdir}/scylla/
@@ -97,6 +101,7 @@ cp -r swagger-ui/dist $RPM_BUILD_ROOT%{_prefix}/lib/scylla/swagger-ui
 install -d -m755 $RPM_BUILD_ROOT%{_prefix}/lib/scylla/api
 cp -r api/api-doc $RPM_BUILD_ROOT%{_prefix}/lib/scylla/api
 cp -r tools/scyllatop $RPM_BUILD_ROOT%{_prefix}/lib/scylla/scyllatop
+cp -r scylla-housekeeping $RPM_BUILD_ROOT%{_prefix}/lib/scylla/scylla-housekeeping
 cp -P dist/common/sbin/*  $RPM_BUILD_ROOT%{_sbindir}/
 
 %pre server
@@ -141,10 +146,13 @@ rm -rf $RPM_BUILD_ROOT
 %{_docdir}/scylla/ORIGIN
 %{_docdir}/scylla/licenses/
 %{_unitdir}/scylla-server.service
+%{_unitdir}/scylla-housekeeping.service
+%{_unitdir}/scylla-housekeeping.timer
 %{_bindir}/scylla
 %{_bindir}/iotune
 %{_bindir}/scyllatop
 %{_sbindir}/scylla*
+%{_prefix}/lib/scylla/scylla-housekeeping
 %{_prefix}/lib/scylla/scylla_prepare
 %{_prefix}/lib/scylla/scylla_stop
 %{_prefix}/lib/scylla/scylla_setup

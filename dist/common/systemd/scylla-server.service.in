@@ -1,6 +1,7 @@
 [Unit]
 Description=Scylla Server
 Wants=scylla-jmx.service
+Wants=scylla-housekeeping.timer
 
 [Service]
 PermissionsStartOnly=true
