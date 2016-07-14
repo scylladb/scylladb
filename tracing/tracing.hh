@@ -164,6 +164,7 @@ public:
         uint64_t max_sessions_threshold_hits = 0;
         uint64_t max_traces_threshold_hits = 0;
         uint64_t trace_events_count = 0;
+        uint64_t trace_errors = 0;
     } stats;
 
 private:

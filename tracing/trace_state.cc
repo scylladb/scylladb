@@ -60,7 +60,7 @@ trace_state::~trace_state() {
             // then do nothing - they will create a lot of session_record events
             // and we do want to know about it.
             ++_pending_trace_events;
-            tracing::get_local_tracing_instance().backend_helper().write_session_record(_session_id, _client, std::move(_params), std::move(_request), _started_at, _type, elapsed(), _ttl);
+            _local_backend.write_session_record(_session_id, _client, std::move(_params), std::move(_request), _started_at, _type, elapsed(), _ttl);
         }
 
         _local_tracing_ptr->end_session();

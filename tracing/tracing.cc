@@ -72,6 +72,10 @@ tracing::tracing(const sstring& tracing_backend_helper_class_name)
                     , scollectd::make_typed(scollectd::data_type::DERIVE, stats.trace_events_count)),
             scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
                     , scollectd::per_cpu_plugin_instance
+                    , "total_operations", "trace_errors")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE, stats.trace_errors)),
+            scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
+                    , scollectd::per_cpu_plugin_instance
                     , "queue_length", "active_sessions")
                     , scollectd::make_typed(scollectd::data_type::GAUGE, _active_sessions)),
             scollectd::add_polled_metric(scollectd::type_instance_id("tracing"

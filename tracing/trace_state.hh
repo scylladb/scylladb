@@ -67,6 +67,7 @@ private:
     std::unordered_map<sstring, sstring> _params;
     int _pending_trace_events = 0;
     shared_ptr<tracing> _local_tracing_ptr;
+    i_tracing_backend_helper& _local_backend;
 
 public:
     trace_state(trace_type type, bool write_on_close, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt)
@@ -76,6 +77,7 @@ public:
         , _ttl(ttl_by_type(_type))
         , _primary(!session_id)
         , _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
+        , _local_backend(_local_tracing_ptr->backend_helper())
     { }
 
     ~trace_state();
@@ -116,7 +118,17 @@ private:
         _params = std::move(params);
     }
 
-    inline void trace(sstring message);
+    /**
+     * Special case a simple string case
+     * @param msg
+     */
+    inline void trace(sstring msg);
+    inline void trace(const char* msg) {
+        trace(sstring(msg));
+    }
+
+    template <typename... A>
+    inline void trace(const char* fmt, A&&... a);
 
     template <typename... A>
     friend void begin(trace_state_ptr& p, A&&... a);
@@ -134,8 +146,20 @@ void trace_state::trace(sstring message) {
         return;
     }
 
+    _local_backend.write_event_record(_session_id, std::move(message), elapsed(), _ttl);
     ++_pending_trace_events;
-    tracing::get_local_tracing_instance().backend_helper().write_event_record(_session_id, std::move(message), elapsed(), _ttl);
+}
+
+template <typename... A>
+void trace_state::trace(const char* fmt, A&&... a) {
+    try {
+        fmt::MemoryWriter out;
+        out.write(fmt, std::forward<A>(a)...);
+        trace(out.c_str());
+    } catch (...) {
+        // Bump up an error counter and ignore
+        ++_local_tracing_ptr->stats.trace_errors;
+    }
 }
 
 int trace_state::elapsed() {
