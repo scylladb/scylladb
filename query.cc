@@ -123,26 +123,6 @@ void partition_slice::clear_range(const schema& s, const partition_key& k) {
     }
 }
 
-query::partition_range
-to_partition_range(query::range<dht::token> r) {
-    using bound_opt = std::experimental::optional<query::partition_range::bound>;
-    auto start = r.start()
-                 ? bound_opt(dht::ring_position(r.start()->value(),
-            r.start()->is_inclusive()
-            ? dht::ring_position::token_bound::start
-            : dht::ring_position::token_bound::end))
-                 : bound_opt();
-
-    auto end = r.end()
-               ? bound_opt(dht::ring_position(r.end()->value(),
-            r.end()->is_inclusive()
-            ? dht::ring_position::token_bound::end
-            : dht::ring_position::token_bound::start))
-               : bound_opt();
-
-    return { std::move(start), std::move(end) };
-}
-
 sstring
 result::pretty_print(schema_ptr s, const query::partition_slice& slice) const {
     std::ostringstream out;

@@ -297,4 +297,24 @@ int ring_position::tri_compare(const schema& s, const ring_position& o) const {
     }
 }
 
+range<ring_position>
+to_partition_range(range<dht::token> r) {
+    using bound_opt = std::experimental::optional<range<ring_position>::bound>;
+    auto start = r.start()
+                 ? bound_opt(dht::ring_position(r.start()->value(),
+                                                r.start()->is_inclusive()
+                                                ? dht::ring_position::token_bound::start
+                                                : dht::ring_position::token_bound::end))
+                 : bound_opt();
+
+    auto end = r.end()
+               ? bound_opt(dht::ring_position(r.end()->value(),
+                                              r.end()->is_inclusive()
+                                              ? dht::ring_position::token_bound::end
+                                              : dht::ring_position::token_bound::start))
+               : bound_opt();
+
+    return { std::move(start), std::move(end) };
+}
+
 }

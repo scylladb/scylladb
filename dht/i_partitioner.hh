@@ -48,6 +48,7 @@
 #include <memory>
 #include <random>
 #include <utility>
+#include <range.hh>
 
 namespace sstables {
 
@@ -415,6 +416,8 @@ void set_global_partitioner(const sstring& class_name);
 i_partitioner& global_partitioner();
 
 unsigned shard_of(const token&);
+
+range<ring_position> to_partition_range(range<dht::token>);
 
 } // dht
 

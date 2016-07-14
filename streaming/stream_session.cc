@@ -161,7 +161,7 @@ void stream_session::init_messaging_service_handler() {
                     auto& cf = db.find_column_family(cf_id);
                     query_ranges.reserve(ranges.size());
                     for (auto& range : ranges) {
-                        query_ranges.push_back(query::to_partition_range(range));
+                        query_ranges.push_back(dht::to_partition_range(range));
                     }
                     return cf.flush_streaming_mutations(plan_id, std::move(query_ranges));
                 } catch (no_such_column_family) {

@@ -143,7 +143,7 @@ void stream_transfer_task::start() {
         unsigned shard_end = range.end() ? dht::shard_of(range.end()->value()) + 1 : smp::count;
         auto cf_id = this->cf_id;
         auto dst_cpu_id = this->session->dst_cpu_id;
-        auto pr = query::to_partition_range(range);
+        auto pr = dht::to_partition_range(range);
         auto shard_range = boost::irange<unsigned>(shard_begin, shard_end);
         sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}, shard_begin={} shard_end={}", plan_id, cf_id, shard_begin, shard_end);
         return parallel_for_each(shard_range.begin(), shard_range.end(),

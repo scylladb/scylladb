@@ -355,7 +355,7 @@ static future<partition_checksum> checksum_range_shard(database &db,
         const sstring& keyspace_name, const sstring& cf_name,
         const ::range<dht::token>& range, repair_checksum hash_version) {
     auto& cf = db.find_column_family(keyspace_name, cf_name);
-    return do_with(query::to_partition_range(range), [&cf, hash_version] (const auto& partition_range) {
+    return do_with(dht::to_partition_range(range), [&cf, hash_version] (const auto& partition_range) {
         auto reader = cf.make_reader(cf.schema(),
                                      partition_range,
                                      query::no_clustering_key_filtering,
