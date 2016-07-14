@@ -1489,10 +1489,10 @@ future<> database::populate_keyspace(sstring datadir, sstring ks_name) {
     } else {
         dblog.info("Populating Keyspace {}", ks_name);
         auto& ks = i->second;
-        return parallel_for_each(_column_families,
-            [ks_name, &ks] (const std::pair<utils::UUID, lw_shared_ptr<column_family>>& e) {
-                utils::UUID uuid = e.first;
-                lw_shared_ptr<column_family> cf = e.second;
+        return parallel_for_each(ks.metadata()->cf_meta_data() | boost::adaptors::map_values,
+            [ks_name, &ks, this] (schema_ptr s) {
+                utils::UUID uuid = s->id();
+                lw_shared_ptr<column_family> cf = _column_families[uuid];
                 sstring cfname = cf->schema()->cf_name();
                 auto sstdir = ks.column_family_directory(cfname, uuid);
                 dblog.info("Keyspace {}: Reading CF {} ", ks_name, cfname);
