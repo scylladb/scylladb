@@ -308,6 +308,27 @@ public:
     }
 };
 
+class mark_end_as_continuous {
+    bool _override;
+    stdx::optional<dht::decorated_key> _next_entry;
+public:
+    class override { };
+
+    explicit mark_end_as_continuous(override, bool value) : _override(value) { }
+    explicit mark_end_as_continuous(const dht::decorated_key& pk)
+        : _next_entry(pk) { }
+
+    // Must be run in correct allocator context and with linearized managed
+    // bytes.
+    bool operator()(row_cache& rc, row_cache::partitions_type::iterator next) const {
+        if (!_next_entry) {
+            return _override;
+        }
+        dht::ring_position_comparator cmp(*rc.schema());
+        return next != rc._partitions.end() && !cmp(*_next_entry, next->key());
+    }
+};
+
 struct last_key {
     std::experimental::optional<dht::ring_position> value;
     bool outside_the_range;
@@ -324,7 +345,7 @@ class range_populating_reader final : public mutation_reader::impl {
     mutation_reader _reader;
     std::experimental::optional<dht::ring_position> _last_key;
     utils::phased_barrier::phase_type _last_key_populate_phase;
-    bool _make_last_entry_continuous;
+    mark_end_as_continuous _make_last_entry_continuous;
 
     void update_reader() {
         if (_populate_phase != _cache._populate_phaser.phase()) {
@@ -336,14 +357,16 @@ class range_populating_reader final : public mutation_reader::impl {
         }
     }
 
-    void mark_last_entry_as_continuous() {
+    void maybe_mark_last_entry_as_continuous(const mark_end_as_continuous& mark_continuous) {
         if (_last_key && _last_key_populate_phase == _cache._populate_phaser.phase()) {
-            with_allocator(_cache._tracker.allocator(), [this] {
-                with_linearized_managed_bytes([this] {
+            with_allocator(_cache._tracker.allocator(), [&] {
+                with_linearized_managed_bytes([&] {
                     auto i = _cache._partitions.find(*_last_key, cache_entry::compare(_schema));
                     if (i != _cache._partitions.end()) {
                         cache_entry& e = *i;
-                        e.set_continuous(true);
+                        if (mark_continuous(_cache, ++i)) {
+                            e.set_continuous(true);
+                        }
                     }
                 });
             });
@@ -359,7 +382,7 @@ public:
         mutation_source& underlying,
         std::experimental::optional<dht::ring_position> last_key,
         utils::phased_barrier::phase_type last_key_populate_phase,
-        bool make_last_entry_continuous)
+        mark_end_as_continuous make_last_entry_continuous)
         : _cache(cache)
         , _schema(std::move(schema))
         , _range(range)
@@ -380,7 +403,7 @@ public:
             if (mo) {
                 _cache.populate(*mo);
                 mo->upgrade(_schema);
-                mark_last_entry_as_continuous();
+                maybe_mark_last_entry_as_continuous(mark_end_as_continuous(mark_end_as_continuous::override(), true));
                 _last_key = dht::ring_position(mo->decorated_key());
                 _last_key_populate_phase = _cache._populate_phaser.phase();
                 auto& ck_ranges = _ck_filtering.get_ranges(mo->key());
@@ -388,9 +411,7 @@ public:
                 mo->partition() = std::move(filtered_partition);
                 return streamed_mutation_from_mutation(std::move(*mo));
             }
-            if (_make_last_entry_continuous) {
-                mark_last_entry_as_continuous();
-            }
+            maybe_mark_last_entry_as_continuous(_make_last_entry_continuous);
             return {};
         });
     }
@@ -478,7 +499,8 @@ class scanning_and_populating_reader final : public mutation_reader::impl{
                 return make_ready_future<streamed_mutation_opt>();
             }
             mutation_reader secondary = make_mutation_reader<range_populating_reader>(_cache, _schema, _range, _ck_filtering, _pc,
-                _cache._underlying, _last_key_from_primary.value, _last_key_from_primary_populate_phase, !_range.end());
+                _cache._underlying, _last_key_from_primary.value, _last_key_from_primary_populate_phase,
+                mark_end_as_continuous(mark_end_as_continuous::override(), !_range.end()));
             _state = secondary_only_state(std::move(secondary));
             return (*this)();
         }
@@ -512,7 +534,7 @@ class scanning_and_populating_reader final : public mutation_reader::impl{
                 return switch_to_after_primary(std::move(data));
             }
             mutation_reader secondary = make_mutation_reader<range_populating_reader>(_cache, _schema, range, _ck_filtering, _pc,
-                _cache._underlying, _last_key_from_primary.value, _last_key_from_primary_populate_phase, true);
+                _cache._underlying, _last_key_from_primary.value, _last_key_from_primary_populate_phase, mark_end_as_continuous(data.mut->decorated_key()));
             _state = secondary_then_primary_state(std::move(secondary), std::move(data));
             return (*this)();
         }

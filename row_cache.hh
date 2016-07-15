@@ -303,4 +303,5 @@ public:
     friend class scanning_and_populating_reader;
     friend class range_populating_reader;
     friend class cache_tracker;
+    friend class mark_end_as_continuous;
 };
