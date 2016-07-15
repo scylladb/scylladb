@@ -113,11 +113,11 @@ uint32_t modification_statement::get_bound_terms() {
     return _bound_terms;
 }
 
-sstring modification_statement::keyspace() const {
+const sstring& modification_statement::keyspace() const {
     return s->ks_name();
 }
 
-sstring modification_statement::column_family() const {
+const sstring& modification_statement::column_family() const {
     return s->cf_name();
 }
 

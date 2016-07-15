@@ -120,9 +120,9 @@ public:
 
     virtual uint32_t get_bound_terms() override;
 
-    virtual sstring keyspace() const;
+    virtual const sstring& keyspace() const;
 
-    virtual sstring column_family() const;
+    virtual const sstring& column_family() const;
 
     virtual bool is_counter() const;
 
