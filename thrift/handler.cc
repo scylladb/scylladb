@@ -1649,16 +1649,26 @@ private:
             throw make_exception<InvalidRequestException>("Mutation must have either column or deletion");
         }
     }
-    static std::vector<mutation> prepare_mutations(database& db, const sstring& ks_name, const std::map<std::string, std::map<std::string, std::vector<Mutation>>>& mutation_map) {
-        std::vector<mutation> muts;
-        for (auto&& key_cf : mutation_map) {
-            auto thrift_key = to_bytes_view(key_cf.first);
+    using mutation_map = std::map<std::string, std::map<std::string, std::vector<Mutation>>>;
+    using mutation_map_by_cf = std::unordered_map<std::string, std::unordered_map<std::string, std::vector<Mutation>>>;
+    static mutation_map_by_cf group_by_cf(mutation_map& m) {
+        mutation_map_by_cf ret;
+        for (auto&& key_cf : m) {
             for (auto&& cf_mutations : key_cf.second) {
-                const sstring& cf_name = cf_mutations.first;
-                auto schema = lookup_schema(db, ks_name, cf_name);
-                const std::vector<Mutation> &mutations = cf_mutations.second;
-                mutation m_to_apply(key_from_thrift(*schema, thrift_key), schema);
-                for (const Mutation &m : mutations) {
+                auto& mutations = ret[std::move(cf_mutations.first)][std::move(key_cf.first)];
+                std::move(cf_mutations.second.begin(), cf_mutations.second.end(), std::back_inserter(mutations));
+            }
+        }
+        return ret;
+    }
+    static std::vector<mutation> prepare_mutations(database& db, const sstring& ks_name, const mutation_map& m) {
+        std::vector<mutation> muts;
+        auto m_by_cf = group_by_cf(const_cast<mutation_map&>(m));
+        for (auto&& cf_key : m_by_cf) {
+            auto schema = lookup_schema(db, ks_name, cf_key.first);
+            for (auto&& key_mutations : cf_key.second) {
+                mutation m_to_apply(key_from_thrift(*schema, to_bytes_view(key_mutations.first)), schema);
+                for (auto&& m : key_mutations.second) {
                     add_to_mutation(*schema, m, m_to_apply);
                 }
                 muts.emplace_back(std::move(m_to_apply));
