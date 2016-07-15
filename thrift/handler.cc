@@ -98,6 +98,8 @@ public:
             throw NotFoundException();
         } catch (exceptions::syntax_exception& se) {
             throw make_exception<InvalidRequestException>("syntax error: %s", se.what());
+        } catch (exceptions::authentication_exception& ae) {
+            throw make_exception<AuthenticationException>(ae.what());
         } catch (std::exception& e) {
             // Unexpected exception, wrap it
             throw ::apache::thrift::TException(std::string("Internal server error: ") + e.what());
@@ -194,8 +196,12 @@ public:
     }
 
     void login(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const AuthenticationRequest& auth_request) {
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        with_cob(std::move(cob), std::move(exn_cob), [&] {
+            auth::authenticator::credentials_map creds(auth_request.credentials.begin(), auth_request.credentials.end());
+            return auth::authenticator::get().authenticate(creds).then([this] (auto user) {
+                _query_state.get_client_state().set_login(std::move(user));
+            });
+        });
     }
 
     void set_keyspace(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
