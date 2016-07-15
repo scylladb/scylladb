@@ -234,6 +234,7 @@ public:
     future<> has_all_keyspaces_access(auth::permission) const;
     future<> has_keyspace_access(const sstring&, auth::permission) const;
     future<> has_column_family_access(const sstring&, const sstring&, auth::permission) const;
+    future<> has_schema_access(const schema& s, auth::permission p) const;
 
 private:
     future<> has_access(const sstring&, auth::permission, auth::data_resource) const;
