@@ -741,7 +741,7 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
                 for (auto&& gs : created) {
                     schema_ptr s = gs.get();
                     auto& ks = db.find_keyspace(s->ks_name());
-                    auto cfg = ks.make_column_family_config(*s);
+                    auto cfg = ks.make_column_family_config(*s, db.get_config());
                     db.add_column_family(s, cfg);
                     auto& cf = db.find_column_family(s);
                     cf.mark_ready_for_writes();
