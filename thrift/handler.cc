@@ -186,6 +186,18 @@ class thrift_handler : public CassandraCobSvIf {
     distributed<database>& _db;
     distributed<cql3::query_processor>& _query_processor;
     service::query_state _query_state;
+private:
+    template <typename Cob, typename Func>
+    void
+    with_schema(Cob&& cob,
+                tcxx::function<void (::apache::thrift::TDelayedException* _throw)>&& exn_cob,
+                const std::string& cf,
+                Func&& func) {
+        with_cob(std::move(cob), std::move(exn_cob), [this, &cf, func = std::move(func)] {
+            auto schema = lookup_schema(_db.local(), current_keyspace(), cf);
+            return func(std::move(schema));
+        });
+    }
 public:
     explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp)
         : _db(db)
@@ -244,11 +256,10 @@ public:
     }
 
     void multiget_slice(tcxx::function<void(std::map<std::string, std::vector<ColumnOrSuperColumn> >  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::vector<std::string> & keys, const ColumnParent& column_parent, const SlicePredicate& predicate, const ConsistencyLevel::type consistency_level) {
-        with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_schema(std::move(cob), std::move(exn_cob), column_parent.column_family, [&](schema_ptr schema) {
             if (!column_parent.super_column.empty()) {
                 fail(unimplemented::cause::SUPER);
             }
-            auto schema = lookup_schema(_db.local(), current_keyspace(), column_parent.column_family);
             auto cmd = slice_pred_to_read_cmd(*schema, predicate);
             auto cell_limit = predicate.__isset.slice_range ? static_cast<uint32_t>(predicate.slice_range.count) : std::numeric_limits<uint32_t>::max();
             return service::get_local_storage_proxy().query(
@@ -266,11 +277,10 @@ public:
     }
 
     void multiget_count(tcxx::function<void(std::map<std::string, int32_t>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::vector<std::string> & keys, const ColumnParent& column_parent, const SlicePredicate& predicate, const ConsistencyLevel::type consistency_level) {
-        with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_schema(std::move(cob), std::move(exn_cob), column_parent.column_family, [&](schema_ptr schema) {
             if (!column_parent.super_column.empty()) {
                 fail(unimplemented::cause::SUPER);
             }
-            auto schema = lookup_schema(_db.local(), current_keyspace(), column_parent.column_family);
             auto cmd = slice_pred_to_read_cmd(*schema, predicate);
             auto cell_limit = predicate.__isset.slice_range ? static_cast<uint32_t>(predicate.slice_range.count) : std::numeric_limits<uint32_t>::max();
             return service::get_local_storage_proxy().query(
@@ -294,11 +304,10 @@ public:
      * now our behavior differs from Origin.
      */
     void get_range_slices(tcxx::function<void(std::vector<KeySlice>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const ColumnParent& column_parent, const SlicePredicate& predicate, const KeyRange& range, const ConsistencyLevel::type consistency_level) {
-        with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_schema(std::move(cob), std::move(exn_cob), column_parent.column_family, [&](schema_ptr schema) {
             if (!column_parent.super_column.empty()) {
                 fail(unimplemented::cause::SUPER);
             }
-            auto schema = lookup_schema(_db.local(), current_keyspace(), column_parent.column_family);
             auto&& prange = make_partition_range(*schema, range);
             auto cmd = slice_pred_to_read_cmd(*schema, predicate);
             // KeyRange::count is the number of thrift rows to return, while
@@ -397,7 +406,7 @@ public:
     }
 
     void get_paged_slice(tcxx::function<void(std::vector<KeySlice> const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family, const KeyRange& range, const std::string& start_column, const ConsistencyLevel::type consistency_level) {
-        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_schema(std::move(cob), std::move(exn_cob), column_family, [&](schema_ptr schema) {
             return do_with(std::vector<KeySlice>(), [&](auto& output) {
                 if (range.__isset.row_filter) {
                     throw make_exception<InvalidRequestException>("Cross-row paging is not supported along with index clauses");
@@ -405,7 +414,6 @@ public:
                 if (range.count <= 0) {
                     throw make_exception<InvalidRequestException>("Count must be positive");
                 }
-                auto schema = lookup_schema(_db.local(), this->current_keyspace(), column_family);
                 auto&& prange = make_partition_range(*schema, range);
                 if (!start_column.empty()) {
                     auto&& start_bound = prange.start();
@@ -430,12 +438,11 @@ public:
     }
 
     void insert(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnParent& column_parent, const Column& column, const ConsistencyLevel::type consistency_level) {
-        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_schema(std::move(cob), std::move(exn_cob), column_parent.column_family, [&](schema_ptr schema) {
             if (column_parent.__isset.super_column) {
                 fail(unimplemented::cause::SUPER);
             }
 
-            auto schema = lookup_schema(_db.local(), current_keyspace(), column_parent.column_family);
             mutation m_to_apply(key_from_thrift(*schema, to_bytes_view(key)), schema);
             add_to_mutation(*schema, column, m_to_apply);
             return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level));
@@ -456,8 +463,7 @@ public:
     }
 
     void remove(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnPath& column_path, const int64_t timestamp, const ConsistencyLevel::type consistency_level) {
-        return with_cob(std::move(cob), std::move(exn_cob), [&] {
-            auto schema = lookup_schema(_db.local(), current_keyspace(), column_path.column_family);
+        with_schema(std::move(cob), std::move(exn_cob), column_path.column_family, [&](schema_ptr schema) {
             mutation m_to_apply(key_from_thrift(*schema, to_bytes_view(key)), schema);
 
             if (column_path.__isset.super_column) {
@@ -484,21 +490,21 @@ public:
     }
 
     void batch_mutate(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::map<std::string, std::map<std::string, std::vector<Mutation> > > & mutation_map, const ConsistencyLevel::type consistency_level) {
-        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_cob(std::move(cob), std::move(exn_cob), [&] {
             auto muts = prepare_mutations(_db.local(), current_keyspace(), mutation_map);
             return service::get_local_storage_proxy().mutate(std::move(muts), cl_from_thrift(consistency_level));
         });
     }
 
     void atomic_batch_mutate(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::map<std::string, std::map<std::string, std::vector<Mutation> > > & mutation_map, const ConsistencyLevel::type consistency_level) {
-        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_cob(std::move(cob), std::move(exn_cob), [&] {
             auto muts = prepare_mutations(_db.local(), current_keyspace(), mutation_map);
             return service::get_local_storage_proxy().mutate_atomically(std::move(muts), cl_from_thrift(consistency_level));
         });
     }
 
     void truncate(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& cfname) {
-        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_cob(std::move(cob), std::move(exn_cob), [&] {
             if (current_keyspace().empty()) {
                 throw make_exception<InvalidRequestException>("keyspace not set");
             }
@@ -508,7 +514,7 @@ public:
     }
 
     void get_multi_slice(tcxx::function<void(std::vector<ColumnOrSuperColumn>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const MultiSliceRequest& request) {
-       with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_schema(std::move(cob), std::move(exn_cob), request.column_parent.column_family, [&](schema_ptr schema) {
             if (!request.__isset.key) {
                 throw make_exception<InvalidRequestException>("Key may not be empty");
             }
@@ -518,7 +524,6 @@ public:
             if (!request.column_parent.super_column.empty()) {
                 throw make_exception<InvalidRequestException>("get_multi_slice does not support super columns");
             }
-            auto schema = lookup_schema(_db.local(), current_keyspace(), request.column_parent.column_family);
             auto& s = *schema;
             auto pk = key_from_thrift(s, to_bytes(request.key));
             auto dk = dht::global_partitioner().decorate_key(s, pk);
@@ -688,7 +693,7 @@ public:
     }
 
     void system_add_column_family(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const CfDef& cf_def) {
-        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_cob(std::move(cob), std::move(exn_cob), [&] {
             if (!_db.local().has_keyspace(cf_def.keyspace)) {
                 throw NotFoundException();
             }
@@ -704,7 +709,7 @@ public:
     }
 
     void system_drop_column_family(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family) {
-        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_cob(std::move(cob), std::move(exn_cob), [&] {
             _db.local().find_schema(current_keyspace(), column_family); // Throws if column family doesn't exist.
             return service::get_local_migration_manager().announce_column_family_drop(current_keyspace(), column_family, false).then([this] {
                 return std::string(_db.local().get_version().to_sstring());
@@ -713,7 +718,7 @@ public:
     }
 
     void system_add_keyspace(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const KsDef& ks_def) {
-        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_cob(std::move(cob), std::move(exn_cob), [&] {
             auto ksm = keyspace_from_thrift(ks_def);
             return service::get_local_migration_manager().announce_new_keyspace(std::move(ksm), false).then([this] {
                 return std::string(_db.local().get_version().to_sstring());
@@ -722,7 +727,7 @@ public:
     }
 
     void system_drop_keyspace(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
-        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_cob(std::move(cob), std::move(exn_cob), [&] {
             thrift_validation::validate_keyspace_not_system(keyspace);
             if (!_db.local().has_keyspace(keyspace)) {
                 throw NotFoundException();
@@ -735,7 +740,7 @@ public:
     }
 
     void system_update_keyspace(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const KsDef& ks_def) {
-        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_cob(std::move(cob), std::move(exn_cob), [&] {
             thrift_validation::validate_keyspace_not_system(ks_def.name);
 
             if (!_db.local().has_keyspace(ks_def.name)) {
@@ -753,7 +758,7 @@ public:
     }
 
     void system_update_column_family(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const CfDef& cf_def) {
-        return with_cob(std::move(cob), std::move(exn_cob), [&] {
+        with_cob(std::move(cob), std::move(exn_cob), [&] {
             auto cf = _db.local().find_schema(cf_def.keyspace, cf_def.name);
 
             if (cf->is_cql3_table()) {
@@ -798,7 +803,7 @@ public:
     };
 
     void execute_cql3_query(tcxx::function<void(CqlResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression, const ConsistencyLevel::type consistency) {
-        return with_exn_cob(std::move(exn_cob), [&] {
+        with_exn_cob(std::move(exn_cob), [&] {
             if (compression != Compression::type::NONE) {
                 throw make_exception<InvalidRequestException>("Compressed query strings are not supported");
             }
@@ -842,7 +847,7 @@ public:
     };
 
     void prepare_cql3_query(tcxx::function<void(CqlPreparedResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression) {
-        return with_exn_cob(std::move(exn_cob), [&] {
+        with_exn_cob(std::move(exn_cob), [&] {
             validate_login();
             if (compression != Compression::type::NONE) {
                 throw make_exception<InvalidRequestException>("Compressed query strings are not supported");
@@ -860,7 +865,7 @@ public:
     }
 
     void execute_prepared_cql3_query(tcxx::function<void(CqlResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const int32_t itemId, const std::vector<std::string> & values, const ConsistencyLevel::type consistency) {
-        return with_exn_cob(std::move(exn_cob), [&] {
+        with_exn_cob(std::move(exn_cob), [&] {
             auto prepared = _query_processor.local().get_prepared_for_thrift(itemId);
             if (!prepared) {
                 throw make_exception<InvalidRequestException>("Prepared query with id %d not found", itemId);
