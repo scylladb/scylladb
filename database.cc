@@ -1435,7 +1435,7 @@ future<> database::populate_keyspace(sstring datadir, sstring ks_name) {
         dblog.info("Populating Keyspace {}", ks_name);
         auto& ks = i->second;
         return parallel_for_each(ks.metadata()->cf_meta_data() | boost::adaptors::map_values,
-            [ks_name, &ks] (schema_ptr s) {
+            [ks_name, &ks, this] (schema_ptr s) {
                 utils::UUID uuid = s->id();
                 lw_shared_ptr<column_family> cf = _column_families[uuid];
                 sstring cfname = cf->schema()->cf_name();
