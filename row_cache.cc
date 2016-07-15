@@ -40,12 +40,12 @@ thread_local seastar::thread_scheduling_group row_cache::_update_thread_scheduli
 
 enum class is_wide_partition { yes, no };
 
-future<is_wide_partition, mutation_opt> try_to_read(streamed_mutation_opt&& sm) {
+future<is_wide_partition, mutation_opt>
+try_to_read(uint64_t max_cached_partition_size_in_bytes, streamed_mutation_opt&& sm) {
     if (!sm) {
         return make_ready_future<is_wide_partition, mutation_opt>(is_wide_partition::no, mutation_opt());
     }
-    static const size_t max_size_of_cached_partition = 10 * 1024 * 1024;
-    return mutation_from_streamed_mutation_with_limit(std::move(*sm), max_size_of_cached_partition).then(
+    return mutation_from_streamed_mutation_with_limit(std::move(*sm), max_cached_partition_size_in_bytes).then(
         [] (mutation_opt&& omo) mutable {
             if (omo) {
                 return make_ready_future<is_wide_partition, mutation_opt>(is_wide_partition::no, std::move(omo));
@@ -234,7 +234,8 @@ public:
                 return make_ready_future<streamed_mutation_opt>(streamed_mutation_opt());
             }
             dht::decorated_key dk = sm->decorated_key();
-            return try_to_read(std::move(sm)).then([this, op = std::move(op), dk = std::move(dk)]
+            return try_to_read(_cache._max_cached_partition_size_in_bytes, std::move(sm)).then(
+                [this, op = std::move(op), dk = std::move(dk)]
                 (is_wide_partition wide_partition, mutation_opt&& mo) {
                     if (wide_partition == is_wide_partition::no) {
                         if (mo) {
@@ -436,8 +437,9 @@ public:
         return _reader().then([this, op = std::move(op)] (auto sm) mutable {
             stdx::optional<dht::decorated_key> dk = (sm) ? stdx::optional<dht::decorated_key>(sm->decorated_key())
                                                          : stdx::optional<dht::decorated_key>(stdx::nullopt);
-            return try_to_read(std::move(sm)).then([this, op = std::move(op), dk = std::move(dk)]
-                (is_wide_partition wide_partition, mutation_opt&& mo) {
+            return try_to_read(_cache._max_cached_partition_size_in_bytes, std::move(sm)).then(
+                [this, op = std::move(op), dk = std::move(dk)]
+                (is_wide_partition wide_partition, mutation_opt&& mo) mutable {
                     if (wide_partition == is_wide_partition::no) {
                         if (mo) {
                             _cache.populate(*mo);
@@ -961,12 +963,13 @@ void row_cache::invalidate_unwrapped(const query::partition_range& range) {
 }
 
 row_cache::row_cache(schema_ptr s, mutation_source fallback_factory, key_source underlying_keys,
-    cache_tracker& tracker)
+    cache_tracker& tracker, uint64_t max_cached_partition_size_in_bytes)
     : _tracker(tracker)
     , _schema(std::move(s))
     , _partitions(cache_entry::compare(_schema))
     , _underlying(std::move(fallback_factory))
     , _underlying_keys(std::move(underlying_keys))
+    , _max_cached_partition_size_in_bytes(max_cached_partition_size_in_bytes)
 {
     with_allocator(_tracker.allocator(), [this] {
         cache_entry* entry = current_allocator().construct<cache_entry>(_schema);
