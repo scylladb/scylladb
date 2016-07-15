@@ -149,6 +149,7 @@ public:
 private:
     uint64_t _hits = 0;
     uint64_t _misses = 0;
+    uint64_t _uncached_wide_partitions = 0;
     uint64_t _insertions = 0;
     uint64_t _merges = 0;
     uint64_t _evictions = 0;
@@ -170,6 +171,7 @@ public:
     void on_merge();
     void on_hit();
     void on_miss();
+    void on_uncached_wide_partition();
     allocation_strategy& allocator();
     logalloc::region& region();
     const logalloc::region& region() const;
@@ -232,6 +234,7 @@ private:
                                          query::clustering_key_filtering_context ck_filtering);
     void on_hit();
     void on_miss();
+    void on_uncached_wide_partition();
     void upgrade_entry(cache_entry&);
     void invalidate_locked(const dht::decorated_key&);
     void invalidate_unwrapped(const query::partition_range&);
