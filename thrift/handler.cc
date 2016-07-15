@@ -100,6 +100,8 @@ public:
             throw make_exception<InvalidRequestException>("syntax error: %s", se.what());
         } catch (exceptions::authentication_exception& ae) {
             throw make_exception<AuthenticationException>(ae.what());
+        } catch (exceptions::unauthorized_exception& ue) {
+            throw make_exception<AuthorizationException>(ue.what());
         } catch (std::exception& e) {
             // Unexpected exception, wrap it
             throw ::apache::thrift::TException(std::string("Internal server error: ") + e.what());
@@ -194,6 +196,10 @@ public:
     const sstring& current_keyspace() const {
         return _query_state.get_client_state().get_raw_keyspace();
     }
+
+    void validate_login() const {
+        return _query_state.get_client_state().validate_login();
+    };
 
     void login(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const AuthenticationRequest& auth_request) {
         with_cob(std::move(cob), std::move(exn_cob), [&] {
@@ -577,6 +583,7 @@ public:
 
     void describe_keyspaces(tcxx::function<void(std::vector<KsDef>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob) {
         with_cob(std::move(cob), std::move(exn_cob), [&] {
+            validate_login();
             std::vector<KsDef>  ret;
             for (auto&& ks : _db.local().keyspaces()) {
                 ret.emplace_back(get_keyspace_definition(ks.second));
@@ -653,6 +660,7 @@ public:
 
     void describe_keyspace(tcxx::function<void(KsDef const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
         with_cob(std::move(cob), std::move(exn_cob), [&] {
+            validate_login();
             auto& ks = _db.local().find_keyspace(keyspace);
             return get_keyspace_definition(ks);
         });
@@ -835,6 +843,7 @@ public:
 
     void prepare_cql3_query(tcxx::function<void(CqlPreparedResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression) {
         return with_exn_cob(std::move(exn_cob), [&] {
+            validate_login();
             if (compression != Compression::type::NONE) {
                 throw make_exception<InvalidRequestException>("Compressed query strings are not supported");
             }
