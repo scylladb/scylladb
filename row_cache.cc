@@ -121,6 +121,11 @@ cache_tracker::setup_collectd() {
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("cache"
                 , scollectd::per_cpu_plugin_instance
+                , "total_operations", "uncached_wide_partitions")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _uncached_wide_partitions)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
+                , scollectd::per_cpu_plugin_instance
                 , "total_operations", "insertions")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _insertions)
         ),
@@ -196,6 +201,10 @@ void cache_tracker::on_miss() {
     ++_misses;
 }
 
+void cache_tracker::on_uncached_wide_partition() {
+    ++_uncached_wide_partitions;
+}
+
 allocation_strategy& cache_tracker::allocator() {
     return _region.allocator();
 }
@@ -248,6 +257,7 @@ public:
                         }
                         return make_ready_future<streamed_mutation_opt>(streamed_mutation_opt());
                     } else {
+                        _cache.on_uncached_wide_partition();
                         auto reader = _underlying(_schema,
                                                   query::partition_range::make_singular(dht::ring_position(std::move(dk))),
                                                   _ck_filtering,
@@ -267,6 +277,10 @@ void row_cache::on_hit() {
 void row_cache::on_miss() {
     _stats.misses.mark();
     _tracker.on_miss();
+}
+
+void row_cache::on_uncached_wide_partition() {
+    _tracker.on_uncached_wide_partition();
 }
 
 class just_cache_scanning_reader final {
@@ -457,6 +471,7 @@ public:
                     } else {
                         assert(bool(dk));
                         _last_key = std::experimental::optional<dht::ring_position>();
+                        _cache.on_uncached_wide_partition();
                         auto reader = _underlying(_schema,
                                                   query::partition_range::make_singular(dht::ring_position(std::move(*dk))),
                                                   _ck_filtering,
