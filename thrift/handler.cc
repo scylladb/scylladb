@@ -702,17 +702,20 @@ public:
             }
 
             auto s = schema_from_thrift(cf_def, cf_def.keyspace);
-            return service::get_local_migration_manager().announce_new_column_family(std::move(s), false).then([this] {
-                return std::string(_db.local().get_version().to_sstring());
+            return _query_state.get_client_state().has_keyspace_access(cf_def.keyspace, auth::permission::CREATE).then([this, s = std::move(s)] {
+                return service::get_local_migration_manager().announce_new_column_family(std::move(s), false).then([this] {
+                    return std::string(_db.local().get_version().to_sstring());
+                });
             });
         });
     }
 
     void system_drop_column_family(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family) {
         with_cob(std::move(cob), std::move(exn_cob), [&] {
-            _db.local().find_schema(current_keyspace(), column_family); // Throws if column family doesn't exist.
-            return service::get_local_migration_manager().announce_column_family_drop(current_keyspace(), column_family, false).then([this] {
-                return std::string(_db.local().get_version().to_sstring());
+            return _query_state.get_client_state().has_column_family_access(current_keyspace(), column_family, auth::permission::DROP).then([=] {
+                return service::get_local_migration_manager().announce_column_family_drop(current_keyspace(), column_family, false).then([this] {
+                    return std::string(_db.local().get_version().to_sstring());
+                });
             });
         });
     }
@@ -720,8 +723,10 @@ public:
     void system_add_keyspace(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const KsDef& ks_def) {
         with_cob(std::move(cob), std::move(exn_cob), [&] {
             auto ksm = keyspace_from_thrift(ks_def);
-            return service::get_local_migration_manager().announce_new_keyspace(std::move(ksm), false).then([this] {
-                return std::string(_db.local().get_version().to_sstring());
+            return _query_state.get_client_state().has_all_keyspaces_access(auth::permission::CREATE).then([this, ksm = std::move(ksm)] {
+                return service::get_local_migration_manager().announce_new_keyspace(std::move(ksm), false).then([this] {
+                    return std::string(_db.local().get_version().to_sstring());
+                });
             });
         });
     }
@@ -733,8 +738,10 @@ public:
                 throw NotFoundException();
             }
 
-            return service::get_local_migration_manager().announce_keyspace_drop(keyspace, false).then([this] {
-                return std::string(_db.local().get_version().to_sstring());
+            return _query_state.get_client_state().has_keyspace_access(keyspace, auth::permission::DROP).then([=] {
+                return service::get_local_migration_manager().announce_keyspace_drop(keyspace, false).then([this] {
+                    return std::string(_db.local().get_version().to_sstring());
+                });
             });
         });
     }
@@ -751,23 +758,27 @@ public:
             }
 
             auto ksm = keyspace_from_thrift(ks_def);
-            return service::get_local_migration_manager().announce_keyspace_update(ksm, false).then([this] {
-                return std::string(_db.local().get_version().to_sstring());
+            return _query_state.get_client_state().has_keyspace_access(ks_def.name, auth::permission::ALTER).then([this, ksm = std::move(ksm)] {
+                return service::get_local_migration_manager().announce_keyspace_update(std::move(ksm), false).then([this] {
+                    return std::string(_db.local().get_version().to_sstring());
+                });
             });
         });
     }
 
     void system_update_column_family(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const CfDef& cf_def) {
         with_cob(std::move(cob), std::move(exn_cob), [&] {
-            auto cf = _db.local().find_schema(cf_def.keyspace, cf_def.name);
+            auto schema = _db.local().find_schema(cf_def.keyspace, cf_def.name);
 
-            if (cf->is_cql3_table()) {
+            if (schema->is_cql3_table()) {
                 throw make_exception<InvalidRequestException>("Cannot modify CQL3 table {} as it may break the schema. You should use cqlsh to modify CQL3 tables instead.", cf_def.name);
             }
 
-            auto s = schema_from_thrift(cf_def, cf_def.keyspace, cf->id());
-            return service::get_local_migration_manager().announce_column_family_update(std::move(s), true, false).then([this] {
-                return std::string(_db.local().get_version().to_sstring());
+            auto s = schema_from_thrift(cf_def, cf_def.keyspace, schema->id());
+            return _query_state.get_client_state().has_schema_access(*schema, auth::permission::ALTER).then([this, s = std::move(s)] {
+                return service::get_local_migration_manager().announce_column_family_update(std::move(s), true, false).then([this] {
+                    return std::string(_db.local().get_version().to_sstring());
+                });
             });
         });
     }
