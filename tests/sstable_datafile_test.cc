@@ -2766,13 +2766,12 @@ SEASTAR_TEST_CASE(basic_date_tiered_strategy_test) {
     int min_threshold = cf->schema()->min_compaction_threshold();
     auto now = db_clock::now();
     auto past_hour = now - std::chrono::seconds(3600);
+    int64_t timestamp_for_now = now.time_since_epoch().count() * 1000;
     int64_t timestamp_for_past_hour = past_hour.time_since_epoch().count() * 1000;
 
     for (auto i = 1; i <= min_threshold; i++) {
-        auto tp = now + std::chrono::seconds(i);
-        int64_t timestamp_for_this_sst = tp.time_since_epoch().count() * 1000;
         auto sst = add_sstable_for_overlapping_test(cf, /*gen*/i, "a", "a",
-            build_stats(timestamp_for_this_sst, timestamp_for_this_sst, std::numeric_limits<int32_t>::max()));
+            build_stats(timestamp_for_now, timestamp_for_now, std::numeric_limits<int32_t>::max()));
         candidates.push_back(sst);
     }
     // add sstable that belong to a different time tier.
