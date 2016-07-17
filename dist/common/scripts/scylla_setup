@@ -28,6 +28,7 @@ print_usage() {
     echo "  --no-coredump-setup		skip coredump setup"
     echo "  --no-sysconfig-setup		skip sysconfig setup"
     echo "  --no-io-setup		skip IO configuration setup"
+    echo "  --no-version-check		skip daily version check"
     exit 1
 }
 
@@ -80,6 +81,7 @@ DEV_MODE=0
 KERNEL_CHECK=1
 VERIFY_PACKAGE=1
 ENABLE_SERVICE=1
+ENABLE_CHECK_VERSION=1
 SELINUX_SETUP=1
 BOOTPARAM_SETUP=1
 NTP_SETUP=1
@@ -130,6 +132,10 @@ while [ $# -gt 0 ]; do
             ;;
         "--no-enable-service")
             ENABLE_SERVICE=0
+            shift 1
+            ;;
+        "--no-version-check")
+            ENABLE_CHECK_VERSION=0
             shift 1
             ;;
         "--no-selinux-setup")
@@ -199,12 +205,21 @@ fi
 if [ $INTERACTIVE -eq 1 ]; then
     interactive_ask_service "Do you want to enable ScyllaDB services?" "Answer yes to automatically start Scylla when the node boots; answer no to skip this step." "yes" &&:
     ENABLE_SERVICE=$?
+    if [ $ENABLE_SERVICE -eq 1 ]; then
+        interactive_ask_service "Do you want to enable ScyllaDB version check?" "Answer yes to automatically start Scylla-housekeeping that check for newer version, when the node boots; answer no to skip this step." "yes" &&:
+        ENABLE_CHECK_VERSION=$?
+    fi
 fi
 
 if [ $ENABLE_SERVICE -eq 1 ]; then
     if [ "$ID" = "fedora" ] || [ "$ID" = "centos" ]; then
         systemctl enable scylla-server.service
         systemctl enable collectd.service
+        if [ $ENABLE_CHECK_VERSION -eq 1 ]; then
+            systemctl unmask scylla-housekeeping.timer
+        else
+            systemctl mask scylla-housekeeping.timer
+        fi
     fi
 fi
 
