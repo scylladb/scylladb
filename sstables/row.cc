@@ -62,12 +62,6 @@ private:
     bool _deleted;
     uint32_t _ttl, _expiration;
 
-    static inline bytes_view to_bytes_view(temporary_buffer<char>& b) {
-        // The sstable code works with char, our "bytes_view" works with
-        // byte_t. Rather than change all the code, let's do a cast...
-        using byte = bytes_view::value_type;
-        return bytes_view(reinterpret_cast<const byte*>(b.get()), b.size());
-    }
 
 public:
     bool non_consuming() const {

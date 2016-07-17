@@ -35,6 +35,13 @@
 #include <unordered_map>
 #include <type_traits>
 
+// While the sstable code works with char, bytes_view works with int8_t
+// (signed char). Rather than change all the code, let's do a cast.
+static inline bytes_view to_bytes_view(const temporary_buffer<char>& b) {
+    using byte = bytes_view::value_type;
+    return bytes_view(reinterpret_cast<const byte*>(b.get()), b.size());
+}
+
 namespace sstables {
 
 struct option {
@@ -64,7 +71,7 @@ class index_entry {
 public:
 
     bytes_view get_key_bytes() const {
-        return bytes_view(reinterpret_cast<const bytes::value_type *>(_key.get()), _key.size());
+        return to_bytes_view(_key);
     }
 
     key_view get_key() const {
