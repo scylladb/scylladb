@@ -18,6 +18,7 @@ TimeoutStartSec=900
 KillMode=process
 Restart=on-abnormal
 User=scylla
+OOMScoreAdjust=-950
 
 [Install]
 WantedBy=multi-user.target
