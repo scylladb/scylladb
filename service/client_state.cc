@@ -114,6 +114,10 @@ future<> service::client_state::has_column_family_access(const sstring& ks,
     return has_access(ks, p, auth::data_resource(ks, cf));
 }
 
+future<> service::client_state::has_schema_access(const schema& s, auth::permission p) const {
+    return has_access(s.ks_name(), p, auth::data_resource(s.ks_name(), s.cf_name()));
+}
+
 future<> service::client_state::has_access(const sstring& ks, auth::permission p, auth::data_resource resource) const {
     if (ks.empty()) {
         throw exceptions::invalid_request_exception("You have not set a keyspace for this session");
