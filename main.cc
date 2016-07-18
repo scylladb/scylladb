@@ -50,6 +50,7 @@
 #include <sys/resource.h>
 #include "disk-error-handler.hh"
 #include "tracing/tracing.hh"
+#include "db/size_estimates_recorder.hh"
 
 #ifdef HAVE_LIBSYSTEMD
 #include <systemd/sd-daemon.h>
@@ -606,6 +607,10 @@ int main(int ac, char** av) {
             api::set_server_gossip_settle(ctx).get();
             supervisor_notify("starting tracing");
             tracing::tracing::create_tracing("trace_keyspace_helper").get();
+            supervisor_notify("starting size estimates recorder");
+            auto&& recorder = db::get_size_estimates_recorder();
+            recorder.start().get();
+            engine().at_exit([] { return db::get_size_estimates_recorder().stop(); });
             supervisor_notify("starting native transport");
             service::get_local_storage_service().start_native_transport().get();
             if (start_thrift) {
