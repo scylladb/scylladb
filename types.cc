@@ -2704,7 +2704,7 @@ update_types(const std::vector<data_type> types, const user_type updated) {
             if (!new_types) {
                 new_types = types;
             }
-            new_types->emplace(new_types->begin() + i, std::move(*ut));
+            (*new_types)[i] = std::move(*ut);
         }
     }
     return new_types;
