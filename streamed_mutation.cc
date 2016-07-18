@@ -120,21 +120,36 @@ streamed_mutation streamed_mutation_from_mutation(mutation m)
 {
     class reader final : public streamed_mutation::impl {
         mutation _mutation;
-        bound_view::compare _cmp;
+        position_in_partition::less_compare _cmp;
         bool _static_row_done = false;
-        range_tombstone::container_type::iterator _rt_it;
-        range_tombstone::container_type::iterator _rt_end;
-        mutation_partition::rows_type::iterator _cr_it;
-        mutation_partition::rows_type::iterator _cr_end;
+        mutation_fragment_opt _rt;
+        mutation_fragment_opt _cr;
     private:
-        mutation_fragment_opt read_next() {
-            if (_cr_it != _cr_end) {
-                if (_rt_it == _rt_end || _cmp(_cr_it->key(), _rt_it->start_bound())) {
-                    return mutation_fragment(std::move(*_cr_it++));
-                }
+        void prepare_next_clustering_row() {
+            auto& crs = _mutation.partition().clustered_rows();
+            auto re = crs.unlink_leftmost_without_rebalance();
+            if (re) {
+                _cr = mutation_fragment(std::move(*re));
+                current_deleter<rows_entry>()(re);
             }
-            if (_rt_it != _rt_end) {
-                return mutation_fragment(std::move(*_rt_it++));
+        }
+        void prepare_next_range_tombstone() {
+            auto& rts = _mutation.partition().row_tombstones().tombstones();
+            auto rt = rts.unlink_leftmost_without_rebalance();
+            if (rt) {
+                _rt = mutation_fragment(std::move(*rt));
+                current_deleter<range_tombstone>()(rt);
+            }
+        }
+        mutation_fragment_opt read_next() {
+            if (_cr && (!_rt || _cmp(*_cr, *_rt))) {
+                auto cr = move_and_disengage(_cr);
+                prepare_next_clustering_row();
+                return cr;
+            } else if (_rt) {
+                auto rt = move_and_disengage(_rt);
+                prepare_next_range_tombstone();
+                return rt;
             }
             return { };
         }
@@ -161,10 +176,8 @@ streamed_mutation streamed_mutation_from_mutation(mutation m)
             , _mutation(std::move(m))
             , _cmp(*_mutation.schema())
         {
-            _rt_it = _mutation.partition().row_tombstones().begin();
-            _cr_it = _mutation.partition().clustered_rows().begin();
-            _rt_end = _mutation.partition().row_tombstones().end();
-            _cr_end = _mutation.partition().clustered_rows().end();
+            prepare_next_clustering_row();
+            prepare_next_range_tombstone();
 
             do_fill_buffer();
         }
