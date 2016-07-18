@@ -1189,6 +1189,12 @@ to_bytes(const sstring& x) {
 }
 
 inline
+bytes_view
+to_bytes_view(const sstring& x) {
+    return bytes_view(reinterpret_cast<const int8_t*>(x.c_str()), x.size());
+}
+
+inline
 bytes
 to_bytes(const utils::UUID& uuid) {
     struct {
