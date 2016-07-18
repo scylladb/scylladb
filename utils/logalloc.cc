@@ -1082,7 +1082,7 @@ class region_impl : public allocation_strategy {
 
         friend std::ostream& operator<<(std::ostream& out, const object_descriptor& desc) {
             return out << sprint("{flags = %x, migrator=%p, alignment=%d, size=%d}",
-                (int)desc._flags._value, desc._migrator, unsigned(desc._alignment), desc._size);
+                (int)desc._flags._value, (void*)desc._migrator, unsigned(desc._alignment), desc._size);
         }
     } __attribute__((packed));
 private:
