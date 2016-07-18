@@ -1760,6 +1760,15 @@ std::vector<sstring>  database::get_non_system_keyspaces() const {
     return res;
 }
 
+std::vector<lw_shared_ptr<column_family>> database::get_non_system_column_families() const {
+    return boost::copy_range<std::vector<lw_shared_ptr<column_family>>>(
+        get_column_families()
+            | boost::adaptors::map_values
+            | boost::adaptors::filtered([](const lw_shared_ptr<column_family>& cf) {
+                return cf->schema()->ks_name() != db::system_keyspace::NAME;
+            }));
+}
+
 column_family& database::find_column_family(const sstring& ks_name, const sstring& cf_name) {
     try {
         return find_column_family(find_uuid(ks_name, cf_name));
