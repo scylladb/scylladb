@@ -177,6 +177,7 @@ public:
     const logalloc::region& region() const;
     uint64_t modification_count() const { return _modification_count; }
     uint64_t partitions() const { return _partitions; }
+    uint64_t uncached_wide_partitions() const { return _uncached_wide_partitions; }
 };
 
 // Returns a reference to shard-wide cache_tracker.
