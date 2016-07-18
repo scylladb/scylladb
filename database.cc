@@ -1217,6 +1217,10 @@ lw_shared_ptr<sstable_list> column_family::get_sstables() const {
     return _sstables->all();
 }
 
+std::vector<sstables::shared_sstable> column_family::select_sstables(const query::partition_range& range) const {
+    return _sstables->select(range);
+}
+
 // Gets the list of all sstables in the column family, including ones that are
 // not used for active queries because they have already been compacted, but are
 // waiting for delete_atomically() to return.

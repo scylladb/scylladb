@@ -650,6 +650,7 @@ public:
 
     lw_shared_ptr<sstable_list> get_sstables() const;
     lw_shared_ptr<sstable_list> get_sstables_including_compacted_undeleted() const;
+    std::vector<sstables::shared_sstable> select_sstables(const query::partition_range& range) const;
     size_t sstables_count() const;
     int64_t get_unleveled_sstables() const;
 
