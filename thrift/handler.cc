@@ -1104,7 +1104,7 @@ private:
                 builder.with_column(to_bytes(cf_def.key_alias), std::move(pk_types.back()), column_kind::partition_key);
             } else {
                 for (uint32_t i = 0; i < pk_types.size(); ++i) {
-                    builder.with_column(to_bytes("key" + (i + 1)), std::move(pk_types[i]), column_kind::partition_key);
+                    builder.with_column(to_bytes(sprint("key%d", i + 1)), std::move(pk_types[i]), column_kind::partition_key);
                 }
             }
         } else {
@@ -1120,7 +1120,7 @@ private:
             auto ck_types = std::move(p.first);
             builder.set_is_compound(p.second);
             for (uint32_t i = 0; i < ck_types.size(); ++i) {
-                builder.with_column(to_bytes("column" + (i + 1)), std::move(ck_types[i]), column_kind::clustering_key);
+                builder.with_column(to_bytes(sprint("column%d", i + 1)), std::move(ck_types[i]), column_kind::clustering_key);
             }
             auto&& vtype = cf_def.__isset.default_validation_class
                          ? db::marshal::type_parser::parse(to_sstring(cf_def.default_validation_class))
