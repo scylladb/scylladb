@@ -347,6 +347,20 @@ class scylla_lsa_zones(gdb.Command):
                 .format(z_base=int(zone['_base']), z_size=int(zone['_segments']['_bits_count']),
                     z_used=int(zone['_used_segment_count'])));
 
+class scylla_timers(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla timers', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+    def invoke(self, arg, from_tty):
+        gdb.write('Timers:\n')
+        timer_set = gdb.parse_and_eval('local_engine->_timers')
+        for timer_list in std_array(timer_set['_buckets']):
+            for t in intrusive_list(timer_list):
+                gdb.write('(%s*) %s = %s\n' % (t.type, t.address, t))
+        timer_set = gdb.parse_and_eval('local_engine->_lowres_timers')
+        for timer_list in std_array(timer_set['_buckets']):
+            for t in intrusive_list(timer_list):
+                gdb.write('(%s*) %s = %s\n' % (t.type, t.address, t))
+
 scylla()
 scylla_databases()
 scylla_keyspaces()
@@ -355,3 +369,4 @@ scylla_memory()
 scylla_ptr()
 scylla_lsa()
 scylla_lsa_zones()
+scylla_timers()
