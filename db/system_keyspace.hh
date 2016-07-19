@@ -79,6 +79,13 @@ static constexpr auto COMPACTION_HISTORY = "compaction_history";
 static constexpr auto SSTABLE_ACTIVITY = "sstable_activity";
 static constexpr auto SIZE_ESTIMATES = "size_estimates";
 
+// Partition estimates for a given range of tokens.
+struct partition_estimates {
+    int64_t partitions_count;
+    int64_t mean_partition_size;
+};
+
+using range_estimates = std::pair<const range<dht::ring_position>*, partition_estimates>;
 
 extern schema_ptr hints();
 extern schema_ptr batchlog();
@@ -561,5 +568,16 @@ future<> set_bootstrap_state(bootstrap_state state);
 #endif
 
     api::timestamp_type schema_creation_timestamp();
+
+/**
+ * Writes the current partition count and size estimates into SIZE_ESTIMATES_CF
+ */
+future<> update_size_estimates(const sstring& ks_name, const sstring& cf_name, std::vector<range_estimates> estimates);
+
+/**
+ * Clears size estimates for a table (on table drop)
+ */
+future<> clear_size_estimates(const sstring& ks_name, const sstring& cf_name);
+
 } // namespace system_keyspace
 } // namespace db

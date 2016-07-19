@@ -340,7 +340,7 @@ single_column_primary_key_restrictions<partition_key>::bounds_ranges(const query
         if (!r.is_singular()) {
             throw exceptions::invalid_request_exception("Range queries on partition key values not supported.");
         }
-        ranges.emplace_back(std::move(r).transform<query::ring_position>(
+        ranges.emplace_back(std::move(r).transform(
             [this] (partition_key&& k) -> query::ring_position {
                 auto token = dht::global_partitioner().get_token(*_schema, k);
                 return { std::move(token), std::move(k) };

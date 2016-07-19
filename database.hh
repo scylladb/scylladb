@@ -650,6 +650,7 @@ public:
 
     lw_shared_ptr<sstable_list> get_sstables() const;
     lw_shared_ptr<sstable_list> get_sstables_including_compacted_undeleted() const;
+    std::vector<sstables::shared_sstable> select_sstables(const query::partition_range& range) const;
     size_t sstables_count() const;
     int64_t get_unleveled_sstables() const;
 
@@ -1064,6 +1065,8 @@ public:
     std::unordered_map<utils::UUID, lw_shared_ptr<column_family>>& get_column_families() {
         return _column_families;
     }
+
+    std::vector<lw_shared_ptr<column_family>> get_non_system_column_families() const;
 
     const std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash>&
     get_column_families_mapping() const {

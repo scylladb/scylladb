@@ -336,7 +336,7 @@ public:
     }
     // Transforms this range into a new range of a different value type
     // Supplied transformer should transform value of type T (the old type) into value of type U (the new type).
-    template<typename U, typename Transformer>
+    template<typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
     range<U> transform(Transformer&& transformer) && {
         auto t = [&transformer] (std::experimental::optional<bound>&& b)
             -> std::experimental::optional<typename range<U>::bound>
