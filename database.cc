@@ -2502,6 +2502,7 @@ future<> update_schema_version_and_announce(distributed<service::storage_proxy>&
             return make_ready_future<>();
         }).then([uuid] {
             return db::system_keyspace::update_schema_version(uuid).then([uuid] {
+                dblog.info("Schema version changed to {}", uuid);
                 return service::get_local_migration_manager().passive_announce(uuid);
             });
         });
