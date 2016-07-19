@@ -361,6 +361,23 @@ class scylla_timers(gdb.Command):
             for t in intrusive_list(timer_list):
                 gdb.write('(%s*) %s = %s\n' % (t.type, t.address, t))
 
+def reactors():
+    orig = gdb.selected_thread()
+    for t in gdb.selected_inferior().threads():
+        t.switch()
+        reactor = gdb.parse_and_eval('local_engine')
+        if reactor:
+            yield reactor.dereference()
+    orig.switch()
+
+class scylla_apply(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla apply', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+    def invoke(self, arg, from_tty):
+        for r in reactors():
+            gdb.write("\nShard %d: \n\n" % (r['_id']))
+            gdb.execute(arg)
+
 scylla()
 scylla_databases()
 scylla_keyspaces()
@@ -370,3 +387,4 @@ scylla_ptr()
 scylla_lsa()
 scylla_lsa_zones()
 scylla_timers()
+scylla_apply()
