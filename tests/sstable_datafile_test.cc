@@ -2825,3 +2825,56 @@ SEASTAR_TEST_CASE(date_tiered_strategy_test_2) {
 
     return make_ready_future<>();
 }
+
+SEASTAR_TEST_CASE(test_promoted_index_read) {
+    // create table promoted_index_read (
+    //        pk int,
+    //        ck1 int,
+    //        ck2 int,
+    //        v int,
+    //        primary key (pk, ck1, ck2)
+    // );
+    //
+    // column_index_size_in_kb: 0
+    //
+    // delete from promoted_index_read where pk = 0 and ck1 = 0;
+    // insert into promoted_index_read (pk, ck1, ck2, v) values (0, 0, 0, 0);
+    // insert into promoted_index_read (pk, ck1, ck2, v) values (0, 0, 1, 1);
+    //
+    // SSTable:
+    // [
+    // {"key": "0",
+    //  "cells": [["0:_","0:!",1468923292708929,"t",1468923292],
+    //            ["0:_","0:!",1468923292708929,"t",1468923292],
+    //            ["0:0:","",1468923308379491],
+    //            ["0:_","0:!",1468923292708929,"t",1468923292],
+    //            ["0:0:v","0",1468923308379491],
+    //            ["0:_","0:!",1468923292708929,"t",1468923292],
+    //            ["0:1:","",1468923311744298],
+    //            ["0:_","0:!",1468923292708929,"t",1468923292],
+    //            ["0:1:v","1",1468923311744298]]}
+    // ]
+
+    return seastar::async([] {
+        auto s = schema_builder("ks", "promoted_index_read")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("ck1", int32_type, column_kind::clustering_key)
+                .with_column("ck2", int32_type, column_kind::clustering_key)
+                .with_column("v", int32_type)
+                .build();
+
+        auto sst = make_lw_shared<sstable>("ks", "promoted_index_read", "tests/sstables/promoted_index_read", 1, sstables::sstable::version_types::ka, big);
+        sst->load().get0();
+
+        auto rd = sstable_reader(sst, s);
+        auto smopt = rd().get0();
+        BOOST_REQUIRE(smopt);
+
+        using kind = mutation_fragment::kind;
+        assert_that_stream(std::move(*smopt))
+                .produces(kind::range_tombstone, { 0 })
+                .produces(kind::clustering_row, { 0, 0 })
+                .produces(kind::clustering_row, { 0, 1 })
+                .produces_end_of_stream();
+    });
+}
