@@ -665,13 +665,16 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
     auto diff = difference(before, after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
 
     for (auto&& key : diff.entries_only_on_left) {
+        logger.info("Dropping keyspace {}", key);
         dropped.emplace(key);
     }
     for (auto&& key : diff.entries_only_on_right) {
         auto&& value = after[key];
+        logger.info("Creating keyspace {}", key);
         created.emplace_back(schema_result_value_type{key, std::move(value)});
     }
     for (auto&& key : diff.entries_differing) {
+        logger.info("Altering keyspace {}", key);
         altered.emplace_back(key);
     }
     return do_with(std::move(created), [&proxy, altered = std::move(altered)] (auto& created) mutable {
