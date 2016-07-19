@@ -249,6 +249,8 @@ public:
     }
 };
 
+std::ostream& operator<<(std::ostream&, mutation_fragment::kind);
+
 class position_in_partition {
     int _bound_weight = 0;
     stdx::optional<clustering_key_prefix> _ck;

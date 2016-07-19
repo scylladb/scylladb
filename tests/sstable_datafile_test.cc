@@ -41,6 +41,7 @@
 #include "range.hh"
 #include "partition_slice_builder.hh"
 #include "sstables/date_tiered_compaction_strategy.hh"
+#include "mutation_assertions.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -2596,43 +2597,25 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
 
         auto smopt = reader().get0();
         BOOST_REQUIRE(smopt);
-        auto& sm = *smopt;
         
         using kind = mutation_fragment::kind;
-        auto then_expect = [&] (kind k, std::vector<int> ck_elems) {
-            std::vector<bytes> ck_bytes;
-            for (auto&& e : ck_elems) {
-                ck_bytes.emplace_back(int32_type->decompose(e));
-            }
-            auto ck = clustering_key_prefix::from_exploded(*s, std::move(ck_bytes));
-
-            auto mfopt = sm().get0();
-            BOOST_REQUIRE(mfopt);
-            if (mfopt->mutation_fragment_kind() != k) {
-                abort();
-            }
-            BOOST_REQUIRE(mfopt->mutation_fragment_kind() == k);
-            BOOST_REQUIRE(ck_eq(mfopt->key(), ck));
-        };
-
-        then_expect(kind::range_tombstone, { 0 });
-        then_expect(kind::clustering_row, { 1 });
-        then_expect(kind::clustering_row, { 1, 1 });
-        then_expect(kind::clustering_row, { 1, 2 });
-        then_expect(kind::clustering_row, { 1, 2, 3 });
-        then_expect(kind::range_tombstone, { 1, 3 });
-        then_expect(kind::clustering_row, { 1, 3 });
-        then_expect(kind::clustering_row, { 1, 3, 4 });
-        then_expect(kind::clustering_row, { 1, 4 });
-        then_expect(kind::clustering_row, { 1, 4, 0 });
-        then_expect(kind::range_tombstone, { 2 });
-        then_expect(kind::range_tombstone, { 2, 1 });
-        then_expect(kind::range_tombstone, { 2, 1 });
-        then_expect(kind::range_tombstone, { 2, 2 });
-        then_expect(kind::range_tombstone, { 2, 2 });
-
-        auto mfopt = sm().get0();
-        BOOST_REQUIRE(!mfopt);
+        assert_that_stream(std::move(*smopt))
+            .produces(kind::range_tombstone, { 0 })
+            .produces(kind::clustering_row, { 1 })
+            .produces(kind::clustering_row, { 1, 1 })
+            .produces(kind::clustering_row, { 1, 2 })
+            .produces(kind::clustering_row, { 1, 2, 3 })
+            .produces(kind::range_tombstone, { 1, 3 })
+            .produces(kind::clustering_row, { 1, 3 })
+            .produces(kind::clustering_row, { 1, 3, 4 })
+            .produces(kind::clustering_row, { 1, 4 })
+            .produces(kind::clustering_row, { 1, 4, 0 })
+            .produces(kind::range_tombstone, { 2 })
+            .produces(kind::range_tombstone, { 2, 1 })
+            .produces(kind::range_tombstone, { 2, 1 })
+            .produces(kind::range_tombstone, { 2, 2 })
+            .produces(kind::range_tombstone, { 2, 2 })
+            .produces_end_of_stream();
 
         smopt = reader().get0();
         BOOST_REQUIRE(!smopt);
