@@ -1,54 +1,19 @@
-#!/bin/sh
+#!/usr/bin/env python3
+import os
+import scyllasetup
+import logging
+import commandlineparser
 
- . /etc/sysconfig/scylla-server
+logging.basicConfig(filename="/start-scylla.log", level=logging.DEBUG, format="%(message)s")
 
-CPUSET=""
-if [ x"$SCYLLA_CPU_SET" != "x" ]; then
-	CPUSET="--cpuset $SCYLLA_CPU_SET"
-fi
-
-if [ "$SCYLLA_PRODUCTION" == "true" ]; then
-	DEV_MODE=""
-	if [ ! -f /var/lib/scylla/.io_setup_done ]; then
-		DATA_DIR=`/usr/lib/scylla/scylla_config_get.py --config $SCYLLA_CONF/scylla.yaml --get data_file_directories|head -n1`
-		iotune --evaluation-directory $DATA_DIR --format envfile --options-file /var/lib/scylla/io.conf $CPUSET --timeout 600
-		if [ $? -ne 0 ]; then
-			echo "/var/lib/scylla did not pass validation tests, it may not be on XFS and/or has limited disk space."
-			echo "This is a non-supported setup, please bind mount an XFS volume."
-			exit 1
-		fi
-		touch /var/lib/scylla/.io_setup_done
-	fi
-	source /var/lib/scylla/io.conf
-else
-	DEV_MODE="--developer-mode true"
-fi
-
-IP=$(hostname -i)
-
-if [ x"$SCYLLA_SEEDS" != "x" ];then
-	SEEDS="$SCYLLA_SEEDS"
-else
-	SEEDS="$IP"
-fi
-
-sed -e "s/seeds:.*/seeds: $SEEDS/g" /var/lib/scylla/conf/scylla.yaml > $HOME/scylla.yaml
-
-if [ x"$SCYLLA_BROADCAST_ADDRESS" != "x" ];then
-	sed -i "s/.*broadcast_address:.*/broadcast_address: $SCYLLA_BROADCAST_ADDRESS/g" $HOME/scylla.yaml
-fi
-
-/usr/bin/scylla --log-to-syslog 1 \
-                --log-to-stdout 0 \
-                $DEV_MODE \
-                $SEASTAR_IO \
-                $CPUSET \
-                --default-log-level info \
-                --options-file $HOME/scylla.yaml \
-                --listen-address $IP \
-                --rpc-address $IP \
-                --network-stack posix &> /dev/null &
-
-source /etc/sysconfig/scylla-jmx
-export SCYLLA_HOME SCYLLA_CONF
-exec /usr/lib/scylla/jmx/scylla-jmx -l /usr/lib/scylla/jmx &> /dev/null &
+try:
+    arguments = commandlineparser.parse()
+    setup = scyllasetup.ScyllaSetup(arguments)
+    setup.developerMode()
+    setup.cpuSet()
+    setup.io()
+    setup.scyllaYAML()
+    setup.enableServices()
+    os.execl("/usr/sbin/init", "/usr/sbin/init")
+except:
+    logging.exception('failed!')
