@@ -49,6 +49,28 @@ class intrusive_list:
     def __bool__(self):
         return self.__nonzero__()
 
+class std_array:
+    def __init__(self, ref):
+        self.ref = ref
+
+    def __len__(self):
+        elems = self.ref['_M_elems']
+        return elems.type.sizeof / elems[0].type.sizeof
+
+    def __iter__(self):
+        elems = self.ref['_M_elems']
+        count = self.__len__()
+        i = 0
+        while i < count:
+            yield elems[i]
+            i += 1
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__nonzero__()
+
 def uint64_t(val):
     val = int(val)
     if val < 0:
