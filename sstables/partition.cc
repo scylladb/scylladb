@@ -589,7 +589,7 @@ class sstable_streamed_mutation : public streamed_mutation::impl {
     position_in_partition::less_compare _cmp;
     position_in_partition::equal_compare _eq;
 private:
-    future<mutation_fragment_opt> read_next() {
+    future<stdx::optional<mutation_fragment_opt>> read_next() {
         // Because of #1203 we may encounter sstables with range tombstones
         // placed earler than expected.
         if (_next_candidate || (_current_candidate && _finished)) {
@@ -599,11 +599,11 @@ private:
                 mf = move_and_disengage(_current_candidate);
                 _current_candidate = move_and_disengage(_next_candidate);
             }
-            return make_ready_future<mutation_fragment_opt>(std::move(mf));
+            return make_ready_future<stdx::optional<mutation_fragment_opt>>(std::move(mf));
         }
         if (_finished) {
             // No need to update _last_position here. We've already read everything from the sstable.
-            return make_ready_future<mutation_fragment_opt>(_range_tombstones.get_next());
+            return make_ready_future<stdx::optional<mutation_fragment_opt>>(_range_tombstones.get_next());
         }
         return _context.read().then([this] {
             _finished = _consumer.get_and_reset_is_mutation_end();
@@ -631,7 +631,7 @@ private:
                     }
                 }
             }
-            return read_next();
+            return stdx::optional<mutation_fragment_opt>();
         });
     }
 public:
@@ -640,7 +640,9 @@ public:
 
     virtual future<> fill_buffer() final override {
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
-            return read_next().then([this] (mutation_fragment_opt&& mfopt) {
+            return repeat_until_value([this] {
+                return read_next();
+            }).then([this] (mutation_fragment_opt&& mfopt) {
                 if (!mfopt) {
                     _end_of_stream = true;
                 } else {
