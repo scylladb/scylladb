@@ -191,11 +191,12 @@ class scylla_ptr(gdb.Command):
             msg += ', small (size <= %d)' % object_size
             offset_in_object = offset_in_span % object_size
             free_object_ptr = gdb.lookup_type('void').pointer().pointer()
+            char_ptr = gdb.lookup_type('char').pointer()
             # pool's free list
             next_free = pool['_free']
             free = False
             while next_free:
-                if ptr >= next_free and ptr < next_free + object_size:
+                if ptr >= next_free and ptr < next_free.reinterpret_cast(char_ptr) + object_size:
                     free = True
                     break
                 next_free = next_free.reinterpret_cast(free_object_ptr).dereference()
@@ -203,7 +204,7 @@ class scylla_ptr(gdb.Command):
                 # span's free list
                 next_free = first_page_in_span['freelist']
                 while next_free:
-                    if ptr >= next_free and ptr < next_free + object_size:
+                    if ptr >= next_free and ptr < next_free.reinterpret_cast(char_ptr) + object_size:
                         free = True
                         break
                     next_free = next_free.reinterpret_cast(free_object_ptr).dereference()
