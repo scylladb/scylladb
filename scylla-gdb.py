@@ -1,5 +1,54 @@
 import gdb, gdb.printing, uuid
 
+def template_arguments(gdb_type):
+    n = 0
+    while True:
+        try:
+            yield gdb_type.template_argument(n)
+            n += 1
+        except RuntimeError:
+            return
+
+def get_template_arg_with_prefix(gdb_type, prefix):
+    for arg in template_arguments(gdb_type):
+        if str(arg).startswith(prefix):
+            return arg
+
+def get_base_class_offset(gdb_type, base_class_name):
+    name_pattern = re.escape(base_class_name) + "(<.*>)?$"
+    for field in gdb_type.fields():
+        if field.is_base_class and re.match(name_pattern, field.name):
+            return field.bitpos / 8
+
+class intrusive_list:
+    size_t = gdb.lookup_type('size_t')
+
+    def __init__(self, list_ref):
+        list_type = list_ref.type.strip_typedefs()
+        self.node_type = list_type.template_argument(0)
+        self.root = list_ref['data_']['root_plus_size_']['root_']
+
+        member_hook = get_template_arg_with_prefix(list_type, "boost::intrusive::member_hook")
+        if member_hook:
+            self.link_offset = member_hook.template_argument(2).cast(self.size_t)
+        else:
+            self.link_offset = get_base_class_offset(self.node_type, "boost::intrusive::list_base_hook")
+            if self.link_offset == None:
+                raise Exception("Class does not extend list_base_hook: " + str(self.node_type))
+
+    def __iter__(self):
+        hook = self.root['next_']
+        while hook != self.root.address:
+            node_ptr = hook.cast(self.size_t) - self.link_offset
+            yield node_ptr.cast(self.node_type.pointer()).dereference()
+            hook = hook['next_']
+
+    def __nonzero__(self):
+        return self.root['next_'] != self.root.address
+
+    def __bool__(self):
+        return self.__nonzero__()
+
 def uint64_t(val):
     val = int(val)
     if val < 0:
