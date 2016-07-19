@@ -378,6 +378,21 @@ class scylla_apply(gdb.Command):
             gdb.write("\nShard %d: \n\n" % (r['_id']))
             gdb.execute(arg)
 
+class scylla_shard(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla shard', gdb.COMMAND_USER, gdb.COMPLETE_NONE)
+    def invoke(self, arg, from_tty):
+        id = int(arg)
+        orig = gdb.selected_thread()
+        for t in gdb.selected_inferior().threads():
+            t.switch()
+            reactor = gdb.parse_and_eval('local_engine')
+            if reactor and reactor['_id'] == id:
+                gdb.write('Switched to thread %d\n' % t.num)
+                return
+        orig.switch()
+        gdb.write('Error: Shard %d not found\n' % (id))
+
 scylla()
 scylla_databases()
 scylla_keyspaces()
@@ -388,3 +403,4 @@ scylla_lsa()
 scylla_lsa_zones()
 scylla_timers()
 scylla_apply()
+scylla_shard()
