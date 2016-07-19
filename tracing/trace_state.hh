@@ -42,6 +42,7 @@
 
 #include <deque>
 #include <unordered_set>
+#include <seastar/util/lazy.hh>
 #include "mutation.hh"
 #include "utils/UUID_gen.hh"
 #include "tracing/tracing.hh"
@@ -150,6 +151,11 @@ private:
         _started_at = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         _request = std::move(request);
         _client = std::move(client);
+    }
+
+    template <typename Func>
+    void begin(const seastar::lazy_eval<Func>& lf, gms::inet_address client) {
+        begin(lf(), client);
     }
 
     /**
