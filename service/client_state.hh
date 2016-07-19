@@ -103,8 +103,8 @@ public:
     struct internal_tag {};
     struct external_tag {};
 
-    void create_tracing_session(tracing::trace_type type, bool flush_on_close) {
-        _trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(type, flush_on_close);
+    void create_tracing_session(tracing::trace_type type, bool write_on_close) {
+        _trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(type, write_on_close);
         // store a session ID separately because its lifetime is not always
         // coupled with the trace_state because the trace_state may already be
         // destroyed when we need a session ID for a response to a client (e.g.
@@ -114,7 +114,11 @@ public:
         }
     }
 
-    tracing::trace_state_ptr& trace_state_ptr() {
+    tracing::trace_state_ptr& get_trace_state() {
+        return _trace_state_ptr;
+    }
+
+    const tracing::trace_state_ptr& get_trace_state() const {
         return _trace_state_ptr;
     }
 

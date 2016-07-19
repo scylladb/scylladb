@@ -186,7 +186,7 @@ public:
         , slice(std::move(slice))
         , row_limit(row_limit)
         , timestamp(now)
-        , trace_info(ti)
+        , trace_info(std::move(ti))
         , partition_limit(partition_limit)
         , read_timestamp(rt)
     { }

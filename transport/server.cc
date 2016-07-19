@@ -40,6 +40,7 @@
 #include "net/byteorder.hh"
 #include <seastar/core/scollectd.hh>
 #include <seastar/net/byteorder.hh>
+#include <seastar/util/lazy.hh>
 
 #include "enum_set.hh"
 #include "service/query_state.hh"
@@ -464,8 +465,11 @@ future<response_type>
     auto cqlop = static_cast<cql_binary_opcode>(op);
 
     if (tracing_request != tracing_request_type::not_requested) {
-        if (cqlop == cql_binary_opcode::QUERY) {
-            client_state.create_tracing_session(tracing::trace_type::QUERY, tracing_request == tracing_request_type::flush_on_close);
+        if (cqlop == cql_binary_opcode::QUERY ||
+            cqlop == cql_binary_opcode::PREPARE ||
+            cqlop == cql_binary_opcode::EXECUTE ||
+            cqlop == cql_binary_opcode::BATCH) {
+            client_state.create_tracing_session(tracing::trace_type::QUERY, tracing_request == tracing_request_type::write_on_close);
         }
     }
 
@@ -620,9 +624,9 @@ future<> cql_server::connection::process_request() {
         if (f.flags & cql_frame_flags::tracing) {
             // If tracing is requested for a specific CQL command - flush
             // tracing info right after the command is over.
-            tracing_requested = tracing_request_type::flush_on_close;
+            tracing_requested = tracing_request_type::write_on_close;
         } else if (tracing::tracing::get_local_tracing_instance().trace_next_query()) {
-            tracing_requested = tracing_request_type::no_flush_on_close;
+            tracing_requested = tracing_request_type::no_write_on_close;
         }
 
         auto op = f.opcode;
@@ -755,12 +759,19 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, byt
     auto query = read_long_string_view(buf);
     auto q_state = std::make_unique<cql_query_state>(client_state);
     auto& query_state = q_state->query_state;
-    query_state.begin_tracing(query.to_string(), query_state.get_client_state().get_client_address(), {});
     q_state->options = read_options(buf);
-    query_state.trace("Done reading options");
     auto& options = *q_state->options;
+
+    tracing::set_page_size(query_state.get_trace_state(), options.get_page_size());
+    tracing::set_consistency_level(query_state.get_trace_state(), options.get_consistency());
+    tracing::set_optional_serial_consistency_level(query_state.get_trace_state(), options.get_serial_consistency());
+    tracing::set_query(query_state.get_trace_state(), query.to_string());
+    tracing::set_user_timestamp(query_state.get_trace_state(), options.get_specific_options().timestamp);
+
+    tracing::begin(query_state.get_trace_state(), "Execute CQL3 query", query_state.get_client_state().get_client_address());
+
     return _server._query_processor.local().process(query, query_state, options).then([this, stream, buf = std::move(buf), &query_state] (auto msg) {
-         query_state.trace("Done processing - preparing a result");
+         tracing::trace(query_state.get_trace_state(), "Done processing - preparing a result");
          return this->make_result(stream, msg);
     }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
         /* Keep q_state alive. */
@@ -771,6 +782,10 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, byt
 future<response_type> cql_server::connection::process_prepare(uint16_t stream, bytes_view buf, service::client_state client_state_)
 {
     auto query = read_long_string_view(buf).to_string();
+
+    tracing::set_query(client_state_.get_trace_state(), query);
+    tracing::begin(client_state_.get_trace_state(), "Preparing CQL3 query", client_state_.get_client_address());
+
     auto cpu_id = engine().cpu_id();
     auto cpus = boost::irange(0u, smp::count);
     auto client_state = std::make_unique<service::client_state>(client_state_);
@@ -785,7 +800,11 @@ future<response_type> cql_server::connection::process_prepare(uint16_t stream, b
             return make_ready_future<>();
         }
     }).then([this, query, stream, &cs] {
-        return _server._query_processor.local().prepare(query, cs, false).then([this, stream] (auto msg) {
+        tracing::trace(cs.get_trace_state(), "Done preparing on remote shards");
+        return _server._query_processor.local().prepare(query, cs, false).then([this, stream, &cs] (auto msg) {
+            tracing::trace(cs.get_trace_state(), "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&msg] {
+                return messages::result_message::prepared::cql::get_id(std::move(msg));
+            }));
             return this->make_result(stream, msg);
         });
     }).then([client_state = std::move(client_state)] (auto&& response) {
@@ -801,16 +820,30 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
     if (!prepared) {
         throw exceptions::prepared_query_not_found_exception(id);
     }
+
     auto q_state = std::make_unique<cql_query_state>(client_state);
     auto& query_state = q_state->query_state;
     q_state->options = read_options(buf);
     auto& options = *q_state->options;
     options.prepare(prepared->bound_names);
+
+    tracing::set_page_size(client_state.get_trace_state(), options.get_page_size());
+    tracing::set_consistency_level(client_state.get_trace_state(), options.get_consistency());
+    tracing::set_optional_serial_consistency_level(client_state.get_trace_state(), options.get_serial_consistency());
+    tracing::set_query(client_state.get_trace_state(), prepared->raw_cql_statement);
+
+    tracing::begin(client_state.get_trace_state(), seastar::value_of([&id] { return seastar::format("Execute CQL3 prepared query [{}]", id); }),
+                   client_state.get_client_address());
+
     auto stmt = prepared->statement;
+    tracing::trace(query_state.get_trace_state(), "Checking bounds");
     if (stmt->get_bound_terms() != options.get_values_count()) {
+        tracing::trace(query_state.get_trace_state(), "Invalid amount of bind variables: expected {:d} received {:d}", stmt->get_bound_terms(), options.get_values_count());
         throw exceptions::invalid_request_exception("Invalid amount of bind variables");
     }
-    return _server._query_processor.local().process_statement(stmt, query_state, options).then([this, stream, buf = std::move(buf)] (auto msg) {
+    tracing::trace(query_state.get_trace_state(), "Processing a statement");
+    return _server._query_processor.local().process_statement(stmt, query_state, options).then([this, stream, buf = std::move(buf), &query_state] (auto msg) {
+        tracing::trace(query_state.get_trace_state(), "Done processing - preparing a result");
         return this->make_result(stream, msg);
     }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
         /* Keep q_state alive. */
@@ -833,6 +866,8 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
 
     modifications.reserve(n);
     values.reserve(n);
+
+    tracing::begin(client_state.get_trace_state(), "Execute batch of CQL3 queries", client_state.get_client_address());
 
     for ([[gnu::unused]] auto i : boost::irange(0u, n)) {
         const auto kind = read_byte(buf);
@@ -881,6 +916,10 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
     // #563. CQL v2 encodes query_options in v1 format for batch requests.
     q_state->options = std::make_unique<cql3::query_options>(std::move(*read_options(buf, _version < 3 ? 1 : _version)), std::move(values));
     auto& options = *q_state->options;
+
+    tracing::set_consistency_level(client_state.get_trace_state(), options.get_consistency());
+    tracing::set_optional_serial_consistency_level(client_state.get_trace_state(), options.get_serial_consistency());
+    tracing::trace(client_state.get_trace_state(), "Creating a batch statement");
 
     auto batch = ::make_shared<cql3::statements::batch_statement>(-1, cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none());
     return _server._query_processor.local().process_batch(batch, query_state, options).then([this, stream, batch] (auto msg) {

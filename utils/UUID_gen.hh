@@ -104,6 +104,20 @@ public:
         return UUID(create_time(from_unix_timestamp(when)), clock_seq_and_node);
     }
 
+    /**
+     * Creates a type 1 UUID (time-based UUID) with the wall clock time point @param tp.
+     *
+     * @return a UUID instance
+     */
+    static UUID get_time_UUID(std::chrono::system_clock::time_point tp)
+    {
+        using namespace std::chrono;
+        // "nanos" needs to be in 100ns intervals since the adoption of the Gregorian calendar in the West.
+        uint64_t nanos = duration_cast<nanoseconds>(tp.time_since_epoch()).count() / 100;
+        nanos -= (10000ULL * START_EPOCH);
+        return UUID(create_time(nanos), clock_seq_and_node);
+    }
+
     static UUID get_time_UUID(int64_t when, int64_t clock_seq_and_node)
     {
         return UUID(create_time(from_unix_timestamp(when)), clock_seq_and_node);

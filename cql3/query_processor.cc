@@ -115,7 +115,7 @@ future<::shared_ptr<result_message>>
 query_processor::process(const sstring_view& query_string, service::query_state& query_state, query_options& options)
 {
     log.trace("process: \"{}\"", query_string);
-    query_state.trace("Parsing a statement");
+    tracing::trace(query_state.get_trace_state(), "Parsing a statement");
     auto p = get_statement(query_string, query_state.get_client_state());
     options.prepare(p->bound_names);
     auto cql_statement = p->statement;
@@ -128,7 +128,7 @@ query_processor::process(const sstring_view& query_string, service::query_state&
         if (!queryState.getClientState().isInternal)
             metrics.regularStatementsExecuted.inc();
 #endif
-    query_state.trace("Processing a statement");
+    tracing::trace(query_state.get_trace_state(), "Processing a statement");
     return process_statement(std::move(cql_statement), query_state, options);
 }
 
@@ -219,6 +219,7 @@ query_processor::store_prepared_statement(const std::experimental::string_view& 
                                                         statementSize,
                                                         MAX_CACHE_PREPARED_MEMORY));
 #endif
+    prepared->raw_cql_statement = query_string.data();
     if (for_thrift) {
         auto statement_id = compute_thrift_id(query_string, keyspace);
         _thrift_prepared_statements.emplace(statement_id, prepared);

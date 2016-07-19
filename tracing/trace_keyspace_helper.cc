@@ -52,8 +52,9 @@ const sstring trace_keyspace_helper::KEYSPACE_NAME("system_traces");
 const sstring trace_keyspace_helper::SESSIONS("sessions");
 const sstring trace_keyspace_helper::EVENTS("events");
 
-trace_keyspace_helper::trace_keyspace_helper()
-            : _registrations{
+trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
+            : i_tracing_backend_helper(tr)
+            , _registrations{
         scollectd::add_polled_metric(scollectd::type_instance_id("tracing_keyspace_helper"
                         , scollectd::per_cpu_plugin_instance
                         , "total_operations", "tracing_errors")
@@ -171,7 +172,7 @@ future<> trace_keyspace_helper::start() {
     }
 }
 
-void trace_keyspace_helper::store_session_record(const utils::UUID& session_id,
+void trace_keyspace_helper::write_session_record(const utils::UUID& session_id,
                                                  gms::inet_address client,
                                                  std::unordered_map<sstring, sstring> parameters,
                                                  sstring request,
@@ -188,13 +189,14 @@ void trace_keyspace_helper::store_session_record(const utils::UUID& session_id,
     }
 }
 
-void trace_keyspace_helper::store_event_record(const utils::UUID& session_id,
+void trace_keyspace_helper::write_event_record(const utils::UUID& session_id,
                                                sstring message,
                                                int elapsed,
-                                               gc_clock::duration ttl) {
+                                               gc_clock::duration ttl,
+                                               wall_clock::time_point event_time_point) {
     try {
-        _mutation_makers[session_id].second.makers.emplace_back([message = std::move(message), elapsed, ttl, this] (const utils::UUID& session_id) {
-            return make_event_mutation(session_id, message, elapsed, tracing::get_local_tracing_instance().get_thread_name(), ttl);
+        _mutation_makers[session_id].second.makers.emplace_back([message = std::move(message), elapsed, ttl, event_time_point, this] (const utils::UUID& session_id) mutable {
+            return make_event_mutation(session_id, message, elapsed, _local_tracing.get_thread_name(), ttl, event_time_point);
         });
     } catch (...) {
         // OOM: ignore
@@ -241,14 +243,15 @@ mutation trace_keyspace_helper::make_event_mutation(const utils::UUID& session_i
                                                     const sstring& message,
                                                     int elapsed,
                                                     const sstring& thread_name,
-                                                    gc_clock::duration ttl) {
+                                                    gc_clock::duration ttl,
+                                                    wall_clock::time_point event_time_point) {
     schema_ptr schema = get_schema_ptr_or_create(_events_id, EVENTS, _events_create_cql,
                                                  [this] (const schema_ptr& s) { return cache_events_table_handles(s); });
 
     auto key = partition_key::from_singular(*schema, session_id);
     auto timestamp = api::new_timestamp();
     mutation m(key, schema);
-    auto& cells = m.partition().clustered_row(clustering_key::from_singular(*schema, utils::UUID_gen::get_time_UUID())).cells();
+    auto& cells = m.partition().clustered_row(clustering_key::from_singular(*schema, utils::UUID_gen::get_time_UUID(make_monotonic_UUID_tp(event_time_point)))).cells();
 
     cells.apply(*_activity_column, atomic_cell::make_live(timestamp, utf8_type->decompose(message), ttl));
     cells.apply(*_source_column, atomic_cell::make_live(timestamp, inet_addr_type->decompose(utils::fb_utilities::get_broadcast_address().addr()), ttl));
@@ -263,29 +266,33 @@ mutation trace_keyspace_helper::make_event_mutation(const utils::UUID& session_i
 future<> trace_keyspace_helper::flush_one_session_mutations(utils::UUID session_id, std::pair<mutation_maker, events_mutation_makers>& mutation_makers) {
     return make_ready_future<>().then([this, session_id, events_makers = std::move(mutation_makers.second.makers)] {
         if (events_makers.size()) {
+            // Reset the "monotinic time point" state machine since it's
+            // relevant in a context of a single tracing session only. The
+            // events from different sessions will differ by a session UUID.
+            reset_monotonic_tp();
             logger.debug("{}: events number is {}", session_id, events_makers.size());
             mutation m((*events_makers.begin())(session_id));
             std::for_each(std::next(events_makers.begin()), events_makers.end(), [&m, &session_id] (const mutation_maker& maker) mutable { m.apply(maker(session_id)); });
-            return service::get_local_storage_proxy().mutate({std::move(m)}, db::consistency_level::ANY);
+            return service::get_local_storage_proxy().mutate({std::move(m)}, db::consistency_level::ANY, nullptr);
         } else {
             return make_ready_future<>();
         }
     }).then([session_id = std::move(session_id), session_maker = std::move(mutation_makers.first)] {
         if (session_maker) {
             logger.debug("{}: storing a session event", session_id);
-            return service::get_local_storage_proxy().mutate({session_maker(session_id)}, db::consistency_level::ANY);
+            return service::get_local_storage_proxy().mutate({session_maker(session_id)}, db::consistency_level::ANY, nullptr);
         } else {
             return make_ready_future<>();
         }
     });
 }
 
-void trace_keyspace_helper::flush() {
+void trace_keyspace_helper::kick() {
     logger.debug("flushing {} sessions", _mutation_makers.size());
     parallel_for_each(_mutation_makers,[this](decltype(_mutation_makers)::value_type& uuid_mutation_makers) {
         return with_gate(_pending_writes, [this, &uuid_mutation_makers]  {
             logger.debug("{}: flushing traces", uuid_mutation_makers.first);
-            return this->flush_one_session_mutations(uuid_mutation_makers.first, uuid_mutation_makers.second).finally([] { tracing::get_local_tracing_instance().flush_complete(); });
+            return this->flush_one_session_mutations(uuid_mutation_makers.first, uuid_mutation_makers.second).finally([this] { _local_tracing.write_complete(); });
         }).handle_exception([this] (auto ep) {
             try {
                 ++_stats.tracing_errors;
@@ -308,7 +315,7 @@ void trace_keyspace_helper::flush() {
     _mutation_makers.clear();
 }
 
-using registry = class_registrator<i_tracing_backend_helper, trace_keyspace_helper>;
+using registry = class_registrator<i_tracing_backend_helper, trace_keyspace_helper, tracing&>;
 static registry registrator1("trace_keyspace_helper");
 
 }

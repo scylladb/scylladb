@@ -42,10 +42,47 @@
 #include "tracing/trace_state.hh"
 #include "tracing/trace_keyspace_helper.hh"
 #include "service/storage_proxy.hh"
+#include "to_string.hh"
+#include "timestamp.hh"
 
 namespace tracing {
 
-static logging::logger logger("keyspace_based_trace_state");
+static logging::logger logger("trace_state");
+
+std::unordered_map<sstring, sstring> trace_state::get_params() {
+    if (!_params_ptr) {
+        return {};
+    }
+
+    std::unordered_map<sstring, sstring> params_map;
+    params_values& vals = *_params_ptr;
+
+    if (vals.batchlog_endpoints) {
+        params_map.emplace("batch_endpoints", join(sstring(","),  *vals.batchlog_endpoints | boost::adaptors::transformed([](gms::inet_address ep) {return seastar::format("/{}", ep);})));
+    }
+
+    if (vals.cl) {
+        params_map.emplace("consistency_level", seastar::format("{}", *vals.cl));
+    }
+
+    if (vals.serial_cl) {
+        params_map.emplace("serial_consistency_level", seastar::format("{}", *vals.serial_cl));
+    }
+
+    if (vals.page_size) {
+        params_map.emplace("page_size", seastar::format("{:d}", *vals.page_size));
+    }
+
+    if (vals.query) {
+        params_map.emplace("query", *vals.query);
+    }
+
+    if (vals.user_timestamp) {
+        params_map.emplace("user_timestamp", seastar::format("{:d}", *vals.user_timestamp));
+    }
+
+    return params_map;
+}
 
 trace_state::~trace_state() {
     if (_tracing_began) {
@@ -60,17 +97,17 @@ trace_state::~trace_state() {
             // then do nothing - they will create a lot of session_record events
             // and we do want to know about it.
             ++_pending_trace_events;
-            tracing::get_local_tracing_instance().backend_helper().store_session_record(_session_id, _client, std::move(_params), std::move(_request), _started_at, _type, elapsed(), _ttl);
+            _local_backend.write_session_record(_session_id, _client, get_params(), std::move(_request), _started_at, _type, elapsed(), _ttl);
         }
 
-        tracing::get_local_tracing_instance().end_session();
+        _local_tracing_ptr->end_session();
 
-        if (_flush_on_close) {
-            tracing::get_local_tracing_instance().flush_pending_records();
+        if (_write_on_close) {
+            _local_tracing_ptr->write_pending_records();
         }
 
         // update some stats and get out...
-        auto& tracing_stats = tracing::get_local_tracing_instance().stats;
+        auto& tracing_stats = _local_tracing_ptr->stats;
 
         tracing_stats.trace_events_count += _pending_trace_events;
 

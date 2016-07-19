@@ -94,10 +94,12 @@ private:
         uint64_t bad_column_family_errors = 0;
     } _stats;
 
+    int64_t _last_event_nanos = 0;
+
     scollectd::registrations _registrations;
 
 public:
-    trace_keyspace_helper();
+    trace_keyspace_helper(tracing& tr);
     virtual ~trace_keyspace_helper() {}
 
     // Create keyspace and tables.
@@ -108,11 +110,11 @@ public:
     virtual future<> start() override;
 
     virtual future<> stop() override {
-        flush();
+        kick();
         return _pending_writes.close();
     };
 
-    virtual void store_session_record(const utils::UUID& session_id,
+    virtual void write_session_record(const utils::UUID& session_id,
                                       gms::inet_address client,
                                       std::unordered_map<sstring, sstring> parameters,
                                       sstring request,
@@ -121,13 +123,45 @@ public:
                                       int elapsed,
                                       gc_clock::duration ttl) override;
 
-    virtual void store_event_record(const utils::UUID& session_id,
+    virtual void write_event_record(const utils::UUID& session_id,
                                     sstring message,
                                     int elapsed,
-                                    gc_clock::duration ttl) override;
+                                    gc_clock::duration ttl,
+                                    wall_clock::time_point event_time_point) override;
 
 private:
-    virtual void flush() override;
+    /**
+     * Makes a monotonically increasing value in 100ns based on the given time stamp.
+     *
+     * If the amount of 100s of ns evaluated from the @param tp is equal to the
+     * value returned in the previouse call to get_next_nanos() (without a reset_monotonic_tp()
+     * call in between), increment it by one.
+     *
+     * @param tp the amount of time passed since the Epoch that will be used for the calculation.
+     *
+     * @return the monotonically increasing vlaue in 100s of ns based on the
+     * given time stamp.
+     */
+    wall_clock::time_point make_monotonic_UUID_tp(wall_clock::time_point tp) {
+        using namespace std::chrono;
+
+        auto tp_nanos = duration_cast<nanoseconds>(tp.time_since_epoch()).count() / 100;
+        if (tp_nanos > _last_event_nanos) {
+            _last_event_nanos = tp_nanos;
+            return tp;
+        } else {
+            return wall_clock::time_point(nanoseconds((++_last_event_nanos) * 100));
+        }
+    }
+
+    /**
+     * Reset the make_monotonic_tp() state machine.
+     */
+    void reset_monotonic_tp() {
+        _last_event_nanos = 0;
+    }
+
+    virtual void kick() override;
 
     /**
      * Tries to create a table with a given name and using the provided CQL
@@ -205,11 +239,24 @@ private:
                                    int elapsed,
                                    gc_clock::duration ttl);
 
+    /**
+     * Create a mutation for a new trace point record
+     *
+     * @param session_id tracing session ID
+     * @param message trace record message
+     * @param elapsed time elapsed since begin() till this trace point
+     * @param thread_name
+     * @param ttl
+     * @param event_time_stamp wall clock time point of this trace event
+     *
+     * @return the relevant mutation
+     */
     mutation make_event_mutation(const utils::UUID& session_id,
                                  const sstring& message,
                                  int elapsed,
                                  const sstring& thread_name,
-                                 gc_clock::duration ttl);
+                                 gc_clock::duration ttl,
+                                 wall_clock::time_point event_time_stamp);
 };
 
 struct bad_column_family : public std::exception {

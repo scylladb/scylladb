@@ -89,23 +89,30 @@ class trace_info {
 public:
     utils::UUID session_id;
     trace_type type;
-    bool flush_on_close;
+    bool write_on_close;
 
 public:
-    trace_info(utils::UUID sid, trace_type t, bool f_o_c)
+    trace_info(utils::UUID sid, trace_type t, bool w_o_c)
         : session_id(std::move(sid))
         , type(t)
-        , flush_on_close(f_o_c)
+        , write_on_close(w_o_c)
     { }
 };
 
 struct i_tracing_backend_helper {
+    using wall_clock = std::chrono::system_clock;
+
+protected:
+    tracing& _local_tracing;
+
+public:
+    i_tracing_backend_helper(tracing& tr) : _local_tracing(tr) {}
     virtual ~i_tracing_backend_helper() {}
     virtual future<> start() = 0;
     virtual future<> stop() = 0;
 
     /**
-     * Store a new tracing session record
+     * Write a new tracing session record
      *
      * @param session_id tracing session ID
      * @param client client IP
@@ -117,7 +124,7 @@ struct i_tracing_backend_helper {
      * @param elapsed number of microseconds this tracing session took
      * @param ttl TTL of a session record
      */
-    virtual void store_session_record(const utils::UUID& session_id,
+    virtual void write_session_record(const utils::UUID& session_id,
                                       gms::inet_address client,
                                       std::unordered_map<sstring, sstring> parameters,
                                       sstring request,
@@ -127,35 +134,37 @@ struct i_tracing_backend_helper {
                                       gc_clock::duration ttl) = 0;
 
     /**
-     * Store a new tracing event record
+     * Write a new tracing event record
      * @param session_id tracing session ID
      * @param message tracing message
      * @param elapsed number of microseconds passed since a beginning of a
      *                corresponding tracing session till this event
      * @param ttl TTL of the event record
+     * @param event_time_point time point when a record was taken
      */
-    virtual void store_event_record(const utils::UUID& session_id,
+    virtual void write_event_record(const utils::UUID& session_id,
                                     sstring message,
                                     int elapsed,
-                                    gc_clock::duration ttl) = 0;
+                                    gc_clock::duration ttl,
+                                    wall_clock::time_point event_time_point) = 0;
 
 private:
     /**
      * Commit all pending tracing records to the underlying storage.
-     * The implementation has to call tracing::tracing::flush_complete(nr) for
+     * The implementation has to call tracing::tracing::write_complete(nr) for
      * each "nr" completed records once they are written to the backend.
      */
-    virtual void flush() = 0;
+    virtual void kick() = 0;
 
     friend class tracing;
 };
 
 using trace_state_ptr = lw_shared_ptr<trace_state>;
 
-class tracing {
+class tracing : public seastar::async_sharded_service<tracing> {
 public:
-    static const gc_clock::duration flush_period;
-    static constexpr int max_pending_for_flush_sessions = 1000;
+    static const gc_clock::duration write_period;
+    static constexpr int max_pending_for_write_sessions = 1000;
     static constexpr int max_trace_events_per_session = 30;
     // Number of max threshold XXX hits when an info message is printed
     static constexpr int max_threshold_hits_warning_period = 10000;
@@ -164,13 +173,14 @@ public:
         uint64_t max_sessions_threshold_hits = 0;
         uint64_t max_traces_threshold_hits = 0;
         uint64_t trace_events_count = 0;
+        uint64_t trace_errors = 0;
     } stats;
 
 private:
     uint64_t _active_sessions = 0;
-    uint64_t _pending_for_flush_sessions = 0;
+    uint64_t _pending_for_write_sessions = 0;
     uint64_t _flushing_sessions = 0;
-    timer<lowres_clock> _flush_timer;
+    timer<lowres_clock> _write_timer;
     bool _down = false;
     std::unique_ptr<i_tracing_backend_helper> _tracing_backend_helper_ptr;
     sstring _thread_name;
@@ -210,20 +220,25 @@ public:
     /**
      * Waits until all pending tracing records are flushed to the backend an
      * shuts down the backend. The following calls to
-     * store_session_record()/store_event_record() methods of a backend instance
+     * write_session_record()/write_event_record() methods of a backend instance
      * should be a NOOP.
      *
      * @return a ready future when the shutdown is complete
      */
     future<> shutdown();
 
-    void flush_pending_records() {
-        _flushing_sessions += _pending_for_flush_sessions;
-        _pending_for_flush_sessions = 0;
-        _tracing_backend_helper_ptr->flush();
+    void write_pending_records() {
+        // if service is down - do nothing
+        if (_down) {
+            return;
+        }
+
+        _flushing_sessions += _pending_for_write_sessions;
+        _pending_for_write_sessions = 0;
+        _tracing_backend_helper_ptr->kick();
     }
 
-    void flush_complete(uint64_t nr = 1) {
+    void write_complete(uint64_t nr = 1) {
         if (nr > _flushing_sessions) {
             throw std::logic_error("completing more sessions than there are pending");
         }
@@ -234,18 +249,18 @@ public:
      * Create a new tracing session.
      *
      * @param type a tracing session type
-     * @param flush_on_close flush a backend before closing the session
+     * @param write_on_close flush a backend before closing the session
      * @param session_id a session ID to create a (secondary) session with
      *
      * @return tracing state handle
      */
-    trace_state_ptr create_session(trace_type type, bool flush_on_close, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt);
+    trace_state_ptr create_session(trace_type type, bool write_on_close, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt);
 
     void end_session() {
         --_active_sessions;
-        ++_pending_for_flush_sessions;
-        if (_pending_for_flush_sessions >= max_pending_for_flush_sessions) {
-            flush_pending_records();
+        ++_pending_for_write_sessions;
+        if (_pending_for_write_sessions >= max_pending_for_write_sessions) {
+            write_pending_records();
         }
     }
 
@@ -267,6 +282,6 @@ public:
     }
 
 private:
-    void flush_timer_callback();
+    void write_timer_callback();
 };
 }

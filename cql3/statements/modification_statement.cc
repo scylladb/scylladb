@@ -148,10 +148,10 @@ future<> modification_statement::check_access(const service::client_state& state
 }
 
 future<std::vector<mutation>>
-modification_statement::get_mutations(distributed<service::storage_proxy>& proxy, const query_options& options, bool local, int64_t now) {
+modification_statement::get_mutations(distributed<service::storage_proxy>& proxy, const query_options& options, bool local, int64_t now, tracing::trace_state_ptr trace_state) {
     auto keys = make_lw_shared(build_partition_keys(options));
     auto prefix = make_lw_shared(create_exploded_clustering_prefix(options));
-    return make_update_parameters(proxy, keys, prefix, options, local, now).then(
+    return make_update_parameters(proxy, keys, prefix, options, local, now, std::move(trace_state)).then(
             [this, keys, prefix, now] (auto params_ptr) {
                 std::vector<mutation> mutations;
                 mutations.reserve(keys->size());
@@ -171,8 +171,9 @@ modification_statement::make_update_parameters(
         lw_shared_ptr<exploded_clustering_prefix> prefix,
         const query_options& options,
         bool local,
-        int64_t now) {
-    return read_required_rows(proxy, std::move(keys), std::move(prefix), local, options.get_consistency()).then(
+        int64_t now,
+        tracing::trace_state_ptr trace_state) {
+    return read_required_rows(proxy, std::move(keys), std::move(prefix), local, options.get_consistency(), std::move(trace_state)).then(
             [this, &options, now] (auto rows) {
                 return make_ready_future<std::unique_ptr<update_parameters>>(
                         std::make_unique<update_parameters>(s, options,
@@ -255,7 +256,8 @@ modification_statement::read_required_rows(
         lw_shared_ptr<std::vector<partition_key>> keys,
         lw_shared_ptr<exploded_clustering_prefix> prefix,
         bool local,
-        db::consistency_level cl) {
+        db::consistency_level cl,
+        tracing::trace_state_ptr trace_state) {
     if (!requires_read()) {
         return make_ready_future<update_parameters::prefetched_rows_type>(
                 update_parameters::prefetched_rows_type{});
@@ -291,7 +293,7 @@ modification_statement::read_required_rows(
     }
     query::read_command cmd(s->id(), s->version(), ps, std::numeric_limits<uint32_t>::max());
     // FIXME: ignoring "local"
-    return proxy.local().query(s, make_lw_shared(std::move(cmd)), std::move(pr), cl).then([this, ps] (auto result) {
+    return proxy.local().query(s, make_lw_shared(std::move(cmd)), std::move(pr), cl, std::move(trace_state)).then([this, ps] (auto result) {
         return query::result_view::do_with(*result, [&] (query::result_view v) {
             auto prefetched_rows = update_parameters::prefetched_rows_type({update_parameters::prefetch_data(s)});
             v.consume(ps, prefetch_data_builder(s, prefetched_rows.value(), ps));
@@ -464,11 +466,12 @@ modification_statement::execute_without_condition(distributed<service::storage_p
         db::validate_for_write(s->ks_name(), cl);
     }
 
-    return get_mutations(proxy, options, false, options.get_timestamp(qs)).then([cl, &proxy] (auto mutations) {
+    return get_mutations(proxy, options, false, options.get_timestamp(qs), qs.get_trace_state()).then([cl, &proxy, &qs] (auto mutations) {
         if (mutations.empty()) {
             return now();
         }
-        return proxy.local().mutate_with_triggers(std::move(mutations), cl, false);
+
+        return proxy.local().mutate_with_triggers(std::move(mutations), cl, false, qs.get_trace_state());
     });
 }
 
@@ -505,7 +508,7 @@ modification_statement::execute_internal(distributed<service::storage_proxy>& pr
     if (has_conditions()) {
         throw exceptions::unsupported_operation_exception();
     }
-    return get_mutations(proxy, options, true, options.get_timestamp(qs)).then(
+    return get_mutations(proxy, options, true, options.get_timestamp(qs), qs.get_trace_state()).then(
             [&proxy] (auto mutations) {
                 return proxy.local().mutate_locally(std::move(mutations));
             }).then(

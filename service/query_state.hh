@@ -36,31 +36,15 @@ private:
 public:
     query_state(client_state client_state)
         : _client_state(client_state)
-        , _trace_state_ptr(_client_state.trace_state_ptr())
+        , _trace_state_ptr(_client_state.get_trace_state())
     { }
 
-    void begin_tracing(sstring request, gms::inet_address client, std::unordered_map<sstring, sstring> params) {
-        tracing::begin(_trace_state_ptr, std::move(request), client, std::move(params));
+    const tracing::trace_state_ptr& get_trace_state() const {
+        return _trace_state_ptr;
     }
 
-    bool is_tracing() const {
-        return (bool)_trace_state_ptr;
-    }
-
-    const utils::UUID& tracing_session_id() const {
-        return _trace_state_ptr->get_session_id();
-    }
-
-    tracing::trace_type trace_type() const {
-        return _trace_state_ptr->get_type();
-    }
-
-    bool flush_trace_on_close() const {
-        return _trace_state_ptr->get_flush_on_close();
-    }
-
-    void trace(const sstring& message) {
-        tracing::trace(_trace_state_ptr, std::move(message));
+    tracing::trace_state_ptr& get_trace_state() {
+        return _trace_state_ptr;
     }
 
     client_state& get_client_state() {

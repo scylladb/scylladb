@@ -167,7 +167,7 @@ private:
 
         auto ranges = _ranges;
         return get_local_storage_proxy().query(_schema, _cmd, std::move(ranges),
-                _options.get_consistency()).then(
+                _options.get_consistency(), _state.get_trace_state()).then(
                 [this, &builder, page_size, now](foreign_ptr<lw_shared_ptr<query::result>> results) {
                     handle_result(builder, std::move(results), page_size, now);
                 });
