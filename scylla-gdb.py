@@ -393,12 +393,20 @@ class scylla_shard(gdb.Command):
         orig.switch()
         gdb.write('Error: Shard %d not found\n' % (id))
 
+class scylla_mem_ranges(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla mem-ranges', gdb.COMMAND_USER, gdb.COMPLETE_NONE)
+    def invoke(self, arg, from_tty):
+        for t, start, total_mem in seastar_memory_layout():
+            gdb.write('0x%x +%d\n' % (start, total_mem))
+
 scylla()
 scylla_databases()
 scylla_keyspaces()
 scylla_column_families()
 scylla_memory()
 scylla_ptr()
+scylla_mem_ranges()
 scylla_lsa()
 scylla_lsa_zones()
 scylla_timers()
