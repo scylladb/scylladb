@@ -309,9 +309,7 @@ void trace_state::trace(sstring message) {
 template <typename... A>
 void trace_state::trace(const char* fmt, A&&... a) {
     try {
-        fmt::MemoryWriter out;
-        out.write(fmt, std::forward<A>(a)...);
-        trace(out.c_str());
+        trace(seastar::format(fmt, std::forward<A>(a)...));
     } catch (...) {
         // Bump up an error counter and ignore
         ++_local_tracing_ptr->stats.trace_errors;
