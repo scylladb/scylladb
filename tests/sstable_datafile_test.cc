@@ -2790,3 +2790,55 @@ SEASTAR_TEST_CASE(basic_date_tiered_strategy_test) {
 
     return make_ready_future<>();
 }
+
+SEASTAR_TEST_CASE(date_tiered_strategy_test_2) {
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
+    compaction_manager cm;
+    column_family::config cfg;
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm);
+
+    // deterministic timestamp for Fri, 01 Jan 2016 00:00:00 GMT.
+    auto tp = db_clock::from_time_t(1451606400);
+    int64_t timestamp = tp.time_since_epoch().count() * 1000; // in microseconds.
+
+    std::vector<sstables::shared_sstable> candidates;
+    int min_threshold = cf->schema()->min_compaction_threshold();
+
+    // add sstables that belong to same time window until min threshold is satisfied.
+    for (auto i = 1; i <= min_threshold; i++) {
+        auto sst = add_sstable_for_overlapping_test(cf, /*gen*/i, "a", "a",
+            build_stats(timestamp, timestamp, std::numeric_limits<int32_t>::max()));
+        candidates.push_back(sst);
+    }
+    // belongs to the time window
+    auto tp2 = tp + std::chrono::seconds(1800);
+    timestamp = tp2.time_since_epoch().count() * 1000;
+    auto sst = add_sstable_for_overlapping_test(cf, /*gen*/min_threshold + 1, "a", "a",
+        build_stats(timestamp, timestamp, std::numeric_limits<int32_t>::max()));
+    candidates.push_back(sst);
+
+    // doesn't belong to the time window above
+    auto tp3 = tp + std::chrono::seconds(4000);
+    timestamp = tp3.time_since_epoch().count() * 1000;
+    auto sst2 = add_sstable_for_overlapping_test(cf, /*gen*/min_threshold + 2, "a", "a",
+        build_stats(timestamp, timestamp, std::numeric_limits<int32_t>::max()));
+    candidates.push_back(sst2);
+
+    std::map<sstring, sstring> options;
+    // Use a 1-hour time window.
+    options.emplace(sstring("base_time_seconds"), sstring("3600"));
+
+    date_tiered_manifest manifest(options);
+    auto gc_before = gc_clock::time_point(std::chrono::seconds(0)); // disable gc before.
+    auto sstables = manifest.get_next_sstables(*cf, candidates, gc_before);
+    std::unordered_set<int64_t> gens;
+    for (auto sst : sstables) {
+        gens.insert(sst->generation());
+    }
+    BOOST_REQUIRE(sstables.size() == size_t(min_threshold + 1));
+    BOOST_REQUIRE(gens.count(min_threshold + 1));
+    BOOST_REQUIRE(!gens.count(min_threshold + 2));
+
+    return make_ready_future<>();
+}
