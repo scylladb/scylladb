@@ -288,7 +288,7 @@ future<> trace_keyspace_helper::flush_one_session_mutations(utils::UUID session_
 }
 
 void trace_keyspace_helper::kick() {
-    logger.debug("flushing {} sessions", _mutation_makers.size());
+    logger.trace("flushing {} sessions", _mutation_makers.size());
     parallel_for_each(_mutation_makers,[this](decltype(_mutation_makers)::value_type& uuid_mutation_makers) {
         return with_gate(_pending_writes, [this, &uuid_mutation_makers]  {
             logger.debug("{}: flushing traces", uuid_mutation_makers.first);

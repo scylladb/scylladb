@@ -142,7 +142,7 @@ void tracing::write_timer_callback() {
         return;
     }
 
-    logger.debug("Timer kicks in: {}", _pending_for_write_sessions ? "writing" : "not writing");
+    logger.trace("Timer kicks in: {}", _pending_for_write_sessions ? "writing" : "not writing");
     write_pending_records();
     _write_timer.arm(write_period);
 }
