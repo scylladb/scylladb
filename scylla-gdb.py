@@ -1,5 +1,76 @@
 import gdb, gdb.printing, uuid
 
+def template_arguments(gdb_type):
+    n = 0
+    while True:
+        try:
+            yield gdb_type.template_argument(n)
+            n += 1
+        except RuntimeError:
+            return
+
+def get_template_arg_with_prefix(gdb_type, prefix):
+    for arg in template_arguments(gdb_type):
+        if str(arg).startswith(prefix):
+            return arg
+
+def get_base_class_offset(gdb_type, base_class_name):
+    name_pattern = re.escape(base_class_name) + "(<.*>)?$"
+    for field in gdb_type.fields():
+        if field.is_base_class and re.match(name_pattern, field.name):
+            return field.bitpos / 8
+
+class intrusive_list:
+    size_t = gdb.lookup_type('size_t')
+
+    def __init__(self, list_ref):
+        list_type = list_ref.type.strip_typedefs()
+        self.node_type = list_type.template_argument(0)
+        self.root = list_ref['data_']['root_plus_size_']['root_']
+
+        member_hook = get_template_arg_with_prefix(list_type, "boost::intrusive::member_hook")
+        if member_hook:
+            self.link_offset = member_hook.template_argument(2).cast(self.size_t)
+        else:
+            self.link_offset = get_base_class_offset(self.node_type, "boost::intrusive::list_base_hook")
+            if self.link_offset == None:
+                raise Exception("Class does not extend list_base_hook: " + str(self.node_type))
+
+    def __iter__(self):
+        hook = self.root['next_']
+        while hook != self.root.address:
+            node_ptr = hook.cast(self.size_t) - self.link_offset
+            yield node_ptr.cast(self.node_type.pointer()).dereference()
+            hook = hook['next_']
+
+    def __nonzero__(self):
+        return self.root['next_'] != self.root.address
+
+    def __bool__(self):
+        return self.__nonzero__()
+
+class std_array:
+    def __init__(self, ref):
+        self.ref = ref
+
+    def __len__(self):
+        elems = self.ref['_M_elems']
+        return elems.type.sizeof / elems[0].type.sizeof
+
+    def __iter__(self):
+        elems = self.ref['_M_elems']
+        count = self.__len__()
+        i = 0
+        while i < count:
+            yield elems[i]
+            i += 1
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__nonzero__()
+
 def uint64_t(val):
     val = int(val)
     if val < 0:
@@ -277,11 +348,68 @@ class scylla_lsa_zones(gdb.Command):
                 .format(z_base=int(zone['_base']), z_size=int(zone['_segments']['_bits_count']),
                     z_used=int(zone['_used_segment_count'])));
 
+class scylla_timers(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla timers', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+    def invoke(self, arg, from_tty):
+        gdb.write('Timers:\n')
+        timer_set = gdb.parse_and_eval('local_engine->_timers')
+        for timer_list in std_array(timer_set['_buckets']):
+            for t in intrusive_list(timer_list):
+                gdb.write('(%s*) %s = %s\n' % (t.type, t.address, t))
+        timer_set = gdb.parse_and_eval('local_engine->_lowres_timers')
+        for timer_list in std_array(timer_set['_buckets']):
+            for t in intrusive_list(timer_list):
+                gdb.write('(%s*) %s = %s\n' % (t.type, t.address, t))
+
+def reactors():
+    orig = gdb.selected_thread()
+    for t in gdb.selected_inferior().threads():
+        t.switch()
+        reactor = gdb.parse_and_eval('local_engine')
+        if reactor:
+            yield reactor.dereference()
+    orig.switch()
+
+class scylla_apply(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla apply', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+    def invoke(self, arg, from_tty):
+        for r in reactors():
+            gdb.write("\nShard %d: \n\n" % (r['_id']))
+            gdb.execute(arg)
+
+class scylla_shard(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla shard', gdb.COMMAND_USER, gdb.COMPLETE_NONE)
+    def invoke(self, arg, from_tty):
+        id = int(arg)
+        orig = gdb.selected_thread()
+        for t in gdb.selected_inferior().threads():
+            t.switch()
+            reactor = gdb.parse_and_eval('local_engine')
+            if reactor and reactor['_id'] == id:
+                gdb.write('Switched to thread %d\n' % t.num)
+                return
+        orig.switch()
+        gdb.write('Error: Shard %d not found\n' % (id))
+
+class scylla_mem_ranges(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla mem-ranges', gdb.COMMAND_USER, gdb.COMPLETE_NONE)
+    def invoke(self, arg, from_tty):
+        for t, start, total_mem in seastar_memory_layout():
+            gdb.write('0x%x +%d\n' % (start, total_mem))
+
 scylla()
 scylla_databases()
 scylla_keyspaces()
 scylla_column_families()
 scylla_memory()
 scylla_ptr()
+scylla_mem_ranges()
 scylla_lsa()
 scylla_lsa_zones()
+scylla_timers()
+scylla_apply()
+scylla_shard()
