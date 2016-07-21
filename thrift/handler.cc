@@ -1041,7 +1041,7 @@ private:
             }
             cf_def.__set_comment(s->comment());
             cf_def.__set_read_repair_chance(s->read_repair_chance());
-            if (s->regular_columns_count()) {
+            if (!s->thrift().is_dynamic()) {
                 std::vector<ColumnDef> columns;
                 for (auto&& c : s->regular_columns()) {
                     ColumnDef c_def;
