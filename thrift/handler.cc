@@ -1189,18 +1189,11 @@ private:
             ks_def.durable_writes,
             std::move(cf_defs));
     }
-    static column_family& lookup_column_family(database& db, const sstring& ks_name, const sstring& cf_name) {
+    static schema_ptr lookup_schema(database& db, const sstring& ks_name, const sstring& cf_name) {
         if (ks_name.empty()) {
             throw make_exception<InvalidRequestException>("keyspace not set");
         }
-        try {
-            return db.find_column_family(ks_name, cf_name);
-        } catch (no_such_column_family&) {
-            throw make_exception<InvalidRequestException>("column family %s not found", cf_name);
-        }
-    }
-    static schema_ptr lookup_schema(database& db, const sstring& ks_name, const sstring& cf_name) {
-        return lookup_column_family(db, ks_name, cf_name).schema();
+        return db.find_schema(ks_name, cf_name);
     }
     static partition_key key_from_thrift(const schema& s, bytes_view k) {
         thrift_validation::validate_key(s, k);
