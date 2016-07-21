@@ -149,6 +149,7 @@ public:
 private:
     uint64_t _hits = 0;
     uint64_t _misses = 0;
+    uint64_t _uncached_wide_partitions = 0;
     uint64_t _insertions = 0;
     uint64_t _merges = 0;
     uint64_t _evictions = 0;
@@ -170,11 +171,13 @@ public:
     void on_merge();
     void on_hit();
     void on_miss();
+    void on_uncached_wide_partition();
     allocation_strategy& allocator();
     logalloc::region& region();
     const logalloc::region& region() const;
     uint64_t modification_count() const { return _modification_count; }
     uint64_t partitions() const { return _partitions; }
+    uint64_t uncached_wide_partitions() const { return _uncached_wide_partitions; }
 };
 
 // Returns a reference to shard-wide cache_tracker.
@@ -211,6 +214,7 @@ private:
     partitions_type _partitions; // Cached partitions are complete.
     mutation_source _underlying;
     key_source _underlying_keys;
+    uint64_t _max_cached_partition_size_in_bytes;
 
     // Synchronizes populating reads with updates of underlying data source to ensure that cache
     // remains consistent across flushes with the underlying data source.
@@ -231,6 +235,7 @@ private:
                                          query::clustering_key_filtering_context ck_filtering);
     void on_hit();
     void on_miss();
+    void on_uncached_wide_partition();
     void upgrade_entry(cache_entry&);
     void invalidate_locked(const dht::decorated_key&);
     void invalidate_unwrapped(const query::partition_range&);
@@ -238,7 +243,7 @@ private:
     static thread_local seastar::thread_scheduling_group _update_thread_scheduling_group;
 public:
     ~row_cache();
-    row_cache(schema_ptr, mutation_source underlying, key_source, cache_tracker&);
+    row_cache(schema_ptr, mutation_source underlying, key_source, cache_tracker&, uint64_t _max_cached_partition_size_in_bytes = 10 * 1024 * 1024);
     row_cache(row_cache&&) = default;
     row_cache(const row_cache&) = delete;
     row_cache& operator=(row_cache&&) = default;

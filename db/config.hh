@@ -369,6 +369,9 @@ public:
     val(reduce_cache_sizes_at, double, .85, Invalid,     \
             "When Java heap usage (after a full concurrent mark sweep (CMS) garbage collection) exceeds this percentage, Cassandra reduces the cache capacity to the fraction of the current size as specified by reduce_cache_capacity_to. To disable, set the value to 1.0."  \
     )   \
+    val(max_cached_partition_size_in_kb, uint64_t, 10240uLL, Used,     \
+            "Partitions with size greater than this value won't be cached."  \
+    )   \
     /* Disks settings */    \
     val(stream_throughput_outbound_megabits_per_sec, uint32_t, 400, Unused,     \
             "Throttles all outbound streaming file transfers on a node to the specified throughput. Cassandra does mostly sequential I/O when streaming data during bootstrap or repair, which can lead to saturating the network connection and degrading client (RPC) performance."  \

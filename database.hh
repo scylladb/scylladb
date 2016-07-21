@@ -316,6 +316,7 @@ public:
         ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
         restricted_mutation_reader_config read_concurrency_config;
         ::cf_stats* cf_stats = nullptr;
+        uint64_t max_cached_partition_size_in_bytes;
     };
     struct no_commitlog {};
     struct stats {
@@ -884,7 +885,7 @@ public:
      */
     locator::abstract_replication_strategy& get_replication_strategy();
     const locator::abstract_replication_strategy& get_replication_strategy() const;
-    column_family::config make_column_family_config(const schema& s) const;
+    column_family::config make_column_family_config(const schema& s, const db::config& db_config) const;
     future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
     void add_or_update_column_family(const schema_ptr& s) {
         _metadata->add_or_update_column_family(s);

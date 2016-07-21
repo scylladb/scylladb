@@ -127,7 +127,7 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog* cl
     , _streaming_memtables(_config.enable_disk_writes ? make_streaming_memtable_list() : make_memory_only_memtable_list())
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
     , _sstables(make_lw_shared(_compaction_strategy.make_sstable_set(_schema)))
-    , _cache(_schema, sstables_as_mutation_source(), sstables_as_key_source(), global_cache_tracker())
+    , _cache(_schema, sstables_as_mutation_source(), sstables_as_key_source(), global_cache_tracker(), _config.max_cached_partition_size_in_bytes)
     , _commitlog(cl)
     , _compaction_manager(compaction_manager)
     , _flush_queue(std::make_unique<memtable_flush_queue>())
@@ -1581,7 +1581,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
                 return parallel_for_each(tables.begin(), tables.end(), [this] (auto& t) {
                     auto s = t.second;
                     auto& ks = this->find_keyspace(s->ks_name());
-                    auto cfg = ks.make_column_family_config(*s);
+                    auto cfg = ks.make_column_family_config(*s, this->get_config());
                     this->add_column_family(s, std::move(cfg));
                     return ks.make_directory_for_column_family(s->cf_name(), s->id()).then([s] {});
                 });
@@ -1838,7 +1838,7 @@ void keyspace::update_from(::lw_shared_ptr<keyspace_metadata> ksm) {
 }
 
 column_family::config
-keyspace::make_column_family_config(const schema& s) const {
+keyspace::make_column_family_config(const schema& s, const db::config& db_config) const {
     column_family::config cfg;
     cfg.datadir = column_family_directory(s.cf_name(), s.id());
     cfg.enable_disk_reads = _config.enable_disk_reads;
@@ -1852,6 +1852,7 @@ keyspace::make_column_family_config(const schema& s) const {
     cfg.read_concurrency_config = _config.read_concurrency_config;
     cfg.cf_stats = _config.cf_stats;
     cfg.enable_incremental_backups = _config.enable_incremental_backups;
+    cfg.max_cached_partition_size_in_bytes = db_config.max_cached_partition_size_in_kb() * 1024;
 
     return cfg;
 }
