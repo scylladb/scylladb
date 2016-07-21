@@ -51,6 +51,7 @@
 #include <boost/range/adaptor/reversed.hpp>
 #include <boost/range/adaptor/indirected.hpp>
 #include "query-result-reader.hh"
+#include "thrift/server.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -123,23 +124,6 @@ with_cob(tcxx::function<void (const T& ret)>&& cob,
     }).then_wrapped([cob = std::move(cob), exn_cob = std::move(exn_cob)] (auto&& f) {
         try {
             cob(noexcept_movable<T>::unwrap(f.get0()));
-        } catch (...) {
-            delayed_exception_wrapper dew(std::current_exception());
-            exn_cob(&dew);
-        }
-    });
-}
-
-template <typename Func, typename T>
-void
-with_cob_dereference(tcxx::function<void (const T& ret)>&& cob,
-        tcxx::function<void (::apache::thrift::TDelayedException* _throw)>&& exn_cob,
-        Func&& func) {
-    using ptr_type = foreign_ptr<lw_shared_ptr<T>>;
-    // then_wrapped() terminates the fiber by calling one of the cob objects
-    futurize<ptr_type>::apply(func).then_wrapped([cob = std::move(cob), exn_cob = std::move(exn_cob)] (future<ptr_type> f) {
-        try {
-            cob(*f.get0());
         } catch (...) {
             delayed_exception_wrapper dew(std::current_exception());
             exn_cob(&dew);
@@ -637,7 +621,7 @@ public:
     }
 
     void describe_version(tcxx::function<void(std::string const& _return)> cob) {
-        cob("20.1.0");
+        cob(org::apache::cassandra::thrift_version);
     }
 
     void do_describe_ring(tcxx::function<void(std::vector<TokenRange>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace, bool local) {
@@ -1205,18 +1189,11 @@ private:
             ks_def.durable_writes,
             std::move(cf_defs));
     }
-    static column_family& lookup_column_family(database& db, const sstring& ks_name, const sstring& cf_name) {
+    static schema_ptr lookup_schema(database& db, const sstring& ks_name, const sstring& cf_name) {
         if (ks_name.empty()) {
             throw make_exception<InvalidRequestException>("keyspace not set");
         }
-        try {
-            return db.find_column_family(ks_name, cf_name);
-        } catch (no_such_column_family&) {
-            throw make_exception<InvalidRequestException>("column family %s not found", cf_name);
-        }
-    }
-    static schema_ptr lookup_schema(database& db, const sstring& ks_name, const sstring& cf_name) {
-        return lookup_column_family(db, ks_name, cf_name).schema();
+        return db.find_schema(ks_name, cf_name);
     }
     static partition_key key_from_thrift(const schema& s, bytes_view k) {
         thrift_validation::validate_key(s, k);
