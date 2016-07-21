@@ -46,7 +46,6 @@
 #include <algorithm>
 #include <vector>
 #include <iterator>
-#include <boost/algorithm/string/case_conv.hpp>
 #include "sstables.hh"
 #include "compaction.hh"
 #include "timestamp.hh"
@@ -98,7 +97,6 @@ public:
 
         auto tmp_value = get_value(options, TIMESTAMP_RESOLUTION_KEY);
         auto target_unit = tmp_value ? tmp_value.value() : DEFAULT_TIMESTAMP_RESOLUTION;
-        boost::to_upper(target_unit);
 
         tmp_value = get_value(options, MAX_SSTABLE_AGE_KEY);
         auto fractional_days = property_definitions::to_double(MAX_SSTABLE_AGE_KEY, tmp_value, DEFAULT_MAX_SSTABLE_AGE_DAYS);
