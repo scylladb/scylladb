@@ -23,7 +23,7 @@
 #include <cstdlib>
 
 #include <seastar/core/align.hh>
-#include <seastar/core/unaligned.hh>
+#include <seastar/core/byteorder.hh>
 #include <seastar/core/fstream.hh>
 
 #include "compress.hh"
@@ -272,8 +272,7 @@ public:
                 auto compressed_len = addr.chunk_len - 4;
                 // FIXME: Do not always calculate checksum - Cassandra has a
                 // probability (defaulting to 1.0, but still...)
-                uint32_t checksum = ntohl(*unaligned_cast<const uint32_t *>(
-                        buf.get() + compressed_len));
+                auto checksum = read_be<uint32_t>(buf.get() + compressed_len);
                 if (checksum != checksum_adler32(buf.get(), compressed_len)) {
                     throw std::runtime_error("compressed chunk failed checksum");
                 }

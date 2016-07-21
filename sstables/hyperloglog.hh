@@ -62,6 +62,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <algorithm>
+#include <seastar/core/byteorder.hh>
 #if 0
 #include "murmur3.h"
 #endif
@@ -191,7 +192,7 @@ public:
         temporary_buffer<uint8_t> bytes(s);
         size_t offset = 0;
         // write version
-        *unaligned_cast<int*>(bytes.get_write() + offset) = htonl(-version);
+        write_be<int32_t>(reinterpret_cast<char*>(bytes.get_write() + offset), -version);
         offset += sizeof(int);
 
         // write register width

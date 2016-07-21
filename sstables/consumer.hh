@@ -21,14 +21,14 @@
 
 #pragma once
 
-#include <net/byteorder.hh>
 #include "core/future.hh"
 #include "core/iostream.hh"
 #include "sstables/exceptions.hh"
+#include <seastar/core/byteorder.hh>
 
 template<typename T>
 static inline T consume_be(temporary_buffer<char>& p) {
-    T i = net::ntoh(*unaligned_cast<const T*>(p.get()));
+    T i = read_be<T>(p.get());
     p.trim_front(sizeof(T));
     return i;
 }

@@ -25,6 +25,7 @@
 #include "core/fstream.hh"
 #include "types.hh"
 #include "compress.hh"
+#include <seastar/core/byteorder.hh>
 
 namespace sstables {
 
@@ -173,7 +174,7 @@ public:
         _compression_metadata->update_full_checksum(per_chunk_checksum, len);
 
         // write checksum into buffer after compressed data.
-        *unaligned_cast<uint32_t*>(compressed.get_write() + len) = htonl(per_chunk_checksum);
+        write_be<uint32_t>(compressed.get_write() + len, per_chunk_checksum);
 
         compressed.trim(len + 4);
 
