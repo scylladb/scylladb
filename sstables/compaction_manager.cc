@@ -27,6 +27,83 @@
 
 static logging::logger cmlog("compaction_manager");
 
+class compacting_sstable_registration {
+    compaction_manager* _cm;
+    std::vector<sstables::shared_sstable> _compacting;
+public:
+    compacting_sstable_registration(compaction_manager* cm, std::vector<sstables::shared_sstable> compacting)
+        : _cm(cm)
+        , _compacting(std::move(compacting))
+    {
+        _cm->register_compacting_sstables(_compacting);
+    }
+
+    compacting_sstable_registration& operator=(const compacting_sstable_registration&) = delete;
+    compacting_sstable_registration(const compacting_sstable_registration&) = delete;
+
+    compacting_sstable_registration& operator=(compacting_sstable_registration&& other) noexcept {
+        if (this != &other) {
+            this->~compacting_sstable_registration();
+            new (this) compacting_sstable_registration(std::move(other));
+        }
+        return *this;
+    }
+
+    compacting_sstable_registration(compacting_sstable_registration&& other) noexcept
+        : _cm(other._cm)
+        , _compacting(std::move(other._compacting))
+    {
+        other._cm = nullptr;
+    }
+
+    ~compacting_sstable_registration() {
+        if (_cm) {
+            _cm->deregister_compacting_sstables(_compacting);
+        }
+    }
+};
+
+class compaction_weight_registration {
+    compaction_manager* _cm;
+    column_family* _cf;
+    int _weight;
+public:
+    compaction_weight_registration(compaction_manager* cm, column_family* cf, int weight)
+        : _cm(cm)
+        , _cf(cf)
+        , _weight(weight)
+    {
+        _cm->register_weight(_cf, _weight);
+    }
+
+    compaction_weight_registration& operator=(const compaction_weight_registration&) = delete;
+    compaction_weight_registration(const compaction_weight_registration&) = delete;
+
+    compaction_weight_registration& operator=(compaction_weight_registration&& other) noexcept {
+        if (this != &other) {
+            this->~compaction_weight_registration();
+            new (this) compaction_weight_registration(std::move(other));
+        }
+        return *this;
+    }
+
+    compaction_weight_registration(compaction_weight_registration&& other) noexcept
+        : _cm(other._cm)
+        , _cf(other._cf)
+        , _weight(other._weight)
+    {
+        other._cm = nullptr;
+        other._cf = nullptr;
+        other._weight = 0;
+    }
+
+    ~compaction_weight_registration() {
+        if (_cm) {
+            _cm->deregister_weight(_cf, _weight);
+        }
+    }
+};
+
 static inline uint64_t get_total_size(const std::vector<sstables::shared_sstable>& sstables) {
     uint64_t total_size = 0;
     for (auto& sst : sstables) {
@@ -83,10 +160,9 @@ int compaction_manager::trim_to_compact(column_family* cf, sstables::compaction_
     return weight;
 }
 
-bool compaction_manager::try_to_register_weight(column_family* cf, int weight, bool parallel_compaction) {
+bool compaction_manager::can_register_weight(column_family* cf, int weight, bool parallel_compaction) {
     auto it = _weight_tracker.find(cf);
     if (it == _weight_tracker.end()) {
-        _weight_tracker.insert({cf, {weight}});
         return true;
     }
     std::unordered_set<int>& s = it->second;
@@ -102,8 +178,16 @@ bool compaction_manager::try_to_register_weight(column_family* cf, int weight, b
         // with the weight of the compaction job.
         return false;
     }
-    s.insert(weight);
     return true;
+}
+
+void compaction_manager::register_weight(column_family* cf, int weight) {
+    auto it = _weight_tracker.find(cf);
+    if (it == _weight_tracker.end()) {
+        _weight_tracker.insert({cf, {weight}});
+    } else {
+        it->second.insert(weight);
+    }
 }
 
 void compaction_manager::deregister_weight(column_family* cf, int weight) {
@@ -282,23 +366,21 @@ void compaction_manager::submit(column_family* cf) {
         int weight = trim_to_compact(&cf, descriptor);
 
         // Stop compaction task immediately if strategy is satisfied or job cannot run in parallel.
-        if (descriptor.sstables.empty() || !try_to_register_weight(&cf, weight, cs.parallel_compaction())) {
+        if (descriptor.sstables.empty() || !can_register_weight(&cf, weight, cs.parallel_compaction())) {
             _stats.pending_tasks--;
             cmlog.debug("Refused compaction job ({} sstable(s)) of weight {} for {}.{}",
                 descriptor.sstables.size(), weight, cf.schema()->ks_name(), cf.schema()->cf_name());
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         }
-        std::vector<sstables::shared_sstable> compacting = descriptor.sstables;
-        register_compacting_sstables(compacting);
+        auto compacting = compacting_sstable_registration(this, descriptor.sstables);
+        auto c_weight = compaction_weight_registration(this, &cf, weight);
         cmlog.debug("Accepted compaction job ({} sstable(s)) of weight {} for {}.{}",
             descriptor.sstables.size(), weight, cf.schema()->ks_name(), cf.schema()->cf_name());
 
         _stats.pending_tasks--;
         _stats.active_tasks++;
         return cf.run_compaction(std::move(descriptor))
-                .then_wrapped([this, task, weight, compacting = std::move(compacting)] (future<> f) mutable {
-            deregister_compacting_sstables(compacting);
-            deregister_weight(task->compacting_cf, weight);
+                .then_wrapped([this, task, compacting = std::move(compacting), c_weight = std::move(c_weight)] (future<> f) mutable {
             _stats.active_tasks--;
 
             if (!can_proceed(task)) {
@@ -349,14 +431,12 @@ future<> compaction_manager::perform_cleanup(column_family* cf) {
         }
         column_family& cf = *task->compacting_cf;
         sstables::compaction_descriptor descriptor = sstables::compaction_descriptor(get_candidates(cf));
-        std::vector<sstables::shared_sstable> compacting = descriptor.sstables;
-        register_compacting_sstables(compacting);
+        auto compacting = compacting_sstable_registration(this, descriptor.sstables);
 
         _stats.pending_tasks--;
         _stats.active_tasks++;
         return cf.cleanup_sstables(std::move(descriptor))
                 .then_wrapped([this, task, compacting = std::move(compacting)] (future<> f) mutable {
-            deregister_compacting_sstables(compacting);
             _stats.active_tasks--;
             if (!can_proceed(task)) {
                 f.ignore_ready_future();

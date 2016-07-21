@@ -34,6 +34,8 @@
 #include "sstables/compaction.hh"
 
 class column_family;
+class compacting_sstable_registration;
+class compaction_weight_registration;
 
 // Compaction manager is a feature used to manage compaction jobs from multiple
 // column families pertaining to the same database.
@@ -77,7 +79,10 @@ private:
 
     // Return true if weight is not registered. If parallel_compaction is not
     // true, only one weight is allowed to be registered.
-    bool try_to_register_weight(column_family* cf, int weight, bool parallel_compaction);
+    bool can_register_weight(column_family* cf, int weight, bool parallel_compaction);
+    // Register weight for a column family. Do that only if can_register_weight()
+    // returned true.
+    void register_weight(column_family* cf, int weight);
     // Deregister weight for a column family.
     void deregister_weight(column_family* cf, int weight);
 
@@ -146,5 +151,8 @@ public:
 
     // Stops ongoing compaction of a given type.
     void stop_compaction(sstring type);
+
+    friend class compacting_sstable_registration;
+    friend class compaction_weight_registration;
 };
 
