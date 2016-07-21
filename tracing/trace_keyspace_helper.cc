@@ -73,7 +73,8 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                       "parameters map<text, text>,"
                                       "request text,"
                                       "started_at timestamp,"
-                                      "PRIMARY KEY ((session_id)))", KEYSPACE_NAME, SESSIONS);
+                                      "PRIMARY KEY ((session_id))) "
+                                      "WITH default_time_to_live = 86400", KEYSPACE_NAME, SESSIONS);
 
         _events_create_cql = sprint("CREATE TABLE %s.%s ("
                                     "session_id uuid,"
@@ -82,7 +83,8 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                     "source inet,"
                                     "source_elapsed int,"
                                     "thread text,"
-                                    "PRIMARY KEY ((session_id), event_id))", KEYSPACE_NAME, EVENTS);
+                                    "PRIMARY KEY ((session_id), event_id)) "
+                                    "WITH default_time_to_live = 86400", KEYSPACE_NAME, EVENTS);
 }
 
 future<> trace_keyspace_helper::setup_table(const sstring& name, const sstring& cql) const {
