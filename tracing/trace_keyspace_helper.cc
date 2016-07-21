@@ -270,7 +270,7 @@ future<> trace_keyspace_helper::flush_one_session_mutations(utils::UUID session_
             // relevant in a context of a single tracing session only. The
             // events from different sessions will differ by a session UUID.
             reset_monotonic_tp();
-            logger.debug("{}: events number is {}", session_id, events_makers.size());
+            logger.trace("{}: events number is {}", session_id, events_makers.size());
             mutation m((*events_makers.begin())(session_id));
             std::for_each(std::next(events_makers.begin()), events_makers.end(), [&m, &session_id] (const mutation_maker& maker) mutable { m.apply(maker(session_id)); });
             return service::get_local_storage_proxy().mutate({std::move(m)}, db::consistency_level::ANY, nullptr);
@@ -279,7 +279,7 @@ future<> trace_keyspace_helper::flush_one_session_mutations(utils::UUID session_
         }
     }).then([session_id = std::move(session_id), session_maker = std::move(mutation_makers.first)] {
         if (session_maker) {
-            logger.debug("{}: storing a session event", session_id);
+            logger.trace("{}: storing a session event", session_id);
             return service::get_local_storage_proxy().mutate({session_maker(session_id)}, db::consistency_level::ANY, nullptr);
         } else {
             return make_ready_future<>();
@@ -291,7 +291,7 @@ void trace_keyspace_helper::kick() {
     logger.trace("flushing {} sessions", _mutation_makers.size());
     parallel_for_each(_mutation_makers,[this](decltype(_mutation_makers)::value_type& uuid_mutation_makers) {
         return with_gate(_pending_writes, [this, &uuid_mutation_makers]  {
-            logger.debug("{}: flushing traces", uuid_mutation_makers.first);
+            logger.trace("{}: flushing traces", uuid_mutation_makers.first);
             return this->flush_one_session_mutations(uuid_mutation_makers.first, uuid_mutation_makers.second).finally([this] { _local_tracing.write_complete(); });
         }).handle_exception([this] (auto ep) {
             try {

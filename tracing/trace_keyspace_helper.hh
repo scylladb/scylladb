@@ -206,7 +206,7 @@ private:
      * @return a schema_ptr as requested
      */
     template <typename ColumnsHandlesChecker>
-    inline schema_ptr get_schema_ptr_or_create(utils::UUID& id, const sstring& table_name, const sstring& cql, ColumnsHandlesChecker check_and_cache) const;
+    schema_ptr get_schema_ptr_or_create(utils::UUID& id, const sstring& table_name, const sstring& cql, ColumnsHandlesChecker check_and_cache) const;
 
     /**
      * Cache definitions of a system_traces.sessions table: table ID and column

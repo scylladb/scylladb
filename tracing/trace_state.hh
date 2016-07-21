@@ -137,7 +137,7 @@ private:
      *
      * @return number of microseconds passed since the beginning of this session
      */
-    inline int elapsed();
+    int elapsed();
 
     /**
      * Initiates a tracing session.
@@ -256,8 +256,8 @@ private:
      *
      * @param msg trace message
      */
-    inline void trace(sstring msg);
-    inline void trace(const char* msg) {
+    void trace(sstring msg);
+    void trace(const char* msg) {
         trace(sstring(msg));
     }
 
@@ -277,7 +277,7 @@ private:
      * @param a positional parameters
      */
     template <typename... A>
-    inline void trace(const char* fmt, A&&... a);
+    void trace(const char* fmt, A&&... a);
 
     template <typename... A>
     friend void begin(const trace_state_ptr& p, A&&... a);
@@ -293,7 +293,7 @@ private:
     friend void set_user_timestamp(const trace_state_ptr& p, api::timestamp_type val);
 };
 
-void trace_state::trace(sstring message) {
+inline void trace_state::trace(sstring message) {
     if (!_tracing_began) {
         throw std::logic_error("trying to use a trace() before begin() for \"" + message + "\" tracepoint");
     }
@@ -309,16 +309,14 @@ void trace_state::trace(sstring message) {
 template <typename... A>
 void trace_state::trace(const char* fmt, A&&... a) {
     try {
-        fmt::MemoryWriter out;
-        out.write(fmt, std::forward<A>(a)...);
-        trace(out.c_str());
+        trace(seastar::format(fmt, std::forward<A>(a)...));
     } catch (...) {
         // Bump up an error counter and ignore
         ++_local_tracing_ptr->stats.trace_errors;
     }
 }
 
-int trace_state::elapsed() {
+inline int trace_state::elapsed() {
     using namespace std::chrono;
     std::atomic_signal_fence(std::memory_order::memory_order_seq_cst);
     auto elapsed = duration_cast<microseconds>(clock_type::now() - _start).count();
