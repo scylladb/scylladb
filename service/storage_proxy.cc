@@ -2128,10 +2128,13 @@ protected:
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->_stats.mutation_data_read_attempts.get_ep_stat(ep);
         if (is_me(ep)) {
+            tracing::trace(_trace_state, "read_mutation_data: querying locally");
             return _proxy->query_mutations_locally(_schema, cmd, _partition_range);
         } else {
             auto& ms = net::get_local_messaging_service();
-            return ms.send_read_mutation_data(net::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this](reconcilable_result&& result) {
+            tracing::trace(_trace_state, "read_mutation_data: sending a message to /{}", ep);
+            return ms.send_read_mutation_data(net::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this, ep](reconcilable_result&& result) {
+                    tracing::trace(_trace_state, "read_mutation_data: got response from /{}", ep);
                     return make_foreign(::make_lw_shared<reconcilable_result>(std::move(result)));
             });
         }
@@ -2139,10 +2142,13 @@ protected:
     future<foreign_ptr<lw_shared_ptr<query::result>>> make_data_request(gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->_stats.data_read_attempts.get_ep_stat(ep);
         if (is_me(ep)) {
+            tracing::trace(_trace_state, "read_data: querying locally");
             return _proxy->query_singular_local(_schema, _cmd, _partition_range);
         } else {
             auto& ms = net::get_local_messaging_service();
-            return ms.send_read_data(net::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range).then([this](query::result&& result) {
+            tracing::trace(_trace_state, "read_data: sending a message to /{}", ep);
+            return ms.send_read_data(net::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range).then([this, ep](query::result&& result) {
+                tracing::trace(_trace_state, "read_data: got response from /{}", ep);
                 return make_foreign(::make_lw_shared<query::result>(std::move(result)));
             });
         }
@@ -2150,10 +2156,13 @@ protected:
     future<query::result_digest, api::timestamp_type> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->_stats.digest_read_attempts.get_ep_stat(ep);
         if (is_me(ep)) {
+            tracing::trace(_trace_state, "read_digest: querying locally");
             return _proxy->query_singular_local_digest(_schema, _cmd, _partition_range);
         } else {
             auto& ms = net::get_local_messaging_service();
-            return ms.send_read_digest(net::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range).then([] (query::result_digest d, rpc::optional<api::timestamp_type> t) {
+            tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
+            return ms.send_read_digest(net::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range).then([this, ep] (query::result_digest d, rpc::optional<api::timestamp_type> t) {
+                tracing::trace(_trace_state, "read_digest: got response from /{}", ep);
                 return make_ready_future<query::result_digest, api::timestamp_type>(d, t ? t.value() : api::missing_timestamp);
             });
         }
@@ -3271,10 +3280,11 @@ void storage_proxy::init_messaging_service() {
         }
 
         return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr)] (const query::partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+            auto src_ip = src_addr.addr;
             return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p] (schema_ptr s) {
                 return p->query_singular_local(std::move(s), cmd, pr);
-            }).finally([&trace_state_ptr] () mutable {
-                tracing::trace(trace_state_ptr, "read_data handling is done");
+            }).finally([&trace_state_ptr, src_ip] () mutable {
+                tracing::trace(trace_state_ptr, "read_data handling is done, sending a response to /{}", src_ip);
             });
         });
     });
@@ -3287,10 +3297,11 @@ void storage_proxy::init_messaging_service() {
             tracing::trace(trace_state_ptr, "read_mutation_data: message received from /{}", src_addr.addr);
         }
         return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr)] (const query::partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+            auto src_ip = src_addr.addr;
             return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p] (schema_ptr s) {
                 return p->query_mutations_locally(std::move(s), cmd, pr);
-            }).finally([&trace_state_ptr] () mutable {
-                tracing::trace(trace_state_ptr, "read_mutation_data handling is done");
+            }).finally([&trace_state_ptr, src_ip] () mutable {
+                tracing::trace(trace_state_ptr, "read_mutation_data handling is done, sending a response to /{}", src_ip);
             });
         });
     });
@@ -3303,10 +3314,11 @@ void storage_proxy::init_messaging_service() {
             tracing::trace(trace_state_ptr, "read_digest: message received from /{}", src_addr.addr);
         }
         return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr)] (const query::partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+            auto src_ip = src_addr.addr;
             return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p] (schema_ptr s) {
                 return p->query_singular_local_digest(std::move(s), cmd, pr);
-            }).finally([&trace_state_ptr] () mutable {
-                tracing::trace(trace_state_ptr, "read_digest handling is done");
+            }).finally([&trace_state_ptr, src_ip] () mutable {
+                tracing::trace(trace_state_ptr, "read_digest handling is done, sending a response to /{}", src_ip);
             });
         });
     });
