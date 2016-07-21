@@ -116,6 +116,16 @@ std::ostream& operator<<(std::ostream& os, const streamed_mutation& sm) {
     return os;
 }
 
+std::ostream& operator<<(std::ostream& os, mutation_fragment::kind k)
+{
+    switch (k) {
+    case mutation_fragment::kind::static_row: return os << "static row";
+    case mutation_fragment::kind::clustering_row: return os << "clustering row";
+    case mutation_fragment::kind::range_tombstone: return os << "range tombstone";
+    }
+    abort();
+}
+
 streamed_mutation streamed_mutation_from_mutation(mutation m)
 {
     class reader final : public streamed_mutation::impl {

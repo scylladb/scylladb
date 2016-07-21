@@ -41,6 +41,7 @@
 #include "range.hh"
 #include "partition_slice_builder.hh"
 #include "sstables/date_tiered_compaction_strategy.hh"
+#include "mutation_assertions.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -2596,43 +2597,25 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
 
         auto smopt = reader().get0();
         BOOST_REQUIRE(smopt);
-        auto& sm = *smopt;
         
         using kind = mutation_fragment::kind;
-        auto then_expect = [&] (kind k, std::vector<int> ck_elems) {
-            std::vector<bytes> ck_bytes;
-            for (auto&& e : ck_elems) {
-                ck_bytes.emplace_back(int32_type->decompose(e));
-            }
-            auto ck = clustering_key_prefix::from_exploded(*s, std::move(ck_bytes));
-
-            auto mfopt = sm().get0();
-            BOOST_REQUIRE(mfopt);
-            if (mfopt->mutation_fragment_kind() != k) {
-                abort();
-            }
-            BOOST_REQUIRE(mfopt->mutation_fragment_kind() == k);
-            BOOST_REQUIRE(ck_eq(mfopt->key(), ck));
-        };
-
-        then_expect(kind::range_tombstone, { 0 });
-        then_expect(kind::clustering_row, { 1 });
-        then_expect(kind::clustering_row, { 1, 1 });
-        then_expect(kind::clustering_row, { 1, 2 });
-        then_expect(kind::clustering_row, { 1, 2, 3 });
-        then_expect(kind::range_tombstone, { 1, 3 });
-        then_expect(kind::clustering_row, { 1, 3 });
-        then_expect(kind::clustering_row, { 1, 3, 4 });
-        then_expect(kind::clustering_row, { 1, 4 });
-        then_expect(kind::clustering_row, { 1, 4, 0 });
-        then_expect(kind::range_tombstone, { 2 });
-        then_expect(kind::range_tombstone, { 2, 1 });
-        then_expect(kind::range_tombstone, { 2, 1 });
-        then_expect(kind::range_tombstone, { 2, 2 });
-        then_expect(kind::range_tombstone, { 2, 2 });
-
-        auto mfopt = sm().get0();
-        BOOST_REQUIRE(!mfopt);
+        assert_that_stream(std::move(*smopt))
+            .produces(kind::range_tombstone, { 0 })
+            .produces(kind::clustering_row, { 1 })
+            .produces(kind::clustering_row, { 1, 1 })
+            .produces(kind::clustering_row, { 1, 2 })
+            .produces(kind::clustering_row, { 1, 2, 3 })
+            .produces(kind::range_tombstone, { 1, 3 })
+            .produces(kind::clustering_row, { 1, 3 })
+            .produces(kind::clustering_row, { 1, 3, 4 })
+            .produces(kind::clustering_row, { 1, 4 })
+            .produces(kind::clustering_row, { 1, 4, 0 })
+            .produces(kind::range_tombstone, { 2 })
+            .produces(kind::range_tombstone, { 2, 1 })
+            .produces(kind::range_tombstone, { 2, 1 })
+            .produces(kind::range_tombstone, { 2, 2 })
+            .produces(kind::range_tombstone, { 2, 2 })
+            .produces_end_of_stream();
 
         smopt = reader().get0();
         BOOST_REQUIRE(!smopt);
@@ -2841,4 +2824,57 @@ SEASTAR_TEST_CASE(date_tiered_strategy_test_2) {
     BOOST_REQUIRE(!gens.count(min_threshold + 2));
 
     return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_promoted_index_read) {
+    // create table promoted_index_read (
+    //        pk int,
+    //        ck1 int,
+    //        ck2 int,
+    //        v int,
+    //        primary key (pk, ck1, ck2)
+    // );
+    //
+    // column_index_size_in_kb: 0
+    //
+    // delete from promoted_index_read where pk = 0 and ck1 = 0;
+    // insert into promoted_index_read (pk, ck1, ck2, v) values (0, 0, 0, 0);
+    // insert into promoted_index_read (pk, ck1, ck2, v) values (0, 0, 1, 1);
+    //
+    // SSTable:
+    // [
+    // {"key": "0",
+    //  "cells": [["0:_","0:!",1468923292708929,"t",1468923292],
+    //            ["0:_","0:!",1468923292708929,"t",1468923292],
+    //            ["0:0:","",1468923308379491],
+    //            ["0:_","0:!",1468923292708929,"t",1468923292],
+    //            ["0:0:v","0",1468923308379491],
+    //            ["0:_","0:!",1468923292708929,"t",1468923292],
+    //            ["0:1:","",1468923311744298],
+    //            ["0:_","0:!",1468923292708929,"t",1468923292],
+    //            ["0:1:v","1",1468923311744298]]}
+    // ]
+
+    return seastar::async([] {
+        auto s = schema_builder("ks", "promoted_index_read")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("ck1", int32_type, column_kind::clustering_key)
+                .with_column("ck2", int32_type, column_kind::clustering_key)
+                .with_column("v", int32_type)
+                .build();
+
+        auto sst = make_lw_shared<sstable>("ks", "promoted_index_read", "tests/sstables/promoted_index_read", 1, sstables::sstable::version_types::ka, big);
+        sst->load().get0();
+
+        auto rd = sstable_reader(sst, s);
+        auto smopt = rd().get0();
+        BOOST_REQUIRE(smopt);
+
+        using kind = mutation_fragment::kind;
+        assert_that_stream(std::move(*smopt))
+                .produces(kind::range_tombstone, { 0 })
+                .produces(kind::clustering_row, { 0, 0 })
+                .produces(kind::clustering_row, { 0, 1 })
+                .produces_end_of_stream();
+    });
 }

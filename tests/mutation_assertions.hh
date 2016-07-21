@@ -110,3 +110,55 @@ mutation_opt_assertions assert_that(streamed_mutation_opt smo) {
     return { std::move(mo) };
 }
 
+class streamed_mutation_assertions {
+    streamed_mutation _sm;
+    clustering_key::equality _ck_eq;
+public:
+    streamed_mutation_assertions(streamed_mutation sm)
+        : _sm(std::move(sm)), _ck_eq(*_sm.schema()) { }
+
+    streamed_mutation_assertions& produces_static_row() {
+        auto mfopt = _sm().get0();
+        if (!mfopt) {
+            BOOST_FAIL("Expected static row, got end of stream");
+        }
+        if (mfopt->mutation_fragment_kind() != mutation_fragment::kind::static_row) {
+            BOOST_FAIL(sprint("Expected static row, got: %s", mfopt->mutation_fragment_kind()));
+        }
+        return *this;
+    }
+
+    streamed_mutation_assertions& produces(mutation_fragment::kind k, std::vector<int> ck_elements) {
+        std::vector<bytes> ck_bytes;
+        for (auto&& e : ck_elements) {
+            ck_bytes.emplace_back(int32_type->decompose(e));
+        }
+        auto ck = clustering_key_prefix::from_exploded(*_sm.schema(), std::move(ck_bytes));
+
+        auto mfopt = _sm().get0();
+        if (!mfopt) {
+            BOOST_FAIL(sprint("Expected mutation fragment %s, got end of stream", ck));
+        }
+        if (mfopt->mutation_fragment_kind() != k) {
+            BOOST_FAIL(sprint("Expected mutation fragment kind %s, got: %s", k, mfopt->mutation_fragment_kind()));
+        }
+        if (!_ck_eq(mfopt->key(), ck)) {
+            BOOST_FAIL(sprint("Expected key %s, got: %s", ck, mfopt->key()));
+        }
+        return *this;
+    }
+
+    streamed_mutation_assertions& produces_end_of_stream() {
+        auto mfopt = _sm().get0();
+        BOOST_REQUIRE(!mfopt);
+        if (mfopt) {
+            BOOST_FAIL(sprint("Expected end of stream, got: %s", mfopt->mutation_fragment_kind()));
+        }
+        return *this;
+    }
+};
+
+static inline streamed_mutation_assertions assert_that_stream(streamed_mutation sm)
+{
+    return streamed_mutation_assertions(std::move(sm));
+}
