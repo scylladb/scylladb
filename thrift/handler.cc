@@ -130,23 +130,6 @@ with_cob(tcxx::function<void (const T& ret)>&& cob,
     });
 }
 
-template <typename Func, typename T>
-void
-with_cob_dereference(tcxx::function<void (const T& ret)>&& cob,
-        tcxx::function<void (::apache::thrift::TDelayedException* _throw)>&& exn_cob,
-        Func&& func) {
-    using ptr_type = foreign_ptr<lw_shared_ptr<T>>;
-    // then_wrapped() terminates the fiber by calling one of the cob objects
-    futurize<ptr_type>::apply(func).then_wrapped([cob = std::move(cob), exn_cob = std::move(exn_cob)] (future<ptr_type> f) {
-        try {
-            cob(*f.get0());
-        } catch (...) {
-            delayed_exception_wrapper dew(std::current_exception());
-            exn_cob(&dew);
-        }
-    });
-}
-
 template <typename Func>
 void
 with_cob(tcxx::function<void ()>&& cob,
