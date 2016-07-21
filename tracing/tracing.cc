@@ -56,7 +56,7 @@ std::vector<sstring> trace_type_names = {
 
 tracing::tracing(const sstring& tracing_backend_helper_class_name)
         : _write_timer([this] { write_timer_callback(); })
-        , _thread_name(to_sstring(engine().cpu_id()))
+        , _thread_name(seastar::format("shard {:d}", engine().cpu_id()))
         , _registrations{
             scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
                     , scollectd::per_cpu_plugin_instance
