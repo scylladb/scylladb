@@ -51,6 +51,7 @@
 #include <boost/range/adaptor/reversed.hpp>
 #include <boost/range/adaptor/indirected.hpp>
 #include "query-result-reader.hh"
+#include "thrift/server.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -620,7 +621,7 @@ public:
     }
 
     void describe_version(tcxx::function<void(std::string const& _return)> cob) {
-        cob("20.1.0");
+        cob(org::apache::cassandra::thrift_version);
     }
 
     void do_describe_ring(tcxx::function<void(std::vector<TokenRange>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace, bool local) {
