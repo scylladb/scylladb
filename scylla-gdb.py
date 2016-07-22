@@ -26,8 +26,12 @@ class intrusive_list:
     def __init__(self, list_ref):
         list_type = list_ref.type.strip_typedefs()
         self.node_type = list_type.template_argument(0)
-        self.root = list_ref['data_']['root_plus_size_']['root_']
-
+        rps = list_ref['data_']['root_plus_size_']
+        try:
+            self.root = rps['root_']
+        except:
+            # Some boost versions have this instead
+            self.root = rps['m_header']
         member_hook = get_template_arg_with_prefix(list_type, "boost::intrusive::member_hook")
         if member_hook:
             self.link_offset = member_hook.template_argument(2).cast(self.size_t)
