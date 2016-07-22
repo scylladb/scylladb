@@ -225,6 +225,12 @@ def seastar_memory_layout():
         results.append((t, start, total_mem))
     return results
 
+def get_thread_owning_memory(ptr):
+    for t in reactor_threads():
+        start, size = get_seastar_memory_start_and_size()
+        if start <= ptr < start + size:
+            return t
+
 class scylla_ptr(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla ptr', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
@@ -424,6 +430,116 @@ class thread_switched_in(object):
     def __exit__(self, *_):
         self.old.switch()
 
+class seastar_thread_context(object):
+    ulong_type = gdb.lookup_type('unsigned long')
+
+    # FIXME: The jmpbuf interpreting code targets x86_64 and glibc 2.19
+    # Offsets taken from sysdeps/x86_64/jmpbuf-offsets.h.
+    jmpbuf_offsets = {
+        'rbx':  0,
+        'rbp':  1,
+        'r12':  2,
+        'r13':  3,
+        'r14':  4,
+        'r15':  5,
+        'rsp':  6,
+        'rip':  7,
+    }
+    mangled_registers = ['rip', 'rsp', 'rbp']
+
+    def save_regs(self):
+        result = {}
+        for reg in self.jmpbuf_offsets.keys():
+            result[reg] = gdb.parse_and_eval('$%s' % reg).cast(self.ulong_type)
+        return result
+
+    def restore_regs(self, values):
+        gdb.newest_frame().select()
+        for reg, value in values.items():
+            gdb.execute('set $%s = %s' % (reg, value))
+
+    def get_fs_base(self):
+        holder_addr  = get_seastar_memory_start_and_size()[0]
+        holder = gdb.Value(holder_addr).reinterpret_cast(self.ulong_type.pointer())
+        saved = holder.dereference()
+        gdb.execute('set *(void**)%s = 0' % holder_addr)
+        if gdb.parse_and_eval('arch_prctl(0x1003, %d)' % holder_addr) != 0:
+            raise Exception('arch_prctl() failed')
+        fs_base = holder.dereference()
+        gdb.execute('set *(void**)%s = %s' % (holder_addr, saved))
+        return fs_base
+
+    def regs_from_jmpbuf(self, jmpbuf):
+        canary = gdb.Value(self.get_fs_base()).reinterpret_cast(self.ulong_type.pointer())[6]
+        result = {}
+        for reg, offset in self.jmpbuf_offsets.items():
+            value = jmpbuf['__jmpbuf'][offset].cast(self.ulong_type)
+            if reg in self.mangled_registers:
+                # glibc mangles by doing:
+                #   xor %reg, %fs:0x30
+                #   rol %reg, $0x11
+                bits = 64
+                shift = 0x11
+                value = (value << (bits-shift)) & (2**bits-1) | (value >> shift)
+                value = value ^ canary
+            result[reg] = value
+        return result
+
+    def is_switched_in(self):
+        jmpbuf_link_ptr = gdb.parse_and_eval('seastar::g_current_context')
+        if jmpbuf_link_ptr['thread'] == self.thread_ctx.address:
+            return True
+        return False
+
+    def __init__(self, thread_ctx):
+        self.thread_ctx = thread_ctx
+        self.old_frame = gdb.selected_frame()
+        self.old_regs = self.save_regs()
+        self.old_gdb_thread = gdb.selected_thread()
+        self.gdb_thread = get_thread_owning_memory(thread_ctx.address)
+        self.new_regs = None
+
+    def __enter__(self):
+        gdb.write('Switched to thread %d, (seastar::thread_context*) 0x%x\n' % (self.gdb_thread.num, self.thread_ctx.address))
+        self.gdb_thread.switch()
+        if not self.is_switched_in():
+            self.new_regs = self.regs_from_jmpbuf(self.thread_ctx['_context']['jmpbuf'])
+            self.restore_regs(self.new_regs)
+
+    def __exit__(self, *_):
+        if self.new_regs:
+            self.gdb_thread.switch()
+            self.restore_regs(self.old_regs)
+        self.old_gdb_thread.switch()
+        self.old_frame.select()
+        gdb.write('Switched to thread %d\n' % self.old_gdb_thread.num)
+
+active_thread_context = None
+
+def exit_thread_context():
+    global active_thread_context
+    if active_thread_context:
+        active_thread_context.__exit__()
+        active_thread_context = None
+
+class scylla_thread(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla thread', gdb.COMMAND_USER,
+                             gdb.COMPLETE_COMMAND, True)
+    def invoke(self, arg, for_tty):
+        addr = gdb.parse_and_eval(arg)
+        ctx = addr.reinterpret_cast(gdb.lookup_type('seastar::thread_context').pointer()).dereference()
+        exit_thread_context()
+        global active_thread_context
+        active_thread_context = seastar_thread_context(ctx)
+        active_thread_context.__enter__()
+
+class scylla_unthread(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla unthread', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+    def invoke(self, arg, for_tty):
+        exit_thread_context()
+
 scylla()
 scylla_databases()
 scylla_keyspaces()
@@ -436,3 +552,5 @@ scylla_lsa_zones()
 scylla_timers()
 scylla_apply()
 scylla_shard()
+scylla_thread()
+scylla_unthread()
