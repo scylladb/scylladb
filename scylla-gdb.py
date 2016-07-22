@@ -535,6 +535,9 @@ def exit_thread_context():
         active_thread_context.__exit__()
         active_thread_context = None
 
+def seastar_threads_on_current_shard():
+    return intrusive_list(gdb.parse_and_eval('\'seastar::thread_context::_all_threads\''))
+
 class scylla_thread(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla thread', gdb.COMMAND_USER,
@@ -553,6 +556,15 @@ class scylla_unthread(gdb.Command):
     def invoke(self, arg, for_tty):
         exit_thread_context()
 
+class scylla_threads(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla threads', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+    def invoke(self, arg, for_tty):
+        for r in reactors():
+            shard = r['_id']
+            for t in seastar_threads_on_current_shard():
+                gdb.write('[shard %2d] (seastar::thread_context*) 0x%x\n' % (shard, t.address))
+
 scylla()
 scylla_databases()
 scylla_keyspaces()
@@ -568,3 +580,4 @@ scylla_apply()
 scylla_shard()
 scylla_thread()
 scylla_unthread()
+scylla_threads()
