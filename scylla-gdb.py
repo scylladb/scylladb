@@ -421,6 +421,15 @@ class scylla_mem_ranges(gdb.Command):
         for t, start, total_mem in seastar_memory_layout():
             gdb.write('0x%x +%d\n' % (start, total_mem))
 
+class scylla_mem_range(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla mem-range', gdb.COMMAND_USER, gdb.COMPLETE_NONE)
+    def invoke(self, arg, from_tty):
+        if not has_reactor():
+            gdb.write('Not a reactor thread')
+            return
+        gdb.write('0x%x +%d\n' % get_seastar_memory_start_and_size())
+
 class thread_switched_in(object):
     def __init__(self, gdb_thread):
         self.new = gdb_thread
@@ -547,6 +556,7 @@ scylla_column_families()
 scylla_memory()
 scylla_ptr()
 scylla_mem_ranges()
+scylla_mem_range()
 scylla_lsa()
 scylla_lsa_zones()
 scylla_timers()
