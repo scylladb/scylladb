@@ -803,7 +803,7 @@ future<response_type> cql_server::connection::process_prepare(uint16_t stream, b
         tracing::trace(cs.get_trace_state(), "Done preparing on remote shards");
         return _server._query_processor.local().prepare(query, cs, false).then([this, stream, &cs] (auto msg) {
             tracing::trace(cs.get_trace_state(), "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&msg] {
-                return messages::result_message::prepared::cql::get_id(std::move(msg));
+                return messages::result_message::prepared::cql::get_id(msg);
             }));
             return this->make_result(stream, msg);
         });
