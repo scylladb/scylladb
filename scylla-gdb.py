@@ -211,17 +211,18 @@ class scylla_memory(gdb.Command):
                 front = int(span['link']['_next'])
             gdb.write('{index:5} {size:13} {total}\n'.format(index=index, size=(1<<index)*page_size, total=total*page_size))
 
+def get_seastar_memory_start_and_size():
+    cpu_mem = gdb.parse_and_eval('memory::cpu_mem')
+    page_size = int(gdb.parse_and_eval('memory::page_size'))
+    total_mem = int(cpu_mem['nr_pages']) * page_size
+    start = int(cpu_mem['memory'])
+    return start, total_mem
+
 def seastar_memory_layout():
-    orig = gdb.selected_thread()
     results = []
-    for t in gdb.selected_inferior().threads():
-        t.switch()
-        cpu_mem = gdb.parse_and_eval('memory::cpu_mem')
-        page_size = int(gdb.parse_and_eval('memory::page_size'))
-        total_mem = int(cpu_mem['nr_pages']) * page_size
-        start = int(cpu_mem['memory'])
+    for t in reactor_threads():
+        start, total_mem = get_seastar_memory_start_and_size()
         results.append((t, start, total_mem))
-    orig.switch()
     return results
 
 class scylla_ptr(gdb.Command):
@@ -362,6 +363,19 @@ class scylla_timers(gdb.Command):
             for t in intrusive_list(timer_list):
                 gdb.write('(%s*) %s = %s\n' % (t.type, t.address, t))
 
+def has_reactor():
+    if gdb.parse_and_eval('local_engine'):
+        return True
+    return False
+
+def reactor_threads():
+    orig = gdb.selected_thread()
+    for t in gdb.selected_inferior().threads():
+        t.switch()
+        if has_reactor():
+            yield t
+    orig.switch()
+
 def reactors():
     orig = gdb.selected_thread()
     for t in gdb.selected_inferior().threads():
@@ -400,6 +414,15 @@ class scylla_mem_ranges(gdb.Command):
     def invoke(self, arg, from_tty):
         for t, start, total_mem in seastar_memory_layout():
             gdb.write('0x%x +%d\n' % (start, total_mem))
+
+class thread_switched_in(object):
+    def __init__(self, gdb_thread):
+        self.new = gdb_thread
+    def __enter__(self):
+        self.old = gdb.selected_thread()
+        self.new.switch()
+    def __exit__(self, *_):
+        self.old.switch()
 
 scylla()
 scylla_databases()
