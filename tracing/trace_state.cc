@@ -49,12 +49,12 @@ namespace tracing {
 
 static logging::logger logger("trace_state");
 
-std::unordered_map<sstring, sstring> trace_state::get_params() {
+void trace_state::build_parameters_map() {
     if (!_params_ptr) {
-        return {};
+        return;
     }
 
-    std::unordered_map<sstring, sstring> params_map;
+    auto& params_map = _records->session_rec.parameters;
     params_values& vals = *_params_ptr;
 
     if (vals.batchlog_endpoints) {
@@ -80,8 +80,6 @@ std::unordered_map<sstring, sstring> trace_state::get_params() {
     if (vals.user_timestamp) {
         params_map.emplace("user_timestamp", seastar::format("{:d}", *vals.user_timestamp));
     }
-
-    return params_map;
 }
 
 trace_state::~trace_state() {
@@ -98,24 +96,21 @@ trace_state::~trace_state() {
             // and we do want to know about it.
             ++_pending_trace_events;
 
-            // get_params() may throw. We don't want to record the session
-            // record in this case since its data may be incomplete. These
-            // events should be really rare however, therefore we don't want to
-            // optimize this flow (e.g. rollback the corresponding events'
-            // records).
+            // build_parameters_map() may throw. We don't want to record the
+            // session record in this case since its data may be incomplete.
+            // These events should be really rare however, therefore we don't
+            // want to optimize this flow (e.g. rollback the corresponding
+            // events' records).
             try {
-                _local_backend.write_session_record(_session_id, _client, get_params(), std::move(_request), _started_at, _type, elapsed(), _ttl);
+                build_parameters_map();
+                _records->session_rec.elapsed = elapsed();
             } catch (...) {
                 // Bump up an error counter and ignore
                 ++_local_tracing_ptr->stats.trace_errors;
             }
         }
 
-        _local_tracing_ptr->end_session();
-
-        if (_write_on_close) {
-            _local_tracing_ptr->write_pending_records();
-        }
+        _local_tracing_ptr->end_session(_records, _write_on_close);
 
         // update some stats and get out...
         auto& tracing_stats = _local_tracing_ptr->stats;
@@ -123,7 +118,7 @@ trace_state::~trace_state() {
         tracing_stats.trace_events_count += _pending_trace_events;
 
         if (_pending_trace_events >= tracing::max_trace_events_per_session) {
-            logger.trace("{}: Maximum number of traces is reached. Some traces are going to be dropped", _session_id);
+            logger.trace("{}: Maximum number of traces is reached. Some traces are going to be dropped", _records->session_id);
 
             if (++tracing_stats.max_traces_threshold_hits % tracing::max_threshold_hits_warning_period == 1) {
                 logger.warn("Maximum traces per session limit is hit {} times", tracing_stats.max_traces_threshold_hits);

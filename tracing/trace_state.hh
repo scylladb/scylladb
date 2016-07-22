@@ -54,13 +54,11 @@ class trace_state final {
     using clock_type = std::chrono::steady_clock;
 
 private:
-    utils::UUID _session_id;
-    trace_type _type;
+    lw_shared_ptr<one_session_records> _records;
     bool _write_on_close;
     // Used for calculation of time passed since the beginning of a tracing
     // session till each tracing event.
     clock_type::time_point _start;
-    gc_clock::duration _ttl;
     // TRUE for a primary trace_state object
     bool _primary;
     bool _tracing_began = false;
@@ -69,7 +67,6 @@ private:
     sstring _request;
     int _pending_trace_events = 0;
     shared_ptr<tracing> _local_tracing_ptr;
-    i_tracing_backend_helper& _local_backend;
 
     struct params_values {
         std::experimental::optional<std::unordered_set<gms::inet_address>> batchlog_endpoints;
@@ -107,23 +104,24 @@ private:
 
 public:
     trace_state(trace_type type, bool write_on_close, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt)
-        : _session_id(session_id ? *session_id : utils::UUID_gen::get_time_UUID())
-        , _type(type)
-        , _write_on_close(write_on_close)
-        , _ttl(ttl_by_type(_type))
+        : _write_on_close(write_on_close)
         , _primary(!session_id)
         , _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
-        , _local_backend(_local_tracing_ptr->backend_helper())
-    { }
+    {
+        _records = make_lw_shared<one_session_records>();
+        _records->session_id = session_id ? *session_id : utils::UUID_gen::get_time_UUID();
+        _records->ttl = ttl_by_type(type);
+        _records->session_rec.command = type;
+    }
 
     ~trace_state();
 
     const utils::UUID& get_session_id() const {
-        return _session_id;
+        return _records->session_id;
     }
 
     trace_type get_type() const {
-        return _type;
+        return _records->session_rec.command;
     }
 
     bool get_write_on_close() const {
@@ -163,9 +161,9 @@ private:
      */
     void begin(sstring request, gms::inet_address client) {
         begin();
-        _started_at = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-        _request = std::move(request);
-        _client = std::move(client);
+        _records->session_rec.client = client;
+        _records->session_rec.request = std::move(request);
+        _records->session_rec.started_at = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     }
 
     template <typename Func>
@@ -249,7 +247,12 @@ private:
         _params_ptr->user_timestamp.emplace(val);
     }
 
-    std::unordered_map<sstring, sstring> get_params();
+    /**
+     * Fill the map in a session's record with the values set so far.
+     *
+     * @param params_map the map to fill
+     */
+    void build_parameters_map();
 
     /**
      * Add a single trace entry - a special case for a simple string.
@@ -302,8 +305,13 @@ inline void trace_state::trace(sstring message) {
         return;
     }
 
-    _local_backend.write_event_record(_session_id, std::move(message), elapsed(), _ttl, i_tracing_backend_helper::wall_clock::now());
-    ++_pending_trace_events;
+    try {
+        _records->events_recs.emplace_back(std::move(message), elapsed(), i_tracing_backend_helper::wall_clock::now());
+        ++_pending_trace_events;
+    } catch (...) {
+        // Bump up an error counter and ignore
+        ++_local_tracing_ptr->stats.trace_errors;
+    }
 }
 
 template <typename... A>

@@ -47,27 +47,14 @@
 
 namespace tracing {
 
-class trace_keyspace_helper : public i_tracing_backend_helper {
+class trace_keyspace_helper final : public i_tracing_backend_helper {
 public:
     static const sstring KEYSPACE_NAME;
     static const sstring SESSIONS;
     static const sstring EVENTS;
 
 private:
-    using mutation_maker = std::function<mutation (const utils::UUID& session_id)>;
-
     static constexpr int bad_column_family_message_period = 10000;
-
-    struct events_mutation_makers {
-        std::vector<mutation_maker> makers;
-    public:
-        events_mutation_makers() {
-            makers.reserve(tracing::max_trace_events_per_session);
-        }
-    };
-
-    // a hash table of session ID to one session mutation and a vector of events mutations
-    std::unordered_map<utils::UUID, std::pair<mutation_maker, events_mutation_makers>> _mutation_makers;
 
     seastar::gate _pending_writes;
 
@@ -110,26 +97,19 @@ public:
     virtual future<> start() override;
 
     virtual future<> stop() override {
-        kick();
         return _pending_writes.close();
     };
 
-    virtual void write_session_record(const utils::UUID& session_id,
-                                      gms::inet_address client,
-                                      std::unordered_map<sstring, sstring> parameters,
-                                      sstring request,
-                                      long started_at,
-                                      trace_type command,
-                                      int elapsed,
-                                      gc_clock::duration ttl) override;
-
-    virtual void write_event_record(const utils::UUID& session_id,
-                                    sstring message,
-                                    int elapsed,
-                                    gc_clock::duration ttl,
-                                    wall_clock::time_point event_time_point) override;
+    virtual void write_records_bulk(records_bulk& bulk) override;
 
 private:
+    /**
+     * Write records of a single tracing session
+     *
+     * @param records records to write
+     */
+    void write_one_session_records(lw_shared_ptr<one_session_records> records);
+
     /**
      * Makes a monotonically increasing value in 100ns based on the given time stamp.
      *
@@ -161,8 +141,6 @@ private:
         _last_event_nanos = 0;
     }
 
-    virtual void kick() override;
-
     /**
      * Tries to create a table with a given name and using the provided CQL
      * command.
@@ -179,14 +157,12 @@ private:
      * Flush mutations of one particular tracing session. First "events"
      * mutations and then, when they are complete, a "sessions" mutation.
      *
-     * @param session_id ID of a tracing session
-     * @param mutation_makers a pair of a "sessions" mutation maker and an array
-     *                        of "events" mutations makers.
+     * @param records records describing the session's records
      *
      * @return A future that resolves when applying of above mutations is
      *         complete.
      */
-    future<> flush_one_session_mutations(utils::UUID session_id, std::pair<mutation_maker, events_mutation_makers>& mutation_makers);
+    future<> flush_one_session_mutations(lw_shared_ptr<one_session_records> records);
 
     /**
      * Get a schema_ptr by a table (UU)ID. If not found will try to get it by
@@ -230,33 +206,26 @@ private:
      */
     bool cache_events_table_handles(const schema_ptr& s);
 
-    mutation make_session_mutation(const utils::UUID& session_id,
-                                   gms::inet_address client,
-                                   const std::unordered_map<sstring, sstring>& parameters,
-                                   const sstring& request,
-                                   long started_at,
-                                   const sstring& command,
-                                   int elapsed,
-                                   gc_clock::duration ttl);
+    /**
+     * Create a mutation for a new session record
+     *
+     * @param all_records_handle handle to access an object with all records of this session
+     *
+     * @return the relevant mutation
+     */
+    mutation make_session_mutation(const one_session_records& all_records_handle);
 
     /**
      * Create a mutation for a new trace point record
      *
-     * @param session_id tracing session ID
-     * @param message trace record message
-     * @param elapsed time elapsed since begin() till this trace point
-     * @param thread_name
-     * @param ttl
-     * @param event_time_stamp wall clock time point of this trace event
+     * @param session_records handle to access an object with all records of this session.
+     *                        It's needed here in order to update the last event's mutation
+     *                        timestamp value stored inside it.
+     * @param record data describing this trace event
      *
      * @return the relevant mutation
      */
-    mutation make_event_mutation(const utils::UUID& session_id,
-                                 const sstring& message,
-                                 int elapsed,
-                                 const sstring& thread_name,
-                                 gc_clock::duration ttl,
-                                 wall_clock::time_point event_time_stamp);
+    mutation make_event_mutation(one_session_records& session_records, const event_record& record);
 };
 
 struct bad_column_family : public std::exception {

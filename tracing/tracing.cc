@@ -81,7 +81,7 @@ tracing::tracing(const sstring& tracing_backend_helper_class_name)
             scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
                     , scollectd::per_cpu_plugin_instance
                     , "queue_length", "pending_for_write_sessions")
-                    , scollectd::make_typed(scollectd::data_type::GAUGE, _pending_for_write_sessions)),
+                    , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _pending_for_write_records_bulk.size(); })),
             scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
                     , scollectd::per_cpu_plugin_instance
                     , "queue_length", "flushing_sessions")
@@ -108,7 +108,7 @@ future<> tracing::create_tracing(const sstring& tracing_backend_class_name) {
 trace_state_ptr tracing::create_session(trace_type type, bool write_on_close, const std::experimental::optional<utils::UUID>& session_id) {
     trace_state_ptr tstate;
     try {
-        if (_active_sessions + _pending_for_write_sessions + _flushing_sessions > 2 * max_pending_for_write_sessions) {
+        if (_active_sessions + _pending_for_write_records_bulk.size() + _flushing_sessions > 2 * max_pending_for_write_sessions) {
             if (session_id) {
                 tracing_logger.trace("{}: Maximum sessions count is reached. Dropping a secondary session", session_id);
             } else {
@@ -116,8 +116,8 @@ trace_state_ptr tracing::create_session(trace_type type, bool write_on_close, co
             }
 
             if (++stats.max_sessions_threshold_hits % tracing::max_threshold_hits_warning_period == 1) {
-                tracing_logger.warn("Maximum sessions limit is hit {} times: open_sessions {}, pending_for_flush_sessions {}, flushing_sessions {}",
-                            stats.max_sessions_threshold_hits, _active_sessions, _pending_for_write_sessions, _flushing_sessions);
+                tracing_logger.warn("Maximum sessions limit is hit {} times: open_sessions {}, pending_for_write_sessions {}, flushing_sessions {}",
+                            stats.max_sessions_threshold_hits, _active_sessions, _pending_for_write_records_bulk.size(), _flushing_sessions);
             }
 
             return trace_state_ptr();
@@ -142,13 +142,17 @@ void tracing::write_timer_callback() {
         return;
     }
 
-    tracing_logger.trace("Timer kicks in: {}", _pending_for_write_sessions ? "writing" : "not writing");
+    tracing_logger.trace("Timer kicks in: {}", _pending_for_write_records_bulk.size() ? "writing" : "not writing");
     write_pending_records();
     _write_timer.arm(write_period);
 }
 
 future<> tracing::shutdown() {
     tracing_logger.info("Asked to shut down");
+    if (_down) {
+        throw std::logic_error("tracing: shutdown() called for the service that is already down");
+    }
+
     write_pending_records();
     _down = true;
     _write_timer.cancel();

@@ -99,6 +99,9 @@ public:
     { }
 };
 
+struct one_session_records;
+using records_bulk = std::deque<lw_shared_ptr<one_session_records>>;
+
 struct i_tracing_backend_helper {
     using wall_clock = std::chrono::system_clock;
 
@@ -112,51 +115,41 @@ public:
     virtual future<> stop() = 0;
 
     /**
-     * Write a new tracing session record
+     * Write a bulk of tracing records
      *
-     * @param session_id tracing session ID
-     * @param client client IP
-     * @param parameters optional parameters
-     * @param request request we are tracing
-     * @param started_at amount of milliseconds passed since Epoch before this
-     *                   session is started (on a Coordinator Node)
-     * @param command a type of this trace
-     * @param elapsed number of microseconds this tracing session took
-     * @param ttl TTL of a session record
+     * @param bulk a bulk of records
      */
-    virtual void write_session_record(const utils::UUID& session_id,
-                                      gms::inet_address client,
-                                      std::unordered_map<sstring, sstring> parameters,
-                                      sstring request,
-                                      long started_at,
-                                      trace_type command,
-                                      int elapsed,
-                                      gc_clock::duration ttl) = 0;
-
-    /**
-     * Write a new tracing event record
-     * @param session_id tracing session ID
-     * @param message tracing message
-     * @param elapsed number of microseconds passed since a beginning of a
-     *                corresponding tracing session till this event
-     * @param ttl TTL of the event record
-     * @param event_time_point time point when a record was taken
-     */
-    virtual void write_event_record(const utils::UUID& session_id,
-                                    sstring message,
-                                    int elapsed,
-                                    gc_clock::duration ttl,
-                                    wall_clock::time_point event_time_point) = 0;
+    virtual void write_records_bulk(records_bulk& bulk) = 0;
 
 private:
-    /**
-     * Commit all pending tracing records to the underlying storage.
-     * The implementation has to call tracing::tracing::write_complete(nr) for
-     * each "nr" completed records once they are written to the backend.
-     */
-    virtual void kick() = 0;
-
     friend class tracing;
+};
+
+struct event_record {
+    sstring message;
+    int elapsed;
+    i_tracing_backend_helper::wall_clock::time_point event_time_point;
+
+    event_record(sstring message_, int elapsed_, i_tracing_backend_helper::wall_clock::time_point event_time_point_)
+        : message(std::move(message_))
+        , elapsed(elapsed_)
+        , event_time_point(event_time_point_) {}
+};
+
+struct session_record {
+    gms::inet_address client;
+    std::unordered_map<sstring, sstring> parameters;
+    sstring request;
+    long started_at = 0;
+    trace_type command = trace_type::NONE;
+    int elapsed = -1;
+};
+
+struct one_session_records {
+    utils::UUID session_id;
+    session_record session_rec;
+    gc_clock::duration ttl;
+    std::deque<event_record> events_recs;
 };
 
 using trace_state_ptr = lw_shared_ptr<trace_state>;
@@ -178,8 +171,8 @@ public:
 
 private:
     uint64_t _active_sessions = 0;
-    uint64_t _pending_for_write_sessions = 0;
     uint64_t _flushing_sessions = 0;
+    records_bulk _pending_for_write_records_bulk;
     timer<lowres_clock> _write_timer;
     bool _down = false;
     std::unique_ptr<i_tracing_backend_helper> _tracing_backend_helper_ptr;
@@ -228,14 +221,11 @@ public:
     future<> shutdown();
 
     void write_pending_records() {
-        // if service is down - do nothing
-        if (_down) {
-            return;
+        if (_pending_for_write_records_bulk.size()) {
+            _flushing_sessions += _pending_for_write_records_bulk.size();
+            _tracing_backend_helper_ptr->write_records_bulk(_pending_for_write_records_bulk);
+            _pending_for_write_records_bulk.clear();
         }
-
-        _flushing_sessions += _pending_for_write_sessions;
-        _pending_for_write_sessions = 0;
-        _tracing_backend_helper_ptr->kick();
     }
 
     void write_complete(uint64_t nr = 1) {
@@ -256,10 +246,23 @@ public:
      */
     trace_state_ptr create_session(trace_type type, bool write_on_close, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt);
 
-    void end_session() {
+    void end_session(lw_shared_ptr<one_session_records> records, bool write_now) {
         --_active_sessions;
-        ++_pending_for_write_sessions;
-        if (_pending_for_write_sessions >= max_pending_for_write_sessions) {
+
+        // if service is down - drop the records and return
+        if (_down) {
+            return;
+        }
+
+        try {
+            _pending_for_write_records_bulk.emplace_back(std::move(records));
+        } catch (...) {
+            // OOM: bump up the error counter and ignore
+            ++stats.trace_errors;
+            return;
+        }
+
+        if (write_now || _pending_for_write_records_bulk.size() >= max_pending_for_write_sessions) {
             write_pending_records();
         }
     }
