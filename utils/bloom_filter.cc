@@ -55,7 +55,7 @@ static thread_local auto reusable_indexes = std::vector<long>();
 
 void bloom_filter::set_indexes(int64_t base, int64_t inc, int count, long max, std::vector<long>& results) {
     for (int i = 0; i < count; i++) {
-        results[i] = abs(base % max);
+        results[i] = std::abs(base % max);
         base = static_cast<int64_t>(static_cast<uint64_t>(base) + static_cast<uint64_t>(inc));
     }
 }
