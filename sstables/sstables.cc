@@ -995,7 +995,7 @@ future<> sstable::read_summary(const io_priority_class& pc) {
         // we can try to regenerate the Summary.
         if (has_component(sstable::component_type::Summary)) {
             return read_simple<component_type::Summary>(_summary, pc).handle_exception([this, &pc] (auto ep) {
-                sstlog.warn("Couldn't read summary file %s: %s. Recreating it.", this->filename(component_type::Summary), ep);
+                sstlog.warn("Couldn't read summary file {}: {}. Recreating it.", this->filename(component_type::Summary), ep);
                 return this->generate_summary(pc);
             });
         } else {
