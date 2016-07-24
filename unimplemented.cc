@@ -59,6 +59,7 @@ std::ostream& operator<<(std::ostream& out, cause c) {
         case cause::STORAGE_SERVICE: return out << "STORAGE_SERVICE";
         case cause::API: return out << "API";
         case cause::SCHEMA_CHANGE: return out << "SCHEMA_CHANGE";
+        case cause::MIXED_CF: return out << "MIXED_CF";
     }
     assert(0);
 }
