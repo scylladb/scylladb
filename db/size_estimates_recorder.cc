@@ -135,7 +135,7 @@ future<> size_estimates_recorder::record_size_estimates() {
 }
 
 future<> size_estimates_recorder::stop() {
-    if (get_size_estimates_recorder().local_is_initialized()) {
+    if (engine().cpu_id() == 0) {
         service::get_local_migration_manager().unregister_listener(this);
         _timer.cancel();
         return _gate.close();
