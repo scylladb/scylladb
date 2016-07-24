@@ -166,7 +166,11 @@ private:
         }
 
         static bytes_view fix_static_name(bytes_view col) {
-            if (check_static(col)) {
+            return fix_static_name(col, check_static(col));
+        }
+
+        static bytes_view fix_static_name(bytes_view col, bool is_static) {
+            if(is_static) {
                 col.remove_prefix(static_size);
             }
             return col;
@@ -181,7 +185,7 @@ private:
         }
         column(const schema& schema, bytes_view col)
             : is_static(check_static(col))
-            , col_name(fix_static_name(col))
+            , col_name(fix_static_name(col, is_static))
             , clustering(extract_clustering_key(schema))
             , collection_extra_data(is_collection(schema) ? pop_back(clustering) : bytes()) // collections are not supported with COMPACT STORAGE, so this is fine
             , cell(!schema.is_dense() ? pop_back(clustering) : (*(schema.regular_begin())).name()) // dense: cell name is not provided. It is the only regular column
