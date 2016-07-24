@@ -177,11 +177,7 @@ private:
         }
 
         std::vector<bytes> extract_clustering_key(const schema& schema) {
-            if (!schema.is_compound()) {
-                return { to_bytes(col_name) };
-            } else {
-                return composite_view(col_name).explode();
-            }
+            return composite_view(col_name, schema.is_compound()).explode();
         }
         column(const schema& schema, bytes_view col)
             : is_static(check_static(col))
