@@ -1642,7 +1642,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                 auto estimated_partitions = size / sizeof(uint64_t);
                 // Since we don't have a summary, use a default min_index_interval, and if needed we'll resample
                 // later.
-                prepare_summary(_summary, estimated_partitions, 0x80);
+                prepare_summary(_summary, estimated_partitions, DEFAULT_MIN_INDEX_INTERVAL);
 
                 file_input_stream_options options;
                 options.buffer_size = sstable_buffer_size;

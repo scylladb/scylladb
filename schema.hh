@@ -279,6 +279,7 @@ bool operator==(const column_definition&, const column_definition&);
 
 static constexpr int DEFAULT_MIN_COMPACTION_THRESHOLD = 4;
 static constexpr int DEFAULT_MAX_COMPACTION_THRESHOLD = 32;
+static constexpr int DEFAULT_MIN_INDEX_INTERVAL = 128;
 
 class column_mapping_entry {
     bytes _name;
@@ -358,7 +359,7 @@ private:
         double _read_repair_chance = 0.0;
         int32_t _min_compaction_threshold = DEFAULT_MIN_COMPACTION_THRESHOLD;
         int32_t _max_compaction_threshold = DEFAULT_MAX_COMPACTION_THRESHOLD;
-        int32_t _min_index_interval = 128;
+        int32_t _min_index_interval = DEFAULT_MIN_INDEX_INTERVAL;
         int32_t _max_index_interval = 2048;
         int32_t _memtable_flush_period = 0;
         speculative_retry _speculative_retry = ::speculative_retry(speculative_retry::type::PERCENTILE, 0.99);
