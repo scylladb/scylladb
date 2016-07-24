@@ -67,11 +67,11 @@ struct i_filter {
      *         Asserts that the given probability can be satisfied using this
      *         filter.
      */
-    static filter_ptr get_filter(long num_elements, double max_false_pos_prob);
+    static filter_ptr get_filter(int64_t num_elements, double max_false_pos_prob);
     /**
      * @return A bloom_filter with the lowest practical false positive
      *         probability for the given number of elements.
      */
-    static filter_ptr get_filter(long num_elements, int target_buckets_per_elem);
+    static filter_ptr get_filter(int64_t num_elements, int target_buckets_per_elem);
 };
 }

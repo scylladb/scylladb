@@ -59,9 +59,9 @@ private:
     bitmap _bitset;
     int _hash_count;
 
-    void set_indexes(int64_t base, int64_t inc, int count, long max, std::vector<long>& results);
-    std::vector<long> get_hash_buckets(const bytes_view& key, int hash_count, long max);
-    std::vector<long> indexes(const bytes_view& key);
+    void set_indexes(int64_t base, int64_t inc, int count, int64_t max, std::vector<int64_t>& results);
+    std::vector<int64_t> get_hash_buckets(const bytes_view& key, int hash_count, int64_t max);
+    std::vector<int64_t> indexes(const bytes_view& key);
 
 public:
     int num_hashes() { return _hash_count; }
@@ -70,7 +70,7 @@ public:
     bloom_filter(int hashes, bitmap&& bs) : _bitset(std::move(bs)), _hash_count(hashes) {
     }
 
-    virtual void hash(const bytes_view& b, long seed, std::array<uint64_t, 2>& result) = 0;
+    virtual void hash(const bytes_view& b, int64_t seed, std::array<uint64_t, 2>& result) = 0;
 
     virtual void add(const bytes_view& key) override {
 
@@ -106,7 +106,7 @@ struct murmur3_bloom_filter: public bloom_filter {
 
     murmur3_bloom_filter(int hashes, bitmap&& bs) : bloom_filter(hashes, std::move(bs)) {}
 
-    virtual void hash(const bytes_view& b, long seed, std::array<uint64_t, 2>& result) {
+    virtual void hash(const bytes_view& b, int64_t seed, std::array<uint64_t, 2>& result) {
         utils::murmur_hash::hash3_x64_128(b, seed, result);
     }
 };
@@ -129,6 +129,6 @@ struct always_present_filter: public i_filter {
 };
 
 filter_ptr create_filter(int hash, large_bitset&& bitset);
-filter_ptr create_filter(int hash, long num_elements, int buckets_per);
+filter_ptr create_filter(int hash, int64_t num_elements, int buckets_per);
 }
 }
