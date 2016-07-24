@@ -579,5 +579,10 @@ future<> update_size_estimates(sstring ks_name, sstring cf_name, std::vector<ran
  */
 future<> clear_size_estimates(sstring ks_name, sstring cf_name);
 
+/**
+ * Queries the size estimates within the specified range
+ */
+future<std::vector<range_estimates>> query_size_estimates(sstring ks_name, sstring cf_name, dht::token start_token, dht::token end_token);
+
 } // namespace system_keyspace
 } // namespace db
