@@ -52,6 +52,7 @@
 #include <boost/range/adaptor/indirected.hpp>
 #include "query-result-reader.hh"
 #include "thrift/server.hh"
+#include "db/size_estimates_recorder.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -709,8 +710,40 @@ public:
     }
 
     void describe_splits_ex(tcxx::function<void(std::vector<CfSplit>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& cfName, const std::string& start_token, const std::string& end_token, const int32_t keys_per_split) {
-        // FIXME: To implement. See describe_splits.
-        return pass_unimplemented(exn_cob);
+        with_cob(std::move(cob), std::move(exn_cob), [&]{
+            auto tstart = start_token.empty() ? dht::minimum_token() : dht::global_partitioner().from_sstring(sstring(start_token));
+            auto tend = end_token.empty() ? dht::maximum_token() : dht::global_partitioner().from_sstring(sstring(end_token));
+            return db::get_local_size_estimates_recorder().record_size_estimates()
+                    .then([this, keys_per_split, cf = sstring(cfName), tstart = std::move(tstart), tend = std::move(tend)] {
+                return db::system_keyspace::query_size_estimates(current_keyspace(), std::move(cf), std::move(tstart), std::move(tend))
+                        .then([keys_per_split](auto&& estimates) {
+                    std::vector<CfSplit> splits;
+                    if (estimates.empty()) {
+                        return splits;
+                    }
+                    auto&& acc = estimates[0];
+                    auto emplace_acc = [&] {
+                        splits.emplace_back();
+                        auto start_token = dht::global_partitioner().to_sstring(acc.range_start_token);
+                        auto end_token = dht::global_partitioner().to_sstring(acc.range_end_token);
+                        splits.back().__set_start_token(bytes_to_string(to_bytes_view(start_token)));
+                        splits.back().__set_end_token(bytes_to_string(to_bytes_view(end_token)));
+                        splits.back().__set_row_count(acc.partitions_count);
+                    };
+                    for (auto&& e : estimates | boost::adaptors::sliced(1, estimates.size())) {
+                        if (acc.partitions_count + e.partitions_count > keys_per_split) {
+                            emplace_acc();
+                            acc = std::move(e);
+                        } else {
+                            acc.range_end_token = std::move(e.range_end_token);
+                            acc.partitions_count += e.partitions_count;
+                        }
+                    }
+                    emplace_acc();
+                    return splits;
+                });
+            });
+        });
     }
 
     void system_add_column_family(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const CfDef& cf_def) {
