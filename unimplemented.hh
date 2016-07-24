@@ -55,6 +55,7 @@ enum class cause {
     WRAP_AROUND, // Support for handling wrap around ranges in queries on database level and below
     STORAGE_SERVICE,
     SCHEMA_CHANGE,
+    MIXED_CF,
 };
 
 void fail(cause what) __attribute__((noreturn));

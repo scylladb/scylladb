@@ -831,6 +831,9 @@ public:
             }
 
             auto s = schema_from_thrift(cf_def, cf_def.keyspace, schema->id());
+            if (schema->thrift().is_dynamic() && s->regular_columns_count() > 1) {
+                fail(unimplemented::cause::MIXED_CF);
+            }
             return _query_state.get_client_state().has_schema_access(*schema, auth::permission::ALTER).then([this, s = std::move(s)] {
                 return service::get_local_migration_manager().announce_column_family_update(std::move(s), true, false).then([this] {
                     return std::string(_db.local().get_version().to_sstring());
@@ -1672,7 +1675,7 @@ private:
                 }
                 add_live_cell(s, col, *def, clustering_key_prefix::make_empty(s), m_to_apply);
             } else {
-                throw make_exception<InvalidRequestException>("No such column %s", col.name);
+                fail(unimplemented::cause::MIXED_CF);
             }
         }
     }
