@@ -694,13 +694,15 @@ public:
     }
 
     void describe_splits(tcxx::function<void(std::vector<std::string>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& cfName, const std::string& start_token, const std::string& end_token, const int32_t keys_per_split) {
-        // FIXME: Maybe implement.
-        // Origin's thrift interface has this to say about the verb:
-        //      "experimental API for hadoop/parallel query support. may change violently and without warning.".
-        // Some drivers have moved away from depending on this verb (SPARKC-94). The correct way to implement
-        // this, as well as describe_splits_ex, is to use the size_estimates system table (CASSANDRA-7688).
-        // However, we currently don't populate that table, which is done by SizeEstimatesRecorder.java in Origin.
-        return pass_unimplemented(exn_cob);
+        return describe_splits_ex([cob = std::move(cob)](auto&& results) {
+            std::vector<std::string> res;
+            res.reserve(results.size() + 1);
+            res.emplace_back(results[0].start_token);
+            for (auto&& s : results) {
+                res.emplace_back(std::move(s.end_token));
+            }
+            return cob(std::move(res));
+        }, exn_cob, cfName, start_token, end_token, keys_per_split);
     }
 
     void trace_next_query(tcxx::function<void(std::string const& _return)> cob) {
