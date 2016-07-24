@@ -96,8 +96,8 @@ public:
             throw make_exception<InvalidRequestException>(ce.what());
         } catch (exceptions::invalid_request_exception& ire) {
             throw make_exception<InvalidRequestException>(ire.what());
-        } catch (no_such_column_family&) {
-            throw NotFoundException();
+        } catch (no_such_column_family& nocf) {
+            throw make_exception<InvalidRequestException>(nocf.what());
         } catch (no_such_keyspace&) {
             throw NotFoundException();
         } catch (exceptions::syntax_exception& se) {
