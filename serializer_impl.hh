@@ -323,18 +323,25 @@ struct serializer<std::experimental::optional<T>> {
     }
 };
 
-template<typename Output>
-void serialize(Output& out, const sstring& v) {
-    safe_serialize_as_uint32(out, uint32_t(v.size()));
-    out.write(v.begin(), v.size());
-}
-template<typename Input>
-sstring deserialize(Input& in, boost::type<sstring>) {
-    auto sz = deserialize(in, boost::type<uint32_t>());
-    sstring v(sstring::initialized_later(), sz);
-    in.read(v.begin(), sz);
-    return v;
-}
+template<>
+struct serializer<sstring> {
+    template<typename Input>
+    static sstring read(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        sstring v(sstring::initialized_later(), sz);
+        in.read(v.begin(), sz);
+        return v;
+    }
+    template<typename Output>
+    static void write(Output& out, const sstring& v) {
+        safe_serialize_as_uint32(out, uint32_t(v.size()));
+        out.write(v.begin(), v.size());
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        in.skip(deserialize(in, boost::type<size_type>()));
+    }
+};
 
 template<typename T, typename Output>
 inline void serialize(Output& out, const std::unique_ptr<T>& v) {

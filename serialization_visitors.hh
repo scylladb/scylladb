@@ -91,9 +91,4 @@ inline void skip(seastar::simple_input_stream& v, boost::type<T>) {
     deserialize(v, boost::type<T>());
 }
 
-template<>
-inline void skip(seastar::simple_input_stream& v, boost::type<sstring>) {
-    v.skip(deserialize(v, boost::type<size_type>()));
-}
-
 }
