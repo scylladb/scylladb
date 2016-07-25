@@ -181,7 +181,8 @@ future<> trace_keyspace_helper::start() {
 
 void trace_keyspace_helper::write_one_session_records(lw_shared_ptr<one_session_records> records) {
     with_gate(_pending_writes, [this, records = std::move(records)] {
-        return this->flush_one_session_mutations(std::move(records)).finally([this] { _local_tracing.write_complete(); });
+        auto num_records = records->size();
+        return this->flush_one_session_mutations(std::move(records)).finally([this, num_records] { _local_tracing.write_complete(num_records); });
     }).handle_exception([this] (auto ep) {
         try {
             ++_stats.tracing_errors;
@@ -199,6 +200,7 @@ void trace_keyspace_helper::write_one_session_records(lw_shared_ptr<one_session_
 }
 
 void trace_keyspace_helper::write_records_bulk(records_bulk& bulk) {
+    logger.trace("Writing {} sessions", bulk.size());
     std::for_each(bulk.begin(), bulk.end(), [this] (records_bulk::value_type& one_session_records_ptr) {
         write_one_session_records(std::move(one_session_records_ptr));
     });
@@ -279,7 +281,7 @@ future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_se
     return futurize<void>::apply([this, records] {
         return apply_events_mutation(records);
     }).then([this, records] {
-        if (records->session_rec.elapsed >= 0) {
+        if (records->session_rec.ready()) {
             logger.trace("{}: storing a session event", records->session_id);
             return service::get_local_storage_proxy().mutate({make_session_mutation(*records)}, db::consistency_level::ANY, nullptr);
         } else {

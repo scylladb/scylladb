@@ -47,7 +47,7 @@
 
 namespace tracing {
 
-static logging::logger logger("trace_state");
+logging::logger trace_state_logger("trace_state");
 
 void trace_state::build_parameters_map() {
     if (!_params_ptr) {
@@ -90,40 +90,29 @@ trace_state::~trace_state() {
             // event and we don't want to cripple the primary session by
             // "stealing" one trace() event from it.
             //
-            // We do want to report it in statistics however. If for instance
-            // there are a lot of tracing sessions that only open itself and
-            // then do nothing - they will create a lot of session_record events
-            // and we do want to know about it.
-            ++_pending_trace_events;
+            // We do want to account them however. If for instance there are a
+            // lot of tracing sessions that only open itself and then do nothing
+            // - they will create a lot of session_record events and we do want
+            // to handle this case properly.
+            _records->consume_from_budget();
 
             // build_parameters_map() may throw. We don't want to record the
-            // session record in this case since its data may be incomplete.
+            // session's record in this case since its data may be incomplete.
             // These events should be really rare however, therefore we don't
             // want to optimize this flow (e.g. rollback the corresponding
-            // events' records).
+            // events' records that have already been sent to I/O).
             try {
                 build_parameters_map();
                 _records->session_rec.elapsed = elapsed();
             } catch (...) {
-                // Bump up an error counter and ignore
+                // Bump up an error counter, drop any pending events records and
+                // continue
                 ++_local_tracing_ptr->stats.trace_errors;
+                _records->events_recs.clear();
             }
         }
 
-        _local_tracing_ptr->end_session(_records, _write_on_close);
-
-        // update some stats and get out...
-        auto& tracing_stats = _local_tracing_ptr->stats;
-
-        tracing_stats.trace_events_count += _pending_trace_events;
-
-        if (_pending_trace_events >= tracing::max_trace_events_per_session) {
-            logger.trace("{}: Maximum number of traces is reached. Some traces are going to be dropped", _records->session_id);
-
-            if (++tracing_stats.max_traces_threshold_hits % tracing::max_threshold_hits_warning_period == 1) {
-                logger.warn("Maximum traces per session limit is hit {} times", tracing_stats.max_traces_threshold_hits);
-            }
-        }
+        _local_tracing_ptr->end_session(std::move(_records), _write_on_close);
     }
 }
 }

@@ -50,6 +50,8 @@
 
 namespace tracing {
 
+extern logging::logger trace_state_logger;
+
 class trace_state final {
     using clock_type = std::chrono::steady_clock;
 
@@ -301,13 +303,25 @@ inline void trace_state::trace(sstring message) {
         throw std::logic_error("trying to use a trace() before begin() for \"" + message + "\" tracepoint");
     }
 
-    if (_pending_trace_events >= tracing::max_trace_events_per_session) {
+    // We don't want the total amount of pending, active and flushing records to
+    // bypass two times the maximum number of pending records.
+    //
+    // If either records are being created too fast or a backend doesn't
+    // keep up we want to start dropping records.
+    // In any case, this should be rare, therefore we don't try to optimize this
+    // flow.
+    if (!_local_tracing_ptr->have_records_budget()) {
+        tracing_logger.trace("{}: Maximum number of traces is reached. Some traces are going to be dropped", get_session_id());
+        if ((++_local_tracing_ptr->stats.dropped_records) % tracing::log_warning_period == 1) {
+            tracing_logger.warn("Maximum records limit is hit {} times", _local_tracing_ptr->stats.dropped_records);
+        }
+
         return;
     }
 
     try {
         _records->events_recs.emplace_back(std::move(message), elapsed(), i_tracing_backend_helper::wall_clock::now());
-        ++_pending_trace_events;
+        _records->consume_from_budget();
     } catch (...) {
         // Bump up an error counter and ignore
         ++_local_tracing_ptr->stats.trace_errors;

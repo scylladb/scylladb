@@ -151,6 +151,9 @@ private:
      * Flush mutations of one particular tracing session. First "events"
      * mutations and then, when they are complete, a "sessions" mutation.
      *
+     * @note This function guaranties that it'll handle exactly the same number
+     * of records @param records had when the function was invoked.
+     *
      * @param records records describing the session's records
      *
      * @return A future that resolves when applying of above mutations is
