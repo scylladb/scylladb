@@ -278,19 +278,26 @@ void serialize(Output& out, const managed_bytes& v) {
     serializer<bytes>::write(out, v);
 }
 
-template<typename Output>
-void serialize(Output& out, const bytes_ostream& v) {
-    safe_serialize_as_uint32(out, uint32_t(v.size()));
-    for (bytes_view frag : v.fragments()) {
-        out.write(reinterpret_cast<const char*>(frag.begin()), frag.size());
+template<>
+struct serializer<bytes_ostream> {
+    template<typename Input>
+    static bytes_ostream read(Input& in) {
+        bytes_ostream v;
+        v.write(deserialize(in, boost::type<bytes>()));
+        return v;
     }
-}
-template<typename Input>
-bytes_ostream deserialize(Input& in, boost::type<bytes_ostream>) {
-    bytes_ostream v;
-    v.write(deserialize(in, boost::type<bytes>()));
-    return v;
-}
+    template<typename Output>
+    static void write(Output& out, const bytes_ostream& v) {
+        safe_serialize_as_uint32(out, uint32_t(v.size()));
+        for (bytes_view frag : v.fragments()) {
+            out.write(reinterpret_cast<const char*>(frag.begin()), frag.size());
+        }
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        read(in); // FIXME: Avoid full deserialization
+    }
+};
 
 template<typename T, typename Output>
 inline void serialize(Output& out, const std::experimental::optional<T>& v) {
