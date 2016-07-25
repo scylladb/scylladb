@@ -80,12 +80,12 @@ static constexpr auto SSTABLE_ACTIVITY = "sstable_activity";
 static constexpr auto SIZE_ESTIMATES = "size_estimates";
 
 // Partition estimates for a given range of tokens.
-struct partition_estimates {
+struct range_estimates {
+    dht::token range_start_token;
+    dht::token range_end_token;
     int64_t partitions_count;
     int64_t mean_partition_size;
 };
-
-using range_estimates = std::pair<const range<dht::ring_position>*, partition_estimates>;
 
 extern schema_ptr hints();
 extern schema_ptr batchlog();
@@ -572,12 +572,17 @@ future<> set_bootstrap_state(bootstrap_state state);
 /**
  * Writes the current partition count and size estimates into SIZE_ESTIMATES_CF
  */
-future<> update_size_estimates(const sstring& ks_name, const sstring& cf_name, std::vector<range_estimates> estimates);
+future<> update_size_estimates(sstring ks_name, sstring cf_name, std::vector<range_estimates> estimates);
 
 /**
  * Clears size estimates for a table (on table drop)
  */
-future<> clear_size_estimates(const sstring& ks_name, const sstring& cf_name);
+future<> clear_size_estimates(sstring ks_name, sstring cf_name);
+
+/**
+ * Queries the size estimates within the specified range
+ */
+future<std::vector<range_estimates>> query_size_estimates(sstring ks_name, sstring cf_name, dht::token start_token, dht::token end_token);
 
 } // namespace system_keyspace
 } // namespace db

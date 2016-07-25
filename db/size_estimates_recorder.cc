@@ -71,6 +71,7 @@ static std::vector<db::system_keyspace::range_estimates> estimates_for(const col
     std::vector<db::system_keyspace::range_estimates> estimates;
     estimates.reserve(local_ranges.size());
 
+    // Each range defines both bounds.
     for (auto& range : local_ranges) {
         int64_t count{0};
         sstables::estimated_histogram hist{0};
@@ -78,7 +79,11 @@ static std::vector<db::system_keyspace::range_estimates> estimates_for(const col
             count += sstable->get_estimated_key_count();
             hist.merge(sstable->get_stats_metadata().estimated_row_size);
         }
-        estimates.emplace_back(&range, db::system_keyspace::partition_estimates{count, count > 0 ? hist.mean() : 0});
+        estimates.emplace_back(db::system_keyspace::range_estimates{
+                range.start()->value().token(),
+                range.end()->value().token(),
+                count,
+                count > 0 ? hist.mean() : 0});
     }
 
     return estimates;
@@ -130,7 +135,7 @@ future<> size_estimates_recorder::record_size_estimates() {
 }
 
 future<> size_estimates_recorder::stop() {
-    if (get_size_estimates_recorder().local_is_initialized()) {
+    if (engine().cpu_id() == 0) {
         service::get_local_migration_manager().unregister_listener(this);
         _timer.cancel();
         return _gate.close();
