@@ -300,8 +300,10 @@ template<>
 struct serializer<bytes_ostream> {
     template<typename Input>
     static bytes_ostream read(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
         bytes_ostream v;
-        v.write(deserialize(in, boost::type<bytes>()));
+        auto dst = v.write_place_holder(sz);
+        in.read(reinterpret_cast<char*>(dst), sz);
         return v;
     }
     template<typename Output>
