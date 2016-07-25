@@ -120,6 +120,10 @@ struct deserialize_array_helper<true, T> {
         t.resize(v, sz);
         in.read(reinterpret_cast<char*>(v.data()), v.size() * sizeof(T));
     }
+    template<typename Input>
+    static void skip(Input& in, size_t sz) {
+        in.skip(sz * sizeof(T));
+    }
 };
 
 template<typename T>
@@ -131,6 +135,12 @@ struct deserialize_array_helper<false, T> {
             be(deserialize(in, boost::type<T>()));
         }
     }
+    template<typename Input>
+    static void skip(Input& in, size_t sz) {
+        while (sz--) {
+            serializer<T>::skip(in);
+        }
+    }
 };
 
 template<typename T, typename Input, typename Container>
@@ -138,163 +148,266 @@ static inline void deserialize_array(Input& in, Container& v, size_t sz) {
     deserialize_array_helper<can_serialize_fast<T>(), T>::doit(in, v, sz);
 }
 
-template<typename T, typename Output>
-inline void serialize(Output& out, const std::vector<T>& v) {
-    safe_serialize_as_uint32(out, v.size());
-    serialize_array<T>(out, v);
-}
 template<typename T, typename Input>
-inline std::vector<T> deserialize(Input& in, boost::type<std::vector<T>>) {
-    auto sz = deserialize(in, boost::type<uint32_t>());
-    std::vector<T> v;
-    v.reserve(sz);
-    deserialize_array<T>(in, v, sz);
-    return v;
+static inline void skip_array(Input& in, size_t sz) {
+    deserialize_array_helper<can_serialize_fast<T>(), T>::skip(in, sz);
 }
 
-template<typename T, typename Ratio, typename Output>
-inline void serialize(Output& out, const std::chrono::duration<T, Ratio>& d) {
-    serialize(out, d.count());
+template<typename T>
+struct serializer<std::vector<T>> {
+    template<typename Input>
+    static std::vector<T> read(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        std::vector<T> v;
+        v.reserve(sz);
+        deserialize_array<T>(in, v, sz);
+        return v;
+    }
+    template<typename Output>
+    static void write(Output& out, const std::vector<T>& v) {
+        safe_serialize_as_uint32(out, v.size());
+        serialize_array<T>(out, v);
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        skip_array<T>(in, sz);
+    }
 };
 
-template<typename T, typename Ratio, typename Input>
-inline std::chrono::duration<T, Ratio> deserialize(Input& in, boost::type<std::chrono::duration<T, Ratio>>) {
-    return std::chrono::duration<T, Ratio>(deserialize(in, boost::type<T>()));
+template<typename T, typename Ratio>
+struct serializer<std::chrono::duration<T, Ratio>> {
+    template<typename Input>
+    static std::chrono::duration<T, Ratio> read(Input& in) {
+        return std::chrono::duration<T, Ratio>(deserialize(in, boost::type<T>()));
+    }
+    template<typename Output>
+    static void write(Output& out, const std::chrono::duration<T, Ratio>& d) {
+        serialize(out, d.count());
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        read(in);
+    }
 };
 
+template<typename Clock, typename Duration>
+struct serializer<std::chrono::time_point<Clock, Duration>> {
+    using value_type = std::chrono::time_point<Clock, Duration>;
 
-template<size_t N, typename T, typename Output>
-inline void serialize(Output& out, const std::array<T, N>& v) {
-    serialize_array<T>(out, v);
-}
-template<size_t N, typename T, typename Input>
-inline std::array<T, N> deserialize(Input& in, boost::type<std::array<T, N>>) {
-    std::array<T, N> v;
-    deserialize_array<T>(in, v, N);
-    return v;
-}
+    template<typename Input>
+    static value_type read(Input& in) {
+        return typename Clock::time_point(Duration(deserialize(in, boost::type<uint64_t>())));
+    }
+    template<typename Output>
+    static void write(Output& out, const value_type& v) {
+        serialize(out, uint64_t(v.time_since_epoch().count()));
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        read(in);
+    }
+};
 
-template<typename K, typename V, typename Output>
-inline void serialize(Output& out, const std::map<K, V>& v) {
-    safe_serialize_as_uint32(out, v.size());
-    for (auto&& e : v) {
-        serialize(out, e.first);
-        serialize(out, e.second);
+template<size_t N, typename T>
+struct serializer<std::array<T, N>> {
+    template<typename Input>
+    static std::array<T, N> read(Input& in) {
+        std::array<T, N> v;
+        deserialize_array<T>(in, v, N);
+        return v;
     }
-}
-template<typename K, typename V, typename Input>
-inline std::map<K, V> deserialize(Input& in, boost::type<std::map<K, V>>) {
-    auto sz = deserialize(in, boost::type<uint32_t>());
-    std::map<K, V> m;
-    while (sz--) {
-        K k = deserialize(in, boost::type<K>());
-        V v = deserialize(in, boost::type<V>());
-        m[k] = v;
+    template<typename Output>
+    static void write(Output& out, const std::array<T, N>& v) {
+        serialize_array<T>(out, v);
     }
-    return m;
-}
+    template<typename Input>
+    static void skip(Input& in) {
+        skip_array<T>(in, N);
+    }
+};
+
+template<typename K, typename V>
+struct serializer<std::map<K, V>> {
+    template<typename Input>
+    static std::map<K, V> read(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        std::map<K, V> m;
+        while (sz--) {
+            K k = deserialize(in, boost::type<K>());
+            V v = deserialize(in, boost::type<V>());
+            m[k] = v;
+        }
+        return m;
+    }
+    template<typename Output>
+    static void write(Output& out, const std::map<K, V>& v) {
+        safe_serialize_as_uint32(out, v.size());
+        for (auto&& e : v) {
+            serialize(out, e.first);
+            serialize(out, e.second);
+        }
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        while (sz--) {
+            serializer<K>::skip(in);
+            serializer<V>::skip(in);
+        }
+    }
+};
+
+template<>
+struct serializer<bytes> {
+    template<typename Input>
+    static bytes read(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        bytes v(bytes::initialized_later(), sz);
+        in.read(reinterpret_cast<char*>(v.begin()), sz);
+        return v;
+    }
+    template<typename Output>
+    static void write(Output& out, bytes_view v) {
+        safe_serialize_as_uint32(out, uint32_t(v.size()));
+        out.write(reinterpret_cast<const char*>(v.begin()), v.size());
+    }
+    template<typename Output>
+    static void write(Output& out, const bytes& v) {
+        write(out, static_cast<bytes_view>(v));
+    }
+    template<typename Output>
+    static void write(Output& out, const managed_bytes& v) {
+        write(out, static_cast<bytes_view>(v));
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        in.skip(sz);
+    }
+};
 
 template<typename Output>
 void serialize(Output& out, const bytes_view& v) {
-    safe_serialize_as_uint32(out, uint32_t(v.size()));
-    out.write(reinterpret_cast<const char*>(v.begin()), v.size());
+    serializer<bytes>::write(out, v);
 }
 template<typename Output>
 void serialize(Output& out, const managed_bytes& v) {
-    safe_serialize_as_uint32(out, uint32_t(v.size()));
-    out.write(reinterpret_cast<const char*>(v.begin()), v.size());
-}
-template<typename Output>
-void serialize(Output& out, const bytes& v) {
-    safe_serialize_as_uint32(out, uint32_t(v.size()));
-    out.write(reinterpret_cast<const char*>(v.begin()), v.size());
-}
-template<typename Input>
-bytes deserialize(Input& in, boost::type<bytes>) {
-    auto sz = deserialize(in, boost::type<uint32_t>());
-    bytes v(bytes::initialized_later(), sz);
-    in.read(reinterpret_cast<char*>(v.begin()), sz);
-    return v;
+    serializer<bytes>::write(out, v);
 }
 
-template<typename Output>
-void serialize(Output& out, const bytes_ostream& v) {
-    safe_serialize_as_uint32(out, uint32_t(v.size()));
-    for (bytes_view frag : v.fragments()) {
-        out.write(reinterpret_cast<const char*>(frag.begin()), frag.size());
+template<>
+struct serializer<bytes_ostream> {
+    template<typename Input>
+    static bytes_ostream read(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        bytes_ostream v;
+        auto dst = v.write_place_holder(sz);
+        in.read(reinterpret_cast<char*>(dst), sz);
+        return v;
     }
-}
-template<typename Input>
-bytes_ostream deserialize(Input& in, boost::type<bytes_ostream>) {
-    bytes_ostream v;
-    v.write(deserialize(in, boost::type<bytes>()));
-    return v;
-}
-
-template<typename T, typename Output>
-inline void serialize(Output& out, const std::experimental::optional<T>& v) {
-    serialize(out, bool(v));
-    if (v) {
-        serialize(out, v.value());
+    template<typename Output>
+    static void write(Output& out, const bytes_ostream& v) {
+        safe_serialize_as_uint32(out, uint32_t(v.size()));
+        for (bytes_view frag : v.fragments()) {
+            out.write(reinterpret_cast<const char*>(frag.begin()), frag.size());
+        }
     }
-}
-template<typename T, typename Input>
-inline std::experimental::optional<T> deserialize(Input& in, boost::type<std::experimental::optional<T>>) {
-    std::experimental::optional<T> v;
-    auto b = deserialize(in, boost::type<bool>());
-    if (b) {
-        v = deserialize(in, boost::type<T>());
+    template<typename Input>
+    static void skip(Input& in) {
+        serializer<bytes>::skip(in);
     }
-    return v;
-}
+};
 
-template<typename Output>
-void serialize(Output& out, const sstring& v) {
-    safe_serialize_as_uint32(out, uint32_t(v.size()));
-    out.write(v.begin(), v.size());
-}
-template<typename Input>
-sstring deserialize(Input& in, boost::type<sstring>) {
-    auto sz = deserialize(in, boost::type<uint32_t>());
-    sstring v(sstring::initialized_later(), sz);
-    in.read(v.begin(), sz);
-    return v;
-}
-
-template<typename T, typename Output>
-inline void serialize(Output& out, const std::unique_ptr<T>& v) {
-    serialize(out, bool(v));
-    if (v) {
-        serialize(out, *v);
+template<typename T>
+struct serializer<std::experimental::optional<T>> {
+    template<typename Input>
+    static std::experimental::optional<T> read(Input& in) {
+        std::experimental::optional<T> v;
+        auto b = deserialize(in, boost::type<bool>());
+        if (b) {
+            v = deserialize(in, boost::type<T>());
+        }
+        return v;
     }
-}
-template<typename T, typename Input>
-inline std::unique_ptr<T> deserialize(Input& in, boost::type<std::unique_ptr<T>>) {
-    std::unique_ptr<T> v;
-    auto b = deserialize(in, boost::type<bool>());
-    if (b) {
-        v = std::make_unique<T>(deserialize(in, boost::type<T>()));
+    template<typename Output>
+    static void write(Output& out, const std::experimental::optional<T>& v) {
+        serialize(out, bool(v));
+        if (v) {
+            serialize(out, v.value());
+        }
     }
-    return v;
-}
+    template<typename Input>
+    static void skip(Input& in) {
+        auto present = deserialize(in, boost::type<bool>());
+        if (present) {
+            serializer<T>::skip(in);
+        }
+    }
+};
 
-template<typename Clock, typename Duration, typename Output>
-inline void serialize(Output& out, const std::chrono::time_point<Clock, Duration>& v) {
-    serialize(out, uint64_t(v.time_since_epoch().count()));
-}
-template<typename Clock, typename Duration, typename Input>
-inline std::chrono::time_point<Clock, Duration> deserialize(Input& in, boost::type<std::chrono::time_point<Clock, Duration>>) {
-    return typename Clock::time_point(Duration(deserialize(in, boost::type<uint64_t>())));
-}
+template<>
+struct serializer<sstring> {
+    template<typename Input>
+    static sstring read(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        sstring v(sstring::initialized_later(), sz);
+        in.read(v.begin(), sz);
+        return v;
+    }
+    template<typename Output>
+    static void write(Output& out, const sstring& v) {
+        safe_serialize_as_uint32(out, uint32_t(v.size()));
+        out.write(v.begin(), v.size());
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        in.skip(deserialize(in, boost::type<size_type>()));
+    }
+};
 
-template<typename Enum, typename Output>
-inline void serialize(Output& out, const enum_set<Enum>& v) {
-    serialize(out, uint64_t(v.mask()));
-}
-template<typename Enum, typename Input>
-inline enum_set<Enum> deserialize(Input& in, boost::type<enum_set<Enum>>) {
-    return enum_set<Enum>::from_mask(deserialize(in, boost::type<uint64_t>()));
-}
+template<typename T>
+struct serializer<std::unique_ptr<T>> {
+    template<typename Input>
+    static std::unique_ptr<T> read(Input& in) {
+        std::unique_ptr<T> v;
+        auto b = deserialize(in, boost::type<bool>());
+        if (b) {
+            v = std::make_unique<T>(deserialize(in, boost::type<T>()));
+        }
+        return v;
+    }
+    template<typename Output>
+    static void write(Output& out, const std::unique_ptr<T>& v) {
+        serialize(out, bool(v));
+        if (v) {
+            serialize(out, *v);
+        }
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        auto present = deserialize(in, boost::type<bool>());
+        if (present) {
+            serializer<T>::skip(in);
+        }
+    }
+};
+
+template<typename Enum>
+struct serializer<enum_set<Enum>> {
+    template<typename Input>
+    static enum_set<Enum> read(Input& in) {
+        return enum_set<Enum>::from_mask(deserialize(in, boost::type<uint64_t>()));
+    }
+    template<typename Output>
+    static void write(Output& out, enum_set<Enum> v) {
+        serialize(out, uint64_t(v.mask()));
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        read(in);
+    }
+};
 
 template<typename T>
 size_type get_sizeof(const T& obj) {

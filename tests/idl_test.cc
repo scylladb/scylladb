@@ -51,6 +51,29 @@ struct simple_compound {
     }
 };
 
+class non_final_composite_test_object {
+    simple_compound _x;
+public:
+    static thread_local int construction_count;
+    non_final_composite_test_object(simple_compound x) : _x(x) {
+        ++construction_count;
+    }
+    simple_compound x() const { return _x; }
+};
+
+class final_composite_test_object {
+    simple_compound _x;
+public:
+    static thread_local int construction_count;
+    final_composite_test_object(simple_compound x) : _x(x) {
+        ++construction_count;
+    }
+    simple_compound x() const { return _x; }
+};
+
+thread_local int non_final_composite_test_object::construction_count = 0;
+thread_local int final_composite_test_object::construction_count = 0;
+
 std::ostream& operator<<(std::ostream& os, const simple_compound& sc)
 {
     return os << " { foo: " << sc.foo << ", bar: " << sc.bar << " }";
@@ -295,4 +318,35 @@ BOOST_AUTO_TEST_CASE(test_compound_with_optional)
     seastar::simple_input_stream in2(reinterpret_cast<const char*>(bv2.data()), bv2.size());
     auto deser_two = ser::deserialize(in2, boost::type<compound_with_optional>());
     BOOST_REQUIRE_EQUAL(two, deser_two);
+}
+
+BOOST_AUTO_TEST_CASE(test_skip_does_not_deserialize)
+{
+    {
+        non_final_composite_test_object x({1, 2});
+
+        bytes_ostream buf;
+        ser::serialize(buf, x);
+
+        auto in = ser::as_input_stream(buf.linearize());
+        auto prev = non_final_composite_test_object::construction_count;
+
+        ser::skip(in, boost::type<non_final_composite_test_object>());
+
+        BOOST_REQUIRE(prev == non_final_composite_test_object::construction_count);
+    }
+
+    {
+        final_composite_test_object x({1, 2});
+
+        bytes_ostream buf;
+        ser::serialize(buf, x);
+
+        auto in = ser::as_input_stream(buf.linearize());
+        auto prev = final_composite_test_object::construction_count;
+
+        ser::skip(in, boost::type<final_composite_test_object>());
+
+        BOOST_REQUIRE(prev == final_composite_test_object::construction_count);
+    }
 }
