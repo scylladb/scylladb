@@ -349,7 +349,6 @@ BOOST_AUTO_TEST_CASE(test_rp_token3) {
 
     auto t1 = partitioner.from_sstring(to_sstring("255"));
     auto bytes1 = partitioner.token_to_bytes(t1);
-    auto bytes3 = partitioner.token_to_bytes(t3);
     // Zero byte is prepended, 255 needs one byte, bit 7 is set
     BOOST_REQUIRE(bytes1.size() == 2);
     BOOST_REQUIRE(bytes1[0] == int8_t(0));
@@ -357,7 +356,6 @@ BOOST_AUTO_TEST_CASE(test_rp_token3) {
 
     auto t2 = partitioner.from_sstring(to_sstring("250"));
     auto bytes2 = partitioner.token_to_bytes(t2);
-    auto bytes3 = partitioner.token_to_bytes(t3);
     // Zero byte is prepended, 250 needs one byte, bit 7 is set
     BOOST_REQUIRE(bytes2.size() == 2);
     BOOST_REQUIRE(bytes2[0] == int8_t(0));
