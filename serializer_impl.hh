@@ -178,6 +178,24 @@ struct serializer<std::chrono::duration<T, Ratio>> {
     }
 };
 
+template<typename Clock, typename Duration>
+struct serializer<std::chrono::time_point<Clock, Duration>> {
+    using value_type = std::chrono::time_point<Clock, Duration>;
+
+    template<typename Input>
+    static value_type read(Input& in) {
+        return typename Clock::time_point(Duration(deserialize(in, boost::type<uint64_t>())));
+    }
+    template<typename Output>
+    static void write(Output& out, const value_type& v) {
+        serialize(out, uint64_t(v.time_since_epoch().count()));
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        read(in);
+    }
+};
+
 template<size_t N, typename T>
 struct serializer<std::array<T, N>> {
     template<typename Input>
@@ -305,15 +323,6 @@ inline std::unique_ptr<T> deserialize(Input& in, boost::type<std::unique_ptr<T>>
         v = std::make_unique<T>(deserialize(in, boost::type<T>()));
     }
     return v;
-}
-
-template<typename Clock, typename Duration, typename Output>
-inline void serialize(Output& out, const std::chrono::time_point<Clock, Duration>& v) {
-    serialize(out, uint64_t(v.time_since_epoch().count()));
-}
-template<typename Clock, typename Duration, typename Input>
-inline std::chrono::time_point<Clock, Duration> deserialize(Input& in, boost::type<std::chrono::time_point<Clock, Duration>>) {
-    return typename Clock::time_point(Duration(deserialize(in, boost::type<uint64_t>())));
 }
 
 template<typename Enum, typename Output>
