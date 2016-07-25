@@ -26,8 +26,12 @@ class intrusive_list:
     def __init__(self, list_ref):
         list_type = list_ref.type.strip_typedefs()
         self.node_type = list_type.template_argument(0)
-        self.root = list_ref['data_']['root_plus_size_']['root_']
-
+        rps = list_ref['data_']['root_plus_size_']
+        try:
+            self.root = rps['root_']
+        except:
+            # Some boost versions have this instead
+            self.root = rps['m_header']
         member_hook = get_template_arg_with_prefix(list_type, "boost::intrusive::member_hook")
         if member_hook:
             self.link_offset = member_hook.template_argument(2).cast(self.size_t)
@@ -531,12 +535,45 @@ def exit_thread_context():
         active_thread_context.__exit__()
         active_thread_context = None
 
+def seastar_threads_on_current_shard():
+    return intrusive_list(gdb.parse_and_eval('\'seastar::thread_context::_all_threads\''))
+
 class scylla_thread(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla thread', gdb.COMMAND_USER,
                              gdb.COMPLETE_COMMAND, True)
+    def invoke_apply_all(self, args):
+        for r in reactors():
+            for t in seastar_threads_on_current_shard():
+                gdb.write('\n[shard %2d] (seastar::thread_context*) 0x%x:\n\n' % (r['_id'], t.address))
+                with seastar_thread_context(t):
+                    gdb.execute(' '.join(args))
+
+    def print_usage(self):
+        gdb.write("""Missing argument. Usage:
+
+ scylla thread <seastar::thread_context pointer> - switches to given seastar thread
+ scylla thread apply all <cmd>                   - executes cmd in the context of each seastar thread
+
+""")
+
     def invoke(self, arg, for_tty):
-        addr = gdb.parse_and_eval(arg)
+        args = arg.split()
+
+        if len(args) < 1:
+            self.print_usage()
+            return
+
+        if args[0] == 'apply':
+            args.pop(0)
+            if len(args) < 2 or args[0] != 'all':
+                self.print_usage()
+                return
+            args.pop(0)
+            self.invoke_apply_all(args)
+            return
+
+        addr = gdb.parse_and_eval(args[0])
         ctx = addr.reinterpret_cast(gdb.lookup_type('seastar::thread_context').pointer()).dereference()
         exit_thread_context()
         global active_thread_context
@@ -548,6 +585,15 @@ class scylla_unthread(gdb.Command):
         gdb.Command.__init__(self, 'scylla unthread', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
     def invoke(self, arg, for_tty):
         exit_thread_context()
+
+class scylla_threads(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla threads', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+    def invoke(self, arg, for_tty):
+        for r in reactors():
+            shard = r['_id']
+            for t in seastar_threads_on_current_shard():
+                gdb.write('[shard %2d] (seastar::thread_context*) 0x%x\n' % (shard, t.address))
 
 scylla()
 scylla_databases()
@@ -564,3 +610,4 @@ scylla_apply()
 scylla_shard()
 scylla_thread()
 scylla_unthread()
+scylla_threads()
