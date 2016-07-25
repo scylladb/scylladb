@@ -86,9 +86,4 @@ size_type read_frame_size(Input& in) {
     return sz - sizeof(size_type);
 }
 
-template<typename T>
-inline void skip(seastar::simple_input_stream& v, boost::type<T>) {
-    return serializer<T>::skip(v);
-}
-
 }

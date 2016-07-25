@@ -92,6 +92,11 @@ inline T deserialize(Input& in, boost::type<T> t) {
 };
 
 template<typename T>
+inline void skip(seastar::simple_input_stream& v, boost::type<T>) {
+    return serializer<T>::skip(v);
+}
+
+template<typename T>
 size_type get_sizeof(const T& obj);
 
 template<typename T>
