@@ -91,12 +91,6 @@ inline T deserialize(Input& in, boost::type<T> t) {
     return serializer<T>::read(in);
 };
 
-// For vectors
-template<typename T, typename Output>
-inline void serialize(Output& out, const std::vector<T>& v);
-template<typename T, typename Input>
-inline std::vector<T> deserialize(Input& in, boost::type<std::vector<T>>);
-
 template<size_t N, typename T, typename Output>
 inline void serialize(Output& out, const std::array<T, N>& v);
 template<size_t N, typename T, typename Input>

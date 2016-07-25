@@ -138,19 +138,29 @@ static inline void deserialize_array(Input& in, Container& v, size_t sz) {
     deserialize_array_helper<can_serialize_fast<T>(), T>::doit(in, v, sz);
 }
 
-template<typename T, typename Output>
-inline void serialize(Output& out, const std::vector<T>& v) {
-    safe_serialize_as_uint32(out, v.size());
-    serialize_array<T>(out, v);
-}
-template<typename T, typename Input>
-inline std::vector<T> deserialize(Input& in, boost::type<std::vector<T>>) {
-    auto sz = deserialize(in, boost::type<uint32_t>());
-    std::vector<T> v;
-    v.reserve(sz);
-    deserialize_array<T>(in, v, sz);
-    return v;
-}
+template<typename T>
+struct serializer<std::vector<T>> {
+    template<typename Input>
+    static std::vector<T> read(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        std::vector<T> v;
+        v.reserve(sz);
+        deserialize_array<T>(in, v, sz);
+        return v;
+    }
+    template<typename Output>
+    static void write(Output& out, const std::vector<T>& v) {
+        safe_serialize_as_uint32(out, v.size());
+        serialize_array<T>(out, v);
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        auto ln = deserialize(in, boost::type<size_type>());
+        for (size_type i = 0; i < ln; i++) {
+            serializer<T>::skip(in);
+        }
+    }
+};
 
 template<typename T, typename Ratio, typename Output>
 inline void serialize(Output& out, const std::chrono::duration<T, Ratio>& d) {
