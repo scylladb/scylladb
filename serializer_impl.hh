@@ -170,10 +170,8 @@ struct serializer<std::vector<T>> {
     }
     template<typename Input>
     static void skip(Input& in) {
-        auto ln = deserialize(in, boost::type<size_type>());
-        for (size_type i = 0; i < ln; i++) {
-            serializer<T>::skip(in);
-        }
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        skip_array<T>(in, sz);
     }
 };
 
