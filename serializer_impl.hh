@@ -367,14 +367,21 @@ struct serializer<std::unique_ptr<T>> {
     }
 };
 
-template<typename Enum, typename Output>
-inline void serialize(Output& out, const enum_set<Enum>& v) {
-    serialize(out, uint64_t(v.mask()));
-}
-template<typename Enum, typename Input>
-inline enum_set<Enum> deserialize(Input& in, boost::type<enum_set<Enum>>) {
-    return enum_set<Enum>::from_mask(deserialize(in, boost::type<uint64_t>()));
-}
+template<typename Enum>
+struct serializer<enum_set<Enum>> {
+    template<typename Input>
+    static enum_set<Enum> read(Input& in) {
+        return enum_set<Enum>::from_mask(deserialize(in, boost::type<uint64_t>()));
+    }
+    template<typename Output>
+    static void write(Output& out, enum_set<Enum> v) {
+        serialize(out, uint64_t(v.mask()));
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        read(in);
+    }
+};
 
 template<typename T>
 size_type get_sizeof(const T& obj) {

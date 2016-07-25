@@ -93,11 +93,6 @@ inline T deserialize(Input& in, boost::type<T> t) {
 
 template<typename T>
 size_type get_sizeof(const T& obj);
-// For enum_set
-template<typename Enum, typename Output>
-inline void serialize(Output& out, const enum_set<Enum>& v);
-template<typename Enum, typename Input>
-inline enum_set<Enum> deserialize(Input& in, boost::type<enum_set<Enum>>);
 
 template<typename T>
 void set_size(seastar::simple_output_stream& os, const T& obj);
