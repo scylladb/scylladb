@@ -70,3 +70,11 @@ struct compound_with_optional {
     std::experimental::optional<simple_compound> first;
     simple_compound second;
 };
+
+class non_final_composite_test_object {
+    simple_compound x();
+};
+
+class final_composite_test_object final {
+    simple_compound x();
+};
