@@ -98,11 +98,6 @@ template<typename Output>
 void serialize(Output& out, const sstring& v);
 template<typename Input>
 sstring deserialize(Input& in, boost::type<sstring>);
-// For optional
-template<typename T, typename Output>
-inline void serialize(Output& out, const std::experimental::optional<T>& v);
-template<typename T, typename Input>
-inline std::experimental::optional<T> deserialize(Input& in, boost::type<std::experimental::optional<T>>);
 template<typename T, typename Output>
 // For unique_ptr
 inline void serialize(Output& out, const std::unique_ptr<T>& v);

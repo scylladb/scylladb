@@ -299,22 +299,29 @@ struct serializer<bytes_ostream> {
     }
 };
 
-template<typename T, typename Output>
-inline void serialize(Output& out, const std::experimental::optional<T>& v) {
-    serialize(out, bool(v));
-    if (v) {
-        serialize(out, v.value());
+template<typename T>
+struct serializer<std::experimental::optional<T>> {
+    template<typename Input>
+    static std::experimental::optional<T> read(Input& in) {
+        std::experimental::optional<T> v;
+        auto b = deserialize(in, boost::type<bool>());
+        if (b) {
+            v = deserialize(in, boost::type<T>());
+        }
+        return v;
     }
-}
-template<typename T, typename Input>
-inline std::experimental::optional<T> deserialize(Input& in, boost::type<std::experimental::optional<T>>) {
-    std::experimental::optional<T> v;
-    auto b = deserialize(in, boost::type<bool>());
-    if (b) {
-        v = deserialize(in, boost::type<T>());
+    template<typename Output>
+    static void write(Output& out, const std::experimental::optional<T>& v) {
+        serialize(out, bool(v));
+        if (v) {
+            serialize(out, v.value());
+        }
     }
-    return v;
-}
+    template<typename Input>
+    static void skip(Input& in) {
+        read(in); // FIXME: Avoid full deserialization
+    }
+};
 
 template<typename Output>
 void serialize(Output& out, const sstring& v) {
