@@ -120,6 +120,10 @@ struct deserialize_array_helper<true, T> {
         t.resize(v, sz);
         in.read(reinterpret_cast<char*>(v.data()), v.size() * sizeof(T));
     }
+    template<typename Input>
+    static void skip(Input& in, size_t sz) {
+        in.skip(sz * sizeof(T));
+    }
 };
 
 template<typename T>
@@ -131,11 +135,22 @@ struct deserialize_array_helper<false, T> {
             be(deserialize(in, boost::type<T>()));
         }
     }
+    template<typename Input>
+    static void skip(Input& in, size_t sz) {
+        while (sz--) {
+            serializer<T>::skip(in);
+        }
+    }
 };
 
 template<typename T, typename Input, typename Container>
 static inline void deserialize_array(Input& in, Container& v, size_t sz) {
     deserialize_array_helper<can_serialize_fast<T>(), T>::doit(in, v, sz);
+}
+
+template<typename T, typename Input>
+static inline void skip_array(Input& in, size_t sz) {
+    deserialize_array_helper<can_serialize_fast<T>(), T>::skip(in, sz);
 }
 
 template<typename T>
@@ -210,7 +225,7 @@ struct serializer<std::array<T, N>> {
     }
     template<typename Input>
     static void skip(Input& in) {
-        read(in); // FIXME: Avoid full deserialization
+        skip_array<T>(in, N);
     }
 };
 
