@@ -178,16 +178,23 @@ struct serializer<std::chrono::duration<T, Ratio>> {
     }
 };
 
-template<size_t N, typename T, typename Output>
-inline void serialize(Output& out, const std::array<T, N>& v) {
-    serialize_array<T>(out, v);
-}
-template<size_t N, typename T, typename Input>
-inline std::array<T, N> deserialize(Input& in, boost::type<std::array<T, N>>) {
-    std::array<T, N> v;
-    deserialize_array<T>(in, v, N);
-    return v;
-}
+template<size_t N, typename T>
+struct serializer<std::array<T, N>> {
+    template<typename Input>
+    static std::array<T, N> read(Input& in) {
+        std::array<T, N> v;
+        deserialize_array<T>(in, v, N);
+        return v;
+    }
+    template<typename Output>
+    static void write(Output& out, const std::array<T, N>& v) {
+        serialize_array<T>(out, v);
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        read(in); // FIXME: Avoid full deserialization
+    }
+};
 
 template<typename K, typename V, typename Output>
 inline void serialize(Output& out, const std::map<K, V>& v) {
