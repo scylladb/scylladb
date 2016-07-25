@@ -91,10 +91,6 @@ inline T deserialize(Input& in, boost::type<T> t) {
     return serializer<T>::read(in);
 };
 
-template<typename K, typename V, typename Output>
-inline void serialize(Output& out, const std::map<K, V>& v);
-template<typename K, typename V, typename Input>
-inline std::map<K, V> deserialize(Input& in, boost::type<std::map<K, V>>);
 template<typename T>
 size_type get_sizeof(const T& obj);
 // For sstring

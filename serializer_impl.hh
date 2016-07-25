@@ -196,25 +196,32 @@ struct serializer<std::array<T, N>> {
     }
 };
 
-template<typename K, typename V, typename Output>
-inline void serialize(Output& out, const std::map<K, V>& v) {
-    safe_serialize_as_uint32(out, v.size());
-    for (auto&& e : v) {
-        serialize(out, e.first);
-        serialize(out, e.second);
+template<typename K, typename V>
+struct serializer<std::map<K, V>> {
+    template<typename Input>
+    static std::map<K, V> read(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        std::map<K, V> m;
+        while (sz--) {
+            K k = deserialize(in, boost::type<K>());
+            V v = deserialize(in, boost::type<V>());
+            m[k] = v;
+        }
+        return m;
     }
-}
-template<typename K, typename V, typename Input>
-inline std::map<K, V> deserialize(Input& in, boost::type<std::map<K, V>>) {
-    auto sz = deserialize(in, boost::type<uint32_t>());
-    std::map<K, V> m;
-    while (sz--) {
-        K k = deserialize(in, boost::type<K>());
-        V v = deserialize(in, boost::type<V>());
-        m[k] = v;
+    template<typename Output>
+    static void write(Output& out, const std::map<K, V>& v) {
+        safe_serialize_as_uint32(out, v.size());
+        for (auto&& e : v) {
+            serialize(out, e.first);
+            serialize(out, e.second);
+        }
     }
-    return m;
-}
+    template<typename Input>
+    static void skip(Input& in) {
+        read(in); // FIXME: Avoid full deserialization
+    }
+};
 
 template<typename Output>
 void serialize(Output& out, const bytes_view& v) {
