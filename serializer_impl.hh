@@ -241,27 +241,41 @@ struct serializer<std::map<K, V>> {
     }
 };
 
+template<>
+struct serializer<bytes> {
+    template<typename Input>
+    static bytes read(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        bytes v(bytes::initialized_later(), sz);
+        in.read(reinterpret_cast<char*>(v.begin()), sz);
+        return v;
+    }
+    template<typename Output>
+    static void write(Output& out, bytes_view v) {
+        safe_serialize_as_uint32(out, uint32_t(v.size()));
+        out.write(reinterpret_cast<const char*>(v.begin()), v.size());
+    }
+    template<typename Output>
+    static void write(Output& out, const bytes& v) {
+        write(out, static_cast<bytes_view>(v));
+    }
+    template<typename Output>
+    static void write(Output& out, const managed_bytes& v) {
+        write(out, static_cast<bytes_view>(v));
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        read(in); // FIXME: Avoid full deserialization
+    }
+};
+
 template<typename Output>
 void serialize(Output& out, const bytes_view& v) {
-    safe_serialize_as_uint32(out, uint32_t(v.size()));
-    out.write(reinterpret_cast<const char*>(v.begin()), v.size());
+    serializer<bytes>::write(out, v);
 }
 template<typename Output>
 void serialize(Output& out, const managed_bytes& v) {
-    safe_serialize_as_uint32(out, uint32_t(v.size()));
-    out.write(reinterpret_cast<const char*>(v.begin()), v.size());
-}
-template<typename Output>
-void serialize(Output& out, const bytes& v) {
-    safe_serialize_as_uint32(out, uint32_t(v.size()));
-    out.write(reinterpret_cast<const char*>(v.begin()), v.size());
-}
-template<typename Input>
-bytes deserialize(Input& in, boost::type<bytes>) {
-    auto sz = deserialize(in, boost::type<uint32_t>());
-    bytes v(bytes::initialized_later(), sz);
-    in.read(reinterpret_cast<char*>(v.begin()), sz);
-    return v;
+    serializer<bytes>::write(out, v);
 }
 
 template<typename Output>
