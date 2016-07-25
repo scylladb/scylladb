@@ -250,7 +250,11 @@ struct serializer<std::map<K, V>> {
     }
     template<typename Input>
     static void skip(Input& in) {
-        read(in); // FIXME: Avoid full deserialization
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        while (sz--) {
+            serializer<K>::skip(in);
+            serializer<V>::skip(in);
+        }
     }
 };
 
@@ -278,7 +282,8 @@ struct serializer<bytes> {
     }
     template<typename Input>
     static void skip(Input& in) {
-        read(in); // FIXME: Avoid full deserialization
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        in.skip(sz);
     }
 };
 
@@ -308,7 +313,7 @@ struct serializer<bytes_ostream> {
     }
     template<typename Input>
     static void skip(Input& in) {
-        read(in); // FIXME: Avoid full deserialization
+        serializer<bytes>::skip(in);
     }
 };
 
@@ -332,7 +337,10 @@ struct serializer<std::experimental::optional<T>> {
     }
     template<typename Input>
     static void skip(Input& in) {
-        read(in); // FIXME: Avoid full deserialization
+        auto present = deserialize(in, boost::type<bool>());
+        if (present) {
+            serializer<T>::skip(in);
+        }
     }
 };
 
@@ -376,7 +384,10 @@ struct serializer<std::unique_ptr<T>> {
     }
     template<typename Input>
     static void skip(Input& in) {
-        read(in); // FIXME: Avoid full deserialization
+        auto present = deserialize(in, boost::type<bool>());
+        if (present) {
+            serializer<T>::skip(in);
+        }
     }
 };
 
