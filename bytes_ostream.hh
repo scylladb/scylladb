@@ -153,19 +153,18 @@ public:
     }
 
     bytes_ostream& operator=(const bytes_ostream& o) {
-        _size = 0;
-        _current = nullptr;
-        _begin = {};
-        append(o);
+        if (this != &o) {
+            auto x = bytes_ostream(o);
+            *this = std::move(x);
+        }
         return *this;
     }
 
     bytes_ostream& operator=(bytes_ostream&& o) noexcept {
-        _size = o._size;
-        _begin = std::move(o._begin);
-        _current = o._current;
-        o._current = nullptr;
-        o._size = 0;
+        if (this != &o) {
+            this->~bytes_ostream();
+            new (this) bytes_ostream(std::move(o));
+        }
         return *this;
     }
 
