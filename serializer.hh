@@ -117,11 +117,6 @@ template<typename T, typename Output>
 inline void serialize(Output& out, const std::unique_ptr<T>& v);
 template<typename T, typename Input>
 inline std::unique_ptr<T> deserialize(Input& in, boost::type<std::unique_ptr<T>>);
-// For time_point
-template<typename Clock, typename Duration, typename Output>
-inline void serialize(Output& out, const std::chrono::time_point<Clock, Duration>& v);
-template<typename Clock, typename Duration, typename Input>
-inline std::chrono::time_point<Clock, Duration> deserialize(Input& in, boost::type<std::chrono::time_point<Clock, Duration>>);
 // For enum_set
 template<typename Enum, typename Output>
 inline void serialize(Output& out, const enum_set<Enum>& v);

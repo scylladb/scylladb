@@ -162,16 +162,21 @@ struct serializer<std::vector<T>> {
     }
 };
 
-template<typename T, typename Ratio, typename Output>
-inline void serialize(Output& out, const std::chrono::duration<T, Ratio>& d) {
-    serialize(out, d.count());
+template<typename T, typename Ratio>
+struct serializer<std::chrono::duration<T, Ratio>> {
+    template<typename Input>
+    static std::chrono::duration<T, Ratio> read(Input& in) {
+        return std::chrono::duration<T, Ratio>(deserialize(in, boost::type<T>()));
+    }
+    template<typename Output>
+    static void write(Output& out, const std::chrono::duration<T, Ratio>& d) {
+        serialize(out, d.count());
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        read(in);
+    }
 };
-
-template<typename T, typename Ratio, typename Input>
-inline std::chrono::duration<T, Ratio> deserialize(Input& in, boost::type<std::chrono::duration<T, Ratio>>) {
-    return std::chrono::duration<T, Ratio>(deserialize(in, boost::type<T>()));
-};
-
 
 template<size_t N, typename T, typename Output>
 inline void serialize(Output& out, const std::array<T, N>& v) {
