@@ -343,22 +343,29 @@ struct serializer<sstring> {
     }
 };
 
-template<typename T, typename Output>
-inline void serialize(Output& out, const std::unique_ptr<T>& v) {
-    serialize(out, bool(v));
-    if (v) {
-        serialize(out, *v);
+template<typename T>
+struct serializer<std::unique_ptr<T>> {
+    template<typename Input>
+    static std::unique_ptr<T> read(Input& in) {
+        std::unique_ptr<T> v;
+        auto b = deserialize(in, boost::type<bool>());
+        if (b) {
+            v = std::make_unique<T>(deserialize(in, boost::type<T>()));
+        }
+        return v;
     }
-}
-template<typename T, typename Input>
-inline std::unique_ptr<T> deserialize(Input& in, boost::type<std::unique_ptr<T>>) {
-    std::unique_ptr<T> v;
-    auto b = deserialize(in, boost::type<bool>());
-    if (b) {
-        v = std::make_unique<T>(deserialize(in, boost::type<T>()));
+    template<typename Output>
+    static void write(Output& out, const std::unique_ptr<T>& v) {
+        serialize(out, bool(v));
+        if (v) {
+            serialize(out, *v);
+        }
     }
-    return v;
-}
+    template<typename Input>
+    static void skip(Input& in) {
+        read(in); // FIXME: Avoid full deserialization
+    }
+};
 
 template<typename Enum, typename Output>
 inline void serialize(Output& out, const enum_set<Enum>& v) {

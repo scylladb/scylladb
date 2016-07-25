@@ -93,11 +93,6 @@ inline T deserialize(Input& in, boost::type<T> t) {
 
 template<typename T>
 size_type get_sizeof(const T& obj);
-template<typename T, typename Output>
-// For unique_ptr
-inline void serialize(Output& out, const std::unique_ptr<T>& v);
-template<typename T, typename Input>
-inline std::unique_ptr<T> deserialize(Input& in, boost::type<std::unique_ptr<T>>);
 // For enum_set
 template<typename Enum, typename Output>
 inline void serialize(Output& out, const enum_set<Enum>& v);
