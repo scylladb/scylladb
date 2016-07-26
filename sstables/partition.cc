@@ -555,8 +555,8 @@ public:
         return *_pc;
     }
 
-    bool is_mutation_end() const {
-        return _is_mutation_end;
+    bool get_and_reset_is_mutation_end() {
+        return std::exchange(_is_mutation_end, false);
     }
 
     stdx::optional<new_mutation> get_mutation() {
@@ -606,9 +606,7 @@ private:
             return make_ready_future<stdx::optional<mutation_fragment_opt>>(_range_tombstones.get_next());
         }
         return _context.read().then([this] {
-            if (_consumer.is_mutation_end()) {
-                _finished = true;
-            }
+            _finished = _consumer.get_and_reset_is_mutation_end();
             auto mf = _consumer.get_mutation_fragment();
             if (mf) {
                 if (mf->is_range_tombstone()) {
@@ -828,7 +826,7 @@ private:
         return _context->read().then([this] {
             auto mut = _consumer.get_mutation();
             if (!mut) {
-                if (_consumer.get_mutation_fragment()) {
+                if (_consumer.get_mutation_fragment() || _consumer.get_and_reset_is_mutation_end()) {
                     // We are still in the middle of the previous mutation.
                     _consumer.skip_partition();
                     return do_read();
