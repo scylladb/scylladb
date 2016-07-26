@@ -97,7 +97,18 @@ trace_state::~trace_state() {
             // then do nothing - they will create a lot of session_record events
             // and we do want to know about it.
             ++_pending_trace_events;
-            _local_backend.write_session_record(_session_id, _client, get_params(), std::move(_request), _started_at, _type, elapsed(), _ttl);
+
+            // get_params() may throw. We don't want to record the session
+            // record in this case since its data may be incomplete. These
+            // events should be really rare however, therefore we don't want to
+            // optimize this flow (e.g. rollback the corresponding events'
+            // records).
+            try {
+                _local_backend.write_session_record(_session_id, _client, get_params(), std::move(_request), _started_at, _type, elapsed(), _ttl);
+            } catch (...) {
+                // Bump up an error counter and ignore
+                ++_local_tracing_ptr->stats.trace_errors;
+            }
         }
 
         _local_tracing_ptr->end_session();
