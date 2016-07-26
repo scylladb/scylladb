@@ -261,7 +261,7 @@ public:
                     return query::result_view::do_with(*result, [schema, cmd, cell_limit](query::result_view v) {
                         column_aggregator aggregator(*schema, cmd->slice, cell_limit);
                         v.consume(cmd->slice, aggregator);
-                        return aggregator.release();
+                        return aggregator.release_as_map();
                     });
                 });
             });
@@ -287,7 +287,7 @@ public:
                     return query::result_view::do_with(*result, [schema, cmd, cell_limit](query::result_view v) {
                         column_counter counter(*schema, cmd->slice, cell_limit);
                         v.consume(cmd->slice, counter);
-                        return counter.release();
+                        return counter.release_as_map();
                     });
                 });
             });
@@ -1450,17 +1450,23 @@ private:
         const schema& _s;
         const query::partition_slice& _slice;
         uint32_t _cell_limit;
-        std::map<std::string, typename Aggregator::type> _aggregation;
+        std::vector<std::pair<std::string, typename Aggregator::type>> _aggregation;
         typename Aggregator::type* _current_aggregation;
     public:
         column_visitor(const schema& s, const query::partition_slice& slice, uint32_t cell_limit)
                 : _s(s), _slice(slice), _cell_limit(cell_limit)
         { }
-        std::map<std::string, typename Aggregator::type>&& release() {
+        std::vector<std::pair<std::string, typename Aggregator::type>>&& release() {
             return std::move(_aggregation);
         }
+        std::map<std::string, typename Aggregator::type> release_as_map() {
+            return std::map<std::string, typename Aggregator::type>(
+                        boost::make_move_iterator(_aggregation.begin()),
+                        boost::make_move_iterator(_aggregation.end()));
+        }
         void accept_new_partition(const partition_key& key, uint32_t row_count) {
-            _current_aggregation = &_aggregation[partition_key_to_string(_s, key)];
+            _aggregation.emplace_back(partition_key_to_string(_s, key), typename Aggregator::type());
+            _current_aggregation = &_aggregation.back().second;
         }
         void accept_new_partition(uint32_t row_count) {
             // We always ask for the partition_key to be sent in query_opts().
