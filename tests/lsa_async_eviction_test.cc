@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
             logalloc::region r;
 
             with_allocator(r.allocator(), [&] {
-                std::deque<managed_bytes> refs;
+                chunked_fifo<managed_bytes> refs;
 
                 r.make_evictable([&] {
                     return with_allocator(r.allocator(), [&] {
