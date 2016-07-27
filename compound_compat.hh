@@ -414,8 +414,12 @@ public:
         return _bytes.empty();
     }
 
+    static bool is_static(bytes_view bytes, bool is_compound) {
+        return is_compound && bytes.size() > 2 && (bytes.at(0) & bytes.at(1) & 0xff) == 0xff;
+    }
+
     bool is_static() const {
-        return _is_compound && size() > 2 && (_bytes.at(0) & _bytes.at(1) & 0xff) == 0xff;
+        return is_static(_bytes, _is_compound);
     }
 
     bool is_compound() const {
@@ -514,7 +518,7 @@ public:
     }
 
     bool is_static() const {
-        return size() > 2 && (_bytes.at(0) & _bytes.at(1)) == 0xff;
+        return composite::is_static(_bytes, _is_compound);
     }
 
     explicit operator bytes_view() const {
