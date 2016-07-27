@@ -793,3 +793,36 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
+    return seastar::async([] {
+        auto dir = make_lw_shared<tmpdir>();
+        schema_builder builder("ks", "cf");
+        builder.with_column("p", utf8_type, column_kind::partition_key);
+        builder.with_column("c", int32_type, column_kind::clustering_key);
+        builder.with_column("v", int32_type);
+        auto s = builder.build(schema_builder::compact_storage::yes);
+
+        auto k = partition_key::from_exploded(*s, {to_bytes("key1")});
+        auto ck = clustering_key::from_exploded(*s, {int32_type->decompose(static_cast<int32_t>(0xffff0000))});
+
+        mutation m(k, s);
+        auto cell = atomic_cell::make_live(1, int32_type->decompose(17), { });
+        m.set_clustered_cell(ck, *s->get_column_definition("v"), std::move(cell));
+
+        auto mt = make_lw_shared<memtable>(s);
+        mt->apply(std::move(m));
+
+        auto sst = sstables::sstable("ks", "cf",
+                                dir->path,
+                                1 /* generation */,
+                                sstables::sstable::version_types::ka,
+                                sstables::sstable::format_types::big);
+        sst.write_components(*mt).get();
+        sst.load().get();
+        auto mr = sst.read_rows(s);
+        auto sm = mr.read().get0();
+        auto mut = mutation_from_streamed_mutation(std::move(sm)).get0();
+        BOOST_REQUIRE(bool(mut));
+    });
+}
