@@ -333,9 +333,9 @@ public:
     }
 
     data_consume_rows_context(row_consumer& consumer,
-            input_stream<char> && input, uint64_t maxlen,
+            input_stream<char> && input, uint64_t start, uint64_t maxlen,
             std::experimental::optional<sstable::disk_read_range::row_info> ri = {})
-                : continuous_data_consumer(std::move(input), maxlen)
+                : continuous_data_consumer(std::move(input), start, maxlen)
                 , _consumer(consumer) {
         // If the "ri" option is given, we are reading a partition from the
         // middle (in the beginning of an atom), as would happen when we use
@@ -390,10 +390,10 @@ private:
     shared_sstable _sst;
     std::unique_ptr<data_consume_rows_context> _ctx;
 public:
-    impl(shared_sstable sst, row_consumer& consumer, input_stream<char>&& input, uint64_t maxlen,
-             std::experimental::optional<sstable::disk_read_range::row_info> ri)
+    impl(shared_sstable sst, row_consumer& consumer, input_stream<char>&& input, uint64_t start,
+             uint64_t maxlen, std::experimental::optional<sstable::disk_read_range::row_info> ri)
         : _sst(std::move(sst))
-        , _ctx(new data_consume_rows_context(consumer, std::move(input), maxlen, ri))
+        , _ctx(new data_consume_rows_context(consumer, std::move(input), start, maxlen, ri))
     { }
     ~impl() {
         if (_ctx) {
@@ -428,7 +428,7 @@ data_consume_context sstable::data_consume_rows(
     // to maintain its own byte count.
     return std::make_unique<data_consume_context::impl>(shared_from_this(),
             consumer, data_stream(toread.start, toread.end - toread.start,
-                consumer.io_priority()), toread.end - toread.start, toread.ri);
+                consumer.io_priority()), toread.start, toread.end - toread.start, toread.ri);
 }
 
 data_consume_context sstable::data_consume_rows(row_consumer& consumer) {
@@ -439,7 +439,7 @@ future<> sstable::data_consume_rows_at_once(row_consumer& consumer,
         uint64_t start, uint64_t end) {
     return data_read(start, end - start, consumer.io_priority()).then([&consumer]
                                                (temporary_buffer<char> buf) {
-        data_consume_rows_context ctx(consumer, input_stream<char>(), -1);
+        data_consume_rows_context ctx(consumer, input_stream<char>(), 0, -1);
         ctx.process(buf);
         ctx.verify_end_state();
     });
