@@ -415,7 +415,7 @@ public:
     }
 
     static bool is_static(bytes_view bytes, bool is_compound) {
-        return is_compound && bytes.size() > 2 && (bytes.at(0) & bytes.at(1) & 0xff) == 0xff;
+        return is_compound && bytes.size() > 2 && (bytes[0] & bytes[1] & 0xff) == 0xff;
     }
 
     bool is_static() const {
