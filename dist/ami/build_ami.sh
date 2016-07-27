@@ -8,7 +8,7 @@ fi
 print_usage() {
     echo "build_ami.sh --localrpm --repo [URL]"
     echo "  --localrpm  deploy locally built rpms"
-    echo "  --repo  specify repository URL"
+    echo "  --repo  specify .repo/.list file URL"
     exit 1
 }
 LOCALRPM=0
@@ -16,7 +16,8 @@ while [ $# -gt 0 ]; do
     case "$1" in
         "--localrpm")
             LOCALRPM=1
-            INSTALL_ARGS="$INSTALL_ARGS --localrpm"
+            REPO=`./scripts/scylla_current_repo`
+            INSTALL_ARGS="$INSTALL_ARGS --localrpm --repo $REPO"
             shift 1
             ;;
         "--repo")

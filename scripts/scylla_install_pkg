@@ -10,7 +10,7 @@ fi
 print_usage() {
     echo "scylla_install_pkg --local-pkg /home/scylla/rpms --repo [URL]"
     echo "  --local-pkg	install locally built .rpm/.deb on specified directory"
-    echo "  --repo specify repository URL"
+    echo "  --repo specify .repo/.list file URL"
     exit 1
 }
 
@@ -42,10 +42,8 @@ if [ "$ID" = "ubuntu" ]; then
     chmod +x /usr/sbin/policy-rc.d
     cp /etc/hosts /etc/hosts.orig
     echo 127.0.0.1 `hostname` >> /etc/hosts
-    if [ "$REPO" = "" ]; then
-        echo "deb http://s3.amazonaws.com/downloads.scylladb.com/deb/ubuntu trusty/scylladb multiverse" > /etc/apt/sources.list.d/scylla.list
-    else
-        echo "deb $REPO trusty/scylladb multiverse" > /etc/apt/sources.list.d/scylla.list
+    if [ "$REPO" != "" ]; then
+        curl -o /etc/apt/sources.list.d/scylla.list $REPO
     fi
     apt-get update
     if [ "$LOCAL_PKG" = "" ]; then
@@ -62,19 +60,14 @@ if [ "$ID" = "ubuntu" ]; then
     mv /etc/hosts.orig /etc/hosts
     rm /usr/sbin/policy-rc.d
 else
-    if [ "$ID" = "fedora" ]; then
-        if [ "$REPO" = "" ]; then
-            curl http://downloads.scylladb.com/rpm/fedora/scylla.repo > /etc/yum.repos.d/scylla.repo
-        else
-            curl $REPO > /etc/yum.repos.d/scylla.repo
-        fi
-    elif [ "$ID" = "centos" ] || [ "$ID" = "rhel" ]; then
-        if [ "$REPO" = "" ]; then
-            curl http://downloads.scylladb.com/rpm/centos/scylla.repo > /etc/yum.repos.d/scylla.repo
-        else
-            curl $REPO > /etc/yum.repos.d/scylla.repo
-        fi
-        yum install -y epel-release
+    if [ "$REPO" != "" ]; then
+        curl -o /etc/yum.repos.d/scylla.repo $REPO
+    fi
+
+    if [ "$ID" = "centos" ]; then
+            yum install -y epel-release
+    elif [ "$ID" = "rhel" ]; then
+        rpm -ivh http://download.fedoraproject.org/pub/epel/7/x86_64/e/epel-release-7-7.noarch.rpm
     else
         echo "Unsupported distribution"
         exit 1
