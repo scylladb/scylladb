@@ -222,6 +222,7 @@ size_t compress_max_size_snappy(size_t input_len) {
 class compressed_file_data_source_impl : public data_source_impl {
     stdx::optional<input_stream<char>> _input_stream;
     sstables::compression* _compression_metadata;
+    uint64_t _underlying_pos;
     uint64_t _pos;
     uint64_t _beg_pos;
     uint64_t _end_pos;
@@ -253,6 +254,7 @@ public:
                 start.chunk_start,
                 end.chunk_start + end.chunk_len - start.chunk_start,
                 std::move(options));
+        _underlying_pos = start.chunk_start;
         _pos = _beg_pos;
     }
     virtual future<temporary_buffer<char>> get() override {
@@ -289,6 +291,7 @@ public:
                 out.trim(len);
                 out.trim_front(addr.offset);
                 _pos += out.size();
+                _underlying_pos += addr.chunk_len;
                 return out;
         });
     }
@@ -298,6 +301,18 @@ public:
             return make_ready_future<>();
         }
         return _input_stream->close();
+    }
+
+    virtual future<temporary_buffer<char>> skip(uint64_t n) override {
+        _pos += n;
+        assert(_pos <= _end_pos);
+        auto addr = _compression_metadata->locate(_pos);
+        auto underlying_n = addr.chunk_start - _underlying_pos;
+        _underlying_pos = addr.chunk_start;
+        _beg_pos = _pos;
+        return _input_stream->skip(underlying_n).then([] {
+            return make_ready_future<temporary_buffer<char>>();
+        });
     }
 };
 
