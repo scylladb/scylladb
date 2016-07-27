@@ -35,6 +35,7 @@
 #include "canonical_mutation.hh"
 
 #include "disk-error-handler.hh"
+#include "cql_test_env.hh"
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
@@ -176,14 +177,15 @@ static sizes calculate_sizes(const mutation& m) {
     cache_tracker tracker;
     row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
 
-    assert(tracker.region().occupancy().used_space() == 0);
+    auto cache_initial_occupancy = tracker.region().occupancy().used_space();
+
     assert(mt->occupancy().used_space() == 0);
 
     mt->apply(m);
     cache.populate(m);
 
     result.memtable = mt->occupancy().used_space();
-    result.cache = tracker.region().occupancy().used_space();
+    result.cache = tracker.region().occupancy().used_space() - cache_initial_occupancy;     
     result.frozen = freeze(m).representation().size();
     result.canonical = canonical_mutation(m).representation().size();
     result.query_result = m.query(partition_slice_builder(*s).build(), query::result_request::only_result).buf().size();
@@ -213,6 +215,7 @@ int main(int argc, char** argv) {
         ("data-size", bpo::value<size_t>()->default_value(32), "cell data size");
 
     return app.run(argc, argv, [&] {
+      return do_with_cql_env([&] (auto&& env) {
         return seastar::async([&] {
             mutation_settings settings;
             settings.column_count = app.configuration()["column-count"].as<size_t>();
@@ -236,5 +239,6 @@ int main(int argc, char** argv) {
             std::cout << "\n";
             size_calculator::print_cache_entry_size();
         });
+      });
     });
 }
