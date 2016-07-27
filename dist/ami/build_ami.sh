@@ -53,10 +53,13 @@ if [ $LOCALRPM -eq 1 ]; then
     if [ "$ID" = "centos" ]; then
         rm -rf build/*
         sudo yum -y install git
-        if [ ! -f dist/ami/files/scylla-conf.x86_64.rpm ] || [ ! -f dist/ami/files/scylla-server.x86_64.rpm ]; then
+        if [ ! -f dist/ami/files/scylla.x86_64.rpm ] || [ ! -f dist/ami/files/scylla-kernel-conf.x86_64.rpm ] || [ ! -f dist/ami/files/scylla-conf.x86_64.rpm ] || [ ! -f dist/ami/files/scylla-server.x86_64.rpm ] || [ ! -f dist/ami/files/scylla-debuginfo.x86_64.rpm ]; then
             dist/redhat/build_rpm.sh
+            cp build/rpmbuild/RPMS/x86_64/scylla-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/scylla.x86_64.rpm
+            cp build/rpmbuild/RPMS/x86_64/scylla-kernel-conf-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/scylla-kernel-conf.x86_64.rpm
             cp build/rpmbuild/RPMS/x86_64/scylla-conf-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/scylla-conf.x86_64.rpm
             cp build/rpmbuild/RPMS/x86_64/scylla-server-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/scylla-server.x86_64.rpm
+            cp build/rpmbuild/RPMS/x86_64/scylla-debuginfo-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/files/scylla-debuginfo.x86_64.rpm
         fi
         if [ ! -f dist/ami/files/scylla-jmx.noarch.rpm ]; then
             cd build
@@ -81,8 +84,11 @@ if [ $LOCALRPM -eq 1 ]; then
                 echo "Build .deb before running build_ami.sh"
                 exit 1
             fi
+            cp ../scylla_`cat build/SCYLLA-VERSION-FILE | sed 's/\.rc/~rc/'`-`cat build/SCYLLA-RELEASE-FILE`-ubuntu1_amd64.deb dist/ami/files/scylla_amd64.deb
+            cp ../scylla-kernel-conf_`cat build/SCYLLA-VERSION-FILE | sed 's/\.rc/~rc/'`-`cat build/SCYLLA-RELEASE-FILE`-ubuntu1_amd64.deb dist/ami/files/scylla-kernel-conf_amd64.deb
             cp ../scylla-conf_`cat build/SCYLLA-VERSION-FILE | sed 's/\.rc/~rc/'`-`cat build/SCYLLA-RELEASE-FILE`-ubuntu1_amd64.deb dist/ami/files/scylla-conf_amd64.deb
             cp ../scylla-server_`cat build/SCYLLA-VERSION-FILE | sed 's/\.rc/~rc/'`-`cat build/SCYLLA-RELEASE-FILE`-ubuntu1_amd64.deb dist/ami/files/scylla-server_amd64.deb
+            cp ../scylla-server-dbg_`cat build/SCYLLA-VERSION-FILE | sed 's/\.rc/~rc/'`-`cat build/SCYLLA-RELEASE-FILE`-ubuntu1_amd64.deb dist/ami/files/scylla-server-dbg_amd64.deb
         fi
         if [ ! -f dist/ami/files/scylla-jmx_all.deb ]; then
             cd build
