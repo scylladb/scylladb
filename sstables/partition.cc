@@ -160,13 +160,12 @@ private:
             return cdef && timestamp > cdef->dropped_at();
         }
 
-        static bool check_static(bytes_view col) {
-            static bytes static_row(static_size, 0xff);
-            return col.compare(0, static_size, static_row) == 0;
+        static bool check_static(const schema& schema, bytes_view col) {
+            return composite_view(col, schema.is_compound()).is_static();
         }
 
-        static bytes_view fix_static_name(bytes_view col) {
-            return fix_static_name(col, check_static(col));
+        static bytes_view fix_static_name(const schema& schema, bytes_view col) {
+            return fix_static_name(col, check_static(schema, col));
         }
 
         static bytes_view fix_static_name(bytes_view col, bool is_static) {
@@ -180,7 +179,7 @@ private:
             return composite_view(col_name, schema.is_compound()).explode();
         }
         column(const schema& schema, bytes_view col)
-            : is_static(check_static(col))
+            : is_static(check_static(schema, col))
             , col_name(fix_static_name(col, is_static))
             , clustering(extract_clustering_key(schema))
             , collection_extra_data(is_collection(schema) ? pop_back(clustering) : bytes()) // collections are not supported with COMPACT STORAGE, so this is fine
@@ -510,7 +509,7 @@ public:
             return proceed::yes;
         }
 
-        auto start = composite_view(column::fix_static_name(start_col)).explode();
+        auto start = composite_view(column::fix_static_name(*_schema, start_col)).explode();
 
         // Note how this is slightly different from the check in is_collection. Collection tombstones
         // do not have extra data.
@@ -520,7 +519,7 @@ public:
         if (start.size() <= _schema->clustering_key_size()) {
             auto start_ck = clustering_key_prefix::from_exploded(std::move(start));
             auto start_kind = start_marker_to_bound_kind(start_col);
-            auto end = clustering_key_prefix::from_exploded(composite_view(column::fix_static_name(end_col)).explode());
+            auto end = clustering_key_prefix::from_exploded(composite_view(column::fix_static_name(*_schema, end_col)).explode());
             auto end_kind = end_marker_to_bound_kind(end_col);
             if (range_tombstone::is_single_clustering_row_tombstone(*_schema, start_ck, start_kind, end, end_kind)) {
                 auto ret = flush_if_needed(std::move(start_ck));
