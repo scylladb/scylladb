@@ -156,6 +156,7 @@ private:
     uint64_t _removals = 0;
     uint64_t _partitions = 0;
     uint64_t _modification_count = 0;
+    uint64_t _continuity_flags_cleared = 0;
     std::unique_ptr<scollectd::registrations> _collectd_registrations;
     logalloc::region _region;
     lru_type _lru;
@@ -167,17 +168,20 @@ public:
     void clear();
     void touch(cache_entry&);
     void insert(cache_entry&);
+    void clear_continuity(cache_entry& ce);
     void on_erase();
     void on_merge();
     void on_hit();
     void on_miss();
     void on_uncached_wide_partition();
+    void on_continuity_flag_cleared();
     allocation_strategy& allocator();
     logalloc::region& region();
     const logalloc::region& region() const;
     uint64_t modification_count() const { return _modification_count; }
     uint64_t partitions() const { return _partitions; }
     uint64_t uncached_wide_partitions() const { return _uncached_wide_partitions; }
+    uint64_t continuity_flags_cleared() const { return _continuity_flags_cleared; }
 };
 
 // Returns a reference to shard-wide cache_tracker.
@@ -293,6 +297,8 @@ public:
     //
     // The range must be kept alive until method resolves.
     future<> invalidate(const query::partition_range&);
+
+    bool has_continuous_entry(const dht::ring_position& key) const;
 
     auto num_entries() const {
         return _partitions.size();

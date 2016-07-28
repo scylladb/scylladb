@@ -896,6 +896,60 @@ static key_source make_key_source(schema_ptr s, std::vector<lw_shared_ptr<memtab
     });
 }
 
+SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
+    return seastar::async([] {
+        auto s = make_schema();
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        cache_tracker tracker;
+        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
+
+        auto ring = make_ring(s, 4);
+        for (auto&& m : ring) {
+            mt->apply(m);
+        }
+
+        // Bring ring[2]and ring[3] to cache.
+        assert_that(cache.make_reader(s, query::partition_range::make_starting_with({ ring[2].ring_position(), true })))
+                .produces(ring[2])
+                .produces(ring[3])
+                .produces_end_of_stream();
+
+        // Start reader with full range.
+        auto rd = assert_that(cache.make_reader(s, query::full_partition_range));
+        rd.produces(ring[0]);
+
+        // Invalidate ring[2] and ring[3]
+        cache.invalidate(query::partition_range::make_starting_with({ ring[2].ring_position(), true })).get();
+
+        // Continue previous reader.
+        rd.produces(ring[1])
+          .produces(ring[2])
+          .produces(ring[3])
+          .produces_end_of_stream();
+
+        // Start another reader with full range.
+        rd = assert_that(cache.make_reader(s, query::full_partition_range));
+        rd.produces(ring[0])
+          .produces(ring[1])
+          .produces(ring[2]);
+
+        // Invalidate whole cache.
+        cache.clear().get();
+
+        rd.produces(ring[3])
+          .produces_end_of_stream();
+
+        // Start yet another reader with full range.
+        assert_that(cache.make_reader(s, query::full_partition_range))
+                .produces(ring[0])
+                .produces(ring[1])
+                .produces(ring[2])
+                .produces(ring[3])
+                .produces_end_of_stream();;
+    });
+}
+
 SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
     return seastar::async([] {
         auto s = make_schema();
