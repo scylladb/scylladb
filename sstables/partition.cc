@@ -134,6 +134,7 @@ private:
         bytes collection_extra_data;
         bytes cell;
         const column_definition *cdef;
+        bool is_present;
 
         static constexpr size_t static_size = 2;
 
@@ -156,10 +157,6 @@ private:
             throw malformed_sstable_exception(sprint("Found %d clustering elements in column name. Was not expecting that!", clustering.size()));
         }
 
-        bool is_present(api::timestamp_type timestamp) {
-            return cdef && timestamp > cdef->dropped_at();
-        }
-
         static bool check_static(const schema& schema, bytes_view col) {
             return composite_view(col, schema.is_compound()).is_static();
         }
@@ -178,13 +175,14 @@ private:
         std::vector<bytes> extract_clustering_key(const schema& schema) {
             return composite_view(col_name, schema.is_compound()).explode();
         }
-        column(const schema& schema, bytes_view col)
+        column(const schema& schema, bytes_view col, api::timestamp_type timestamp)
             : is_static(check_static(schema, col))
             , col_name(fix_static_name(col, is_static))
             , clustering(extract_clustering_key(schema))
             , collection_extra_data(is_collection(schema) ? pop_back(clustering) : bytes()) // collections are not supported with COMPACT STORAGE, so this is fine
             , cell(!schema.is_dense() ? pop_back(clustering) : (*(schema.regular_begin())).name()) // dense: cell name is not provided. It is the only regular column
             , cdef(schema.get_column_definition(cell))
+            , is_present(cdef && timestamp > cdef->dropped_at())
         {
 
             if (is_static) {
@@ -193,6 +191,11 @@ private:
                         throw malformed_sstable_exception("Static row has clustering key information. I didn't expect that!");
                     }
                 }
+            }
+
+            if (is_present && is_static != cdef->is_static()) {
+                throw malformed_sstable_exception(seastar::format("Mismatch between {} cell and {} column definition",
+                        is_static ? "static" : "non-static", cdef->is_static() ? "static" : "non-static"));
             }
         }
     };
@@ -383,7 +386,7 @@ public:
             return proceed::yes;
         }
 
-        struct column col(*_schema, col_name);
+        struct column col(*_schema, col_name, timestamp);
 
         auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
         auto ret = flush_if_needed(col.is_static, clustering_prefix);
@@ -397,7 +400,7 @@ public:
             return ret;
         }
 
-        if (!col.is_present(timestamp)) {
+        if (!col.is_present) {
             return ret;
         }
 
@@ -425,10 +428,11 @@ public:
             return proceed::yes;
         }
 
-        struct column col(*_schema, col_name);
+        auto timestamp = deltime.marked_for_delete_at;
+        struct column col(*_schema, col_name, timestamp);
         gc_clock::duration secs(deltime.local_deletion_time);
 
-        return consume_deleted_cell(col, deltime.marked_for_delete_at, gc_clock::time_point(secs));
+        return consume_deleted_cell(col, timestamp, gc_clock::time_point(secs));
     }
 
     proceed consume_deleted_cell(column &col, int64_t timestamp, gc_clock::time_point ttl) {
@@ -443,7 +447,7 @@ public:
             _in_progress->as_clustering_row().apply(rm);
             return ret;
         }
-        if (!col.is_present(timestamp)) {
+        if (!col.is_present) {
             return ret;
         }
 
