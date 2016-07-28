@@ -141,7 +141,7 @@ SEASTAR_TEST_CASE(test_cache_works_after_clearing) {
     });
 }
 
-SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_always_for_wide_partition_full_range) {
+SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_for_wide_partition_full_range) {
     return seastar::async([] {
         auto s = make_schema();
         auto m = make_new_mutation(s);
@@ -162,12 +162,12 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_always_for_wide_partition_f
         assert_that(cache.make_reader(s, query::full_partition_range))
             .produces(m)
             .produces_end_of_stream();
-        BOOST_REQUIRE_EQUAL(secondary_calls_count, 4);
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 3);
         BOOST_REQUIRE_EQUAL(tracker.uncached_wide_partitions(), 2);
     });
 }
 
-SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_always_for_wide_partition_single_partition) {
+SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_for_wide_partition_single_partition) {
     return seastar::async([] {
         auto s = make_schema();
         auto m = make_new_mutation(s);
@@ -188,7 +188,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_always_for_wide_partition_s
         assert_that(cache.make_reader(s, query::partition_range::make_singular(query::ring_position(m.decorated_key()))))
             .produces(m)
             .produces_end_of_stream();
-        BOOST_REQUIRE_EQUAL(secondary_calls_count, 4);
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 3);
         BOOST_REQUIRE_EQUAL(tracker.uncached_wide_partitions(), 2);
     });
 }

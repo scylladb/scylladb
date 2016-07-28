@@ -264,6 +264,7 @@ public:
                         return make_ready_future<streamed_mutation_opt>(streamed_mutation_opt());
                     } else {
                         _cache.on_uncached_wide_partition();
+                        _cache.mark_partition_as_wide(dk);
                         _large_partition_range = query::partition_range::make_singular(std::move(dk));
                         _large_partition_reader = _underlying(_schema, _large_partition_range, _ck_filtering, _pc);
                         return _large_partition_reader();
@@ -302,6 +303,7 @@ class just_cache_scanning_reader final {
     uint64_t _last_reclaim_count;
     size_t _last_modification_count;
     query::clustering_key_filtering_context _ck_filtering;
+    const io_priority_class _pc;
 private:
     void update_iterators() {
         auto cmp = cache_entry::compare(_cache._schema);
@@ -347,8 +349,9 @@ public:
         uint64_t continuity_flags_cleared;
         bool continuous;
     };
-    just_cache_scanning_reader(schema_ptr s, row_cache& cache, const query::partition_range& range, query::clustering_key_filtering_context ck_filtering)
-        : _schema(std::move(s)), _cache(cache), _range(range), _ck_filtering(ck_filtering)
+    just_cache_scanning_reader(schema_ptr s, row_cache& cache, const query::partition_range& range,
+                               query::clustering_key_filtering_context ck_filtering, const io_priority_class& pc)
+        : _schema(std::move(s)), _cache(cache), _range(range), _ck_filtering(ck_filtering), _pc(pc)
     { }
     future<cache_data> operator()() {
         return _cache._read_section(_cache._tracker.region(), [this] {
@@ -361,8 +364,19 @@ public:
             ++_it;
             _last = ce.key();
             _cache.upgrade_entry(ce);
-            cache_data data{std::move(ce.read(_cache, _schema, _ck_filtering)), _cache._tracker.continuity_flags_cleared(), ce.continuous()};
-            return make_ready_future<cache_data>(std::move(data));
+            cache_data cd { { }, _cache._tracker.continuity_flags_cleared(), ce.continuous() };
+            if (ce.wide_partition()) {
+                return ce.read_wide(_cache, _schema, _ck_filtering, _pc).then([this, cd = std::move(cd)] (auto smopt) mutable {
+                    if (smopt) {
+                        cd.mut = std::move(*smopt);
+                    } else {
+                        cd.mut = streamed_mutation_from_mutation(mutation(_last->as_decorated_key(), _schema));
+                    }
+                    return std::move(cd);
+                });
+            }
+            cd.mut = ce.read(_cache, _schema, _ck_filtering);
+            return make_ready_future<cache_data>(std::move(cd));
           });
         });
     }
@@ -434,6 +448,12 @@ class range_populating_reader final : public mutation_reader::impl {
             });
         }
     }
+
+    void update_last_key(const dht::decorated_key& key) {
+        this->maybe_mark_last_entry_as_continuous(mark_end_as_continuous(mark_end_as_continuous::override(), true));
+        _last_key = dht::ring_position(key);
+        _last_key_populate_phase = _cache._populate_phaser.phase();
+    }
 public:
     range_populating_reader(
         row_cache& cache,
@@ -470,9 +490,7 @@ public:
                         if (mo) {
                             _cache.populate(*mo);
                             mo->upgrade(_schema);
-                            this->maybe_mark_last_entry_as_continuous(mark_end_as_continuous(mark_end_as_continuous::override(), true));
-                            _last_key = dht::ring_position(mo->decorated_key());
-                            _last_key_populate_phase = _cache._populate_phaser.phase();
+                            this->update_last_key(mo->decorated_key());
                             auto& ck_ranges = _ck_filtering.get_ranges(mo->key());
                             auto filtered_partition = mutation_partition(std::move(mo->partition()), *(mo->schema()), ck_ranges);
                             mo->partition() = std::move(filtered_partition);
@@ -482,8 +500,9 @@ public:
                         return make_ready_future<streamed_mutation_opt>(streamed_mutation_opt());
                     } else {
                         assert(bool(dk));
-                        _last_key = std::experimental::optional<dht::ring_position>();
+                        this->update_last_key(*dk);
                         _cache.on_uncached_wide_partition();
+                        _cache.mark_partition_as_wide(*dk);
                         _large_partition_range = query::partition_range::make_singular(*dk);
                         _large_partition_reader = _underlying(_schema, _large_partition_range, _ck_filtering, _pc);
                         return _large_partition_reader().then([this, dk = std::move(*dk)] (auto smopt) mutable -> streamed_mutation_opt {
@@ -636,7 +655,7 @@ class scanning_and_populating_reader final : public mutation_reader::impl{
             , _schema(std::move(s))
             , _range(range)
             , _pc(pc)
-            , _primary(_schema, _cache, _range, ck_filtering)
+            , _primary(_schema, _cache, _range, ck_filtering, pc)
             , _ck_filtering(ck_filtering)
             , _state(start_state{}) {}
         future<streamed_mutation_opt> operator()(const end_state& state) {
@@ -771,6 +790,10 @@ row_cache::make_reader(schema_ptr s,
                 _tracker.touch(e);
                 on_hit();
                 upgrade_entry(e);
+                if (e.wide_partition()) {
+                    _tracker.on_uncached_wide_partition();
+                    return _underlying(s, range, ck_filtering, pc);
+                }
                 return make_reader_returning(e.read(*this, s, ck_filtering));
             } else {
                 on_miss();
@@ -805,6 +828,24 @@ void row_cache::clear_now() noexcept {
             });
         }
         _tracker.clear_continuity(*_partitions.begin());
+    });
+}
+
+void row_cache::mark_partition_as_wide(const dht::decorated_key& key) {
+    with_allocator(_tracker.allocator(), [this, &key] {
+        _populate_section(_tracker.region(), [&] {
+            with_linearized_managed_bytes([&] {
+                auto i = _partitions.lower_bound(key, cache_entry::compare(_schema));
+                if (i == _partitions.end() || !i->key().equal(*_schema, key)) {
+                    cache_entry* entry = current_allocator().construct<cache_entry>(
+                            _schema, key, cache_entry::wide_partition_tag{});
+                    _tracker.insert(*entry);
+                    _partitions.insert(i, *entry);
+                } else {
+                    i->set_wide_partition();
+                }
+            });
+        });
     });
 }
 
@@ -879,11 +920,13 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                             // FIXME: keep a bitmap indicating which sstables we do cover, so we don't have to
                             //        search it.
                             if (cache_i != _partitions.end() && cache_i->key().equal(*_schema, mem_e.key())) {
+                              if (!cache_i->wide_partition()) {
                                 cache_entry& entry = *cache_i;
                                 upgrade_entry(entry);
                                 entry.partition().apply(*_schema, std::move(mem_e.partition()), *mem_e.schema());
                                 _tracker.touch(entry);
                                 _tracker.on_merge();
+                              }
                             } else if (presence_checker(mem_e.key().key()) ==
                                     partition_presence_checker_result::definitely_doesnt_exist) {
                                 cache_entry* entry = current_allocator().construct<cache_entry>(
@@ -1041,6 +1084,7 @@ cache_entry::cache_entry(cache_entry&& o) noexcept
     , _key(std::move(o._key))
     , _pe(std::move(o._pe))
     , _continuous(o._continuous)
+    , _wide_partition(o._wide_partition)
     , _lru_link()
     , _cache_link()
 {
@@ -1061,11 +1105,29 @@ void row_cache::set_schema(schema_ptr new_schema) noexcept {
     _schema = std::move(new_schema);
 }
 
+future<streamed_mutation_opt> cache_entry::read_wide(row_cache& rc, schema_ptr s, query::clustering_key_filtering_context ck_filtering, const io_priority_class& pc) {
+    struct range_and_underlyig_reader {
+        query::partition_range _range;
+        mutation_reader _reader;
+        range_and_underlyig_reader(row_cache& rc, schema_ptr s, query::partition_range pr,
+                                   query::clustering_key_filtering_context ck_filtering, const io_priority_class& pc)
+                : _range(std::move(pr))
+                  , _reader(rc._underlying(s, _range, ck_filtering, pc))
+        { }
+    };
+    rc._tracker.on_uncached_wide_partition();
+    auto pr = query::partition_range::make_singular(_key);
+    return do_with(range_and_underlyig_reader(rc, s, std::move(pr), std::move(ck_filtering), pc), [] (auto& r_a_ur) {
+        return r_a_ur._reader();
+    });
+}
+
 streamed_mutation cache_entry::read(row_cache& rc, const schema_ptr& s) {
     return read(rc, s, query::no_clustering_key_filtering);
 }
 
 streamed_mutation cache_entry::read(row_cache& rc, const schema_ptr& s, query::clustering_key_filtering_context ck_filtering) {
+    assert(!wide_partition());
     auto dk = _key.as_decorated_key();
     if (_schema->version() != s->version()) {
         const query::clustering_row_ranges& ck_ranges = ck_filtering.get_ranges(dk.key());
@@ -1084,6 +1146,10 @@ const schema_ptr& row_cache::schema() const {
 
 void row_cache::upgrade_entry(cache_entry& e) {
     if (e._schema != _schema) {
+        if (e.wide_partition()) {
+            e._schema = _schema;
+            return;
+        }
         auto& r = _tracker.region();
         assert(!r.reclaiming_enabled());
         with_allocator(r.allocator(), [this, &e] {
