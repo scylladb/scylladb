@@ -219,8 +219,9 @@ static future<json::json_return_type>  sum_sstable(http_context& ctx, const sstr
     auto uuid = get_uuid(name, ctx.db.local());
     return ctx.db.map_reduce0([uuid, total](database& db) {
         std::unordered_map<sstring, uint64_t> m;
-        for (auto t :*((total) ? db.find_column_family(uuid).get_sstables_including_compacted_undeleted() :
-                db.find_column_family(uuid).get_sstables()).get()) {
+        auto sstables = (total) ? db.find_column_family(uuid).get_sstables_including_compacted_undeleted() :
+                db.find_column_family(uuid).get_sstables();
+        for (auto t : *sstables) {
             m[t.second->get_filename()] = t.second->bytes_on_disk();
         }
         return m;
@@ -234,8 +235,9 @@ static future<json::json_return_type>  sum_sstable(http_context& ctx, const sstr
 static future<json::json_return_type> sum_sstable(http_context& ctx, bool total) {
     return map_reduce_cf_raw(ctx, std::unordered_map<sstring, uint64_t>(), [total](column_family& cf) {
         std::unordered_map<sstring, uint64_t> m;
-        for (auto t :*((total) ? cf.get_sstables_including_compacted_undeleted() :
-                cf.get_sstables()).get()) {
+        auto sstables = (total) ? cf.get_sstables_including_compacted_undeleted() :
+                cf.get_sstables();
+        for (auto t : *sstables) {
             m[t.second->get_filename()] = t.second->bytes_on_disk();
         }
         return m;
