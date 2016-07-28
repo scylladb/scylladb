@@ -5,14 +5,20 @@
 print_usage() {
     echo "scylla_coredump_setup --dump-to-raiddir"
     echo "  --dump-to-raiddir  store coredump to /var/lib/scylla"
+    echo "  --compress  enable compress on systemd-coredump"
     exit 1
 }
 
 SYMLINK=0
+COMPRESS=no
 while [ $# -gt 0 ]; do
     case "$1" in
         "--dump-to-raiddir")
             SYMLINK=1
+            shift 1
+            ;;
+        "--compress")
+            COMPRESS=yes
             shift 1
             ;;
         *)
@@ -33,7 +39,7 @@ else
     cat << EOS > /etc/systemd/coredump.conf
 [Coredump]
 Storage=external
-Compress=yes
+Compress=$COMPRESS
 ProcessSizeMax=1024G
 ExternalSizeMax=1024G
 EOS
