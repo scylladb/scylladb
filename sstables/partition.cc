@@ -134,6 +134,7 @@ private:
         bytes collection_extra_data;
         bytes cell;
         const column_definition *cdef;
+        bool is_present;
 
         static constexpr size_t static_size = 2;
 
@@ -156,36 +157,32 @@ private:
             throw malformed_sstable_exception(sprint("Found %d clustering elements in column name. Was not expecting that!", clustering.size()));
         }
 
-        bool is_present(api::timestamp_type timestamp) {
-            return cdef && timestamp > cdef->dropped_at();
+        static bool check_static(const schema& schema, bytes_view col) {
+            return composite_view(col, schema.is_compound()).is_static();
         }
 
-        static bool check_static(bytes_view col) {
-            static bytes static_row(static_size, 0xff);
-            return col.compare(0, static_size, static_row) == 0;
+        static bytes_view fix_static_name(const schema& schema, bytes_view col) {
+            return fix_static_name(col, check_static(schema, col));
         }
 
-        static bytes_view fix_static_name(bytes_view col) {
-            if (check_static(col)) {
+        static bytes_view fix_static_name(bytes_view col, bool is_static) {
+            if(is_static) {
                 col.remove_prefix(static_size);
             }
             return col;
         }
 
         std::vector<bytes> extract_clustering_key(const schema& schema) {
-            if (!schema.is_compound()) {
-                return { to_bytes(col_name) };
-            } else {
-                return composite_view(col_name).explode();
-            }
+            return composite_view(col_name, schema.is_compound()).explode();
         }
-        column(const schema& schema, bytes_view col)
-            : is_static(check_static(col))
-            , col_name(fix_static_name(col))
+        column(const schema& schema, bytes_view col, api::timestamp_type timestamp)
+            : is_static(check_static(schema, col))
+            , col_name(fix_static_name(col, is_static))
             , clustering(extract_clustering_key(schema))
             , collection_extra_data(is_collection(schema) ? pop_back(clustering) : bytes()) // collections are not supported with COMPACT STORAGE, so this is fine
             , cell(!schema.is_dense() ? pop_back(clustering) : (*(schema.regular_begin())).name()) // dense: cell name is not provided. It is the only regular column
             , cdef(schema.get_column_definition(cell))
+            , is_present(cdef && timestamp > cdef->dropped_at())
         {
 
             if (is_static) {
@@ -194,6 +191,11 @@ private:
                         throw malformed_sstable_exception("Static row has clustering key information. I didn't expect that!");
                     }
                 }
+            }
+
+            if (is_present && is_static != cdef->is_static()) {
+                throw malformed_sstable_exception(seastar::format("Mismatch between {} cell and {} column definition",
+                        is_static ? "static" : "non-static", cdef->is_static() ? "static" : "non-static"));
             }
         }
     };
@@ -384,7 +386,7 @@ public:
             return proceed::yes;
         }
 
-        struct column col(*_schema, col_name);
+        struct column col(*_schema, col_name, timestamp);
 
         auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
         auto ret = flush_if_needed(col.is_static, clustering_prefix);
@@ -398,7 +400,7 @@ public:
             return ret;
         }
 
-        if (!col.is_present(timestamp)) {
+        if (!col.is_present) {
             return ret;
         }
 
@@ -426,10 +428,11 @@ public:
             return proceed::yes;
         }
 
-        struct column col(*_schema, col_name);
+        auto timestamp = deltime.marked_for_delete_at;
+        struct column col(*_schema, col_name, timestamp);
         gc_clock::duration secs(deltime.local_deletion_time);
 
-        return consume_deleted_cell(col, deltime.marked_for_delete_at, gc_clock::time_point(secs));
+        return consume_deleted_cell(col, timestamp, gc_clock::time_point(secs));
     }
 
     proceed consume_deleted_cell(column &col, int64_t timestamp, gc_clock::time_point ttl) {
@@ -444,7 +447,7 @@ public:
             _in_progress->as_clustering_row().apply(rm);
             return ret;
         }
-        if (!col.is_present(timestamp)) {
+        if (!col.is_present) {
             return ret;
         }
 
@@ -510,7 +513,7 @@ public:
             return proceed::yes;
         }
 
-        auto start = composite_view(column::fix_static_name(start_col)).explode();
+        auto start = composite_view(column::fix_static_name(*_schema, start_col)).explode();
 
         // Note how this is slightly different from the check in is_collection. Collection tombstones
         // do not have extra data.
@@ -520,7 +523,7 @@ public:
         if (start.size() <= _schema->clustering_key_size()) {
             auto start_ck = clustering_key_prefix::from_exploded(std::move(start));
             auto start_kind = start_marker_to_bound_kind(start_col);
-            auto end = clustering_key_prefix::from_exploded(composite_view(column::fix_static_name(end_col)).explode());
+            auto end = clustering_key_prefix::from_exploded(composite_view(column::fix_static_name(*_schema, end_col)).explode());
             auto end_kind = end_marker_to_bound_kind(end_col);
             if (range_tombstone::is_single_clustering_row_tombstone(*_schema, start_ck, start_kind, end, end_kind)) {
                 auto ret = flush_if_needed(std::move(start_ck));
