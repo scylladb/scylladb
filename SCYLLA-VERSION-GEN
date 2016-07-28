@@ -1,6 +1,6 @@
 #!/bin/sh
 
-VERSION=1.3.rc1
+VERSION=1.3.rc2
 
 if test -f version
 then
