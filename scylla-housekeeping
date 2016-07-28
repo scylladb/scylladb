@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python
 #
 # Copyright (C) 2016 ScyllaDB
 #
@@ -19,10 +19,12 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 #
+from __future__ import print_function
 
 import argparse
 import json
 import urllib
+import urllib2
 import requests
 
 VERSION = "1.0"
@@ -40,13 +42,12 @@ def help(args):
     parser.print_help()
 
 def get_json_from_url(path):
-    req = urllib.request.Request(path)
+    req = urllib2.Request(path)
     try:
-        response = urllib.request.urlopen(req)
+        response = urllib2.urlopen(req)
         data = response.read()
-        encoding = response.info().get_content_charset('utf-8')
-        return json.loads(data.decode(encoding))
-    except urllib.error.URLError as e:
+        return json.loads(data)
+    except urllib2.URLError as e:
         pass
     return ""
 
