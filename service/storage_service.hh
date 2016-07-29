@@ -559,9 +559,9 @@ public:
         auto orig_map = get_range_to_address_map(keyspace, get_tokens_in_local_dc());
         std::unordered_map<range<token>, std::vector<inet_address>> filtered_map;
         for (auto entry : orig_map) {
-            filtered_map[entry.first].reserve(entry.second.size());
-            std::remove_copy_if(entry.second.begin(), entry.second.end(),
-                    filtered_map[entry.first].begin(), filter);
+            auto& addresses = filtered_map[entry.first];
+            addresses.reserve(entry.second.size());
+            std::copy_if(entry.second.begin(), entry.second.end(), std::back_inserter(addresses), filter);
         }
 
         return filtered_map;
