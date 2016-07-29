@@ -229,6 +229,8 @@ class single_partition_populating_reader final : public mutation_reader::impl {
     mutation_reader _delegate;
     const io_priority_class _pc;
     query::clustering_key_filtering_context _ck_filtering;
+    query::partition_range _large_partition_range;
+    mutation_reader _large_partition_reader;
 public:
     single_partition_populating_reader(schema_ptr s, row_cache& cache, mutation_source& underlying,
         mutation_reader delegate, const io_priority_class pc, query::clustering_key_filtering_context ck_filtering)
@@ -262,11 +264,9 @@ public:
                         return make_ready_future<streamed_mutation_opt>(streamed_mutation_opt());
                     } else {
                         _cache.on_uncached_wide_partition();
-                        auto reader = _underlying(_schema,
-                                                  query::partition_range::make_singular(dht::ring_position(std::move(dk))),
-                                                  _ck_filtering,
-                                                  _pc);
-                        return reader();
+                        _large_partition_range = query::partition_range::make_singular(std::move(dk));
+                        _large_partition_reader = _underlying(_schema, _large_partition_range, _ck_filtering, _pc);
+                        return _large_partition_reader();
                     }
                 });
         });
@@ -406,6 +406,8 @@ class range_populating_reader final : public mutation_reader::impl {
     std::experimental::optional<dht::ring_position> _last_key;
     utils::phased_barrier::phase_type _last_key_populate_phase;
     mark_end_as_continuous _make_last_entry_continuous;
+    query::partition_range _large_partition_range;
+    mutation_reader _large_partition_reader;
 
     void update_reader() {
         if (_populate_phase != _cache._populate_phaser.phase()) {
@@ -482,11 +484,18 @@ public:
                         assert(bool(dk));
                         _last_key = std::experimental::optional<dht::ring_position>();
                         _cache.on_uncached_wide_partition();
-                        auto reader = _underlying(_schema,
-                                                  query::partition_range::make_singular(dht::ring_position(std::move(*dk))),
-                                                  _ck_filtering,
-                                                  _pc);
-                        return reader();
+                        _large_partition_range = query::partition_range::make_singular(*dk);
+                        _large_partition_reader = _underlying(_schema, _large_partition_range, _ck_filtering, _pc);
+                        return _large_partition_reader().then([this, dk = std::move(*dk)] (auto smopt) mutable -> streamed_mutation_opt {
+                            _large_partition_reader = {};
+                            if (!smopt) {
+                                // We cannot emit disengaged optional since this is a part of range
+                                // read and it would incorrectly interpreted as end of stream.
+                                // Produce empty mutation instead.
+                                return streamed_mutation_from_mutation(mutation(std::move(dk), _schema));
+                            }
+                            return smopt;
+                        });
                     }
                 });
         });
