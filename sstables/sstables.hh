@@ -113,7 +113,7 @@ class sstable_writer;
 
 using index_list = std::vector<index_entry>;
 
-class sstable {
+class sstable : public enable_lw_shared_from_this<sstable> {
 public:
     enum class component_type {
         Index,
