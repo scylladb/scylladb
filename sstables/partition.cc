@@ -579,10 +579,33 @@ public:
     }
 };
 
+struct sstable_data_source {
+    shared_sstable _sst;
+    mp_row_consumer _consumer;
+    data_consume_context _context;
+
+    sstable_data_source(shared_sstable sst, mp_row_consumer&& consumer)
+        : _sst(std::move(sst))
+        , _consumer(std::move(consumer))
+        , _context(_sst->data_consume_rows(_consumer))
+    { }
+
+    sstable_data_source(shared_sstable sst, mp_row_consumer&& consumer, uint64_t start, uint64_t end)
+        : _sst(std::move(sst))
+        , _consumer(std::move(consumer))
+        , _context(_sst->data_consume_rows(_consumer, start, end))
+    { }
+
+    sstable_data_source(schema_ptr s, shared_sstable sst, const sstables::key& k, const io_priority_class& pc,
+            query::clustering_key_filtering_context ck_filtering, uint64_t start, uint64_t end)
+        : _sst(std::move(sst))
+        , _consumer(k, s, ck_filtering, pc)
+        , _context(_sst->data_consume_rows(_consumer, start, end))
+    { }
+};
+
 class sstable_streamed_mutation : public streamed_mutation::impl {
-    const schema& _schema;
-    data_consume_context& _context;
-    mp_row_consumer& _consumer;
+    lw_shared_ptr<sstable_data_source> _ds;
     tombstone _t;
     bool _finished = false;
     range_tombstone_stream _range_tombstones;
@@ -608,9 +631,9 @@ private:
             // No need to update _last_position here. We've already read everything from the sstable.
             return make_ready_future<stdx::optional<mutation_fragment_opt>>(_range_tombstones.get_next());
         }
-        return _context.read().then([this] {
-            _finished = _consumer.get_and_reset_is_mutation_end();
-            auto mf = _consumer.get_mutation_fragment();
+        return _ds->_context.read().then([this] {
+            _finished = _ds->_consumer.get_and_reset_is_mutation_end();
+            auto mf = _ds->_consumer.get_mutation_fragment();
             if (mf) {
                 if (mf->is_range_tombstone()) {
                     // If sstable uses promoted index it will repeat relevant range tombstones in
@@ -628,7 +651,7 @@ private:
                     if (!_current_candidate) {
                         _current_candidate = std::move(mf);
                     } else if (_current_candidate && _eq(*_current_candidate, *mf)) {
-                        _current_candidate->apply(_schema, std::move(*mf));
+                        _current_candidate->apply(*_schema, std::move(*mf));
                     } else {
                         _next_candidate = std::move(mf);
                     }
@@ -638,8 +661,8 @@ private:
         });
     }
 public:
-    sstable_streamed_mutation(schema_ptr s, dht::decorated_key dk, data_consume_context& context, mp_row_consumer& consumer, tombstone t)
-        : streamed_mutation::impl(s, std::move(dk), t), _schema(*s), _context(context), _consumer(consumer), _t(t), _range_tombstones(*s), _cmp(*s), _eq(*s) { }
+    sstable_streamed_mutation(schema_ptr s, dht::decorated_key dk, tombstone t, lw_shared_ptr<sstable_data_source> ds)
+        : streamed_mutation::impl(s, std::move(dk), t), _ds(std::move(ds)), _t(t), _range_tombstones(*s), _cmp(*s), _eq(*s) { }
 
     virtual future<> fill_buffer() final override {
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
@@ -654,38 +677,17 @@ public:
             });
         });
     }
-};
 
-class sstable_single_streamed_mutation final : public sstable_streamed_mutation {
-    struct data_source {
-        mp_row_consumer _consumer;
-        data_consume_context _context;
-
-        data_source(schema_ptr s, sstable& sst, const sstables::key& k, const io_priority_class& pc,
-                    query::clustering_key_filtering_context ck_filtering, uint64_t start, uint64_t end)
-            : _consumer(k, s, ck_filtering, pc)
-            , _context(sst.data_consume_rows(_consumer, start, end))
-        {
-        }
-    };
-
-    lw_shared_ptr<data_source> _data_source;
-public:
-    sstable_single_streamed_mutation(schema_ptr s, dht::decorated_key dk, tombstone t, lw_shared_ptr<data_source> ds)
-        : sstable_streamed_mutation(std::move(s), std::move(dk), ds->_context, ds->_consumer, t)
-        , _data_source(ds)
-    { }
-
-    static future<streamed_mutation> create(schema_ptr s, sstable& sst, const sstables::key& k,
+    static future<streamed_mutation> create(schema_ptr s, shared_sstable sst, const sstables::key& k,
                                             query::clustering_key_filtering_context ck_filtering,
                                             const io_priority_class& pc, uint64_t start, uint64_t end)
     {
-        auto ds = make_lw_shared<data_source>(s, sst, k, pc, ck_filtering, start, end);
+        auto ds = make_lw_shared<sstable_data_source>(s, sst, k, pc, ck_filtering, start, end);
         return ds->_context.read().then([s, ds] {
             auto mut = ds->_consumer.get_mutation();
             assert(mut);
             auto dk = dht::global_partitioner().decorate_key(*s, std::move(mut->key));
-            return make_streamed_mutation<sstable_single_streamed_mutation>(s, std::move(dk), mut->tomb, ds);
+            return make_streamed_mutation<sstable_streamed_mutation>(s, std::move(dk), mut->tomb, ds);
         });
     }
 };
@@ -761,7 +763,7 @@ sstables::sstable::read_row(schema_ptr schema,
 
         auto position = index_list[index_idx].position();
         return this->data_end_position(summary_idx, index_idx, index_list, pc).then([&key, schema, ck_filtering, this, position, &pc] (uint64_t end) {
-            return sstable_single_streamed_mutation::create(schema, *this, key, ck_filtering, pc, position, end).then([] (auto sm) {
+            return sstable_streamed_mutation::create(schema, this->shared_from_this(), key, ck_filtering, pc, position, end).then([] (auto sm) {
                 return streamed_mutation_opt(std::move(sm));
             });
         });
@@ -771,25 +773,31 @@ sstables::sstable::read_row(schema_ptr schema,
 class mutation_reader::impl {
 private:
     schema_ptr _schema;
+    lw_shared_ptr<sstable_data_source> _ds;
+    // For some reason std::function requires functors to be copyable and that's
+    // why we cannot store mp_row_consumer in _get_data_source captured values.
+    // Instead we have this _consumer field here which is moved away by
+    // _get_data_source().
     mp_row_consumer _consumer;
-    std::experimental::optional<data_consume_context> _context;
-    std::function<future<data_consume_context> ()> _get_context;
+    std::function<future<lw_shared_ptr<sstable_data_source>> ()> _get_data_source;
 public:
-    impl(sstable& sst, schema_ptr schema, uint64_t start, uint64_t end,
+    impl(shared_sstable sst, schema_ptr schema, uint64_t start, uint64_t end,
          const io_priority_class &pc)
         : _schema(schema)
         , _consumer(schema, query::no_clustering_key_filtering, pc)
-        , _get_context([&sst, this, start, end] {
-            return make_ready_future<data_consume_context>(sst.data_consume_rows(_consumer, start, end));
+        , _get_data_source([this, sst = std::move(sst), start, end] {
+            auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), start, end);
+            return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
-    impl(sstable& sst, schema_ptr schema,
+    impl(shared_sstable sst, schema_ptr schema,
          const io_priority_class &pc)
         : _schema(schema)
         , _consumer(schema, query::no_clustering_key_filtering, pc)
-        , _get_context([this, &sst] {
-            return make_ready_future<data_consume_context>(sst.data_consume_rows(_consumer));
+        , _get_data_source([this, sst = std::move(sst)] {
+            auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer));
+            return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
-    impl(sstable& sst,
+    impl(shared_sstable sst,
          schema_ptr schema,
          std::function<future<uint64_t>()> start,
          std::function<future<uint64_t>()> end,
@@ -797,48 +805,49 @@ public:
          const io_priority_class& pc)
         : _schema(schema)
         , _consumer(schema, ck_filtering, pc)
-        , _get_context([this, &sst, start = std::move(start), end = std::move(end)] () {
-            return start().then([this, &sst, end = std::move(end)] (uint64_t start) {
-                return end().then([this, &sst, start] (uint64_t end) {
-                    return make_ready_future<data_consume_context>(sst.data_consume_rows(_consumer, start, end));
+        , _get_data_source([this, sst = std::move(sst), start = std::move(start), end = std::move(end)] () mutable {
+            return start().then([this, sst = std::move(sst), end = std::move(end)] (uint64_t start) mutable {
+                return end().then([this, sst = std::move(sst), start] (uint64_t end) mutable {
+                    return make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), start, end);
                 });
             });
         }) { }
-    impl() : _consumer(), _get_context() { }
+    impl() : _get_data_source() { }
 
     // Reference to _consumer is passed to data_consume_rows() in the constructor so we must not allow move/copy
     impl(impl&&) = delete;
     impl(const impl&) = delete;
 
     future<streamed_mutation_opt> read() {
-        if (!_get_context) {
+        if (!_get_data_source) {
             // empty mutation reader returns EOF immediately
             return make_ready_future<streamed_mutation_opt>();
         }
 
-        if (_context) {
+        if (_ds) {
             return do_read();
         }
-        return (_get_context)().then([this] (data_consume_context context) {
-            _context = std::move(context);
+        return (_get_data_source)().then([this] (lw_shared_ptr<sstable_data_source> ds) {
+            _ds = std::move(ds);
             return do_read();
         });
     }
 private:
     future<streamed_mutation_opt> do_read() {
-        return _context->read().then([this] {
-            auto mut = _consumer.get_mutation();
+        return _ds->_context.read().then([this] {
+            auto& consumer = _ds->_consumer;
+            auto mut = consumer.get_mutation();
             if (!mut) {
-                if (_consumer.get_mutation_fragment() || _consumer.get_and_reset_is_mutation_end()) {
+                if (consumer.get_mutation_fragment() || consumer.get_and_reset_is_mutation_end()) {
                     // We are still in the middle of the previous mutation.
-                    _consumer.skip_partition();
+                    consumer.skip_partition();
                     return do_read();
                 } else {
                     return make_ready_future<streamed_mutation_opt>();
                 }
             }
             auto dk = dht::global_partitioner().decorate_key(*_schema, std::move(mut->key));
-            auto sm = make_streamed_mutation<sstable_streamed_mutation>(_schema, std::move(dk), *_context, _consumer, mut->tomb);
+            auto sm = make_streamed_mutation<sstable_streamed_mutation>(_schema, std::move(dk), mut->tomb, _ds);
             return make_ready_future<streamed_mutation_opt>(std::move(sm));
         });
     }
@@ -854,7 +863,7 @@ future<streamed_mutation_opt> mutation_reader::read() {
 }
 
 mutation_reader sstable::read_rows(schema_ptr schema, const io_priority_class& pc) {
-    return std::make_unique<mutation_reader::impl>(*this, schema, pc);
+    return std::make_unique<mutation_reader::impl>(shared_from_this(), schema, pc);
 }
 
 // Less-comparator for lookups in the partition index.
@@ -967,7 +976,7 @@ sstable::read_range_rows(schema_ptr schema,
     };
 
     return std::make_unique<mutation_reader::impl>(
-        *this, std::move(schema), std::move(start), std::move(end), ck_filtering, pc);
+        shared_from_this(), std::move(schema), std::move(start), std::move(end), ck_filtering, pc);
 }
 
 
