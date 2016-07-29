@@ -33,6 +33,13 @@
 // marking the end of iteration. After calling mutation_reader's operator(),
 // caller must keep the object alive until the returned future is fulfilled.
 //
+// streamed_mutation object emitted by mutation_reader remains valid after the
+// destruction of the mutation_reader.
+//
+// Asking mutation_reader for another streamed_mutation (i.e. invoking
+// mutation_reader::operator()) invalidates all streamed_mutation objects
+// previously produced by that reader.
+//
 // The mutations returned have strictly monotonically increasing keys. Two
 // consecutive mutations never have equal keys.
 //
