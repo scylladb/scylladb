@@ -157,13 +157,13 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_always_for_wide_partition_f
         assert_that(cache.make_reader(s, query::full_partition_range))
             .produces(m)
             .produces_end_of_stream();
-        assert(secondary_calls_count == 2);
-        assert(tracker.uncached_wide_partitions() == 1);
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 2);
+        BOOST_REQUIRE_EQUAL(tracker.uncached_wide_partitions(), 1);
         assert_that(cache.make_reader(s, query::full_partition_range))
             .produces(m)
             .produces_end_of_stream();
-        assert(secondary_calls_count == 4);
-        assert(tracker.uncached_wide_partitions() == 2);
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 4);
+        BOOST_REQUIRE_EQUAL(tracker.uncached_wide_partitions(), 2);
     });
 }
 
@@ -183,13 +183,13 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_always_for_wide_partition_s
         assert_that(cache.make_reader(s, query::partition_range::make_singular(query::ring_position(m.decorated_key()))))
             .produces(m)
             .produces_end_of_stream();
-        assert(secondary_calls_count == 2);
-        assert(tracker.uncached_wide_partitions() == 1);
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 2);
+        BOOST_REQUIRE_EQUAL(tracker.uncached_wide_partitions(), 1);
         assert_that(cache.make_reader(s, query::partition_range::make_singular(query::ring_position(m.decorated_key()))))
             .produces(m)
             .produces_end_of_stream();
-        assert(secondary_calls_count == 4);
-        assert(tracker.uncached_wide_partitions() == 2);
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 4);
+        BOOST_REQUIRE_EQUAL(tracker.uncached_wide_partitions(), 2);
     });
 }
 
@@ -207,10 +207,10 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_full_range)
 
         assert_that(cache.make_reader(s, query::full_partition_range))
             .produces_end_of_stream();
-        assert(secondary_calls_count.load() == 1);
+        BOOST_REQUIRE_EQUAL(secondary_calls_count.load(), 1);
         assert_that(cache.make_reader(s, query::full_partition_range))
             .produces_end_of_stream();
-        assert(secondary_calls_count.load() == 1);
+        BOOST_REQUIRE_EQUAL(secondary_calls_count.load(), 1);
     });
 }
 
@@ -234,11 +234,11 @@ void test_cache_delegates_to_underlying_only_once_with_single_partition(schema_p
     assert_that(cache.make_reader(s, range))
         .produces(m)
         .produces_end_of_stream();
-    assert(secondary_calls_count.load() == 1);
+    BOOST_REQUIRE_EQUAL(secondary_calls_count.load(), 1);
     assert_that(cache.make_reader(s, range))
         .produces(m)
         .produces_end_of_stream();
-    assert(secondary_calls_count.load() == 1);
+    BOOST_REQUIRE_EQUAL(secondary_calls_count.load(), 1);
 }
 
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_single_key_range) {
