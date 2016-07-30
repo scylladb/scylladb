@@ -40,6 +40,7 @@
  */
 
 #include "cql3/statements/drop_keyspace_statement.hh"
+#include "cql3/statements/prepared_statement.hh"
 
 #include "service/migration_manager.hh"
 #include "transport/event.hh"
@@ -95,6 +96,11 @@ shared_ptr<transport::event::schema_change> drop_keyspace_statement::change_even
 
     return make_shared<event::schema_change>(event::schema_change::change_type::DROPPED, keyspace());
 
+}
+
+shared_ptr<cql3::statements::prepared_statement>
+drop_keyspace_statement::prepare(database& db) {
+    return make_shared<prepared_statement>(make_shared<drop_keyspace_statement>(*this));
 }
 
 }
