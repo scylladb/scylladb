@@ -156,6 +156,14 @@ void create_table_statement::add_column_metadata_from_aliases(schema_builder& bu
     }
 }
 
+shared_ptr<prepared_statement>
+create_table_statement::prepare(database& db) {
+    // Cannot happen; create_table_statement is never instantiated as a raw statement
+    // (instead we instantiate create_table_statement::raw_statement)
+    abort();
+}
+
+
 create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name, bool if_not_exists)
     : cf_statement{std::move(name)}
     , _if_not_exists{if_not_exists}
