@@ -85,10 +85,10 @@ static std::vector<db::system_keyspace::range_estimates> estimates_for(const col
             unwrapped.push_back(range);
         }
         for (auto&& uwr : unwrapped) {
-          for (auto&& sstable : cf.select_sstables(uwr)) {
-            count += sstable->get_estimated_key_count();
-            hist.merge(sstable->get_stats_metadata().estimated_row_size);
-          }
+            for (auto&& sstable : cf.select_sstables(uwr)) {
+                count += sstable->get_estimated_key_count();
+                hist.merge(sstable->get_stats_metadata().estimated_row_size);
+            }
         }
         estimates.emplace_back(db::system_keyspace::range_estimates{
                 range.start()->value().token(),
