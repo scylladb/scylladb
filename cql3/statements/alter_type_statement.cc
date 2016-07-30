@@ -39,6 +39,7 @@
 
 #include "cql3/statements/alter_type_statement.hh"
 #include "cql3/statements/create_type_statement.hh"
+#include "prepared_statement.hh"
 #include "schema_builder.hh"
 #include "service/migration_manager.hh"
 #include "boost/range/adaptor/map.hpp"
@@ -225,6 +226,16 @@ user_type alter_type_statement::renames::make_updated_type(database& db, user_ty
     auto&& updated = user_type_impl::get_instance(to_update->_keyspace, to_update->_name, std::move(new_names), to_update->field_types());
     create_type_statement::check_for_duplicate_names(updated);
     return updated;
+}
+
+shared_ptr<cql3::statements::prepared_statement>
+alter_type_statement::add_or_alter::prepare(database& db) {
+    return make_shared<prepared_statement>(make_shared<alter_type_statement::add_or_alter>(*this));
+}
+
+shared_ptr<cql3::statements::prepared_statement>
+alter_type_statement::renames::prepare(database& db) {
+    return make_shared<prepared_statement>(make_shared<alter_type_statement::renames>(*this));
 }
 
 }
