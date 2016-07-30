@@ -40,6 +40,7 @@
  */
 
 #include "cql3/statements/drop_table_statement.hh"
+#include "cql3/statements/prepared_statement.hh"
 
 #include "service/migration_manager.hh"
 
@@ -96,6 +97,11 @@ shared_ptr<transport::event::schema_change> drop_table_statement::change_event()
                                              event::schema_change::target_type::TABLE,
                                              keyspace(),
                                              column_family());
+}
+
+shared_ptr<cql3::statements::prepared_statement>
+drop_table_statement::prepare(database& db) {
+    return make_shared<prepared_statement>(make_shared<drop_table_statement>(*this));
 }
 
 }
