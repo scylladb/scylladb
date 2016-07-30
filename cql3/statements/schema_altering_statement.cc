@@ -86,11 +86,6 @@ void schema_altering_statement::prepare_keyspace(const service::client_state& st
     }
 }
 
-::shared_ptr<prepared_statement> schema_altering_statement::prepare(database& db)
-{
-    return ::make_shared<prepared>(this->shared_from_this());
-}
-
 future<::shared_ptr<messages::result_message>>
 schema_altering_statement::execute0(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options, bool is_local_only) {
     // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
