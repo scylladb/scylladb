@@ -69,6 +69,8 @@ public:
 
     virtual future<bool> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) override;
 
+    virtual shared_ptr<prepared> prepare(database& db) override;
+
     static void check_for_duplicate_names(user_type type);
 private:
     bool type_exists_in(::keyspace& ks);

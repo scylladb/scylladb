@@ -38,6 +38,7 @@
  */
 
 #include "cql3/statements/create_type_statement.hh"
+#include "prepared_statement.hh"
 
 #include "service/migration_manager.hh"
 
@@ -153,6 +154,11 @@ future<bool> create_type_statement::announce_migration(distributed<service::stor
     auto type = create_type(db);
     check_for_duplicate_names(type);
     return service::get_local_migration_manager().announce_new_type(type, is_local_only).then([] { return true; });
+}
+
+shared_ptr<cql3::statements::prepared_statement>
+create_type_statement::prepare(database& db) {
+    return make_shared<prepared_statement>(make_shared<create_type_statement>(*this));
 }
 
 }
