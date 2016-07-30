@@ -173,38 +173,39 @@ public:
         return 0;
     }
 
-      /**
-       * @return the largest value that could have been added to this histogram.  If the histogram
-       * overflowed, returns INT64_MAX.
-       */
-      int64_t max() const {
-          int lastBucket = buckets.size() - 1;
-          if (buckets[lastBucket] > 0) {
-              return INT64_MAX;
-          }
-          for (int i = lastBucket - 1; i >= 0; i--) {
-              if (buckets[i] > 0)
-                  return bucket_offsets[i];
-          }
-          return 0;
-      }
+    /**
+     * @return the largest value that could have been added to this histogram.  If the histogram
+     * overflowed, returns INT64_MAX.
+     */
+    int64_t max() const {
+        int lastBucket = buckets.size() - 1;
+        if (buckets[lastBucket] > 0) {
+            return INT64_MAX;
+        }
+        for (int i = lastBucket - 1; i >= 0; i--) {
+            if (buckets[i] > 0) {
+                return bucket_offsets[i];
+            }
+        }
+        return 0;
+    }
 
-      /**
-       * merge a histogram to the current one.
-       */
-      estimated_histogram& merge(const estimated_histogram& b) {
-          if (bucket_offsets.size() < b.bucket_offsets.size()) {
-              new_offsets(b.bucket_offsets.size());
-              buckets.resize(b.bucket_offsets.size() + 1, 0);
-          }
-          size_t i = 0;
-          for (auto p: b.buckets) {
-              buckets[i++] += p;
-          }
-          return *this;
-      }
+    /**
+     * merge a histogram to the current one.
+     */
+    estimated_histogram& merge(const estimated_histogram& b) {
+        if (bucket_offsets.size() < b.bucket_offsets.size()) {
+            new_offsets(b.bucket_offsets.size());
+            buckets.resize(b.bucket_offsets.size() + 1, 0);
+        }
+        size_t i = 0;
+        for (auto p: b.buckets) {
+            buckets[i++] += p;
+        }
+        return *this;
+    }
 
-      friend estimated_histogram merge(estimated_histogram a, const estimated_histogram& b);
+    friend estimated_histogram merge(estimated_histogram a, const estimated_histogram& b);
 
     // FIXME: convert Java code below.
 #if 0
