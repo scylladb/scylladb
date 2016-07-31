@@ -5,10 +5,12 @@ print_usage() {
     echo "build_rpm.sh --rebuild-dep --jobs 2"
     echo "  --rebuild-dep  rebuild dependency packages (CentOS)"
     echo "  --jobs  specify number of jobs"
+    echo "  --dist  create a public distribution rpm"
     exit 1
 }
 REBUILD=0
 JOBS=0
+DIST=0
 while [ $# -gt 0 ]; do
     case "$1" in
         "--rebuild-dep")
@@ -18,6 +20,10 @@ while [ $# -gt 0 ]; do
         "--jobs")
             JOBS=$2
             shift 2
+            ;;
+        "--dist")
+            DIST=1
+            shift 1
             ;;
         *)
             print_usage
@@ -62,6 +68,13 @@ rm -f version
 cp dist/redhat/scylla.spec.in $RPMBUILD/SPECS/scylla.spec
 sed -i -e "s/@@VERSION@@/$SCYLLA_VERSION/g" $RPMBUILD/SPECS/scylla.spec
 sed -i -e "s/@@RELEASE@@/$SCYLLA_RELEASE/g" $RPMBUILD/SPECS/scylla.spec
+
+if [ $DIST -gt 0 ]; then
+  sed -i -e "s/@@HOUSEKEEPING_CONF@@/true/g" $RPMBUILD/SPECS/scylla.spec
+else
+  sed -i -e "s/@@HOUSEKEEPING_CONF@@/false/g" $RPMBUILD/SPECS/scylla.spec
+fi
+
 if [ "$ID" = "fedora" ]; then
     if [ $JOBS -gt 0 ]; then
         rpmbuild -bs --define "_topdir $RPMBUILD" --define "_smp_mflags -j$JOBS" $RPMBUILD/SPECS/scylla.spec
