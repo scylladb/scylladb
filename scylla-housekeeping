@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python
 #
 # Copyright (C) 2016 ScyllaDB
 #
@@ -19,11 +19,14 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 #
+from __future__ import print_function
 
 import argparse
 import json
 import urllib
+import urllib2
 import requests
+from pkg_resources import parse_version
 
 VERSION = "1.0"
 quiet = False
@@ -40,24 +43,25 @@ def help(args):
     parser.print_help()
 
 def get_json_from_url(path):
-    req = urllib.request.Request(path)
+    req = urllib2.Request(path)
     try:
-        response = urllib.request.urlopen(req)
+        response = urllib2.urlopen(req)
         data = response.read()
-        encoding = response.info().get_content_charset('utf-8')
-        return json.loads(data.decode(encoding))
-    except urllib.error.URLError as e:
+        return json.loads(data)
+    except urllib2.URLError as e:
         pass
     return ""
 
 def get_api(path):
     return get_json_from_url("http://localhost:10000" + path)
 
+def version_compare(a, b):
+    return parse_version(a) < parse_version(b)
+
 def check_version(ar):
     current_version = get_api('/storage_service/scylla_release_version')
-    latest_version = get_json_from_url(version_url)["version"]
-    
-    if current_version != latest_version:
+    latest_version = get_json_from_url(version_url + "?version=" + current_version)["version"]
+    if version_compare(current_version, latest_version):
         traceln("A new version was found, current version=", current_version, " latest version=", latest_version)
 
 parser = argparse.ArgumentParser(description='ScyllaDB help report tool', conflict_handler="resolve")
