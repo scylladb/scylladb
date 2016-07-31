@@ -26,6 +26,9 @@ import json
 import urllib
 import urllib2
 import requests
+import ConfigParser
+import os
+import sys
 from pkg_resources import parse_version
 
 VERSION = "1.0"
@@ -59,6 +62,8 @@ def version_compare(a, b):
     return parse_version(a) < parse_version(b)
 
 def check_version(ar):
+    if config and (not config.has_option("housekeeping", "check-version") or not config.getboolean("housekeeping", "check-version")):
+        return
     current_version = get_api('/storage_service/scylla_release_version')
     latest_version = get_json_from_url(version_url + "?version=" + current_version)["version"]
     if version_compare(current_version, latest_version):
@@ -66,6 +71,7 @@ def check_version(ar):
 
 parser = argparse.ArgumentParser(description='ScyllaDB help report tool', conflict_handler="resolve")
 parser.add_argument('-q', '--quiet', action='store_true', default=False, help='Quiet mode')
+parser.add_argument('-c', '--config', default="", help='An optional config file. Specifying a missing file will terminate the script')
 
 subparsers = parser.add_subparsers(help='Available commands')
 parser_help = subparsers.add_parser('help', help='Display help information')
@@ -75,4 +81,11 @@ parser_system.set_defaults(func=check_version)
 
 args = parser.parse_args()
 quiet = args.quiet
+config = None
+if args.config != "":
+    if not os.path.isfile(args.config):
+        traceln("Config file ", args.config, " is missing, terminating")
+        sys.exit(0)
+    config = ConfigParser.SafeConfigParser()
+    config.read(args.config)
 args.func(args)
