@@ -84,7 +84,9 @@ SEASTAR_TEST_CASE(test_queue_ordering_random_ops) {
         return res.then([e] {
             BOOST_CHECK_EQUAL(e->result.size(), e->promises.size());
             BOOST_REQUIRE(std::is_sorted(e->result.begin(), e->result.end()));
-        }).finally([e] {});
+        }).finally([e] {
+            return e->queue.close();
+        });
     });
 }
 
@@ -129,6 +131,8 @@ SEASTAR_TEST_CASE(test_queue_ordering_multi_ops) {
         return res.then([e] {
             BOOST_CHECK_EQUAL(e->result.size(), e->n);
             BOOST_REQUIRE(std::is_sorted(e->result.begin(), e->result.end()));
-        }).finally([e] {});
+        }).finally([e] {
+            return e->queue.close();
+        });
     });
 }
