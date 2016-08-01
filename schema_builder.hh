@@ -220,4 +220,6 @@ public:
     schema_ptr build(compact_storage cp);
 
     schema_ptr build();
+private:
+    void prepare_dense_schema(schema::raw_schema& raw);
 };

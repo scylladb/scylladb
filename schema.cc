@@ -637,51 +637,60 @@ schema_builder& schema_builder::with_version(table_schema_version v) {
     return *this;
 }
 
-schema_ptr schema_builder::build() {
-    if (_version) {
-        _raw._version = *_version;
-    } else {
-        _raw._version = utils::UUID_gen::get_time_UUID();
-    }
+void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
+    if (raw._is_dense) {
+        auto regular_cols = boost::copy_range<std::vector<column_definition*>>(
+            raw._columns | boost::adaptors::filtered([](auto&& col) { return col.is_regular(); })
+                         | boost::adaptors::transformed([](auto&& col) { return &col; }));
 
-    if (!_compact_storage) {
-        return make_lw_shared<schema>(schema(_raw));
-    }
-
-    schema s(_raw);
-
-    // Dense means that no part of the comparator stores a CQL column name. This means
-    // COMPACT STORAGE with at least one columnAliases (otherwise it's a thrift "static" CF).
-    s._raw._is_dense = (*_compact_storage == compact_storage::yes) && (s.clustering_key_size() > 0);
-
-    if (s.clustering_key_size() == 0) {
-        if (*_compact_storage == compact_storage::yes) {
-            s._raw._is_compound = false;
-        } else {
-            s._raw._is_compound = true;
-        }
-    } else {
-        if ((*_compact_storage == compact_storage::yes) && s.clustering_key_size() == 1) {
-            s._raw._is_compound = false;
-        } else {
-            s._raw._is_compound = true;
-        }
-    }
-
-    if (s._raw._is_dense) {
         // In Origin, dense CFs always have at least one regular column
-        if (s.regular_columns_count() == 0) {
-            s._raw._columns.emplace_back(bytes(""), s.regular_column_name_type(), column_kind::regular_column, 0, index_info());
+        if (regular_cols.empty()) {
+            raw._columns.emplace_back(bytes(""), raw._regular_column_name_type, column_kind::compact_column, 0, index_info());
+            return;
         }
 
-        if (s.regular_columns_count() != 1) {
-            throw exceptions::configuration_exception(sprint("Expecting exactly one regular column. Found %d", s.regular_columns_count()));
+        if (regular_cols.size() != 1) {
+            throw exceptions::configuration_exception(sprint("Expecting exactly one regular column. Found %d", regular_cols.size()));
         }
-        s._raw._columns.at(s.column_offset(column_kind::regular_column)).kind = column_kind::compact_column;
+
+        regular_cols[0]->kind = column_kind::compact_column;
     }
-    // We need to rebuild the schema in case we added some column. This is way simpler than trying to factor out the relevant code
-    // from the constructor
-    return make_lw_shared<schema>(schema(s._raw));
+}
+
+schema_ptr schema_builder::build() {
+    schema::raw_schema new_raw = _raw; // Copy so that build() remains idempotent.
+
+    if (_version) {
+        new_raw._version = *_version;
+    } else {
+        new_raw._version = utils::UUID_gen::get_time_UUID();
+    }
+
+    if (_compact_storage) {
+        // Dense means that no part of the comparator stores a CQL column name. This means
+        // COMPACT STORAGE with at least one columnAliases (otherwise it's a thrift "static" CF).
+        auto clustering_key_size = std::count_if(new_raw._columns.begin(), new_raw._columns.end(), [](auto&& col) {
+            return col.kind == column_kind::clustering_key;
+        });
+        new_raw._is_dense = (*_compact_storage == compact_storage::yes) && (clustering_key_size > 0);
+
+        if (clustering_key_size == 0) {
+            if (*_compact_storage == compact_storage::yes) {
+                new_raw._is_compound = false;
+            } else {
+                new_raw._is_compound = true;
+            }
+        } else {
+            if ((*_compact_storage == compact_storage::yes) && clustering_key_size == 1) {
+                new_raw._is_compound = false;
+            } else {
+                new_raw._is_compound = true;
+            }
+        }
+    }
+
+    prepare_dense_schema(new_raw);
+    return make_lw_shared<schema>(schema(new_raw));
 }
 
 schema_ptr schema_builder::build(compact_storage cp) {
