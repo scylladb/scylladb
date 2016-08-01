@@ -11,6 +11,14 @@ PATH=$PATH:$HOME/.local/bin:$HOME/bin
 
 export PATH
 
+is_supported_instance_type() {
+	TYPE=`curl -s http://169.254.169.254/latest/meta-data/instance-type|cut -d . -f 1`
+	case $TYPE in
+		"m3"|"c3"|"i2") echo 1;;
+		*) echo 0;;
+	esac
+}
+
 echo
 echo '   _____            _ _       _____  ____  '
 echo '  / ____|          | | |     |  __ \|  _ \ '
@@ -31,6 +39,7 @@ echo '	http://www.scylladb.com/doc/'
 echo
 
 . /etc/os-release
+
 SETUP=0
 if [ "$ID" != "ubuntu" ]; then
 	if [ "`systemctl status scylla-ami-setup|grep Active|grep exited`" = "" ]; then
@@ -71,19 +80,34 @@ else
 		tput sgr0
 		echo
 	else
-		tput setaf 1
-		tput bold
-		echo "    ScyllaDB is not started!"
-		tput sgr0
-		echo "Please wait for startup. To see status of ScyllaDB, run "
-		if [ "$ID" = "ubuntu" ]; then
-			echo " 'initctl status scylla-server'"
-			echo "and"
-			echo " 'sudo cat /var/log/upstart/scylla-server.log'"
-			echo
+		if [ `is_supported_instance_type` -eq 0 ]; then
+			TYPE=`curl -s http://169.254.169.254/latest/meta-data/instance-type`
+			tput setaf 1
+			tput bold
+			echo "    $TYPE is not supported instance type!"
+			tput sgr0
+			echo -n "To continue startup ScyllaDB on this instance, run 'scylla_io_setup' "
+			if [ "$ID" = "ubuntu" ]; then
+				echo "then 'initctl start scylla-server'."
+			else
+				echo "then 'systemctl start scylla-server'."
+			fi
+			echo "To run ScyllaDB on supported instance type, run AMI in m3/c3/i2 types."
 		else
-			echo " 'systemctl status scylla-server'"
-			echo
+			tput setaf 1
+			tput bold
+			echo "    ScyllaDB is not started!"
+			tput sgr0
+			echo "Please wait for startup. To see status of ScyllaDB, run "
+			if [ "$ID" = "ubuntu" ]; then
+				echo " 'initctl status scylla-server'"
+				echo "and"
+				echo " 'sudo cat /var/log/upstart/scylla-server.log'"
+				echo
+			else
+				echo " 'systemctl status scylla-server'"
+				echo
+			fi
 		fi
 	fi
 fi
