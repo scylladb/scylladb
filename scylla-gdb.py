@@ -177,8 +177,8 @@ class scylla_memory(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla memory', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
     def invoke(self, arg, from_tty):
-        cpu_mem = gdb.parse_and_eval('::memory::cpu_mem')
-        page_size = int(gdb.parse_and_eval('::memory::page_size'))
+        cpu_mem = gdb.parse_and_eval('\'memory::cpu_mem\'')
+        page_size = int(gdb.parse_and_eval('\'memory::page_size\''))
         free_mem = int(cpu_mem['nr_free_pages']) * page_size
         total_mem = int(cpu_mem['nr_pages']) * page_size
         gdb.write('Used memory: {used_mem:>13}\nFree memory: {free_mem:>13}\nTotal memory: {total_mem:>12}\n\n'
@@ -216,8 +216,8 @@ class scylla_memory(gdb.Command):
             gdb.write('{index:5} {size:13} {total}\n'.format(index=index, size=(1<<index)*page_size, total=total*page_size))
 
 def get_seastar_memory_start_and_size():
-    cpu_mem = gdb.parse_and_eval('memory::cpu_mem')
-    page_size = int(gdb.parse_and_eval('memory::page_size'))
+    cpu_mem = gdb.parse_and_eval('\'memory::cpu_mem\'')
+    page_size = int(gdb.parse_and_eval('\'memory::page_size\''))
     total_mem = int(cpu_mem['nr_pages']) * page_size
     start = int(cpu_mem['memory'])
     return start, total_mem
@@ -255,8 +255,8 @@ class scylla_ptr(gdb.Command):
 
         owning_thread.switch()
 
-        cpu_mem = gdb.parse_and_eval('memory::cpu_mem')
-        page_size = int(gdb.parse_and_eval('memory::page_size'))
+        cpu_mem = gdb.parse_and_eval('\'memory::cpu_mem\'')
+        page_size = int(gdb.parse_and_eval('\'memory::page_size\''))
         offset = ptr - int(cpu_mem['memory'])
 
         page = cpu_mem['pages'][offset / page_size];
@@ -303,8 +303,8 @@ class scylla_lsa(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla lsa', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
     def invoke(self, arg, from_tty):
-        lsa = gdb.parse_and_eval('::logalloc::shard_segment_pool')
-        segment_size = int(gdb.parse_and_eval('::logalloc::segment::size'))
+        lsa = gdb.parse_and_eval('\'logalloc::shard_segment_pool\'')
+        segment_size = int(gdb.parse_and_eval('\'logalloc::segment::size\''))
 
         lsa_mem = int(lsa['_segments_in_use']) * segment_size
         non_lsa_mem = int(lsa['_non_lsa_memory_in_use'])
@@ -320,7 +320,7 @@ class scylla_lsa(gdb.Command):
             'Emergency reserve current: {er_current:>8}\n\n'
             .format(er_goal=er_goal, er_max=er_max, er_current=er_current))
 
-        lsa_tracker = gdb.parse_and_eval('::logalloc::tracker_instance._impl')['_M_t']['_M_head_impl']
+        lsa_tracker = gdb.parse_and_eval('\'logalloc::tracker_instance\'._impl')['_M_t']['_M_head_impl']
         regions = lsa_tracker['_regions']
         region = regions['_M_impl']['_M_start']
         gdb.write('LSA regions:\n')
@@ -352,7 +352,7 @@ class scylla_lsa_zones(gdb.Command):
         gdb.Command.__init__(self, 'scylla lsa_zones', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
     def invoke(self, arg, from_tty):
         gdb.write('LSA zones:\n')
-        all_zones = gdb.parse_and_eval('::logalloc::shard_segment_pool._all_zones')
+        all_zones = gdb.parse_and_eval('\'logalloc::shard_segment_pool\'._all_zones')
         for zone in lsa_zone_tree(all_zones['holder']['root']['parent_']):
             gdb.write('    Zone:\n      - base: {z_base:08X}\n      - size: {z_size:>12}\n'
                 '      - used: {z_used:>12}\n'
