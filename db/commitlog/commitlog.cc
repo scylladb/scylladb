@@ -453,7 +453,7 @@ public:
     segment(::shared_ptr<segment_manager> m, const descriptor& d, file && f, bool active)
             : _segment_manager(std::move(m)), _desc(std::move(d)), _file(std::move(f)),
         _file_name(_segment_manager->cfg.commit_log_location + "/" + _desc.filename()), _sync_time(
-                    clock_type::now())
+                    clock_type::now()), _pending_ops(true) // want exception propagation
     {
         ++_segment_manager->totals.segments_created;
         logger.debug("Created new {} segment {}", active ? "active" : "reserve", *this);
@@ -762,9 +762,9 @@ public:
         auto me = shared_from_this();
         ++_segment_manager->totals.pending_allocations;
         logger.trace("Previous allocation is blocking. Must wait.");
-        return _pending_ops.wait_for_pending().then([me] { // TODO: do we need a finally?
+        return _pending_ops.wait_for_pending().then_wrapped([me](auto f) { // TODO: do we need a finally?
             --me->_segment_manager->totals.pending_allocations;
-            return make_ready_future<sseg_ptr>(me);
+            return f.failed() ? me->_segment_manager->active_segment() : make_ready_future<sseg_ptr>(me);
         });
     }
 
@@ -793,6 +793,13 @@ public:
                 });
             }
             return me->sync();
+        }).handle_exception([me, fp](auto p) {
+            // If we get an IO exception (which we assume this is)
+            // we should close the segment.
+            // TODO: should we also trunctate away any partial write
+            // we did?
+            me->_closed = true; // just mark segment as closed, no writes will be done.
+            return make_exception_future<sseg_ptr>(p);
         });
     }
     /**
