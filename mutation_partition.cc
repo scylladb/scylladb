@@ -1780,8 +1780,9 @@ public:
     }
 
     void consume_end_of_partition() {
-        _live_rows += _mutation_consumer->consume_end_of_stream();
-        _partitions += 1;
+        auto live_rows_in_partition = _mutation_consumer->consume_end_of_stream();
+        _live_rows += live_rows_in_partition;
+        _partitions += live_rows_in_partition > 0;
     }
 
     data_query_result consume_end_of_stream() {
