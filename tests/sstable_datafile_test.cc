@@ -42,6 +42,7 @@
 #include "partition_slice_builder.hh"
 #include "sstables/date_tiered_compaction_strategy.hh"
 #include "mutation_assertions.hh"
+#include "mutation_reader_assertions.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -981,6 +982,10 @@ static ::mutation_reader sstable_reader(shared_sstable sst, schema_ptr s) {
     // TODO: s is probably not necessary, as the read_rows() object keeps a copy of it.
     return as_mutation_reader(sst, sst->read_rows(s));
 
+}
+
+static ::mutation_reader sstable_reader(shared_sstable sst, schema_ptr s, const query::partition_range& pr) {
+    return as_mutation_reader(sst, sst->read_range_rows(s, pr));
 }
 
 SEASTAR_TEST_CASE(compaction_manager_test) {
@@ -3125,5 +3130,57 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
             sst = reusable_sst(s, tmp->path, 6).get0();
             BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.map.size());
         }
+    });
+}
+
+SEASTAR_TEST_CASE(test_partition_skipping) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "test_skipping_partitions")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("v", int32_type)
+                .build();
+
+        auto sst = make_lw_shared<sstable>(s, "tests/sstables/partition_skipping", 1, sstables::sstable::version_types::ka, big);
+        sst->load().get0();
+
+        std::vector<dht::decorated_key> keys;
+        for (int i = 0; i < 10; i++) {
+            auto pk = partition_key::from_single_value(*s, int32_type->decompose(i));
+            keys.emplace_back(dht::global_partitioner().decorate_key(*s, std::move(pk)));
+        }
+        dht::decorated_key::less_comparator cmp(s);
+        std::sort(keys.begin(), keys.end(), cmp);
+
+        assert_that(sstable_reader(sst, s)).produces(keys);
+
+        auto pr = query::partition_range::make(dht::ring_position(keys[0]), dht::ring_position(keys[1]));
+        assert_that(sstable_reader(sst, s, pr))
+            .produces(keys[0])
+            .produces(keys[1])
+            .produces_end_of_stream()
+            .fast_forward_to(query::partition_range::make_starting_with(dht::ring_position(keys[8])))
+            .produces(keys[8])
+            .produces(keys[9])
+            .produces_end_of_stream();
+
+        pr = query::partition_range::make(dht::ring_position(keys[1]), dht::ring_position(keys[1]));
+        assert_that(sstable_reader(sst, s, pr))
+            .produces(keys[1])
+            .produces_end_of_stream()
+            .fast_forward_to(query::partition_range::make(dht::ring_position(keys[3]), dht::ring_position(keys[4])))
+            .produces(keys[3])
+            .produces(keys[4])
+            .produces_end_of_stream()
+            .fast_forward_to(query::partition_range::make({ dht::ring_position(keys[4]), false }, dht::ring_position(keys[5])))
+            .produces(keys[5])
+            .produces_end_of_stream()
+            .fast_forward_to(query::partition_range::make(dht::ring_position(keys[6]), dht::ring_position(keys[6])))
+            .produces(keys[6])
+            .produces_end_of_stream()
+            .fast_forward_to(query::partition_range::make(dht::ring_position(keys[7]), dht::ring_position(keys[8])))
+            .produces(keys[7])
+            .fast_forward_to(query::partition_range::make(dht::ring_position(keys[9]), dht::ring_position(keys[9])))
+            .produces(keys[9])
+            .produces_end_of_stream();
     });
 }
