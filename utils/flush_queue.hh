@@ -113,7 +113,6 @@ public:
                         _map.erase(i);
                         pr.set_value();
                     }
-                    _gate.leave();
                 });
             };
 
@@ -126,6 +125,11 @@ public:
             return i->second.pr.get_future().then(std::move(run_post)).finally([pr = std::move(pr)]() mutable {
                 pr.set_value();
             });
+        }).finally([this] {
+            // note: would have liked to use "with_gate", but compiler fails to
+            // infer return type then, since we use "auto" because of future
+            // chaining
+            _gate.leave();
         });
     }
 private:
