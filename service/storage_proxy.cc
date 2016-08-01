@@ -3406,7 +3406,7 @@ public:
 
         boost::range::make_heap(_runs, cmp);
 
-        return repeat_until_value([this, cmp = std::move(cmp), partitions = std::vector<partition>(), row_count = 0u] () mutable {
+        return repeat_until_value([this, cmp = std::move(cmp), partitions = std::vector<partition>(), row_count = 0u, partition_count = 0u] () mutable {
             std::experimental::optional<reconcilable_result> ret;
 
             boost::range::pop_heap(_runs, cmp);
@@ -3426,6 +3426,7 @@ public:
                 partitions.push_back(p);
                 row_count += p._row_count;
             }
+            partition_count += p._row_count > 0;
             if (row_count < _cmd->row_limit) {
                 next.advance();
                 if (next.has_more()) {
@@ -3434,7 +3435,7 @@ public:
                     _runs.pop_back();
                 }
             }
-            if (_runs.empty() || row_count >= _cmd->row_limit) {
+            if (_runs.empty() || row_count >= _cmd->row_limit || partition_count >= _cmd->partition_limit) {
                 ret = reconcilable_result(row_count, std::move(partitions));
             }
             return make_ready_future<std::experimental::optional<reconcilable_result>>(std::move(ret));
