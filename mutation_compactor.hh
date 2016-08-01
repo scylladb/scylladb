@@ -231,7 +231,7 @@ public:
             }
 
             _row_limit -= _rows_in_current_partition;
-            _partition_limit -= 1;
+            _partition_limit -= _rows_in_current_partition > 0;
             _consumer.consume_end_of_partition();
             if (!sstable_compaction()) {
                 return _row_limit && _partition_limit ? stop_iteration::no : stop_iteration::yes;
