@@ -25,6 +25,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/shared_future.hh>
 
 namespace utils {
 
@@ -40,7 +41,7 @@ private:
     // Lifting the restriction of a single "post"
     // per key; Use a "ref count" for each execution
     struct notifier {
-        promise<> pr;
+        shared_promise<> pr;
         size_t count = 0;
     };
 
@@ -52,6 +53,7 @@ private:
     // embed all ops in a seastar::gate as well
     // so we can effectively block incoming ops
     seastar::gate _gate;
+    bool _chain_exceptions;
 
     template<typename Func, typename... Args>
     static auto call_helper(Func&& func, future<Args...> f) {
@@ -62,12 +64,17 @@ private:
             return futurator::make_exception_future(std::current_exception());
         }
     }
-    template<typename _Iter>
-    promise<> replace_promise(_Iter i) {
-        return std::exchange(i->second.pr, promise<>());
+    template<typename... Types>
+    static future<Types...> handle_failed_future(future<Types...> f, shared_promise<>& pr) {
+        assert(f.failed());
+        auto ep = std::move(f).get_exception();
+        pr.set_exception(ep);
+        return make_exception_future<Types...>(ep);
     }
 public:
-    flush_queue() = default;
+    flush_queue(bool chain_exceptions = false)
+        : _chain_exceptions(chain_exceptions)
+    {}
     // we are repeatedly using lambdas with "this" captured.
     // allowing moving would not be wise.
     flush_queue(flush_queue&&) = delete;
@@ -104,15 +111,22 @@ public:
             auto i = _map.find(rp);
             assert(i != _map.end());
 
+            using post_result = decltype(call_helper(std::forward<Post>(post), std::move(f)));
+
             auto run_post = [this, post = std::forward<Post>(post), f = std::move(f), i]() mutable {
                 assert(i == _map.begin());
-                return call_helper(std::forward<Post>(post), std::move(f)).finally([this, i]() {
+                return call_helper(std::forward<Post>(post), std::move(f)).then_wrapped([this, i](post_result f) {
                     if (--i->second.count == 0) {
                         auto pr = std::move(i->second.pr);
                         assert(i == _map.begin());
                         _map.erase(i);
-                        pr.set_value();
+                        if (f.failed() && _chain_exceptions) {
+                            return handle_failed_future(std::move(f), pr);
+                        } else {
+                            pr.set_value();
+                        }
                     }
+                    return f;
                 });
             };
 
@@ -121,10 +135,8 @@ public:
             }
 
             --i;
-            auto pr = replace_promise(i);
-            return i->second.pr.get_future().then(std::move(run_post)).finally([pr = std::move(pr)]() mutable {
-                pr.set_value();
-            });
+
+            return i->second.pr.get_shared_future().then(std::move(run_post));
         }).finally([this] {
             // note: would have liked to use "with_gate", but compiler fails to
             // infer return type then, since we use "auto" because of future
@@ -138,10 +150,7 @@ private:
         if (i == _map.rend()) {
             return make_ready_future<>();
         }
-        auto pr = replace_promise(i);
-        return i->second.pr.get_future().then([pr = std::move(pr)]() mutable {
-            pr.set_value();
-        });
+        return i->second.pr.get_shared_future();
     }
 public:
     // Waits for all operations currently active to finish
