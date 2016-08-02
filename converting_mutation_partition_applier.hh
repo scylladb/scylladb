@@ -35,7 +35,7 @@ class converting_mutation_partition_applier : public mutation_partition_visitor 
     deletable_row* _current_row;
 private:
     static bool is_compatible(const column_definition& new_def, const data_type& old_type, column_kind kind) {
-        return new_def.kind == kind && new_def.type->is_value_compatible_with(*old_type);
+        return ::is_compatible(new_def.kind, kind) && new_def.type->is_value_compatible_with(*old_type);
     }
     void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, atomic_cell_view cell) {
         if (is_compatible(new_def, old_type, kind) && cell.timestamp() > new_def.dropped_at()) {
