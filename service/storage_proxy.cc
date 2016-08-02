@@ -3434,7 +3434,7 @@ public:
                     _runs.pop_back();
                 }
             }
-            if (_runs.empty() || row_count >= _cmd->row_limit || partitions.size() >= _cmd->partition_limit) {
+            if (_runs.empty() || row_count >= _cmd->row_limit) {
                 ret = reconcilable_result(row_count, std::move(partitions));
             }
             return make_ready_future<std::experimental::optional<reconcilable_result>>(std::move(ret));
