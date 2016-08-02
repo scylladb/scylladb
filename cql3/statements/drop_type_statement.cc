@@ -38,6 +38,7 @@
  */
 
 #include "cql3/statements/drop_type_statement.hh"
+#include "cql3/statements/prepared_statement.hh"
 
 #include "boost/range/adaptor/map.hpp"
 
@@ -114,6 +115,11 @@ future<bool> drop_type_statement::announce_migration(distributed<service::storag
     }
 
     return service::get_local_migration_manager().announce_type_drop(to_drop->second, is_local_only).then([] { return true; });
+}
+
+shared_ptr<cql3::statements::prepared_statement>
+drop_type_statement::prepare(database& db) {
+    return make_shared<prepared_statement>(make_shared<drop_type_statement>(*this));
 }
 
 }

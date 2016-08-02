@@ -87,6 +87,7 @@ public:
                 transport::event::schema_change::target_type::TABLE, keyspace(),
                 column_family());
     }
+    virtual shared_ptr<prepared> prepare(database& db) override;
 };
 
 }

@@ -40,6 +40,7 @@
  */
 
 #include "alter_keyspace_statement.hh"
+#include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "db/system_keyspace.hh"
 #include "database.hh"
@@ -100,3 +101,9 @@ shared_ptr<transport::event::schema_change> cql3::statements::alter_keyspace_sta
                     transport::event::schema_change::change_type::UPDATED,
                     keyspace());
 }
+
+shared_ptr<cql3::statements::prepared_statement>
+cql3::statements::alter_keyspace_statement::prepare(database& db) {
+    return make_shared<prepared_statement>(make_shared<alter_keyspace_statement>(*this));
+}
+

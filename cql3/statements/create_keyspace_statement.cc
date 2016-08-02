@@ -40,6 +40,7 @@
  */
 
 #include "cql3/statements/create_keyspace_statement.hh"
+#include "prepared_statement.hh"
 
 #include "service/migration_manager.hh"
 
@@ -120,6 +121,11 @@ future<bool> create_keyspace_statement::announce_migration(distributed<service::
 shared_ptr<transport::event::schema_change> create_keyspace_statement::change_event()
 {
     return make_shared<transport::event::schema_change>(transport::event::schema_change::change_type::CREATED, keyspace());
+}
+
+shared_ptr<cql3::statements::prepared_statement>
+cql3::statements::create_keyspace_statement::prepare(database& db) {
+    return make_shared<prepared_statement>(make_shared<create_keyspace_statement>(*this));
 }
 
 }

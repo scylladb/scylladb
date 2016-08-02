@@ -40,6 +40,7 @@
  */
 
 #include "create_index_statement.hh"
+#include "prepared_statement.hh"
 #include "validation.hh"
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
@@ -203,6 +204,11 @@ cql3::statements::create_index_statement::announce_migration(distributed<service
             cfm.build(), false, is_local_only).then([]() {
         return make_ready_future<bool>(true);
     });
+}
+
+shared_ptr<cql3::statements::prepared_statement>
+cql3::statements::create_index_statement::prepare(database& db) {
+    return make_shared<prepared_statement>(make_shared<create_index_statement>(*this));
 }
 
 

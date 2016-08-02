@@ -40,6 +40,7 @@
  */
 
 #include "cql3/statements/alter_table_statement.hh"
+#include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "validation.hh"
 #include "db/config.hh"
@@ -271,6 +272,11 @@ shared_ptr<transport::event::schema_change> alter_table_statement::change_event(
 {
     return make_shared<transport::event::schema_change>(transport::event::schema_change::change_type::UPDATED,
         transport::event::schema_change::target_type::TABLE, keyspace(), column_family());
+}
+
+shared_ptr<cql3::statements::prepared_statement>
+cql3::statements::alter_table_statement::prepare(database& db) {
+    return make_shared<prepared_statement>(make_shared<alter_table_statement>(*this));
 }
 
 }
