@@ -72,6 +72,8 @@ void read_collections(schema_builder& builder, sstring comparator);
 enum class column_kind { partition_key, clustering_key, static_column, regular_column, compact_column };
 
 sstring to_sstring(column_kind k);
+bool is_regular(column_kind k);
+bool is_compatible(column_kind k1, column_kind k2);
 
 // CMH this is also manually defined in thrift gen file.
 enum class index_type {
@@ -225,7 +227,7 @@ public:
     index_info idx_info;
 
     bool is_static() const { return kind == column_kind::static_column; }
-    bool is_regular() const { return kind == column_kind::regular_column || kind == column_kind::compact_column; }
+    bool is_regular() const { return ::is_regular(kind); }
     bool is_partition_key() const { return kind == column_kind::partition_key; }
     bool is_clustering_key() const { return kind == column_kind::clustering_key; }
     bool is_primary_key() const { return kind == column_kind::partition_key || kind == column_kind::clustering_key; }
