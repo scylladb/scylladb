@@ -179,5 +179,8 @@ void tracing::set_trace_probability(double p) {
 
     tracing_logger.info("Setting tracing probability to {} (normalized {})", _trace_probability, _normalized_trace_probability);
 }
+
+one_session_records::one_session_records()
+    : backend_state_ptr(tracing::get_local_tracing_instance().allocate_backend_session_state()) {}
 }
 

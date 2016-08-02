@@ -102,6 +102,10 @@ public:
 struct one_session_records;
 using records_bulk = std::deque<lw_shared_ptr<one_session_records>>;
 
+struct backend_session_state_base {
+    virtual ~backend_session_state_base() {};
+};
+
 struct i_tracing_backend_helper {
     using wall_clock = std::chrono::system_clock;
 
@@ -120,6 +124,8 @@ public:
      * @param bulk a bulk of records
      */
     virtual void write_records_bulk(records_bulk& bulk) = 0;
+
+    virtual std::unique_ptr<backend_session_state_base> allocate_session_state() const = 0;
 
 private:
     friend class tracing;
@@ -150,6 +156,13 @@ struct one_session_records {
     session_record session_rec;
     gc_clock::duration ttl;
     std::deque<event_record> events_recs;
+    std::unique_ptr<backend_session_state_base> backend_state_ptr;
+
+    one_session_records();
+
+    uint64_t size() const {
+        return events_recs.size() + (session_rec.elapsed >= 0);
+    }
 };
 
 using trace_state_ptr = lw_shared_ptr<trace_state>;
@@ -282,6 +295,10 @@ public:
 
     bool trace_next_query() {
         return _normalized_trace_probability != 0 && _gen() < _normalized_trace_probability;
+    }
+
+    std::unique_ptr<backend_session_state_base> allocate_backend_session_state() const {
+        return _tracing_backend_helper_ptr->allocate_session_state();
     }
 
 private:

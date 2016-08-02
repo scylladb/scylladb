@@ -81,8 +81,6 @@ private:
         uint64_t bad_column_family_errors = 0;
     } _stats;
 
-    int64_t _last_event_nanos = 0;
-
     scollectd::registrations _registrations;
 
 public:
@@ -101,6 +99,7 @@ public:
     };
 
     virtual void write_records_bulk(records_bulk& bulk) override;
+    virtual std::unique_ptr<backend_session_state_base> allocate_session_state() const override;
 
 private:
     /**
@@ -111,34 +110,29 @@ private:
     void write_one_session_records(lw_shared_ptr<one_session_records> records);
 
     /**
-     * Makes a monotonically increasing value in 100ns based on the given time stamp.
+     * Makes a monotonically increasing value in 100ns ("nanos") based on the given time
+     * stamp and the "nanos" value of the previous event.
      *
      * If the amount of 100s of ns evaluated from the @param tp is equal to the
-     * value returned in the previouse call to get_next_nanos() (without a reset_monotonic_tp()
-     * call in between), increment it by one.
+     * given @param last_event_nanos increment @param last_event_nanos by one
+     * and return a time point based its new value.
      *
+     * @param last_event_nanos a reference to the last nanos to align the given time point to.
      * @param tp the amount of time passed since the Epoch that will be used for the calculation.
      *
      * @return the monotonically increasing vlaue in 100s of ns based on the
-     * given time stamp.
+     * given time stamp and on the "nanos" value of the previous event.
      */
-    wall_clock::time_point make_monotonic_UUID_tp(wall_clock::time_point tp) {
+    wall_clock::time_point make_monotonic_UUID_tp(int64_t& last_event_nanos, wall_clock::time_point tp) {
         using namespace std::chrono;
 
         auto tp_nanos = duration_cast<nanoseconds>(tp.time_since_epoch()).count() / 100;
-        if (tp_nanos > _last_event_nanos) {
-            _last_event_nanos = tp_nanos;
+        if (tp_nanos > last_event_nanos) {
+            last_event_nanos = tp_nanos;
             return tp;
         } else {
-            return wall_clock::time_point(nanoseconds((++_last_event_nanos) * 100));
+            return wall_clock::time_point(nanoseconds((++last_event_nanos) * 100));
         }
-    }
-
-    /**
-     * Reset the make_monotonic_tp() state machine.
-     */
-    void reset_monotonic_tp() {
-        _last_event_nanos = 0;
     }
 
     /**
@@ -163,6 +157,8 @@ private:
      *         complete.
      */
     future<> flush_one_session_mutations(lw_shared_ptr<one_session_records> records);
+
+    future<> apply_events_mutation(lw_shared_ptr<one_session_records> records);
 
     /**
      * Get a schema_ptr by a table (UU)ID. If not found will try to get it by

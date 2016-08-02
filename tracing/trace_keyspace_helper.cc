@@ -52,6 +52,11 @@ const sstring trace_keyspace_helper::KEYSPACE_NAME("system_traces");
 const sstring trace_keyspace_helper::SESSIONS("sessions");
 const sstring trace_keyspace_helper::EVENTS("events");
 
+struct trace_keyspace_backend_sesssion_state final : public backend_session_state_base {
+    int64_t last_nanos = 0;
+    virtual ~trace_keyspace_backend_sesssion_state() {}
+};
+
 trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
             : i_tracing_backend_helper(tr)
             , _registrations{
@@ -235,9 +240,11 @@ mutation trace_keyspace_helper::make_event_mutation(one_session_records& session
 
     auto key = partition_key::from_singular(*schema, session_records.session_id);
     auto ttl = session_records.ttl;
+    auto backend_state_ptr = static_cast<trace_keyspace_backend_sesssion_state*>(session_records.backend_state_ptr.get());
+    int64_t& last_event_nanos = backend_state_ptr->last_nanos;
     auto timestamp = api::new_timestamp();
     mutation m(key, schema);
-    auto& cells = m.partition().clustered_row(clustering_key::from_singular(*schema, utils::UUID_gen::get_time_UUID(make_monotonic_UUID_tp(record.event_time_point)))).cells();
+    auto& cells = m.partition().clustered_row(clustering_key::from_singular(*schema, utils::UUID_gen::get_time_UUID(make_monotonic_UUID_tp(last_event_nanos, record.event_time_point)))).cells();
 
     cells.apply(*_activity_column, atomic_cell::make_live(timestamp, utf8_type->decompose(record.message), ttl));
     cells.apply(*_source_column, atomic_cell::make_live(timestamp, inet_addr_type->decompose(utils::fb_utilities::get_broadcast_address().addr()), ttl));
@@ -247,24 +254,30 @@ mutation trace_keyspace_helper::make_event_mutation(one_session_records& session
     return m;
 }
 
+future<> trace_keyspace_helper::apply_events_mutation(lw_shared_ptr<one_session_records> records) {
+    std::deque<event_record>& events_records = records->events_recs;
+
+    if (events_records.empty()) {
+        return make_ready_future<>();
+    }
+
+    logger.trace("{}: storing {} events records", records->session_id, events_records.size());
+
+    mutation m(make_event_mutation(*records, *events_records.begin()));
+
+    return do_with(std::move(m), std::move(events_records), [this, records] (mutation& m, std::deque<event_record>& events_records) {
+        return do_for_each(std::next(events_records.begin()), events_records.end(), [this, &m, &events_records, all_records = records] (event_record& one_event_record) {
+            m.apply(make_event_mutation(*all_records, one_event_record));
+            return make_ready_future<>();
+        }).then([&m] {
+            return service::get_local_storage_proxy().mutate({std::move(m)}, db::consistency_level::ANY, nullptr);
+        });
+    });
+}
+
 future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_session_records> records) {
     return futurize<void>::apply([this, records] {
-        auto& events_records = records->events_recs;
-
-        if (events_records.size()) {
-            // Reset the "monotinic time point" state machine since it's
-            // relevant in a context of a single tracing session only. The
-            // events from different sessions will differ by a session UUID.
-            reset_monotonic_tp();
-
-            logger.trace("{}: events number is {}", records->session_id, events_records.size());
-            mutation m(make_event_mutation(*records, *events_records.begin()));
-            std::for_each(std::next(events_records.begin()), events_records.end(), [this, &m, &all_records = *records] (const event_record& record) { m.apply(make_event_mutation(all_records, record)); });
-
-            return service::get_local_storage_proxy().mutate({std::move(m)}, db::consistency_level::ANY, nullptr);
-        } else {
-            return make_ready_future<>();
-        }
+        return apply_events_mutation(records);
     }).then([this, records] {
         if (records->session_rec.elapsed >= 0) {
             logger.trace("{}: storing a session event", records->session_id);
@@ -273,6 +286,10 @@ future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_se
             return make_ready_future<>();
         }
     });
+}
+
+std::unique_ptr<backend_session_state_base> trace_keyspace_helper::allocate_session_state() const {
+    return std::make_unique<trace_keyspace_backend_sesssion_state>();
 }
 
 using registry = class_registrator<i_tracing_backend_helper, trace_keyspace_helper, tracing&>;
