@@ -194,6 +194,8 @@ void trace_keyspace_helper::write_one_session_records(lw_shared_ptr<one_session_
             if (_stats.bad_column_family_errors++ % bad_column_family_message_period == 0) {
                 logger.warn("Tracing is enabled but {}", e.what());
             }
+        } catch (std::logic_error& e) {
+            logger.error(e.what());
         } catch (...) {
             // TODO: Handle some more exceptions maybe?
         }

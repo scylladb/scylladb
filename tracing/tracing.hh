@@ -344,7 +344,7 @@ public:
 
     void write_complete(uint64_t nr = 1) {
         if (nr > _flushing_records) {
-            throw std::logic_error("completing more records than there are pending");
+            throw std::logic_error(seastar::format("completing more records ({:d}) than there are pending ({:d})", nr, _flushing_records));
         }
         _flushing_records -= nr;
     }
