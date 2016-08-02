@@ -75,6 +75,7 @@ class data_consume_context {
     friend class sstable;
 public:
     future<> read();
+    void fast_forward_to(uint64_t begin, uint64_t end);
     // Define (as defaults) the destructor and move operations in the source
     // file, so here we don't need to know the incomplete impl type.
     ~data_consume_context();
@@ -102,6 +103,7 @@ class mutation_reader {
     friend class sstable;
 public:
     future<streamed_mutation_opt> read();
+    future<> fast_forward_to(const query::partition_range&);
     // Define (as defaults) the destructor and move operations in the source
     // file, so here we don't need to know the incomplete impl type.
     ~mutation_reader();
@@ -209,6 +211,8 @@ public:
     // as well as the sstable, remains alive as long as a read() is in
     // progress (i.e., returned a future which hasn't completed yet).
     data_consume_context data_consume_rows(row_consumer& consumer, disk_read_range toread);
+
+    data_consume_context data_consume_single_partition(row_consumer& consumer, disk_read_range toread);
 
     // Like data_consume_rows() with bounds, but iterates over whole range
     data_consume_context data_consume_rows(row_consumer& consumer);
@@ -662,6 +666,7 @@ public:
     friend class components_writer;
     friend class sstable_writer;
     friend class index_reader;
+    friend class mutation_reader::impl;
 };
 
 using shared_sstable = lw_shared_ptr<sstable>;

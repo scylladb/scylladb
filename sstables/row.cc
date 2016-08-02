@@ -404,6 +404,9 @@ public:
     future<> read() {
         return _ctx->consume_input(*_ctx);
     }
+    void fast_forward_to(uint64_t begin, uint64_t end) {
+        _ctx->fast_forward_to(begin, end);
+    }
 };
 
 data_consume_context::~data_consume_context() = default;
@@ -418,18 +421,24 @@ data_consume_context::data_consume_context(std::unique_ptr<impl> p) : _pimpl(std
 future<> data_consume_context::read() {
     return _pimpl->read();
 }
+void data_consume_context::fast_forward_to(uint64_t begin, uint64_t end) {
+    return _pimpl->fast_forward_to(begin, end);
+}
 
 data_consume_context sstable::data_consume_rows(
         row_consumer& consumer, sstable::disk_read_range toread) {
-    // TODO: The second "end - start" below is redundant: The first one tells
-    // data_stream() to stop at the "end" byte, which allows optimal read-
-    // ahead and avoiding over-read at the end. The second one tells the
-    // consumer to stop at exactly the same place, and forces the consumer
-    // to maintain its own byte count.
     return std::make_unique<data_consume_context::impl>(shared_from_this(),
-            consumer, data_stream(toread.start, toread.end - toread.start,
+            consumer, data_stream(toread.start, data_size() - toread.start,
                 consumer.io_priority()), toread.start, toread.end - toread.start, toread.ri);
 }
+
+data_consume_context sstable::data_consume_single_partition(
+        row_consumer& consumer, sstable::disk_read_range toread) {
+    return std::make_unique<data_consume_context::impl>(shared_from_this(),
+            consumer, data_stream(toread.start, toread.end - toread.start,
+                 consumer.io_priority()), toread.start, toread.end - toread.start, toread.ri);
+}
+
 
 data_consume_context sstable::data_consume_rows(row_consumer& consumer) {
     return data_consume_rows(consumer, {0, data_size()});
