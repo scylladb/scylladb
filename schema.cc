@@ -56,6 +56,14 @@ sstring to_sstring(index_type t) {
     throw std::invalid_argument("unknown index type");
 }
 
+bool is_regular(column_kind k) {
+    return k == column_kind::regular_column || k == column_kind::compact_column;
+}
+
+bool is_compatible(column_kind k1, column_kind k2) {
+    return k1 == k2 || (is_regular(k1) && is_regular(k2));
+}
+
 column_mapping_entry::column_mapping_entry(bytes name, sstring type_name)
     : _name(std::move(name))
     , _type(db::marshal::type_parser::parse(type_name))
