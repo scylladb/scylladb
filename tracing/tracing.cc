@@ -44,7 +44,7 @@
 
 namespace tracing {
 
-static logging::logger logger("tracing");
+static logging::logger tracing_logger("tracing");
 const gc_clock::duration tracing::tracing::write_period = std::chrono::seconds(2);
 
 
@@ -90,7 +90,7 @@ tracing::tracing(const sstring& tracing_backend_helper_class_name)
     try {
         _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(tracing_backend_helper_class_name, *this);
     } catch (no_such_class& e) {
-        logger.error("Can't create tracing backend helper {}: not supported", tracing_backend_helper_class_name);
+        tracing_logger.error("Can't create tracing backend helper {}: not supported", tracing_backend_helper_class_name);
         throw;
     } catch (...) {
         throw;
@@ -110,13 +110,13 @@ trace_state_ptr tracing::create_session(trace_type type, bool write_on_close, co
     try {
         if (_active_sessions + _pending_for_write_sessions + _flushing_sessions > 2 * max_pending_for_write_sessions) {
             if (session_id) {
-                logger.trace("{}: Maximum sessions count is reached. Dropping a secondary session", session_id);
+                tracing_logger.trace("{}: Maximum sessions count is reached. Dropping a secondary session", session_id);
             } else {
-                logger.trace("Maximum sessions count is reached. Dropping a primary session");
+                tracing_logger.trace("Maximum sessions count is reached. Dropping a primary session");
             }
 
             if (++stats.max_sessions_threshold_hits % tracing::max_threshold_hits_warning_period == 1) {
-                logger.warn("Maximum sessions limit is hit {} times: open_sessions {}, pending_for_flush_sessions {}, flushing_sessions {}",
+                tracing_logger.warn("Maximum sessions limit is hit {} times: open_sessions {}, pending_for_flush_sessions {}, flushing_sessions {}",
                             stats.max_sessions_threshold_hits, _active_sessions, _pending_for_write_sessions, _flushing_sessions);
             }
 
@@ -142,18 +142,18 @@ void tracing::write_timer_callback() {
         return;
     }
 
-    logger.trace("Timer kicks in: {}", _pending_for_write_sessions ? "writing" : "not writing");
+    tracing_logger.trace("Timer kicks in: {}", _pending_for_write_sessions ? "writing" : "not writing");
     write_pending_records();
     _write_timer.arm(write_period);
 }
 
 future<> tracing::shutdown() {
-    logger.info("Asked to shut down");
+    tracing_logger.info("Asked to shut down");
     write_pending_records();
     _down = true;
     _write_timer.cancel();
     return _tracing_backend_helper_ptr->stop().then([] {
-        logger.info("Tracing is down");
+        tracing_logger.info("Tracing is down");
     });
 }
 
@@ -173,7 +173,7 @@ void tracing::set_trace_probability(double p) {
     _trace_probability = p;
     _normalized_trace_probability = std::llround(_trace_probability * (_gen.max() + 1));
 
-    logger.info("Setting tracing probability to {} (normalized {})", _trace_probability, _normalized_trace_probability);
+    tracing_logger.info("Setting tracing probability to {} (normalized {})", _trace_probability, _normalized_trace_probability);
 }
 }
 
