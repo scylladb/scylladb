@@ -131,6 +131,11 @@ cache_tracker::setup_collectd() {
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("cache"
                 , scollectd::per_cpu_plugin_instance
+                , "total_operations", "concurrent_misses_same_key")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _concurrent_misses_same_key)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
+                , scollectd::per_cpu_plugin_instance
                 , "total_operations", "merges")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _merges)
         ),
@@ -199,6 +204,10 @@ void cache_tracker::on_hit() {
 
 void cache_tracker::on_miss() {
     ++_misses;
+}
+
+void cache_tracker::on_miss_already_populated() {
+    ++_concurrent_misses_same_key;
 }
 
 void cache_tracker::on_uncached_wide_partition() {
@@ -864,6 +873,7 @@ void row_cache::populate(const mutation& m) {
                 _tracker.touch(*i);
                 // We cache whole partitions right now, so if cache already has this partition,
                 // it must be complete, so do nothing.
+                _tracker.on_miss_already_populated();  // #1534
             }
           });
         });
