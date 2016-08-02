@@ -62,7 +62,8 @@ class cache_entry {
     dht::ring_position _key;
     partition_entry _pe;
     // True when we know that there is nothing between this entry and the next one in cache
-    bool _continuous;
+    bool _continuous : 1;
+    bool _wide_partition : 1;
     lru_link_type _lru_link;
     cache_link_type _cache_link;
     friend class size_calculator;
@@ -73,8 +74,17 @@ public:
     cache_entry(schema_ptr s)
         : _schema(std::move(s))
         , _key(dht::ring_position::starting_at(dht::minimum_token()))
-        , _pe(_schema)
         , _continuous(false)
+        , _wide_partition(false)
+    { }
+
+    struct wide_partition_tag{};
+
+    cache_entry(schema_ptr s, const dht::decorated_key& key, wide_partition_tag)
+        : _schema(std::move(s))
+        , _key(key)
+        , _continuous(false)
+        , _wide_partition(true)
     { }
 
     cache_entry(schema_ptr s, const dht::decorated_key& key, const mutation_partition& p, bool continuous = false)
@@ -82,6 +92,7 @@ public:
         , _key(key)
         , _pe(p)
         , _continuous(continuous)
+        , _wide_partition(false)
     { }
 
     cache_entry(schema_ptr s, dht::decorated_key&& key, mutation_partition&& p, bool continuous = false) noexcept
@@ -89,6 +100,7 @@ public:
         , _key(std::move(key))
         , _pe(std::move(p))
         , _continuous(continuous)
+        , _wide_partition(false)
     { }
 
     cache_entry(schema_ptr s, dht::decorated_key&& key, partition_entry&& pe, bool continuous = false) noexcept
@@ -96,6 +108,7 @@ public:
         , _key(std::move(key))
         , _pe(std::move(pe))
         , _continuous(continuous)
+        , _wide_partition(false)
     { }
 
     cache_entry(cache_entry&&) noexcept;
@@ -106,10 +119,19 @@ public:
     partition_entry& partition() { return _pe; }
     const schema_ptr& schema() const { return _schema; }
     schema_ptr& schema() { return _schema; }
+    // Requires: !wide_partition()
     streamed_mutation read(row_cache&, const schema_ptr&);
+    // Requires: !wide_partition()
     streamed_mutation read(row_cache&, const schema_ptr&, query::clustering_key_filtering_context);
+    // May return disengaged optional if the partition is empty.
+    future<streamed_mutation_opt> read_wide(row_cache&, schema_ptr, query::clustering_key_filtering_context, const io_priority_class&);
     bool continuous() const { return _continuous; }
     void set_continuous(bool value) { _continuous = value; }
+    bool wide_partition() const { return _wide_partition; }
+    void set_wide_partition() {
+        _wide_partition = true;
+        _pe = {};
+    }
 
     struct compare {
         dht::ring_position_less_comparator _c;
@@ -266,6 +288,9 @@ public:
     // Populate cache from given mutation. The mutation must contain all
     // information there is for its partition in the underlying data sources.
     void populate(const mutation& m);
+
+    // Caches an information that a partition with a given key is wide.
+    void mark_partition_as_wide(const dht::decorated_key& key);
 
     // Clears the cache.
     // Guarantees that cache will not be populated using readers created

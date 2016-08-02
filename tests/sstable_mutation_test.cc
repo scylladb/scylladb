@@ -404,14 +404,14 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
         auto mt = make_lw_shared<memtable>(s);
         mt->apply(std::move(m));
 
-        auto sst = sstables::sstable("ks", "cf",
+        auto sst = make_lw_shared<sstables::sstable>("ks", "cf",
                 dir->path,
                 1 /* generation */,
                 sstables::sstable::version_types::la,
                 sstables::sstable::format_types::big);
-        sst.write_components(*mt).get();
-        sst.load().get();
-        auto mr = sst.read_rows(s);
+        sst->write_components(*mt).get();
+        sst->load().get();
+        auto mr = sst->read_rows(s);
         auto sm = mr.read().get0();
         auto mut = mutation_from_streamed_mutation(std::move(sm)).get0();
         BOOST_REQUIRE(bool(mut));
@@ -813,14 +813,14 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
         auto mt = make_lw_shared<memtable>(s);
         mt->apply(std::move(m));
 
-        auto sst = sstables::sstable("ks", "cf",
+        auto sst = make_lw_shared<sstables::sstable>("ks", "cf",
                                 dir->path,
                                 1 /* generation */,
                                 sstables::sstable::version_types::ka,
                                 sstables::sstable::format_types::big);
-        sst.write_components(*mt).get();
-        sst.load().get();
-        auto mr = sst.read_rows(s);
+        sst->write_components(*mt).get();
+        sst->load().get();
+        auto mr = sst->read_rows(s);
         auto sm = mr.read().get0();
         auto mut = mutation_from_streamed_mutation(std::move(sm)).get0();
         BOOST_REQUIRE(bool(mut));
