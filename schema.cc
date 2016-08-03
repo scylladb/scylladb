@@ -41,7 +41,6 @@ sstring to_sstring(column_kind k) {
     case column_kind::clustering_key: return "CLUSTERING_COLUMN";
     case column_kind::static_column:  return "STATIC";
     case column_kind::regular_column: return "REGULAR";
-    case column_kind::compact_column: return "COMPACT_VALUE";
     }
     throw std::invalid_argument("unknown column kind");
 }
@@ -56,12 +55,8 @@ sstring to_sstring(index_type t) {
     throw std::invalid_argument("unknown index type");
 }
 
-bool is_regular(column_kind k) {
-    return k == column_kind::regular_column || k == column_kind::compact_column;
-}
-
 bool is_compatible(column_kind k1, column_kind k2) {
-    return k1 == k2 || (is_regular(k1) && is_regular(k2));
+    return k1 == k2;
 }
 
 column_mapping_entry::column_mapping_entry(bytes name, sstring type_name)
@@ -138,21 +133,20 @@ schema::schema(const raw_schema& raw)
         }
 
         auto& cols = _raw._columns;
-        std::array<column_count_type, 5> count = { 0, 0, 0, 0, 0 };
+        std::array<column_count_type, 4> count = { 0, 0, 0, 0 };
         auto i = cols.begin();
         auto e = cols.end();
-        for (auto k : { column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column, column_kind::compact_column }) {
+        for (auto k : { column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column }) {
             auto j = std::stable_partition(i, e, [k](const auto& c) {
                 return c.kind == k;
             });
             count[column_count_type(k)] = std::distance(i, j);
             i = j;
         }
-        return std::array<column_count_type, 4> {
+        return std::array<column_count_type, 3> {
                 count[0],
                 count[0] + count[1],
                 count[0] + count[1] + count[2],
-                count[0] + count[1] + count[2] + count[3]
         };
     }())
     , _regular_columns_by_name(serialized_compare(_raw._regular_column_name_type))
@@ -206,10 +200,12 @@ schema::schema(const raw_schema& raw)
                 // Which is true of #pk == 1
                 def._thrift_bits.is_on_all_components = partition_key_size() == 1;
                 break;
-            case column_kind::compact_column:
-                // compact values are alone, so they have no index
-                def._thrift_bits.is_on_all_components = true;
-                break;
+            case column_kind::regular_column:
+                if (_raw._is_dense) {
+                    // regular values in dense tables are alone, so they have no index
+                    def._thrift_bits.is_on_all_components = true;
+                    break;
+                }
             default:
                 // Or any other column where "comparator" is not compound
                 def._thrift_bits.is_on_all_components = !thrift().has_compound_comparator();
@@ -645,21 +641,15 @@ schema_builder& schema_builder::with_version(table_schema_version v) {
 
 void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
     if (raw._is_dense) {
-        auto regular_cols = boost::copy_range<std::vector<column_definition*>>(
-            raw._columns | boost::adaptors::filtered([](auto&& col) { return col.is_regular(); })
-                         | boost::adaptors::transformed([](auto&& col) { return &col; }));
-
+        auto regular_cols = std::count_if(raw._columns.begin(), raw._columns.end(), [](auto&& col) {
+            return col.kind == column_kind::regular_column;
+        });
         // In Origin, dense CFs always have at least one regular column
-        if (regular_cols.empty()) {
-            raw._columns.emplace_back(bytes(""), raw._regular_column_name_type, column_kind::compact_column, 0, index_info());
-            return;
+        if (regular_cols == 0) {
+            raw._columns.emplace_back(bytes(""), raw._regular_column_name_type, column_kind::regular_column, 0, index_info());
+        } else if (regular_cols > 1) {
+            throw exceptions::configuration_exception(sprint("Expecting exactly one regular column. Found %d", regular_cols));
         }
-
-        if (regular_cols.size() != 1) {
-            throw exceptions::configuration_exception(sprint("Expecting exactly one regular column. Found %d", regular_cols.size()));
-        }
-
-        regular_cols[0]->kind = column_kind::compact_column;
     }
 }
 
@@ -897,7 +887,7 @@ schema::static_columns_count() const {
 
 column_count_type
 schema::compact_columns_count() const {
-    return _raw._columns.size() - column_offset(column_kind::compact_column);
+    return is_dense();
 }
 
 column_count_type
@@ -931,10 +921,14 @@ schema::regular_columns() const {
 
 const column_definition&
 schema::compact_column() const {
-    if (compact_columns_count() > 1) {
-        throw std::runtime_error("unexpected number of compact columns");
-    }
-    return *(_raw._columns.begin() + column_offset(column_kind::compact_column));
+    assert(is_dense());
+    return *(_raw._columns.begin() + column_offset(column_kind::regular_column));
+}
+
+
+bool
+schema::is_compact_column(const column_definition& def) const {
+    return is_dense() && def.is_regular();
 }
 
 const schema::columns_type&

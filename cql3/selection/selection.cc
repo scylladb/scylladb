@@ -207,7 +207,7 @@ protected:
     auto& columns = schema->all_columns_in_select_order();
     cds.reserve(columns.size());
     for (auto& c : columns) {
-        if (!c.is_compact_value() || !c.name().empty()) {
+        if (!schema->is_compact_column(c) || !c.name().empty()) {
             cds.emplace_back(&c);
         }
     }
@@ -391,9 +391,6 @@ void result_set_builder::visitor::accept_new_row(
             }
             break;
         case column_kind::regular_column:
-            add_value(*def, row_iterator);
-            break;
-        case column_kind::compact_column:
             add_value(*def, row_iterator);
             break;
         case column_kind::static_column:

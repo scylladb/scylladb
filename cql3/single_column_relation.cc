@@ -95,7 +95,7 @@ single_column_relation::to_receivers(schema_ptr schema, const column_definition&
     using namespace statements::request_validations;
     auto receiver = column_def.column_specification;
 
-    if (column_def.is_compact_value()) {
+    if (schema->is_compact_column(column_def)) {
         throw exceptions::invalid_request_exception(sprint(
             "Predicates on the non-primary-key column (%s) of a COMPACT table are not yet supported", column_def.name_as_text()));
     }

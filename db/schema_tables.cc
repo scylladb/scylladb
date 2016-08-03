@@ -1593,7 +1593,6 @@ sstring serialize_kind(column_kind kind)
     case column_kind::clustering_key: return "clustering_key";
     case column_kind::static_column:  return "static";
     case column_kind::regular_column: return "regular";
-    case column_kind::compact_column: return "compact_value";
     default:                          throw std::invalid_argument("unknown column kind");
     }
 }
@@ -1607,8 +1606,8 @@ column_kind deserialize_kind(sstring kind) {
         return column_kind::static_column;
     } else if (kind == "regular") {
         return column_kind::regular_column;
-    } else if (kind == "compact_value") {
-        return column_kind::compact_column;
+    } else if (kind == "compact_value") { // backward compatibility
+        return column_kind::regular_column;
     } else {
         throw std::invalid_argument("unknown column kind: " + kind);
     }
