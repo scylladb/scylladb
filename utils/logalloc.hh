@@ -186,7 +186,8 @@ class region_group {
     // there are region_groups waiting on us, we broadcast these messages to the waiters and they
     // will then decide whether they can now run or if they have to wait on us again (or potentially
     // a different ancestor)
-    shared_promise<> _descendant_blocked_requests;
+    std::experimental::optional<shared_promise<>> _descendant_blocked_requests = {};
+
     region_group* _waiting_on_ancestor = nullptr;
     seastar::gate _asynchronous_gate;
     bool _shutdown_requested = false;
@@ -346,7 +347,10 @@ private:
             };
 
             return do_until(evaluate_ancestor_and_stop, [this] {
-                return _waiting_on_ancestor->_descendant_blocked_requests.get_shared_future().then([this] {
+                if (!_waiting_on_ancestor->_descendant_blocked_requests) {
+                    _waiting_on_ancestor->_descendant_blocked_requests = shared_promise<>();
+                }
+                return _waiting_on_ancestor->_descendant_blocked_requests->get_shared_future().then([this] {
                     _waiting_on_ancestor = nullptr;
                 });
             });
@@ -378,8 +382,10 @@ private:
     void release_requests() noexcept {
         _reclaimer.notify_relief();
 
-        _descendant_blocked_requests.set_value();
-        _descendant_blocked_requests = shared_promise<>();
+        if (_descendant_blocked_requests) {
+            _descendant_blocked_requests->set_value();
+        }
+        _descendant_blocked_requests = {};
         if (!_blocked_requests.empty()) {
             do_release_requests();
         }
