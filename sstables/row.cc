@@ -346,15 +346,17 @@ public:
 // memory in the same time (they are delivered to the consumer one by one).
 class data_consume_context::impl {
 private:
+    shared_sstable _sst;
     std::unique_ptr<data_consume_rows_context> _ctx;
 public:
-    impl(row_consumer& consumer,
-            input_stream<char>&& input, uint64_t maxlen) :
-                _ctx(new data_consume_rows_context(consumer, std::move(input), maxlen)) { }
+    impl(shared_sstable sst, row_consumer& consumer, input_stream<char>&& input, uint64_t maxlen)
+        : _sst(std::move(sst))
+        , _ctx(new data_consume_rows_context(consumer, std::move(input), maxlen))
+    { }
     ~impl() {
         if (_ctx) {
             auto f = _ctx->close();
-            f.handle_exception([ctx = std::move(_ctx)] (auto) { });
+            f.handle_exception([ctx = std::move(_ctx), sst = std::move(_sst)] (auto) { });
         }
     }
     future<> read() {
@@ -382,7 +384,7 @@ data_consume_context sstable::data_consume_rows(
     // ahead and avoiding over-read at the end. The second one tells the
     // consumer to stop at exactly the same place, and forces the consumer
     // to maintain its own byte count.
-    return std::make_unique<data_consume_context::impl>(
+    return std::make_unique<data_consume_context::impl>(shared_from_this(),
             consumer, data_stream(start, end - start, consumer.io_priority()), end - start);
 }
 
