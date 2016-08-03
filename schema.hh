@@ -533,7 +533,6 @@ public:
     column_count_type partition_key_size() const;
     column_count_type clustering_key_size() const;
     column_count_type static_columns_count() const;
-    column_count_type compact_columns_count() const;
     column_count_type regular_columns_count() const;
     // Returns a range of column definitions
     const_iterator_range_type partition_key_columns() const;
@@ -543,11 +542,6 @@ public:
     const_iterator_range_type static_columns() const;
     // Returns a range of column definitions
     const_iterator_range_type regular_columns() const;
-    // Note that since compact columns are also regular columns, ranging over
-    // regular columns and testing if the table is supposed to have a compact
-    // column should yield the same result as using this.
-    const column_definition& compact_column() const;
-    bool is_compact_column(const column_definition& def) const;
     // Returns a range of column definitions
     const columns_type& all_columns_in_select_order() const;
     uint32_t position(const column_definition& column) const;

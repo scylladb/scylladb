@@ -886,11 +886,6 @@ schema::static_columns_count() const {
 }
 
 column_count_type
-schema::compact_columns_count() const {
-    return is_dense();
-}
-
-column_count_type
 schema::regular_columns_count() const {
     return _raw._columns.size() - column_offset(column_kind::regular_column);
 }
@@ -917,18 +912,6 @@ schema::const_iterator_range_type
 schema::regular_columns() const {
     return boost::make_iterator_range(_raw._columns.begin() + column_offset(column_kind::regular_column)
             , _raw._columns.end());
-}
-
-const column_definition&
-schema::compact_column() const {
-    assert(is_dense());
-    return *(_raw._columns.begin() + column_offset(column_kind::regular_column));
-}
-
-
-bool
-schema::is_compact_column(const column_definition& def) const {
-    return is_dense() && def.is_regular();
 }
 
 const schema::columns_type&

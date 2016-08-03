@@ -1213,8 +1213,8 @@ schema_mutations make_table_mutations(schema_ptr table, api::timestamp_type time
 
     m.set_clustered_cell(ckey, "key_aliases", alias(table->partition_key_columns()), timestamp);
     m.set_clustered_cell(ckey, "column_aliases", alias(table->clustering_key_columns()), timestamp);
-    if (table->compact_columns_count() == 1) {
-        m.set_clustered_cell(ckey, "value_alias", table->compact_column().name_as_text(), timestamp);
+    if (table->is_dense()) {
+        m.set_clustered_cell(ckey, "value_alias", table->regular_begin()->name_as_text(), timestamp);
     } // null if none
 
     map_type_impl::mutation dropped_columns;

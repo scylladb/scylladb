@@ -207,7 +207,7 @@ protected:
     auto& columns = schema->all_columns_in_select_order();
     cds.reserve(columns.size());
     for (auto& c : columns) {
-        if (!schema->is_compact_column(c) || !c.name().empty()) {
+        if (!schema->is_dense() || !c.is_regular() || !c.name().empty()) {
             cds.emplace_back(&c);
         }
     }
