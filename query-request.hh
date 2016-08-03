@@ -170,7 +170,7 @@ public:
     uint32_t row_limit;
     gc_clock::time_point timestamp;
     std::experimental::optional<tracing::trace_info> trace_info;
-    uint32_t partition_limit;
+    uint32_t partition_limit; // The maximum number of live partitions to return.
     api::timestamp_type read_timestamp; // not serialized
 public:
     read_command(utils::UUID cf_id,
