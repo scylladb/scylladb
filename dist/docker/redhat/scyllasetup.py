@@ -40,7 +40,3 @@ class ScyllaSetup:
             configuration['broadcast_address'] = self._broadcastAddress
         with open('/etc/scylla/scylla.yaml', 'w') as file:
             yaml.dump(configuration, file)
-
-    def enableServices(self):
-        self._run('systemctl enable scylla-server', shell=True)
-        self._run('systemctl enable scylla-jmx', shell=True)
