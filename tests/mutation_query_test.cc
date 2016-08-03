@@ -483,3 +483,49 @@ SEASTAR_TEST_CASE(test_result_row_count) {
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 3);
     });
 }
+
+SEASTAR_TEST_CASE(test_partition_limit) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+        auto s = make_schema();
+        auto now = gc_clock::now();
+
+        mutation m1(partition_key::from_single_value(*s, "key1"), s);
+        m1.partition().apply(tombstone(api::timestamp_type(1), now));
+        mutation m2(partition_key::from_single_value(*s, "key2"), s);
+        m2.set_clustered_cell(clustering_key::from_single_value(*s, bytes("A")), "v1", data_value(bytes("A:v")), 1);
+        mutation m3(partition_key::from_single_value(*s, "key3"), s);
+        m3.set_clustered_cell(clustering_key::from_single_value(*s, bytes("B")), "v1", data_value(bytes("B:v")), 1);
+
+        auto src = make_source({m1, m2, m3});
+        auto slice = make_full_slice(*s);
+
+        {
+            reconcilable_result result = mutation_query(s, src,
+                query::full_partition_range, slice, query::max_rows, 10, now).get0();
+
+            assert_that(to_result_set(result, s, slice))
+                .has_size(2)
+                .has(a_row()
+                    .with_column("pk", data_value(bytes("key2")))
+                    .with_column("ck", data_value(bytes("A")))
+                    .with_column("v1", data_value(bytes("A:v"))))
+                .has(a_row()
+                    .with_column("pk", data_value(bytes("key3")))
+                    .with_column("ck", data_value(bytes("B")))
+                    .with_column("v1", data_value(bytes("B:v"))));
+        }
+
+        {
+            reconcilable_result result = mutation_query(s, src,
+                query::full_partition_range, slice, query::max_rows, 1, now).get0();
+
+            assert_that(to_result_set(result, s, slice))
+                .has_size(1)
+                .has(a_row()
+                    .with_column("pk", data_value(bytes("key2")))
+                    .with_column("ck", data_value(bytes("A")))
+                    .with_column("v1", data_value(bytes("A:v"))));
+        }
+    });
+}
