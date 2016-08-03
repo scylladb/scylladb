@@ -56,6 +56,7 @@ class tracker::impl {
     scollectd::registrations _collectd_registrations;
     bool _reclaiming_enabled = true;
     size_t _reclamation_step = 1;
+    bool _abort_on_bad_alloc = false;
 private:
     // Prevents tracker's reclaimer from running while live. Reclaimer may be
     // invoked synchronously with allocator. This guard ensures that this
@@ -91,6 +92,8 @@ public:
     occupancy_stats occupancy();
     void set_reclamation_step(size_t step_in_segments) { _reclamation_step = step_in_segments; }
     size_t reclamation_step() const { return _reclamation_step; }
+    void enable_abort_on_bad_alloc() { _abort_on_bad_alloc = true; }
+    bool should_abort_on_bad_alloc() const { return _abort_on_bad_alloc; }
 };
 
 class tracker_reclaimer_lock {
@@ -671,6 +674,10 @@ segment* segment_pool::allocate_segment()
             return seg;
         }
     } while (shard_tracker().get_impl().compact_and_evict(shard_tracker().reclamation_step() * segment::size));
+    if (shard_tracker().should_abort_on_bad_alloc()) {
+        logger.error("Aborting due to segment allocation failure");
+        abort();
+    }
     return nullptr;
 }
 
@@ -1555,6 +1562,14 @@ void tracker::set_reclamation_step(size_t step_in_segments) {
 
 size_t tracker::reclamation_step() const {
     return _impl->reclamation_step();
+}
+
+void tracker::enable_abort_on_bad_alloc() {
+    return _impl->enable_abort_on_bad_alloc();
+}
+
+bool tracker::should_abort_on_bad_alloc() {
+    return _impl->should_abort_on_bad_alloc();
 }
 
 memory::reclaiming_result tracker::reclaim() {

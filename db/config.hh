@@ -734,6 +734,7 @@ public:
     val(lsa_reclamation_step, size_t, 1, Used, "Minimum number of segments to reclaim in a single step") \
     val(prometheus_port, uint16_t, 9180, Used, "Prometheus port, set to zero to disable") \
     val(prometheus_address, sstring, "0.0.0.0", Used, "Prometheus listening address") \
+    val(abort_on_lsa_bad_alloc, bool, false, Used, "Abort when allocation in LSA region fails") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \

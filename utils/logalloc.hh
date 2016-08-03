@@ -467,6 +467,11 @@ public:
 
     // Returns the minimum number of segments reclaimed during single reclamation cycle.
     size_t reclamation_step() const;
+
+    // Abort on allocation failure from LSA
+    void enable_abort_on_bad_alloc();
+
+    bool should_abort_on_bad_alloc();
 };
 
 tracker& shard_tracker();

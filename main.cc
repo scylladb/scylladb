@@ -629,6 +629,11 @@ int main(int ac, char** av) {
             smp::invoke_on_all([&cfg] () {
                 return logalloc::shard_tracker().set_reclamation_step(cfg->lsa_reclamation_step());
             }).get();
+            if (cfg->abort_on_lsa_bad_alloc()) {
+                smp::invoke_on_all([&cfg]() {
+                    return logalloc::shard_tracker().enable_abort_on_bad_alloc();
+                }).get();
+            }
             api::set_server_done(ctx).get();
             dns::hostent prom_addr = dns::gethostbyname(cfg->prometheus_address()).get0();
             supervisor_notify("starting prometheus API server");
