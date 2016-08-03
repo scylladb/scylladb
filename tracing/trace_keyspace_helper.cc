@@ -54,6 +54,7 @@ const sstring trace_keyspace_helper::EVENTS("events");
 
 struct trace_keyspace_backend_sesssion_state final : public backend_session_state_base {
     int64_t last_nanos = 0;
+    semaphore write_sem;
     virtual ~trace_keyspace_backend_sesssion_state() {}
 };
 
@@ -256,9 +257,7 @@ mutation trace_keyspace_helper::make_event_mutation(one_session_records& session
     return m;
 }
 
-future<> trace_keyspace_helper::apply_events_mutation(lw_shared_ptr<one_session_records> records) {
-    std::deque<event_record>& events_records = records->events_recs;
-
+future<> trace_keyspace_helper::apply_events_mutation(lw_shared_ptr<one_session_records> records, std::deque<event_record>& events_records) {
     if (events_records.empty()) {
         return make_ready_future<>();
     }
@@ -278,15 +277,36 @@ future<> trace_keyspace_helper::apply_events_mutation(lw_shared_ptr<one_session_
 }
 
 future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_session_records> records) {
-    return futurize<void>::apply([this, records] {
-        return apply_events_mutation(records);
-    }).then([this, records] {
-        if (records->session_rec.ready()) {
-            logger.trace("{}: storing a session event", records->session_id);
-            return service::get_local_storage_proxy().mutate({make_session_mutation(*records)}, db::consistency_level::ANY, nullptr);
-        } else {
-            return make_ready_future<>();
-        }
+    // grab events records available so far
+    return do_with(std::move(records->events_recs), [this, records] (std::deque<event_record>& events_records) {
+        records->events_recs.clear();
+
+        // Check if a session's record is ready before handling events' records.
+        //
+        // New event's records and a session's record may become ready while a
+        // mutation with the current events' records is being written. We don't want
+        // to allow the situation when a session's record is written before the last
+        // event record from the same session.
+        bool session_record_is_ready = records->session_rec.ready();
+
+        // From this point on - all new data will have to be handled in the next write event
+        records->data_consumed();
+
+        // We want to serialize the creation of events mutations in order to ensure
+        // that mutations the events that were created first are going to be created
+        // first too.
+        auto backend_state_ptr = static_cast<trace_keyspace_backend_sesssion_state*>(records->backend_state_ptr.get());
+        semaphore& write_sem = backend_state_ptr->write_sem;
+        return with_semaphore(write_sem, 1, [this, records, session_record_is_ready, &events_records] {
+            return apply_events_mutation(records, events_records).then([this, session_record_is_ready, records] {
+                if (session_record_is_ready) {
+                    logger.trace("{}: storing a session event", records->session_id);
+                    return service::get_local_storage_proxy().mutate({make_session_mutation(*records)}, db::consistency_level::ANY, nullptr);
+                } else {
+                    return make_ready_future<>();
+                }
+            });
+        }).finally([records] {});
     });
 }
 

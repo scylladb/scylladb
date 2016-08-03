@@ -161,7 +161,7 @@ private:
      */
     future<> flush_one_session_mutations(lw_shared_ptr<one_session_records> records);
 
-    future<> apply_events_mutation(lw_shared_ptr<one_session_records> records);
+    future<> apply_events_mutation(lw_shared_ptr<one_session_records> records, std::deque<event_record>& events_records);
 
     /**
      * Get a schema_ptr by a table (UU)ID. If not found will try to get it by

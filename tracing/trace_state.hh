@@ -322,6 +322,16 @@ inline void trace_state::trace(sstring message) {
     try {
         _records->events_recs.emplace_back(std::move(message), elapsed(), i_tracing_backend_helper::wall_clock::now());
         _records->consume_from_budget();
+
+        // If we have aggregated enough records - schedule them for write already.
+        //
+        // We prefer the traces to be written after the session is over. However
+        // if there is a session that creates a lot of traces - we want to write
+        // them before we start to drop new records.
+        if (_records->events_recs.size() >= tracing::exp_trace_events_per_session) {
+            _local_tracing_ptr->schedule_for_write(_records);
+            _local_tracing_ptr->write_maybe();
+        }
     } catch (...) {
         // Bump up an error counter and ignore
         ++_local_tracing_ptr->stats.trace_errors;

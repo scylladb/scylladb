@@ -121,7 +121,10 @@ public:
     virtual future<> stop() = 0;
 
     /**
-     * Write a bulk of tracing records
+     * Write a bulk of tracing records.
+     *
+     * This function has to clear a scheduled state of each one_session_records object
+     * in the @param bulk after it has been actually passed to the backend for writing.
      *
      * @param bulk a bulk of records
      */
@@ -157,7 +160,8 @@ struct session_record {
     }
 };
 
-struct one_session_records {
+class one_session_records {
+public:
     utils::UUID session_id;
     session_record session_rec;
     gc_clock::duration ttl;
@@ -178,9 +182,31 @@ struct one_session_records {
         ++(*budget_ptr);
     }
 
+    /**
+     * Should be called when a record is scheduled for write.
+     * From that point till data_consumed() call all new records will be written
+     * in the next write event.
+     */
+    inline void set_pending_for_write();
+
+    /**
+     * Should be called after all data pending to be written in this record has
+     * been processed.
+     * From that point on new records are cached internally and have to be
+     * explicitly committed for write in order to be written during the write event.
+     */
+    inline void data_consumed();
+
+    bool is_pending_for_write() const {
+        return _is_pending_for_write;
+    }
+
     uint64_t size() const {
         return events_recs.size() + session_rec.ready();
     }
+
+private:
+    bool _is_pending_for_write = false;
 };
 
 using trace_state_ptr = lw_shared_ptr<trace_state>;
@@ -405,13 +431,21 @@ public:
         return true;
     }
 
+    uint64_t* get_pending_records_ptr() {
+        return &_pending_for_write_records_count;
+    }
 
     uint64_t* get_cached_records_ptr() {
         return &_cached_records;
     }
 
     void schedule_for_write(lw_shared_ptr<one_session_records> records) {
+        if (records->is_pending_for_write()) {
+            return;
+        }
+
         _pending_for_write_records_bulk.emplace_back(records);
+        records->set_pending_for_write();
 
         // move the current records from a "cached" to "pending for write" state
         auto current_records_num = records->size();
@@ -422,4 +456,14 @@ public:
 private:
     void write_timer_callback();
 };
+
+void one_session_records::set_pending_for_write() {
+    _is_pending_for_write = true;
+    budget_ptr = tracing::get_local_tracing_instance().get_pending_records_ptr();
+}
+
+void one_session_records::data_consumed() {
+    _is_pending_for_write = false;
+    budget_ptr = tracing::get_local_tracing_instance().get_cached_records_ptr();
+}
 }
