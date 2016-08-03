@@ -51,6 +51,7 @@
 #include "disk-error-handler.hh"
 #include "tracing/tracing.hh"
 #include "db/size_estimates_recorder.hh"
+#include "core/prometheus.hh"
 
 #ifdef HAVE_LIBSYSTEMD
 #include <systemd/sd-daemon.h>
@@ -305,6 +306,8 @@ int main(int ac, char** av) {
     auto& proxy = service::get_storage_proxy();
     auto& mm = service::get_migration_manager();
     api::http_context ctx(db, proxy);
+    httpd::http_server_control prometheus_server;
+    prometheus::config pctx;
     directories dirs;
 
     return app.run_deprecated(ac, av, [&] {
@@ -335,7 +338,7 @@ int main(int ac, char** av) {
 
         tcp_syncookies_sanity();
 
-        return seastar::async([cfg, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs] {
+        return seastar::async([cfg, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs, &pctx, &prometheus_server] {
             read_config(opts, *cfg).get();
             apply_logger_settings(cfg->default_log_level(), cfg->logger_log_level(),
                     cfg->log_to_stdout(), cfg->log_to_syslog());
@@ -627,6 +630,15 @@ int main(int ac, char** av) {
                 return logalloc::shard_tracker().set_reclamation_step(cfg->lsa_reclamation_step());
             }).get();
             api::set_server_done(ctx).get();
+            dns::hostent prom_addr = dns::gethostbyname(cfg->prometheus_address()).get0();
+            supervisor_notify("starting prometheus API server");
+            uint16_t pport = cfg->prometheus_port();
+            if (pport) {
+                pctx.metric_help = "Scylla server statistics";
+                prometheus_server.start().get();
+                prometheus::start(prometheus_server, pctx);
+                prometheus_server.listen(ipv4_addr{prom_addr.addresses[0].in.s_addr, pport}).get();
+            }
             supervisor_notify("serving");
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
             engine().at_exit([] {
