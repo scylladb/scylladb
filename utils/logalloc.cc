@@ -2041,10 +2041,30 @@ uint64_t region_group::top_region_evictable_space() const {
     return _regions.empty() ? 0 : _regions.top()->evictable_occupancy().total_space();
 }
 
-void region_group::do_release_requests() noexcept {
+void region_group::release_requests() noexcept {
     // The later() statement is here  to avoid executing the function in update() context. But
     // also guarantees that we won't dominate the CPU if we have many requests to release.
-    with_gate(_asynchronous_gate, [this] {
+    //
+    // However, both with_gate() and later() can ultimately call to schedule() and consequently
+    // allocate memory, which (if that allocation triggers a compaction - that frees memory) would
+    // defeat the very purpose of not executing this on update() context. Allocations should be rare
+    // on those but can happen, so we need to at least make sure they will not reclaim.
+    //
+    // Whatever comes after later() is already in a safe context, so we don't need to keep the lock
+    // alive until we are done with the whole execution - only until later is successfully executed.
+    tracker_reclaimer_lock rl;
+
+    _reclaimer.notify_relief();
+    if (_descendant_blocked_requests) {
+        _descendant_blocked_requests->set_value();
+    }
+    _descendant_blocked_requests = {};
+
+    if (_blocked_requests.empty()) {
+        return;
+    }
+
+    with_gate(_asynchronous_gate, [this, rl = std::move(rl)] () mutable {
         return later().then([this] {
             // Check again, we may have executed release_requests() in this mean time from another entry
             // point (for instance, a descendant notification)

@@ -379,18 +379,7 @@ private:
         return _total_memory <= _reclaimer.throttle_threshold();
     }
 
-    void release_requests() noexcept {
-        _reclaimer.notify_relief();
-
-        if (_descendant_blocked_requests) {
-            _descendant_blocked_requests->set_value();
-        }
-        _descendant_blocked_requests = {};
-        if (!_blocked_requests.empty()) {
-            do_release_requests();
-        }
-    }
-    void do_release_requests() noexcept;
+    void release_requests() noexcept;
 
     uint64_t top_region_evictable_space() const;
 
