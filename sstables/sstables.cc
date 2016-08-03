@@ -969,6 +969,65 @@ void sstable::write_compression(const io_priority_class& pc) {
     write_simple<component_type::CompressionInfo>(_compression, pc);
 }
 
+void sstable::validate_min_max_metadata() {
+    auto entry = _statistics.contents.find(metadata_type::Stats);
+    if (entry == _statistics.contents.end()) {
+        throw std::runtime_error("Stats metadata not available");
+    }
+    auto& p = entry->second;
+    if (!p) {
+        throw std::runtime_error("Statistics is malformed");
+    }
+
+    stats_metadata& s = *static_cast<stats_metadata *>(p.get());
+    auto is_composite_valid = [] (const bytes& b) {
+        auto v = composite_view(b);
+        try {
+            size_t s = 0;
+            for (auto& c : v.components()) {
+                s += c.first.size() + sizeof(composite::size_type) + sizeof(composite::eoc_type);
+            }
+            return s == b.size();
+        } catch (marshal_exception&) {
+            return false;
+        }
+    };
+    auto clear_incorrect_min_max_column_names = [&s] {
+        s.min_column_names.elements.clear();
+        s.max_column_names.elements.clear();
+    };
+    auto& min_column_names = s.min_column_names.elements;
+    auto& max_column_names = s.max_column_names.elements;
+
+    if (min_column_names.empty() && max_column_names.empty()) {
+        return;
+    }
+
+    // The min/max metadata is wrong if:
+    // 1) it's not empty and schema defines no clustering key.
+    // 2) their size differ.
+    // 3) column name is stored instead of clustering value.
+    // 4) clustering component is stored as composite.
+    if ((!_schema->clustering_key_size() && (min_column_names.size() || max_column_names.size())) ||
+            (min_column_names.size() != max_column_names.size())) {
+        clear_incorrect_min_max_column_names();
+        return;
+    }
+
+    for (auto i = 0U; i < min_column_names.size(); i++) {
+        if (_schema->get_column_definition(min_column_names[i].value) || _schema->get_column_definition(max_column_names[i].value)) {
+            clear_incorrect_min_max_column_names();
+            break;
+        }
+
+        if (_schema->is_compound() && _schema->clustering_key_size() > 1 && _schema->is_dense() &&
+                (is_composite_valid(min_column_names[i].value) || is_composite_valid(max_column_names[i].value))) {
+            clear_incorrect_min_max_column_names();
+            break;
+        }
+    }
+}
+
 future<> sstable::read_statistics(const io_priority_class& pc) {
     return read_simple<component_type::Statistics>(_statistics, pc);
 }
@@ -1065,6 +1124,7 @@ future<> sstable::load() {
     return read_toc().then([this] {
         return read_statistics(default_priority_class());
     }).then([this] {
+        validate_min_max_metadata();
         return read_compression(default_priority_class());
     }).then([this] {
         return read_filter(default_priority_class());
