@@ -36,6 +36,7 @@ echo 'CQL Shell:'
 echo '	cqlsh'
 echo 'More documentation available at: '
 echo '	http://www.scylladb.com/doc/'
+echo 'By default, Scylla sends certain information about this node to a data collection server. For information, see http://www.scylladb.com/privacy/'
 echo
 
 . /etc/os-release
