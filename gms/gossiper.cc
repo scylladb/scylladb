@@ -1671,7 +1671,7 @@ future<> gossiper::wait_for_gossip_to_settle() {
             total_polls++;
             // Make sure 5 gossip rounds are completed sucessfully
             if (_nr_run > 5) {
-                logger.debug("Gossip looks settled. {} gossip round completed: {}", _nr_run);
+                logger.debug("Gossip looks settled. gossip round completed: {}", _nr_run);
                 num_okay++;
             } else {
                 logger.info("Gossip not settled after {} polls.", total_polls);
