@@ -21,6 +21,9 @@ RUN yum -y install python34 python34-PyYAML
 ADD scylla_bashrc /scylla_bashrc
 RUN cat /scylla_bashrc >> /etc/bashrc
 
+# Scylla configuration:
+ADD etc/sysconfig/scylla-server /etc/sysconfig/scylla-server
+
 # Supervisord configuration:
 ADD etc/supervisord.conf /etc/supervisord.conf
 RUN mkdir -p /var/log/scylla
