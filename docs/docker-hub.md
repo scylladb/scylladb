@@ -11,13 +11,13 @@ ScyllaDB is a high-performance Cassandra implementation written in C++14. Classi
 ## Start a `scylla` server instance
 
 ```console
-$ docker run --name scylla -d scylladb/scylla
+$ docker run --name some-scylla -d scylladb/scylla
 ```
 
 ## Run `nodetool` utility
 
 ```
-$ docker exec -it scylla nodetool status
+$ docker exec -it some-scylla nodetool status
 Datacenter: datacenter1
 =======================
 Status=Up/Down
@@ -29,17 +29,23 @@ UN  172.17.0.2  125.51 KB  256     100.0%            c9155121-786d-44f8-8667-a8b
 ## Run `cqlsh` utility
 
 ```
-$ docker exec -it scylla cqlsh
+$ docker exec -it some-scylla cqlsh
 Connected to Test Cluster at 172.17.0.2:9042.
 [cqlsh 5.0.1 | Cassandra 2.1.8 | CQL spec 3.2.1 | Native protocol v3]
 Use HELP for help.
 cqlsh>
 ```
 
+## Make a cluster
+
+```
+$ docker run --name some-scylla2 -d scylladb/scylla --seeds="$(docker inspect --format='{{ .NetworkSettings.IPAddress }}' some-scylla)"
+```
+
 ## Check `scylla` logs
 
 ```
-$ docker logs scylla | tail
+$ docker logs some-scylla | tail
 INFO  2016-08-04 06:57:40,836 [shard 5] database - Setting compaction strategy of system_traces.events to SizeTieredCompactionStrategy
 INFO  2016-08-04 06:57:40,836 [shard 3] database - Setting compaction strategy of system_traces.events to SizeTieredCompactionStrategy
 INFO  2016-08-04 06:57:40,836 [shard 1] database - Setting compaction strategy of system_traces.events to SizeTieredCompactionStrategy
