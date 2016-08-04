@@ -13,6 +13,7 @@ try:
     setup.cpuSet()
     setup.io()
     setup.scyllaYAML()
+    setup.cqlshrc()
     os.system("/usr/bin/supervisord -c /etc/supervisord.conf")
 except:
     logging.exception('failed!')

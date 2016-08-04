@@ -1,7 +1,7 @@
 import subprocess
 import logging
 import yaml
-
+import os
 
 class ScyllaSetup:
     def __init__(self, arguments):
@@ -40,3 +40,9 @@ class ScyllaSetup:
             configuration['broadcast_address'] = self._broadcastAddress
         with open('/etc/scylla/scylla.yaml', 'w') as file:
             yaml.dump(configuration, file)
+
+    def cqlshrc(self):
+        home = os.environ['HOME']
+        hostname = subprocess.check_output(['hostname', '-i']).decode('ascii').strip()
+        with open("%s/.cqlshrc" % home, "w") as cqlshrc:
+            cqlshrc.write("[connection]\nhostname = %s\n" % hostname)
