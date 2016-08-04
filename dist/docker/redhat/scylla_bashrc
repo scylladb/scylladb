@@ -16,5 +16,3 @@ echo '	cqlsh' > /dev/stderr
 echo 'More documentation available at: ' > /dev/stderr
 echo '	http://www.scylladb.com/doc/' > /dev/stderr
 echo > /dev/stderr
-
-export CQLSH_HOST=$(hostname -i)
