@@ -4,7 +4,7 @@ import scyllasetup
 import logging
 import commandlineparser
 
-logging.basicConfig(filename="/start-scylla.log", level=logging.DEBUG, format="%(message)s")
+logging.basicConfig(filename="/var/log/scylla/docker-entrypoint.log", level=logging.DEBUG, format="%(message)s")
 
 try:
     arguments = commandlineparser.parse()
@@ -13,7 +13,7 @@ try:
     setup.cpuSet()
     setup.io()
     setup.scyllaYAML()
-    setup.enableServices()
-    os.execl("/usr/sbin/init", "/usr/sbin/init")
+    setup.cqlshrc()
+    os.system("/usr/bin/supervisord -c /etc/supervisord.conf")
 except:
     logging.exception('failed!')
