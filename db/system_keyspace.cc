@@ -1230,23 +1230,21 @@ future<> clear_size_estimates(sstring ks_name, sstring cf_name) {
 
 future<std::vector<range_estimates>> query_size_estimates(sstring ks_name, sstring cf_name, dht::token start_token, dht::token end_token) {
     sstring req = "SELECT range_start, range_end, partitions_count, mean_partition_size FROM system.%s WHERE keyspace_name = ? AND table_name = ?";
+    auto query_range = range<dht::token>::make({std::move(start_token)}, {std::move(end_token)});
     return execute_cql(req, SIZE_ESTIMATES, std::move(ks_name), std::move(cf_name))
-            .then([start_token = std::move(start_token), end_token = std::move(end_token)](::shared_ptr<cql3::untyped_result_set> result) {
+            .then([query_range = std::move(query_range)](::shared_ptr<cql3::untyped_result_set> result) {
         std::vector<range_estimates> estimates;
         for (auto&& row : *result) {
             auto range_start = dht::global_partitioner().from_sstring(row.get_as<sstring>("range_start"));
-            if (range_start < start_token) {
-                continue;
-            }
             auto range_end = dht::global_partitioner().from_sstring(row.get_as<sstring>("range_end"));
-            if (range_end > end_token) {
-                break;
+            auto estimate_range = range<dht::token>::make({std::move(range_start)}, {std::move(range_end)});
+            if (query_range.contains(estimate_range, &dht::tri_compare)) {
+                estimates.emplace_back(range_estimates{
+                    std::move(*estimate_range.start()).value(),
+                    std::move(*estimate_range.end()).value(),
+                    row.get_as<int64_t>("partitions_count"),
+                    row.get_as<int64_t>("mean_partition_size")});
             }
-            estimates.emplace_back(range_estimates{
-                std::move(range_start),
-                std::move(range_end),
-                row.get_as<int64_t>("partitions_count"),
-                row.get_as<int64_t>("mean_partition_size")});
         }
         return estimates;
     });
