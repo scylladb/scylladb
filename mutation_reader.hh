@@ -91,6 +91,31 @@ make_mutation_reader(Args&&... args) {
     return mutation_reader(std::make_unique<Impl>(std::forward<Args>(args)...));
 }
 
+// Combines multiple mutation_readers into one.
+class combined_mutation_reader final : public mutation_reader::impl {
+    std::vector<mutation_reader> _readers;
+    struct mutation_and_reader {
+        streamed_mutation m;
+        mutation_reader* read;
+    };
+    std::vector<mutation_and_reader> _ptables;
+    // comparison function for std::make_heap()/std::push_heap()
+    static bool heap_compare(const mutation_and_reader& a, const mutation_and_reader& b) {
+        auto&& s = a.m.schema();
+        // order of comparison is inverted, because heaps produce greatest value first
+        return b.m.decorated_key().less_compare(*s, a.m.decorated_key());
+    }
+    std::vector<streamed_mutation> _current;
+    std::vector<mutation_reader*> _next;
+private:
+    future<> prepare_next();
+    // Produces next mutation or disengaged optional if there are no more.
+    future<streamed_mutation_opt> next();
+public:
+    combined_mutation_reader(std::vector<mutation_reader> readers);
+    virtual future<streamed_mutation_opt> operator()() override;
+};
+
 // Creates a mutation reader which combines data return by supplied readers.
 // Returns mutation of the same schema only when all readers return mutations
 // of the same schema.
