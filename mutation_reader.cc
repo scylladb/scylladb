@@ -21,6 +21,7 @@
 
 #include <boost/range/algorithm/heap_algorithm.hpp>
 #include <boost/range/algorithm/reverse.hpp>
+#include <boost/move/iterator.hpp>
 
 #include "mutation_reader.hh"
 #include "core/future-util.hh"
@@ -74,6 +75,30 @@ future<streamed_mutation_opt> combined_mutation_reader::next() {
     return make_ready_future<streamed_mutation_opt>(merge_mutations(move_and_clear(_current)));
 }
 
+void combined_mutation_reader::init_mutation_reader_set(std::vector<mutation_reader*> readers)
+{
+    _all_readers = std::move(readers);
+    _next.assign(_all_readers.begin(), _all_readers.end());
+    _ptables.reserve(_all_readers.size());
+}
+
+future<> combined_mutation_reader::fast_forward_to(std::vector<mutation_reader*> to_add, std::vector<mutation_reader*> to_remove, const query::partition_range& pr)
+{
+    _ptables.clear();
+
+    std::vector<mutation_reader*> new_readers;
+    boost::range::sort(_all_readers);
+    boost::range::sort(to_remove);
+    boost::range::set_difference(_all_readers, to_remove, std::back_inserter(new_readers));
+    _all_readers = std::move(new_readers);
+    return parallel_for_each(_all_readers, [this, &pr] (mutation_reader* mr) {
+        return mr->fast_forward_to(pr);
+    }).then([this, to_add = std::move(to_add)] {
+        _all_readers.insert(_all_readers.end(), to_add.begin(), to_add.end());
+        _next.assign(_all_readers.begin(), _all_readers.end());
+    });
+}
+
 combined_mutation_reader::combined_mutation_reader(std::vector<mutation_reader> readers)
     : _readers(std::move(readers))
 {
@@ -84,6 +109,15 @@ combined_mutation_reader::combined_mutation_reader(std::vector<mutation_reader> 
     for (auto&& r : _readers) {
         _next.emplace_back(&r);
     }
+    _all_readers.assign(_next.begin(), _next.end());
+}
+
+future<> combined_mutation_reader::fast_forward_to(const query::partition_range& pr) {
+    _ptables.clear();
+    _next.assign(_all_readers.begin(), _all_readers.end());
+    return parallel_for_each(_next, [this, &pr] (mutation_reader* mr) {
+        return mr->fast_forward_to(pr);
+    });
 }
 
 future<streamed_mutation_opt> combined_mutation_reader::operator()() {
@@ -130,18 +164,30 @@ mutation_reader make_reader_returning(streamed_mutation m) {
 
 class reader_returning_many final : public mutation_reader::impl {
     std::vector<streamed_mutation> _m;
-    bool _done = false;
+    query::partition_range _pr;
 public:
-    reader_returning_many(std::vector<streamed_mutation> m) : _m(std::move(m)) {
+    reader_returning_many(std::vector<streamed_mutation> m, const query::partition_range& pr) : _m(std::move(m)), _pr(pr) {
         boost::range::reverse(_m);
     }
     virtual future<streamed_mutation_opt> operator()() override {
-        if (_m.empty()) {
-            return make_ready_future<streamed_mutation_opt>();
+        while (!_m.empty()) {
+            auto& sm = _m.back();
+            dht::ring_position_comparator cmp(*sm.schema());
+            if (_pr.before(sm.decorated_key(), cmp)) {
+                _m.pop_back();
+            } else if (_pr.after(sm.decorated_key(), cmp)) {
+                break;
+            } else {
+                auto m = std::move(sm);
+                _m.pop_back();
+                return make_ready_future<streamed_mutation_opt>(std::move(m));
+            }
         }
-        auto m = std::move(_m.back());
-        _m.pop_back();
-        return make_ready_future<streamed_mutation_opt>(std::move(m));
+        return make_ready_future<streamed_mutation_opt>();
+    }
+    virtual future<> fast_forward_to(const query::partition_range& pr) override {
+        _pr = pr;
+        return make_ready_future<>();
     }
 };
 
@@ -154,11 +200,19 @@ mutation_reader make_reader_returning_many(std::vector<mutation> mutations, cons
         auto sm = streamed_mutation_from_mutation(mutation(m.schema(), m.decorated_key(), std::move(mp)));
         streamed_mutations.emplace_back(std::move(sm));
     }
-    return make_mutation_reader<reader_returning_many>(std::move(streamed_mutations));
+    return make_mutation_reader<reader_returning_many>(std::move(streamed_mutations), query::full_partition_range);
+}
+
+mutation_reader make_reader_returning_many(std::vector<mutation> mutations, const query::partition_range& pr) {
+    std::vector<streamed_mutation> streamed_mutations;
+    boost::range::transform(mutations, std::back_inserter(streamed_mutations), [] (auto& m) {
+        return streamed_mutation_from_mutation(std::move(m));
+    });
+    return make_mutation_reader<reader_returning_many>(std::move(streamed_mutations), pr);
 }
 
 mutation_reader make_reader_returning_many(std::vector<streamed_mutation> mutations) {
-    return make_mutation_reader<reader_returning_many>(std::move(mutations));
+    return make_mutation_reader<reader_returning_many>(std::move(mutations), query::full_partition_range);
 }
 
 class empty_reader final : public mutation_reader::impl {

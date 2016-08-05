@@ -92,11 +92,29 @@ make_mutation_reader(Args&&... args) {
 }
 
 // Combines multiple mutation_readers into one.
-class combined_mutation_reader final : public mutation_reader::impl {
+class combined_mutation_reader : public mutation_reader::impl {
     std::vector<mutation_reader> _readers;
+    std::vector<mutation_reader*> _all_readers;
+
     struct mutation_and_reader {
         streamed_mutation m;
         mutation_reader* read;
+
+        bool operator<(const mutation_and_reader& other) const {
+            return read < other.read;
+        }
+
+        struct less_compare {
+            bool operator()(const mutation_and_reader& a, mutation_reader* b) const {
+                return a.read < b;
+            }
+            bool operator()(mutation_reader* a, const mutation_and_reader& b) const {
+                return a < b.read;
+            }
+            bool operator()(const mutation_and_reader& a, const mutation_and_reader& b) const {
+                return a < b;
+            }
+        };
     };
     std::vector<mutation_and_reader> _ptables;
     // comparison function for std::make_heap()/std::push_heap()
@@ -111,9 +129,14 @@ private:
     future<> prepare_next();
     // Produces next mutation or disengaged optional if there are no more.
     future<streamed_mutation_opt> next();
+protected:
+    combined_mutation_reader() = default;
+    void init_mutation_reader_set(std::vector<mutation_reader*>);
+    future<> fast_forward_to(std::vector<mutation_reader*> to_add, std::vector<mutation_reader*> to_remove, const query::partition_range& pr);
 public:
     combined_mutation_reader(std::vector<mutation_reader> readers);
     virtual future<streamed_mutation_opt> operator()() override;
+    virtual future<> fast_forward_to(const query::partition_range& pr) override;
 };
 
 // Creates a mutation reader which combines data return by supplied readers.
@@ -126,6 +149,7 @@ mutation_reader make_reader_returning(mutation);
 mutation_reader make_reader_returning(streamed_mutation);
 mutation_reader make_reader_returning_many(std::vector<mutation>,
     const query::partition_slice& slice = query::full_slice);
+mutation_reader make_reader_returning_many(std::vector<mutation>, const query::partition_range&);
 mutation_reader make_reader_returning_many(std::vector<streamed_mutation>);
 mutation_reader make_empty_reader();
 
