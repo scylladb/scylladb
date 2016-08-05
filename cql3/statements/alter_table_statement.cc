@@ -181,7 +181,6 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
             }
             break;
 
-        case column_kind::compact_column:
         case column_kind::regular_column:
         case column_kind::static_column:
             // Thrift allows to change a column validator so CFMetaData.validateCompatibility will let it slide

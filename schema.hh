@@ -69,10 +69,9 @@ void read_collections(schema_builder& builder, sstring comparator);
 }
 
 // make sure these match the order we like columns back from schema
-enum class column_kind { partition_key, clustering_key, static_column, regular_column, compact_column };
+enum class column_kind { partition_key, clustering_key, static_column, regular_column };
 
 sstring to_sstring(column_kind k);
-bool is_regular(column_kind k);
 bool is_compatible(column_kind k1, column_kind k2);
 
 // CMH this is also manually defined in thrift gen file.
@@ -227,12 +226,11 @@ public:
     index_info idx_info;
 
     bool is_static() const { return kind == column_kind::static_column; }
-    bool is_regular() const { return ::is_regular(kind); }
+    bool is_regular() const { return kind == column_kind::regular_column; }
     bool is_partition_key() const { return kind == column_kind::partition_key; }
     bool is_clustering_key() const { return kind == column_kind::clustering_key; }
     bool is_primary_key() const { return kind == column_kind::partition_key || kind == column_kind::clustering_key; }
     bool is_atomic() const { return _is_atomic; }
-    bool is_compact_value() const { return kind == column_kind::compact_column; }
     const sstring& name_as_text() const;
     const bytes& name() const;
     friend std::ostream& operator<<(std::ostream& os, const column_definition& cd);
@@ -378,7 +376,7 @@ private:
     thrift_schema _thrift;
     mutable schema_registry_entry* _registry_entry = nullptr;
 
-    const std::array<column_count_type, 4> _offsets;
+    const std::array<column_count_type, 3> _offsets;
 
     inline column_count_type column_offset(column_kind k) const {
         return k == column_kind::partition_key ? 0 : _offsets[column_count_type(k) - 1];
@@ -535,7 +533,6 @@ public:
     column_count_type partition_key_size() const;
     column_count_type clustering_key_size() const;
     column_count_type static_columns_count() const;
-    column_count_type compact_columns_count() const;
     column_count_type regular_columns_count() const;
     // Returns a range of column definitions
     const_iterator_range_type partition_key_columns() const;
@@ -545,10 +542,6 @@ public:
     const_iterator_range_type static_columns() const;
     // Returns a range of column definitions
     const_iterator_range_type regular_columns() const;
-    // Note that since compact columns are also regular columns, ranging over
-    // regular columns and testing if the table is supposed to have a compact
-    // column should yield the same result as using this.
-    const column_definition& compact_column() const;
     // Returns a range of column definitions
     const columns_type& all_columns_in_select_order() const;
     uint32_t position(const column_definition& column) const;

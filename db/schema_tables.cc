@@ -1213,8 +1213,8 @@ schema_mutations make_table_mutations(schema_ptr table, api::timestamp_type time
 
     m.set_clustered_cell(ckey, "key_aliases", alias(table->partition_key_columns()), timestamp);
     m.set_clustered_cell(ckey, "column_aliases", alias(table->clustering_key_columns()), timestamp);
-    if (table->compact_columns_count() == 1) {
-        m.set_clustered_cell(ckey, "value_alias", table->compact_column().name_as_text(), timestamp);
+    if (table->is_dense()) {
+        m.set_clustered_cell(ckey, "value_alias", table->regular_begin()->name_as_text(), timestamp);
     } // null if none
 
     map_type_impl::mutation dropped_columns;
@@ -1593,7 +1593,6 @@ sstring serialize_kind(column_kind kind)
     case column_kind::clustering_key: return "clustering_key";
     case column_kind::static_column:  return "static";
     case column_kind::regular_column: return "regular";
-    case column_kind::compact_column: return "compact_value";
     default:                          throw std::invalid_argument("unknown column kind");
     }
 }
@@ -1607,8 +1606,8 @@ column_kind deserialize_kind(sstring kind) {
         return column_kind::static_column;
     } else if (kind == "regular") {
         return column_kind::regular_column;
-    } else if (kind == "compact_value") {
-        return column_kind::compact_column;
+    } else if (kind == "compact_value") { // backward compatibility
+        return column_kind::regular_column;
     } else {
         throw std::invalid_argument("unknown column kind: " + kind);
     }

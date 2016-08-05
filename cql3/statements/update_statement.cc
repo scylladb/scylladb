@@ -64,16 +64,16 @@ void update_statement::add_update_for_key(mutation& m, const exploded_clustering
             throw exceptions::invalid_request_exception(sprint("Missing PRIMARY KEY part %s", s->clustering_key_columns().begin()->name_as_text()));
         }
 
-        // An empty name for the compact value is what we use to recognize the case where there is not column
+        // An empty name for the value is what we use to recognize the case where there is not column
         // outside the PK, see CreateStatement.
-        if (s->compact_column().name().empty()) {
+        if (s->regular_begin()->name().empty()) {
             // There is no column outside the PK. So no operation could have passed through validation
             assert(_column_operations.empty());
-            constants::setter(s->compact_column(), make_shared(constants::value(bytes()))).execute(m, prefix, params);
+            constants::setter(*s->regular_begin(), make_shared(constants::value(bytes()))).execute(m, prefix, params);
         } else {
             // dense means we don't have a row marker, so don't accept to set only the PK. See CASSANDRA-5648.
             if (_column_operations.empty()) {
-                throw exceptions::invalid_request_exception(sprint("Column %s is mandatory for this COMPACT STORAGE table", s->compact_column().name_as_text()));
+                throw exceptions::invalid_request_exception(sprint("Column %s is mandatory for this COMPACT STORAGE table", s->regular_begin()->name_as_text()));
             }
         }
     } else {
