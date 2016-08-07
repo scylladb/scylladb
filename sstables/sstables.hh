@@ -407,6 +407,27 @@ private:
     uint64_t _filter_file_size = 0;
     uint64_t _bytes_on_disk = 0;
 
+    // _pi_write is used temporarily for building the promoted
+    // index (column sample) of one partition when writing a new sstable.
+    struct {
+        // Unfortunately we cannot output the promoted index directly to the
+        // index file because it needs to be prepended by its size.
+        bytes_ostream data;
+        uint32_t numblocks;
+        deletion_time deltime;
+        uint64_t block_start_offset;
+        uint64_t block_next_start_offset;
+        bytes block_first_colname;
+        bytes block_last_colname;
+        std::experimental::optional<range_tombstone_accumulator> tombstone_accumulator;
+        const schema* schemap;
+        size_t desired_block_size;
+    } _pi_write;
+
+    void maybe_flush_pi_block(file_writer& out,
+            const composite& clustering_key,
+            const std::vector<bytes_view>& column_names);
+
     sstring _ks;
     sstring _cf;
     sstring _dir;
