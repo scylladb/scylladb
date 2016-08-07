@@ -51,6 +51,7 @@ private:
         RANGE_TOMBSTONE_3,
         RANGE_TOMBSTONE_4,
         RANGE_TOMBSTONE_5,
+        STOP_THEN_ATOM_START,
     } _state = state::ROW_START;
 
     row_consumer& _consumer;
@@ -69,6 +70,7 @@ public:
                 || (_state == state::CELL_VALUE_BYTES_2)
                 || (_state == state::ATOM_START_2)
                 || (_state == state::ATOM_MASK_2)
+                || (_state == state::STOP_THEN_ATOM_START)
                 || (_state == state::EXPIRING_CELL_3)) && (_prestate == prestate::NONE));
     }
 
@@ -319,6 +321,9 @@ public:
             }
             break;
         }
+        case state::STOP_THEN_ATOM_START:
+            _state = state::ATOM_START;
+            return row_consumer::proceed::no;
         default:
             throw malformed_sstable_exception("unknown state");
         }
