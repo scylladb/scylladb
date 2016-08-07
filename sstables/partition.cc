@@ -125,6 +125,7 @@ private:
     stdx::optional<new_mutation> _mutation;
     bool _is_mutation_end;
 
+public:
     struct column {
         bool is_static;
         bytes_view col_name;
@@ -200,6 +201,7 @@ private:
         }
     };
 
+private:
     // Notes for collection mutation:
     //
     // While we could in theory generate the mutation for the elements as they
