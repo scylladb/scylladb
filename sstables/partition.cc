@@ -28,6 +28,7 @@
 #include "unimplemented.hh"
 #include "utils/move.hh"
 #include "dht/i_partitioner.hh"
+#include <seastar/core/byteorder.hh>
 
 namespace sstables {
 
@@ -768,6 +769,167 @@ sstables::sstable::read_row(schema_ptr schema,
             return sstable_streamed_mutation::create(schema, this->shared_from_this(), key, ck_filtering, pc, {position, end}).then([] (auto sm) {
                 return streamed_mutation_opt(std::move(sm));
             });
+        });
+    });
+}
+
+template <typename T>
+static inline T read_be(const signed char* p) {
+    return ::read_be<T>(reinterpret_cast<const char*>(p));
+}
+
+template<typename T>
+static inline T consume_be(bytes_view& p) {
+    T i = read_be<T>(p.data());
+    p.remove_prefix(sizeof(T));
+    return i;
+}
+
+static inline bytes_view consume_bytes(bytes_view& p, size_t len) {
+    auto ret = bytes_view(p.data(), len);
+    p.remove_prefix(len);
+    return ret;
+}
+
+static inline clustering_key_prefix get_clustering_key(
+        const schema& schema, bytes_view col_name) {
+    mp_row_consumer::column col(schema, std::move(col_name), api::max_timestamp);
+    return std::move(col.clustering);
+}
+
+future<sstable::disk_read_range>
+sstables::sstable::find_disk_ranges(
+        schema_ptr schema, const sstables::key& key,
+        query::clustering_key_filtering_context ck_filtering,
+        const io_priority_class& pc) {
+    auto& partitioner = dht::global_partitioner();
+    auto token = partitioner.get_token(key_view(key));
+
+    if (token < partitioner.get_token(key_view(_summary.first_key.value))
+            || token > partitioner.get_token(key_view(_summary.last_key.value))) {
+        return make_ready_future<disk_read_range>();
+    }
+    auto summary_idx = adjust_binary_search_index(binary_search(_summary.entries, key, token));
+    if (summary_idx < 0) {
+        return make_ready_future<disk_read_range>();
+    }
+
+    return read_indexes(summary_idx, pc).then([this, schema, ck_filtering, &key, token, summary_idx, &pc] (auto index_list) {
+        auto index_idx = this->binary_search(index_list, key, token);
+        if (index_idx < 0) {
+            return make_ready_future<disk_read_range>();
+        }
+        index_entry& ie = index_list[index_idx];
+        if (ie.get_promoted_index_bytes().size() >= 16) {
+            auto& ck_ranges = ck_filtering.get_ranges(
+                partition_key::from_exploded(*schema, key.explode(*schema)));
+            if (ck_ranges.size() == 1 && ck_ranges[0].is_full()) {
+                // When no clustering filter is given to sstable::read_row(),
+                // we get here one range unbounded on both sides. This is fine
+                // (the code below will work with an unbounded range), but
+                // let's drop this range to revert to the classic behavior of
+                // reading entire sstable row without using the promoted index
+            } else if (ck_ranges.size() == 1) {
+                auto data = ie.get_promoted_index_bytes();
+                // note we already verified above that data.size >= 16
+                sstables::deletion_time deltime;
+                deltime.local_deletion_time = consume_be<uint32_t>(data);
+                deltime.marked_for_delete_at = consume_be<uint64_t>(data);
+                uint32_t num_blocks = consume_be<uint32_t>(data);
+                // We do a linear search on the promoted index. If we were to
+                // look in the same promoted index several times it might have
+                // made sense to build an array of key starts so we can do a
+                // binary search. We could do this once we have a key cache.
+                bool has_range_start = bool(ck_ranges[0].start());
+                auto range_start = ck_ranges[0].start()->value();
+                bool found_range_start = false;
+                uint64_t range_start_pos;
+                bool has_range_end = bool(ck_ranges[0].end());
+                auto range_end = ck_ranges[0].end()->value();
+
+                auto cmp = clustering_key_prefix::tri_compare(*schema);
+                while (num_blocks--) {
+                    if (data.size() < 2) {
+                        // When we break out of this loop, we give up on
+                        // using the promoted index, and fall back to
+                        // reading the entire partition.
+                        // FIXME: this and all other "break" cases below,
+                        // are errors. Log them (with rate limit) and count.
+                        break;
+                    }
+                    uint16_t len = consume_be<uint16_t>(data);
+                    if (data.size() < len) {
+                        break;
+                    }
+                    // The promoted index contains ranges of full column
+                    // names, which may include a clustering key and column.
+                    // But we only need to match the clustering key, because
+                    // we got a clustering key range to search for.
+                    auto start_ck = get_clustering_key(*schema,
+                            consume_bytes(data, len));
+                    if (data.size() < 2) {
+                        break;
+                    }
+                    len = consume_be<uint16_t>(data);
+                    if (data.size() < len) {
+                        break;
+                    }
+                    auto end_ck = get_clustering_key(*schema,
+                            consume_bytes(data, len));
+                    if (data.size() < 16) {
+                        break;
+                    }
+                    uint64_t offset = consume_be<uint64_t>(data);
+                    uint64_t width = consume_be<uint64_t>(data);
+                    if (!found_range_start) {
+                        if (!has_range_start || cmp(range_start, end_ck) <= 0) {
+                            range_start_pos = ie.position() + offset;
+                            found_range_start = true;
+                        }
+                    }
+                    bool found_range_end = false;
+                    uint64_t range_end_pos;
+                    if (has_range_end) {
+                        if (cmp(range_end, start_ck) < 0) {
+                            // this block is already past the range_end
+                            found_range_end = true;
+                            range_end_pos = ie.position() + offset;
+                        } else if (cmp(range_end, end_ck) < 0 || num_blocks == 0) {
+                            // range_end is in the middle of this block.
+                            // Note the strict inequality above is important:
+                            // if range_end==end_ck the next block may contain
+                            // still more items matching range_end.
+                            found_range_end = true;
+                            range_end_pos = ie.position() + offset + width;
+                        }
+                    } else if (num_blocks == 0) {
+                        // When !has_range_end, read until the last block.
+                        // In this case we could have also found the end of
+                        // the partition using the index.
+                        found_range_end = true;
+                        range_end_pos = ie.position() + offset + width;
+                    }
+                    if (found_range_end) {
+                        if (!found_range_start) {
+                            // return empty range
+                            range_start_pos = range_end_pos = 0;
+                        }
+                        return make_ready_future<disk_read_range>(
+                                disk_read_range(range_start_pos, range_end_pos,
+                                        key, deltime));
+                    }
+                }
+            }
+            // Else, if more than one clustering-key range needs to be read,
+            // fall back to reading the entire partition.
+            // FIXME: support multiple ranges, and do not fall back to reading
+            // the entire partition.
+        }
+        // If we're still here there is no promoted index, or we had problems
+        // using it, so just just find the entire partition's range.
+        auto start = ie.position();
+        return this->data_end_position(summary_idx, index_idx, index_list, pc).then([start] (uint64_t end) {
+            return disk_read_range(start, end);
         });
     });
 }
