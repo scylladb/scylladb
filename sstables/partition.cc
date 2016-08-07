@@ -738,37 +738,16 @@ sstables::sstable::read_row(schema_ptr schema,
     if (!filter_has_key(key)) {
         return make_ready_future<streamed_mutation_opt>();
     }
-
-    auto& partitioner = dht::global_partitioner();
-    auto token = partitioner.get_token(key_view(key));
-
-    auto& summary = _summary;
-
-    if (token < partitioner.get_token(key_view(summary.first_key.value))
-            || token > partitioner.get_token(key_view(summary.last_key.value))) {
-        _filter_tracker.add_false_positive();
-        return make_ready_future<streamed_mutation_opt>();
-    }
-
-    auto summary_idx = adjust_binary_search_index(binary_search(summary.entries, key, token));
-    if (summary_idx < 0) {
-        _filter_tracker.add_false_positive();
-        return make_ready_future<streamed_mutation_opt>();
-    }
-
-    return read_indexes(summary_idx, pc).then([this, schema, ck_filtering, &key, token, summary_idx, &pc] (auto index_list) {
-        auto index_idx = this->binary_search(index_list, key, token);
-        if (index_idx < 0) {
+    return find_disk_ranges(schema, key, ck_filtering, pc).then([this, &key, ck_filtering, &pc, schema] (disk_read_range toread) {
+        if (!toread.found_row()) {
             _filter_tracker.add_false_positive();
+        }
+        if (!toread) {
             return make_ready_future<streamed_mutation_opt>();
         }
         _filter_tracker.add_true_positive();
-
-        auto position = index_list[index_idx].position();
-        return this->data_end_position(summary_idx, index_idx, index_list, pc).then([&key, schema, ck_filtering, this, position, &pc] (uint64_t end) {
-            return sstable_streamed_mutation::create(schema, this->shared_from_this(), key, ck_filtering, pc, {position, end}).then([] (auto sm) {
-                return streamed_mutation_opt(std::move(sm));
-            });
+        return sstable_streamed_mutation::create(schema, this->shared_from_this(), key, ck_filtering, pc, std::move(toread)).then([] (auto sm) {
+            return streamed_mutation_opt(std::move(sm));
         });
     });
 }
