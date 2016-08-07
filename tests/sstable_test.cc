@@ -38,6 +38,7 @@
 #include "sstable_test.hh"
 #include "tmpdir.hh"
 #include "partition_slice_builder.hh"
+#include "tests/test_services.hh"
 
 #include "disk-error-handler.hh"
 
@@ -1164,5 +1165,58 @@ SEASTAR_TEST_CASE(sub_partitions_read) {
         return count_rows(sstp, s, "18wX", "18xB").then([] (int nrows) {
             BOOST_REQUIRE(nrows == 5);
         });
+    });
+}
+
+// A silly, inefficient but effective, way to compare two files by reading
+// them entirely into memory.
+static future<> compare_files(sstring file1, sstring file2) {
+    return read_file(file1).then([file2] (auto in1) {
+        return read_file(file2).then([in1 = std::move(in1)] (auto in2) {
+            // assert that both files have the same size.
+            BOOST_REQUIRE(in1.second == in2.second);
+            // assert that both files have the same content.
+            BOOST_REQUIRE(::memcmp(in1.first.get(), in2.first.get(), in1.second) == 0);
+        });
+    });
+
+}
+
+// This test creates the same data as we previously created with Cassandra
+// in the tests/sstables/large_partition directory (which we read in the
+// promoted_index_read test above). The index file in both sstables - which
+// includes the promoted index - should be bit-for-bit identical, otherwise
+// we have a problem in our promoted index writing code (or in the data
+// writing code, because the promoted index points to offsets in the data).
+SEASTAR_TEST_CASE(promoted_index_write) {
+    return test_setup::do_with_test_directory([] {
+        auto s = large_partition_schema();
+        auto mtp = make_lw_shared<memtable>(s);
+        auto key = partition_key::from_exploded(*s, {to_bytes("v1")});
+        mutation m(key, s);
+        auto col = s->get_column_definition("t3");
+        BOOST_REQUIRE(col && !col->is_static());
+        for (char i = 'a'; i <= 'z'; i++) {
+            for (char j = 'A'; j <= 'Z'; j++) {
+                for (int k = 0; k < 20; k++) {
+                    auto& row = m.partition().clustered_row(
+                            clustering_key::from_exploded(
+                                    *s, {to_bytes(sprint("%d%c%c", k, i, j))}));
+                    row.cells().apply(*col,
+                            atomic_cell::make_live(2345,
+                                    col->type->decompose(sstring(sprint("z%c",i)))));
+                    row.apply(row_marker(1234));
+                }
+            }
+        }
+        mtp->apply(std::move(m));
+        auto sst = make_lw_shared<sstable>("try1", "data",
+                "tests/sstables/tests-temporary", 100,
+                sstables::sstable::version_types::ka, big);
+        return sst->write_components(*mtp).then([s] {
+            return compare_files(
+                    "tests/sstables/large_partition/try1-data-ka-3-Index.db",
+                    "tests/sstables/tests-temporary/try1-data-ka-100-Index.db");
+        }).then([sst, mtp] {});
     });
 }
