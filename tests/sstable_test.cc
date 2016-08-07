@@ -37,6 +37,8 @@
 #include <memory>
 #include "sstable_test.hh"
 #include "tmpdir.hh"
+#include "partition_slice_builder.hh"
+#include "tests/test_services.hh"
 
 #include "disk-error-handler.hh"
 
@@ -447,7 +449,7 @@ SEASTAR_TEST_CASE(compressed_row_read_at_once) {
 SEASTAR_TEST_CASE(uncompressed_rows_read_one) {
     return reusable_sst("tests/sstables/uncompressed", 1).then([] (auto sstp) {
         return do_with(test_row_consumer(1418656871665302), [sstp] (auto& c) {
-            auto context = sstp->data_consume_rows(c, 0, 95);
+            auto context = sstp->data_consume_rows(c, {0, 95});
             auto fut = context.read();
             return fut.then([sstp, &c, context = std::move(context)] {
                 BOOST_REQUIRE(c.count_row_start == 1);
@@ -464,7 +466,7 @@ SEASTAR_TEST_CASE(uncompressed_rows_read_one) {
 SEASTAR_TEST_CASE(compressed_rows_read_one) {
     return reusable_sst("tests/sstables/compressed", 1).then([] (auto sstp) {
         return do_with(test_row_consumer(1418654707438005), [sstp] (auto& c) {
-            auto context = sstp->data_consume_rows(c, 0, 95);
+            auto context = sstp->data_consume_rows(c, {0, 95});
             auto fut = context.read();
             return fut.then([sstp, &c, context = std::move(context)] {
                 BOOST_REQUIRE(c.count_row_start == 1);
@@ -946,4 +948,275 @@ SEASTAR_TEST_CASE(statistics_rewrite) {
             });
         });
     }, "tests/sstables/generation");
+}
+
+// Tests for reading a large partition for which the index contains a
+// "promoted index", i.e., a sample of the column names inside the partition,
+// with which we can avoid reading the entire partition when we look only
+// for a specific subset of columns. The test sstable for the read test was
+// generated in Cassandra.
+
+static schema_ptr large_partition_schema() {
+    static thread_local auto s = [] {
+        schema_builder builder(make_lw_shared(schema(
+                generate_legacy_id("try1", "data"), "try1", "data",
+        // partition key
+        {{"t1", utf8_type}},
+        // clustering key
+        {{"t2", utf8_type}},
+        // regular columns
+        {{"t3", utf8_type}},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        ""
+       )));
+       return builder.build(schema_builder::compact_storage::no);
+    }();
+    return s;
+}
+
+static future<lw_shared_ptr<sstable>> load_large_partition_sst() {
+    auto sst = make_lw_shared<sstable>(
+            "try1", "data", "tests/sstables/large_partition", 3,
+            sstables::sstable::version_types::ka, big);
+    auto fut = sst->load();
+    return std::move(fut).then([sst = std::move(sst)] {
+        return std::move(sst);
+    });
+}
+
+// This is a rudimentary test that reads an sstable exported from Cassandra
+// which contains a promoted index. It just checks that the promoted index
+// is read from disk, as an unparsed array, and doesn't actually use it to
+// search for anything.
+SEASTAR_TEST_CASE(promoted_index_read) {
+    return load_large_partition_sst().then([] (auto sstp) {
+        schema_ptr s = large_partition_schema();
+        return sstables::test(sstp).read_indexes(0).then([sstp] (index_list vec) {
+            BOOST_REQUIRE(vec.size() == 1);
+            index_entry &e = vec[0];
+            BOOST_REQUIRE(e.get_promoted_index_bytes().size() == 468);
+        });
+    });
+}
+
+// Use an empty string for ck1, ck2, or both, for unbounded ranges.
+static query::partition_slice make_partition_slice(const schema& s, sstring ck1, sstring ck2) {
+    std::experimental::optional<query::clustering_range::bound> b1;
+    if (!ck1.empty()) {
+        b1.emplace(clustering_key_prefix::from_single_value(
+                s, utf8_type->decompose(ck1)));
+    }
+    std::experimental::optional<query::clustering_range::bound> b2;
+    if (!ck2.empty()) {
+        b2.emplace(clustering_key_prefix::from_single_value(
+                s, utf8_type->decompose(ck2)));
+    }
+    return partition_slice_builder(s).
+            with_range(query::clustering_range(b1, b2)).build();
+}
+
+// Count the number of CQL rows in one partition between clustering key
+// prefix ck1 to ck2.
+static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key, sstring ck1, sstring ck2) {
+    return seastar::async([sstp, s, key, ck1, ck2] () mutable {
+        auto ps = make_partition_slice(*s, ck1, ck2);
+        auto row = sstp->read_row(s, sstables::key(key.c_str()),
+               query::clustering_key_filtering_context::create(s, ps)).get0();
+        if (!row) {
+            return 0;
+        }
+        int nrows = 0;
+        auto mfopt = (*row)().get0();
+        while (mfopt) {
+            if (mfopt->is_clustering_row()) {
+                nrows++;
+            }
+            mfopt = (*row)().get0();
+        }
+        return nrows;
+    });
+}
+
+// Count the number of CQL rows in one partition
+static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key) {
+    return seastar::async([sstp, s, key] () mutable {
+        auto row = sstp->read_row(s, sstables::key(key.c_str())).get0();
+        if (!row) {
+            return 0;
+        }
+        int nrows = 0;
+        auto mfopt = (*row)().get0();
+        while (mfopt) {
+            if (mfopt->is_clustering_row()) {
+                nrows++;
+            }
+            mfopt = (*row)().get0();
+        }
+        return nrows;
+    });
+}
+
+// Count the number of CQL rows between clustering key prefix ck1 to ck2
+// in all partitions in the sstable (using sstable::read_range_rows).
+static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring ck1, sstring ck2) {
+    return seastar::async([sstp, s, ck1, ck2] () mutable {
+        auto ps = make_partition_slice(*s, ck1, ck2);
+        auto reader = sstp->read_range_rows(s, query::full_partition_range,
+               query::clustering_key_filtering_context::create(s, ps));
+        int nrows = 0;
+        auto smopt = reader.read().get0();
+        while (smopt) {
+            auto mfopt = (*smopt)().get0();
+            while (mfopt) {
+                if (mfopt->is_clustering_row()) {
+                    nrows++;
+                }
+                mfopt = (*smopt)().get0();
+            }
+            smopt = reader.read().get0();
+        }
+        return nrows;
+    });
+}
+
+// This test reads, using sstable::read_row(), a slice (a range of clustering
+// rows) from one large partition in an sstable written in Cassandra.
+// This large partition includes 13520 clustering rows, and spans about
+// 700 KB on disk. When we ask to read only a part of it, the promoted index
+// (included in this sstable) may be used to allow reading only a part of the
+// partition from disk. This test doesn't directly verify that the promoted
+// index is actually used - and can work even without a promoted index
+// support - but can be used to check that adding promoted index read supports
+// did not break anything.
+// To verify that the promoted index was actually used to reduce the size
+// of read from disk, add printouts to the row reading code.
+SEASTAR_TEST_CASE(sub_partition_read) {
+    schema_ptr s = large_partition_schema();
+    return load_large_partition_sst().then([s] (auto sstp) {
+        return count_rows(sstp, s, "v1", "18wX", "18xB").then([] (int nrows) {
+            // there should be 5 rows (out of 13520 = 20*26*26) in this range:
+            // 18wX, 18wY, 18wZ, 18xA, 18xB.
+            BOOST_REQUIRE(nrows == 5);
+        }).then([sstp, s] () {
+            return count_rows(sstp, s, "v1", "13aB", "15aA").then([] (int nrows) {
+                // There should be 26*26*2 rows in this range. It spans two
+                // promoted-index blocks, so we get to test that case.
+                BOOST_REQUIRE(nrows == 2*26*26);
+            });
+        }).then([sstp, s] () {
+            return count_rows(sstp, s, "v1", "10aB", "19aA").then([] (int nrows) {
+                // There should be 26*26*9 rows in this range. It spans many
+                // promoted-index blocks.
+                BOOST_REQUIRE(nrows == 9*26*26);
+            });
+        }).then([sstp, s] () {
+            return count_rows(sstp, s, "v1", "0", "z").then([] (int nrows) {
+                // All rows, 20*26*26 of them, are in this range. It spans all
+                // the promoted-index blocks, but the range is still bounded
+                // on both sides
+                BOOST_REQUIRE(nrows == 20*26*26);
+            });
+        }).then([sstp, s] () {
+            // range that is outside (after) the actual range of the data.
+            // No rows should match.
+            return count_rows(sstp, s, "v1", "y", "z").then([] (int nrows) {
+                BOOST_REQUIRE(nrows == 0);
+            });
+        }).then([sstp, s] () {
+            // range that is outside (before) the actual range of the data.
+            // No rows should match.
+            return count_rows(sstp, s, "v1", "_a", "_b").then([] (int nrows) {
+                BOOST_REQUIRE(nrows == 0);
+            });
+        }).then([sstp, s] () {
+            // half-infinite range
+            return count_rows(sstp, s, "v1", "", "10aA").then([] (int nrows) {
+                BOOST_REQUIRE(nrows == (1*26*26 + 1));
+            });
+        }).then([sstp, s] () {
+            // half-infinite range
+            return count_rows(sstp, s, "v1", "10aA", "").then([] (int nrows) {
+                BOOST_REQUIRE(nrows == 19*26*26);
+            });
+        }).then([sstp, s] () {
+            // count all rows, but giving an explicit all-encompasing filter
+            return count_rows(sstp, s, "v1", "", "").then([] (int nrows) {
+                BOOST_REQUIRE(nrows == 20*26*26);
+            });
+        }).then([sstp, s] () {
+            // count all rows, without a filter
+            return count_rows(sstp, s, "v1").then([] (int nrows) {
+                BOOST_REQUIRE(nrows == 20*26*26);
+            });
+        });
+    });
+}
+
+// Same as previous test, just using read_range_rows instead of read_row
+// to read parts of potentially more than one partition (in this particular
+// sstable, there is actually just one partition).
+SEASTAR_TEST_CASE(sub_partitions_read) {
+    schema_ptr s = large_partition_schema();
+    return load_large_partition_sst().then([s] (auto sstp) {
+        return count_rows(sstp, s, "18wX", "18xB").then([] (int nrows) {
+            BOOST_REQUIRE(nrows == 5);
+        });
+    });
+}
+
+// A silly, inefficient but effective, way to compare two files by reading
+// them entirely into memory.
+static future<> compare_files(sstring file1, sstring file2) {
+    return read_file(file1).then([file2] (auto in1) {
+        return read_file(file2).then([in1 = std::move(in1)] (auto in2) {
+            // assert that both files have the same size.
+            BOOST_REQUIRE(in1.second == in2.second);
+            // assert that both files have the same content.
+            BOOST_REQUIRE(::memcmp(in1.first.get(), in2.first.get(), in1.second) == 0);
+        });
+    });
+
+}
+
+// This test creates the same data as we previously created with Cassandra
+// in the tests/sstables/large_partition directory (which we read in the
+// promoted_index_read test above). The index file in both sstables - which
+// includes the promoted index - should be bit-for-bit identical, otherwise
+// we have a problem in our promoted index writing code (or in the data
+// writing code, because the promoted index points to offsets in the data).
+SEASTAR_TEST_CASE(promoted_index_write) {
+    return test_setup::do_with_test_directory([] {
+        auto s = large_partition_schema();
+        auto mtp = make_lw_shared<memtable>(s);
+        auto key = partition_key::from_exploded(*s, {to_bytes("v1")});
+        mutation m(key, s);
+        auto col = s->get_column_definition("t3");
+        BOOST_REQUIRE(col && !col->is_static());
+        for (char i = 'a'; i <= 'z'; i++) {
+            for (char j = 'A'; j <= 'Z'; j++) {
+                for (int k = 0; k < 20; k++) {
+                    auto& row = m.partition().clustered_row(
+                            clustering_key::from_exploded(
+                                    *s, {to_bytes(sprint("%d%c%c", k, i, j))}));
+                    row.cells().apply(*col,
+                            atomic_cell::make_live(2345,
+                                    col->type->decompose(sstring(sprint("z%c",i)))));
+                    row.apply(row_marker(1234));
+                }
+            }
+        }
+        mtp->apply(std::move(m));
+        auto sst = make_lw_shared<sstable>("try1", "data",
+                "tests/sstables/tests-temporary", 100,
+                sstables::sstable::version_types::ka, big);
+        return sst->write_components(*mtp).then([s] {
+            return compare_files(
+                    "tests/sstables/large_partition/try1-data-ka-3-Index.db",
+                    "tests/sstables/tests-temporary/try1-data-ka-100-Index.db");
+        }).then([sst, mtp] {});
+    });
 }
