@@ -590,17 +590,17 @@ struct sstable_data_source {
         , _context(_sst->data_consume_rows(_consumer))
     { }
 
-    sstable_data_source(shared_sstable sst, mp_row_consumer&& consumer, uint64_t start, uint64_t end)
+    sstable_data_source(shared_sstable sst, mp_row_consumer&& consumer, sstable::disk_read_range toread)
         : _sst(std::move(sst))
         , _consumer(std::move(consumer))
-        , _context(_sst->data_consume_rows(_consumer, start, end))
+        , _context(_sst->data_consume_rows(_consumer, std::move(toread)))
     { }
 
     sstable_data_source(schema_ptr s, shared_sstable sst, const sstables::key& k, const io_priority_class& pc,
-            query::clustering_key_filtering_context ck_filtering, uint64_t start, uint64_t end)
+            query::clustering_key_filtering_context ck_filtering, sstable::disk_read_range toread)
         : _sst(std::move(sst))
         , _consumer(k, s, ck_filtering, pc)
-        , _context(_sst->data_consume_rows(_consumer, start, end))
+        , _context(_sst->data_consume_rows(_consumer, std::move(toread)))
     { }
 };
 
@@ -680,9 +680,9 @@ public:
 
     static future<streamed_mutation> create(schema_ptr s, shared_sstable sst, const sstables::key& k,
                                             query::clustering_key_filtering_context ck_filtering,
-                                            const io_priority_class& pc, uint64_t start, uint64_t end)
+                                            const io_priority_class& pc, sstable::disk_read_range toread)
     {
-        auto ds = make_lw_shared<sstable_data_source>(s, sst, k, pc, ck_filtering, start, end);
+        auto ds = make_lw_shared<sstable_data_source>(s, sst, k, pc, ck_filtering, std::move(toread));
         return ds->_context.read().then([s, ds] {
             auto mut = ds->_consumer.get_mutation();
             assert(mut);
@@ -763,7 +763,7 @@ sstables::sstable::read_row(schema_ptr schema,
 
         auto position = index_list[index_idx].position();
         return this->data_end_position(summary_idx, index_idx, index_list, pc).then([&key, schema, ck_filtering, this, position, &pc] (uint64_t end) {
-            return sstable_streamed_mutation::create(schema, this->shared_from_this(), key, ck_filtering, pc, position, end).then([] (auto sm) {
+            return sstable_streamed_mutation::create(schema, this->shared_from_this(), key, ck_filtering, pc, {position, end}).then([] (auto sm) {
                 return streamed_mutation_opt(std::move(sm));
             });
         });
@@ -781,12 +781,12 @@ private:
     mp_row_consumer _consumer;
     std::function<future<lw_shared_ptr<sstable_data_source>> ()> _get_data_source;
 public:
-    impl(shared_sstable sst, schema_ptr schema, uint64_t start, uint64_t end,
+    impl(shared_sstable sst, schema_ptr schema, sstable::disk_read_range toread,
          const io_priority_class &pc)
         : _schema(schema)
         , _consumer(schema, query::no_clustering_key_filtering, pc)
-        , _get_data_source([this, sst = std::move(sst), start, end] {
-            auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), start, end);
+        , _get_data_source([this, sst = std::move(sst), toread] {
+            auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), std::move(toread));
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
     impl(shared_sstable sst, schema_ptr schema,
@@ -808,7 +808,7 @@ public:
         , _get_data_source([this, sst = std::move(sst), start = std::move(start), end = std::move(end)] () mutable {
             return start().then([this, sst = std::move(sst), end = std::move(end)] (uint64_t start) mutable {
                 return end().then([this, sst = std::move(sst), start] (uint64_t end) mutable {
-                    return make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), start, end);
+                    return make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), sstable::disk_read_range{start, end});
                 });
             });
         }) { }

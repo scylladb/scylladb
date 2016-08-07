@@ -155,6 +155,16 @@ public:
     // object lives until then (e.g., using the do_with() idiom).
     future<> data_consume_rows_at_once(row_consumer& consumer, uint64_t pos, uint64_t end);
 
+    struct disk_read_range {
+        uint64_t start;
+        uint64_t end;
+        disk_read_range() : start(0), end(0) {}
+        disk_read_range(uint64_t start, uint64_t end) :
+            start(start), end(end) { }
+        explicit operator bool() const {
+            return start != end;
+        }
+    };
 
     // data_consume_rows() iterates over rows in the data file from
     // a particular range, feeding them into the consumer. The iteration is
@@ -172,7 +182,7 @@ public:
     // The caller must ensure (e.g., using do_with()) that the context object,
     // as well as the sstable, remains alive as long as a read() is in
     // progress (i.e., returned a future which hasn't completed yet).
-    data_consume_context data_consume_rows(row_consumer& consumer, uint64_t start, uint64_t end);
+    data_consume_context data_consume_rows(row_consumer& consumer, disk_read_range toread);
 
     // Like data_consume_rows() with bounds, but iterates over whole range
     data_consume_context data_consume_rows(row_consumer& consumer);

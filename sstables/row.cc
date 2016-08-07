@@ -383,18 +383,19 @@ future<> data_consume_context::read() {
 }
 
 data_consume_context sstable::data_consume_rows(
-        row_consumer& consumer, uint64_t start, uint64_t end) {
+        row_consumer& consumer, sstable::disk_read_range toread) {
     // TODO: The second "end - start" below is redundant: The first one tells
     // data_stream() to stop at the "end" byte, which allows optimal read-
     // ahead and avoiding over-read at the end. The second one tells the
     // consumer to stop at exactly the same place, and forces the consumer
     // to maintain its own byte count.
     return std::make_unique<data_consume_context::impl>(shared_from_this(),
-            consumer, data_stream(start, end - start, consumer.io_priority()), end - start);
+            consumer, data_stream(toread.start, toread.end - toread.start,
+                consumer.io_priority()), toread.end - toread.start);
 }
 
 data_consume_context sstable::data_consume_rows(row_consumer& consumer) {
-    return data_consume_rows(consumer, 0, data_size());
+    return data_consume_rows(consumer, {0, data_size()});
 }
 
 future<> sstable::data_consume_rows_at_once(row_consumer& consumer,

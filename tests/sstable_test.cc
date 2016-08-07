@@ -448,7 +448,7 @@ SEASTAR_TEST_CASE(compressed_row_read_at_once) {
 SEASTAR_TEST_CASE(uncompressed_rows_read_one) {
     return reusable_sst("tests/sstables/uncompressed", 1).then([] (auto sstp) {
         return do_with(test_row_consumer(1418656871665302), [sstp] (auto& c) {
-            auto context = sstp->data_consume_rows(c, 0, 95);
+            auto context = sstp->data_consume_rows(c, {0, 95});
             auto fut = context.read();
             return fut.then([sstp, &c, context = std::move(context)] {
                 BOOST_REQUIRE(c.count_row_start == 1);
@@ -465,7 +465,7 @@ SEASTAR_TEST_CASE(uncompressed_rows_read_one) {
 SEASTAR_TEST_CASE(compressed_rows_read_one) {
     return reusable_sst("tests/sstables/compressed", 1).then([] (auto sstp) {
         return do_with(test_row_consumer(1418654707438005), [sstp] (auto& c) {
-            auto context = sstp->data_consume_rows(c, 0, 95);
+            auto context = sstp->data_consume_rows(c, {0, 95});
             auto fut = context.read();
             return fut.then([sstp, &c, context = std::move(context)] {
                 BOOST_REQUIRE(c.count_row_start == 1);
