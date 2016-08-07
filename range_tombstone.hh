@@ -294,6 +294,11 @@ public:
         return _current_tombstone;
     }
 
+    const std::deque<range_tombstone>& range_tombstones_for_row(const clustering_key_prefix& ck) {
+        drop_unneeded_tombstones(ck);
+        return _range_tombstones;
+    }
+
     void apply(const range_tombstone& rt);
 
     void clear();
