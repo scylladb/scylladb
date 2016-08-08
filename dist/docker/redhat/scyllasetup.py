@@ -9,6 +9,7 @@ class ScyllaSetup:
         self._seeds = arguments.seeds
         self._cpuset = arguments.cpuset
         self._broadcastAddress = arguments.broadcastAddress
+        self._broadcastRpcAddress = arguments.broadcastRpcAddress
 
     def _run(self, *args, **kwargs):
         logging.info('running: {}'.format(args))
@@ -38,6 +39,8 @@ class ScyllaSetup:
                 ]
         if self._broadcastAddress is not None:
             configuration['broadcast_address'] = self._broadcastAddress
+        if self._broadcastRpcAddress is not None:
+            configuration['broadcast_rpc_address'] = self._broadcastRpcAddress
         with open('/etc/scylla/scylla.yaml', 'w') as file:
             yaml.dump(configuration, file)
 
