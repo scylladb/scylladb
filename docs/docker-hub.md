@@ -58,6 +58,30 @@ INFO  2016-08-04 06:57:40,839 [shard 0] storage_service - Starting listening for
 INFO  2016-08-04 06:57:40,840 [shard 0] storage_service - Thrift server listening on 172.17.0.2:9160 ...
 ```
 
+## Configuring data volume for storage
+
+You can use Docker volumes to improve performance of Scylla.
+
+Create a Scylla data directory ``/var/lib/scylla`` on the host, which is used by Scylla container to store all data:
+
+```console
+$ sudo mkdir -p /var/lib/scylla/data /var/lib/scylla/commitlog
+```
+
+Launch Scylla using Docker's ``--volume`` command line option to mount the created host directory as a data volume in the container and disable Scylla's developer mode to run I/O tuning before starting up the Scylla node.
+
+```
+docker run --name some-scylla --volume /var/lib/scylla:/var/lib/scylla -d scylladb/scylla --developer-mode=0
+```
+
+## Restricting container CPUs
+
+Scylla utilizes all CPUs by default. To restrict your Docker container to a subset of the CPUs, use the ``--cpuset`` command line option:
+
+```
+docker run --name some-scylla -d scylladb/scylla --cpuset 0-4
+```
+
 # User Feedback
 
 ## Issues
