@@ -75,32 +75,29 @@ partition_key frozen_mutation::deserialize_key() const {
     return mutation_view().key();
 }
 
-frozen_mutation::frozen_mutation(bytes&& b)
+frozen_mutation::frozen_mutation(bytes_ostream&& b)
     : _bytes(std::move(b))
     , _pk(deserialize_key())
 { }
 
 frozen_mutation::frozen_mutation(bytes_view bv, partition_key pk)
-    : _bytes(bytes(bv.begin(), bv.end()))
-    , _pk(std::move(pk))
-{ }
+    : _pk(std::move(pk))
+{
+    _bytes.write(bv);
+}
 
 frozen_mutation::frozen_mutation(const mutation& m)
     : _pk(m.key())
 {
     mutation_partition_serializer part_ser(*m.schema(), m.partition());
 
-    bytes_ostream out;
-    ser::writer_of_mutation wom(out);
+    ser::writer_of_mutation wom(_bytes);
     std::move(wom).write_table_id(m.schema()->id())
                   .write_schema_version(m.schema()->version())
                   .write_key(m.key())
                   .partition([&] (auto wr) {
                       part_ser.write(std::move(wr));
                   }).end_mutation();
-
-    auto bv = out.linearize();
-    _bytes = bytes(bv.begin(), bv.end()); // FIXME: avoid copy
 }
 
 mutation
