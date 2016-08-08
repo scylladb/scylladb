@@ -24,7 +24,6 @@
 #include "clustering_key_filter.hh"
 #include "keys.hh"
 #include "query-request.hh"
-#include "range.hh"
 
 namespace query {
 

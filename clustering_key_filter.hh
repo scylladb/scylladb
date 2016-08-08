@@ -28,8 +28,7 @@
 #include "core/shared_ptr.hh"
 #include "database_fwd.hh"
 #include "schema.hh"
-
-template<typename T> class range;
+#include "range.hh"
 
 namespace query {
 
