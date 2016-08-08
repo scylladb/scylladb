@@ -45,6 +45,7 @@ ExternalSizeMax=1024G
 EOS
     if [ $SYMLINK = 1 ]; then
         rm -rf /var/lib/systemd/coredump
+        mkdir -p /var/lib/scylla/coredump
         ln -sf /var/lib/scylla/coredump /var/lib/systemd/coredump
     fi
     systemctl daemon-reload
