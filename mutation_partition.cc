@@ -484,7 +484,7 @@ mutation_partition::clustered_row(const schema& s, const clustering_key_view& ke
 }
 
 mutation_partition::rows_type::const_iterator
-mutation_partition::lower_bound(const schema& schema, const query::range<clustering_key_prefix>& r) const {
+mutation_partition::lower_bound(const schema& schema, const query::clustering_range& r) const {
     auto cmp = rows_entry::key_comparator(clustering_key_prefix::prefix_equality_less_compare(schema));
     return r.start() ? (r.start()->is_inclusive()
             ? _rows.lower_bound(r.start()->value(), cmp)
@@ -492,7 +492,7 @@ mutation_partition::lower_bound(const schema& schema, const query::range<cluster
 }
 
 mutation_partition::rows_type::const_iterator
-mutation_partition::upper_bound(const schema& schema, const query::range<clustering_key_prefix>& r) const {
+mutation_partition::upper_bound(const schema& schema, const query::clustering_range& r) const {
     auto cmp = rows_entry::key_comparator(clustering_key_prefix::prefix_equality_less_compare(schema));
     return r.end() ? (r.end()->is_inclusive()
                          ? _rows.upper_bound(r.end()->value(), cmp)
@@ -500,7 +500,7 @@ mutation_partition::upper_bound(const schema& schema, const query::range<cluster
 }
 
 boost::iterator_range<mutation_partition::rows_type::const_iterator>
-mutation_partition::range(const schema& schema, const query::range<clustering_key_prefix>& r) const {
+mutation_partition::range(const schema& schema, const query::clustering_range& r) const {
     return boost::make_iterator_range(lower_bound(schema, r), upper_bound(schema, r));
 }
 
@@ -520,22 +520,22 @@ unconst(Container& c, typename Container::const_iterator i) {
 }
 
 boost::iterator_range<mutation_partition::rows_type::iterator>
-mutation_partition::range(const schema& schema, const query::range<clustering_key_prefix>& r) {
+mutation_partition::range(const schema& schema, const query::clustering_range& r) {
     return unconst(_rows, static_cast<const mutation_partition*>(this)->range(schema, r));
 }
 
 mutation_partition::rows_type::iterator
-mutation_partition::lower_bound(const schema& schema, const query::range<clustering_key_prefix>& r) {
+mutation_partition::lower_bound(const schema& schema, const query::clustering_range& r) {
     return unconst(_rows, static_cast<const mutation_partition*>(this)->lower_bound(schema, r));
 }
 
 mutation_partition::rows_type::iterator
-mutation_partition::upper_bound(const schema& schema, const query::range<clustering_key_prefix>& r) {
+mutation_partition::upper_bound(const schema& schema, const query::clustering_range& r) {
     return unconst(_rows, static_cast<const mutation_partition*>(this)->upper_bound(schema, r));
 }
 
 template<typename Func>
-void mutation_partition::for_each_row(const schema& schema, const query::range<clustering_key_prefix>& row_range, bool reversed, Func&& func) const
+void mutation_partition::for_each_row(const schema& schema, const query::clustering_range& row_range, bool reversed, Func&& func) const
 {
     auto r = range(schema, row_range);
     if (!reversed) {
