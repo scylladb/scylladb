@@ -1179,11 +1179,6 @@ void sstable::maybe_flush_pi_block(file_writer& out,
 // @clustering_key: it's expected that clustering key is already in its composite form.
 // NOTE: empty clustering key means that there is no clustering key.
 void sstable::write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker) {
-    // FIXME: min_components and max_components also keep track of clustering
-    // prefix, so we must merge clustering_key and column_names somehow and
-    // pass the result to the functions below.
-    column_name_helper::min_max_components(_c_stats.min_column_names, _c_stats.max_column_names, column_names);
-
     // was defined in the schema, for example.
     auto c = composite::from_exploded(column_names, marker);
     auto ck_bview = bytes_view(clustering_key);
@@ -1205,8 +1200,6 @@ void sstable::write_column_name(file_writer& out, const composite& clustering_ke
 }
 
 void sstable::write_column_name(file_writer& out, bytes_view column_names) {
-    column_name_helper::min_max_components(_c_stats.min_column_names, _c_stats.max_column_names, { column_names });
-
     size_t sz = column_names.size();
     if (sz > std::numeric_limits<uint16_t>::max()) {
         throw std::runtime_error(sprint("Column name too large (%d > %d)", sz, std::numeric_limits<uint16_t>::max()));
@@ -1361,6 +1354,11 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
         _pi_write.tombstone_accumulator->apply(range_tombstone(
                 clustered_row.key(), bound_kind::incl_start,
                 clustered_row.key(), bound_kind::incl_end, clustered_row.tomb()));
+    }
+
+    if (schema.clustering_key_size()) {
+        column_name_helper::min_max_components(schema, _collector.min_column_names(), _collector.max_column_names(),
+            clustered_row.key().components());
     }
 
     // Write all cells of a partition's row.
@@ -1672,7 +1670,7 @@ stop_iteration components_writer::consume_end_of_partition() {
     // compute size of the current row.
     _sst._c_stats.row_size = _out.offset() - _sst._c_stats.start_offset;
     // update is about merging column_stats with the data being stored by collector.
-    _sst._collector.update(std::move(_sst._c_stats));
+    _sst._collector.update(_schema, std::move(_sst._c_stats));
     _sst._c_stats.reset();
 
     if (!_first_key) {
