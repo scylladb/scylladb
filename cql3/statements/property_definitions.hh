@@ -79,6 +79,7 @@ protected:
 
     std::experimental::optional<std::map<sstring, sstring>> get_map(const sstring& name) const;
 
+    void remove_from_map_if_exists(const sstring& name, const sstring& key);
 public:
     bool has_property(const sstring& name) const;
 
