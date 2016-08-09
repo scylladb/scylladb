@@ -181,6 +181,21 @@ long property_definitions::to_long(sstring key, std::experimental::optional<sstr
     }
 }
 
+void property_definitions::remove_from_map_if_exists(const sstring& name, const sstring& key)
+{
+    auto it = _properties.find(name);
+    if (it == _properties.end()) {
+        return;
+    }
+    try {
+        auto map = boost::any_cast<std::map<sstring, sstring>>(it->second);
+        map.erase(key);
+        _properties[name] = map;
+    } catch (const boost::bad_any_cast& e) {
+        throw exceptions::syntax_exception(sprint("Invalid value for property '%s'. It should be a map.", name));
+    }
+}
+
 }
 
 }

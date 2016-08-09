@@ -92,9 +92,9 @@ void cf_prop_defs::validate() {
             throw exceptions::configuration_exception(sstring("Missing sub-option '") + COMPACTION_STRATEGY_CLASS_KEY + "' for the '" + KW_COMPACTION + "' option.");
         }
         _compaction_strategy_class = sstables::compaction_strategy::type(strategy->second);
-#if 0
-       compactionOptions.remove(COMPACTION_STRATEGY_CLASS_KEY);
+        remove_from_map_if_exists(KW_COMPACTION, COMPACTION_STRATEGY_CLASS_KEY);
 
+#if 0
        CFMetaData.validateCompactionOptions(compactionStrategyClass, compactionOptions);
 #endif
     }
