@@ -55,6 +55,7 @@
 #include "log.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/core/scollectd.hh>
 #include <chrono>
 #include "dht/i_partitioner.hh"
 #include <boost/range/algorithm/set_algorithm.hpp>
@@ -112,6 +113,19 @@ gossiper::gossiper() {
     /* register with the Failure Detector for receiving Failure detector events */
     get_local_failure_detector().register_failure_detection_event_listener(this);
     // Register this instance with JMX
+    _collectd_registrations = std::make_unique<scollectd::registrations>(setup_collectd());
+}
+
+scollectd::registrations
+gossiper::setup_collectd() {
+    auto ep = get_broadcast_address();
+    return {
+        scollectd::add_polled_metric(
+            scollectd::type_instance_id("gossip", scollectd::per_cpu_plugin_instance,
+                    "derive", "heart_beat_version"),
+            scollectd::make_typed(scollectd::data_type::DERIVE, [ep, this] {
+                return this->endpoint_state_map.at(ep).get_heart_beat_state().get_heart_beat_version(); })),
+    };
 }
 
 void gossiper::set_last_processed_message_at() {
