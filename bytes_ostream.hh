@@ -324,6 +324,16 @@ public:
         _current->offset = pos._offset;
     }
 
+    void reduce_chunk_count() {
+        // FIXME: This is a simplified version. It linearizes the whole buffer
+        // if its size is below max_chunk_size. We probably could also gain
+        // some read performance by doing "real" reduction, i.e. merging
+        // all chunks until all but the last one is max_chunk_size.
+        if (size() < max_chunk_size) {
+            linearize();
+        }
+    }
+
     bool operator==(const bytes_ostream& other) const {
         auto as = fragments().begin();
         auto as_end = fragments().end();
