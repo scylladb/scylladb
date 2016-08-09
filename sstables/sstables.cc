@@ -1560,7 +1560,6 @@ components_writer::components_writer(sstable& sst, const schema& s, file_writer&
     , _out(out)
     , _index(index_file_writer(sst, pc))
     , _max_sstable_size(max_sstable_size)
-    , _tombstone_written(false)
 {
     _sst._filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance());
     _sst._pi_write.desired_block_size = get_config().column_index_size_in_kb() * 1024;

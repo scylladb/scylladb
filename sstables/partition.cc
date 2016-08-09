@@ -109,8 +109,8 @@ private:
     query::clustering_key_filtering_context _ck_filtering;
     query::clustering_key_filter _filter;
 
-    bool _skip_partition = false;
-    bool _skip_clustering_row = false;
+    bool _skip_partition;
+    bool _skip_clustering_row;
 
     // We don't have "end of clustering row" markers. So we know that the current
     // row has ended once we get something (e.g. a live cell) that belongs to another
@@ -123,7 +123,7 @@ private:
     mutation_fragment_opt _ready;
 
     stdx::optional<new_mutation> _mutation;
-    bool _is_mutation_end = false;
+    bool _is_mutation_end;
 
     struct column {
         bool is_static;
