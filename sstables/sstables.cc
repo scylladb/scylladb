@@ -1543,8 +1543,7 @@ file_writer components_writer::index_file_writer(sstable& sst, const io_priority
 // Get the currently loaded configuration, or the default configuration in
 // case none has been loaded (this happens, for example, in unit tests).
 static const db::config& get_config() {
-    if (service::get_storage_service().local_is_initialized() &&
-            service::get_local_storage_service().db().local_is_initialized()) {
+    if (service::get_storage_service().local_is_initialized()) {
         return service::get_local_storage_service().db().local().get_config();
     } else {
         static db::config default_config;
