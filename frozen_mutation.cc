@@ -78,12 +78,16 @@ partition_key frozen_mutation::deserialize_key() const {
 frozen_mutation::frozen_mutation(bytes_ostream&& b)
     : _bytes(std::move(b))
     , _pk(deserialize_key())
-{ }
+{
+    _bytes.reduce_chunk_count();
+}
 
 frozen_mutation::frozen_mutation(bytes_ostream&& b, partition_key pk)
     : _bytes(std::move(b))
     , _pk(std::move(pk))
-{ }
+{
+    _bytes.reduce_chunk_count();
+}
 
 frozen_mutation::frozen_mutation(const mutation& m)
     : _pk(m.key())
@@ -97,6 +101,7 @@ frozen_mutation::frozen_mutation(const mutation& m)
                   .partition([&] (auto wr) {
                       part_ser.write(std::move(wr));
                   }).end_mutation();
+    _bytes.reduce_chunk_count();
 }
 
 mutation
