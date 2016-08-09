@@ -1149,6 +1149,7 @@ private:
             auto&& vtype = cf_def.__isset.default_validation_class
                          ? db::marshal::type_parser::parse(to_sstring(cf_def.default_validation_class))
                          : bytes_type;
+            builder.set_default_validator(vtype);
             builder.with_column(to_bytes("value"), std::move(vtype));
         } else {
             // Static CF
