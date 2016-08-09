@@ -323,6 +323,35 @@ public:
         _current->next = nullptr;
         _current->offset = pos._offset;
     }
+
+    bool operator==(const bytes_ostream& other) const {
+        auto as = fragments().begin();
+        auto as_end = fragments().end();
+        auto bs = other.fragments().begin();
+        auto bs_end = other.fragments().end();
+
+        auto a = *as++;
+        auto b = *bs++;
+        while (!a.empty() || !b.empty()) {
+            auto now = std::min(a.size(), b.size());
+            if (!std::equal(a.begin(), a.begin() + now, b.begin(), b.begin() + now)) {
+                return false;
+            }
+            a.remove_prefix(now);
+            if (a.empty() && as != as_end) {
+                a = *as++;
+            }
+            b.remove_prefix(now);
+            if (b.empty() && bs != bs_end) {
+                b = *bs++;
+            }
+        }
+        return true;
+    }
+
+    bool operator!=(const bytes_ostream& other) const {
+        return !(*this == other);
+    }
 };
 
 template<>
