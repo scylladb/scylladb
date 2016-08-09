@@ -53,7 +53,7 @@ private:
 public:
     frozen_mutation(const mutation& m);
     explicit frozen_mutation(bytes_ostream&& b);
-    frozen_mutation(bytes_view bv, partition_key key);
+    frozen_mutation(bytes_ostream&& b, partition_key key);
     frozen_mutation(frozen_mutation&& m) = default;
     frozen_mutation(const frozen_mutation& m) = default;
     frozen_mutation& operator=(frozen_mutation&&) = default;

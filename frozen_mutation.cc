@@ -80,11 +80,10 @@ frozen_mutation::frozen_mutation(bytes_ostream&& b)
     , _pk(deserialize_key())
 { }
 
-frozen_mutation::frozen_mutation(bytes_view bv, partition_key pk)
-    : _pk(std::move(pk))
-{
-    _bytes.write(bv);
-}
+frozen_mutation::frozen_mutation(bytes_ostream&& b, partition_key pk)
+    : _bytes(std::move(b))
+    , _pk(std::move(pk))
+{ }
 
 frozen_mutation::frozen_mutation(const mutation& m)
     : _pk(m.key())
@@ -162,7 +161,7 @@ frozen_mutation streamed_mutation_freezer::consume_end_of_stream() {
                                                    std::move(_sr), std::move(_rts),
                                                    std::move(_crs), std::move(wr));
                   }).end_mutation();
-    return frozen_mutation(out.linearize(), std::move(_key));
+    return frozen_mutation(std::move(out), std::move(_key));
 }
 
 future<frozen_mutation> freeze(streamed_mutation sm) {
@@ -202,7 +201,7 @@ private:
         _rts.clear();
         _crs.clear();
         _dirty_size = 0;
-        return _consumer(frozen_mutation(out.linearize(), _key), _fragmented);
+        return _consumer(frozen_mutation(std::move(out), _key), _fragmented);
     }
 
     future<stop_iteration> maybe_flush() {
