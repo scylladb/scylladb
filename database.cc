@@ -632,7 +632,7 @@ future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sst
     }
 
     return load_sstable(sstables::sstable(
-            _schema->ks_name(), _schema->cf_name(), sstdir, comps.generation,
+            _schema, sstdir, comps.generation,
             comps.version, comps.format)).then_wrapped([fname, comps] (future<> f) {
         try {
             f.get();
@@ -725,7 +725,7 @@ column_family::seal_active_streaming_memtable_immediate() {
 
         _config.streaming_dirty_memory_manager->serialize_flush([this, old] {
           return with_lock(_sstables_lock.for_read(), [this, old] {
-            auto newtab = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(),
+            auto newtab = make_lw_shared<sstables::sstable>(_schema,
                 _config.datadir, calculate_generation_for_new_table(),
                 sstables::sstable::version_types::ka,
                 sstables::sstable::format_types::big);
@@ -780,7 +780,7 @@ future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_bi
     return with_gate(_streaming_flush_gate, [this, old, &smb] {
         return with_gate(smb.flush_in_progress, [this, old, &smb] {
             return with_lock(_sstables_lock.for_read(), [this, old, &smb] {
-                auto newtab = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(),
+                auto newtab = make_lw_shared<sstables::sstable>(_schema,
                                                                 _config.datadir, calculate_generation_for_new_table(),
                                                                 sstables::sstable::version_types::ka,
                                                                 sstables::sstable::format_types::big);
@@ -845,7 +845,7 @@ future<stop_iteration>
 column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
     auto gen = calculate_generation_for_new_table();
 
-    auto newtab = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(),
+    auto newtab = make_lw_shared<sstables::sstable>(_schema,
         _config.datadir, gen,
         sstables::sstable::version_types::ka,
         sstables::sstable::format_types::big);
@@ -934,7 +934,7 @@ future<std::vector<sstables::entry_descriptor>> column_family::flush_upload_dir(
             if (comps.component != sstables::sstable::component_type::TOC) {
                 return make_ready_future<>();
             }
-            auto sst = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(),
+            auto sst = make_lw_shared<sstables::sstable>(_schema,
                                                         _config.datadir + "/upload", comps.generation,
                                                         comps.version, comps.format);
             work.sstables.emplace(comps.generation, std::move(sst));
@@ -989,7 +989,7 @@ column_family::reshuffle_sstables(std::set<int64_t> all_generations, int64_t sta
             if (work.all_generations.count(comps.generation) != 0) {
                 return make_ready_future<>();
             }
-            auto sst = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(),
+            auto sst = make_lw_shared<sstables::sstable>(_schema,
                                                          _config.datadir, comps.generation,
                                                          comps.version, comps.format);
             work.sstables.emplace(comps.generation, std::move(sst));
@@ -1115,7 +1115,7 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
         auto create_sstable = [this] {
                 auto gen = this->calculate_generation_for_new_table();
                 // FIXME: use "tmp" marker in names of incomplete sstable
-                auto sst = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), _config.datadir, gen,
+                auto sst = make_lw_shared<sstables::sstable>(_schema, _config.datadir, gen,
                         sstables::sstable::version_types::ka,
                         sstables::sstable::format_types::big);
                 sst->set_unshared();
@@ -1165,7 +1165,7 @@ future<>
 column_family::load_new_sstables(std::vector<sstables::entry_descriptor> new_tables) {
     return parallel_for_each(new_tables, [this] (auto comps) {
         return this->load_sstable(sstables::sstable(
-                _schema->ks_name(), _schema->cf_name(), _config.datadir,
+                _schema, _config.datadir,
                 comps.generation, comps.version, comps.format), true);
     }).then([this] {
         start_rewrite();

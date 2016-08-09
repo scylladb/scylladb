@@ -43,7 +43,7 @@ thread_local disk_error_signal_type general_disk_error;
 using namespace sstables;
 
 SEASTAR_TEST_CASE(nonexistent_key) {
-    return reusable_sst("tests/sstables/uncompressed", 1).then([] (auto sstp) {
+    return reusable_sst(uncompressed_schema(), "tests/sstables/uncompressed", 1).then([] (auto sstp) {
         return do_with(key::from_bytes(to_bytes("invalid_key")), [sstp] (auto& key) {
             auto s = uncompressed_schema();
             return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
@@ -55,7 +55,7 @@ SEASTAR_TEST_CASE(nonexistent_key) {
 }
 
 future<> test_no_clustered(bytes&& key, std::unordered_map<bytes, data_value> &&map) {
-    return reusable_sst("tests/sstables/uncompressed", 1).then([k = std::move(key), map = std::move(map)] (auto sstp) mutable {
+    return reusable_sst(uncompressed_schema(), "tests/sstables/uncompressed", 1).then([k = std::move(key), map = std::move(map)] (auto sstp) mutable {
         return do_with(sstables::key(std::move(k)), [sstp, map = std::move(map)] (auto& key) {
             auto s = uncompressed_schema();
             return sstp->read_row(s, key).then([] (auto sm) {
@@ -123,7 +123,7 @@ SEASTAR_TEST_CASE(uncompressed_4) {
 // FIXME: we are lacking a full deletion test
 template <int Generation>
 future<mutation> generate_clustered(bytes&& key) {
-    return reusable_sst("tests/sstables/complex", Generation).then([k = std::move(key)] (auto sstp) mutable {
+    return reusable_sst(complex_schema(), "tests/sstables/complex", Generation).then([k = std::move(key)] (auto sstp) mutable {
         return do_with(sstables::key(std::move(k)), [sstp] (auto& key) {
             auto s = complex_schema();
             return sstp->read_row(s, key).then([] (auto sm) {
@@ -306,7 +306,7 @@ SEASTAR_TEST_CASE(complex_sst3_k2) {
 }
 
 future<> test_range_reads(const dht::token& min, const dht::token& max, std::vector<bytes>& expected) {
-    return reusable_sst("tests/sstables/uncompressed", 1).then([min, max, &expected] (auto sstp) mutable {
+    return reusable_sst(uncompressed_schema(), "tests/sstables/uncompressed", 1).then([min, max, &expected] (auto sstp) mutable {
         auto s = uncompressed_schema();
         auto count = make_lw_shared<size_t>(0);
         auto expected_size = expected.size();
@@ -366,7 +366,7 @@ SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
 
         run_mutation_source_tests([&dirs] (schema_ptr s, const std::vector<mutation>& partitions) -> mutation_source {
             tmpdir sstable_dir;
-            auto sst = make_lw_shared<sstables::sstable>("ks", "cf",
+            auto sst = make_lw_shared<sstables::sstable>(s,
                 sstable_dir.path,
                 1 /* generation */,
                 sstables::sstable::version_types::la,
@@ -404,7 +404,7 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
         auto mt = make_lw_shared<memtable>(s);
         mt->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstables::sstable>("ks", "cf",
+        auto sst = make_lw_shared<sstables::sstable>(s,
                 dir->path,
                 1 /* generation */,
                 sstables::sstable::version_types::la,
@@ -428,7 +428,7 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
 }
 
 SEASTAR_TEST_CASE(compact_storage_sparse_read) {
-    return reusable_sst("tests/sstables/compact_sparse", 1).then([] (auto sstp) {
+    return reusable_sst(compact_sparse_schema(), "tests/sstables/compact_sparse", 1).then([] (auto sstp) {
         return do_with(sstables::key("first_row"), [sstp] (auto& key) {
             auto s = compact_sparse_schema();
             return sstp->read_row(s, key).then([] (auto sm) {
@@ -445,7 +445,7 @@ SEASTAR_TEST_CASE(compact_storage_sparse_read) {
 }
 
 SEASTAR_TEST_CASE(compact_storage_simple_dense_read) {
-    return reusable_sst("tests/sstables/compact_simple_dense", 1).then([] (auto sstp) {
+    return reusable_sst(compact_simple_dense_schema(), "tests/sstables/compact_simple_dense", 1).then([] (auto sstp) {
         return do_with(sstables::key("first_row"), [sstp] (auto& key) {
             auto s = compact_simple_dense_schema();
             return sstp->read_row(s, key).then([] (auto sm) {
@@ -465,7 +465,7 @@ SEASTAR_TEST_CASE(compact_storage_simple_dense_read) {
 }
 
 SEASTAR_TEST_CASE(compact_storage_dense_read) {
-    return reusable_sst("tests/sstables/compact_dense", 1).then([] (auto sstp) {
+    return reusable_sst(compact_dense_schema(), "tests/sstables/compact_dense", 1).then([] (auto sstp) {
         return do_with(sstables::key("first_row"), [sstp] (auto& key) {
             auto s = compact_dense_schema();
             return sstp->read_row(s, key).then([] (auto sm) {
@@ -489,7 +489,7 @@ SEASTAR_TEST_CASE(compact_storage_dense_read) {
 //
 // Make sure we don't regress on that.
 SEASTAR_TEST_CASE(broken_ranges_collection) {
-    return reusable_sst("tests/sstables/broken_ranges", 2).then([] (auto sstp) {
+    return reusable_sst(peers_schema(), "tests/sstables/broken_ranges", 2).then([] (auto sstp) {
         auto s = peers_schema();
         auto reader = make_lw_shared<::mutation_reader>(as_mutation_reader(sstp, sstp->read_rows(s)));
         return repeat([s, reader] {
@@ -542,8 +542,8 @@ static schema_ptr tombstone_overlap_schema() {
 }
 
 
-static future<sstable_ptr> ka_sst(sstring ks, sstring cf, sstring dir, unsigned long generation) {
-    auto sst = make_lw_shared<sstable>(ks, cf, dir, generation, sstables::sstable::version_types::ka, big);
+static future<sstable_ptr> ka_sst(schema_ptr schema, sstring dir, unsigned long generation) {
+    auto sst = make_lw_shared<sstable>(std::move(schema), dir, generation, sstables::sstable::version_types::ka, big);
     auto fut = sst->load();
     return std::move(fut).then([sst = std::move(sst)] {
         return make_ready_future<sstable_ptr>(std::move(sst));
@@ -557,7 +557,7 @@ static future<sstable_ptr> ka_sst(sstring ks, sstring cf, sstring dir, unsigned 
 //                ["aaa:bbb:!","aaa:!",1459334681228103,"t",1459334681]]}
 //               ]
 SEASTAR_TEST_CASE(tombstone_in_tombstone) {
-    return ka_sst("try1", "tab", "tests/sstables/tombstone_overlap", 1).then([] (auto sstp) {
+    return ka_sst(tombstone_overlap_schema(), "tests/sstables/tombstone_overlap", 1).then([] (auto sstp) {
         auto s = tombstone_overlap_schema();
         return do_with(sstp->read_rows(s), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
@@ -622,7 +622,7 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone) {
 // We're not sure how this sort of sstable can be generated with Cassandra 2's
 // CQL, but we saw a similar thing is a real use case.
 SEASTAR_TEST_CASE(range_tombstone_reading) {
-    return ka_sst("try1", "tab", "tests/sstables/tombstone_overlap", 4).then([] (auto sstp) {
+    return ka_sst(tombstone_overlap_schema(), "tests/sstables/tombstone_overlap", 4).then([] (auto sstp) {
         auto s = tombstone_overlap_schema();
         return do_with(sstp->read_rows(s), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
@@ -703,7 +703,7 @@ SEASTAR_TEST_CASE(range_tombstone_reading) {
 //        ["aaa:bbb:!","aaa:!",1459438519943668,"t",1459438519]]}
 static schema_ptr tombstone_overlap_schema2() {
     static thread_local auto s = [] {
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id("try1", "tab"), "try1", "tab",
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("try1", "tab2"), "try1", "tab2",
         // partition key
         {{"pk", utf8_type}},
         // clustering key
@@ -722,7 +722,7 @@ static schema_ptr tombstone_overlap_schema2() {
     return s;
 }
 SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
-    return ka_sst("try1", "tab2", "tests/sstables/tombstone_overlap", 3).then([] (auto sstp) {
+    return ka_sst(tombstone_overlap_schema2(), "tests/sstables/tombstone_overlap", 3).then([] (auto sstp) {
         auto s = tombstone_overlap_schema2();
         return do_with(sstp->read_rows(s), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
@@ -813,7 +813,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
         auto mt = make_lw_shared<memtable>(s);
         mt->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstables::sstable>("ks", "cf",
+        auto sst = make_lw_shared<sstables::sstable>(s,
                                 dir->path,
                                 1 /* generation */,
                                 sstables::sstable::version_types::ka,

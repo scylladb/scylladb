@@ -799,7 +799,7 @@ void sstable::write_toc(const io_priority_class& pc) {
         // the generation of a sstable that exists.
         f.close().get();
         remove_file(file_path).get();
-        throw std::runtime_error(sprint("SSTable write failed due to existence of TOC file for generation %ld of %s.%s", _generation, _ks, _cf));
+        throw std::runtime_error(sprint("SSTable write failed due to existence of TOC file for generation %ld of %s.%s", _generation, _schema->ks_name(), _schema->cf_name()));
     }
 
     file_output_stream_options options;
@@ -842,7 +842,7 @@ future<> sstable::seal_sstable() {
             return sstable_write_io_check([&] { return dir_f.close(); });
         }).then([this, dir_f] {
             // If this point was reached, sstable should be safe in disk.
-            sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", _generation, _ks, _cf);
+            sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", _generation, _schema->ks_name(), _schema->cf_name());
         });
     });
 }
@@ -1867,7 +1867,7 @@ const bool sstable::has_component(component_type f) const {
 }
 
 const sstring sstable::filename(component_type f) const {
-    return filename(_dir, _ks, _cf, _version, _generation, _format, f);
+    return filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
 }
 
 std::vector<sstring> sstable::component_filenames() const {
@@ -1901,7 +1901,7 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
 
 future<> sstable::create_links(sstring dir, int64_t generation) const {
     // TemporaryTOC is always first, TOC is always last
-    auto dst = sstable::filename(dir, _ks, _cf, _version, generation, _format, component_type::TemporaryTOC);
+    auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
     return sstable_write_io_check(::link_file, filename(component_type::TOC), dst).then([dir] {
         return sstable_write_io_check(sync_directory, dir);
     }).then([this, dir, generation] {
@@ -1910,14 +1910,14 @@ future<> sstable::create_links(sstring dir, int64_t generation) const {
             if (comp == component_type::TOC) {
                 return make_ready_future<>();
             }
-            auto dst = sstable::filename(dir, _ks, _cf, _version, generation, _format, comp);
+            auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, comp);
             return sstable_write_io_check(::link_file, this->filename(comp), dst);
         });
     }).then([dir] {
         return sstable_write_io_check(sync_directory, dir);
     }).then([dir, this, generation] {
-        auto src = sstable::filename(dir, _ks, _cf, _version, generation, _format, component_type::TemporaryTOC);
-        auto dst = sstable::filename(dir, _ks, _cf, _version, generation, _format, component_type::TOC);
+        auto src = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
+        auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TOC);
         return sstable_write_io_check([&] {
             return engine().rename_file(src, dst);
         });
@@ -2296,8 +2296,8 @@ sstable::get_sstable_key_range(const schema& s) {
     });
 }
 
-void sstable::mark_sstable_for_deletion(sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f) {
-    auto sst = sstable(ks, cf, dir, generation, v, f);
+void sstable::mark_sstable_for_deletion(const schema_ptr& schema, sstring dir, int64_t generation, version_types v, format_types f) {
+    auto sst = sstable(schema, dir, generation, v, f);
     sst.mark_for_deletion();
 }
 
