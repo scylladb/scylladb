@@ -141,7 +141,7 @@ SEASTAR_TEST_CASE(test_queue_ordering_multi_ops) {
 template<typename Func, typename Post, typename Then>
 static future<> test_propagation(bool propagate, Func&& func, Post&& post, Then&& thn, bool want_except_in_run, bool want_except_in_wait) {
     auto queue = ::make_shared<utils::flush_queue<int>>(propagate);
-    auto sem = ::make_shared<semaphore>();
+    auto sem = ::make_shared<semaphore>(0);
     auto xr = ::make_shared<bool>(false);
     auto xw = ::make_shared<bool>(false);
 
