@@ -1065,16 +1065,16 @@ private:
             }
             cf_def.__set_comment(s->comment());
             cf_def.__set_read_repair_chance(s->read_repair_chance());
+            std::vector<ColumnDef> columns;
             if (!s->thrift().is_dynamic()) {
-                std::vector<ColumnDef> columns;
                 for (auto&& c : s->regular_columns()) {
                     ColumnDef c_def;
                     c_def.__set_name(c.name_as_text());
                     c_def.__set_validation_class(c.type->name());
                     columns.emplace_back(std::move(c_def));
                 }
-                cf_def.__set_column_metadata(columns);
             }
+            cf_def.__set_column_metadata(columns);
             cf_def.__set_gc_grace_seconds(s->gc_grace_seconds().count());
             cf_def.__set_default_validation_class(s->default_validator()->name());
             cf_def.__set_min_compaction_threshold(s->min_compaction_threshold());
