@@ -1591,10 +1591,10 @@ private:
     template<typename RangeType, typename Comparator>
     static std::vector<range<RangeType>> make_non_overlapping_ranges(
             std::vector<ColumnSlice> column_slices,
-            const std::function<range<RangeType>(ColumnSlice&&)> mapper,
-            const Comparator&& cmp,
+            const std::function<wrapping_range<RangeType>(ColumnSlice&&)> mapper,
+            Comparator&& cmp,
             bool reversed) {
-        std::vector<range<RangeType>> ranges;
+        std::vector<nonwrapping_range<RangeType>> ranges;
         std::transform(column_slices.begin(), column_slices.end(), std::back_inserter(ranges), [&](auto&& cslice) {
             auto range = mapper(std::move(cslice));
             if (!reversed && range.is_wrap_around(cmp)) {
@@ -1603,10 +1603,18 @@ private:
                 throw make_exception<InvalidRequestException>("Reversed column slice had start %s less than finish %s", cslice.start, cslice.finish);
             } else if (reversed) {
                 range.reverse();
+                if (range.is_wrap_around(cmp)) {
+                    // If a wrap around range is still wrapping after reverse, then it's (a, a). This is equivalent
+                    // to an open ended range.
+                    range = wrapping_range<RangeType>::make_open_ended_both_sides();
+                }
             }
-            return range;
+            return nonwrapping_range<RangeType>(std::move(range));
         });
-        return range<RangeType>::deoverlap(std::move(ranges), cmp);
+        auto deoverlapped = nonwrapping_range<RangeType>::deoverlap(std::move(ranges), std::forward<Comparator>(cmp));
+        std::vector<wrapping_range<RangeType>> ret;
+        std::move(deoverlapped.begin(), deoverlapped.end(), std::back_inserter(ret));
+        return ret;
     }
     static range_tombstone make_range_tombstone(const schema& s, const SliceRange& range, tombstone tomb) {
         using bound = query::clustering_range::bound;
