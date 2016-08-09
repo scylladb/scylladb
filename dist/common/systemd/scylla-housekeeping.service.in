@@ -5,7 +5,7 @@ Description=Scylla Housekeeping
 Type=simple
 User=scylla
 Group=scylla
-ExecStart=/usr/lib/scylla/scylla-housekeeping -q version
+ExecStart=/usr/lib/scylla/scylla-housekeeping -q -c /etc/scylla.d/housekeeping.conf version
 
 [Install]
 WantedBy=multi-user.target
