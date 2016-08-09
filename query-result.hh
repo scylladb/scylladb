@@ -105,8 +105,12 @@ public:
     friend class result_merger;
 
     result();
-    result(bytes_ostream&& w, stdx::optional<uint32_t> c = {}) : _w(std::move(w)), _row_count(c) {}
-    result(bytes_ostream&& w, stdx::optional<result_digest> d, api::timestamp_type last_modified, stdx::optional<uint32_t> c = {}) : _w(std::move(w)), _digest(d), _row_count(c), _last_modified(last_modified) {}
+    result(bytes_ostream&& w, stdx::optional<uint32_t> c = {}) : _w(std::move(w)), _row_count(c) {
+        w.reduce_chunk_count();
+    }
+    result(bytes_ostream&& w, stdx::optional<result_digest> d, api::timestamp_type last_modified, stdx::optional<uint32_t> c = {}) : _w(std::move(w)), _digest(d), _row_count(c), _last_modified(last_modified) {
+        w.reduce_chunk_count();
+    }
     result(result&&) = default;
     result(const result&) = default;
     result& operator=(result&&) = default;
