@@ -819,12 +819,10 @@ sstables::sstable::find_disk_ranges(
                 // look in the same promoted index several times it might have
                 // made sense to build an array of key starts so we can do a
                 // binary search. We could do this once we have a key cache.
-                bool has_range_start = bool(ck_ranges[0].start());
-                auto range_start = ck_ranges[0].start()->value();
+                auto& range_start = ck_ranges[0].start();
                 bool found_range_start = false;
                 uint64_t range_start_pos;
-                bool has_range_end = bool(ck_ranges[0].end());
-                auto range_end = ck_ranges[0].end()->value();
+                auto& range_end = ck_ranges[0].end();
 
                 auto cmp = clustering_key_prefix::tri_compare(*schema);
                 while (num_blocks--) {
@@ -861,19 +859,19 @@ sstables::sstable::find_disk_ranges(
                     uint64_t offset = consume_be<uint64_t>(data);
                     uint64_t width = consume_be<uint64_t>(data);
                     if (!found_range_start) {
-                        if (!has_range_start || cmp(range_start, end_ck) <= 0) {
+                        if (!range_start || cmp(range_start->value(), end_ck) <= 0) {
                             range_start_pos = ie.position() + offset;
                             found_range_start = true;
                         }
                     }
                     bool found_range_end = false;
                     uint64_t range_end_pos;
-                    if (has_range_end) {
-                        if (cmp(range_end, start_ck) < 0) {
+                    if (range_end) {
+                        if (cmp(range_end->value(), start_ck) < 0) {
                             // this block is already past the range_end
                             found_range_end = true;
                             range_end_pos = ie.position() + offset;
-                        } else if (cmp(range_end, end_ck) < 0 || num_blocks == 0) {
+                        } else if (cmp(range_end->value(), end_ck) < 0 || num_blocks == 0) {
                             // range_end is in the middle of this block.
                             // Note the strict inequality above is important:
                             // if range_end==end_ck the next block may contain
@@ -882,7 +880,7 @@ sstables::sstable::find_disk_ranges(
                             range_end_pos = ie.position() + offset + width;
                         }
                     } else if (num_blocks == 0) {
-                        // When !has_range_end, read until the last block.
+                        // When !range_end, read until the last block.
                         // In this case we could have also found the end of
                         // the partition using the index.
                         found_range_end = true;
