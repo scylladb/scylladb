@@ -220,6 +220,7 @@ scylla_tests = [
     'tests/range_tombstone_list_test',
     'tests/anchorless_list_test',
     'tests/database_test',
+    'tests/nonwrapping_range_test',
 ]
 
 apps = [
@@ -589,6 +590,7 @@ tests_not_using_seastar_test_framework = set([
     'tests/idl_test',
     'tests/range_tombstone_list_test',
     'tests/anchorless_list_test',
+    'tests/nonwrapping_range_test',
 ])
 
 for t in tests_not_using_seastar_test_framework:
