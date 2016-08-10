@@ -1047,7 +1047,8 @@ future<> sstable::create_data() {
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
     file_open_options opt;
     opt.extent_allocation_size_hint = 32 << 20;
-    return when_all(new_sstable_component_file(sstable_write_error, filename(component_type::Index), oflags),
+    opt.sloppy_size = true;
+    return when_all(new_sstable_component_file(sstable_write_error, filename(component_type::Index), oflags, opt),
                     new_sstable_component_file(sstable_write_error, filename(component_type::Data), oflags, opt)).then([this] (auto files) {
         // FIXME: If both files could not be created, the first get below will
         // throw an exception, and second get() will not be attempted, and
@@ -1535,6 +1536,7 @@ file_writer components_writer::index_file_writer(sstable& sst, const io_priority
     file_output_stream_options options;
     options.buffer_size = sst.sstable_buffer_size;
     options.io_priority_class = pc;
+    options.write_behind = 10;
     return file_writer(sst._index_file, std::move(options));
 }
 
@@ -1709,6 +1711,7 @@ void sstable_writer::prepare_file_writer()
     file_output_stream_options options;
     options.io_priority_class = _pc;
     options.buffer_size = _sst.sstable_buffer_size;
+    options.write_behind = 10;
 
     if (!_compression_enabled) {
         _writer = make_shared<checksummed_file_writer>(_sst._data_file, std::move(options), true);
