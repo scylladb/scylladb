@@ -51,6 +51,7 @@ private:
         RANGE_TOMBSTONE_3,
         RANGE_TOMBSTONE_4,
         RANGE_TOMBSTONE_5,
+        STOP_THEN_ATOM_START,
     } _state = state::ROW_START;
 
     row_consumer& _consumer;
@@ -62,6 +63,7 @@ private:
     bool _deleted;
     uint32_t _ttl, _expiration;
 
+    bool _read_partial_row = false;
 
 public:
     bool non_consuming() const {
@@ -69,6 +71,7 @@ public:
                 || (_state == state::CELL_VALUE_BYTES_2)
                 || (_state == state::ATOM_START_2)
                 || (_state == state::ATOM_MASK_2)
+                || (_state == state::STOP_THEN_ATOM_START)
                 || (_state == state::EXPIRING_CELL_3)) && (_prestate == prestate::NONE));
     }
 
@@ -319,6 +322,9 @@ public:
             }
             break;
         }
+        case state::STOP_THEN_ATOM_START:
+            _state = state::ATOM_START;
+            return row_consumer::proceed::no;
         default:
             throw malformed_sstable_exception("unknown state");
         }
@@ -327,12 +333,42 @@ public:
     }
 
     data_consume_rows_context(row_consumer& consumer,
-            input_stream<char> && input, uint64_t maxlen) :
-            continuous_data_consumer(std::move(input), maxlen)
-            , _consumer(consumer) {
+            input_stream<char> && input, uint64_t maxlen,
+            std::experimental::optional<sstable::disk_read_range::row_info> ri = {})
+                : continuous_data_consumer(std::move(input), maxlen)
+                , _consumer(consumer) {
+        // If the "ri" option is given, we are reading a partition from the
+        // middle (in the beginning of an atom), as would happen when we use
+        // the "promoted index" to skip closer to where a particular column
+        // starts. When we start in the middle of the partition, we will not
+        // read the key nor the tombstone from the disk, so the caller needs
+        // to provide them (the tombstone is provided in the promoted index
+        // exactly for that reason).
+        if (ri) {
+            _read_partial_row = true;
+            auto ret = _consumer.consume_row_start(ri->k, ri->deltime);
+            if (ret == row_consumer::proceed::yes) {
+                _state = state::ATOM_START;
+            } else {
+                // If we were asked to stop parsing after consuming the row
+                // start, we can't go to ATOM_START, need to use a new state
+                // which stops parsing, and continues at ATOM_START later.
+                _state = state::STOP_THEN_ATOM_START;
+            }
+        }
     }
 
     void verify_end_state() {
+        if (_read_partial_row) {
+            // If reading a partial row (i.e., when we have a clustering row
+            // filter and using a promoted index), we may be in ATOM_START
+            // state instead of ROW_START. In that case we did not read the
+            // end-of-row marker and consume_row_end() was never called.
+            if (_state == state::ATOM_START) {
+                _consumer.consume_row_end();
+                return;
+            }
+        }
         if (_state != state::ROW_START || _prestate != prestate::NONE) {
             throw malformed_sstable_exception("end of input, but not end of row");
         }
@@ -349,9 +385,10 @@ private:
     shared_sstable _sst;
     std::unique_ptr<data_consume_rows_context> _ctx;
 public:
-    impl(shared_sstable sst, row_consumer& consumer, input_stream<char>&& input, uint64_t maxlen)
+    impl(shared_sstable sst, row_consumer& consumer, input_stream<char>&& input, uint64_t maxlen,
+             std::experimental::optional<sstable::disk_read_range::row_info> ri)
         : _sst(std::move(sst))
-        , _ctx(new data_consume_rows_context(consumer, std::move(input), maxlen))
+        , _ctx(new data_consume_rows_context(consumer, std::move(input), maxlen, ri))
     { }
     ~impl() {
         if (_ctx) {
@@ -378,18 +415,19 @@ future<> data_consume_context::read() {
 }
 
 data_consume_context sstable::data_consume_rows(
-        row_consumer& consumer, uint64_t start, uint64_t end) {
+        row_consumer& consumer, sstable::disk_read_range toread) {
     // TODO: The second "end - start" below is redundant: The first one tells
     // data_stream() to stop at the "end" byte, which allows optimal read-
     // ahead and avoiding over-read at the end. The second one tells the
     // consumer to stop at exactly the same place, and forces the consumer
     // to maintain its own byte count.
     return std::make_unique<data_consume_context::impl>(shared_from_this(),
-            consumer, data_stream(start, end - start, consumer.io_priority()), end - start);
+            consumer, data_stream(toread.start, toread.end - toread.start,
+                consumer.io_priority()), toread.end - toread.start, toread.ri);
 }
 
 data_consume_context sstable::data_consume_rows(row_consumer& consumer) {
-    return data_consume_rows(consumer, 0, data_size());
+    return data_consume_rows(consumer, {0, data_size()});
 }
 
 future<> sstable::data_consume_rows_at_once(row_consumer& consumer,

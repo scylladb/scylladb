@@ -10,6 +10,9 @@ class ScyllaSetup:
         self._cpuset = arguments.cpuset
         self._broadcastAddress = arguments.broadcastAddress
         self._broadcastRpcAddress = arguments.broadcastRpcAddress
+        self._smp = arguments.smp
+        self._memory = arguments.memory
+        self._overprovisioned = arguments.overprovisioned
 
     def _run(self, *args, **kwargs):
         logging.info('running: {}'.format(args))
@@ -49,3 +52,14 @@ class ScyllaSetup:
         hostname = subprocess.check_output(['hostname', '-i']).decode('ascii').strip()
         with open("%s/.cqlshrc" % home, "w") as cqlshrc:
             cqlshrc.write("[connection]\nhostname = %s\n" % hostname)
+
+    def arguments(self):
+        args = ""
+        if self._memory is not None:
+            args += "--memory %s" % self._memory
+        if self._smp is not None:
+            args += " --smp %s" % self._smp
+        if self._overprovisioned == "1":
+            args += " --overprovisioned"
+        with open("/etc/scylla.d/docker.conf", "w") as cqlshrc:
+            cqlshrc.write("SCYLLA_DOCKER_ARGS=\"%s\"\n" % args)

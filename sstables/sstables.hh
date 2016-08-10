@@ -155,6 +155,41 @@ public:
     // object lives until then (e.g., using the do_with() idiom).
     future<> data_consume_rows_at_once(row_consumer& consumer, uint64_t pos, uint64_t end);
 
+    // disk_read_range describes a byte ranges covering part of an sstable
+    // row that we need to read from disk. Usually this is the whole byte
+    // range covering a single sstable row, but in very large rows we might
+    // want to only read a subset of the atoms which we know contains the
+    // columns we are looking for. When the range to be read does NOT include
+    // the entire row, the caller needs to supply the optional "row_info"
+    // containing information about the entire row (key and deletion time)
+    // which is normally read from the beginning of the row.
+    struct disk_read_range {
+        // TODO: this should become a vector of ranges
+        uint64_t start;
+        uint64_t end;
+        // When the range above does not cover the beginning of the sstable
+        // row, we need to supply information which is only available at the
+        // beginning of the row - the row's key and its tombstone if any.
+        struct row_info {
+            key k;
+            deletion_time deltime;
+        };
+        std::experimental::optional<row_info> ri;
+        disk_read_range() : start(0), end(0) {}
+        disk_read_range(uint64_t start, uint64_t end) :
+            start(start), end(end) { }
+        disk_read_range(uint64_t start, uint64_t end, const key& key, const deletion_time& deltime) :
+            start(start), end(end), ri(row_info{key, deltime}) { }
+        explicit operator bool() const {
+            return start != end;
+        }
+        // found_row() is true if the row was found. This is not the same as
+        // operator bool(): It is possible that found_row() but the promoted
+        // index ruled out anything to read (in this case "ri" was set).
+        bool found_row() const {
+            return start != end || ri;
+        }
+    };
 
     // data_consume_rows() iterates over rows in the data file from
     // a particular range, feeding them into the consumer. The iteration is
@@ -172,7 +207,7 @@ public:
     // The caller must ensure (e.g., using do_with()) that the context object,
     // as well as the sstable, remains alive as long as a read() is in
     // progress (i.e., returned a future which hasn't completed yet).
-    data_consume_context data_consume_rows(row_consumer& consumer, uint64_t start, uint64_t end);
+    data_consume_context data_consume_rows(row_consumer& consumer, disk_read_range toread);
 
     // Like data_consume_rows() with bounds, but iterates over whole range
     data_consume_context data_consume_rows(row_consumer& consumer);
@@ -491,6 +526,19 @@ private:
     //
     // The ring_position doesn't have to survive deferring.
     future<uint64_t> upper_bound(schema_ptr, const dht::ring_position&, const io_priority_class& pc);
+
+    // find_disk_ranges finds the ranges of bytes we need to read from the
+    // sstable to read the desired columns out of the given key. This range
+    // may be the entire byte range of the given partition - as found using
+    // the summary and index files - but if the index contains a "promoted
+    // index" (a sample of column positions for each key) it may be a smaller
+    // range. The returned range may contain columns beyond those requested
+    // in ck_filtering, so it is the reader's duty to use ck_filtering again
+    // when parsing the data read from the returned range.
+    future<disk_read_range> find_disk_ranges(schema_ptr schema,
+            const sstables::key& key,
+            query::clustering_key_filtering_context ck_filtering,
+            const io_priority_class& pc);
 
     future<summary_entry&> read_summary_entry(size_t i);
 

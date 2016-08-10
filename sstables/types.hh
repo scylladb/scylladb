@@ -82,6 +82,10 @@ public:
         return _position;
     }
 
+    bytes_view get_promoted_index_bytes() const {
+        return to_bytes_view(_promoted_index);
+    }
+
     index_entry(temporary_buffer<char>&& key, uint64_t position, temporary_buffer<char>&& promoted_index)
         : _key(std::move(key)), _position(position), _promoted_index(std::move(promoted_index)) {}
 
