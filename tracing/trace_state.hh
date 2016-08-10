@@ -53,14 +53,12 @@ namespace tracing {
 extern logging::logger trace_state_logger;
 
 class trace_state final {
-    using clock_type = std::chrono::steady_clock;
-
 private:
     lw_shared_ptr<one_session_records> _records;
     bool _write_on_close;
     // Used for calculation of time passed since the beginning of a tracing
     // session till each tracing event.
-    clock_type::time_point _start;
+    elapsed_clock::time_point _start;
     // TRUE for a primary trace_state object
     bool _primary;
     bool _tracing_began = false;
@@ -132,12 +130,11 @@ public:
 
 private:
     /**
-     * Returns the number of microseconds passed since the beginning of this
-     * tracing session.
+     * Returns the amount of time passed since the beginning of this tracing session.
      *
-     * @return number of microseconds passed since the beginning of this session
+     * @return the amount of time passed since the beginning of this session
      */
-    int elapsed();
+    elapsed_clock::duration elapsed();
 
     /**
      * Initiates a tracing session.
@@ -147,7 +144,7 @@ private:
      */
     void begin() {
         std::atomic_signal_fence(std::memory_order::memory_order_seq_cst);
-        _start = clock_type::now();
+        _start = elapsed_clock::now();
         std::atomic_signal_fence(std::memory_order::memory_order_seq_cst);
         _tracing_began = true;
     }
@@ -348,15 +345,11 @@ void trace_state::trace(const char* fmt, A&&... a) {
     }
 }
 
-inline int trace_state::elapsed() {
+inline elapsed_clock::duration trace_state::elapsed() {
     using namespace std::chrono;
     std::atomic_signal_fence(std::memory_order::memory_order_seq_cst);
-    auto elapsed = duration_cast<microseconds>(clock_type::now() - _start).count();
+    elapsed_clock::duration elapsed = elapsed_clock::now() - _start;
     std::atomic_signal_fence(std::memory_order::memory_order_seq_cst);
-
-    if (elapsed > std::numeric_limits<int>::max()) {
-        return std::numeric_limits<int>::max();
-    }
 
     return elapsed;
 }

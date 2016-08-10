@@ -51,6 +51,8 @@
 
 namespace tracing {
 
+using elapsed_clock = std::chrono::steady_clock;
+
 extern logging::logger tracing_logger;
 
 class trace_state;
@@ -138,10 +140,10 @@ private:
 
 struct event_record {
     sstring message;
-    int elapsed;
+    elapsed_clock::duration elapsed;
     i_tracing_backend_helper::wall_clock::time_point event_time_point;
 
-    event_record(sstring message_, int elapsed_, i_tracing_backend_helper::wall_clock::time_point event_time_point_)
+    event_record(sstring message_, elapsed_clock::duration elapsed_, i_tracing_backend_helper::wall_clock::time_point event_time_point_)
         : message(std::move(message_))
         , elapsed(elapsed_)
         , event_time_point(event_time_point_) {}
@@ -153,10 +155,12 @@ struct session_record {
     sstring request;
     std::chrono::system_clock::time_point started_at;
     trace_type command = trace_type::NONE;
-    int elapsed = -1;
+    elapsed_clock::duration elapsed;
+
+    session_record() : elapsed(-1) {}
 
     bool ready() const {
-        return elapsed >= 0;
+        return elapsed.count() >= 0;
     }
 };
 
