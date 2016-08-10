@@ -3024,3 +3024,95 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
         check_min_max_column_names(new_sstables.front(), { "0ck100" }, { "9ck298" });
     });
 }
+
+SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "cf")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("ck1", utf8_type, column_kind::clustering_key)
+            .with_column("r1", int32_type)
+            .build();
+        auto tmp = make_lw_shared<tmpdir>();
+        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+        auto c_key = exploded_clustering_prefix({to_bytes("c1") });
+        const column_definition& r1_col = *s->get_column_definition("r1");
+
+        {
+            auto mt = make_lw_shared<memtable>(s);
+            mutation m(key, s);
+            tombstone tomb(api::new_timestamp(), gc_clock::now());
+            m.partition().apply_delete(*s, c_key, tomb);
+            mt->apply(std::move(m));
+            auto sst = make_lw_shared<sstable>(s, tmp->path, 1, la, big);
+            sst->write_components(*mt).get();
+            sst = reusable_sst(s, tmp->path, 1).get0();
+            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.map.size());
+        }
+
+        {
+            auto mt = make_lw_shared<memtable>(s);
+            mutation m(key, s);
+            m.set_clustered_cell(c_key, r1_col, make_dead_atomic_cell(3600));
+            mt->apply(std::move(m));
+            auto sst = make_lw_shared<sstable>(s, tmp->path, 2, la, big);
+            sst->write_components(*mt).get();
+            sst = reusable_sst(s, tmp->path, 2).get0();
+            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.map.size());
+        }
+
+        {
+            auto mt = make_lw_shared<memtable>(s);
+            mutation m(key, s);
+            m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
+            mt->apply(std::move(m));
+            auto sst = make_lw_shared<sstable>(s, tmp->path, 3, la, big);
+            sst->write_components(*mt).get();
+            sst = reusable_sst(s, tmp->path, 3).get0();
+            BOOST_REQUIRE(!sst->get_stats_metadata().estimated_tombstone_drop_time.bin.map.size());
+        }
+
+        {
+            auto mt = make_lw_shared<memtable>(s);
+
+            mutation m(key, s);
+            tombstone tomb(api::new_timestamp(), gc_clock::now());
+            m.partition().apply_delete(*s, c_key, tomb);
+            mt->apply(std::move(m));
+
+            auto key2 = partition_key::from_exploded(*s, {to_bytes("key2")});
+            mutation m2(key2, s);
+            m2.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
+            mt->apply(std::move(m2));
+
+            auto sst = make_lw_shared<sstable>(s, tmp->path, 4, la, big);
+            sst->write_components(*mt).get();
+            sst = reusable_sst(s, tmp->path, 4).get0();
+            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.map.size());
+        }
+
+        {
+            auto mt = make_lw_shared<memtable>(s);
+            mutation m(key, s);
+            tombstone tomb(api::new_timestamp(), gc_clock::now());
+            m.partition().apply(tomb);
+            mt->apply(std::move(m));
+            auto sst = make_lw_shared<sstable>(s, tmp->path, 5, la, big);
+            sst->write_components(*mt).get();
+            sst = reusable_sst(s, tmp->path, 5).get0();
+            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.map.size());
+        }
+
+        {
+            auto mt = make_lw_shared<memtable>(s);
+            mutation m(key, s);
+            tombstone tomb(api::new_timestamp(), gc_clock::now());
+            range_tombstone rt(clustering_key_prefix::from_single_value(*s, bytes("a")), clustering_key_prefix::from_single_value(*s, bytes("a")), tomb);
+            m.partition().apply_delete(*s, std::move(rt));
+            mt->apply(std::move(m));
+            auto sst = make_lw_shared<sstable>(s, tmp->path, 6, la, big);
+            sst->write_components(*mt).get();
+            sst = reusable_sst(s, tmp->path, 6).get0();
+            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.map.size());
+        }
+    });
+}
