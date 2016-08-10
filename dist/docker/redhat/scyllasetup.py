@@ -35,7 +35,10 @@ class ScyllaSetup:
         configuration['listen_address'] = IP
         configuration['rpc_address'] = IP
         if self._seeds is None:
-            self._seeds = IP
+            if self._broadcastAddress is not None:
+                self._seeds = self._broadcastAddress
+            else:
+                self._seeds = IP
         configuration['seed_provider'] = [
                 {'class_name': 'org.apache.cassandra.locator.SimpleSeedProvider',
                  'parameters': [{'seeds': self._seeds}]}
