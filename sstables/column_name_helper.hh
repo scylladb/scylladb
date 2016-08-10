@@ -40,67 +40,37 @@
 #pragma once
 
 #include "core/sstring.hh"
+#include "schema.hh"
+#include "compound_compat.hh"
 #include <cmath>
 #include <algorithm>
 #include <vector>
 
 class column_name_helper {
 private:
-    static void may_grow(std::vector<bytes>& v, size_t target_size) {
+    static inline void may_grow(std::vector<bytes_opt>& v, size_t target_size) {
         if (target_size > v.size()) {
             v.resize(target_size);
         }
     }
 public:
-    static void min_max_components(std::vector<bytes>& min_seen, std::vector<bytes>& max_seen, const std::vector<bytes_view>& column_names) {
-        may_grow(min_seen, column_names.size());
-        may_grow(max_seen, column_names.size());
+    template <typename T>
+    static void min_max_components(const schema& schema, std::vector<bytes_opt>& min_seen, std::vector<bytes_opt>& max_seen, T components) {
+        may_grow(min_seen, schema.clustering_key_size());
+        may_grow(max_seen, schema.clustering_key_size());
 
-        for (auto i = 0U; i < column_names.size(); i++) {
-            auto& name = column_names[i];
-            if (max_seen[i].size() == 0 || name > bytes_view(max_seen[i])) {
-                max_seen[i] = bytes(name.data(), name.size());
+        auto& types = schema.clustering_key_type()->types();
+        auto i = 0U;
+        for (auto& value : components) {
+            auto& type = types[i];
+
+            if (!max_seen[i] || type->compare(value, max_seen[i].value()) > 0) {
+                max_seen[i] = bytes(value.data(), value.size());
             }
-            if (min_seen[i].size() == 0 || name < bytes_view(min_seen[i])) {
-                min_seen[i] = bytes(name.data(), name.size());
+            if (!min_seen[i] || type->compare(value, min_seen[i].value()) < 0) {
+                min_seen[i] = bytes(value.data(), value.size());
             }
-        }
-    }
-
-    static void merge_max_components(std::vector<bytes>& to, std::vector<bytes>&& from) {
-        if (to.empty()) {
-            to = std::move(from);
-            return;
-        }
-
-        if (from.empty()) {
-            return;
-        }
-
-        may_grow(to, from.size());
-
-        for (auto i = 0U; i < from.size(); i++) {
-            if (to[i].size() == 0 || bytes_view(from[i]) > bytes_view(to[i])) {
-                to[i] = std::move(from[i]);
-            }
-        }
-    }
-
-    static void merge_min_components(std::vector<bytes>& to, std::vector<bytes>&& from) {
-        if (to.empty()) {
-            to = std::move(from);
-        }
-
-        if (from.empty()) {
-            return;
-        }
-
-        may_grow(to, from.size());
-
-        for (auto i = 0U; i < from.size(); i++) {
-            if (to[i].size() == 0 || bytes_view(from[i]) < bytes_view(to[i])) {
-                to[i] = std::move(from[i]);
-            }
+            i++;
         }
     }
 };

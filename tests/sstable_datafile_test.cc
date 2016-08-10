@@ -2878,3 +2878,148 @@ SEASTAR_TEST_CASE(test_promoted_index_read) {
                 .produces_end_of_stream();
     });
 }
+
+static void check_min_max_column_names(const sstable_ptr& sst, std::vector<bytes> min_components, std::vector<bytes> max_components) {
+    const auto& st = sst->get_stats_metadata();
+    BOOST_REQUIRE(st.min_column_names.elements.size() == min_components.size());
+    BOOST_REQUIRE(st.min_column_names.elements.size() == st.max_column_names.elements.size());
+    for (auto i = 0U; i < st.min_column_names.elements.size(); i++) {
+        BOOST_REQUIRE(min_components[i] == st.min_column_names.elements[i].value);
+        BOOST_REQUIRE(max_components[i] == st.max_column_names.elements[i].value);
+    }
+}
+
+static void test_min_max_clustering_key(schema_ptr s, std::vector<bytes> exploded_pk, std::vector<std::vector<bytes>> exploded_cks,
+        std::vector<bytes> min_components, std::vector<bytes> max_components, bool remove = false) {
+    auto mt = make_lw_shared<memtable>(s);
+    auto insert_data = [&mt, &s] (std::vector<bytes>& exploded_pk, std::vector<bytes>&& exploded_ck) {
+        const column_definition& r1_col = *s->get_column_definition("r1");
+        auto key = partition_key::from_exploded(*s, exploded_pk);
+        auto c_key = clustering_key::make_empty();
+        if (!exploded_ck.empty()) {
+            c_key = clustering_key::from_exploded(*s, exploded_ck);
+        }
+        mutation m(key, s);
+        m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
+        mt->apply(std::move(m));
+    };
+    auto remove_data = [&mt, &s] (std::vector<bytes>& exploded_pk, std::vector<bytes>&& exploded_ck) {
+        auto key = partition_key::from_exploded(*s, exploded_pk);
+        auto c_key = clustering_key::from_exploded(*s, exploded_ck);
+        mutation m(key, s);
+        tombstone tomb(api::new_timestamp(), gc_clock::now());
+        m.partition().apply_delete(*s, c_key, tomb);
+        mt->apply(std::move(m));
+    };
+
+    if (exploded_cks.empty()) {
+        insert_data(exploded_pk, {});
+    } else {
+        for (auto& exploded_ck : exploded_cks) {
+            if (remove) {
+                remove_data(exploded_pk, std::move(exploded_ck));
+            } else {
+                insert_data(exploded_pk, std::move(exploded_ck));
+            }
+        }
+    }
+    auto tmp = make_lw_shared<tmpdir>();
+    auto sst = make_lw_shared<sstable>("ks", "cf", tmp->path, 1, la, big);
+    sst->write_components(*mt).get();
+    sst = reusable_sst(tmp->path, 1).get0();
+    check_min_max_column_names(sst, std::move(min_components), std::move(max_components));
+}
+
+SEASTAR_TEST_CASE(min_max_clustering_key_test) {
+    return seastar::async([] {
+        {
+            auto s = schema_builder("ks", "cf")
+                .with_column("pk", utf8_type, column_kind::partition_key)
+                .with_column("ck1", utf8_type, column_kind::clustering_key)
+                .with_column("ck2", utf8_type, column_kind::clustering_key)
+                .with_column("r1", int32_type)
+                .build();
+            test_min_max_clustering_key(s, { "key1" }, { { "a", "b" }, { "a", "c" } }, { "a", "b" }, { "a", "c" });
+        }
+        {
+            auto s = schema_builder("ks", "cf")
+                .with(schema_builder::compact_storage::yes)
+                .with_column("pk", utf8_type, column_kind::partition_key)
+                .with_column("ck1", utf8_type, column_kind::clustering_key)
+                .with_column("ck2", utf8_type, column_kind::clustering_key)
+                .with_column("r1", int32_type)
+                .build();
+            test_min_max_clustering_key(s, { "key1" }, { { "a", "b" }, { "a", "c" } }, { "a", "b" }, { "a", "c" });
+        }
+        {
+            auto s = schema_builder("ks", "cf")
+                .with_column("pk", utf8_type, column_kind::partition_key)
+                .with_column("ck1", utf8_type, column_kind::clustering_key)
+                .with_column("r1", int32_type)
+                .build();
+            test_min_max_clustering_key(s, { "key1" }, { { "a" }, { "z" } }, { "a" }, { "z" });
+        }
+        {
+            auto s = schema_builder("ks", "cf")
+                .with_column("pk", utf8_type, column_kind::partition_key)
+                .with_column("ck1", utf8_type, column_kind::clustering_key)
+                .with_column("r1", int32_type)
+                .build();
+            test_min_max_clustering_key(s, { "key1" }, { { "a" }, { "z" } }, { "a" }, { "z" }, true);
+        }
+        {
+            auto s = schema_builder("ks", "cf")
+                .with_column("pk", utf8_type, column_kind::partition_key)
+                .with_column("r1", int32_type)
+                .build();
+            test_min_max_clustering_key(s, { "key1" }, {}, {}, {});
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "cf")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("ck1", utf8_type, column_kind::clustering_key)
+            .with_column("r1", int32_type)
+            .build();
+        auto cm = make_lw_shared<compaction_manager>();
+        auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm);
+        auto tmp = make_lw_shared<tmpdir>();
+        auto mt = make_lw_shared<memtable>(s);
+        const column_definition& r1_col = *s->get_column_definition("r1");
+
+        for (auto j = 0; j < 8; j++) {
+            auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(j))});
+            mutation m(key, s);
+            for (auto i = 100; i < 150; i++) {
+                auto c_key = clustering_key::from_exploded(*s, {to_bytes(to_sstring(j) + "ck" + to_sstring(i))});
+                m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
+            }
+            mt->apply(std::move(m));
+        }
+        auto sst = make_lw_shared<sstable>("ks", "cf", tmp->path, 1, la, big);
+        sst->write_components(*mt).get();
+        sst = reusable_sst(tmp->path, 1).get0();
+        check_min_max_column_names(sst, { "0ck100" }, { "7ck149" });
+
+        mt = make_lw_shared<memtable>(s);
+        auto key = partition_key::from_exploded(*s, {to_bytes("key9")});
+        mutation m(key, s);
+        for (auto i = 101; i < 299; i++) {
+            auto c_key = clustering_key::from_exploded(*s, {to_bytes(to_sstring(9) + "ck" + to_sstring(i))});
+            m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
+        }
+        mt->apply(std::move(m));
+        auto sst2 = make_lw_shared<sstable>("ks", "cf", tmp->path, 2, la, big);
+        sst2->write_components(*mt).get();
+        sst2 = reusable_sst(tmp->path, 2).get0();
+        check_min_max_column_names(sst2, { "9ck101" }, { "9ck298" });
+
+        auto creator = [tmp] { return make_lw_shared<sstables::sstable>("ks", "cf", tmp->path, 3, la, big); };
+        auto new_sstables = sstables::compact_sstables({ sst, sst2 }, *cf, creator, std::numeric_limits<uint64_t>::max(), 0).get0();
+        BOOST_REQUIRE(new_sstables.size() == 1);
+        check_min_max_column_names(new_sstables.front(), { "0ck100" }, { "9ck298" });
+    });
+}
