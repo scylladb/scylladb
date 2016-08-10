@@ -151,7 +151,7 @@ struct session_record {
     gms::inet_address client;
     std::unordered_map<sstring, sstring> parameters;
     sstring request;
-    long started_at = 0;
+    std::chrono::system_clock::time_point started_at;
     trace_type command = trace_type::NONE;
     int elapsed = -1;
 

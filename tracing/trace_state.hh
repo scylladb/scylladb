@@ -165,7 +165,7 @@ private:
         begin();
         _records->session_rec.client = client;
         _records->session_rec.request = std::move(request);
-        _records->session_rec.started_at = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        _records->session_rec.started_at = std::chrono::system_clock::now();
     }
 
     template <typename Func>
