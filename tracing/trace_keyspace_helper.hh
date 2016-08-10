@@ -161,6 +161,17 @@ private:
      */
     future<> flush_one_session_mutations(lw_shared_ptr<one_session_records> records);
 
+    /**
+     * Apply events records mutations.
+     *
+     * @param records all session records
+     * @param events_records events recods to apply
+     *
+     * @return a future that resolves when the mutation has been written.
+     *
+     * @note A caller must ensure that @param events_records is alive till the
+     * returned future resolves.
+     */
     future<> apply_events_mutation(lw_shared_ptr<one_session_records> records, std::deque<event_record>& events_records);
 
     /**

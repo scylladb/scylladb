@@ -268,8 +268,8 @@ future<> trace_keyspace_helper::apply_events_mutation(lw_shared_ptr<one_session_
 
     mutation m(make_event_mutation(*records, *events_records.begin()));
 
-    return do_with(std::move(m), std::move(events_records), [this, records] (mutation& m, std::deque<event_record>& events_records) {
-        return do_for_each(std::next(events_records.begin()), events_records.end(), [this, &m, &events_records, all_records = records] (event_record& one_event_record) {
+    return do_with(std::move(m), [this, records, &events_records] (mutation& m) {
+        return do_for_each(std::next(events_records.begin()), events_records.end(), [this, &m, all_records = records] (event_record& one_event_record) {
             m.apply(make_event_mutation(*all_records, one_event_record));
             return make_ready_future<>();
         }).then([&m] {
