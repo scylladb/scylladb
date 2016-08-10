@@ -64,8 +64,8 @@ class query_processor::internal_state {
     service::query_state _qs;
 public:
     internal_state()
-            : _qs(service::client_state{service::client_state::internal_tag()}) {
-    }
+        : _qs(service::client_state{service::client_state::internal_tag()})
+    { }
     operator service::query_state&() {
         return _qs;
     }
@@ -88,7 +88,7 @@ api::timestamp_type query_processor::next_timestamp() {
 }
 
 query_processor::query_processor(distributed<service::storage_proxy>& proxy,
-        distributed<database>& db)
+                                 distributed<database>& db)
     : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
     , _proxy(proxy)
     , _db(db)
@@ -133,8 +133,9 @@ query_processor::process(const sstring_view& query_string, service::query_state&
 }
 
 future<::shared_ptr<result_message>>
-query_processor::process_statement(::shared_ptr<cql_statement> statement, service::query_state& query_state,
-        const query_options& options)
+query_processor::process_statement(::shared_ptr<cql_statement> statement,
+                                   service::query_state& query_state,
+                                   const query_options& options)
 {
 #if 0
         logger.trace("Process {} @CL.{}", statement, options.getConsistency());
@@ -170,7 +171,9 @@ query_processor::prepare(const std::experimental::string_view& query_string, ser
 }
 
 future<::shared_ptr<transport::messages::result_message::prepared>>
-query_processor::prepare(const std::experimental::string_view& query_string, const service::client_state& client_state, bool for_thrift)
+query_processor::prepare(const std::experimental::string_view& query_string,
+                         const service::client_state& client_state,
+                         bool for_thrift)
 {
     auto existing = get_stored_prepared_statement(query_string, client_state.get_raw_keyspace(), for_thrift);
     if (existing) {
@@ -186,7 +189,9 @@ query_processor::prepare(const std::experimental::string_view& query_string, con
 }
 
 ::shared_ptr<transport::messages::result_message::prepared>
-query_processor::get_stored_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, bool for_thrift)
+query_processor::get_stored_prepared_statement(const std::experimental::string_view& query_string,
+                                               const sstring& keyspace,
+                                               bool for_thrift)
 {
     if (for_thrift) {
         auto statement_id = compute_thrift_id(query_string, keyspace);
@@ -206,8 +211,10 @@ query_processor::get_stored_prepared_statement(const std::experimental::string_v
 }
 
 future<::shared_ptr<transport::messages::result_message::prepared>>
-query_processor::store_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace,
-        ::shared_ptr<statements::prepared_statement> prepared, bool for_thrift)
+query_processor::store_prepared_statement(const std::experimental::string_view& query_string,
+                                          const sstring& keyspace,
+                                          ::shared_ptr<statements::prepared_statement> prepared,
+                                          bool for_thrift)
 {
 #if 0
     // Concatenate the current keyspace so we don't mix prepared statements between keyspace (#5352).
@@ -301,7 +308,7 @@ query_processor::parse_statement(const sstring_view& query)
 
         if (!statement) {
             throw exceptions::syntax_exception("Parsing failed");
-        };
+        }
         return std::move(statement);
     } catch (const exceptions::recognition_exception& e) {
         throw exceptions::syntax_exception(sprint("Invalid or malformed CQL query string: %s", e.what()));
@@ -313,10 +320,10 @@ query_processor::parse_statement(const sstring_view& query)
     }
 }
 
-query_options query_processor::make_internal_options(
-                ::shared_ptr<statements::prepared_statement> p,
-                const std::initializer_list<data_value>& values,
-                db::consistency_level cl) {
+query_options query_processor::make_internal_options(::shared_ptr<statements::prepared_statement> p,
+                                                     const std::initializer_list<data_value>& values,
+                                                     db::consistency_level cl)
+{
     if (p->bound_names.size() != values.size()) {
         throw std::invalid_argument(sprint("Invalid number of values. Expecting %d but got %d", p->bound_names.size(), values.size()));
     }
@@ -335,8 +342,8 @@ query_options query_processor::make_internal_options(
     return query_options(cl, bound_values);
 }
 
-::shared_ptr<statements::prepared_statement> query_processor::prepare_internal(
-        const sstring& query_string) {
+::shared_ptr<statements::prepared_statement> query_processor::prepare_internal(const sstring& query_string)
+{
     auto& p = _internal_statements[query_string];
     if (p == nullptr) {
         auto np = parse_statement(query_string)->prepare(_db.local());
@@ -346,9 +353,10 @@ query_options query_processor::make_internal_options(
     return p;
 }
 
-future<::shared_ptr<untyped_result_set>> query_processor::execute_internal(
-        const sstring& query_string,
-        const std::initializer_list<data_value>& values) {
+future<::shared_ptr<untyped_result_set>>
+query_processor::execute_internal(const sstring& query_string,
+                                  const std::initializer_list<data_value>& values)
+{
     if (log.is_enabled(logging::log_level::trace)) {
         log.trace("execute_internal: \"{}\" ({})", query_string, ::join(", ", values));
     }
@@ -356,22 +364,23 @@ future<::shared_ptr<untyped_result_set>> query_processor::execute_internal(
     return execute_internal(p, values);
 }
 
-future<::shared_ptr<untyped_result_set>> query_processor::execute_internal(
-        ::shared_ptr<statements::prepared_statement> p,
-        const std::initializer_list<data_value>& values) {
+future<::shared_ptr<untyped_result_set>>
+query_processor::execute_internal(::shared_ptr<statements::prepared_statement> p,
+                                  const std::initializer_list<data_value>& values)
+{
     auto opts = make_internal_options(p, values);
-    return do_with(std::move(opts),
-            [this, p = std::move(p)](auto& opts) {
-                return p->statement->execute_internal(_proxy, *_internal_state, opts).then(
-                        [p](auto msg) {
-                            return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
-                        });
-            });
+    return do_with(std::move(opts), [this, p = std::move(p)](auto& opts) {
+        return p->statement->execute_internal(_proxy, *_internal_state, opts).then([p](auto msg) {
+            return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
+        });
+    });
 }
 
-future<::shared_ptr<untyped_result_set>> query_processor::process(
-                const sstring& query_string,
-                db::consistency_level cl, const std::initializer_list<data_value>& values, bool cache)
+future<::shared_ptr<untyped_result_set>>
+query_processor::process(const sstring& query_string,
+                         db::consistency_level cl,
+                         const std::initializer_list<data_value>& values,
+                         bool cache)
 {
     auto p = cache ? prepare_internal(query_string) : parse_statement(query_string)->prepare(_db.local());
     if (!cache) {
@@ -380,23 +389,24 @@ future<::shared_ptr<untyped_result_set>> query_processor::process(
     return process(p, cl, values);
 }
 
-future<::shared_ptr<untyped_result_set>> query_processor::process(
-                ::shared_ptr<statements::prepared_statement> p,
-                db::consistency_level cl, const std::initializer_list<data_value>& values)
+future<::shared_ptr<untyped_result_set>>
+query_processor::process(::shared_ptr<statements::prepared_statement> p,
+                         db::consistency_level cl,
+                         const std::initializer_list<data_value>& values)
 {
     auto opts = make_internal_options(p, values, cl);
-    return do_with(std::move(opts),
-            [this, p = std::move(p)](auto & opts) {
-                return p->statement->execute(_proxy, *_internal_state, opts).then(
-                        [p](auto msg) {
-                            return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
-                        });
-            });
+    return do_with(std::move(opts), [this, p = std::move(p)](auto & opts) {
+        return p->statement->execute(_proxy, *_internal_state, opts).then([p](auto msg) {
+            return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
+        });
+    });
 }
 
-
 future<::shared_ptr<transport::messages::result_message>>
-query_processor::process_batch(::shared_ptr<statements::batch_statement> batch, service::query_state& query_state, query_options& options) {
+query_processor::process_batch(::shared_ptr<statements::batch_statement> batch,
+                               service::query_state& query_state,
+                               query_options& options)
+{
     return batch->check_access(query_state.get_client_state()).then([this, &query_state, &options, batch] {
         batch->validate();
         batch->validate(_proxy, query_state.get_client_state());
