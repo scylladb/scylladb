@@ -145,7 +145,7 @@ query_processor::process_statement(::shared_ptr<cql_statement> statement, servic
 
         statement->validate(_proxy, client_state);
 
-        future<::shared_ptr<transport::messages::result_message>> fut = make_ready_future<::shared_ptr<transport::messages::result_message>>();
+        auto fut = make_ready_future<::shared_ptr<transport::messages::result_message>>();
         if (client_state.is_internal()) {
             fut = statement->execute_internal(_proxy, query_state, options);
         } else  {
@@ -361,9 +361,9 @@ future<::shared_ptr<untyped_result_set>> query_processor::execute_internal(
         const std::initializer_list<data_value>& values) {
     auto opts = make_internal_options(p, values);
     return do_with(std::move(opts),
-            [this, p = std::move(p)](query_options & opts) {
+            [this, p = std::move(p)](auto& opts) {
                 return p->statement->execute_internal(_proxy, *_internal_state, opts).then(
-                        [p](::shared_ptr<transport::messages::result_message> msg) {
+                        [p](auto msg) {
                             return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
                         });
             });
@@ -386,9 +386,9 @@ future<::shared_ptr<untyped_result_set>> query_processor::process(
 {
     auto opts = make_internal_options(p, values, cl);
     return do_with(std::move(opts),
-            [this, p = std::move(p)](query_options & opts) {
+            [this, p = std::move(p)](auto & opts) {
                 return p->statement->execute(_proxy, *_internal_state, opts).then(
-                        [p](::shared_ptr<transport::messages::result_message> msg) {
+                        [p](auto msg) {
                             return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
                         });
             });
