@@ -2,14 +2,20 @@
 
 print_usage() {
     echo "build_deb.sh --rebuild-dep"
+    echo "  --dist  create a public distribution package"
     echo "  --rebuild-dep  rebuild dependency packages"
     exit 1
 }
 REBUILD=0
+DIST=0
 while [ $# -gt 0 ]; do
     case "$1" in
         "--rebuild-dep")
             REBUILD=1
+            shift 1
+            ;;
+        "--dist")
+            DIST=1
             shift 1
             ;;
         *)
@@ -80,7 +86,11 @@ else
     sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++/g" debian/control
     sed -i -e "s#@@INSTALL@@##g" debian/scylla-server.install
 fi
-
+if [ $DIST -gt 0 ]; then
+    sed -i -e "s#@@ADDHKCFG@@#conf/housekeeping.cfg etc/scylla.d/#g" debian/scylla-server.install
+else
+    sed -i -e "s#@@ADDHKCFG@@##g" debian/scylla-server.install
+fi
 if [ "$DISTRIBUTION" = "Ubuntu" ]; then
     sed -i -e "s/@@DEPENDS@@/hugepages, /g" debian/control
 else
