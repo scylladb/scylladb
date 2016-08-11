@@ -1659,11 +1659,11 @@ stop_iteration components_writer::consume_end_of_partition() {
             _sst._pi_write.block_start_offset - _sst._c_stats.start_offset,
             _out.offset() - _sst._pi_write.block_start_offset);
         _sst._pi_write.numblocks++;
-        _sst._pi_write.block_first_colname = {};
     }
     write_index_promoted(_index, _sst._pi_write.data, _sst._pi_write.deltime,
             _sst._pi_write.numblocks);
     _sst._pi_write.data = {};
+    _sst._pi_write.block_first_colname = {};
 
     ensure_tombstone_is_written();
     int16_t end_of_row = 0;
