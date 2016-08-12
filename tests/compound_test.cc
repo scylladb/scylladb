@@ -307,3 +307,28 @@ BOOST_AUTO_TEST_CASE(test_composite_view_explode) {
                             std::vector<bytes>({bytes({'e', 'l', '1'})}));
     }
 }
+
+BOOST_AUTO_TEST_CASE(test_composite_validity) {
+    auto is_valid = [] (bytes b) {
+        auto v = composite_view(b);
+        try {
+            size_t s = 0;
+            for (auto& c : v.components()) { s += c.first.size() + sizeof(composite::size_type) + sizeof(composite::eoc_type);  }
+            return s == b.size();
+        } catch (marshal_exception&) {
+            return false;
+        }
+    };
+
+    BOOST_REQUIRE_EQUAL(is_valid({'\x00', '\x01', 'a', '\x00'}), true);
+    BOOST_REQUIRE_EQUAL(is_valid({'\x00', '\x02', 'a', 'a', '\x00'}), true);
+    BOOST_REQUIRE_EQUAL(is_valid({'\x00', '\x02', 'a', 'a', '\x00', '\x00', '\x01', 'a', '\x00'}), true);
+
+    BOOST_REQUIRE_EQUAL(is_valid({'\x00', '\x02', 'a', '\x00'}), false);
+    BOOST_REQUIRE_EQUAL(is_valid({'\x01', 'a', '\x00'}), false);
+    BOOST_REQUIRE_EQUAL(is_valid({'\x00', '\x01', 'a', '\x00', '\x00'}), false);
+    BOOST_REQUIRE_EQUAL(is_valid({'\x00', '\x01', 'a', '\x00', '\x00', '\x00'}), false);
+    BOOST_REQUIRE_EQUAL(is_valid({'\x00', '\x01', 'a', '\x00', '\x00', '\x01'}), false);
+    BOOST_REQUIRE_EQUAL(is_valid({'\x00', '\x01', 'a'}), false);
+    BOOST_REQUIRE_EQUAL(is_valid({'\x00', '\x02', 'a'}), false);
+}
