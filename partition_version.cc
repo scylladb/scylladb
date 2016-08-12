@@ -309,8 +309,10 @@ partition_snapshot_reader::partition_snapshot_reader(schema_ptr s, dht::decorate
 partition_snapshot_reader::~partition_snapshot_reader()
 {
     with_allocator(_lsa_region.allocator(), [this] {
-        logalloc::reclaim_lock _(_lsa_region);
-        _snapshot = { };
+        return with_linearized_managed_bytes([this] {
+            logalloc::reclaim_lock _(_lsa_region);
+            _snapshot = { };
+        });
     });
 }
 
