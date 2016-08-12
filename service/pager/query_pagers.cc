@@ -166,7 +166,8 @@ private:
                 );
 
         auto ranges = _ranges;
-        return get_local_storage_proxy().query(_schema, _cmd, std::move(ranges),
+        auto command = ::make_lw_shared<query::read_command>(*_cmd);
+        return get_local_storage_proxy().query(_schema, std::move(command), std::move(ranges),
                 _options.get_consistency()).then(
                 [this, &builder, page_size, now](foreign_ptr<lw_shared_ptr<query::result>> results) {
                     handle_result(builder, std::move(results), page_size, now);

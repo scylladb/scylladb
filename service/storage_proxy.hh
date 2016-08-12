@@ -289,6 +289,9 @@ public:
      *
      * Partitions for each range will be ordered according to decorated_key ordering. Results for
      * each range from "partition_ranges" may appear in any order.
+     *
+     * IMPORTANT: Not all fibers started by this method have to be done by the time it returns so no
+     * parameter can be changed after being passed to this method.
      */
     future<foreign_ptr<lw_shared_ptr<query::result>>> query(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,
