@@ -1028,6 +1028,25 @@ void sstable::validate_min_max_metadata() {
     }
 }
 
+void sstable::set_clustering_components_ranges() {
+    if (!_schema->clustering_key_size()) {
+        return;
+    }
+    auto& min_column_names = get_stats_metadata().min_column_names.elements;
+    auto& max_column_names = get_stats_metadata().max_column_names.elements;
+
+    auto s = std::min(min_column_names.size(), max_column_names.size());
+    _clustering_components_ranges.reserve(s);
+    for (auto i = 0U; i < s; i++) {
+        auto r = nonwrapping_range<bytes_view>({{ min_column_names[i].value, true }}, {{ max_column_names[i].value, true }});
+        _clustering_components_ranges.push_back(std::move(r));
+    }
+}
+
+const std::vector<nonwrapping_range<bytes_view>>& sstable::clustering_components_ranges() const {
+    return _clustering_components_ranges;
+}
+
 future<> sstable::read_statistics(const io_priority_class& pc) {
     return read_simple<component_type::Statistics>(_statistics, pc);
 }
@@ -1088,6 +1107,8 @@ future<> sstable::open_data() {
               _index_file_size = size;
             });
         }).then([this] {
+            this->set_clustering_components_ranges();
+
             // Get disk usage for this sstable (includes all components).
             _bytes_on_disk = 0;
             return do_for_each(_components, [this] (component_type c) {
@@ -1125,6 +1146,7 @@ future<> sstable::load() {
         return read_statistics(default_priority_class());
     }).then([this] {
         validate_min_max_metadata();
+        set_clustering_components_ranges();
         return read_compression(default_priority_class());
     }).then([this] {
         return read_filter(default_priority_class());
