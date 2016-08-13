@@ -231,6 +231,11 @@ public:
         return _generation;
     }
 
+    // read_row() reads the entire sstable row (partition) at a given
+    // partition key k, or a subset of this row. The subset is defined by
+    // a filter on the clustering keys which we want to read, which
+    // additionally determines also if all the static columns will also be
+    // returned in the result.
     future<streamed_mutation_opt> read_row(
         schema_ptr schema,
         const key& k,
