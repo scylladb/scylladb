@@ -776,6 +776,21 @@ static inline clustering_key_prefix get_clustering_key(
     return std::move(col.clustering);
 }
 
+static bool has_static_columns(const schema& schema, index_entry &ie) {
+    // We can easily check if there are any static columns in this partition,
+    // because the static columns always come first, so the first promoted
+    // index block will start with one, if there are any. The name of a static
+    // column is a  composite beginning with a special marker (0xffff).
+    // But we can only assume the column name is composite if the schema is
+    // compound - if it isn't, we cannot have any static columns anyway.
+    //
+    // The first 18 bytes are deletion times (4+8), num blocks (4), and
+    // length of start column (2). Then come the actual column name bytes.
+    // See also composite::is_static().
+    auto data = ie.get_promoted_index_bytes();
+    return schema.is_compound() && data.size() >= 20 && data[18] == -1 && data[19] == -1;
+}
+
 future<sstable::disk_read_range>
 sstables::sstable::find_disk_ranges(
         schema_ptr schema, const sstables::key& key,
@@ -800,14 +815,22 @@ sstables::sstable::find_disk_ranges(
         }
         index_entry& ie = index_list[index_idx];
         if (ie.get_promoted_index_bytes().size() >= 16) {
-            auto& ck_ranges = ck_filtering.get_ranges(
-                partition_key::from_exploded(*schema, key.explode(*schema)));
+            auto&& pkey = partition_key::from_exploded(*schema, key.explode(*schema));
+            auto& ck_ranges = ck_filtering.get_ranges(pkey);
             if (ck_ranges.size() == 1 && ck_ranges[0].is_full()) {
                 // When no clustering filter is given to sstable::read_row(),
                 // we get here one range unbounded on both sides. This is fine
                 // (the code below will work with an unbounded range), but
                 // let's drop this range to revert to the classic behavior of
                 // reading entire sstable row without using the promoted index
+            } else if (ck_filtering.want_static_columns(pkey) && has_static_columns(*schema, ie)) {
+                // FIXME: If we need to read the static columns and also a
+                // non-full clustering key range, we need to return two byte
+                // ranges in the returned disk_read_range. We don't support
+                // this yet so for now let's fall back to reading the entire
+                // partition which is wasteful but at least correct.
+                // This case should be replaced by correctly adding the static
+                // column's blocks to the return.
             } else if (ck_ranges.size() == 1) {
                 auto data = ie.get_promoted_index_bytes();
                 // note we already verified above that data.size >= 16

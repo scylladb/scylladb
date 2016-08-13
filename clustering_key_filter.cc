@@ -60,6 +60,10 @@ public:
     virtual const std::vector<range<clustering_key_prefix>>& get_ranges(const partition_key& key) override {
         return _ranges;
     }
+
+    virtual bool want_static_columns(const partition_key& key) override {
+        return true;
+    }
 };
 
 class partition_slice_clustering_key_filter_factory : public clustering_key_filter_factory {
@@ -94,6 +98,10 @@ public:
             return _ck_ranges;
         }
         return _slice.row_ranges(*_schema, key);
+    }
+
+    virtual bool want_static_columns(const partition_key& key) override {
+        return true;
     }
 };
 
