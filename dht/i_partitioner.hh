@@ -45,6 +45,7 @@
 #include "types.hh"
 #include "keys.hh"
 #include "utils/managed_bytes.hh"
+#include "stdx.hh"
 #include <memory>
 #include <random>
 #include <utility>
@@ -433,6 +434,23 @@ void set_global_partitioner(const sstring& class_name);
 i_partitioner& global_partitioner();
 
 unsigned shard_of(const token&);
+
+struct ring_position_range_and_shard {
+    nonwrapping_range<ring_position> ring_range;
+    unsigned shard;
+};
+
+class ring_position_range_sharder {
+    const i_partitioner& _partitioner;
+    nonwrapping_range<ring_position> _range;
+    bool _done = false;
+public:
+    explicit ring_position_range_sharder(range<ring_position> rrp)
+            : ring_position_range_sharder(global_partitioner(), std::move(rrp)) {}
+    ring_position_range_sharder(const i_partitioner& partitioner, range<ring_position> rrp)
+            : _partitioner(partitioner), _range(std::move(rrp)) {}
+    stdx::optional<ring_position_range_and_shard> next(const schema& s);
+};
 
 nonwrapping_range<ring_position> to_partition_range(nonwrapping_range<dht::token>);
 
