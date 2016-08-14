@@ -161,6 +161,7 @@ struct session_record {
     std::chrono::system_clock::time_point started_at;
     trace_type command = trace_type::NONE;
     elapsed_clock::duration elapsed;
+    std::chrono::seconds slow_query_record_ttl;
 
 private:
     bool _consumed = false;
