@@ -42,6 +42,7 @@ This package contains ScyllaDB server.
     %{nil}
 
 %build
+%define is_housekeeping_conf %( if @@HOUSEKEEPING_CONF@@; then echo "1" ; else echo "0"; fi )
 %if 0%{?fedora}
 ./configure.py --disable-xen --enable-dpdk --mode=release
 %endif
@@ -205,6 +206,10 @@ mv /tmp/scylla.yaml /etc/scylla/scylla.yaml
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla
 %config(noreplace) %{_sysconfdir}/scylla/scylla.yaml
 %config(noreplace) %{_sysconfdir}/scylla/cassandra-rackdc.properties
+%if %is_housekeeping_conf
+%config(noreplace) %{_sysconfdir}/scylla/housekeeping.cfg
+%endif
+
 
 %package kernel-conf
 Group:          Applications/Databases
