@@ -157,10 +157,18 @@ struct session_record {
     trace_type command = trace_type::NONE;
     elapsed_clock::duration elapsed;
 
+private:
+    bool _consumed = false;
+
+public:
     session_record() : elapsed(-1) {}
 
     bool ready() const {
-        return elapsed.count() >= 0;
+        return elapsed.count() >= 0 && !_consumed;
+    }
+
+    void set_consumed() {
+        _consumed = true;
     }
 };
 
@@ -370,9 +378,11 @@ public:
         }
     }
 
-    void end_session(lw_shared_ptr<one_session_records> records, bool write_now) {
+    void end_session() {
         --_active_sessions;
+    }
 
+    void write_session_records(lw_shared_ptr<one_session_records> records, bool write_now) {
         // if service is down - drop the records and return
         if (_down) {
             return;
@@ -467,6 +477,10 @@ void one_session_records::set_pending_for_write() {
 }
 
 void one_session_records::data_consumed() {
+    if (session_rec.ready()) {
+        session_rec.set_consumed();
+    }
+
     _is_pending_for_write = false;
     budget_ptr = tracing::get_local_tracing_instance().get_cached_records_ptr();
 }

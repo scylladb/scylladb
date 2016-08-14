@@ -61,7 +61,29 @@ private:
     elapsed_clock::time_point _start;
     // TRUE for a primary trace_state object
     bool _primary;
-    bool _tracing_began = false;
+
+    // A primary session may be in 3 states:
+    //   - "inactive": between the creation and a begin() call.
+    //   - "foreground": after a begin() call and before a
+    //     stop_foreground_and_write() call.
+    //   - "background": after a stop_foreground_and_write() call and till the
+    //     state object is destroyed.
+    //
+    // - Traces are not allowed while state is in an "inactive" state.
+    // - The time the primary session was in a "foreground" state is the time
+    //   reported as a session's "duration".
+    // - Traces that have arrived during the "background" state will be recorded
+    //   as usual but their "elapsed" time will be greater or equal to the
+    //   session's "duration".
+    //
+    // Secondary sessions may only be in an "inactive" or in a "foreground"
+    // states.
+    enum class state {
+        inactive,
+        foreground,
+        background
+    } _state = state::inactive;
+
     std::chrono::system_clock::rep _started_at;
     gms::inet_address _client;
     sstring _request;
@@ -116,6 +138,14 @@ public:
 
     ~trace_state();
 
+    /**
+     * Stop a foreground state and write pending records to I/O.
+     *
+     * @note The tracing session's "duration" is the time it was in the "foreground"
+     * state.
+     */
+    void stop_foreground_and_write();
+
     const utils::UUID& get_session_id() const {
         return _records->session_id;
     }
@@ -146,7 +176,7 @@ private:
         std::atomic_signal_fence(std::memory_order::memory_order_seq_cst);
         _start = elapsed_clock::now();
         std::atomic_signal_fence(std::memory_order::memory_order_seq_cst);
-        _tracing_began = true;
+        _state = state::foreground;
     }
 
     /**
@@ -296,7 +326,7 @@ private:
 };
 
 inline void trace_state::trace(sstring message) {
-    if (!_tracing_began) {
+    if (_state == state::inactive) {
         throw std::logic_error("trying to use a trace() before begin() for \"" + message + "\" tracepoint");
     }
 
@@ -438,5 +468,11 @@ inline std::experimental::optional<trace_info> make_trace_info(const trace_state
     }
 
     return std::experimental::nullopt;
+}
+
+inline void stop_foreground(const trace_state_ptr& state) {
+    if (state) {
+        state->stop_foreground_and_write();
+    }
 }
 }
