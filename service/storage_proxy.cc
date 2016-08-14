@@ -3356,75 +3356,24 @@ void storage_proxy::uninit_messaging_service() {
 // Merges reconcilable_result:s from different shards into one
 // Drops partitions which exceed the limit.
 class mutation_result_merger {
-    // Adapts reconcilable_result to a consumable sequence of partitions.
-    struct partition_run {
-        foreign_ptr<lw_shared_ptr<reconcilable_result>> result;
-        // we order by (priority, partition_key) to preserve ordering in wraparound
-        // queries.
-        unsigned priority;
-        size_t index = 0;
-
-        partition_run(std::pair<foreign_ptr<lw_shared_ptr<reconcilable_result>>, unsigned> result)
-            : result(std::move(result.first)), priority(result.second)
-        { }
-
-        const partition& current() const {
-            return result->partitions()[index];
-        }
-
-        bool has_more() const {
-            return index < result->partitions().size();
-        }
-
-        void advance() {
-            ++index;
-        }
-    };
-
     lw_shared_ptr<query::read_command> _cmd;
     schema_ptr _schema;
-    std::vector<partition_run> _runs;
+    unsigned _row_count = 0;
+    unsigned _partition_count = 0;
+    std::vector<partition> _partitions;
+    bool _limits_satisfied = false;
 public:
     mutation_result_merger(lw_shared_ptr<query::read_command> cmd, schema_ptr schema)
         : _cmd(std::move(cmd))
         , _schema(std::move(schema))
     { }
 
-    void reserve(size_t shard_count) {
-        _runs.reserve(shard_count);
-    }
-
-    future<> operator()(std::pair<foreign_ptr<lw_shared_ptr<reconcilable_result>>, unsigned> result) {
-        if (result.first->partitions().size() > 0) {
-            _runs.emplace_back(partition_run(std::move(result)));
-        }
-        return make_ready_future<>();
-    }
-
-    future<reconcilable_result> get() {
-        auto cmp = [this] (const partition_run& r1, const partition_run& r2) {
-            if (r1.priority < r2.priority) {
-                return false;
-            } else if (r1.priority > r2.priority) {
-                return true;
-            }
-            const partition& p1 = r1.current();
-            const partition& p2 = r2.current();
-            return p1._m.key(*_schema).ring_order_tri_compare(*_schema, p2._m.key(*_schema)) > 0;
-        };
-
-        if (_runs.empty()) {
-            return make_ready_future<reconcilable_result>(reconcilable_result(0, std::vector<partition>()));
-        }
-
-        boost::range::make_heap(_runs, cmp);
-
-        return repeat_until_value([this, cmp = std::move(cmp), partitions = std::vector<partition>(), row_count = 0u, partition_count = 0u] () mutable {
-            std::experimental::optional<reconcilable_result> ret;
-
-            boost::range::pop_heap(_runs, cmp);
-            partition_run& next = _runs.back();
-            const partition& p = next.current();
+    void add_result(foreign_ptr<lw_shared_ptr<reconcilable_result>> partial_result) {
+        // Following three lines to simplify patch; can remove later
+        auto& row_count = _row_count;
+        auto& partition_count = _partition_count;
+        auto& partitions = _partitions;
+        for (const partition& p : partial_result->partitions()) {
             unsigned limit_left = _cmd->row_limit - row_count;
             if (p._row_count > limit_left) {
                 // no space for all rows in the mutation
@@ -3440,19 +3389,17 @@ public:
                 row_count += p._row_count;
             }
             partition_count += p._row_count > 0;
-            if (row_count < _cmd->row_limit) {
-                next.advance();
-                if (next.has_more()) {
-                    boost::range::push_heap(_runs, cmp);
-                } else {
-                    _runs.pop_back();
-                }
+            if (row_count >= _cmd->row_limit || partition_count >= _cmd->partition_limit) {
+                _limits_satisfied = true;
+                break;
             }
-            if (_runs.empty() || row_count >= _cmd->row_limit || partition_count >= _cmd->partition_limit) {
-                ret = reconcilable_result(row_count, std::move(partitions));
-            }
-            return make_ready_future<std::experimental::optional<reconcilable_result>>(std::move(ret));
-        });
+        }
+    }
+    reconcilable_result get() && {
+        return reconcilable_result(_row_count, std::move(_partitions));
+    }
+    bool limits_satisfied() const {
+        return _limits_satisfied;
     }
 };
 
@@ -3482,33 +3429,35 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
 storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const std::vector<query::partition_range>& prs, tracing::trace_state_ptr trace_state) {
-    struct part {
-        query::partition_range pr;
-        unsigned shard;
-        unsigned priority;
-    };
-    std::vector<part> parts;
-    auto shard_nonwrapped_partition_range = [&] (const query::partition_range& pr, unsigned priority) {
-        for (auto shard : smp::all_cpus()) {
-            parts.push_back(part{pr, shard, priority});
-        }
-    };
-    parts.reserve(smp::count * prs.size());
-    auto priority = 0u;
-    for (auto&& pr : prs) {
-        shard_nonwrapped_partition_range(pr, priority++);
-    }
-    return do_with(std::move(parts), [this, s, cmd, trace_state] (std::vector<part>& parts) mutable {
-        auto query_part = [this, cmd, gs=global_schema_ptr(s), gt = tracing::global_trace_state_ptr(std::move(trace_state))] (part p) mutable {
-            return _db.invoke_on(p.shard, [cmd, gs, gt, p] (database& db) mutable {
-                return db.query_mutations(gs, *cmd, p.pr, gt).then([priority = p.priority] (reconcilable_result&& result) {
-                    return std::make_pair(make_foreign(make_lw_shared(std::move(result))), priority);
+    return do_with(cmd,
+            mutation_result_merger{cmd, s},
+            dht::ring_position_range_vector_sharder{prs},
+            global_schema_ptr(s),
+            tracing::global_trace_state_ptr(std::move(trace_state)),
+            [this, s] (lw_shared_ptr<query::read_command>& cmd,
+                    mutation_result_merger& mrm,
+                    dht::ring_position_range_vector_sharder& rprs,
+                    global_schema_ptr& gs,
+                    tracing::global_trace_state_ptr& gt) {
+        return repeat_until_value([&, s] () -> future<stdx::optional<reconcilable_result>> {
+            auto now = rprs.next(*s);
+            if (!now) {
+                return make_ready_future<stdx::optional<reconcilable_result>>(std::move(mrm).get());
+            }
+            return _db.invoke_on(now->shard, [&, now = std::move(*now), gt] (database& db) {
+                return db.query_mutations(gs, *cmd, now.ring_range, std::move(gt)).then([] (reconcilable_result&& rr) {
+                    return make_foreign(make_lw_shared(std::move(rr)));
                 });
+            }).then([&] (foreign_ptr<lw_shared_ptr<reconcilable_result>> rr) -> stdx::optional<reconcilable_result> {
+                mrm.add_result(std::move(rr));
+                if (mrm.limits_satisfied()) {
+                    return std::move(mrm).get();
+                }
+                return stdx::nullopt;
             });
-        };
-        return map_reduce(parts.begin(), parts.end(), query_part, mutation_result_merger{ cmd, s }).then([] (reconcilable_result&& result) {
-            return make_foreign(make_lw_shared(std::move(result)));
         });
+    }).then([] (reconcilable_result&& result) {
+        return make_foreign(make_lw_shared(std::move(result)));
     });
 }
 
