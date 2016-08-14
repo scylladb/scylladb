@@ -202,7 +202,7 @@ unsigned random_partitioner::shard_of(const token& t) const {
         case token::kind::after_all_keys:
             return smp::count - 1;
         case token::kind::key:
-            auto i = (token_to_cppint(t) * smp::count) >> 127;
+            auto i = (boost::multiprecision::uint256_t(token_to_cppint(t)) * smp::count) >> 127;
             // token can be [0, 2^127], make sure smp be [0, smp::count)
             auto smp = i.convert_to<unsigned>();
             if (smp >= smp::count) {
