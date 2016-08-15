@@ -62,29 +62,37 @@ partition_version::~partition_version()
 }
 
 partition_snapshot::~partition_snapshot() {
-    if (_version) {
+    if (_version && _version.is_unique_owner()) {
         auto v = &*_version;
-        if (_version.is_unique_owner()) {
-            _version = { };
-            remove_or_mark_as_unique_owner(v);
-        } else {
-            _version = { };
-            auto first_used = v;
-            while (first_used->prev() && !first_used->is_referenced()) {
-                first_used = first_used->prev();
-            }
+        _version = {};
+        remove_or_mark_as_unique_owner(v);
+    } else if (_entry) {
+        _entry->_snapshot = nullptr;
+    }
+}
 
-            auto current = first_used->next();
-            while (current && !current->is_referenced()) {
-                auto next = current->next();
+void partition_snapshot::merge_partition_versions() {
+    if (_version && !_version.is_unique_owner()) {
+        auto v = &*_version;
+        _version = { };
+        auto first_used = v;
+        while (first_used->prev() && !first_used->is_referenced()) {
+            first_used = first_used->prev();
+        }
+
+        auto current = first_used->next();
+        while (current && !current->is_referenced()) {
+            auto next = current->next();
+            try {
                 first_used->partition().apply(*_schema, std::move(current->partition()));
                 current_allocator().destroy(current);
-                current = next;
+            } catch (...) {
+                // Set _version so that the merge can be retried.
+                _version = partition_version_ref(*current);
+                throw;
             }
+            current = next;
         }
-    } else {
-        assert(_entry);
-        _entry->_snapshot = nullptr;
     }
 }
 
@@ -308,10 +316,19 @@ partition_snapshot_reader::partition_snapshot_reader(schema_ptr s, dht::decorate
 
 partition_snapshot_reader::~partition_snapshot_reader()
 {
+    if (!_snapshot.owned()) {
+        return;
+    }
+    // If no one else is using this particular snapshot try to merge partition
+    // versions.
     with_allocator(_lsa_region.allocator(), [this] {
         return with_linearized_managed_bytes([this] {
-            logalloc::reclaim_lock _(_lsa_region);
-            _snapshot = { };
+            try {
+                _read_section(_lsa_region, [this] {
+                    _snapshot->merge_partition_versions();
+                    _snapshot = {};
+                });
+            } catch (...) { }
         });
     });
 }
