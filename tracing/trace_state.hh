@@ -47,6 +47,7 @@
 #include "utils/UUID_gen.hh"
 #include "tracing/tracing.hh"
 #include "gms/inet_address.hh"
+#include "auth/authenticated_user.hh"
 
 namespace tracing {
 
@@ -276,6 +277,16 @@ private:
         _params_ptr->user_timestamp.emplace(val);
     }
 
+    void set_username(shared_ptr<auth::authenticated_user> user) {
+        if (user) {
+            _records->session_rec.username = user->name();
+        }
+    }
+
+    void add_table_name(sstring full_table_name) {
+        _records->session_rec.tables.emplace(std::move(full_table_name));
+    }
+
     /**
      * Fill the map in a session's record with the values set so far.
      *
@@ -323,6 +334,8 @@ private:
     friend void set_optional_serial_consistency_level(const trace_state_ptr& p, const std::experimental::optional<db::consistency_level>&val);
     friend void set_query(const trace_state_ptr& p, const sstring& val);
     friend void set_user_timestamp(const trace_state_ptr& p, api::timestamp_type val);
+    friend void set_username(const trace_state_ptr& p, shared_ptr<auth::authenticated_user> user);
+    friend void add_table_name(const trace_state_ptr& p, const sstring& ks_name, const sstring& cf_name);
 };
 
 inline void trace_state::trace(sstring message) {
@@ -417,6 +430,18 @@ inline void set_query(const trace_state_ptr& p, const sstring& val) {
 inline void set_user_timestamp(const trace_state_ptr& p, api::timestamp_type val) {
     if (p) {
         p->set_user_timestamp(val);
+    }
+}
+
+inline void set_username(const trace_state_ptr& p, shared_ptr<auth::authenticated_user> user) {
+    if (p) {
+        p->set_username(user);
+    }
+}
+
+inline void add_table_name(const trace_state_ptr& p, const sstring& ks_name, const sstring& cf_name) {
+    if (p) {
+        p->add_table_name(ks_name + "." + cf_name);
     }
 }
 
