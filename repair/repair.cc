@@ -413,26 +413,18 @@ future<partition_checksum> checksum_range(seastar::sharded<database> &db,
     });
 }
 
-static future<> sync_range(seastar::sharded<database>& db,
+static void sync_range(seastar::sharded<database>& db,
         const sstring& keyspace, const sstring& cf,
         const ::range<dht::token>& range,
-        std::vector<gms::inet_address>& neighbors) {
-    return do_with(streaming::stream_plan("repair-in"),
-                   streaming::stream_plan("repair-out"),
-            [&db, &keyspace, &cf, &range, &neighbors]
-            (auto& sp_in, auto& sp_out) {
+        std::vector<gms::inet_address>& neighbors,
+        streaming::stream_plan& sp_in,
+        streaming::stream_plan& sp_out) {
         for (const auto& peer : neighbors) {
             sp_in.request_ranges(peer, keyspace, {range}, {cf});
             sp_out.transfer_ranges(peer, keyspace, {range}, {cf});
         }
-        return sp_in.execute().discard_result().then([&sp_out] {
-                return sp_out.execute().discard_result();
-        }).handle_exception([] (auto ep) {
-            logger.warn("repair's stream failed: {}", ep);
-            return make_exception_future(ep);
-        });
-    });
 }
+
 static void split_and_add(std::vector<::range<dht::token>>& ranges,
         const range<dht::token>& range,
         uint64_t estimated_partitions, uint64_t target_partitions) {
@@ -471,7 +463,9 @@ static thread_local semaphore parallelism_semaphore(parallelism);
 // Comparable to RepairJob in Origin.
 static future<> repair_cf_range(seastar::sharded<database>& db,
         sstring keyspace, sstring cf, ::range<dht::token> range,
-        std::vector<gms::inet_address>& neighbors) {
+        std::vector<gms::inet_address>& neighbors,
+        streaming::stream_plan& sp_in,
+        streaming::stream_plan& sp_out) {
     if (neighbors.empty()) {
         // Nothing to do in this case...
         return make_ready_future<>();
@@ -513,12 +507,12 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
     }
 
     return do_with(seastar::gate(), true, std::move(keyspace), std::move(cf), std::move(ranges),
-        [&db, &neighbors] (auto& completion, auto& success, const auto& keyspace, const auto& cf, const auto& ranges) {
-        return do_for_each(ranges, [&completion, &success, &db, &neighbors, &keyspace, &cf]
+        [&db, &neighbors, &sp_in, &sp_out] (auto& completion, auto& success, const auto& keyspace, const auto& cf, const auto& ranges) {
+        return do_for_each(ranges, [&completion, &success, &db, &neighbors, &keyspace, &cf, &sp_in, &sp_out]
                            (const auto& range) {
 
             check_in_shutdown();
-            return parallelism_semaphore.wait(1).then([&completion, &success, &db, &neighbors, &keyspace, &cf, &range] {
+            return parallelism_semaphore.wait(1).then([&completion, &success, &db, &neighbors, &keyspace, &cf, &range, &sp_in, &sp_out] {
                 auto checksum_type = service::get_local_storage_service().cluster_supports_large_partitions()
                                      ? repair_checksum::streamed : repair_checksum::legacy;
 
@@ -536,7 +530,7 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
 
                 completion.enter();
                 when_all(checksums.begin(), checksums.end()).then(
-                        [&db, &keyspace, &cf, &range, &neighbors, &success]
+                        [&db, &keyspace, &cf, &range, &neighbors, &success, &sp_in, &sp_out]
                         (std::vector<future<partition_checksum>> checksums) {
                     // If only some of the replicas of this range are alive,
                     // we set success=false so repair will fail, but we can
@@ -566,9 +560,8 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
                     for (unsigned i = 1; i < checksums.size(); i++) {
                         if (checksums[i].available() && checksum0 != checksums[i].get()) {
                             logger.info("Found differing range {} on nodes {}", range, live_neighbors);
-                            return do_with(std::move(live_neighbors), [&db, &keyspace, &cf, &range] (auto& live_neighbors) {
-                                return sync_range(db, keyspace, cf, range, live_neighbors);
-                            });
+                            sync_range(db, keyspace, cf, range, live_neighbors, sp_in, sp_out);
+                            return make_ready_future<>();
                         }
                     }
                     return make_ready_future<>();
@@ -599,13 +592,16 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
 static future<> repair_range(seastar::sharded<database>& db, sstring keyspace,
         ::range<dht::token> range, std::vector<sstring>& cfs,
         const std::vector<sstring>& data_centers,
-        const std::vector<sstring>& hosts) {
+        const std::vector<sstring>& hosts,
+        streaming::stream_plan& sp_in,
+        streaming::stream_plan& sp_out) {
     auto id = utils::UUID_gen::get_time_UUID();
-    return do_with(get_neighbors(db.local(), keyspace, range, data_centers, hosts), [&db, &cfs, keyspace, id, range] (auto& neighbors) {
-        logger.info("[repair #{}] new session: will sync {} on range {} for {}.{}", id, neighbors, range, keyspace, cfs);
+    return do_with(get_neighbors(db.local(), keyspace, range, data_centers, hosts),
+                   [&sp_in, &sp_out, &db, &cfs, keyspace, id, range] (auto& neighbors) {
+        logger.debug("[repair #{}] new session: will sync {} on range {} for {}.{}", id, neighbors, range, keyspace, cfs);
         return do_for_each(cfs.begin(), cfs.end(),
-                [&db, keyspace, &neighbors, id, range] (auto&& cf) {
-            return repair_cf_range(db, keyspace, cf, range, neighbors);
+                [&db, keyspace, &neighbors, id, range, &sp_in, &sp_out] (auto&& cf) {
+            return repair_cf_range(db, keyspace, cf, range, neighbors, sp_in, sp_out);
         });
     });
 }
@@ -803,18 +799,27 @@ static future<> repair_ranges(seastar::sharded<database>& db, sstring keyspace,
         std::vector<query::range<dht::token>> ranges,
         std::vector<sstring> cfs, int id,
         std::vector<sstring> data_centers, std::vector<sstring> hosts) {
-    return do_with(std::move(ranges), std::move(keyspace), std::move(cfs),
+    return do_with(streaming::stream_plan("repair-in"),
+            streaming::stream_plan("repair-out"),
+            std::move(ranges), std::move(keyspace), std::move(cfs),
             std::move(data_centers), std::move(hosts),
-            [&db, id] (auto& ranges, auto& keyspace, auto& cfs, auto& data_centers, auto& hosts) {
+            [&db, id] (auto& sp_in, auto& sp_out, auto& ranges, auto& keyspace, auto& cfs, auto& data_centers, auto& hosts) {
 #if 1
         // repair all the ranges in parallel
-        return parallel_for_each(ranges.begin(), ranges.end(), [&db, keyspace, &cfs, &data_centers, &hosts, id] (auto&& range) {
+        return parallel_for_each(ranges.begin(), ranges.end(), [&sp_in, &sp_out, &db, keyspace, &cfs, &data_centers, &hosts, id] (auto&& range) {
 #else
         // repair all the ranges in sequence
-        return do_for_each(ranges.begin(), ranges.end(), [&db, keyspace, &cfs, &data_centers, &hosts, id] (auto&& range) {
+        return do_for_each(ranges.begin(), ranges.end(), [&sp_in, &sp_out, &db, keyspace, &cfs, &data_centers, &hosts, id] (auto&& range) {
 #endif
             check_in_shutdown();
-            return repair_range(db, keyspace, range, cfs, data_centers, hosts);
+            return repair_range(db, keyspace, range, cfs, data_centers, hosts, sp_in, sp_out);
+        }).then([&sp_in, &sp_out] {
+            return sp_in.execute().discard_result().then([&sp_out] {
+                    return sp_out.execute().discard_result();
+            }).handle_exception([] (auto ep) {
+                logger.warn("repair's stream failed: {}", ep);
+                return make_exception_future(ep);
+            });
         }).then([id] {
             logger.info("repair {} completed sucessfully", id);
             repair_tracker.done(id, true);
