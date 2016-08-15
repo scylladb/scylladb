@@ -900,7 +900,10 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
             throw exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed.");
         }
 
-        modifications.emplace_back(static_pointer_cast<cql3::statements::modification_statement>(ps->statement));
+        ::shared_ptr<cql3::statements::modification_statement> modif_statement_ptr = static_pointer_cast<cql3::statements::modification_statement>(ps->statement);
+        tracing::add_table_name(client_state.get_trace_state(), modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
+
+        modifications.emplace_back(std::move(modif_statement_ptr));
 
         std::vector<bytes_view_opt> tmp;
         read_value_view_list(buf, tmp);
