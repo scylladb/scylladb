@@ -192,6 +192,11 @@ public:
     partition_snapshot& operator=(const partition_snapshot&) = delete;
     partition_snapshot& operator=(partition_snapshot&&) = delete;
 
+    // If possible merges the version pointed to by this snapshot with
+    // adjacent partition versions. Leaves the snapshot in an unspecified state.
+    // Can be retried if previous merge attempt has failed.
+    void merge_partition_versions();
+
     ~partition_snapshot();
 
     partition_version_ref& version();
