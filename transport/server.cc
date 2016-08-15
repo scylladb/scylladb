@@ -494,6 +494,9 @@ future<response_type>
                 }
                 break;
         }
+
+        tracing::set_username(client_state.get_trace_state(), client_state.user());
+
         switch (cqlop) {
         case cql_binary_opcode::STARTUP:       return process_startup(stream, std::move(buf), std::move(client_state));
         case cql_binary_opcode::AUTH_RESPONSE: return process_auth_response(stream, std::move(buf), std::move(client_state));
