@@ -218,6 +218,8 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
                           service::query_state& state,
                           const query_options& options)
 {
+    tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
+
     auto cl = options.get_consistency();
 
     validate_for_read(_schema->ks_name(), cl);
@@ -326,6 +328,8 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy,
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
         make_partition_slice(options), limit, to_gc_clock(now), std::experimental::nullopt, query::max_partitions, options.get_timestamp(state));
     auto partition_ranges = _restrictions->get_partition_key_ranges(options);
+
+    tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
 
     if (needs_post_query_ordering() && _limit) {
         return do_with(std::move(partition_ranges), [this, &proxy, &state, command] (auto prs) {
