@@ -52,6 +52,12 @@ const sstring trace_keyspace_helper::KEYSPACE_NAME("system_traces");
 const sstring trace_keyspace_helper::SESSIONS("sessions");
 const sstring trace_keyspace_helper::EVENTS("events");
 
+struct trace_keyspace_backend_sesssion_state final : public backend_session_state_base {
+    int64_t last_nanos = 0;
+    semaphore write_sem;
+    virtual ~trace_keyspace_backend_sesssion_state() {}
+};
+
 trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
             : i_tracing_backend_helper(tr)
             , _registrations{
@@ -174,63 +180,55 @@ future<> trace_keyspace_helper::start() {
     }
 }
 
-void trace_keyspace_helper::write_session_record(const utils::UUID& session_id,
-                                                 gms::inet_address client,
-                                                 std::unordered_map<sstring, sstring> parameters,
-                                                 sstring request,
-                                                 long started_at,
-                                                 trace_type command,
-                                                 int elapsed,
-                                                 gc_clock::duration ttl) {
-    try {
-        _mutation_makers[session_id].first = [request = std::move(request), client, parameters = std::move(parameters), started_at, command, elapsed, ttl, this] (const utils::UUID& session_id) {
-            return make_session_mutation(session_id, client, parameters, request, started_at, type_to_string(command), elapsed, ttl);
-        };
-    } catch (...) {
-        // OOM: ignore
-    }
+void trace_keyspace_helper::write_one_session_records(lw_shared_ptr<one_session_records> records) {
+    with_gate(_pending_writes, [this, records = std::move(records)] {
+        auto num_records = records->size();
+        return this->flush_one_session_mutations(std::move(records)).finally([this, num_records] { _local_tracing.write_complete(num_records); });
+    }).handle_exception([this] (auto ep) {
+        try {
+            ++_stats.tracing_errors;
+            std::rethrow_exception(ep);
+        } catch (exceptions::overloaded_exception&) {
+            logger.warn("Too many nodes are overloaded to save trace events");
+        } catch (bad_column_family& e) {
+            if (_stats.bad_column_family_errors++ % bad_column_family_message_period == 0) {
+                logger.warn("Tracing is enabled but {}", e.what());
+            }
+        } catch (std::logic_error& e) {
+            logger.error(e.what());
+        } catch (...) {
+            // TODO: Handle some more exceptions maybe?
+        }
+    }).discard_result();
 }
 
-void trace_keyspace_helper::write_event_record(const utils::UUID& session_id,
-                                               sstring message,
-                                               int elapsed,
-                                               gc_clock::duration ttl,
-                                               wall_clock::time_point event_time_point) {
-    try {
-        _mutation_makers[session_id].second.makers.emplace_back([message = std::move(message), elapsed, ttl, event_time_point, this] (const utils::UUID& session_id) mutable {
-            return make_event_mutation(session_id, message, elapsed, _local_tracing.get_thread_name(), ttl, event_time_point);
-        });
-    } catch (...) {
-        // OOM: ignore
-    }
+void trace_keyspace_helper::write_records_bulk(records_bulk& bulk) {
+    logger.trace("Writing {} sessions", bulk.size());
+    std::for_each(bulk.begin(), bulk.end(), [this] (records_bulk::value_type& one_session_records_ptr) {
+        write_one_session_records(std::move(one_session_records_ptr));
+    });
 }
 
-mutation trace_keyspace_helper::make_session_mutation(
-        const utils::UUID& session_id,
-        gms::inet_address client,
-        const std::unordered_map<sstring, sstring>& parameters,
-        const sstring& request,
-        long started_at,
-        const sstring& command,
-        int elapsed,
-        gc_clock::duration ttl) {
+mutation trace_keyspace_helper::make_session_mutation(const one_session_records& session_records) {
     schema_ptr schema = get_schema_ptr_or_create(_sessions_id, SESSIONS, _sessions_create_cql,
                                                  [this] (const schema_ptr& s) { return cache_sessions_table_handles(s); });
 
-    auto key = partition_key::from_singular(*schema, session_id);
+    auto key = partition_key::from_singular(*schema, session_records.session_id);
+    auto ttl = session_records.ttl;
+    const session_record& record = session_records.session_rec;
     auto timestamp = api::new_timestamp();
     mutation m(key, schema);
     auto& cells = m.partition().clustered_row(clustering_key::make_empty(*schema)).cells();
 
-    cells.apply(*_client_column, atomic_cell::make_live(timestamp, inet_addr_type->decompose(client.addr()), ttl));
+    cells.apply(*_client_column, atomic_cell::make_live(timestamp, inet_addr_type->decompose(record.client.addr()), ttl));
     cells.apply(*_coordinator_column, atomic_cell::make_live(timestamp, inet_addr_type->decompose(utils::fb_utilities::get_broadcast_address().addr()), ttl));
-    cells.apply(*_request_column, atomic_cell::make_live(timestamp, utf8_type->decompose(request), ttl));
-    cells.apply(*_started_at_column, atomic_cell::make_live(timestamp, timestamp_type->decompose(started_at), ttl));
-    cells.apply(*_command_column, atomic_cell::make_live(timestamp, utf8_type->decompose(command), ttl));
-    cells.apply(*_duration_column, atomic_cell::make_live(timestamp, int32_type->decompose((int32_t)elapsed), ttl));
+    cells.apply(*_request_column, atomic_cell::make_live(timestamp, utf8_type->decompose(record.request), ttl));
+    cells.apply(*_started_at_column, atomic_cell::make_live(timestamp, timestamp_type->decompose(record.started_at), ttl));
+    cells.apply(*_command_column, atomic_cell::make_live(timestamp, utf8_type->decompose(type_to_string(record.command)), ttl));
+    cells.apply(*_duration_column, atomic_cell::make_live(timestamp, int32_type->decompose((int32_t)record.elapsed), ttl));
 
     std::vector<std::pair<bytes, atomic_cell>> map_cell;
-    for (auto& param_pair : parameters) {
+    for (auto& param_pair : record.parameters) {
         map_cell.emplace_back(utf8_type->decompose(param_pair.first), atomic_cell::make_live(timestamp, utf8_type->decompose(param_pair.second), ttl));
     }
 
@@ -241,80 +239,81 @@ mutation trace_keyspace_helper::make_session_mutation(
     return m;
 }
 
-mutation trace_keyspace_helper::make_event_mutation(const utils::UUID& session_id,
-                                                    const sstring& message,
-                                                    int elapsed,
-                                                    const sstring& thread_name,
-                                                    gc_clock::duration ttl,
-                                                    wall_clock::time_point event_time_point) {
+mutation trace_keyspace_helper::make_event_mutation(one_session_records& session_records, const event_record& record) {
     schema_ptr schema = get_schema_ptr_or_create(_events_id, EVENTS, _events_create_cql,
                                                  [this] (const schema_ptr& s) { return cache_events_table_handles(s); });
 
-    auto key = partition_key::from_singular(*schema, session_id);
+    auto key = partition_key::from_singular(*schema, session_records.session_id);
+    auto ttl = session_records.ttl;
+    auto backend_state_ptr = static_cast<trace_keyspace_backend_sesssion_state*>(session_records.backend_state_ptr.get());
+    int64_t& last_event_nanos = backend_state_ptr->last_nanos;
     auto timestamp = api::new_timestamp();
     mutation m(key, schema);
-    auto& cells = m.partition().clustered_row(clustering_key::from_singular(*schema, utils::UUID_gen::get_time_UUID(make_monotonic_UUID_tp(event_time_point)))).cells();
+    auto& cells = m.partition().clustered_row(clustering_key::from_singular(*schema, utils::UUID_gen::get_time_UUID(make_monotonic_UUID_tp(last_event_nanos, record.event_time_point)))).cells();
 
-    cells.apply(*_activity_column, atomic_cell::make_live(timestamp, utf8_type->decompose(message), ttl));
+    cells.apply(*_activity_column, atomic_cell::make_live(timestamp, utf8_type->decompose(record.message), ttl));
     cells.apply(*_source_column, atomic_cell::make_live(timestamp, inet_addr_type->decompose(utils::fb_utilities::get_broadcast_address().addr()), ttl));
-    cells.apply(*_thread_column, atomic_cell::make_live(timestamp, utf8_type->decompose(thread_name), ttl));
-
-    assert(elapsed >= 0);
-    cells.apply(*_source_elapsed_column, atomic_cell::make_live(timestamp, int32_type->decompose(elapsed), ttl));
+    cells.apply(*_thread_column, atomic_cell::make_live(timestamp, utf8_type->decompose(_local_tracing.get_thread_name()), ttl));
+    cells.apply(*_source_elapsed_column, atomic_cell::make_live(timestamp, int32_type->decompose(record.elapsed), ttl));
 
     return m;
 }
 
-future<> trace_keyspace_helper::flush_one_session_mutations(utils::UUID session_id, std::pair<mutation_maker, events_mutation_makers>& mutation_makers) {
-    return make_ready_future<>().then([this, session_id, events_makers = std::move(mutation_makers.second.makers)] {
-        if (events_makers.size()) {
-            // Reset the "monotinic time point" state machine since it's
-            // relevant in a context of a single tracing session only. The
-            // events from different sessions will differ by a session UUID.
-            reset_monotonic_tp();
-            logger.trace("{}: events number is {}", session_id, events_makers.size());
-            mutation m((*events_makers.begin())(session_id));
-            std::for_each(std::next(events_makers.begin()), events_makers.end(), [&m, &session_id] (const mutation_maker& maker) mutable { m.apply(maker(session_id)); });
+future<> trace_keyspace_helper::apply_events_mutation(lw_shared_ptr<one_session_records> records, std::deque<event_record>& events_records) {
+    if (events_records.empty()) {
+        return make_ready_future<>();
+    }
+
+    logger.trace("{}: storing {} events records", records->session_id, events_records.size());
+
+    mutation m(make_event_mutation(*records, *events_records.begin()));
+
+    return do_with(std::move(m), std::move(events_records), [this, records] (mutation& m, std::deque<event_record>& events_records) {
+        return do_for_each(std::next(events_records.begin()), events_records.end(), [this, &m, &events_records, all_records = records] (event_record& one_event_record) {
+            m.apply(make_event_mutation(*all_records, one_event_record));
+            return make_ready_future<>();
+        }).then([&m] {
             return service::get_local_storage_proxy().mutate({std::move(m)}, db::consistency_level::ANY, nullptr);
-        } else {
-            return make_ready_future<>();
-        }
-    }).then([session_id = std::move(session_id), session_maker = std::move(mutation_makers.first)] {
-        if (session_maker) {
-            logger.trace("{}: storing a session event", session_id);
-            return service::get_local_storage_proxy().mutate({session_maker(session_id)}, db::consistency_level::ANY, nullptr);
-        } else {
-            return make_ready_future<>();
-        }
+        });
     });
 }
 
-void trace_keyspace_helper::kick() {
-    logger.trace("flushing {} sessions", _mutation_makers.size());
-    parallel_for_each(_mutation_makers,[this](decltype(_mutation_makers)::value_type& uuid_mutation_makers) {
-        return with_gate(_pending_writes, [this, &uuid_mutation_makers]  {
-            logger.trace("{}: flushing traces", uuid_mutation_makers.first);
-            return this->flush_one_session_mutations(uuid_mutation_makers.first, uuid_mutation_makers.second).finally([this] { _local_tracing.write_complete(); });
-        }).handle_exception([this] (auto ep) {
-            try {
-                ++_stats.tracing_errors;
-                std::rethrow_exception(ep);
-            } catch (exceptions::overloaded_exception&) {
-                logger.warn("Too many nodes are overloaded to save trace events");
-            } catch (bad_column_family& e) {
-                if (_stats.bad_column_family_errors++ % bad_column_family_message_period == 0) {
-                    logger.warn("Tracing is enabled but {}", e.what());
-                }
-            } catch (...) {
-                // TODO: Handle some more exceptions maybe?
-            }
-        });
-    }).discard_result();
+future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_session_records> records) {
+    // grab events records available so far
+    return do_with(std::move(records->events_recs), [this, records] (std::deque<event_record>& events_records) {
+        records->events_recs.clear();
 
-    // We can clear the hash table here because we cared to capture all relevant
-    // data from it in lambdas' capture-lists inside
-    // flush_one_session_mutations() before any asynchronous call.
-    _mutation_makers.clear();
+        // Check if a session's record is ready before handling events' records.
+        //
+        // New event's records and a session's record may become ready while a
+        // mutation with the current events' records is being written. We don't want
+        // to allow the situation when a session's record is written before the last
+        // event record from the same session.
+        bool session_record_is_ready = records->session_rec.ready();
+
+        // From this point on - all new data will have to be handled in the next write event
+        records->data_consumed();
+
+        // We want to serialize the creation of events mutations in order to ensure
+        // that mutations the events that were created first are going to be created
+        // first too.
+        auto backend_state_ptr = static_cast<trace_keyspace_backend_sesssion_state*>(records->backend_state_ptr.get());
+        semaphore& write_sem = backend_state_ptr->write_sem;
+        return with_semaphore(write_sem, 1, [this, records, session_record_is_ready, &events_records] {
+            return apply_events_mutation(records, events_records).then([this, session_record_is_ready, records] {
+                if (session_record_is_ready) {
+                    logger.trace("{}: storing a session event", records->session_id);
+                    return service::get_local_storage_proxy().mutate({make_session_mutation(*records)}, db::consistency_level::ANY, nullptr);
+                } else {
+                    return make_ready_future<>();
+                }
+            });
+        }).finally([records] {});
+    });
+}
+
+std::unique_ptr<backend_session_state_base> trace_keyspace_helper::allocate_session_state() const {
+    return std::make_unique<trace_keyspace_backend_sesssion_state>();
 }
 
 using registry = class_registrator<i_tracing_backend_helper, trace_keyspace_helper, tracing&>;

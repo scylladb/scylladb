@@ -51,6 +51,8 @@
 
 namespace tracing {
 
+extern logging::logger tracing_logger;
+
 class trace_state;
 class tracing;
 
@@ -99,6 +101,13 @@ public:
     { }
 };
 
+struct one_session_records;
+using records_bulk = std::deque<lw_shared_ptr<one_session_records>>;
+
+struct backend_session_state_base {
+    virtual ~backend_session_state_base() {};
+};
+
 struct i_tracing_backend_helper {
     using wall_clock = std::chrono::system_clock;
 
@@ -112,51 +121,92 @@ public:
     virtual future<> stop() = 0;
 
     /**
-     * Write a new tracing session record
+     * Write a bulk of tracing records.
      *
-     * @param session_id tracing session ID
-     * @param client client IP
-     * @param parameters optional parameters
-     * @param request request we are tracing
-     * @param started_at amount of milliseconds passed since Epoch before this
-     *                   session is started (on a Coordinator Node)
-     * @param command a type of this trace
-     * @param elapsed number of microseconds this tracing session took
-     * @param ttl TTL of a session record
+     * This function has to clear a scheduled state of each one_session_records object
+     * in the @param bulk after it has been actually passed to the backend for writing.
+     *
+     * @param bulk a bulk of records
      */
-    virtual void write_session_record(const utils::UUID& session_id,
-                                      gms::inet_address client,
-                                      std::unordered_map<sstring, sstring> parameters,
-                                      sstring request,
-                                      long started_at,
-                                      trace_type command,
-                                      int elapsed,
-                                      gc_clock::duration ttl) = 0;
+    virtual void write_records_bulk(records_bulk& bulk) = 0;
 
-    /**
-     * Write a new tracing event record
-     * @param session_id tracing session ID
-     * @param message tracing message
-     * @param elapsed number of microseconds passed since a beginning of a
-     *                corresponding tracing session till this event
-     * @param ttl TTL of the event record
-     * @param event_time_point time point when a record was taken
-     */
-    virtual void write_event_record(const utils::UUID& session_id,
-                                    sstring message,
-                                    int elapsed,
-                                    gc_clock::duration ttl,
-                                    wall_clock::time_point event_time_point) = 0;
+    virtual std::unique_ptr<backend_session_state_base> allocate_session_state() const = 0;
 
 private:
-    /**
-     * Commit all pending tracing records to the underlying storage.
-     * The implementation has to call tracing::tracing::write_complete(nr) for
-     * each "nr" completed records once they are written to the backend.
-     */
-    virtual void kick() = 0;
-
     friend class tracing;
+};
+
+struct event_record {
+    sstring message;
+    int elapsed;
+    i_tracing_backend_helper::wall_clock::time_point event_time_point;
+
+    event_record(sstring message_, int elapsed_, i_tracing_backend_helper::wall_clock::time_point event_time_point_)
+        : message(std::move(message_))
+        , elapsed(elapsed_)
+        , event_time_point(event_time_point_) {}
+};
+
+struct session_record {
+    gms::inet_address client;
+    std::unordered_map<sstring, sstring> parameters;
+    sstring request;
+    long started_at = 0;
+    trace_type command = trace_type::NONE;
+    int elapsed = -1;
+
+    bool ready() const {
+        return elapsed >= 0;
+    }
+};
+
+class one_session_records {
+public:
+    utils::UUID session_id;
+    session_record session_rec;
+    gc_clock::duration ttl;
+    std::deque<event_record> events_recs;
+    std::unique_ptr<backend_session_state_base> backend_state_ptr;
+
+    // A pointer to the records counter of the corresponding state new records
+    // of this tracing session should consume from (e.g. "cached" or "pending
+    // for write").
+    uint64_t* budget_ptr;
+
+    one_session_records();
+
+    /**
+     * Consume a single record from the per-shard budget.
+     */
+    void consume_from_budget() {
+        ++(*budget_ptr);
+    }
+
+    /**
+     * Should be called when a record is scheduled for write.
+     * From that point till data_consumed() call all new records will be written
+     * in the next write event.
+     */
+    inline void set_pending_for_write();
+
+    /**
+     * Should be called after all data pending to be written in this record has
+     * been processed.
+     * From that point on new records are cached internally and have to be
+     * explicitly committed for write in order to be written during the write event.
+     */
+    inline void data_consumed();
+
+    bool is_pending_for_write() const {
+        return _is_pending_for_write;
+    }
+
+    uint64_t size() const {
+        return events_recs.size() + session_rec.ready();
+    }
+
+private:
+    bool _is_pending_for_write = false;
 };
 
 using trace_state_ptr = lw_shared_ptr<trace_state>;
@@ -164,22 +214,77 @@ using trace_state_ptr = lw_shared_ptr<trace_state>;
 class tracing : public seastar::async_sharded_service<tracing> {
 public:
     static const gc_clock::duration write_period;
-    static constexpr int max_pending_for_write_sessions = 1000;
-    static constexpr int max_trace_events_per_session = 30;
-    // Number of max threshold XXX hits when an info message is printed
-    static constexpr int max_threshold_hits_warning_period = 10000;
+    // maximum number of sessions pending for write per shard
+    static constexpr int max_pending_sessions = 1000;
+    // expectation of an average number of trace records per session
+    static constexpr int exp_trace_events_per_session = 10;
+    // maximum allowed pending records per-shard
+    static constexpr int max_pending_trace_records = max_pending_sessions * exp_trace_events_per_session;
+    // number of pending sessions that would trigger a write event
+    static constexpr int write_event_sessions_threshold = 100;
+    // number of pending records that would trigger a write event
+    static constexpr int write_event_records_threshold = write_event_sessions_threshold * exp_trace_events_per_session;
+    // Number of events when an info message is printed
+    static constexpr int log_warning_period = 10000;
 
     struct stats {
-        uint64_t max_sessions_threshold_hits = 0;
-        uint64_t max_traces_threshold_hits = 0;
-        uint64_t trace_events_count = 0;
+        uint64_t dropped_sessions = 0;
+        uint64_t dropped_records = 0;
+        uint64_t trace_records_count = 0;
         uint64_t trace_errors = 0;
     } stats;
 
 private:
+    // A number of currently active tracing sessions
     uint64_t _active_sessions = 0;
-    uint64_t _pending_for_write_sessions = 0;
-    uint64_t _flushing_sessions = 0;
+
+    // Below are 3 counters that describe the total amount of tracing records on
+    // this shard. Each counter describes a state in which a record may be.
+    //
+    // Each record may only be in a specific state at every point of time and
+    // thereby it must be accounted only in one and only one of the three
+    // counters below at any given time.
+    //
+    // The sum of all three counters should not be greater than
+    // (max_pending_trace_records + write_event_records_threshold) at any time
+    // (actually it can get as high as a value above plus (max_pending_sessions)
+    // if all sessions are primary but we won't take this into an account for
+    // simplicity).
+    //
+    // The same is about the number of outstanding sessions: it may not be
+    // greater than (max_pending_sessions + write_event_sessions_threshold) at
+    // any time.
+    //
+    // If total number of tracing records is greater or equal to the limit
+    // above, the new trace point is going to be dropped.
+    //
+    // If current number or records plus the expected number of trace records
+    // per session (exp_trace_events_per_session) is greater than the limit
+    // above new sessions will be dropped. A new session will also be dropped if
+    // there are too many active sessions.
+    //
+    // When the record or a session is dropped the appropriate statistics
+    // counters are updated and there is a rate-limited warning message printed
+    // to the log.
+    //
+    // Every time a number of records pending for write is greater or equal to
+    // (write_event_records_threshold) or a number of sessions pending for
+    // write is greater or equal to (write_event_sessions_threshold) a write
+    // event is issued.
+    //
+    // Every 2 seconds a timer would write all pending for write records
+    // available so far.
+
+    // Total number of records cached in the active sessions that are not going
+    // to be written in the next write event
+    uint64_t _cached_records = 0;
+    // Total number of records that are currently being written to I/O
+    uint64_t _flushing_records = 0;
+    // Total number of records in the _pending_for_write_records_bulk. All of
+    // them are going to be written to the I/O during the next write event.
+    uint64_t _pending_for_write_records_count = 0;
+
+    records_bulk _pending_for_write_records_bulk;
     timer<lowres_clock> _write_timer;
     bool _down = false;
     std::unique_ptr<i_tracing_backend_helper> _tracing_backend_helper_ptr;
@@ -228,21 +333,20 @@ public:
     future<> shutdown();
 
     void write_pending_records() {
-        // if service is down - do nothing
-        if (_down) {
-            return;
+        if (_pending_for_write_records_bulk.size()) {
+            _flushing_records += _pending_for_write_records_count;
+            stats.trace_records_count += _pending_for_write_records_count;
+            _pending_for_write_records_count = 0;
+            _tracing_backend_helper_ptr->write_records_bulk(_pending_for_write_records_bulk);
+            _pending_for_write_records_bulk.clear();
         }
-
-        _flushing_sessions += _pending_for_write_sessions;
-        _pending_for_write_sessions = 0;
-        _tracing_backend_helper_ptr->kick();
     }
 
     void write_complete(uint64_t nr = 1) {
-        if (nr > _flushing_sessions) {
-            throw std::logic_error("completing more sessions than there are pending");
+        if (nr > _flushing_records) {
+            throw std::logic_error(seastar::format("completing more records ({:d}) than there are pending ({:d})", nr, _flushing_records));
         }
-        _flushing_sessions -= nr;
+        _flushing_records -= nr;
     }
 
     /**
@@ -256,11 +360,32 @@ public:
      */
     trace_state_ptr create_session(trace_type type, bool write_on_close, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt);
 
-    void end_session() {
-        --_active_sessions;
-        ++_pending_for_write_sessions;
-        if (_pending_for_write_sessions >= max_pending_for_write_sessions) {
+    void write_maybe() {
+        if (_pending_for_write_records_count >= write_event_records_threshold || _pending_for_write_records_bulk.size() >= write_event_sessions_threshold) {
             write_pending_records();
+        }
+    }
+
+    void end_session(lw_shared_ptr<one_session_records> records, bool write_now) {
+        --_active_sessions;
+
+        // if service is down - drop the records and return
+        if (_down) {
+            return;
+        }
+
+        try {
+            schedule_for_write(std::move(records));
+        } catch (...) {
+            // OOM: bump up the error counter and ignore
+            ++stats.trace_errors;
+            return;
+        }
+
+        if (write_now) {
+            write_pending_records();
+        } else {
+            write_maybe();
         }
     }
 
@@ -281,7 +406,64 @@ public:
         return _normalized_trace_probability != 0 && _gen() < _normalized_trace_probability;
     }
 
+    std::unique_ptr<backend_session_state_base> allocate_backend_session_state() const {
+        return _tracing_backend_helper_ptr->allocate_session_state();
+    }
+
+    /**
+     * Checks if there is enough budget for the @param nr new records
+     * @param nr number of new records
+     *
+     * @return TRUE if there is enough budget, FLASE otherwise
+     */
+    bool have_records_budget(uint64_t nr = 1) {
+        // We don't want the total amount of pending, active and flushing records to
+        // bypass the maximum number of pending records plus the number of
+        // records that are possibly being written write now.
+        //
+        // If either records are being created too fast or a backend doesn't
+        // keep up we want to start dropping records.
+        // In any case, this should be rare.
+        if (_pending_for_write_records_count + _cached_records + _flushing_records + nr > max_pending_trace_records + write_event_records_threshold) {
+            return false;
+        }
+
+        return true;
+    }
+
+    uint64_t* get_pending_records_ptr() {
+        return &_pending_for_write_records_count;
+    }
+
+    uint64_t* get_cached_records_ptr() {
+        return &_cached_records;
+    }
+
+    void schedule_for_write(lw_shared_ptr<one_session_records> records) {
+        if (records->is_pending_for_write()) {
+            return;
+        }
+
+        _pending_for_write_records_bulk.emplace_back(records);
+        records->set_pending_for_write();
+
+        // move the current records from a "cached" to "pending for write" state
+        auto current_records_num = records->size();
+        _cached_records -= current_records_num;
+        _pending_for_write_records_count += current_records_num;
+    }
+
 private:
     void write_timer_callback();
 };
+
+void one_session_records::set_pending_for_write() {
+    _is_pending_for_write = true;
+    budget_ptr = tracing::get_local_tracing_instance().get_pending_records_ptr();
+}
+
+void one_session_records::data_consumed() {
+    _is_pending_for_write = false;
+    budget_ptr = tracing::get_local_tracing_instance().get_cached_records_ptr();
+}
 }

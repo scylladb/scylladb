@@ -44,7 +44,7 @@
 
 namespace tracing {
 
-static logging::logger logger("tracing");
+logging::logger tracing_logger("tracing");
 const gc_clock::duration tracing::tracing::write_period = std::chrono::seconds(2);
 
 
@@ -60,16 +60,16 @@ tracing::tracing(const sstring& tracing_backend_helper_class_name)
         , _registrations{
             scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
                     , scollectd::per_cpu_plugin_instance
-                    , "total_operations", "max_sessions_threshold_hits")
-                    , scollectd::make_typed(scollectd::data_type::DERIVE, stats.max_sessions_threshold_hits)),
+                    , "total_operations", "dropped_sessions")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE, stats.dropped_sessions)),
             scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
                     , scollectd::per_cpu_plugin_instance
-                    , "total_operations", "max_traces_threshold_hits")
-                    , scollectd::make_typed(scollectd::data_type::DERIVE, stats.max_traces_threshold_hits)),
+                    , "total_operations", "dropped_records")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE, stats.dropped_records)),
             scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
                     , scollectd::per_cpu_plugin_instance
-                    , "total_operations", "trace_events_count")
-                    , scollectd::make_typed(scollectd::data_type::DERIVE, stats.trace_events_count)),
+                    , "total_operations", "trace_records_count")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE, stats.trace_records_count)),
             scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
                     , scollectd::per_cpu_plugin_instance
                     , "total_operations", "trace_errors")
@@ -80,17 +80,21 @@ tracing::tracing(const sstring& tracing_backend_helper_class_name)
                     , scollectd::make_typed(scollectd::data_type::GAUGE, _active_sessions)),
             scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
                     , scollectd::per_cpu_plugin_instance
-                    , "queue_length", "pending_for_write_sessions")
-                    , scollectd::make_typed(scollectd::data_type::GAUGE, _pending_for_write_sessions)),
+                    , "queue_length", "cached_records")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE, _cached_records)),
             scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
                     , scollectd::per_cpu_plugin_instance
-                    , "queue_length", "flushing_sessions")
-                    , scollectd::make_typed(scollectd::data_type::GAUGE, _flushing_sessions))}
+                    , "queue_length", "pending_for_write_records")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE, _pending_for_write_records_count)),
+            scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
+                    , scollectd::per_cpu_plugin_instance
+                    , "queue_length", "flushing_records")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE, _flushing_records))}
         , _gen(std::random_device()()) {
     try {
         _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(tracing_backend_helper_class_name, *this);
     } catch (no_such_class& e) {
-        logger.error("Can't create tracing backend helper {}: not supported", tracing_backend_helper_class_name);
+        tracing_logger.error("Can't create tracing backend helper {}: not supported", tracing_backend_helper_class_name);
         throw;
     } catch (...) {
         throw;
@@ -108,16 +112,17 @@ future<> tracing::create_tracing(const sstring& tracing_backend_class_name) {
 trace_state_ptr tracing::create_session(trace_type type, bool write_on_close, const std::experimental::optional<utils::UUID>& session_id) {
     trace_state_ptr tstate;
     try {
-        if (_active_sessions + _pending_for_write_sessions + _flushing_sessions > 2 * max_pending_for_write_sessions) {
+        // Don't create a session if its records are likely to be dropped
+        if (!have_records_budget(exp_trace_events_per_session) || _active_sessions >= max_pending_sessions + write_event_sessions_threshold) {
             if (session_id) {
-                logger.trace("{}: Maximum sessions count is reached. Dropping a secondary session", session_id);
+                tracing_logger.trace("{}: Too many outstanding tracing records or sessions. Dropping a secondary session", session_id);
             } else {
-                logger.trace("Maximum sessions count is reached. Dropping a primary session");
+                tracing_logger.trace("Too many outstanding tracing records or sessions. Dropping a primary session");
             }
 
-            if (++stats.max_sessions_threshold_hits % tracing::max_threshold_hits_warning_period == 1) {
-                logger.warn("Maximum sessions limit is hit {} times: open_sessions {}, pending_for_flush_sessions {}, flushing_sessions {}",
-                            stats.max_sessions_threshold_hits, _active_sessions, _pending_for_write_sessions, _flushing_sessions);
+            if (++stats.dropped_sessions % tracing::log_warning_period == 1) {
+                tracing_logger.warn("Dropped {} sessions: open_sessions {}, cached_records {} pending_for_write_records {}, flushing_records {}",
+                            stats.dropped_sessions, _active_sessions, _cached_records, _pending_for_write_records_count, _flushing_records);
             }
 
             return trace_state_ptr();
@@ -142,18 +147,22 @@ void tracing::write_timer_callback() {
         return;
     }
 
-    logger.trace("Timer kicks in: {}", _pending_for_write_sessions ? "writing" : "not writing");
+    tracing_logger.trace("Timer kicks in: {}", _pending_for_write_records_bulk.size() ? "writing" : "not writing");
     write_pending_records();
     _write_timer.arm(write_period);
 }
 
 future<> tracing::shutdown() {
-    logger.info("Asked to shut down");
+    tracing_logger.info("Asked to shut down");
+    if (_down) {
+        throw std::logic_error("tracing: shutdown() called for the service that is already down");
+    }
+
     write_pending_records();
     _down = true;
     _write_timer.cancel();
     return _tracing_backend_helper_ptr->stop().then([] {
-        logger.info("Tracing is down");
+        tracing_logger.info("Tracing is down");
     });
 }
 
@@ -173,7 +182,11 @@ void tracing::set_trace_probability(double p) {
     _trace_probability = p;
     _normalized_trace_probability = std::llround(_trace_probability * (_gen.max() + 1));
 
-    logger.info("Setting tracing probability to {} (normalized {})", _trace_probability, _normalized_trace_probability);
+    tracing_logger.info("Setting tracing probability to {} (normalized {})", _trace_probability, _normalized_trace_probability);
 }
+
+one_session_records::one_session_records()
+    : backend_state_ptr(tracing::get_local_tracing_instance().allocate_backend_session_state())
+    , budget_ptr(tracing::get_local_tracing_instance().get_cached_records_ptr()) {}
 }
 
