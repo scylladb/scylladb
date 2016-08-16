@@ -271,17 +271,17 @@ protected:
     /**
      * @return < 0 if if t1's _data array is less, t2's. 0 if they are equal, and > 0 otherwise. _kind comparison should be done separately.
      */
-    virtual int tri_compare(const token& t1, const token& t2);
+    virtual int tri_compare(const token& t1, const token& t2) const;
     /**
      * @return true if t1's _data array is equal t2's. _kind comparison should be done separately.
      */
-    bool is_equal(const token& t1, const token& t2) {
+    bool is_equal(const token& t1, const token& t2) const {
         return tri_compare(t1, t2) == 0;
     }
     /**
      * @return true if t1's _data array is less then t2's. _kind comparison should be done separately.
      */
-    bool is_less(const token& t1, const token& t2) {
+    bool is_less(const token& t1, const token& t2) const {
         return tri_compare(t1, t2) < 0;
     }
 

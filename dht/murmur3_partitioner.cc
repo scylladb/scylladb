@@ -116,7 +116,7 @@ dht::token murmur3_partitioner::from_bytes(bytes_view bytes) const {
     }
 }
 
-int murmur3_partitioner::tri_compare(const token& t1, const token& t2) {
+int murmur3_partitioner::tri_compare(const token& t1, const token& t2) const {
     auto l1 = long_token(t1);
     auto l2 = long_token(t2);
 

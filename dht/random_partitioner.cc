@@ -108,7 +108,7 @@ token random_partitioner::get_token(const sstables::key_view& key) {
     return get_token(bytes(v.begin(), v.end()));
 }
 
-int random_partitioner::tri_compare(const token& t1, const token& t2) {
+int random_partitioner::tri_compare(const token& t1, const token& t2) const {
     auto l1 = token_to_cppint(t1);
     auto l2 = token_to_cppint(t2);
 

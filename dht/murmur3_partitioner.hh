@@ -37,7 +37,7 @@ public:
     virtual bool preserves_order() override { return false; }
     virtual std::map<token, float> describe_ownership(const std::vector<token>& sorted_tokens) override;
     virtual data_type get_token_validator() override;
-    virtual int tri_compare(const token& t1, const token& t2) override;
+    virtual int tri_compare(const token& t1, const token& t2) const override;
     virtual token midpoint(const token& t1, const token& t2) const override;
     virtual sstring to_sstring(const dht::token& t) const override;
     virtual dht::token from_sstring(const sstring& t) const override;
