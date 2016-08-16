@@ -799,6 +799,11 @@ column_family::seal_active_memtable(memtable_list::flush_behavior ignored) {
     _highest_flushed_rp = old->replay_position();
 
     return _flush_queue->run_cf_flush(old->replay_position(), [old, this] {
+      auto memtable_size = old->occupancy().total_space();
+
+      _config.cf_stats->pending_memtables_flushes_count++;
+      _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
+
       return _config.dirty_memory_manager->serialize_flush([this, old] {
         return repeat([this, old] {
             return with_lock(_sstables_lock.for_read(), [this, old] {
@@ -806,6 +811,9 @@ column_family::seal_active_memtable(memtable_list::flush_behavior ignored) {
                 return try_flush_memtable_to_sstable(old);
             });
         });
+      }).then([this, memtable_size] {
+        _config.cf_stats->pending_memtables_flushes_count--;
+        _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
       });
     }, [old, this] {
         if (_commitlog) {
@@ -825,10 +833,6 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
         sstables::sstable::version_types::ka,
         sstables::sstable::format_types::big);
 
-    auto memtable_size = old->occupancy().total_space();
-
-    _config.cf_stats->pending_memtables_flushes_count++;
-    _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
     newtab->set_unshared();
     dblog.debug("Flushing to {}", newtab->get_filename());
     // Note that due to our sharded architecture, it is possible that
@@ -845,9 +849,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
     auto&& priority = service::get_local_memtable_flush_priority();
     return newtab->write_components(*old, incremental_backups_enabled(), priority).then([this, newtab, old] {
         return newtab->open_data();
-    }).then_wrapped([this, old, newtab, memtable_size] (future<> ret) {
-        _config.cf_stats->pending_memtables_flushes_count--;
-        _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
+    }).then_wrapped([this, old, newtab] (future<> ret) {
         dblog.debug("Flushing to {} done", newtab->get_filename());
         try {
             ret.get();
