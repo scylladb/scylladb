@@ -487,7 +487,11 @@ protected:
         });
 
     }
-    future<> done() { return _listing.done(); }
+    future<> done() {
+        return _listing.done().then([this] {
+            return _f.close();
+        });
+    }
 private:
     future<directory_entry> guarantee_type(directory_entry de) {
         if (de.type) {
