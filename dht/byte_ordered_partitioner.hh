@@ -29,7 +29,9 @@
 namespace dht {
 
 class byte_ordered_partitioner final : public i_partitioner {
+    unsigned _shard_count;
 public:
+    byte_ordered_partitioner(unsigned shard_count = smp::count) : _shard_count(shard_count) {}
     virtual const sstring name() { return "org.apache.cassandra.dht.ByteOrderedPartitioner"; }
     virtual token get_token(const schema& s, partition_key_view key) override {
         auto&& legacy = key.legacy_form(s);

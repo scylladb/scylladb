@@ -150,13 +150,13 @@ byte_ordered_partitioner::shard_of(const token& t) const {
         case token::kind::before_all_keys:
             return 0;
         case token::kind::after_all_keys:
-            return smp::count - 1;
+            return _shard_count - 1;
         case token::kind::key:
             if (t._data.empty()) {
                 return 0;
             }
             // treat first byte as a fraction in the range [0, 1) and divide it evenly:
-            return (uint8_t(t._data[0]) * smp::count) >> 8;
+            return (uint8_t(t._data[0]) * _shard_count) >> 8;
     }
     assert(0);
 }

@@ -208,13 +208,13 @@ unsigned random_partitioner::shard_of(const token& t) const {
         case token::kind::before_all_keys:
             return 0;
         case token::kind::after_all_keys:
-            return smp::count - 1;
+            return _shard_count - 1;
         case token::kind::key:
-            auto i = (boost::multiprecision::uint256_t(token_to_cppint(t)) * smp::count) >> 127;
-            // token can be [0, 2^127], make sure smp be [0, smp::count)
+            auto i = (boost::multiprecision::uint256_t(token_to_cppint(t)) * _shard_count) >> 127;
+            // token can be [0, 2^127], make sure smp be [0, _shard_count)
             auto smp = i.convert_to<unsigned>();
-            if (smp >= smp::count) {
-                return smp::count - 1;
+            if (smp >= _shard_count) {
+                return _shard_count - 1;
             }
             return smp;
     }

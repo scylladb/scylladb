@@ -27,7 +27,9 @@
 namespace dht {
 
 class murmur3_partitioner final : public i_partitioner {
+    unsigned _shard_count;
 public:
+    murmur3_partitioner(unsigned shard_count = smp::count) : _shard_count(shard_count) {}
     virtual const sstring name() { return "org.apache.cassandra.dht.Murmur3Partitioner"; }
     virtual token get_token(const schema& s, partition_key_view key) override;
     virtual token get_token(const sstables::key_view& key) override;
