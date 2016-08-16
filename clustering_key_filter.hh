@@ -28,8 +28,7 @@
 #include "core/shared_ptr.hh"
 #include "database_fwd.hh"
 #include "schema.hh"
-
-template<typename T> class range;
+#include "range.hh"
 
 namespace query {
 
@@ -45,7 +44,7 @@ public:
     virtual clustering_key_filter get_filter(const partition_key&) = 0;
     // Create a clustering key filter that can be used for multiple clustering keys but they have to be sorted.
     virtual clustering_key_filter get_filter_for_sorted(const partition_key&) = 0;
-    virtual const std::vector<range<clustering_key_prefix>>& get_ranges(const partition_key&) = 0;
+    virtual const std::vector<nonwrapping_range<clustering_key_prefix>>& get_ranges(const partition_key&) = 0;
     // Whether we want to get the static row, in addition to the desired clustering rows
     virtual bool want_static_columns(const partition_key&) = 0;
 
@@ -66,7 +65,7 @@ public:
     clustering_key_filter get_filter_for_sorted(const partition_key& key) const {
         return _factory ? _factory->get_filter_for_sorted(key) : [] (const clustering_key&) { return true; };
     }
-    const std::vector<range<clustering_key_prefix>>& get_ranges(const partition_key& key) const;
+    const std::vector<nonwrapping_range<clustering_key_prefix>>& get_ranges(const partition_key& key) const;
 
     bool want_static_columns(const partition_key& key)  const {
         return _factory ? _factory->want_static_columns(key) : true;

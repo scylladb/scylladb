@@ -346,7 +346,7 @@ public:
             row_limit = column_limit;
             partition_limit = query::max_partitions;
             if (start_column) {
-                auto sr = query::specific_ranges(*range.start()->value().key(), {make_clustering_range(s, *start_column, std::string())});
+                auto sr = query::specific_ranges(*range.start()->value().key(), {make_clustering_range_and_validate(s, *start_column, std::string())});
                 specific_ranges = std::make_unique<query::specific_ranges>(std::move(sr));
             }
             regular_columns.emplace_back(s.regular_begin()->id);
@@ -1289,8 +1289,8 @@ private:
         }));
         return query::clustering_range::bound(std::move(ck), last != exclusiveness_marker);
     }
-    static query::clustering_range make_clustering_range(const schema& s, const std::string& start, const std::string& end) {
-        using bound = query::clustering_range::bound;
+    static range<clustering_key_prefix> make_clustering_range(const schema& s, const std::string& start, const std::string& end) {
+        using bound = range<clustering_key_prefix>::bound;
         stdx::optional<bound> start_bound;
         if (!start.empty()) {
             start_bound = make_clustering_bound(s, to_bytes_view(start), composite::eoc::end);
@@ -1299,11 +1299,14 @@ private:
         if (!end.empty()) {
             end_bound = make_clustering_bound(s, to_bytes_view(end), composite::eoc::start);
         }
-        query::clustering_range range = { std::move(start_bound), std::move(end_bound) };
+        return { std::move(start_bound), std::move(end_bound) };
+    }
+    static query::clustering_range make_clustering_range_and_validate(const schema& s, const std::string& start, const std::string& end) {
+        auto range = make_clustering_range(s, start, end);
         if (range.is_wrap_around(clustering_key_prefix::prefix_equal_tri_compare(s))) {
             throw make_exception<InvalidRequestException>("Range finish must come after start in the order of traversal");
         }
-        return range;
+        return query::clustering_range(std::move(range));
     }
     static range<bytes> make_range(const std::string& start, const std::string& end) {
         using bound = range<bytes>::bound;
@@ -1377,7 +1380,7 @@ private:
             }
             per_partition_row_limit = static_cast<uint32_t>(range.count);
             if (s.thrift().is_dynamic()) {
-                clustering_ranges.emplace_back(make_clustering_range(s, range.start, range.finish));
+                clustering_ranges.emplace_back(make_clustering_range_and_validate(s, range.start, range.finish));
                 regular_columns.emplace_back(s.regular_begin()->id);
             } else {
                 clustering_ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
@@ -1589,12 +1592,12 @@ private:
         return ret;
     }
     template<typename RangeType, typename Comparator>
-    static std::vector<range<RangeType>> make_non_overlapping_ranges(
+    static std::vector<nonwrapping_range<RangeType>> make_non_overlapping_ranges(
             std::vector<ColumnSlice> column_slices,
-            const std::function<range<RangeType>(ColumnSlice&&)> mapper,
-            const Comparator&& cmp,
+            const std::function<wrapping_range<RangeType>(ColumnSlice&&)> mapper,
+            Comparator&& cmp,
             bool reversed) {
-        std::vector<range<RangeType>> ranges;
+        std::vector<nonwrapping_range<RangeType>> ranges;
         std::transform(column_slices.begin(), column_slices.end(), std::back_inserter(ranges), [&](auto&& cslice) {
             auto range = mapper(std::move(cslice));
             if (!reversed && range.is_wrap_around(cmp)) {
@@ -1603,10 +1606,15 @@ private:
                 throw make_exception<InvalidRequestException>("Reversed column slice had start %s less than finish %s", cslice.start, cslice.finish);
             } else if (reversed) {
                 range.reverse();
+                if (range.is_wrap_around(cmp)) {
+                    // If a wrap around range is still wrapping after reverse, then it's (a, a). This is equivalent
+                    // to an open ended range.
+                    range = wrapping_range<RangeType>::make_open_ended_both_sides();
+                }
             }
-            return range;
+            return nonwrapping_range<RangeType>(std::move(range));
         });
-        return range<RangeType>::deoverlap(std::move(ranges), cmp);
+        return nonwrapping_range<RangeType>::deoverlap(std::move(ranges), std::forward<Comparator>(cmp));
     }
     static range_tombstone make_range_tombstone(const schema& s, const SliceRange& range, tombstone tomb) {
         using bound = query::clustering_range::bound;

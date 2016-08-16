@@ -34,11 +34,11 @@
 namespace query {
 
 template <typename T>
-using range = ::range<T>;
+using range = wrapping_range<T>;
 
 using ring_position = dht::ring_position;
 using partition_range = range<ring_position>;
-using clustering_range = range<clustering_key_prefix>;
+using clustering_range = nonwrapping_range<clustering_key_prefix>;
 
 extern const partition_range full_partition_range;
 
