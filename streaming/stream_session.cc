@@ -419,9 +419,14 @@ void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::ra
     auto cfs = get_column_family_stores(keyspace, column_families);
     for (auto& cf : cfs) {
         auto cf_id = cf->schema()->id();
-        stream_transfer_task task(shared_from_this(), cf_id, ranges);
-        auto inserted = _transfers.emplace(cf_id, std::move(task)).second;
-        assert(inserted);
+        auto it = _transfers.find(cf_id);
+        if (it == _transfers.end()) {
+            stream_transfer_task task(shared_from_this(), cf_id, ranges);
+            auto inserted = _transfers.emplace(cf_id, std::move(task)).second;
+            assert(inserted);
+        } else {
+            it->second.append_ranges(ranges);
+        }
     }
 }
 
