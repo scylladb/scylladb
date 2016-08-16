@@ -75,6 +75,7 @@ public:
         }
     }
     virtual unsigned shard_of(const token& t) const override;
+    virtual token token_for_next_shard(const token& t) const override;
 };
 
 }

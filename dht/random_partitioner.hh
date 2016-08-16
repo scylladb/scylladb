@@ -46,6 +46,7 @@ public:
     virtual dht::token from_sstring(const sstring& t) const override;
     virtual dht::token from_bytes(bytes_view bytes) const override;
     virtual unsigned shard_of(const token& t) const override;
+    virtual token token_for_next_shard(const token& t) const override;
 private:
     token get_token(bytes data);
 };

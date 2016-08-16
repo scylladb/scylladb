@@ -161,6 +161,29 @@ byte_ordered_partitioner::shard_of(const token& t) const {
     assert(0);
 }
 
+token
+byte_ordered_partitioner::token_for_next_shard(const token& t) const {
+    switch (t._kind) {
+    case token::kind::before_all_keys:
+        return token_for_next_shard(token(token::kind::key, managed_bytes{int8_t(0)}));
+    case token::kind::after_all_keys:
+        return maximum_token();
+    case token::kind::key:
+        auto s = shard_of(t) + 1;
+        if (s == _shard_count) {
+            return maximum_token();
+        }
+        auto e = (s << 8) / _shard_count;
+        // Division truncates; adjust
+        while (((e * _shard_count) >> 8) != s) {
+            ++e;
+        }
+        return token(token::kind::key, managed_bytes({int8_t(e)}));
+    }
+    assert(0);
+}
+
+
 using registry = class_registrator<i_partitioner, byte_ordered_partitioner>;
 static registry registrator("org.apache.cassandra.dht.ByteOrderedPartitioner");
 static registry registrator_short_name("ByteOrderedPartitioner");

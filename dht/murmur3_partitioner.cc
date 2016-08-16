@@ -219,6 +219,33 @@ murmur3_partitioner::shard_of(const token& t) const {
     assert(0);
 }
 
+token
+murmur3_partitioner::token_for_next_shard(const token& t) const {
+    switch (t._kind) {
+        case token::kind::before_all_keys:
+            return token_for_next_shard(get_token(std::numeric_limits<int64_t>::min() + 1));
+        case token::kind::after_all_keys:
+            return maximum_token();
+        case token::kind::key:
+            if (long_token(t) == std::numeric_limits<int64_t>::min()) {
+                return token_for_next_shard(get_token(std::numeric_limits<int64_t>::min() + 1));
+            }
+            using uint128 = unsigned __int128;
+            auto s = shard_of(t) + 1;
+            if (s == _shard_count) {
+                return maximum_token();
+            }
+            uint64_t e = (uint128(s) << 64) / _shard_count;
+            while (((uint128(e) * _shard_count) >> 64) != s) {
+                // division will round down, so correct for it
+                ++e;
+            }
+            return get_token(e + uint64_t(std::numeric_limits<int64_t>::min()));
+    }
+    assert(0);
+}
+
+
 using registry = class_registrator<i_partitioner, murmur3_partitioner>;
 static registry registrator("org.apache.cassandra.dht.Murmur3Partitioner");
 static registry registrator_short_name("Murmur3Partitioner");
