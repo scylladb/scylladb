@@ -118,14 +118,14 @@ bool trace_keyspace_helper::cache_sessions_table_handles(const schema_ptr& schem
     _duration_column = schema->get_column_definition("duration");
     _parameters_column = schema->get_column_definition("parameters");
 
-    if (session_id_column && session_id_column->type == uuid_type &&
-        _client_column && _client_column->type == inet_addr_type &&
-        _coordinator_column && _coordinator_column->type == inet_addr_type &&
-        _request_column && _request_column->type == utf8_type &&
-        _started_at_column && _started_at_column->type == timestamp_type &&
-        _command_column && _command_column->type == utf8_type &&
-        _duration_column && _duration_column->type == int32_type &&
-        _parameters_column && _parameters_column->type && map_type_impl::get_instance(utf8_type, utf8_type, true)) {
+    if (check_column_definition(session_id_column, uuid_type) &&
+        check_column_definition(_client_column, inet_addr_type) &&
+        check_column_definition(_coordinator_column, inet_addr_type) &&
+        check_column_definition(_request_column, utf8_type) &&
+        check_column_definition(_started_at_column, timestamp_type) &&
+        check_column_definition(_command_column, utf8_type) &&
+        check_column_definition(_duration_column, int32_type) &&
+        check_column_definition(_parameters_column, map_type_impl::get_instance(utf8_type, utf8_type, true))) {
         // store a table ID only if its format meets our demands
         _sessions_id = schema->id();
         return true;
@@ -143,12 +143,12 @@ bool trace_keyspace_helper::cache_events_table_handles(const schema_ptr& schema)
     _thread_column = schema->get_column_definition("thread");
     _source_elapsed_column = schema->get_column_definition("source_elapsed");
 
-    if (session_id_column && session_id_column->type == uuid_type &&
-        event_id_column && event_id_column->type == timeuuid_type &&
-        _activity_column && _activity_column->type == utf8_type &&
-        _source_column && _source_column->type == inet_addr_type &&
-        _thread_column && _thread_column->type == utf8_type &&
-        _source_elapsed_column && _source_elapsed_column->type == int32_type) {
+    if (check_column_definition(session_id_column, uuid_type) &&
+        check_column_definition(event_id_column, timeuuid_type) &&
+        check_column_definition(_activity_column, utf8_type) &&
+        check_column_definition(_source_column, inet_addr_type) &&
+        check_column_definition(_thread_column, utf8_type) &&
+        check_column_definition(_source_elapsed_column, int32_type)) {
         // store a table ID only if its format meets our demands
         _events_id = schema->id();
         return true;

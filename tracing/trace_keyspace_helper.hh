@@ -253,6 +253,10 @@ private:
 
         return elapsed_micros;
     }
+
+    bool check_column_definition(const column_definition* column_def, const shared_ptr<const abstract_type>& abstracet_type_inst) const {
+        return column_def && column_def->type == abstracet_type_inst;
+    }
 };
 
 struct bad_column_family : public std::exception {
