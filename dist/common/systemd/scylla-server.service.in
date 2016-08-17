@@ -12,7 +12,6 @@ LimitAS=infinity
 LimitNPROC=8096
 EnvironmentFile=@@SYSCONFDIR@@/scylla-server
 EnvironmentFile=/etc/scylla.d/*.conf
-WorkingDirectory=$SCYLLA_HOME
 ExecStartPre=/usr/lib/scylla/scylla_prepare
 ExecStart=/usr/bin/scylla $SCYLLA_ARGS $SEASTAR_IO $DEV_MODE $CPUSET
 ExecStopPost=/usr/lib/scylla/scylla_stop
