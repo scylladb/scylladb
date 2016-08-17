@@ -21,8 +21,8 @@
                "parameters":[
                   {
                      "name":"host",
-                     "description":"The host name",
-                     "required":true,
+                     "description":"The host name. If absent, the local server broadcast/listen address is used",
+                     "required":false,
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"query"
@@ -45,8 +45,8 @@
                "parameters":[
                   {
                      "name":"host",
-                     "description":"The host name",
-                     "required":true,
+                     "description":"The host name. If absent, the local server broadcast/listen address is used",
+                     "required":false,
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"query"
