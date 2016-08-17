@@ -21,6 +21,7 @@
 
 #include <stack>
 #include <boost/range/algorithm/heap_algorithm.hpp>
+#include <seastar/util/defer.hh>
 
 #include "mutation.hh"
 #include "streamed_mutation.hh"
@@ -139,16 +140,16 @@ streamed_mutation streamed_mutation_from_mutation(mutation m)
             auto& crs = _mutation.partition().clustered_rows();
             auto re = crs.unlink_leftmost_without_rebalance();
             if (re) {
+                auto re_deleter = defer([re] { current_deleter<rows_entry>()(re); });
                 _cr = mutation_fragment(std::move(*re));
-                current_deleter<rows_entry>()(re);
             }
         }
         void prepare_next_range_tombstone() {
             auto& rts = _mutation.partition().row_tombstones().tombstones();
             auto rt = rts.unlink_leftmost_without_rebalance();
             if (rt) {
+                auto rt_deleter = defer([rt] { current_deleter<range_tombstone>()(rt); });
                 _rt = mutation_fragment(std::move(*rt));
-                current_deleter<range_tombstone>()(rt);
             }
         }
         mutation_fragment_opt read_next() {
@@ -412,3 +413,4 @@ streamed_mutation reverse_streamed_mutation(streamed_mutation sm) {
 
     return make_streamed_mutation<reversing_steamed_mutation>(std::move(sm));
 };
+
