@@ -64,6 +64,17 @@ SEASTAR_TEST_CASE(test_mutation_from_streamed_mutation_from_mutation) {
     });
 }
 
+SEASTAR_TEST_CASE(test_abandoned_streamed_mutation_from_mutation) {
+    return seastar::async([] {
+        for_each_mutation([&] (const mutation& m) {
+            auto sm = streamed_mutation_from_mutation(mutation(m));
+            sm().get();
+            sm().get();
+            // We rely on AddressSanitizer telling us if nothing was leaked.
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_mutation_merger) {
     return seastar::async([] {
         for_each_mutation_pair([&] (const mutation& m1, const mutation& m2, are_equal) {

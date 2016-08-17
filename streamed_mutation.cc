@@ -21,6 +21,7 @@
 
 #include <stack>
 #include <boost/range/algorithm/heap_algorithm.hpp>
+#include <seastar/util/defer.hh>
 
 #include "mutation.hh"
 #include "streamed_mutation.hh"
@@ -139,16 +140,16 @@ streamed_mutation streamed_mutation_from_mutation(mutation m)
             auto& crs = _mutation.partition().clustered_rows();
             auto re = crs.unlink_leftmost_without_rebalance();
             if (re) {
+                auto re_deleter = defer([re] { current_deleter<rows_entry>()(re); });
                 _cr = mutation_fragment(std::move(*re));
-                current_deleter<rows_entry>()(re);
             }
         }
         void prepare_next_range_tombstone() {
             auto& rts = _mutation.partition().row_tombstones().tombstones();
             auto rt = rts.unlink_leftmost_without_rebalance();
             if (rt) {
+                auto rt_deleter = defer([rt] { current_deleter<range_tombstone>()(rt); });
                 _rt = mutation_fragment(std::move(*rt));
-                current_deleter<range_tombstone>()(rt);
             }
         }
         mutation_fragment_opt read_next() {
@@ -190,6 +191,27 @@ streamed_mutation streamed_mutation_from_mutation(mutation m)
             prepare_next_range_tombstone();
 
             do_fill_buffer();
+        }
+
+        ~reader() {
+            // After unlink_leftmost_without_rebalance() was called on a bi::set
+            // we need to complete destroying the tree using that function.
+            // clear_and_dispose() used by mutation_partition destructor won't
+            // work properly.
+
+            auto& crs = _mutation.partition().clustered_rows();
+            auto re = crs.unlink_leftmost_without_rebalance();
+            while (re) {
+                current_deleter<rows_entry>()(re);
+                re = crs.unlink_leftmost_without_rebalance();
+            }
+
+            auto& rts = _mutation.partition().row_tombstones().tombstones();
+            auto rt = rts.unlink_leftmost_without_rebalance();
+            while (rt) {
+                current_deleter<range_tombstone>()(rt);
+                rt = rts.unlink_leftmost_without_rebalance();
+            }
         }
 
         virtual future<> fill_buffer() override {
@@ -412,3 +434,4 @@ streamed_mutation reverse_streamed_mutation(streamed_mutation sm) {
 
     return make_streamed_mutation<reversing_steamed_mutation>(std::move(sm));
 };
+
