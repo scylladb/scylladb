@@ -418,7 +418,14 @@ future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_se
             return apply_events_mutation(records, events_records).then([this, session_record_is_ready, records] {
                 if (session_record_is_ready) {
                     logger.trace("{}: storing a session event", records->session_id);
-                    return service::get_local_storage_proxy().mutate({make_session_mutation(*records)}, db::consistency_level::ANY, nullptr);
+                    return service::get_local_storage_proxy().mutate({make_session_mutation(*records)}, db::consistency_level::ANY, nullptr).then([this, records] {
+                        if (!records->do_log_slow_query) {
+                            return make_ready_future<>();
+                        }
+
+                        logger.trace("{}: storing a slow query event", records->session_id);
+                        return service::get_local_storage_proxy().mutate({make_slow_query_mutation(*records)}, db::consistency_level::ANY, nullptr);
+                    });
                 } else {
                     return make_ready_future<>();
                 }

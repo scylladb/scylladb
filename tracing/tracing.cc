@@ -46,6 +46,8 @@ namespace tracing {
 
 logging::logger tracing_logger("tracing");
 const gc_clock::duration tracing::tracing::write_period = std::chrono::seconds(2);
+const std::chrono::seconds tracing::tracing::default_slow_query_record_ttl = std::chrono::seconds(86400);
+const std::chrono::microseconds tracing::tracing::default_slow_query_duraion_threshold = std::chrono::milliseconds(500);
 
 std::vector<sstring> trace_type_names = {
     "NONE",
@@ -89,7 +91,9 @@ tracing::tracing(const sstring& tracing_backend_helper_class_name)
                     , scollectd::per_cpu_plugin_instance
                     , "queue_length", "flushing_records")
                     , scollectd::make_typed(scollectd::data_type::GAUGE, _flushing_records))}
-        , _gen(std::random_device()()) {
+        , _gen(std::random_device()())
+        , _slow_query_duration_threshold(default_slow_query_duraion_threshold)
+        , _slow_query_record_ttl(default_slow_query_record_ttl) {
     try {
         _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(tracing_backend_helper_class_name, *this);
     } catch (no_such_class& e) {

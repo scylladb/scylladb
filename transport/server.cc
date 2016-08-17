@@ -463,14 +463,16 @@ cql_server::connection::read_frame() {
 future<response_type>
     cql_server::connection::process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request) {
     auto cqlop = static_cast<cql_binary_opcode>(op);
+    tracing::trace_state_props_set trace_props;
 
-    if (tracing_request != tracing_request_type::not_requested) {
+    trace_props.set_if<tracing::trace_state_props::log_slow_query>(tracing::tracing::get_local_tracing_instance().slow_query_tracing_enabled());
+    trace_props.set_if<tracing::trace_state_props::full_tracing>(tracing_request != tracing_request_type::not_requested);
+
+    if (trace_props) {
         if (cqlop == cql_binary_opcode::QUERY ||
             cqlop == cql_binary_opcode::PREPARE ||
             cqlop == cql_binary_opcode::EXECUTE ||
             cqlop == cql_binary_opcode::BATCH) {
-            tracing::trace_state_props_set trace_props;
-
             trace_props.set_if<tracing::trace_state_props::write_on_close>(tracing_request == tracing_request_type::write_on_close);
             client_state.create_tracing_session(tracing::trace_type::QUERY, trace_props);
         }

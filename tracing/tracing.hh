@@ -98,12 +98,14 @@ inline std::chrono::seconds ttl_by_type(const trace_type t) {
 //
 // Otherwise this may break IDL's backward compatibility.
 enum class trace_state_props {
-    write_on_close, primary
+    write_on_close, primary, log_slow_query, full_tracing
 };
 
 using trace_state_props_set = enum_set<super_enum<trace_state_props,
     trace_state_props::write_on_close,
-    trace_state_props::primary>>;
+    trace_state_props::primary,
+    trace_state_props::log_slow_query,
+    trace_state_props::full_tracing>>;
 
 class trace_info {
 public:
@@ -111,13 +113,17 @@ public:
     trace_type type;
     bool write_on_close;
     trace_state_props_set state_props;
+    uint32_t slow_query_threshold_us; // in microseconds
+    uint32_t slow_query_ttl_sec; // in seconds
 
 public:
-    trace_info(utils::UUID sid, trace_type t, bool w_o_c, trace_state_props_set s_p)
+    trace_info(utils::UUID sid, trace_type t, bool w_o_c, trace_state_props_set s_p, uint32_t slow_query_threshold, uint32_t slow_query_ttl)
         : session_id(std::move(sid))
         , type(t)
         , write_on_close(w_o_c)
         , state_props(s_p)
+        , slow_query_threshold_us(slow_query_threshold)
+        , slow_query_ttl_sec(slow_query_ttl)
     {
         state_props.set_if<trace_state_props::write_on_close>(write_on_close);
     }
@@ -207,6 +213,7 @@ public:
     std::chrono::seconds ttl;
     std::deque<event_record> events_recs;
     std::unique_ptr<backend_session_state_base> backend_state_ptr;
+    bool do_log_slow_query = false;
 
     // A pointer to the records counter of the corresponding state new records
     // of this tracing session should consume from (e.g. "cached" or "pending
@@ -220,6 +227,15 @@ public:
      */
     void consume_from_budget() {
         ++(*budget_ptr);
+    }
+
+    /**
+     * Drop all pending records and return the budget.
+     */
+    void drop_records() {
+        (*budget_ptr) -= size();
+        events_recs.clear();
+        session_rec.set_consumed();
     }
 
     /**
@@ -266,6 +282,9 @@ public:
     static constexpr int write_event_records_threshold = write_event_sessions_threshold * exp_trace_events_per_session;
     // Number of events when an info message is printed
     static constexpr int log_warning_period = 10000;
+
+    static const std::chrono::microseconds default_slow_query_duraion_threshold;
+    static const std::chrono::seconds default_slow_query_record_ttl;
 
     struct stats {
         uint64_t dropped_sessions = 0;
@@ -327,12 +346,15 @@ private:
     records_bulk _pending_for_write_records_bulk;
     timer<lowres_clock> _write_timer;
     bool _down = false;
+    bool _slow_query_logging_enabled = false;
     std::unique_ptr<i_tracing_backend_helper> _tracing_backend_helper_ptr;
     sstring _thread_name;
     scollectd::registrations _registrations;
     double _trace_probability = 0.0; // keep this one for querying purposes
     uint64_t _normalized_trace_probability = 0;
     std::ranlux48_base _gen;
+    std::chrono::microseconds _slow_query_duration_threshold;
+    std::chrono::seconds _slow_query_record_ttl;
 
 public:
     i_tracing_backend_helper& backend_helper() {
@@ -501,6 +523,62 @@ public:
         auto current_records_num = records->size();
         _cached_records -= current_records_num;
         _pending_for_write_records_count += current_records_num;
+    }
+
+    void set_slow_query_enabled(bool enable = true) {
+        _slow_query_logging_enabled = enable;
+    }
+
+    bool slow_query_tracing_enabled() const {
+        return _slow_query_logging_enabled;
+    }
+
+    /**
+     * Set the slow query threshold
+     *
+     * We limit the number of microseconds in the threshold by a maximal unsigned 32-bit
+     * integer.
+     *
+     * If a new threshold value exceeds the above limitation we will override it
+     * with the value based on a limit above.
+     *
+     * @param new_threshold new threshold value
+     */
+    void set_slow_query_threshold(std::chrono::microseconds new_threshold) {
+        if (new_threshold.count() > std::numeric_limits<uint32_t>::max()) {
+            _slow_query_duration_threshold = std::chrono::microseconds(std::numeric_limits<uint32_t>::max());
+            return;
+        }
+
+        _slow_query_duration_threshold = new_threshold;
+    }
+
+    std::chrono::microseconds slow_query_threshold() const {
+        return _slow_query_duration_threshold;
+    }
+
+    /**
+     * Set the slow query record TTL
+     *
+     * We limit the number of seconds in the TTL by a maximal unsigned 32-bit
+     * integer.
+     *
+     * If a new TTL value exceeds the above limitation we will override it
+     * with the value based on a limit above.
+     *
+     * @param new_ttl new TTL
+     */
+    void set_slow_query_record_ttl(std::chrono::seconds new_ttl) {
+        if (new_ttl.count() > std::numeric_limits<uint32_t>::max()) {
+            _slow_query_record_ttl = std::chrono::seconds(std::numeric_limits<uint32_t>::max());
+            return;
+        }
+
+        _slow_query_record_ttl = new_ttl;
+    }
+
+    std::chrono::seconds slow_query_record_ttl() const {
+        return _slow_query_record_ttl;
     }
 
 private:

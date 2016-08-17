@@ -82,11 +82,9 @@ private:
     // Used for calculation of time passed since the beginning of a tracing
     // session till each tracing event.
     elapsed_clock::time_point _start;
-
+    std::chrono::microseconds _slow_query_threshold;
     trace_state_props_set _state_props;
-
     state _state = state::inactive;
-
     std::chrono::system_clock::rep _started_at;
     gms::inet_address _client;
     sstring _request;
@@ -132,10 +130,15 @@ public:
         : _state_props(props)
         , _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
     {
+        if (!full_tracing() && !log_slow_query()) {
+            throw std::logic_error("A primary session has to be created for either full tracing or a slow query logging");
+        }
+
         // This is a primary session
         _state_props.set(trace_state_props::primary);
 
-        init_session_records(type);
+        init_session_records(type, _local_tracing_ptr->slow_query_record_ttl());
+        _slow_query_threshold = _local_tracing_ptr->slow_query_threshold();
     }
 
     trace_state(const trace_info& info)
@@ -145,7 +148,16 @@ public:
         // This is a secondary session
         _state_props.remove(trace_state_props::primary);
 
-        init_session_records(info.type, info.session_id);
+        // Default a secondary session to a full tracing.
+        // We may get both zeroes for a full_tracing and a log_slow_query if a
+        // primary session is created with an older server version.
+        _state_props.set_if<trace_state_props::full_tracing>(!full_tracing() && !log_slow_query());
+
+        // inherit the slow query threshold and ttl from the coordinator
+        init_session_records(info.type, std::chrono::seconds(info.slow_query_ttl_sec), info.session_id);
+        _slow_query_threshold = std::chrono::microseconds(info.slow_query_threshold_us);
+
+        trace_state_logger.trace("{}: props {}, slow query threshold {}us, slow query ttl {}s", session_id(), _state_props.mask(), info.slow_query_threshold_us, info.slow_query_ttl_sec);
     }
 
     ~trace_state();
@@ -182,16 +194,58 @@ public:
         return _state_props.contains(trace_state_props::write_on_close);
     }
 
+    bool full_tracing() const {
+        return _state_props.contains(trace_state_props::full_tracing);
+    }
+
+    bool log_slow_query() const {
+        return _state_props.contains(trace_state_props::log_slow_query);
+    }
+
     trace_state_props_set raw_props() const {
         return _state_props;
     }
 
+    /**
+     * @return a slow query threshold value in microseconds.
+     */
+    uint32_t slow_query_threshold_us() const {
+        return _slow_query_threshold.count();
+    }
+
+    /**
+     * @return a slow query entry TTL value in seconds
+     */
+    uint32_t slow_query_ttl_sec() const {
+        return _records->session_rec.slow_query_record_ttl.count();
+    }
+
 private:
-    void init_session_records(trace_type type, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt) {
+    bool should_log_slow_query(elapsed_clock::duration e) const {
+        return log_slow_query() && e > _slow_query_threshold;
+    }
+
+    void init_session_records(trace_type type, std::chrono::seconds slow_query_ttl, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt)
+    {
         _records = make_lw_shared<one_session_records>();
         _records->session_id = session_id ? *session_id : utils::UUID_gen::get_time_UUID();
-        _records->ttl = ttl_by_type(type);
+
+        if (full_tracing()) {
+            if (!log_slow_query()) {
+                _records->ttl = ttl_by_type(type);
+            } else {
+                _records->ttl = std::max(ttl_by_type(type), slow_query_ttl);
+            }
+        } else {
+            _records->ttl = slow_query_ttl;
+        }
+
         _records->session_rec.command = type;
+        _records->session_rec.slow_query_record_ttl = slow_query_ttl;
+    }
+
+    bool should_write_records() const {
+        return full_tracing() || _records->do_log_slow_query;
     }
 
     /**
@@ -394,7 +448,8 @@ inline void trace_state::trace(sstring message) {
     }
 
     try {
-        _records->events_recs.emplace_back(std::move(message), elapsed(), i_tracing_backend_helper::wall_clock::now());
+        auto e = elapsed();
+        _records->events_recs.emplace_back(std::move(message), e, i_tracing_backend_helper::wall_clock::now());
         _records->consume_from_budget();
 
         // If we have aggregated enough records - schedule them for write already.
@@ -402,7 +457,11 @@ inline void trace_state::trace(sstring message) {
         // We prefer the traces to be written after the session is over. However
         // if there is a session that creates a lot of traces - we want to write
         // them before we start to drop new records.
-        if (_records->events_recs.size() >= tracing::exp_trace_events_per_session) {
+        //
+        // We don't want to write records of a tracing session if we trace only
+        // slow queries and the elapsed time is still below the slow query
+        // logging threshold.
+        if (_records->events_recs.size() >= tracing::exp_trace_events_per_session && (full_tracing() || should_log_slow_query(e))) {
             _local_tracing_ptr->schedule_for_write(_records);
             _local_tracing_ptr->write_maybe();
         }
@@ -522,8 +581,15 @@ inline void trace(const trace_state_ptr& p, A&&... a) {
 }
 
 inline std::experimental::optional<trace_info> make_trace_info(const trace_state_ptr& state) {
-    if (state) {
-        return trace_info{state->session_id(), state->type(), state->write_on_close(), state->raw_props()};
+    // We want to trace the remote replicas' operations only when a full tracing
+    // is requested or when a slow query logging is enabled and the session is
+    // still active.
+    //
+    // When only a slow query logging is enabled we don't really care what
+    // happens on a remote replica after a Client has received a response for
+    // his/her query.
+    if (state && (state->full_tracing() || (state->log_slow_query() && !state->is_in_state(trace_state::state::background)))) {
+        return trace_info{state->session_id(), state->type(), state->write_on_close(), state->raw_props(), state->slow_query_threshold_us(), state->slow_query_ttl_sec()};
     }
 
     return std::experimental::nullopt;
