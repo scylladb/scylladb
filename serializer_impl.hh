@@ -451,8 +451,16 @@ T deserialize_from_buffer(const Buffer& buf, boost::type<T> type, size_t head_sp
 }
 
 inline
-seastar::simple_input_stream as_input_stream(bytes_view b) {
+utils::input_stream as_input_stream(bytes_view b) {
     return seastar::simple_input_stream(reinterpret_cast<const char*>(b.begin()), b.size());
+}
+
+inline
+utils::input_stream as_input_stream(const bytes_ostream& b) {
+    if (b.is_linearized()) {
+        return as_input_stream(b.view());
+    }
+    return utils::fragmented_input_stream(b.fragments().begin(), b.size());
 }
 
 template<typename Output, typename ...T>
@@ -470,11 +478,13 @@ void serialize(Output& out, const unknown_variant_type& v) {
 }
 template<typename Input>
 unknown_variant_type deserialize(Input& in, boost::type<unknown_variant_type>) {
-    auto size = deserialize(in, boost::type<size_type>());
-    auto index = deserialize(in, boost::type<size_type>());
-    auto sz = size - sizeof(size_type) * 2;
-    sstring v(sstring::initialized_later(), sz);
-    in.read(v.begin(), sz);
-    return unknown_variant_type{index, std::move(v)};
+    return utils::input_stream::with_stream(in, [] (auto& in) {
+        auto size = deserialize(in, boost::type<size_type>());
+        auto index = deserialize(in, boost::type<size_type>());
+        auto sz = size - sizeof(size_type) * 2;
+        sstring v(sstring::initialized_later(), sz);
+        in.read(v.begin(), sz);
+        return unknown_variant_type{ index, std::move(v) };
+    });
 }
 }
