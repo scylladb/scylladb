@@ -30,6 +30,7 @@
 #include "bytes_ostream.hh"
 #include "core/simple-stream.hh"
 #include "boost/variant/variant.hpp"
+#include "bytes_ostream.hh"
 
 namespace ser {
 using size_type = uint32_t;
@@ -87,7 +88,7 @@ inline void serialize(Output& out, const T& v) {
 };
 
 template<typename T, typename Input>
-inline T deserialize(Input& in, boost::type<T> t) {
+inline auto deserialize(Input& in, boost::type<T> t) {
     return serializer<T>::read(in);
 };
 
@@ -144,6 +145,11 @@ struct normalize<bytes_view> {
 template <>
 struct normalize<managed_bytes> {
      using type = bytes;
+};
+
+template <>
+struct normalize<bytes_ostream> {
+    using type = bytes;
 };
 
 template <typename T, typename U>

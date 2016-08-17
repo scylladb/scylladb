@@ -776,7 +776,7 @@ def add_view(hout, info):
     for m in members:
         full_type = param_view_type(m["type"])
         fprintln(hout, Template(reindent(4, """
-            $type $name() const {
+            auto $name() const {
                auto in = v;
                $skip
                return deserialize(in, boost::type<$type>());
@@ -884,10 +884,10 @@ $name$temp_param serializer<$name$temp_param>::read(Input& buf) {""").substitute
             deflt = param["default"][0] if "default" in param else param_type(param["type"]) + "()"
             if deflt in local_names:
                 deflt = local_names[deflt]
-            fprintln(cout, Template("""  $typ $local = (in.size()>0) ?
+            fprintln(cout, Template("""  auto $local = (in.size()>0) ?
     $func(in, boost::type<$typ>()) : $default;""").substitute({'func' : DESERIALIZER, 'typ': param_type(param["type"]), 'local' : local_param, 'default': deflt}))
         else:
-            fprintln(cout, Template("""  $typ $local = $func(in, boost::type<$typ>());""").substitute({'func' : DESERIALIZER, 'typ': param_type(param["type"]), 'local' : local_param}))
+            fprintln(cout, Template("""  auto $local = $func(in, boost::type<$typ>());""").substitute({'func' : DESERIALIZER, 'typ': param_type(param["type"]), 'local' : local_param}))
         params.append("std::move(" + local_param + ")")
     fprintln(cout, Template("""
   $name$temp_param res {$params};
