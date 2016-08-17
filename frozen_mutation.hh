@@ -29,6 +29,10 @@
 class mutation;
 class streamed_mutation;
 
+namespace ser {
+class mutation_view;
+}
+
 // Immutable, compact form of mutation.
 //
 // This form is primarily destined to be sent over the network channel.
@@ -45,6 +49,7 @@ private:
     partition_key _pk;
 private:
     partition_key deserialize_key() const;
+    ser::mutation_view mutation_view() const;
 public:
     frozen_mutation(const mutation& m);
     explicit frozen_mutation(bytes&& b);

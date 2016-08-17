@@ -46,18 +46,19 @@
 
 using namespace db;
 
+ser::mutation_view frozen_mutation::mutation_view() const {
+    auto in = ser::as_input_stream(_bytes);
+    return ser::deserialize(in, boost::type<ser::mutation_view>());
+}
+
 utils::UUID
 frozen_mutation::column_family_id() const {
-    auto in = ser::as_input_stream(_bytes);
-    auto mv = ser::deserialize(in, boost::type<ser::mutation_view>());
-    return mv.table_id();
+    return mutation_view().table_id();
 }
 
 utils::UUID
 frozen_mutation::schema_version() const {
-    auto in = ser::as_input_stream(_bytes);
-    auto mv = ser::deserialize(in, boost::type<ser::mutation_view>());
-    return mv.schema_version();
+    return mutation_view().schema_version();
 }
 
 partition_key_view
@@ -71,9 +72,7 @@ frozen_mutation::decorated_key(const schema& s) const {
 }
 
 partition_key frozen_mutation::deserialize_key() const {
-    auto in = ser::as_input_stream(_bytes);
-    auto mv = ser::deserialize(in, boost::type<ser::mutation_view>());
-    return mv.key();
+    return mutation_view().key();
 }
 
 frozen_mutation::frozen_mutation(bytes&& b)
@@ -117,9 +116,7 @@ frozen_mutation freeze(const mutation& m) {
 }
 
 mutation_partition_view frozen_mutation::partition() const {
-    auto in = ser::as_input_stream(_bytes);
-    auto mv = ser::deserialize(in, boost::type<ser::mutation_view>());
-    return mutation_partition_view::from_view(mv.partition());
+    return mutation_partition_view::from_view(mutation_view().partition());
 }
 
 std::ostream& operator<<(std::ostream& out, const frozen_mutation::printer& pr) {
