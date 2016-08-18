@@ -108,27 +108,31 @@ future<> tracing::create_tracing(const sstring& tracing_backend_class_name) {
     });
 }
 
-trace_state_ptr tracing::create_session(trace_type type, bool write_on_close, const std::experimental::optional<utils::UUID>& session_id) {
+trace_state_ptr tracing::create_session(trace_type type, trace_state_props_set props) {
     trace_state_ptr tstate;
     try {
         // Don't create a session if its records are likely to be dropped
-        if (!have_records_budget(exp_trace_events_per_session) || _active_sessions >= max_pending_sessions + write_event_sessions_threshold) {
-            if (session_id) {
-                tracing_logger.trace("{}: Too many outstanding tracing records or sessions. Dropping a secondary session", session_id);
-            } else {
-                tracing_logger.trace("Too many outstanding tracing records or sessions. Dropping a primary session");
-            }
-
-            if (++stats.dropped_sessions % tracing::log_warning_period == 1) {
-                tracing_logger.warn("Dropped {} sessions: open_sessions {}, cached_records {} pending_for_write_records {}, flushing_records {}",
-                            stats.dropped_sessions, _active_sessions, _cached_records, _pending_for_write_records_count, _flushing_records);
-            }
-
+        if (!may_create_new_session()) {
             return trace_state_ptr();
         }
 
         ++_active_sessions;
-        return make_lw_shared<trace_state>(type, write_on_close, session_id);
+        return make_lw_shared<trace_state>(type, props);
+    } catch (...) {
+        // return an uninitialized state in case of any error (OOM?)
+        return trace_state_ptr();
+    }
+}
+
+trace_state_ptr tracing::create_session(const trace_info& secondary_session_info) {
+    try {
+        // Don't create a session if its records are likely to be dropped
+        if (!may_create_new_session(secondary_session_info.session_id)) {
+            return trace_state_ptr();
+        }
+
+        ++_active_sessions;
+        return make_lw_shared<trace_state>(secondary_session_info);
     } catch (...) {
         // return an uninitialized state in case of any error (OOM?)
         return trace_state_ptr();

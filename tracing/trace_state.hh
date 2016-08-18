@@ -79,12 +79,11 @@ public:
 
 private:
     lw_shared_ptr<one_session_records> _records;
-    bool _write_on_close;
     // Used for calculation of time passed since the beginning of a tracing
     // session till each tracing event.
     elapsed_clock::time_point _start;
-    // TRUE for a primary trace_state object
-    bool _primary;
+
+    trace_state_props_set _state_props;
 
     state _state = state::inactive;
 
@@ -129,15 +128,24 @@ private:
     } _params_ptr;
 
 public:
-    trace_state(trace_type type, bool write_on_close, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt)
-        : _write_on_close(write_on_close)
-        , _primary(!session_id)
+    trace_state(trace_type type, trace_state_props_set props)
+        : _state_props(props)
         , _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
     {
-        _records = make_lw_shared<one_session_records>();
-        _records->session_id = session_id ? *session_id : utils::UUID_gen::get_time_UUID();
-        _records->ttl = ttl_by_type(type);
-        _records->session_rec.command = type;
+        // This is a primary session
+        _state_props.set(trace_state_props::primary);
+
+        init_session_records(type);
+    }
+
+    trace_state(const trace_info& info)
+        : _state_props(info.state_props)
+        , _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
+    {
+        // This is a secondary session
+        _state_props.remove(trace_state_props::primary);
+
+        init_session_records(info.type, info.session_id);
     }
 
     ~trace_state();
@@ -166,11 +174,26 @@ public:
         return _records->session_rec.command;
     }
 
+    bool is_primary() const {
+        return _state_props.contains(trace_state_props::primary);
+    }
+
     bool write_on_close() const {
-        return _write_on_close;
+        return _state_props.contains(trace_state_props::write_on_close);
+    }
+
+    trace_state_props_set raw_props() const {
+        return _state_props;
     }
 
 private:
+    void init_session_records(trace_type type, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt) {
+        _records = make_lw_shared<one_session_records>();
+        _records->session_id = session_id ? *session_id : utils::UUID_gen::get_time_UUID();
+        _records->ttl = ttl_by_type(type);
+        _records->session_rec.command = type;
+    }
+
     /**
      * Returns the amount of time passed since the beginning of this tracing session.
      *
@@ -500,7 +523,7 @@ inline void trace(const trace_state_ptr& p, A&&... a) {
 
 inline std::experimental::optional<trace_info> make_trace_info(const trace_state_ptr& state) {
     if (state) {
-        return trace_info{state->session_id(), state->type(), state->write_on_close()};
+        return trace_info{state->session_id(), state->type(), state->write_on_close(), state->raw_props()};
     }
 
     return std::experimental::nullopt;

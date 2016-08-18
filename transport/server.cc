@@ -469,7 +469,10 @@ future<response_type>
             cqlop == cql_binary_opcode::PREPARE ||
             cqlop == cql_binary_opcode::EXECUTE ||
             cqlop == cql_binary_opcode::BATCH) {
-            client_state.create_tracing_session(tracing::trace_type::QUERY, tracing_request == tracing_request_type::write_on_close);
+            tracing::trace_state_props_set trace_props;
+
+            trace_props.set_if<tracing::trace_state_props::write_on_close>(tracing_request == tracing_request_type::write_on_close);
+            client_state.create_tracing_session(tracing::trace_type::QUERY, trace_props);
         }
     }
 

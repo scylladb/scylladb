@@ -83,7 +83,7 @@ void trace_state::build_parameters_map() {
 }
 
 trace_state::~trace_state() {
-    if (!_primary && is_in_state(state::background)) {
+    if (!is_primary() && is_in_state(state::background)) {
         trace_state_logger.error("Secondary session is in a background state! session_id: {}", session_id());
     }
 
@@ -99,7 +99,7 @@ void trace_state::stop_foreground_and_write() {
         return;
     }
 
-    if (_primary && is_in_state(state::foreground)) {
+    if (is_primary() && is_in_state(state::foreground)) {
         // We don't account the session_record event when checking a limit
         // of maximum events per session because there may be only one such
         // event and we don't want to cripple the primary session by
@@ -129,6 +129,6 @@ void trace_state::stop_foreground_and_write() {
 
     set_state(state::background);
     trace_state_logger.trace("{}: Current records count is {}",  session_id(), _records->size());
-    _local_tracing_ptr->write_session_records(_records, _write_on_close);
+    _local_tracing_ptr->write_session_records(_records, write_on_close());
 }
 }

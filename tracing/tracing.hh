@@ -48,6 +48,7 @@
 #include "gc_clock.hh"
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
+#include "enum_set.hh"
 
 namespace tracing {
 
@@ -89,18 +90,37 @@ inline std::chrono::seconds ttl_by_type(const trace_type t) {
     }
 }
 
+// !!!!IMPORTANT!!!!
+//
+// The enum_set based on this enum is serialized using IDL, therefore new items
+// should always be added to the end of this enum - never before the existing
+// ones.
+//
+// Otherwise this may break IDL's backward compatibility.
+enum class trace_state_props {
+    write_on_close, primary
+};
+
+using trace_state_props_set = enum_set<super_enum<trace_state_props,
+    trace_state_props::write_on_close,
+    trace_state_props::primary>>;
+
 class trace_info {
 public:
     utils::UUID session_id;
     trace_type type;
     bool write_on_close;
+    trace_state_props_set state_props;
 
 public:
-    trace_info(utils::UUID sid, trace_type t, bool w_o_c)
+    trace_info(utils::UUID sid, trace_type t, bool w_o_c, trace_state_props_set s_p)
         : session_id(std::move(sid))
         , type(t)
         , write_on_close(w_o_c)
-    { }
+        , state_props(s_p)
+    {
+        state_props.set_if<trace_state_props::write_on_close>(write_on_close);
+    }
 };
 
 struct one_session_records;
@@ -370,15 +390,23 @@ public:
     }
 
     /**
-     * Create a new tracing session.
+     * Create a new primary tracing session.
      *
      * @param type a tracing session type
-     * @param write_on_close flush a backend before closing the session
-     * @param session_id a session ID to create a (secondary) session with
+     * @param props trace session properties set
      *
      * @return tracing state handle
      */
-    trace_state_ptr create_session(trace_type type, bool write_on_close, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt);
+    trace_state_ptr create_session(trace_type type, trace_state_props_set props);
+
+    /**
+     * Create a new secondary tracing session.
+     *
+     * @param secondary_session_info tracing session info
+     *
+     * @return tracing state handle
+     */
+    trace_state_ptr create_session(const trace_info& secondary_session_info);
 
     void write_maybe() {
         if (_pending_for_write_records_count >= write_event_records_threshold || _pending_for_write_records_bulk.size() >= write_event_sessions_threshold) {
@@ -477,6 +505,31 @@ public:
 
 private:
     void write_timer_callback();
+
+    /**
+     * Check if we may create a new tracing session.
+     *
+     * @return TRUE if conditions are allowing creating a new tracing session
+     */
+    bool may_create_new_session(const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt) {
+        // Don't create a session if its records are likely to be dropped
+        if (!have_records_budget(exp_trace_events_per_session) || _active_sessions >= max_pending_sessions + write_event_sessions_threshold) {
+            if (session_id) {
+                tracing_logger.trace("{}: Too many outstanding tracing records or sessions. Dropping a secondary session", *session_id);
+            } else {
+                tracing_logger.trace("Too many outstanding tracing records or sessions. Dropping a primary session");
+            }
+
+            if (++stats.dropped_sessions % tracing::log_warning_period == 1) {
+                tracing_logger.warn("Dropped {} sessions: open_sessions {}, cached_records {} pending_for_write_records {}, flushing_records {}",
+                            stats.dropped_sessions, _active_sessions, _cached_records, _pending_for_write_records_count, _flushing_records);
+            }
+
+            return false;
+        }
+
+        return true;
+    }
 };
 
 void one_session_records::set_pending_for_write() {
