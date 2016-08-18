@@ -84,13 +84,13 @@ void trace_state::build_parameters_map() {
 
 trace_state::~trace_state() {
     if (!_primary && _state == state::background) {
-        trace_state_logger.error("Secondary session is in a background state! session_id: {}", get_session_id());
+        trace_state_logger.error("Secondary session is in a background state! session_id: {}", session_id());
     }
 
     stop_foreground_and_write();
     _local_tracing_ptr->end_session();
 
-    trace_state_logger.trace("{}: destructing", get_session_id());
+    trace_state_logger.trace("{}: destructing", session_id());
 }
 
 void trace_state::stop_foreground_and_write() {
@@ -128,7 +128,7 @@ void trace_state::stop_foreground_and_write() {
     }
 
     _state = state::background;
-    trace_state_logger.trace("{}: Current records count is {}",  get_session_id(), _records->size());
+    trace_state_logger.trace("{}: Current records count is {}",  session_id(), _records->size());
     _local_tracing_ptr->write_session_records(_records, _write_on_close);
 }
 }

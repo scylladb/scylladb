@@ -147,7 +147,7 @@ public:
      */
     void stop_foreground_and_write();
 
-    const utils::UUID& get_session_id() const {
+    const utils::UUID& session_id() const {
         return _records->session_id;
     }
 
@@ -351,7 +351,7 @@ inline void trace_state::trace(sstring message) {
     // In any case, this should be rare, therefore we don't try to optimize this
     // flow.
     if (!_local_tracing_ptr->have_records_budget()) {
-        tracing_logger.trace("{}: Maximum number of traces is reached. Some traces are going to be dropped", get_session_id());
+        tracing_logger.trace("{}: Maximum number of traces is reached. Some traces are going to be dropped", session_id());
         if ((++_local_tracing_ptr->stats.dropped_records) % tracing::log_warning_period == 1) {
             tracing_logger.warn("Maximum records limit is hit {} times", _local_tracing_ptr->stats.dropped_records);
         }
@@ -489,7 +489,7 @@ inline void trace(const trace_state_ptr& p, A&&... a) {
 
 inline std::experimental::optional<trace_info> make_trace_info(const trace_state_ptr& state) {
     if (state) {
-        return trace_info{state->get_session_id(), state->get_type(), state->get_write_on_close()};
+        return trace_info{state->session_id(), state->get_type(), state->get_write_on_close()};
     }
 
     return std::experimental::nullopt;

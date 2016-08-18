@@ -110,7 +110,7 @@ public:
         // destroyed when we need a session ID for a response to a client (e.g.
         // in case of errors).
         if (_trace_state_ptr) {
-            _tracing_session_id = make_lw_shared<utils::UUID>(_trace_state_ptr->get_session_id());
+            _tracing_session_id = make_lw_shared<utils::UUID>(_trace_state_ptr->session_id());
         }
     }
 
