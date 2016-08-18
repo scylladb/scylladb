@@ -151,7 +151,7 @@ public:
         return _records->session_id;
     }
 
-    trace_type get_type() const {
+    trace_type type() const {
         return _records->session_rec.command;
     }
 
@@ -489,7 +489,7 @@ inline void trace(const trace_state_ptr& p, A&&... a) {
 
 inline std::experimental::optional<trace_info> make_trace_info(const trace_state_ptr& state) {
     if (state) {
-        return trace_info{state->session_id(), state->get_type(), state->get_write_on_close()};
+        return trace_info{state->session_id(), state->type(), state->get_write_on_close()};
     }
 
     return std::experimental::nullopt;
