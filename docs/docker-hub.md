@@ -4,7 +4,7 @@ ScyllaDB is a high-performance Cassandra implementation written in C++14. Classi
 
 > [ScyllaDB](http://www.scylladb.com/)
 
-![logo](http://www.scylladb.com/img/logo.svg)
+![logo](http://www.scylladb.com/img/mascot_1.png)
 
 # How to use this image
 
