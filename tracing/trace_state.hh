@@ -155,7 +155,7 @@ public:
         return _records->session_rec.command;
     }
 
-    bool get_write_on_close() const {
+    bool write_on_close() const {
         return _write_on_close;
     }
 
@@ -489,7 +489,7 @@ inline void trace(const trace_state_ptr& p, A&&... a) {
 
 inline std::experimental::optional<trace_info> make_trace_info(const trace_state_ptr& state) {
     if (state) {
-        return trace_info{state->session_id(), state->type(), state->get_write_on_close()};
+        return trace_info{state->session_id(), state->type(), state->write_on_close()};
     }
 
     return std::experimental::nullopt;
