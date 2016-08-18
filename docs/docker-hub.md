@@ -16,8 +16,8 @@ $ docker run --name some-scylla -d scylladb/scylla
 
 ## Run `nodetool` utility
 
-```
-$ docker exec -it some-scylla nodetool status
+```console
+$ docker exec -it some-scylla nodetool status
 Datacenter: datacenter1
 =======================
 Status=Up/Down
@@ -28,8 +28,8 @@ UN  172.17.0.2  125.51 KB  256     100.0%            c9155121-786d-44f8-8667-a8b
 
 ## Run `cqlsh` utility
 
-```
-$ docker exec -it some-scylla cqlsh
+```console
+$ docker exec -it some-scylla cqlsh
 Connected to Test Cluster at 172.17.0.2:9042.
 [cqlsh 5.0.1 | Cassandra 2.1.8 | CQL spec 3.2.1 | Native protocol v3]
 Use HELP for help.
@@ -38,13 +38,13 @@ cqlsh>
 
 ## Make a cluster
 
-```
+```console
 $ docker run --name some-scylla2 -d scylladb/scylla --seeds="$(docker inspect --format='{{ .NetworkSettings.IPAddress }}' some-scylla)"
 ```
 
 ## Check `scylla` logs
 
-```
+```console
 $ docker logs some-scylla | tail
 INFO  2016-08-04 06:57:40,836 [shard 5] database - Setting compaction strategy of system_traces.events to SizeTieredCompactionStrategy
 INFO  2016-08-04 06:57:40,836 [shard 3] database - Setting compaction strategy of system_traces.events to SizeTieredCompactionStrategy
@@ -70,8 +70,8 @@ $ sudo mkdir -p /var/lib/scylla/data /var/lib/scylla/commitlog
 
 Launch Scylla using Docker's ``--volume`` command line option to mount the created host directory as a data volume in the container and disable Scylla's developer mode to run I/O tuning before starting up the Scylla node.
 
-```
-docker run --name some-scylla --volume /var/lib/scylla:/var/lib/scylla -d scylladb/scylla --developer-mode=0
+```console
+$ docker run --name some-scylla --volume /var/lib/scylla:/var/lib/scylla -d scylladb/scylla --developer-mode=0
 ```
 
 ## Configuring resource limits
@@ -92,8 +92,8 @@ If no `--seeds` option is specified, Scylla uses its own IP address as the seed.
 
 For example, to configure Scylla to run with two seed nodes `192.168.0.100` and `192.168.0.200`.
 
-```
-docker run --name some-scylla -d scylladb/scylla --seeds 192.168.0.100,192.168.0.200
+```console
+$ docker run --name some-scylla -d scylladb/scylla --seeds 192.168.0.100,192.168.0.200
 ```
 
 ### `--broadcast-address ADDR`
@@ -102,8 +102,8 @@ The `--broadcast-address` command line option configures the IP address the Scyl
 
 For example, to configure Scylla to use broadcast address `10.0.0.5`:
 
-```
-docker run --name some-scylla -d scylladb/scylla --broadcast-address 10.0.0.5
+```console
+$ docker run --name some-scylla -d scylladb/scylla --broadcast-address 10.0.0.5
 ```
 
 ### `--broadcast-rpc-address ADDR`
@@ -112,8 +112,8 @@ The `--broadcast-rpc-address` command line option configures the IP address the 
 
 For example, to configure Scylla to use broadcast RPC address `10.0.0.5`:
 
-```
-docker run --name some-scylla -d scylladb/scylla --broadcast-rpc-address 10.0.0.5
+```console
+$ docker run --name some-scylla -d scylladb/scylla --broadcast-rpc-address 10.0.0.5
 ```
 
 ### `--smp COUNT`
@@ -124,8 +124,8 @@ See the `--cpuset` command line option if you need Scylla to run on specific CPU
 
 For example, to restrict Scylla to 2 CPUs:
 
-```
-docker run --name some-scylla -d scylladb/scylla --smp 2
+```console
+$ docker run --name some-scylla -d scylladb/scylla --smp 2
 ```
 
 ### `--memory AMOUNT`
@@ -135,8 +135,8 @@ The `AMOUNT` value supports both `M` unit for megabytes and `G` unit for gigabyt
 
 For example, to restrict Scylla to 4 GB of memory:
 
-```
-docker run --name some-scylla -d scylladb/scylla --memory 4G
+```console
+$ docker run --name some-scylla -d scylladb/scylla --memory 4G
 ```
 
 ### `--overprovisioned ENABLE`
@@ -146,19 +146,19 @@ If no `--overprovisioned` option is specified, Scylla defaults to running with o
 
 For example, to enable optimizations for running in an overprovisioned environment:
 
-```
-docker run --name some-scylla -d scylladb/scylla --overprovisioned 1
+```console
+$ docker run --name some-scylla -d scylladb/scylla --overprovisioned 1
 ```
 
 ### `--cpuset CPUSET`
 
 The `--cpuset` command line option restricts Scylla to run on only on CPUs specified by `CPUSET`.
-The `CPUSET` value is either a single CPU (e.g. `--cpuset 1`), a range (e.g. `--cpuset 2-3`), or a list (e.g. `--cpuset 1,2,5`), or a combination of the last two options (e.g. `--cpuset 1-2,5).
+The `CPUSET` value is either a single CPU (e.g. `--cpuset 1`), a range (e.g. `--cpuset 2-3`), or a list (e.g. `--cpuset 1,2,5`), or a combination of the last two options (e.g. `--cpuset 1-2,5`).
 
 For example, to restrict Scylla to run on physical CPUs 0 to 2 and 4:
 
-```
-docker run --name some-scylla -d scylladb/scylla --cpuset 0-2,4
+```console
+$ docker run --name some-scylla -d scylladb/scylla --cpuset 0-2,4
 ```
 
 ### `--developer-mode ENABLE`
@@ -169,15 +169,15 @@ It is highly recommended to disable developer mode for production deployments to
 
 For example, to disable developer mode:
 
-```
-docker run --name some-scylla -d scylladb/scylla --developer-mode 0
+```console
+$ docker run --name some-scylla -d scylladb/scylla --developer-mode 0
 ```
 
 # User Feedback
 
 ## Issues
 
-Don't hesitage to report bugs or issues on http://www.github.com/scylladb/scylla's bug tracker.
+Don't hesitate to report bugs or issues on http://www.github.com/scylladb/scylla's bug tracker.
 
 ## Contributing
 
