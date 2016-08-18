@@ -74,12 +74,103 @@ Launch Scylla using Docker's ``--volume`` command line option to mount the creat
 docker run --name some-scylla --volume /var/lib/scylla:/var/lib/scylla -d scylladb/scylla --developer-mode=0
 ```
 
-## Restricting container CPUs
+## Configuring resource limits
 
-Scylla utilizes all CPUs by default. To restrict your Docker container to a subset of the CPUs, use the ``--cpuset`` command line option:
+Scylla utilizes all CPUs and all memory by default.
+To configure resource limits for your Docker container, you can use the `--smp`, `--memory`, and `--cpuset` command line options documented in the section "Command-line options".
+
+If you run multiple Scylla instances on the same machine, it is highly recommended that you enable the `--overprovisioned` command line option, which enables certain optimizations for Scylla to run efficiently in an overprovisioned environment.
+
+## Command-line options
+
+The Scylla image supports many command line options that are passed to the `docker run` command.
+
+### `--seeds SEEDS`
+
+The `-seeds` command line option configures Scylla's seed nodes.
+If no `--seeds` option is specified, Scylla uses its own IP address as the seed.
+
+For example, to configure Scylla to run with two seed nodes `192.168.0.100` and `192.168.0.200`.
 
 ```
-docker run --name some-scylla -d scylladb/scylla --cpuset 0-4
+docker run --name some-scylla -d scylladb/scylla --seeds 192.168.0.100,192.168.0.200
+```
+
+### `--broadcast-address ADDR`
+
+The `--broadcast-address` command line option configures the IP address the Scylla instance tells other Scylla nodes in the cluster to connect to.
+
+For example, to configure Scylla to use broadcast address `10.0.0.5`:
+
+```
+docker run --name some-scylla -d scylladb/scylla --broadcast-address 10.0.0.5
+```
+
+### `--broadcast-rpc-address ADDR`
+
+The `--broadcast-rpc-address` command line option configures the IP address the Scylla instance tells clients to connect to.
+
+For example, to configure Scylla to use broadcast RPC address `10.0.0.5`:
+
+```
+docker run --name some-scylla -d scylladb/scylla --broadcast-rpc-address 10.0.0.5
+```
+
+### `--smp COUNT`
+
+The `--smp` command line option restricts Scylla to `COUNT` number of CPUs.
+The option does not, however, mandate a specific placement of CPUs.
+See the `--cpuset` command line option if you need Scylla to run on specific CPUs.
+
+For example, to restrict Scylla to 2 CPUs:
+
+```
+docker run --name some-scylla -d scylladb/scylla --smp 2
+```
+
+### `--memory AMOUNT`
+
+The `--memory` command line options restricts Scylla to use up to `AMOUNT` of memory.
+The `AMOUNT` value supports both `M` unit for megabytes and `G` unit for gigabytes.
+
+For example, to restrict Scylla to 4 GB of memory:
+
+```
+docker run --name some-scylla -d scylladb/scylla --memory 4G
+```
+
+### `--overprovisioned ENABLE`
+
+The `--overprovisioned` command line option enables or disables optimizations for running Scylla in an overprovisioned environment.
+If no `--overprovisioned` option is specified, Scylla defaults to running with optimizations *disabled*.
+
+For example, to enable optimizations for running in an overprovisioned environment:
+
+```
+docker run --name some-scylla -d scylladb/scylla --overprovisioned 1
+```
+
+### `--cpuset CPUSET`
+
+The `--cpuset` command line option restricts Scylla to run on only on CPUs specified by `CPUSET`.
+The `CPUSET` value is either a single CPU (e.g. `--cpuset 1`), a range (e.g. `--cpuset 2-3`), or a list (e.g. `--cpuset 1,2,5`), or a combination of the last two options (e.g. `--cpuset 1-2,5).
+
+For example, to restrict Scylla to run on physical CPUs 0 to 2 and 4:
+
+```
+docker run --name some-scylla -d scylladb/scylla --cpuset 0-2,4
+```
+
+### `--developer-mode ENABLE`
+
+The `--developer-mode` command line option enables Scylla's developer mode, which relaxes checks for things like XFS and enables Scylla to run on unsupported configurations (which usually results in suboptimal performance).
+If no `--developer-mode` command line option is defined, Scylla defaults to running with developer mode *enabled*.
+It is highly recommended to disable developer mode for production deployments to ensure Scylla is able to run with maximum performance.
+
+For example, to disable developer mode:
+
+```
+docker run --name some-scylla -d scylladb/scylla --developer-mode 0
 ```
 
 # User Feedback
