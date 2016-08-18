@@ -177,7 +177,11 @@ $ docker run --name some-scylla -d scylladb/scylla --developer-mode 0
 
 ## Issues
 
-Don't hesitate to report bugs or issues on http://www.github.com/scylladb/scylla's bug tracker.
+For bug reports, please use Scylla's [issue tracker](https://github.com/scylladb/scylla/issues) on GitHub.
+Please read the [How to report a Scylla problem](https://github.com/scylladb/scylla/wiki/How-to-report-a-Scylla-problem) page before you report bugs.
+
+For general help, see Scylla's [documentation](http://www.scylladb.com/doc/).
+For questions and comments, use Scylla's [mailing lists](http://www.scylladb.com/community/).
 
 ## Contributing
 
