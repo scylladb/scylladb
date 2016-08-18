@@ -161,6 +161,17 @@ private:
      */
     future<> flush_one_session_mutations(lw_shared_ptr<one_session_records> records);
 
+    /**
+     * Apply events records mutations.
+     *
+     * @param records all session records
+     * @param events_records events recods to apply
+     *
+     * @return a future that resolves when the mutation has been written.
+     *
+     * @note A caller must ensure that @param events_records is alive till the
+     * returned future resolves.
+     */
     future<> apply_events_mutation(lw_shared_ptr<one_session_records> records, std::deque<event_record>& events_records);
 
     /**
@@ -225,6 +236,23 @@ private:
      * @return the relevant mutation
      */
     mutation make_event_mutation(one_session_records& session_records, const event_record& record);
+
+    /**
+     * Converts a @param elapsed to an int32_t value of microseconds.
+     *
+     * @param elapsed the duration to convert
+     *
+     * @return the amount of microseconds in a @param elapsed or a std::numeric_limits<int32_t>::max()
+     * if their amount doesn't fit in the int32_t type.
+     */
+    int32_t elapsed_to_micros(elapsed_clock::duration elapsed) {
+        auto elapsed_micros = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+        if (elapsed_micros > std::numeric_limits<int32_t>::max()) {
+            return std::numeric_limits<int32_t>::max();
+        }
+
+        return elapsed_micros;
+    }
 };
 
 struct bad_column_family : public std::exception {

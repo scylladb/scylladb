@@ -552,6 +552,8 @@ future<response_type>
         } catch (...) {
             return make_ready_future<response_type>(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error"), client_state));
         }
+    }).finally([tracing_state = client_state.get_trace_state()] {
+        tracing::stop_foreground(tracing_state);
     });
 }
 

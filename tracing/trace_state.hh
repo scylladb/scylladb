@@ -53,17 +53,37 @@ namespace tracing {
 extern logging::logger trace_state_logger;
 
 class trace_state final {
-    using clock_type = std::chrono::steady_clock;
-
 private:
     lw_shared_ptr<one_session_records> _records;
     bool _write_on_close;
     // Used for calculation of time passed since the beginning of a tracing
     // session till each tracing event.
-    clock_type::time_point _start;
+    elapsed_clock::time_point _start;
     // TRUE for a primary trace_state object
     bool _primary;
-    bool _tracing_began = false;
+
+    // A primary session may be in 3 states:
+    //   - "inactive": between the creation and a begin() call.
+    //   - "foreground": after a begin() call and before a
+    //     stop_foreground_and_write() call.
+    //   - "background": after a stop_foreground_and_write() call and till the
+    //     state object is destroyed.
+    //
+    // - Traces are not allowed while state is in an "inactive" state.
+    // - The time the primary session was in a "foreground" state is the time
+    //   reported as a session's "duration".
+    // - Traces that have arrived during the "background" state will be recorded
+    //   as usual but their "elapsed" time will be greater or equal to the
+    //   session's "duration".
+    //
+    // Secondary sessions may only be in an "inactive" or in a "foreground"
+    // states.
+    enum class state {
+        inactive,
+        foreground,
+        background
+    } _state = state::inactive;
+
     std::chrono::system_clock::rep _started_at;
     gms::inet_address _client;
     sstring _request;
@@ -118,6 +138,14 @@ public:
 
     ~trace_state();
 
+    /**
+     * Stop a foreground state and write pending records to I/O.
+     *
+     * @note The tracing session's "duration" is the time it was in the "foreground"
+     * state.
+     */
+    void stop_foreground_and_write();
+
     const utils::UUID& get_session_id() const {
         return _records->session_id;
     }
@@ -132,12 +160,11 @@ public:
 
 private:
     /**
-     * Returns the number of microseconds passed since the beginning of this
-     * tracing session.
+     * Returns the amount of time passed since the beginning of this tracing session.
      *
-     * @return number of microseconds passed since the beginning of this session
+     * @return the amount of time passed since the beginning of this session
      */
-    int elapsed();
+    elapsed_clock::duration elapsed();
 
     /**
      * Initiates a tracing session.
@@ -147,9 +174,9 @@ private:
      */
     void begin() {
         std::atomic_signal_fence(std::memory_order::memory_order_seq_cst);
-        _start = clock_type::now();
+        _start = elapsed_clock::now();
         std::atomic_signal_fence(std::memory_order::memory_order_seq_cst);
-        _tracing_began = true;
+        _state = state::foreground;
     }
 
     /**
@@ -165,7 +192,7 @@ private:
         begin();
         _records->session_rec.client = client;
         _records->session_rec.request = std::move(request);
-        _records->session_rec.started_at = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        _records->session_rec.started_at = std::chrono::system_clock::now();
     }
 
     template <typename Func>
@@ -299,7 +326,7 @@ private:
 };
 
 inline void trace_state::trace(sstring message) {
-    if (!_tracing_began) {
+    if (_state == state::inactive) {
         throw std::logic_error("trying to use a trace() before begin() for \"" + message + "\" tracepoint");
     }
 
@@ -348,15 +375,11 @@ void trace_state::trace(const char* fmt, A&&... a) {
     }
 }
 
-inline int trace_state::elapsed() {
+inline elapsed_clock::duration trace_state::elapsed() {
     using namespace std::chrono;
     std::atomic_signal_fence(std::memory_order::memory_order_seq_cst);
-    auto elapsed = duration_cast<microseconds>(clock_type::now() - _start).count();
+    elapsed_clock::duration elapsed = elapsed_clock::now() - _start;
     std::atomic_signal_fence(std::memory_order::memory_order_seq_cst);
-
-    if (elapsed > std::numeric_limits<int>::max()) {
-        return std::numeric_limits<int>::max();
-    }
 
     return elapsed;
 }
@@ -445,5 +468,11 @@ inline std::experimental::optional<trace_info> make_trace_info(const trace_state
     }
 
     return std::experimental::nullopt;
+}
+
+inline void stop_foreground(const trace_state_ptr& state) {
+    if (state) {
+        state->stop_foreground_and_write();
+    }
 }
 }

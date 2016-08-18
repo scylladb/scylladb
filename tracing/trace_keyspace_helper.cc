@@ -223,9 +223,10 @@ mutation trace_keyspace_helper::make_session_mutation(const one_session_records&
     cells.apply(*_client_column, atomic_cell::make_live(timestamp, inet_addr_type->decompose(record.client.addr()), ttl));
     cells.apply(*_coordinator_column, atomic_cell::make_live(timestamp, inet_addr_type->decompose(utils::fb_utilities::get_broadcast_address().addr()), ttl));
     cells.apply(*_request_column, atomic_cell::make_live(timestamp, utf8_type->decompose(record.request), ttl));
-    cells.apply(*_started_at_column, atomic_cell::make_live(timestamp, timestamp_type->decompose(record.started_at), ttl));
+    auto millis_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(record.started_at.time_since_epoch()).count();
+    cells.apply(*_started_at_column, atomic_cell::make_live(timestamp, timestamp_type->decompose(millis_since_epoch), ttl));
     cells.apply(*_command_column, atomic_cell::make_live(timestamp, utf8_type->decompose(type_to_string(record.command)), ttl));
-    cells.apply(*_duration_column, atomic_cell::make_live(timestamp, int32_type->decompose((int32_t)record.elapsed), ttl));
+    cells.apply(*_duration_column, atomic_cell::make_live(timestamp, int32_type->decompose(elapsed_to_micros(record.elapsed)), ttl));
 
     std::vector<std::pair<bytes, atomic_cell>> map_cell;
     for (auto& param_pair : record.parameters) {
@@ -254,7 +255,7 @@ mutation trace_keyspace_helper::make_event_mutation(one_session_records& session
     cells.apply(*_activity_column, atomic_cell::make_live(timestamp, utf8_type->decompose(record.message), ttl));
     cells.apply(*_source_column, atomic_cell::make_live(timestamp, inet_addr_type->decompose(utils::fb_utilities::get_broadcast_address().addr()), ttl));
     cells.apply(*_thread_column, atomic_cell::make_live(timestamp, utf8_type->decompose(_local_tracing.get_thread_name()), ttl));
-    cells.apply(*_source_elapsed_column, atomic_cell::make_live(timestamp, int32_type->decompose(record.elapsed), ttl));
+    cells.apply(*_source_elapsed_column, atomic_cell::make_live(timestamp, int32_type->decompose(elapsed_to_micros(record.elapsed)), ttl));
 
     return m;
 }
@@ -268,8 +269,8 @@ future<> trace_keyspace_helper::apply_events_mutation(lw_shared_ptr<one_session_
 
     mutation m(make_event_mutation(*records, *events_records.begin()));
 
-    return do_with(std::move(m), std::move(events_records), [this, records] (mutation& m, std::deque<event_record>& events_records) {
-        return do_for_each(std::next(events_records.begin()), events_records.end(), [this, &m, &events_records, all_records = records] (event_record& one_event_record) {
+    return do_with(std::move(m), [this, records, &events_records] (mutation& m) {
+        return do_for_each(std::next(events_records.begin()), events_records.end(), [this, &m, all_records = records] (event_record& one_event_record) {
             m.apply(make_event_mutation(*all_records, one_event_record));
             return make_ready_future<>();
         }).then([&m] {
