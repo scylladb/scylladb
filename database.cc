@@ -1620,6 +1620,15 @@ database::setup_collectd() {
     ));
 
     _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
+                , "queue_length", "requests_blocked_memory")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
+                    return _dirty_memory_manager.region_group().blocked_requests();
+                })
+    ));
+
+    _collectd.push_back(
         scollectd::add_polled_metric(scollectd::type_instance_id("memtables"
                 , scollectd::per_cpu_plugin_instance
                 , "bytes", "pending_flushes")

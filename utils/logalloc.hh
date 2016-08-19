@@ -318,6 +318,10 @@ public:
         _shutdown_requested = true;
         return _asynchronous_gate.close();
     }
+
+    size_t blocked_requests() {
+        return _blocked_requests.size();
+    }
 private:
     // Make sure we get a notification and can call release_requests when one of our ancestors that
     // used to block us is no longer under memory pressure.
