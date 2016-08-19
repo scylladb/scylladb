@@ -15,4 +15,5 @@ build/release/iotune usr/bin
 dist/common/bin/scyllatop usr/bin
 dist/common/sbin/* usr/sbin
 @@ADDHKCFG@@
+@@HKDOTTIMER@@
 @@INSTALL@@
