@@ -2701,9 +2701,7 @@ storage_proxy::do_query(schema_ptr s,
         return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>>(make_foreign(make_lw_shared<query::result>()));
     };
 
-    auto& slice = cmd->slice;
-    if (partition_ranges.empty() ||
-            (slice.default_row_ranges().empty() && !slice.get_specific_ranges())) {
+    if (partition_ranges.empty()) {
         return make_empty();
     }
     utils::latency_counter lc;

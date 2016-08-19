@@ -46,8 +46,6 @@
 #include "cartesian_product.hh"
 #include "cql3/restrictions/primary_key_restrictions.hh"
 #include "cql3/restrictions/single_column_restrictions.hh"
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/adaptor/filtered.hpp>
 
 namespace cql3 {
 
@@ -354,10 +352,7 @@ single_column_primary_key_restrictions<partition_key>::bounds_ranges(const query
 template<>
 std::vector<query::clustering_range>
 single_column_primary_key_restrictions<clustering_key_prefix>::bounds_ranges(const query_options& options) const {
-    auto wrapping_bounds = compute_bounds(options);
-    auto tri_cmp = clustering_key_prefix::tri_compare(*_schema);
-    auto bounds = boost::copy_range<query::clustering_row_ranges>(wrapping_bounds
-            | boost::adaptors::filtered([&](auto&& r) { return !r.is_wrap_around(tri_cmp); }));
+    auto bounds = compute_bounds(options);
     auto less_cmp = clustering_key_prefix::less_compare(*_schema);
     std::sort(bounds.begin(), bounds.end(), [&] (query::clustering_range& x, query::clustering_range& y) {
         if (!x.start() && !y.start()) {

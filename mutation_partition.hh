@@ -688,12 +688,12 @@ public:
     tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key) const;
     tombstone tombstone_for_row(const schema& schema, const clustering_key& key) const;
     tombstone tombstone_for_row(const schema& schema, const rows_entry& e) const;
-    boost::iterator_range<rows_type::const_iterator> range(const schema& schema, const query::clustering_range& r) const;
-    rows_type::const_iterator lower_bound(const schema& schema, const query::clustering_range& r) const;
-    rows_type::const_iterator upper_bound(const schema& schema, const query::clustering_range& r) const;
-    rows_type::iterator lower_bound(const schema& schema, const query::clustering_range& r);
-    rows_type::iterator upper_bound(const schema& schema, const query::clustering_range& r);
-    boost::iterator_range<rows_type::iterator> range(const schema& schema, const query::clustering_range& r);
+    boost::iterator_range<rows_type::const_iterator> range(const schema& schema, const query::range<clustering_key_prefix>& r) const;
+    rows_type::const_iterator lower_bound(const schema& schema, const query::range<clustering_key_prefix>& r) const;
+    rows_type::const_iterator upper_bound(const schema& schema, const query::range<clustering_key_prefix>& r) const;
+    rows_type::iterator lower_bound(const schema& schema, const query::range<clustering_key_prefix>& r);
+    rows_type::iterator upper_bound(const schema& schema, const query::range<clustering_key_prefix>& r);
+    boost::iterator_range<rows_type::iterator> range(const schema& schema, const query::range<clustering_key_prefix>& r);
     // Writes this partition using supplied query result writer.
     // The partition should be first compacted with compact_for_query(), otherwise
     // results may include data which is deleted/expired.
@@ -714,5 +714,5 @@ public:
         gc_clock::time_point query_time = gc_clock::time_point::min()) const;
 private:
     template<typename Func>
-    void for_each_row(const schema& schema, const query::clustering_range& row_range, bool reversed, Func&& func) const;
+    void for_each_row(const schema& schema, const query::range<clustering_key_prefix>& row_range, bool reversed, Func&& func) const;
 };

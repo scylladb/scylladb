@@ -28,9 +28,9 @@
 
 namespace query {
 
-const clustering_row_ranges&
+const std::vector<range<clustering_key_prefix>>&
 clustering_key_filtering_context::get_ranges(const partition_key& key) const {
-    static thread_local clustering_row_ranges full_range = {{}};
+    static thread_local std::vector<range<clustering_key_prefix>> full_range = {{}};
     return _factory ? _factory->get_ranges(key) : full_range;
 }
 
@@ -43,9 +43,9 @@ const clustering_key_filtering_context no_clustering_key_filtering =
 
 class stateless_clustering_key_filter_factory : public clustering_key_filter_factory {
     clustering_key_filter _filter;
-    clustering_row_ranges _ranges;
+    std::vector<range<clustering_key_prefix>> _ranges;
 public:
-    stateless_clustering_key_filter_factory(clustering_row_ranges&& ranges,
+    stateless_clustering_key_filter_factory(std::vector<range<clustering_key_prefix>>&& ranges,
                                     clustering_key_filter&& filter)
         : _filter(std::move(filter)), _ranges(std::move(ranges)) {}
 
@@ -57,7 +57,7 @@ public:
         return _filter;
     }
 
-    virtual const clustering_row_ranges& get_ranges(const partition_key& key) override {
+    virtual const std::vector<range<clustering_key_prefix>>& get_ranges(const partition_key& key) override {
         return _ranges;
     }
 
@@ -70,7 +70,7 @@ class partition_slice_clustering_key_filter_factory : public clustering_key_filt
     schema_ptr _schema;
     const partition_slice& _slice;
     clustering_key_prefix::prefix_equal_tri_compare _cmp;
-    clustering_row_ranges _ck_ranges;
+    query::clustering_row_ranges _ck_ranges;
 public:
     partition_slice_clustering_key_filter_factory(schema_ptr s, const partition_slice& slice)
         : _schema(std::move(s)), _slice(slice), _cmp(*_schema) {}
@@ -79,7 +79,7 @@ public:
         const clustering_row_ranges& ranges = _slice.row_ranges(*_schema, key);
         return [this, &ranges] (const clustering_key& key) {
             return std::any_of(std::begin(ranges), std::end(ranges),
-                [this, &key] (const clustering_range& r) { return r.contains(key, _cmp); });
+                [this, &key] (const range<clustering_key_prefix>& r) { return r.contains(key, _cmp); });
         };
     }
 
@@ -87,11 +87,11 @@ public:
         const clustering_row_ranges& ranges = _slice.row_ranges(*_schema, key);
         return [this, &ranges] (const clustering_key& key) {
             return std::any_of(std::begin(ranges), std::end(ranges),
-                [this, &key] (const clustering_range& r) { return r.contains(key, _cmp); });
+                [this, &key] (const range<clustering_key_prefix>& r) { return r.contains(key, _cmp); });
         };
     }
 
-    virtual const clustering_row_ranges& get_ranges(const partition_key& key) override {
+    virtual const std::vector<range<clustering_key_prefix>>& get_ranges(const partition_key& key) override {
         if (_slice.options.contains(query::partition_slice::option::reversed)) {
             _ck_ranges = _slice.row_ranges(*_schema, key);
             std::reverse(_ck_ranges.begin(), _ck_ranges.end());
@@ -113,10 +113,10 @@ create_partition_slice_filter(schema_ptr s, const partition_slice& slice) {
 const clustering_key_filtering_context
 clustering_key_filtering_context::create(schema_ptr schema, const partition_slice& slice) {
     static thread_local clustering_key_filtering_context accept_all = clustering_key_filtering_context(
-        ::make_shared<stateless_clustering_key_filter_factory>(clustering_row_ranges{{}},
+        ::make_shared<stateless_clustering_key_filter_factory>(std::vector<range<clustering_key_prefix>>{{}},
                                                        [](const clustering_key&) { return true; }));
     static thread_local clustering_key_filtering_context reject_all = clustering_key_filtering_context(
-        ::make_shared<stateless_clustering_key_filter_factory>(clustering_row_ranges{},
+        ::make_shared<stateless_clustering_key_filter_factory>(std::vector<range<clustering_key_prefix>>{},
                                                        [](const clustering_key&) { return false; }));
 
     if (slice.get_specific_ranges()) {
