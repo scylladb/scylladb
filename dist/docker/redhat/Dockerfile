@@ -26,6 +26,9 @@ ADD etc/sysconfig/scylla-server /etc/sysconfig/scylla-server
 
 # Supervisord configuration:
 ADD etc/supervisord.conf /etc/supervisord.conf
+RUN mkdir -p /etc/supervisor.conf.d
+ADD etc/supervisord.conf.d/scylla-server.conf /etc/supervisord.conf.d/scylla-server.conf
+ADD etc/supervisord.conf.d/scylla-jmx.conf /etc/supervisord.conf.d/scylla-jmx.conf
 RUN mkdir -p /var/log/scylla
 ADD scylla-service.sh /scylla-service.sh
 ADD scylla-jmx-service.sh /scylla-jmx-service.sh
