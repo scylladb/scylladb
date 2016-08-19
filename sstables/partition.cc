@@ -108,7 +108,9 @@ private:
     key_view _key;
     const io_priority_class* _pc = nullptr;
     query::clustering_key_filtering_context _ck_filtering;
-    query::clustering_key_filter _filter;
+    bool _in_current_ck_range = false;
+    query::clustering_row_ranges::const_iterator _current_ck_range;
+    query::clustering_row_ranges::const_iterator _ck_range_end;
 
     bool _skip_partition = false;
     bool _skip_clustering_row = false;
@@ -271,6 +273,45 @@ private:
         }
     }
 
+    // We rely on the fact that the first 'S' in SSTables stands for 'sorted'
+    // and the clustering row keys are always in an ascending order.
+    bool is_in_range(const clustering_key_prefix& ck) {
+        // This is a wrong comparator to use here, but at the moment the correct
+        // one has a very serious disadvantage of not existing (see #1446).
+        clustering_key_prefix::prefix_equality_less_compare cmp(*_schema);
+
+        while (_current_ck_range != _ck_range_end) {
+            if (!_in_current_ck_range && _current_ck_range->start()) {
+                auto& start = *_current_ck_range->start();
+                if ((start.is_inclusive() && cmp(ck, start.value())) || (!start.is_inclusive() && !cmp(start.value(), ck))) {
+                    return false;
+                }
+            }
+            // All subsequent clustering keys are larger than the start of this
+            // range so there is no need to check that again.
+            _in_current_ck_range = true;
+
+            if (!_current_ck_range->end()) {
+                return true;
+            }
+
+            auto& end = *_current_ck_range->end();
+            if ((!end.is_inclusive() && cmp(ck, end.value())) || (end.is_inclusive() && !cmp(end.value(), ck))) {
+                return true;
+            }
+
+            ++_current_ck_range;
+            _in_current_ck_range = false;
+        }
+        return false;
+    }
+
+    void set_up_ck_ranges(const partition_key& pk) {
+        auto& range = _ck_filtering.get_ranges(pk);
+        _current_ck_range = range.begin();
+        _ck_range_end = range.end();
+        _in_current_ck_range = false;
+    }
 public:
     mutation_opt mut;
 
@@ -282,8 +323,9 @@ public:
             , _key(key_view(key))
             , _pc(&pc)
             , _ck_filtering(ck_filtering)
-            , _filter(_ck_filtering.get_filter_for_sorted(partition_key::from_exploded(*_schema, key.explode(*_schema))))
-    { }
+    {
+        set_up_ck_ranges(partition_key::from_exploded(*_schema, key.explode(*_schema)));
+    }
 
     mp_row_consumer(const key& key,
                     const schema_ptr schema,
@@ -310,7 +352,7 @@ public:
             _is_mutation_end = false;
             _skip_partition = false;
             _skip_clustering_row = false;
-            _filter = _ck_filtering.get_filter_for_sorted(_mutation->key);
+            set_up_ck_ranges(_mutation->key);
             return proceed::no;
         } else {
             throw malformed_sstable_exception(sprint("Key mismatch. Got %s while processing %s", to_hex(bytes_view(key)).c_str(), to_hex(bytes_view(_key)).c_str()));
@@ -349,7 +391,7 @@ public:
             flush();
         }
         if (!_in_progress) {
-            _skip_clustering_row = !is_static && !_filter(pos.key());
+            _skip_clustering_row = !is_static && !is_in_range(pos.key());
             if (is_static) {
                 _in_progress = mutation_fragment(static_row());
             } else {
