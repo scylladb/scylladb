@@ -747,9 +747,16 @@ public:
     int64_t get_estimated_tasks() {
         int64_t tasks = 0;
 
-        for (auto i = _generations.size() - 1; i >= 0; i--) {
+        for (int i = static_cast<int>(_generations.size()) - 1; i >= 0; i--) {
             const auto& sstables = get_level(i);
-            tasks += std::max(0UL, get_total_bytes(sstables) - max_bytes_for_level(i)) / _max_sstable_size_in_bytes;
+            uint64_t total_bytes_for_this_level = get_total_bytes(sstables);
+            uint64_t max_bytes_for_this_level = max_bytes_for_level(i);
+
+            if (total_bytes_for_this_level < max_bytes_for_this_level) {
+                continue;
+            }
+            // add to tasks an estimate about number of sstables that make this level go beyond its limit.
+            tasks += (total_bytes_for_this_level - max_bytes_for_this_level) / _max_sstable_size_in_bytes;
         }
         return tasks;
     }
