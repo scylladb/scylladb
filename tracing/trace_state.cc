@@ -84,7 +84,7 @@ void trace_state::build_parameters_map() {
 
 trace_state::~trace_state() {
     if (!_primary && _state == state::background) {
-        throw std::logic_error(seastar::format("{}", get_session_id()) + ": secondary session is in a background state!");
+        trace_state_logger.error("{}: secondary session is in a background state!", get_session_id());
     }
 
     stop_foreground_and_write();
