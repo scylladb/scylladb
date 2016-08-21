@@ -54,15 +54,7 @@ namespace tracing {
 extern logging::logger trace_state_logger;
 
 class trace_state final {
-private:
-    lw_shared_ptr<one_session_records> _records;
-    bool _write_on_close;
-    // Used for calculation of time passed since the beginning of a tracing
-    // session till each tracing event.
-    elapsed_clock::time_point _start;
-    // TRUE for a primary trace_state object
-    bool _primary;
-
+public:
     // A primary session may be in 3 states:
     //   - "inactive": between the creation and a begin() call.
     //   - "foreground": after a begin() call and before a
@@ -83,7 +75,18 @@ private:
         inactive,
         foreground,
         background
-    } _state = state::inactive;
+    };
+
+private:
+    lw_shared_ptr<one_session_records> _records;
+    bool _write_on_close;
+    // Used for calculation of time passed since the beginning of a tracing
+    // session till each tracing event.
+    elapsed_clock::time_point _start;
+    // TRUE for a primary trace_state object
+    bool _primary;
+
+    state _state = state::inactive;
 
     std::chrono::system_clock::rep _started_at;
     gms::inet_address _client;
@@ -151,6 +154,14 @@ public:
         return _records->session_id;
     }
 
+    bool is_in_state(state s) const {
+        return _state == s;
+    }
+
+    void set_state(state s) {
+        _state = s;
+    }
+
     trace_type type() const {
         return _records->session_rec.command;
     }
@@ -177,7 +188,7 @@ private:
         std::atomic_signal_fence(std::memory_order::memory_order_seq_cst);
         _start = elapsed_clock::now();
         std::atomic_signal_fence(std::memory_order::memory_order_seq_cst);
-        _state = state::foreground;
+        set_state(state::foreground);
     }
 
     /**
@@ -339,7 +350,7 @@ private:
 };
 
 inline void trace_state::trace(sstring message) {
-    if (_state == state::inactive) {
+    if (is_in_state(state::inactive)) {
         throw std::logic_error("trying to use a trace() before begin() for \"" + message + "\" tracepoint");
     }
 

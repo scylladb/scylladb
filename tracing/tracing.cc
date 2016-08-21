@@ -47,7 +47,6 @@ namespace tracing {
 logging::logger tracing_logger("tracing");
 const gc_clock::duration tracing::tracing::write_period = std::chrono::seconds(2);
 
-
 std::vector<sstring> trace_type_names = {
     "NONE",
     "QUERY",
