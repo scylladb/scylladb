@@ -214,7 +214,7 @@ mutation trace_keyspace_helper::make_session_mutation(const one_session_records&
                                                  [this] (const schema_ptr& s) { return cache_sessions_table_handles(s); });
 
     auto key = partition_key::from_singular(*schema, session_records.session_id);
-    auto ttl = session_records.ttl;
+    gc_clock::duration ttl = session_records.ttl;
     const session_record& record = session_records.session_rec;
     auto timestamp = api::new_timestamp();
     mutation m(key, schema);
@@ -245,7 +245,7 @@ mutation trace_keyspace_helper::make_event_mutation(one_session_records& session
                                                  [this] (const schema_ptr& s) { return cache_events_table_handles(s); });
 
     auto key = partition_key::from_singular(*schema, session_records.session_id);
-    auto ttl = session_records.ttl;
+    gc_clock::duration ttl = session_records.ttl;
     auto backend_state_ptr = static_cast<trace_keyspace_backend_sesssion_state*>(session_records.backend_state_ptr.get());
     int64_t& last_event_nanos = backend_state_ptr->last_nanos;
     auto timestamp = api::new_timestamp();

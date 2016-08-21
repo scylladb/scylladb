@@ -76,13 +76,13 @@ inline const sstring& type_to_string(trace_type t) {
  *
  * @return TTL
  */
-inline gc_clock::duration ttl_by_type(const trace_type t) {
+inline std::chrono::seconds ttl_by_type(const trace_type t) {
     switch (t) {
     case trace_type::NONE:
     case trace_type::QUERY:
-        return gc_clock::duration(86400);  // 1 day
+        return std::chrono::seconds(86400);  // 1 day
     case trace_type::REPAIR:
-        return gc_clock::duration(604800); // 7 days
+        return std::chrono::seconds(604800); // 7 days
     default:
         // unknown type value - must be a SW bug
         throw std::invalid_argument("unknown trace type: " + std::to_string(int(t)));
@@ -183,7 +183,7 @@ class one_session_records {
 public:
     utils::UUID session_id;
     session_record session_rec;
-    gc_clock::duration ttl;
+    std::chrono::seconds ttl;
     std::deque<event_record> events_recs;
     std::unique_ptr<backend_session_state_base> backend_state_ptr;
 
