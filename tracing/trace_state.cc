@@ -51,7 +51,7 @@ static logging::logger logger("trace_state");
 
 std::unordered_map<sstring, sstring> trace_state::get_params() {
     if (!_params_ptr) {
-        return {};
+        return std::unordered_map<sstring, sstring>();
     }
 
     std::unordered_map<sstring, sstring> params_map;
