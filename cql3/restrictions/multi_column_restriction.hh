@@ -394,7 +394,8 @@ public:
             return bounds_range_type::bound(prefix, is_inclusive(b));
         };
         auto range = wrapping_range<clustering_key_prefix>(read_bound(statements::bound::START), read_bound(statements::bound::END));
-        if (range.is_wrap_around(clustering_key_prefix::prefix_equal_tri_compare(*_schema))) {
+        auto bounds = bound_view::from_range(range);
+        if (bound_view::compare(*_schema)(bounds.second, bounds.first)) {
             return { };
         }
         return { bounds_range_type(std::move(range)) };
