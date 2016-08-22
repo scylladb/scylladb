@@ -20,6 +20,7 @@
  */
 
 #include "memtable.hh"
+#include "database.hh"
 #include "frozen_mutation.hh"
 #include "sstable_mutation_readers.hh"
 
@@ -240,11 +241,73 @@ public:
     }
 };
 
+class flush_memory_accounter {
+    uint64_t _bytes_read = 0;
+    logalloc::region& _region;
+
+public:
+    void update_bytes_read(uint64_t delta) {
+        _bytes_read += delta;
+        dirty_memory_manager::from_region_group(_region.group()).account_potentially_cleaned_up_memory(delta);
+    }
+
+    explicit flush_memory_accounter(logalloc::region& region)
+        : _region(region)
+	{}
+
+    ~flush_memory_accounter() {
+        assert(_bytes_read <= _region.occupancy().used_space());
+        dirty_memory_manager::from_region_group(_region.group()).revert_potentially_cleaned_up_memory(_bytes_read);
+    }
+    void account_component(memtable_entry& e) {
+        auto delta = _region.allocator().object_memory_size_in_allocator(&e) +
+                     _region.allocator().object_memory_size_in_allocator(&*(partition_snapshot(e.schema(), &(e.partition())).version())) +
+                     e.memory_usage_without_rows();
+        update_bytes_read(delta);
+    }
+};
+
+class partition_snapshot_accounter {
+    flush_memory_accounter& _accounter;
+public:
+    partition_snapshot_accounter(flush_memory_accounter& acct): _accounter(acct) {}
+
+    // We will be passed mutation fragments here, and they are allocated using the standard
+    // allocator. So we can't compute the size in memtable precisely. However, precise accounting is
+    // hard anyway, since we may be holding multiple snapshots of the partitions, and the
+    // partition_snapshot_reader may compose them. In doing so, we move memory to the standard
+    // allocation. As long as our size read here is lesser or equal to the size in the memtables, we
+    // are safe, and worst case we will allow a bit fewer requests in.
+    void operator()(const range_tombstone& rt) {
+        _accounter.update_bytes_read(sizeof(range_tombstone) + rt.memory_usage());
+    }
+
+    void operator()(const static_row& sr) {
+        _accounter.update_bytes_read(sr.memory_usage());
+    }
+
+    void operator()(const clustering_row& cr) {
+        // Every clustering row is stored in a rows_entry object, and that has some significant
+        // overhead - so add it here. We will be a bit short on our estimate because we can't know
+        // what is the size in the allocator for this rows_entry object: we may have many snapshots,
+        // and we don't know which one(s) contributed to the generation of this mutation fragment.
+        //
+        // We will add the size of the struct here, and that should be good enough.
+        _accounter.update_bytes_read(sizeof(rows_entry) + cr.memory_usage());
+    }
+};
+
 class flush_reader final : public iterator_reader {
+    flush_memory_accounter _flushed_memory;
 public:
     flush_reader(schema_ptr s, lw_shared_ptr<memtable> m)
         : iterator_reader(std::move(s), std::move(m), query::full_partition_range)
+        , _flushed_memory(region())
     {}
+    flush_reader(const flush_reader&) = delete;
+    flush_reader(flush_reader&&) = delete;
+    flush_reader& operator=(flush_reader&&) = delete;
+    flush_reader& operator=(const flush_reader&) = delete;
 
     virtual future<streamed_mutation_opt> operator()() override {
         logalloc::reclaim_lock _(region());
@@ -253,7 +316,11 @@ public:
         if (!e) {
             return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
         } else {
-            return make_ready_future<streamed_mutation_opt>((*e).read(mtbl(), schema(), query::full_slice));
+            auto cr = query::clustering_key_filter_ranges::get_ranges(*schema(), query::full_slice, e->key().key());
+            auto snp = e->partition().read(schema());
+            auto mpsr = make_partition_snapshot_reader<partition_snapshot_accounter>(schema(), e->key(), std::move(cr), snp, region(), read_section(), mtbl(), _flushed_memory);
+            _flushed_memory.account_component(*e);
+            return make_ready_future<streamed_mutation_opt>(std::move(mpsr));
         }
     }
 };

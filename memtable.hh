@@ -61,6 +61,10 @@ public:
     schema_ptr& schema() { return _schema; }
     streamed_mutation read(lw_shared_ptr<memtable> mtbl, const schema_ptr&, const query::partition_slice&);
 
+    size_t memory_usage_without_rows() const {
+        return _key.key().memory_usage();
+    }
+
     struct compare {
         dht::decorated_key::less_comparator _c;
 
