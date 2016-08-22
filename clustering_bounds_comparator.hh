@@ -24,6 +24,7 @@
 
 #include "keys.hh"
 #include "schema.hh"
+#include "range.hh"
 
 /**
  * Represents the kind of bound in a range tombstone.
@@ -104,6 +105,21 @@ public:
     }
     static bound_view top() {
         return {empty_prefix, bound_kind::incl_end};
+    }
+    /*
+    template<template<typename> typename T, typename U>
+    concept bool Range() {
+        return requires (T<U> range) {
+            { range.start() } -> stdx::optional<U>;
+            { range.end() } -> stdx::optional<U>;
+        };
+    };*/
+    template<template<typename> typename Range>
+    static std::pair<bound_view, bound_view> from_range(const Range<clustering_key_prefix>& range) {
+        return {
+            range.start() ? bound_view(range.start()->value(), range.start()->is_inclusive() ? bound_kind::incl_start : bound_kind::excl_start) : bottom(),
+            range.end() ? bound_view(range.end()->value(), range.end()->is_inclusive() ? bound_kind::incl_end : bound_kind::excl_end) : top(),
+        };
     }
     friend std::ostream& operator<<(std::ostream& out, const bound_view& b) {
         return out << "{bound: prefix=" << b.prefix << ", kind=" << b.kind << "}";
