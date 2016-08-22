@@ -151,7 +151,10 @@ struct event_record {
 
 struct session_record {
     gms::inet_address client;
-    std::unordered_map<sstring, sstring> parameters;
+    // Keep the container below sorted since some backends require that and it's
+    // very cheap to always do that because the amount of elements in a
+    // container is very small.
+    std::map<sstring, sstring> parameters;
     sstring request;
     std::chrono::system_clock::time_point started_at;
     trace_type command = trace_type::NONE;
