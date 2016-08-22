@@ -73,6 +73,7 @@ boost_tests = [
     'streamed_mutation_test',
     'anchorless_list_test',
     'database_test',
+    'input_stream_test',
 ]
 
 other_tests = [

@@ -38,6 +38,7 @@ class bytes_ostream {
 public:
     using size_type = bytes::size_type;
     using value_type = bytes::value_type;
+    static constexpr size_type max_chunk_size = 16 * 1024;
 private:
     static_assert(sizeof(value_type) == 1, "value_type is assumed to be one byte long");
     struct chunk {
@@ -194,19 +195,19 @@ public:
         if (v.empty()) {
             return;
         }
-        auto space_left = current_space_left();
-        if (v.size() <= space_left) {
-            memcpy(_current->data + _current->offset, v.begin(), v.size());
-            _current->offset += v.size();
-            _size += v.size();
-        } else {
-            if (space_left) {
-                memcpy(_current->data + _current->offset, v.begin(), space_left);
-                _current->offset += space_left;
-                _size += space_left;
-                v.remove_prefix(space_left);
-            }
-            memcpy(alloc(v.size()), v.begin(), v.size());
+
+        auto this_size = std::min(v.size(), size_t(current_space_left()));
+        if (this_size) {
+            memcpy(_current->data + _current->offset, v.begin(), this_size);
+            _current->offset += this_size;
+            _size += this_size;
+            v.remove_prefix(this_size);
+        }
+
+        while (!v.empty()) {
+            auto this_size = std::min(v.size(), size_t(max_chunk_size));
+            std::copy_n(v.begin(), this_size, alloc(this_size));
+            v.remove_prefix(this_size);
         }
     }
 
@@ -271,13 +272,8 @@ public:
     }
 
     void append(const bytes_ostream& o) {
-        if (o.size() > 0) {
-            auto dst = alloc(o.size());
-            auto r = o._begin.get();
-            while (r) {
-                dst = std::copy_n(r->data, r->offset, dst);
-                r = r->next.get();
-            }
+        for (auto&& bv : o.fragments()) {
+            write(bv);
         }
     }
 
@@ -326,6 +322,45 @@ public:
         _current = pos._chunk;
         _current->next = nullptr;
         _current->offset = pos._offset;
+    }
+
+    void reduce_chunk_count() {
+        // FIXME: This is a simplified version. It linearizes the whole buffer
+        // if its size is below max_chunk_size. We probably could also gain
+        // some read performance by doing "real" reduction, i.e. merging
+        // all chunks until all but the last one is max_chunk_size.
+        if (size() < max_chunk_size) {
+            linearize();
+        }
+    }
+
+    bool operator==(const bytes_ostream& other) const {
+        auto as = fragments().begin();
+        auto as_end = fragments().end();
+        auto bs = other.fragments().begin();
+        auto bs_end = other.fragments().end();
+
+        auto a = *as++;
+        auto b = *bs++;
+        while (!a.empty() || !b.empty()) {
+            auto now = std::min(a.size(), b.size());
+            if (!std::equal(a.begin(), a.begin() + now, b.begin(), b.begin() + now)) {
+                return false;
+            }
+            a.remove_prefix(now);
+            if (a.empty() && as != as_end) {
+                a = *as++;
+            }
+            b.remove_prefix(now);
+            if (b.empty() && bs != bs_end) {
+                b = *bs++;
+            }
+        }
+        return true;
+    }
+
+    bool operator!=(const bytes_ostream& other) const {
+        return !(*this == other);
     }
 };
 

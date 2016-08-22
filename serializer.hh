@@ -30,6 +30,8 @@
 #include "bytes_ostream.hh"
 #include "core/simple-stream.hh"
 #include "boost/variant/variant.hpp"
+#include "bytes_ostream.hh"
+#include "utils/input_stream.hh"
 
 namespace ser {
 using size_type = uint32_t;
@@ -87,12 +89,12 @@ inline void serialize(Output& out, const T& v) {
 };
 
 template<typename T, typename Input>
-inline T deserialize(Input& in, boost::type<T> t) {
+inline auto deserialize(Input& in, boost::type<T> t) {
     return serializer<T>::read(in);
 };
 
-template<typename T>
-inline void skip(seastar::simple_input_stream& v, boost::type<T>) {
+template<typename T, typename Input>
+inline void skip(Input& v, boost::type<T>) {
     return serializer<T>::skip(v);
 }
 
@@ -144,6 +146,11 @@ struct normalize<bytes_view> {
 template <>
 struct normalize<managed_bytes> {
      using type = bytes;
+};
+
+template <>
+struct normalize<bytes_ostream> {
+    using type = bytes;
 };
 
 template <typename T, typename U>

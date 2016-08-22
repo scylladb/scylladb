@@ -258,14 +258,40 @@ struct serializer<std::map<K, V>> {
     }
 };
 
+class deserialized_bytes_proxy {
+    utils::input_stream _stream;
+public:
+    explicit deserialized_bytes_proxy(utils::input_stream stream)
+        : _stream(std::move(stream)) { }
+
+    [[gnu::always_inline]]
+    operator bytes() && {
+        bytes v(bytes::initialized_later(), _stream.size());
+        _stream.read(reinterpret_cast<char*>(v.begin()), _stream.size());
+        return v;
+    }
+
+    [[gnu::always_inline]]
+    operator managed_bytes() && {
+        managed_bytes v(managed_bytes::initialized_later(), _stream.size());
+        _stream.read(reinterpret_cast<char*>(v.begin()), _stream.size());
+        return v;
+    }
+
+    [[gnu::always_inline]]
+    operator bytes_ostream() && {
+        bytes_ostream v;
+        _stream.copy_to(v);
+        return v;
+    }
+};
+
 template<>
 struct serializer<bytes> {
     template<typename Input>
-    static bytes read(Input& in) {
+    static deserialized_bytes_proxy read(Input& in) {
         auto sz = deserialize(in, boost::type<uint32_t>());
-        bytes v(bytes::initialized_later(), sz);
-        in.read(reinterpret_cast<char*>(v.begin()), sz);
-        return v;
+        return deserialized_bytes_proxy(in.read_substream(sz));
     }
     template<typename Output>
     static void write(Output& out, bytes_view v) {
@@ -279,6 +305,13 @@ struct serializer<bytes> {
     template<typename Output>
     static void write(Output& out, const managed_bytes& v) {
         write(out, static_cast<bytes_view>(v));
+    }
+    template<typename Output>
+    static void write(Output& out, const bytes_ostream& v) {
+        safe_serialize_as_uint32(out, uint32_t(v.size()));
+        for (bytes_view frag : v.fragments()) {
+            out.write(reinterpret_cast<const char*>(frag.begin()), frag.size());
+        }
     }
     template<typename Input>
     static void skip(Input& in) {
@@ -295,29 +328,10 @@ template<typename Output>
 void serialize(Output& out, const managed_bytes& v) {
     serializer<bytes>::write(out, v);
 }
-
-template<>
-struct serializer<bytes_ostream> {
-    template<typename Input>
-    static bytes_ostream read(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
-        bytes_ostream v;
-        auto dst = v.write_place_holder(sz);
-        in.read(reinterpret_cast<char*>(dst), sz);
-        return v;
-    }
-    template<typename Output>
-    static void write(Output& out, const bytes_ostream& v) {
-        safe_serialize_as_uint32(out, uint32_t(v.size()));
-        for (bytes_view frag : v.fragments()) {
-            out.write(reinterpret_cast<const char*>(frag.begin()), frag.size());
-        }
-    }
-    template<typename Input>
-    static void skip(Input& in) {
-        serializer<bytes>::skip(in);
-    }
-};
+template<typename Output>
+void serialize(Output& out, const bytes_ostream& v) {
+    serializer<bytes>::write(out, v);
+}
 
 template<typename T>
 struct serializer<std::experimental::optional<T>> {
@@ -437,8 +451,16 @@ T deserialize_from_buffer(const Buffer& buf, boost::type<T> type, size_t head_sp
 }
 
 inline
-seastar::simple_input_stream as_input_stream(bytes_view b) {
+utils::input_stream as_input_stream(bytes_view b) {
     return seastar::simple_input_stream(reinterpret_cast<const char*>(b.begin()), b.size());
+}
+
+inline
+utils::input_stream as_input_stream(const bytes_ostream& b) {
+    if (b.is_linearized()) {
+        return as_input_stream(b.view());
+    }
+    return utils::fragmented_input_stream(b.fragments().begin(), b.size());
 }
 
 template<typename Output, typename ...T>
@@ -456,11 +478,13 @@ void serialize(Output& out, const unknown_variant_type& v) {
 }
 template<typename Input>
 unknown_variant_type deserialize(Input& in, boost::type<unknown_variant_type>) {
-    auto size = deserialize(in, boost::type<size_type>());
-    auto index = deserialize(in, boost::type<size_type>());
-    auto sz = size - sizeof(size_type) * 2;
-    sstring v(sstring::initialized_later(), sz);
-    in.read(v.begin(), sz);
-    return unknown_variant_type{index, std::move(v)};
+    return utils::input_stream::with_stream(in, [] (auto& in) {
+        auto size = deserialize(in, boost::type<size_type>());
+        auto index = deserialize(in, boost::type<size_type>());
+        auto sz = size - sizeof(size_type) * 2;
+        sstring v(sstring::initialized_later(), sz);
+        in.read(v.begin(), sz);
+        return unknown_variant_type{ index, std::move(v) };
+    });
 }
 }

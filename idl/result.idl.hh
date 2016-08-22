@@ -26,7 +26,7 @@ class result_digest final {
 };
 
 class result {
-    bytes_ostream buf();
+    bytes buf();
     std::experimental::optional<query::result_digest> digest();
     api::timestamp_type last_modified() [ [version 1.2] ] = api::missing_timestamp;
 };

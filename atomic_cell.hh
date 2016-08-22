@@ -236,10 +236,18 @@ public:
     static atomic_cell make_live(api::timestamp_type timestamp, bytes_view value) {
         return atomic_cell_type::make_live(timestamp, value);
     }
+    static atomic_cell make_live(api::timestamp_type timestamp, const bytes& value) {
+        return make_live(timestamp, bytes_view(value));
+    }
     static atomic_cell make_live(api::timestamp_type timestamp, bytes_view value,
         gc_clock::time_point expiry, gc_clock::duration ttl)
     {
         return atomic_cell_type::make_live(timestamp, value, expiry, ttl);
+    }
+    static atomic_cell make_live(api::timestamp_type timestamp, const bytes& value,
+                                 gc_clock::time_point expiry, gc_clock::duration ttl)
+    {
+        return make_live(timestamp, bytes_view(value), expiry, ttl);
     }
     static atomic_cell make_live(api::timestamp_type timestamp, bytes_view value, ttl_opt ttl) {
         if (!ttl) {

@@ -170,18 +170,7 @@ uint32_t result::calculate_row_count(const query::partition_slice& slice) {
         }
     } counter;
 
-    bytes_view v;
-
-    if (buf().is_linearized()) {
-        v = buf().view();
-    } else {
-        // FIXME: make result_view::consume() work on fragments to avoid linearization.
-        bytes_ostream w(buf());
-        v = w.linearize();
-    }
-
-    query::result_view view(v);
-    view.consume(slice, counter);
+    result_view::consume(*this, slice, counter);
     return counter.total_count;
 }
 
