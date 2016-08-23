@@ -68,6 +68,9 @@ def check_version(ar):
     if config and (not config.has_option("housekeeping", "check-version") or not config.getboolean("housekeeping", "check-version")):
         return
     current_version = get_api('/storage_service/scylla_release_version')
+    if current_version == "":
+        # API is down, nothing to do
+        return
     try:
         latest_version = get_json_from_url(version_url + "?version=" + current_version)["version"]
     except:
