@@ -40,7 +40,7 @@ else
 fi
 mv /tmp/grub /etc/default/grub
 if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
-    grub-mkconfig -o /boot/grub/grub.cfg
+    update-grub
 else
     grub2-mkconfig -o /boot/grub2/grub.cfg
 fi
