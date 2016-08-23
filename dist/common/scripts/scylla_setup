@@ -212,7 +212,7 @@ if [ $INTERACTIVE -eq 1 ]; then
 fi
 
 if [ $ENABLE_SERVICE -eq 1 ]; then
-    if [ "$ID" = "fedora" ] || [ "$ID" = "centos" ]; then
+    if [ "$ID" = "fedora" ] || [ "$ID" = "centos" ] || [ "$ID" = "ubuntu" -a "$VERSION_ID" != "14.04" ]; then
         systemctl enable scylla-server.service
         systemctl enable collectd.service
         if [ $ENABLE_CHECK_VERSION -eq 1 ]; then
