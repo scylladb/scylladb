@@ -262,10 +262,10 @@ public:
             // We received more data than we actually care about, so process
             // the beginning of the buffer, and return the rest to the stream
             auto segment = data.share(0, _remain);
-            process(segment);
+            auto ret = process(segment);
             data.trim_front(_remain - segment.size());
             _remain -= (_remain - segment.size());
-            if (_remain == 0) {
+            if (_remain == 0 && ret == proceed::yes) {
                 verify_end_state();
             }
             return make_ready_future<unconsumed_remainder>(std::move(data));
