@@ -22,7 +22,11 @@ while [ $# -gt 0 ]; do
 done
 
 . /etc/os-release
-
+if [ "$ID" = "ubuntu" ]; then
+    . /etc/default/scylla-server
+else
+    . /etc/sysconfig/scylla-server
+fi
 if [ ! -f /etc/default/grub ]; then
     echo "Unsupported bootloader"
     exit 1
