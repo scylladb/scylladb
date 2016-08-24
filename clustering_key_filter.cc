@@ -40,17 +40,6 @@ clustering_key_filtering_context clustering_key_filtering_context::create_no_fil
 const clustering_key_filtering_context no_clustering_key_filtering =
     clustering_key_filtering_context::create_no_filtering();
 
-class stateless_clustering_key_filter_factory : public clustering_key_filter_factory {
-    clustering_row_ranges _ranges;
-public:
-    stateless_clustering_key_filter_factory(clustering_row_ranges&& ranges)
-        : _ranges(std::move(ranges)) {}
-
-    virtual const clustering_row_ranges& get_ranges(const partition_key& key) override {
-        return _ranges;
-    }
-};
-
 class partition_slice_clustering_key_filter_factory : public clustering_key_filter_factory {
     schema_ptr _schema;
     const partition_slice& _slice;
@@ -76,24 +65,6 @@ create_partition_slice_filter(schema_ptr s, const partition_slice& slice) {
 
 const clustering_key_filtering_context
 clustering_key_filtering_context::create(schema_ptr schema, const partition_slice& slice) {
-    static thread_local clustering_key_filtering_context accept_all = clustering_key_filtering_context(
-        ::make_shared<stateless_clustering_key_filter_factory>(clustering_row_ranges{{}}));
-    static thread_local clustering_key_filtering_context reject_all = clustering_key_filtering_context(
-        ::make_shared<stateless_clustering_key_filter_factory>(clustering_row_ranges{}));
-
-    if (slice.get_specific_ranges()) {
-        return clustering_key_filtering_context(create_partition_slice_filter(schema, slice));
-    }
-
-    const clustering_row_ranges& ranges = slice.default_row_ranges();
-
-    if (ranges.empty()) {
-        return reject_all;
-    }
-
-    if (ranges.size() == 1 && ranges[0].is_full()) {
-        return accept_all;
-    }
     return clustering_key_filtering_context(create_partition_slice_filter(schema, slice));
 }
 
