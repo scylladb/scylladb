@@ -1391,3 +1391,54 @@ SEASTAR_TEST_CASE(test_slicing_mutation) {
 
     return make_ready_future<>();
 }
+
+SEASTAR_TEST_CASE(test_trim_rows) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "cf")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("ck", int32_type, column_kind::clustering_key)
+                .with_column("v", int32_type)
+                .build();
+
+        auto pk = partition_key::from_exploded(*s, { int32_type->decompose(0) });
+        mutation m(pk, s);
+        constexpr auto row_count = 8;
+        for (auto i = 0; i < row_count; i++) {
+            m.set_clustered_cell(clustering_key_prefix::from_single_value(*s, int32_type->decompose(i)),
+                                 to_bytes("v"), data_value(i), api::new_timestamp() - 5);
+        }
+        m.partition().apply(tombstone(api::new_timestamp(), gc_clock::now()));
+
+        auto now = gc_clock::now() + gc_clock::duration(std::chrono::hours(1));
+
+        auto compact_and_expect_empty = [&] (mutation m, std::vector<query::clustering_range> ranges) {
+            mutation m2 = m;
+            m.partition().compact_for_query(*s, now, ranges, false, query::max_rows);
+            BOOST_REQUIRE(m.partition().clustered_rows().empty());
+
+            std::reverse(ranges.begin(), ranges.end());
+            m2.partition().compact_for_query(*s, now, ranges, true, query::max_rows);
+            BOOST_REQUIRE(m2.partition().clustered_rows().empty());
+        };
+
+        std::vector<query::clustering_range> ranges = {
+                query::clustering_range::make_starting_with(clustering_key_prefix::from_single_value(*s, int32_type->decompose(5)))
+        };
+        compact_and_expect_empty(m, ranges);
+
+        ranges = {
+            query::clustering_range::make_starting_with(clustering_key_prefix::from_single_value(*s, int32_type->decompose(50)))
+        };
+        compact_and_expect_empty(m, ranges);
+
+        ranges = {
+            query::clustering_range::make_ending_with(clustering_key_prefix::from_single_value(*s, int32_type->decompose(5)))
+        };
+        compact_and_expect_empty(m, ranges);
+
+        ranges = {
+            query::clustering_range::make_open_ended_both_sides()
+        };
+        compact_and_expect_empty(m, ranges);
+    });
+}
