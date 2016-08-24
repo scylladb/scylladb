@@ -34,16 +34,9 @@ namespace query {
 
 class partition_slice;
 
-// A predicate that tells if a clustering key should be accepted.
-using clustering_key_filter = std::function<bool(const clustering_key&)>;
-
 // A factory for clustering key filter which can be reused for multiple clustering keys.
 class clustering_key_filter_factory {
 public:
-    // Create a clustering key filter that can be used for multiple clustering keys with no restrictions.
-    virtual clustering_key_filter get_filter(const partition_key&) = 0;
-    // Create a clustering key filter that can be used for multiple clustering keys but they have to be sorted.
-    virtual clustering_key_filter get_filter_for_sorted(const partition_key&) = 0;
     virtual const std::vector<nonwrapping_range<clustering_key_prefix>>& get_ranges(const partition_key&) = 0;
 
     virtual ~clustering_key_filter_factory() = default;
@@ -55,14 +48,6 @@ private:
     clustering_key_filtering_context() {};
     clustering_key_filtering_context(shared_ptr<clustering_key_filter_factory> factory) : _factory(factory) {}
 public:
-    // Create a clustering key filter that can be used for multiple clustering keys with no restrictions.
-    clustering_key_filter get_filter(const partition_key& key) const {
-        return _factory ? _factory->get_filter(key) : [] (const clustering_key&) { return true; };
-    }
-    // Create a clustering key filter that can be used for multiple clustering keys but they have to be sorted.
-    clustering_key_filter get_filter_for_sorted(const partition_key& key) const {
-        return _factory ? _factory->get_filter_for_sorted(key) : [] (const clustering_key&) { return true; };
-    }
     const std::vector<nonwrapping_range<clustering_key_prefix>>& get_ranges(const partition_key& key) const;
 
     static const clustering_key_filtering_context create(schema_ptr, const partition_slice&);

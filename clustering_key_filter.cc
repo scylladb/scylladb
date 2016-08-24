@@ -41,20 +41,10 @@ const clustering_key_filtering_context no_clustering_key_filtering =
     clustering_key_filtering_context::create_no_filtering();
 
 class stateless_clustering_key_filter_factory : public clustering_key_filter_factory {
-    clustering_key_filter _filter;
     clustering_row_ranges _ranges;
 public:
-    stateless_clustering_key_filter_factory(clustering_row_ranges&& ranges,
-                                    clustering_key_filter&& filter)
-        : _filter(std::move(filter)), _ranges(std::move(ranges)) {}
-
-    virtual clustering_key_filter get_filter(const partition_key& key) override {
-        return _filter;
-    }
-
-    virtual clustering_key_filter get_filter_for_sorted(const partition_key& key) override {
-        return _filter;
-    }
+    stateless_clustering_key_filter_factory(clustering_row_ranges&& ranges)
+        : _ranges(std::move(ranges)) {}
 
     virtual const clustering_row_ranges& get_ranges(const partition_key& key) override {
         return _ranges;
@@ -64,27 +54,10 @@ public:
 class partition_slice_clustering_key_filter_factory : public clustering_key_filter_factory {
     schema_ptr _schema;
     const partition_slice& _slice;
-    clustering_key_prefix::prefix_equal_tri_compare _cmp;
     clustering_row_ranges _ck_ranges;
 public:
     partition_slice_clustering_key_filter_factory(schema_ptr s, const partition_slice& slice)
-        : _schema(std::move(s)), _slice(slice), _cmp(*_schema) {}
-
-    virtual clustering_key_filter get_filter(const partition_key& key) override {
-        const clustering_row_ranges& ranges = _slice.row_ranges(*_schema, key);
-        return [this, &ranges] (const clustering_key& key) {
-            return std::any_of(std::begin(ranges), std::end(ranges),
-                [this, &key] (const clustering_range& r) { return r.contains(key, _cmp); });
-        };
-    }
-
-    virtual clustering_key_filter get_filter_for_sorted(const partition_key& key) override {
-        const clustering_row_ranges& ranges = _slice.row_ranges(*_schema, key);
-        return [this, &ranges] (const clustering_key& key) {
-            return std::any_of(std::begin(ranges), std::end(ranges),
-                [this, &key] (const clustering_range& r) { return r.contains(key, _cmp); });
-        };
-    }
+        : _schema(std::move(s)), _slice(slice) {}
 
     virtual const clustering_row_ranges& get_ranges(const partition_key& key) override {
         if (_slice.options.contains(query::partition_slice::option::reversed)) {
@@ -104,11 +77,9 @@ create_partition_slice_filter(schema_ptr s, const partition_slice& slice) {
 const clustering_key_filtering_context
 clustering_key_filtering_context::create(schema_ptr schema, const partition_slice& slice) {
     static thread_local clustering_key_filtering_context accept_all = clustering_key_filtering_context(
-        ::make_shared<stateless_clustering_key_filter_factory>(clustering_row_ranges{{}},
-                                                       [](const clustering_key&) { return true; }));
+        ::make_shared<stateless_clustering_key_filter_factory>(clustering_row_ranges{{}}));
     static thread_local clustering_key_filtering_context reject_all = clustering_key_filtering_context(
-        ::make_shared<stateless_clustering_key_filter_factory>(clustering_row_ranges{},
-                                                       [](const clustering_key&) { return false; }));
+        ::make_shared<stateless_clustering_key_filter_factory>(clustering_row_ranges{}));
 
     if (slice.get_specific_ranges()) {
         return clustering_key_filtering_context(create_partition_slice_filter(schema, slice));
