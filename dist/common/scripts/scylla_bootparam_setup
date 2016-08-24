@@ -8,6 +8,14 @@ print_usage() {
     exit 1
 }
 
+is_ec2() {
+    if [ -f /sys/hypervisor/uuid ] && [ "$(head -c 3 /sys/hypervisor/uuid)" = "ec2" ]; then
+        echo 1
+    else
+        echo 0
+    fi
+}
+
 AMI_OPT=0
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -27,24 +35,37 @@ if [ "$ID" = "ubuntu" ]; then
 else
     . /etc/sysconfig/scylla-server
 fi
-if [ ! -f /etc/default/grub ]; then
+if [ ! -e /etc/default/grub ] && [ ! -e /boot/grub/menu.lst ]; then
     echo "Unsupported bootloader"
     exit 1
 fi
-if [ "`grep hugepagesz /etc/default/grub`" != "" ] || [ "`grep hugepages /etc/default/grub`" != "" ]; then
-    sed -e "s#hugepagesz=2M ##" /etc/default/grub > /tmp/grub
+if [ -e /etc/default/grub ]; then
+    if [ "`grep hugepagesz /etc/default/grub`" != "" ] || [ "`grep hugepages /etc/default/grub`" != "" ]; then
+        sed -e "s#hugepagesz=2M ##" /etc/default/grub > /tmp/grub
+        mv /tmp/grub /etc/default/grub
+        sed -e "s#hugepages=[0-9]* ##" /etc/default/grub > /tmp/grub
+        mv /tmp/grub /etc/default/grub
+    fi
+    if [ $AMI_OPT -eq 1 ]; then
+        sed -e "s#^GRUB_CMDLINE_LINUX=\"#GRUB_CMDLINE_LINUX=\"clocksource=tsc tsc=reliable hugepagesz=2M hugepages=$NR_HUGEPAGES #" /etc/default/grub > /tmp/grub
+    else
+        sed -e "s#^GRUB_CMDLINE_LINUX=\"#GRUB_CMDLINE_LINUX=\"hugepagesz=2M hugepages=$NR_HUGEPAGES #" /etc/default/grub > /tmp/grub
+    fi
     mv /tmp/grub /etc/default/grub
-    sed -e "s#hugepages=[0-9]* ##" /etc/default/grub > /tmp/grub
-    mv /tmp/grub /etc/default/grub
+    if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
+        update-grub
+    else
+        grub2-mkconfig -o /boot/grub2/grub.cfg
+    fi
 fi
-if [ $AMI_OPT -eq 1 ]; then
-    sed -e "s#^GRUB_CMDLINE_LINUX=\"#GRUB_CMDLINE_LINUX=\"clocksource=tsc tsc=reliable hugepagesz=2M hugepages=$NR_HUGEPAGES #" /etc/default/grub > /tmp/grub
-else
-    sed -e "s#^GRUB_CMDLINE_LINUX=\"#GRUB_CMDLINE_LINUX=\"hugepagesz=2M hugepages=$NR_HUGEPAGES #" /etc/default/grub > /tmp/grub
-fi
-mv /tmp/grub /etc/default/grub
-if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
-    update-grub
-else
-    grub2-mkconfig -o /boot/grub2/grub.cfg
+
+if [ `is_ec2` -eq 1 ] && [ -e /boot/grub/menu.lst ]; then
+    if [ "`grep hugepagesz /boot/grub/menu.lst`" != "" ] || [ "`grep hugepages /boot/grub/menu.lst`" != "" ]; then
+        sed -e "s#hugepagesz=2M ##" /boot/grub/menu.lst > /tmp/menu.lst
+        mv /tmp/menu.lst /boot/grub/menu.lst
+        sed -e "s#hugepages=[0-9]* ##" /boot/grub/menu.lst > /tmp/menu.lst
+        mv /tmp/menu.lst /boot/grub/menu.lst
+    fi
+    sed -e "s#^kernel\\(.*\\)#kernel\\1 hugepagesz=2M hugepages=$NR_HUGEPAGES #" /boot/grub/menu.lst > /tmp/menu.lst
+    mv /tmp/menu.lst /boot/grub/menu.lst
 fi
