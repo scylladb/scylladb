@@ -865,7 +865,7 @@ sstables::sstable::find_disk_ranges(
                 // (the code below will work with an unbounded range), but
                 // let's drop this range to revert to the classic behavior of
                 // reading entire sstable row without using the promoted index
-            } else if (ck_filtering.want_static_columns(pkey) && has_static_columns(*schema, ie)) {
+            } else if (has_static_columns(*schema, ie)) {
                 // FIXME: If we need to read the static columns and also a
                 // non-full clustering key range, we need to return two byte
                 // ranges in the returned disk_read_range. We don't support
