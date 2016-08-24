@@ -53,6 +53,14 @@ struct reversal_traits<false> {
         return c.erase_and_dispose(begin, end, std::move(disposer));
     }
 
+    template<typename Container, typename Disposer>
+    static typename Container::iterator erase_dispose_and_update_end(Container& c,
+         typename Container::iterator it, Disposer&& disposer,
+         typename Container::iterator&)
+    {
+        return c.erase_and_dispose(it, std::forward<Disposer>(disposer));
+    }
+
     template <typename Container>
     static boost::iterator_range<typename Container::iterator> maybe_reverse(
         Container& c, boost::iterator_range<typename Container::iterator> r)
@@ -87,6 +95,24 @@ struct reversal_traits<true> {
         return typename Container::reverse_iterator(
             c.erase_and_dispose(end.base(), begin.base(), disposer)
         );
+    }
+
+    // Erases element pointed to by it and makes sure than iterator end is not
+    // invalidated.
+    template<typename Container, typename Disposer>
+    static typename Container::reverse_iterator erase_dispose_and_update_end(Container& c,
+        typename Container::reverse_iterator it, Disposer&& disposer,
+        typename Container::reverse_iterator& end)
+    {
+        auto to_erase = std::next(it).base();
+        bool update_end = end.base() == to_erase;
+        auto ret = typename Container::reverse_iterator(
+            c.erase_and_dispose(to_erase, std::forward<Disposer>(disposer))
+        );
+        if (update_end) {
+            end = ret;
+        }
+        return ret;
     }
 
     template <typename Container>
@@ -1120,7 +1146,7 @@ void mutation_partition::trim_rows(const schema& s,
             }
 
             if (e.empty()) {
-                last = reversal_traits<reversed>::erase_and_dispose(_rows, last, std::next(last, 1), deleter);
+                last = reversal_traits<reversed>::erase_dispose_and_update_end(_rows, last, deleter, end);
             } else {
                 ++last;
             }
