@@ -103,7 +103,7 @@ memtable::slice(const query::partition_range& range) const {
     }
 }
 
-class scanning_reader final : public mutation_reader::impl {
+class iterator_reader: public mutation_reader::impl {
     lw_shared_ptr<memtable> _memtable;
     schema_ptr _schema;
     const query::partition_range& _range;
@@ -112,11 +112,7 @@ class scanning_reader final : public mutation_reader::impl {
     memtable::partitions_type::iterator _end;
     uint64_t _last_reclaim_counter;
     size_t _last_partition_count = 0;
-    stdx::optional<query::partition_range> _delegate_range;
-    mutation_reader _delegate;
-    const io_priority_class& _pc;
-    const query::partition_slice& _slice;
-private:
+
     memtable::partitions_type::iterator lookup_end() {
         auto cmp = memtable_entry::compare(_memtable->_schema);
         return _range.end()
@@ -148,46 +144,117 @@ private:
         }
         _last_reclaim_counter = current_reclaim_counter;
     }
-public:
-    scanning_reader(schema_ptr s,
+protected:
+    iterator_reader(schema_ptr s,
                     lw_shared_ptr<memtable> m,
-                    const query::partition_range& range,
-                    const query::partition_slice& slice,
-                    const io_priority_class& pc)
+                    const query::partition_range& range)
         : _memtable(std::move(m))
         , _schema(std::move(s))
         , _range(range)
-        , _pc(pc)
-        , _slice(slice)
     { }
+
+    memtable_entry* fetch_next_entry() {
+        update_iterators();
+        if (_i == _end) {
+            return nullptr;
+        } else {
+            memtable_entry& e = *_i;
+            ++_i;
+            _last = e.key();
+            _memtable->upgrade_entry(e);
+            return &e;
+        }
+    }
+
+    logalloc::allocating_section& read_section() {
+        return _memtable->_read_section;
+    }
+
+    lw_shared_ptr<memtable> mtbl() {
+        return _memtable;
+    }
+
+    schema_ptr schema() {
+        return _schema;
+    }
+
+    logalloc::region& region() {
+        return *_memtable;
+    };
+
+    std::experimental::optional<query::partition_range> get_delegate_range() {
+        // We cannot run concurrently with row_cache::update().
+        if (_memtable->is_flushed()) {
+            return _last ? _range.split_after(*_last, dht::ring_position_comparator(*_memtable->_schema)) : _range;
+        }
+        return {};
+    }
+
+    mutation_reader delegate_reader(const query::partition_range& delegate,
+                                    const query::partition_slice& slice,
+                                    const io_priority_class& pc) {
+        auto ret = make_mutation_reader<sstable_range_wrapping_reader>(
+            _memtable->_sstable, _schema, delegate, slice, pc);
+        _memtable = {};
+        _last = {};
+        return ret;
+    }
+};
+
+class scanning_reader final: public iterator_reader {
+    stdx::optional<query::partition_range> _delegate_range;
+    mutation_reader _delegate;
+    const io_priority_class& _pc;
+    const query::partition_slice& _slice;
+public:
+     scanning_reader(schema_ptr s,
+                     lw_shared_ptr<memtable> m,
+                     const query::partition_range& range,
+                     const query::partition_slice& slice,
+                     const io_priority_class& pc)
+         : iterator_reader(std::move(s), std::move(m), range)
+         , _pc(pc)
+         , _slice(slice)
+     { }
 
     virtual future<streamed_mutation_opt> operator()() override {
         if (_delegate_range) {
             return _delegate();
         }
 
-        // We cannot run concurrently with row_cache::update().
-        if (_memtable->is_flushed()) {
-            // FIXME: Use cache. See column_family::make_reader().
-            _delegate_range = _last ? _range.split_after(*_last, dht::ring_position_comparator(*_memtable->_schema)) : _range;
-            _delegate = make_mutation_reader<sstable_range_wrapping_reader>(
-                _memtable->_sstable, _schema, *_delegate_range, _slice, _pc);
-            _memtable = {};
-            _last = {};
+        // FIXME: Use cache. See column_family::make_reader().
+        _delegate_range = get_delegate_range();
+        if (_delegate_range) {
+            _delegate = delegate_reader(*_delegate_range, _slice, _pc);
             return _delegate();
         }
 
-        logalloc::reclaim_lock _(*_memtable);
+        logalloc::reclaim_lock _(region());
         managed_bytes::linearization_context_guard lcg;
-        update_iterators();
-        if (_i == _end) {
-            return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
+        memtable_entry* e = fetch_next_entry();
+        if (!e) {
+             return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
+        } else {
+            return make_ready_future<streamed_mutation_opt>(e->read(mtbl(), schema(), _slice));
         }
-        memtable_entry& e = *_i;
-        ++_i;
-        _last = e.key();
-        _memtable->upgrade_entry(e);
-        return make_ready_future<streamed_mutation_opt>(e.read(_memtable, _schema, _slice));
+    }
+};
+
+class flush_reader final : public iterator_reader {
+public:
+    flush_reader(schema_ptr s, lw_shared_ptr<memtable> m)
+        : iterator_reader(std::move(s), std::move(m), query::full_partition_range)
+    {}
+
+    virtual future<streamed_mutation_opt> operator()() override {
+        logalloc::reclaim_lock _(region());
+        managed_bytes::linearization_context_guard lcg;
+        memtable_entry* e = fetch_next_entry();
+        if (!e) {
+            return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
+        } else {
+            return make_ready_future<streamed_mutation_opt>((*e).read(mtbl(), schema(), query::full_slice));
+        }
     }
 };
 
@@ -219,7 +286,7 @@ memtable::make_reader(schema_ptr s,
 
 mutation_reader
 memtable::make_flush_reader(schema_ptr s) {
-    return make_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), query::full_partition_range, query::full_slice, default_priority_class());
+    return make_mutation_reader<flush_reader>(std::move(s), shared_from_this());
 }
 
 void

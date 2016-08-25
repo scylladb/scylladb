@@ -161,5 +161,5 @@ public:
         return _replay_position;
     }
 
-    friend class scanning_reader;
+    friend class iterator_reader;
 };
