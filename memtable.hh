@@ -147,6 +147,9 @@ public:
                                 const query::partition_slice& slice = query::full_slice,
                                 const io_priority_class& pc = default_priority_class());
 
+
+    mutation_reader make_flush_reader(schema_ptr);
+
     mutation_source as_data_source();
     key_source as_key_source();
 

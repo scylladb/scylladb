@@ -1781,7 +1781,7 @@ void components_writer::consume_end_of_stream() {
 
 future<> sstable::write_components(memtable& mt, bool backup, const io_priority_class& pc, bool leave_unsealed) {
     _collector.set_replay_position(mt.replay_position());
-    return write_components(mt.make_reader(mt.schema()),
+    return write_components(mt.make_flush_reader(mt.schema()),
             mt.partition_count(), mt.schema(), std::numeric_limits<uint64_t>::max(), backup, pc, leave_unsealed);
 }
 

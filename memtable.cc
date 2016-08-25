@@ -217,6 +217,11 @@ memtable::make_reader(schema_ptr s,
     }
 }
 
+mutation_reader
+memtable::make_flush_reader(schema_ptr s) {
+    return make_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), query::full_partition_range, query::full_slice, default_priority_class());
+}
+
 void
 memtable::update(const db::replay_position& rp) {
     if (_replay_position < rp) {
