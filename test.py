@@ -74,6 +74,7 @@ boost_tests = [
     'anchorless_list_test',
     'database_test',
     'input_stream_test',
+    'nonwrapping_range_test',
 ]
 
 other_tests = [
