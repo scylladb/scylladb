@@ -167,8 +167,8 @@ mutation_reader make_reader_returning_many(std::vector<mutation> mutations, quer
     std::vector<streamed_mutation> streamed_mutations;
     streamed_mutations.reserve(mutations.size());
     for (auto& m : mutations) {
-        const query::clustering_row_ranges& ck_ranges = ck_filtering.get_ranges(m.key());
-        auto mp = mutation_partition(std::move(m.partition()), *m.schema(), ck_ranges);
+        auto ck_ranges = ck_filtering.get_ranges(m.key());
+        auto mp = mutation_partition(std::move(m.partition()), *m.schema(), std::move(ck_ranges));
         auto sm = streamed_mutation_from_mutation(mutation(m.schema(), m.decorated_key(), std::move(mp)));
         streamed_mutations.emplace_back(std::move(sm));
     }

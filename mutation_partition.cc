@@ -222,7 +222,7 @@ mutation_partition::mutation_partition(const mutation_partition& x)
 }
 
 mutation_partition::mutation_partition(const mutation_partition& x, const schema& schema,
-        const query::clustering_row_ranges& ck_ranges)
+        query::clustering_key_filter_ranges ck_ranges)
         : _tombstone(x._tombstone)
         , _static_row(x._static_row)
         , _rows(x._rows.value_comp())
@@ -242,7 +242,7 @@ mutation_partition::mutation_partition(const mutation_partition& x, const schema
 }
 
 mutation_partition::mutation_partition(mutation_partition&& x, const schema& schema,
-    const query::clustering_row_ranges& ck_ranges)
+    query::clustering_key_filter_ranges ck_ranges)
     : _tombstone(x._tombstone)
     , _static_row(std::move(x._static_row))
     , _rows(std::move(x._rows))

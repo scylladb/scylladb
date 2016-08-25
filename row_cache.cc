@@ -265,8 +265,8 @@ public:
                         if (mo) {
                             _cache.populate(*mo);
                             mo->upgrade(_schema);
-                            auto& ck_ranges = _ck_filtering.get_ranges(mo->key());
-                            auto filtered_partition = mutation_partition(std::move(mo->partition()), *(mo->schema()), ck_ranges);
+                            auto ck_ranges = _ck_filtering.get_ranges(mo->key());
+                            auto filtered_partition = mutation_partition(std::move(mo->partition()), *(mo->schema()), std::move(ck_ranges));
                             mo->partition() = std::move(filtered_partition);
                             return make_ready_future<streamed_mutation_opt>(streamed_mutation_from_mutation(std::move(*mo)));
                         }
@@ -500,8 +500,8 @@ public:
                             _cache.populate(*mo);
                             mo->upgrade(_schema);
                             this->update_last_key(mo->decorated_key());
-                            auto& ck_ranges = _ck_filtering.get_ranges(mo->key());
-                            auto filtered_partition = mutation_partition(std::move(mo->partition()), *(mo->schema()), ck_ranges);
+                            auto ck_ranges = _ck_filtering.get_ranges(mo->key());
+                            auto filtered_partition = mutation_partition(std::move(mo->partition()), *(mo->schema()), std::move(ck_ranges));
                             mo->partition() = std::move(filtered_partition);
                             return make_ready_future<streamed_mutation_opt>(streamed_mutation_from_mutation(std::move(*mo)));
                         }
@@ -1140,14 +1140,14 @@ streamed_mutation cache_entry::read(row_cache& rc, const schema_ptr& s, query::c
     assert(!wide_partition());
     auto dk = _key.as_decorated_key();
     if (_schema->version() != s->version()) {
-        const query::clustering_row_ranges& ck_ranges = ck_filtering.get_ranges(dk.key());
-        auto mp = mutation_partition(_pe.squashed(_schema, s), *s, ck_ranges);
+        auto ck_ranges = ck_filtering.get_ranges(dk.key());
+        auto mp = mutation_partition(_pe.squashed(_schema, s), *s, std::move(ck_ranges));
         auto m = mutation(s, dk, std::move(mp));
         return streamed_mutation_from_mutation(std::move(m));
     }
-    auto& ckr = ck_filtering.get_ranges(dk.key());
+    auto ckr = ck_filtering.get_ranges(dk.key());
     auto snp = _pe.read(_schema);
-    return make_partition_snapshot_reader(_schema, dk, ck_filtering, ckr, snp, rc._tracker.region(), rc._read_section, { });
+    return make_partition_snapshot_reader(_schema, dk, std::move(ckr), snp, rc._tracker.region(), rc._read_section, { });
 }
 
 const schema_ptr& row_cache::schema() const {

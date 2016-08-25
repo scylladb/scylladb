@@ -306,9 +306,9 @@ memtable_entry::read(lw_shared_ptr<memtable> mtbl, const schema_ptr& target_sche
         mutation m = mutation(target_schema, _key, std::move(mp));
         return streamed_mutation_from_mutation(std::move(m));
     }
-    auto& cr = ck_filtering.get_ranges(_key.key());
+    auto cr = ck_filtering.get_ranges(_key.key());
     auto snp = _pe.read(_schema);
-    return make_partition_snapshot_reader(_schema, _key, ck_filtering, cr, snp, *mtbl, mtbl->_read_section, mtbl);
+    return make_partition_snapshot_reader(_schema, _key, std::move(cr), snp, *mtbl, mtbl->_read_section, mtbl);
 }
 
 void memtable::upgrade_entry(memtable_entry& e) {

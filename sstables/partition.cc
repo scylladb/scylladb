@@ -109,6 +109,7 @@ private:
     const io_priority_class* _pc = nullptr;
     query::clustering_key_filtering_context _ck_filtering;
     bool _in_current_ck_range = false;
+    stdx::optional<query::clustering_key_filter_ranges> _ck_ranges;
     query::clustering_row_ranges::const_iterator _current_ck_range;
     query::clustering_row_ranges::const_iterator _ck_range_end;
 
@@ -307,9 +308,9 @@ private:
     }
 
     void set_up_ck_ranges(const partition_key& pk) {
-        auto& range = _ck_filtering.get_ranges(pk);
-        _current_ck_range = range.begin();
-        _ck_range_end = range.end();
+        _ck_ranges = _ck_filtering.get_ranges(pk);
+        _current_ck_range = _ck_ranges->begin();
+        _ck_range_end = _ck_ranges->end();
         _in_current_ck_range = false;
     }
 public:
@@ -858,8 +859,8 @@ sstables::sstable::find_disk_ranges(
         index_entry& ie = index_list[index_idx];
         if (ie.get_promoted_index_bytes().size() >= 16) {
             auto&& pkey = partition_key::from_exploded(*schema, key.explode(*schema));
-            auto& ck_ranges = ck_filtering.get_ranges(pkey);
-            if (ck_ranges.size() == 1 && ck_ranges[0].is_full()) {
+            auto ck_ranges = ck_filtering.get_ranges(pkey);
+            if (ck_ranges.size() == 1 && ck_ranges.begin()->is_full()) {
                 // When no clustering filter is given to sstable::read_row(),
                 // we get here one range unbounded on both sides. This is fine
                 // (the code below will work with an unbounded range), but
@@ -884,10 +885,10 @@ sstables::sstable::find_disk_ranges(
                 // look in the same promoted index several times it might have
                 // made sense to build an array of key starts so we can do a
                 // binary search. We could do this once we have a key cache.
-                auto& range_start = ck_ranges[0].start();
+                auto& range_start = ck_ranges.begin()->start();
                 bool found_range_start = false;
                 uint64_t range_start_pos;
-                auto& range_end = ck_ranges[0].end();
+                auto& range_end = ck_ranges.begin()->end();
 
                 auto cmp = clustering_key_prefix::tri_compare(*schema);
                 while (num_blocks--) {

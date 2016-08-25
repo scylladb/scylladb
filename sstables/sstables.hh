@@ -32,6 +32,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include "types.hh"
+#include "clustering_key_filter.hh"
 #include "core/enum.hh"
 #include "compress.hh"
 #include "row.hh"

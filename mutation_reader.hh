@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "mutation.hh"
+#include "clustering_key_filter.hh"
 #include "core/future.hh"
 #include "core/future-util.hh"
 #include "core/do_with.hh"

@@ -22,15 +22,13 @@
  */
 
 #include "clustering_key_filter.hh"
-#include "keys.hh"
-#include "query-request.hh"
 
 namespace query {
 
-const clustering_row_ranges&
+clustering_key_filter_ranges
 clustering_key_filtering_context::get_ranges(const partition_key& key) const {
     static thread_local clustering_row_ranges full_range = {{}};
-    return _factory ? _factory->get_ranges(key) : full_range;
+    return _factory ? _factory->get_ranges(key) : clustering_key_filter_ranges(full_range);
 }
 
 clustering_key_filtering_context clustering_key_filtering_context::create_no_filtering() {
@@ -43,18 +41,16 @@ const clustering_key_filtering_context no_clustering_key_filtering =
 class partition_slice_clustering_key_filter_factory : public clustering_key_filter_factory {
     schema_ptr _schema;
     const partition_slice& _slice;
-    clustering_row_ranges _ck_ranges;
 public:
     partition_slice_clustering_key_filter_factory(schema_ptr s, const partition_slice& slice)
         : _schema(std::move(s)), _slice(slice) {}
 
-    virtual const clustering_row_ranges& get_ranges(const partition_key& key) override {
+    virtual clustering_key_filter_ranges get_ranges(const partition_key& key) override {
+        const query::clustering_row_ranges& ranges = _slice.row_ranges(*_schema, key);
         if (_slice.options.contains(query::partition_slice::option::reversed)) {
-            _ck_ranges = _slice.row_ranges(*_schema, key);
-            std::reverse(_ck_ranges.begin(), _ck_ranges.end());
-            return _ck_ranges;
+            return clustering_key_filter_ranges(clustering_key_filter_ranges::reversed{}, ranges);
         }
-        return _slice.row_ranges(*_schema, key);
+        return clustering_key_filter_ranges(ranges);
     }
 };
 

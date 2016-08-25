@@ -40,6 +40,7 @@
 #include "utils/managed_vector.hh"
 #include "hashing_partition_visitor.hh"
 #include "range_tombstone_list.hh"
+#include "clustering_key_filter.hh"
 
 //
 // Container for cells of a row. Cells are identified by column_id.
@@ -563,8 +564,8 @@ public:
     { }
     mutation_partition(mutation_partition&&) = default;
     mutation_partition(const mutation_partition&);
-    mutation_partition(const mutation_partition&, const schema&, const query::clustering_row_ranges&);
-    mutation_partition(mutation_partition&&, const schema&, const query::clustering_row_ranges&);
+    mutation_partition(const mutation_partition&, const schema&, query::clustering_key_filter_ranges);
+    mutation_partition(mutation_partition&&, const schema&, query::clustering_key_filter_ranges);
     ~mutation_partition();
     mutation_partition& operator=(const mutation_partition& x);
     mutation_partition& operator=(mutation_partition&& x) noexcept;
