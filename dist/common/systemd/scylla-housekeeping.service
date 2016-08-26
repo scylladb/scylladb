@@ -1,5 +1,6 @@
 [Unit]
 Description=Scylla Housekeeping
+After=network.target
 
 [Service]
 Type=simple
