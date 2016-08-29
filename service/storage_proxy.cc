@@ -2626,7 +2626,7 @@ storage_proxy::query_partition_key_range_concurrent(std::chrono::steady_clock::t
 }
 
 future<foreign_ptr<lw_shared_ptr<query::result>>>
-storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd, query::partition_range&& range, db::consistency_level cl, tracing::trace_state_ptr trace_state) {
+storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range> partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state) {
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
     std::vector<query::partition_range> ranges;
@@ -2635,9 +2635,12 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     // when dealing with LocalStrategy keyspaces, we can skip the range splitting and merging (which can be
     // expensive in clusters with vnodes)
     if (ks.get_replication_strategy().get_type() == locator::replication_strategy_type::local) {
-        ranges.emplace_back(std::move(range));
+        ranges = std::move(partition_ranges);
     } else {
-        ranges = get_restricted_ranges(ks, *schema, std::move(range));
+        for (auto&& r : partition_ranges) {
+            auto restricted_ranges = get_restricted_ranges(ks, *schema, std::move(r));
+            std::move(restricted_ranges.begin(), restricted_ranges.end(), std::back_inserter(ranges));
+        }
     }
 
     // our estimate of how many result rows there will be per-range
@@ -2724,13 +2727,7 @@ storage_proxy::do_query(schema_ptr s,
         }
     }
 
-    if (partition_ranges.size() != 1) {
-        // FIXME: implement
-        _stats.read.mark(lc.stop().latency_in_nano());
-        throw std::runtime_error("more than one non singular range not supported yet");
-    }
-
-    return query_partition_key_range(cmd, std::move(partition_ranges[0]), cl, std::move(trace_state)).finally([lc, p] () mutable {
+    return query_partition_key_range(cmd, std::move(partition_ranges), cl, std::move(trace_state)).finally([lc, p] () mutable {
         p->_stats.read.mark(lc.stop().latency_in_nano());
     });
 }
