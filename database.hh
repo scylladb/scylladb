@@ -73,6 +73,7 @@
 #include "key_reader.hh"
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/shared_future.hh>
+#include "tracing/trace_state.hh"
 
 class frozen_mutation;
 class reconcilable_result;
@@ -468,7 +469,8 @@ private:
     mutation_reader make_sstable_reader(schema_ptr schema,
                                         const query::partition_range& range,
                                         const query::partition_slice& slice,
-                                        const io_priority_class& pc) const;
+                                        const io_priority_class& pc,
+                                        tracing::trace_state_ptr trace_state) const;
 
     mutation_source sstables_as_mutation_source();
     key_source sstables_as_key_source() const;
@@ -507,9 +509,10 @@ public:
     mutation_reader make_reader(schema_ptr schema,
             const query::partition_range& range = query::full_partition_range,
             const query::partition_slice& slice = query::full_slice,
-            const io_priority_class& pc = default_priority_class()) const;
+            const io_priority_class& pc = default_priority_class(),
+            tracing::trace_state_ptr trace_state = nullptr) const;
 
-    mutation_source as_mutation_source() const;
+    mutation_source as_mutation_source(tracing::trace_state_ptr trace_state) const;
 
     // Queries can be satisfied from multiple data sources, so they are returned
     // as temporaries.
@@ -551,7 +554,8 @@ public:
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(schema_ptr,
         const query::read_command& cmd, query::result_request request,
-        const std::vector<query::partition_range>& ranges);
+        const std::vector<query::partition_range>& ranges,
+        tracing::trace_state_ptr trace_state);
 
     future<> populate(sstring datadir);
 
@@ -1042,8 +1046,8 @@ public:
     unsigned shard_of(const dht::token& t);
     unsigned shard_of(const mutation& m);
     unsigned shard_of(const frozen_mutation& m);
-    future<lw_shared_ptr<query::result>> query(schema_ptr, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges);
-    future<reconcilable_result> query_mutations(schema_ptr, const query::read_command& cmd, const query::partition_range& range);
+    future<lw_shared_ptr<query::result>> query(schema_ptr, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges, tracing::trace_state_ptr trace_state = nullptr);
+    future<reconcilable_result> query_mutations(schema_ptr, const query::read_command& cmd, const query::partition_range& range, tracing::trace_state_ptr trace_state = nullptr);
     future<> apply(schema_ptr, const frozen_mutation&);
     future<> apply_streaming_mutation(schema_ptr, utils::UUID plan_id, const frozen_mutation&, bool fragmented);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
