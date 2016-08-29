@@ -2129,7 +2129,7 @@ protected:
         ++_proxy->_stats.mutation_data_read_attempts.get_ep_stat(ep);
         if (is_me(ep)) {
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
-            return _proxy->query_mutations_locally(_schema, cmd, _partition_range);
+            return _proxy->query_mutations_locally(_schema, cmd, _partition_range, _trace_state);
         } else {
             auto& ms = net::get_local_messaging_service();
             tracing::trace(_trace_state, "read_mutation_data: sending a message to /{}", ep);
@@ -2143,7 +2143,7 @@ protected:
         ++_proxy->_stats.data_read_attempts.get_ep_stat(ep);
         if (is_me(ep)) {
             tracing::trace(_trace_state, "read_data: querying locally");
-            return _proxy->query_singular_local(_schema, _cmd, _partition_range);
+            return _proxy->query_singular_local(_schema, _cmd, _partition_range, query::result_request::result_and_digest, _trace_state);
         } else {
             auto& ms = net::get_local_messaging_service();
             tracing::trace(_trace_state, "read_data: sending a message to /{}", ep);
@@ -2157,7 +2157,7 @@ protected:
         ++_proxy->_stats.digest_read_attempts.get_ep_stat(ep);
         if (is_me(ep)) {
             tracing::trace(_trace_state, "read_digest: querying locally");
-            return _proxy->query_singular_local_digest(_schema, _cmd, _partition_range);
+            return _proxy->query_singular_local_digest(_schema, _cmd, _partition_range, _trace_state);
         } else {
             auto& ms = net::get_local_messaging_service();
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
@@ -2487,17 +2487,17 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
 }
 
 future<query::result_digest, api::timestamp_type>
-storage_proxy::query_singular_local_digest(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr) {
-    return query_singular_local(std::move(s), std::move(cmd), pr, query::result_request::only_digest).then([] (foreign_ptr<lw_shared_ptr<query::result>> result) {
+storage_proxy::query_singular_local_digest(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr, tracing::trace_state_ptr trace_state) {
+    return query_singular_local(std::move(s), std::move(cmd), pr, query::result_request::only_digest, std::move(trace_state)).then([] (foreign_ptr<lw_shared_ptr<query::result>> result) {
         return make_ready_future<query::result_digest, api::timestamp_type>(*result->digest(), result->last_modified());
     });
 }
 
 future<foreign_ptr<lw_shared_ptr<query::result>>>
-storage_proxy::query_singular_local(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr, query::result_request request) {
+storage_proxy::query_singular_local(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr, query::result_request request, tracing::trace_state_ptr trace_state) {
     unsigned shard = _db.local().shard_of(pr.start()->value().token());
-    return _db.invoke_on(shard, [gs = global_schema_ptr(s), prv = std::vector<query::partition_range>({pr}) /* FIXME: pr is copied */, cmd, request] (database& db) {
-        return db.query(gs, *cmd, request, prv).then([](auto&& f) {
+    return _db.invoke_on(shard, [gs = global_schema_ptr(s), prv = std::vector<query::partition_range>({pr}) /* FIXME: pr is copied */, cmd, request, trace_state = std::move(trace_state)] (database& db) mutable {
+        return db.query(gs, *cmd, request, prv, std::move(trace_state)).then([](auto&& f) {
             return make_foreign(std::move(f));
         });
     });
@@ -3280,8 +3280,8 @@ void storage_proxy::init_messaging_service() {
 
         return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr)] (const query::partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
             auto src_ip = src_addr.addr;
-            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p] (schema_ptr s) {
-                return p->query_singular_local(std::move(s), cmd, pr);
+            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr] (schema_ptr s) {
+                return p->query_singular_local(std::move(s), cmd, pr, query::result_request::result_and_digest, trace_state_ptr);
             }).finally([&trace_state_ptr, src_ip] () mutable {
                 tracing::trace(trace_state_ptr, "read_data handling is done, sending a response to /{}", src_ip);
             });
@@ -3297,8 +3297,8 @@ void storage_proxy::init_messaging_service() {
         }
         return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr)] (const query::partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
             auto src_ip = src_addr.addr;
-            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p] (schema_ptr s) {
-                return p->query_mutations_locally(std::move(s), cmd, pr);
+            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr] (schema_ptr s) {
+                return p->query_mutations_locally(std::move(s), cmd, pr, trace_state_ptr);
             }).finally([&trace_state_ptr, src_ip] () mutable {
                 tracing::trace(trace_state_ptr, "read_mutation_data handling is done, sending a response to /{}", src_ip);
             });
@@ -3314,8 +3314,8 @@ void storage_proxy::init_messaging_service() {
         }
         return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr)] (const query::partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
             auto src_ip = src_addr.addr;
-            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p] (schema_ptr s) {
-                return p->query_singular_local_digest(std::move(s), cmd, pr);
+            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr] (schema_ptr s) {
+                return p->query_singular_local_digest(std::move(s), cmd, pr, trace_state_ptr);
             }).finally([&trace_state_ptr, src_ip] () mutable {
                 tracing::trace(trace_state_ptr, "read_digest handling is done, sending a response to /{}", src_ip);
             });
@@ -3443,17 +3443,17 @@ public:
 };
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
-storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr) {
+storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr, tracing::trace_state_ptr trace_state) {
     if (pr.is_singular()) {
         unsigned shard = _db.local().shard_of(pr.start()->value().token());
-        return _db.invoke_on(shard, [cmd, &pr, gs = global_schema_ptr(s)] (database& db) {
-            return db.query_mutations(gs, *cmd, pr).then([] (reconcilable_result&& result) {
+        return _db.invoke_on(shard, [cmd, &pr, gs = global_schema_ptr(s), trace_state = std::move(trace_state)] (database& db) mutable {
+            return db.query_mutations(gs, *cmd, pr, std::move(trace_state)).then([] (reconcilable_result&& result) {
                 return make_foreign(make_lw_shared(std::move(result)));
             });
         });
     } else {
-        return _db.map_reduce(mutation_result_merger{cmd, s}, [cmd, &pr, gs = global_schema_ptr(s)] (database& db) {
-            return db.query_mutations(gs, *cmd, pr).then([] (reconcilable_result&& result) {
+        return _db.map_reduce(mutation_result_merger{cmd, s}, [cmd, &pr, gs = global_schema_ptr(s), trace_state = std::move(trace_state)] (database& db) {
+            return db.query_mutations(gs, *cmd, pr, trace_state).then([] (reconcilable_result&& result) {
                 return make_foreign(make_lw_shared(std::move(result)));
             });
         }).then([] (reconcilable_result&& result) {
