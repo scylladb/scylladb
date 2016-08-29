@@ -52,6 +52,8 @@ const sstring trace_keyspace_helper::KEYSPACE_NAME("system_traces");
 const sstring trace_keyspace_helper::SESSIONS("sessions");
 const sstring trace_keyspace_helper::EVENTS("events");
 
+const sstring trace_keyspace_helper::NODE_SLOW_QUERY_LOG("node_slow_log");
+
 struct trace_keyspace_backend_sesssion_state final : public backend_session_state_base {
     int64_t last_nanos = 0;
     semaphore write_sem;
@@ -91,6 +93,21 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                     "thread text,"
                                     "PRIMARY KEY ((session_id), event_id)) "
                                     "WITH default_time_to_live = 86400", KEYSPACE_NAME, EVENTS);
+
+        _node_slow_query_log_cql = sprint("CREATE TABLE %s.%s ("
+                                    "node_ip inet,"
+                                    "shard int,"
+                                    "session_id uuid,"
+                                    "date timestamp,"
+                                    "start_time timeuuid,"
+                                    "command text,"
+                                    "duration int,"
+                                    "parameters map<text, text>,"
+                                    "source_ip inet,"
+                                    "table_names set<text>,"
+                                    "username text,"
+                                    "PRIMARY KEY (start_time, node_ip, shard)) "
+                                    "WITH default_time_to_live = 86400", KEYSPACE_NAME, NODE_SLOW_QUERY_LOG);
 }
 
 future<> trace_keyspace_helper::setup_table(const sstring& name, const sstring& cql) const {
@@ -118,19 +135,52 @@ bool trace_keyspace_helper::cache_sessions_table_handles(const schema_ptr& schem
     _duration_column = schema->get_column_definition("duration");
     _parameters_column = schema->get_column_definition("parameters");
 
-    if (session_id_column && session_id_column->type == uuid_type &&
-        _client_column && _client_column->type == inet_addr_type &&
-        _coordinator_column && _coordinator_column->type == inet_addr_type &&
-        _request_column && _request_column->type == utf8_type &&
-        _started_at_column && _started_at_column->type == timestamp_type &&
-        _command_column && _command_column->type == utf8_type &&
-        _duration_column && _duration_column->type == int32_type &&
-        _parameters_column && _parameters_column->type && map_type_impl::get_instance(utf8_type, utf8_type, true)) {
+    if (check_column_definition(session_id_column, uuid_type) &&
+        check_column_definition(_client_column, inet_addr_type) &&
+        check_column_definition(_coordinator_column, inet_addr_type) &&
+        check_column_definition(_request_column, utf8_type) &&
+        check_column_definition(_started_at_column, timestamp_type) &&
+        check_column_definition(_command_column, utf8_type) &&
+        check_column_definition(_duration_column, int32_type) &&
+        check_column_definition(_parameters_column, map_type_impl::get_instance(utf8_type, utf8_type, true))) {
         // store a table ID only if its format meets our demands
         _sessions_id = schema->id();
         return true;
     } else {
         _sessions_id = utils::UUID();
+        return false;
+    }
+}
+
+bool trace_keyspace_helper::cache_node_slow_log_table_handles(const schema_ptr& schema) {
+    auto node_ip_column = schema->get_column_definition("node_ip");
+    auto shard_column = schema->get_column_definition("shard");
+    _slow_session_id_column = schema->get_column_definition("session_id");
+    _slow_date_column = schema->get_column_definition("date");
+    auto start_time_column = schema->get_column_definition("start_time");
+    _slow_command_column = schema->get_column_definition("command");
+    _slow_duration_column = schema->get_column_definition("duration");
+    _slow_parameters_column = schema->get_column_definition("parameters");
+    _slow_source_ip_column = schema->get_column_definition("source_ip");
+    _slow_table_names_column = schema->get_column_definition("table_names");
+    _slow_username_column = schema->get_column_definition("username");
+
+    if (check_column_definition(node_ip_column, inet_addr_type) &&
+        check_column_definition(shard_column, int32_type) &&
+        check_column_definition(_slow_session_id_column, uuid_type) &&
+        check_column_definition(_slow_date_column, timestamp_type) &&
+        check_column_definition(start_time_column, timeuuid_type) &&
+        check_column_definition(_slow_command_column, utf8_type) &&
+        check_column_definition(_slow_duration_column, int32_type) &&
+        check_column_definition(_slow_parameters_column, map_type_impl::get_instance(utf8_type, utf8_type, true)) &&
+        check_column_definition(_slow_source_ip_column, inet_addr_type) &&
+        check_column_definition(_slow_table_names_column, set_type_impl::get_instance(utf8_type, true)) &&
+        check_column_definition(_slow_username_column, utf8_type)) {
+        // store a table ID only if its format meets our demands
+        _slow_query_log_id = schema->id();
+        return true;
+    } else {
+        _slow_query_log_id = utils::UUID();
         return false;
     }
 }
@@ -143,12 +193,12 @@ bool trace_keyspace_helper::cache_events_table_handles(const schema_ptr& schema)
     _thread_column = schema->get_column_definition("thread");
     _source_elapsed_column = schema->get_column_definition("source_elapsed");
 
-    if (session_id_column && session_id_column->type == uuid_type &&
-        event_id_column && event_id_column->type == timeuuid_type &&
-        _activity_column && _activity_column->type == utf8_type &&
-        _source_column && _source_column->type == inet_addr_type &&
-        _thread_column && _thread_column->type == utf8_type &&
-        _source_elapsed_column && _source_elapsed_column->type == int32_type) {
+    if (check_column_definition(session_id_column, uuid_type) &&
+        check_column_definition(event_id_column, timeuuid_type) &&
+        check_column_definition(_activity_column, utf8_type) &&
+        check_column_definition(_source_column, inet_addr_type) &&
+        check_column_definition(_thread_column, utf8_type) &&
+        check_column_definition(_source_elapsed_column, int32_type)) {
         // store a table ID only if its format meets our demands
         _events_id = schema->id();
         return true;
@@ -174,6 +224,7 @@ future<> trace_keyspace_helper::start() {
             // Create tables
             setup_table(SESSIONS, _sessions_create_cql).get();
             setup_table(EVENTS, _events_create_cql).get();
+            setup_table(NODE_SLOW_QUERY_LOG, _node_slow_query_log_cql).get();
         });
     } else {
         return make_ready_future<>();
@@ -214,7 +265,7 @@ mutation trace_keyspace_helper::make_session_mutation(const one_session_records&
                                                  [this] (const schema_ptr& s) { return cache_sessions_table_handles(s); });
 
     auto key = partition_key::from_singular(*schema, session_records.session_id);
-    auto ttl = session_records.ttl;
+    gc_clock::duration ttl = session_records.ttl;
     const session_record& record = session_records.session_rec;
     auto timestamp = api::new_timestamp();
     mutation m(key, schema);
@@ -240,12 +291,75 @@ mutation trace_keyspace_helper::make_session_mutation(const one_session_records&
     return m;
 }
 
+mutation trace_keyspace_helper::make_slow_query_mutation(const one_session_records& session_records) {
+    schema_ptr schema = get_schema_ptr_or_create(_slow_query_log_id, NODE_SLOW_QUERY_LOG, _node_slow_query_log_cql,
+                                                 [this] (const schema_ptr& s) { return cache_node_slow_log_table_handles(s); });
+
+    const session_record& record = session_records.session_rec;
+
+    auto key = partition_key::from_singular(*schema, utils::UUID_gen::get_time_UUID(make_monotonic_UUID_tp(_slow_query_last_nanos, record.started_at)));
+    auto timestamp = api::new_timestamp();
+    gc_clock::duration ttl = record.slow_query_record_ttl;
+    mutation m(key, schema);
+
+    std::vector<bytes> full_components;
+    full_components.reserve(2);
+    full_components.emplace_back(inet_addr_type->decompose(utils::fb_utilities::get_broadcast_address().addr()));
+    full_components.emplace_back(int32_type->decompose((int32_t)(engine().cpu_id())));
+    auto& cells = m.partition().clustered_row(clustering_key::from_exploded(*schema, full_components)).cells();
+
+    // the corresponding tracing session ID
+    cells.apply(*_slow_session_id_column, atomic_cell::make_live(timestamp, uuid_type->decompose(session_records.session_id), ttl));
+
+    // timestamp when the query began
+    auto millis_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(record.started_at.time_since_epoch()).count();
+    cells.apply(*_slow_date_column, atomic_cell::make_live(timestamp, timestamp_type->decompose(millis_since_epoch), ttl));
+
+    // query command is stored on a parameters map with a 'query' key
+    auto it = record.parameters.find("query");
+    if (it == record.parameters.end()) {
+        throw std::logic_error("No \"query\" parameter set for a session requesting a slow_query_log record");
+    }
+    cells.apply(*_slow_command_column, atomic_cell::make_live(timestamp, utf8_type->decompose(it->second), ttl));
+
+    // query duration
+    cells.apply(*_slow_duration_column, atomic_cell::make_live(timestamp, int32_type->decompose(elapsed_to_micros(record.elapsed)), ttl));
+
+    // parameters map
+    std::vector<std::pair<bytes, atomic_cell>> map_cell;
+    for (auto& param_pair : record.parameters) {
+        map_cell.emplace_back(utf8_type->decompose(param_pair.first), atomic_cell::make_live(timestamp, utf8_type->decompose(param_pair.second), ttl));
+    }
+
+    map_type_impl::mutation map_mutation{{}, map_cell};
+    auto my_map_type = map_type_impl::get_instance(utf8_type, utf8_type, true);
+    cells.apply(*_slow_parameters_column, my_map_type->serialize_mutation_form(map_mutation));
+
+    // IP of a Client that sent this query
+    cells.apply(*_slow_source_ip_column, atomic_cell::make_live(timestamp, inet_addr_type->decompose(record.client.addr()), ttl));
+
+    // set of tables involved in this query
+    std::vector<std::pair<bytes, atomic_cell>> set_cell;
+    for (auto& table_name : record.tables) {
+        set_cell.emplace_back(utf8_type->decompose(table_name), atomic_cell::make_live(timestamp, utf8_type->decompose(table_name), ttl));
+    }
+
+    set_type_impl::mutation set_mutation{{}, set_cell};
+    auto my_set_type = set_type_impl::get_instance(utf8_type, true);
+    cells.apply(*_slow_table_names_column, my_set_type->serialize_mutation_form(set_mutation));
+
+    // user name used for this query
+    cells.apply(*_slow_username_column, atomic_cell::make_live(timestamp, utf8_type->decompose(record.username), ttl));
+
+    return m;
+}
+
 mutation trace_keyspace_helper::make_event_mutation(one_session_records& session_records, const event_record& record) {
     schema_ptr schema = get_schema_ptr_or_create(_events_id, EVENTS, _events_create_cql,
                                                  [this] (const schema_ptr& s) { return cache_events_table_handles(s); });
 
     auto key = partition_key::from_singular(*schema, session_records.session_id);
-    auto ttl = session_records.ttl;
+    gc_clock::duration ttl = session_records.ttl;
     auto backend_state_ptr = static_cast<trace_keyspace_backend_sesssion_state*>(session_records.backend_state_ptr.get());
     int64_t& last_event_nanos = backend_state_ptr->last_nanos;
     auto timestamp = api::new_timestamp();
@@ -304,7 +418,14 @@ future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_se
             return apply_events_mutation(records, events_records).then([this, session_record_is_ready, records] {
                 if (session_record_is_ready) {
                     logger.trace("{}: storing a session event", records->session_id);
-                    return service::get_local_storage_proxy().mutate({make_session_mutation(*records)}, db::consistency_level::ANY, nullptr);
+                    return service::get_local_storage_proxy().mutate({make_session_mutation(*records)}, db::consistency_level::ANY, nullptr).then([this, records] {
+                        if (!records->do_log_slow_query) {
+                            return make_ready_future<>();
+                        }
+
+                        logger.trace("{}: storing a slow query event", records->session_id);
+                        return service::get_local_storage_proxy().mutate({make_slow_query_mutation(*records)}, db::consistency_level::ANY, nullptr);
+                    });
                 } else {
                     return make_ready_future<>();
                 }

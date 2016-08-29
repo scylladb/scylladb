@@ -53,13 +53,28 @@ public:
     static const sstring SESSIONS;
     static const sstring EVENTS;
 
+    // Performance related tables
+    static const sstring NODE_SLOW_QUERY_LOG;
+
 private:
     static constexpr int bad_column_family_message_period = 10000;
 
     seastar::gate _pending_writes;
+    int64_t _slow_query_last_nanos = 0;
 
     sstring _sessions_create_cql;
     sstring _events_create_cql;
+    sstring _node_slow_query_log_cql;
+
+    utils::UUID _slow_query_log_id;
+    const column_definition* _slow_session_id_column;
+    const column_definition* _slow_date_column;
+    const column_definition* _slow_command_column;
+    const column_definition* _slow_duration_column;
+    const column_definition* _slow_parameters_column;
+    const column_definition* _slow_source_ip_column;
+    const column_definition* _slow_table_names_column;
+    const column_definition* _slow_username_column;
 
     utils::UUID _sessions_id;
     const column_definition* _client_column;
@@ -206,6 +221,17 @@ private:
     bool cache_sessions_table_handles(const schema_ptr& s);
 
     /**
+     * Cache definitions of a system_traces.node_slow_log table: table ID and column
+     * definitions.
+     *
+     * @param s schema handle
+     * @return TRUE if succeeded to cache all relevant information. FALSE will
+     *         be returned if something is wrong with the table: it was dropped
+     *         or its columns definitions are not as expected.
+     */
+    bool cache_node_slow_log_table_handles(const schema_ptr& s);
+
+    /**
      * Cache definitions of a system_traces.events table: table ID and column
      * definitions.
      *
@@ -224,6 +250,15 @@ private:
      * @return the relevant mutation
      */
     mutation make_session_mutation(const one_session_records& all_records_handle);
+
+    /**
+     * Create mutation for a new slow_query_log record
+     *
+     * @param all_records_handle handle to access an object with all records of this session
+     *
+     * @return the relevant mutation
+     */
+    mutation make_slow_query_mutation(const one_session_records& all_records_handle);
 
     /**
      * Create a mutation for a new trace point record
@@ -252,6 +287,10 @@ private:
         }
 
         return elapsed_micros;
+    }
+
+    bool check_column_definition(const column_definition* column_def, const shared_ptr<const abstract_type>& abstracet_type_inst) const {
+        return column_def && column_def->type == abstracet_type_inst;
     }
 };
 

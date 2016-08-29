@@ -447,6 +447,8 @@ modification_statement::execute(distributed<service::storage_proxy>& proxy, serv
         throw exceptions::invalid_request_exception("Conditional updates are not supported by the protocol version in use. You need to upgrade to a driver using the native protocol v2.");
     }
 
+    tracing::add_table_name(qs.get_trace_state(), keyspace(), column_family());
+
     if (has_conditions()) {
         return execute_with_condition(proxy, qs, options);
     }
@@ -508,6 +510,9 @@ modification_statement::execute_internal(distributed<service::storage_proxy>& pr
     if (has_conditions()) {
         throw exceptions::unsupported_operation_exception();
     }
+
+    tracing::add_table_name(qs.get_trace_state(), keyspace(), column_family());
+
     return get_mutations(proxy, options, true, options.get_timestamp(qs), qs.get_trace_state()).then(
             [&proxy] (auto mutations) {
                 return proxy.local().mutate_locally(std::move(mutations));

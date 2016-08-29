@@ -3219,7 +3219,7 @@ void storage_proxy::init_messaging_service() {
 
         if (trace_info && *trace_info) {
             tracing::trace_info& tr_info = **trace_info;
-            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(tr_info.type, tr_info.write_on_close, tr_info.session_id);
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(tr_info);
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "Message received from /{}", src_addr.addr);
         }
@@ -3276,7 +3276,7 @@ void storage_proxy::init_messaging_service() {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = net::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
-            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(cmd.trace_info->type, cmd.trace_info->write_on_close, cmd.trace_info->session_id);
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd.trace_info);
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "read_data: message received from /{}", src_addr.addr);
         }
@@ -3294,7 +3294,7 @@ void storage_proxy::init_messaging_service() {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = net::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
-            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(cmd.trace_info->type, cmd.trace_info->write_on_close, cmd.trace_info->session_id);
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd.trace_info);
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "read_mutation_data: message received from /{}", src_addr.addr);
         }
@@ -3311,7 +3311,7 @@ void storage_proxy::init_messaging_service() {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = net::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
-            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(cmd.trace_info->type, cmd.trace_info->write_on_close, cmd.trace_info->session_id);
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd.trace_info);
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "read_digest: message received from /{}", src_addr.addr);
         }

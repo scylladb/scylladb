@@ -463,13 +463,18 @@ cql_server::connection::read_frame() {
 future<response_type>
     cql_server::connection::process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request) {
     auto cqlop = static_cast<cql_binary_opcode>(op);
+    tracing::trace_state_props_set trace_props;
 
-    if (tracing_request != tracing_request_type::not_requested) {
+    trace_props.set_if<tracing::trace_state_props::log_slow_query>(tracing::tracing::get_local_tracing_instance().slow_query_tracing_enabled());
+    trace_props.set_if<tracing::trace_state_props::full_tracing>(tracing_request != tracing_request_type::not_requested);
+
+    if (trace_props) {
         if (cqlop == cql_binary_opcode::QUERY ||
             cqlop == cql_binary_opcode::PREPARE ||
             cqlop == cql_binary_opcode::EXECUTE ||
             cqlop == cql_binary_opcode::BATCH) {
-            client_state.create_tracing_session(tracing::trace_type::QUERY, tracing_request == tracing_request_type::write_on_close);
+            trace_props.set_if<tracing::trace_state_props::write_on_close>(tracing_request == tracing_request_type::write_on_close);
+            client_state.create_tracing_session(tracing::trace_type::QUERY, trace_props);
         }
     }
 
@@ -494,6 +499,9 @@ future<response_type>
                 }
                 break;
         }
+
+        tracing::set_username(client_state.get_trace_state(), client_state.user());
+
         switch (cqlop) {
         case cql_binary_opcode::STARTUP:       return process_startup(stream, std::move(buf), std::move(client_state));
         case cql_binary_opcode::AUTH_RESPONSE: return process_auth_response(stream, std::move(buf), std::move(client_state));
@@ -900,7 +908,10 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
             throw exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed.");
         }
 
-        modifications.emplace_back(static_pointer_cast<cql3::statements::modification_statement>(ps->statement));
+        ::shared_ptr<cql3::statements::modification_statement> modif_statement_ptr = static_pointer_cast<cql3::statements::modification_statement>(ps->statement);
+        tracing::add_table_name(client_state.get_trace_state(), modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
+
+        modifications.emplace_back(std::move(modif_statement_ptr));
 
         std::vector<bytes_view_opt> tmp;
         read_value_view_list(buf, tmp);

@@ -30,6 +30,9 @@ class trace_info {
     utils::UUID session_id;
     tracing::trace_type type;
     bool write_on_close;
+    tracing::trace_state_props_set state_props [[version 1.4]];
+    uint32_t slow_query_threshold_us [[version 1.4]];
+    uint32_t slow_query_ttl_sec [[version 1.4]];
 };
 }
 
