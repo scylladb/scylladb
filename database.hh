@@ -345,7 +345,7 @@ public:
 private:
     schema_ptr _schema;
     config _config;
-    stats _stats;
+    mutable stats _stats;
 
     lw_shared_ptr<memtable_list> _memtables;
 
