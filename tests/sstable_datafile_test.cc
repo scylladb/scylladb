@@ -2436,9 +2436,8 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
 void test_sliced_read_row_presence(shared_sstable sst, schema_ptr s, const query::partition_slice& ps,
     std::vector<std::pair<partition_key, std::vector<clustering_key>>> expected)
 {
-    auto ck_filtering = query::clustering_key_filtering_context::create(s, ps);
     auto reader = make_mutation_reader<test_mutation_reader>(sst,
-                    sst->read_range_rows(s, query::full_partition_range, std::move(ck_filtering)));
+                    sst->read_range_rows(s, query::full_partition_range, ps));
 
     partition_key::equality pk_eq(*s);
     clustering_key::equality ck_eq(*s);

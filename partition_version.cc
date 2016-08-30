@@ -293,14 +293,14 @@ lw_shared_ptr<partition_snapshot> partition_entry::read(schema_ptr entry_schema)
 }
 
 partition_snapshot_reader::partition_snapshot_reader(schema_ptr s, dht::decorated_key dk,
-    lw_shared_ptr<partition_snapshot> snp, query::clustering_key_filtering_context fc,
-    const query::clustering_row_ranges& crr, logalloc::region& region,
+    lw_shared_ptr<partition_snapshot> snp,
+    query::clustering_key_filter_ranges crr, logalloc::region& region,
     logalloc::allocating_section& read_section, boost::any pointer_to_container)
     : streamed_mutation::impl(s, std::move(dk), tomb(*snp))
     , _container_guard(std::move(pointer_to_container))
-    , _filtering_context(fc)
-    , _current_ck_range(crr.begin())
-    , _ck_range_end(crr.end())
+    , _ck_ranges(std::move(crr))
+    , _current_ck_range(_ck_ranges.begin())
+    , _ck_range_end(_ck_ranges.end())
     , _cmp(*s)
     , _eq(*s)
     , _snapshot(snp)
@@ -462,10 +462,10 @@ future<> partition_snapshot_reader::fill_buffer()
 }
 
 streamed_mutation make_partition_snapshot_reader(schema_ptr s, dht::decorated_key dk,
-    query::clustering_key_filtering_context fc, const query::clustering_row_ranges& crr,
+    query::clustering_key_filter_ranges crr,
     lw_shared_ptr<partition_snapshot> snp, logalloc::region& region,
     logalloc::allocating_section& read_section, boost::any pointer_to_container)
 {
     return make_streamed_mutation<partition_snapshot_reader>(s, std::move(dk), 
-        snp, fc, crr, region, read_section, std::move(pointer_to_container));
+        snp, std::move(crr), region, read_section, std::move(pointer_to_container));
 }

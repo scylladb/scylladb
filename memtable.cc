@@ -115,7 +115,7 @@ class scanning_reader final : public mutation_reader::impl {
     stdx::optional<query::partition_range> _delegate_range;
     mutation_reader _delegate;
     const io_priority_class& _pc;
-    query::clustering_key_filtering_context _ck_filtering;
+    const query::partition_slice& _slice;
 private:
     memtable::partitions_type::iterator lookup_end() {
         auto cmp = memtable_entry::compare(_memtable->_schema);
@@ -152,13 +152,13 @@ public:
     scanning_reader(schema_ptr s,
                     lw_shared_ptr<memtable> m,
                     const query::partition_range& range,
-                    const query::clustering_key_filtering_context& ck_filtering,
+                    const query::partition_slice& slice,
                     const io_priority_class& pc)
         : _memtable(std::move(m))
         , _schema(std::move(s))
         , _range(range)
         , _pc(pc)
-        , _ck_filtering(ck_filtering)
+        , _slice(slice)
     { }
 
     virtual future<streamed_mutation_opt> operator()() override {
@@ -171,7 +171,7 @@ public:
             // FIXME: Use cache. See column_family::make_reader().
             _delegate_range = _last ? _range.split_after(*_last, dht::ring_position_comparator(*_memtable->_schema)) : _range;
             _delegate = make_mutation_reader<sstable_range_wrapping_reader>(
-                _memtable->_sstable, _schema, *_delegate_range, _ck_filtering, _pc);
+                _memtable->_sstable, _schema, *_delegate_range, _slice, _pc);
             _memtable = {};
             _last = {};
             return _delegate();
@@ -187,14 +187,14 @@ public:
         ++_i;
         _last = e.key();
         _memtable->upgrade_entry(e);
-        return make_ready_future<streamed_mutation_opt>(e.read(_memtable, _schema, _ck_filtering));
+        return make_ready_future<streamed_mutation_opt>(e.read(_memtable, _schema, _slice));
     }
 };
 
 mutation_reader
 memtable::make_reader(schema_ptr s,
                       const query::partition_range& range,
-                      const query::clustering_key_filtering_context& ck_filtering,
+                      const query::partition_slice& slice,
                       const io_priority_class& pc) {
     if (query::is_wrap_around(range, *s)) {
         fail(unimplemented::cause::WRAP_AROUND);
@@ -207,13 +207,13 @@ memtable::make_reader(schema_ptr s,
         auto i = partitions.find(pos, memtable_entry::compare(_schema));
         if (i != partitions.end()) {
             upgrade_entry(*i);
-            return make_reader_returning(i->read(shared_from_this(), s, ck_filtering));
+            return make_reader_returning(i->read(shared_from_this(), s, slice));
         } else {
             return make_empty_reader();
         }
         });
     } else {
-        return make_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), range, ck_filtering, pc);
+        return make_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), range, slice, pc);
     }
 }
 
@@ -300,15 +300,15 @@ bool memtable::is_flushed() const {
 }
 
 streamed_mutation
-memtable_entry::read(lw_shared_ptr<memtable> mtbl, const schema_ptr& target_schema, const query::clustering_key_filtering_context& ck_filtering) {
+memtable_entry::read(lw_shared_ptr<memtable> mtbl, const schema_ptr& target_schema, const query::partition_slice& slice) {
+    auto cr = query::clustering_key_filter_ranges::get_ranges(*_schema, slice, _key.key());
     if (_schema->version() != target_schema->version()) {
-        auto mp = mutation_partition(_pe.squashed(_schema, target_schema), *target_schema, ck_filtering.get_ranges(_key.key()));
+        auto mp = mutation_partition(_pe.squashed(_schema, target_schema), *target_schema, std::move(cr));
         mutation m = mutation(target_schema, _key, std::move(mp));
         return streamed_mutation_from_mutation(std::move(m));
     }
-    auto& cr = ck_filtering.get_ranges(_key.key());
     auto snp = _pe.read(_schema);
-    return make_partition_snapshot_reader(_schema, _key, ck_filtering, cr, snp, *mtbl, mtbl->_read_section, mtbl);
+    return make_partition_snapshot_reader(_schema, _key, std::move(cr), snp, *mtbl, mtbl->_read_section, mtbl);
 }
 
 void memtable::upgrade_entry(memtable_entry& e) {

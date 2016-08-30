@@ -467,7 +467,7 @@ private:
     // Mutations returned by the reader will all have given schema.
     mutation_reader make_sstable_reader(schema_ptr schema,
                                         const query::partition_range& range,
-                                        query::clustering_key_filtering_context ck_filtering,
+                                        const query::partition_slice& slice,
                                         const io_priority_class& pc) const;
 
     mutation_source sstables_as_mutation_source();
@@ -506,7 +506,7 @@ public:
     // will be scheduled under the priority class given by pc.
     mutation_reader make_reader(schema_ptr schema,
             const query::partition_range& range = query::full_partition_range,
-            const query::clustering_key_filtering_context& ck_filtering = query::no_clustering_key_filtering,
+            const query::partition_slice& slice = query::full_slice,
             const io_priority_class& pc = default_priority_class()) const;
 
     mutation_source as_mutation_source() const;

@@ -290,8 +290,7 @@ private:
     // that its lifetime is appropriately extended.
     boost::any _container_guard;
 
-    // _filtering_context keeps alive the range of clustering rows
-    query::clustering_key_filtering_context _filtering_context;
+    query::clustering_key_filter_ranges _ck_ranges;
     query::clustering_row_ranges::const_iterator _current_ck_range;
     query::clustering_row_ranges::const_iterator _ck_range_end;
     bool _in_ck_range = false;
@@ -321,7 +320,7 @@ private:
     static tombstone tomb(partition_snapshot& snp);
 public:
     partition_snapshot_reader(schema_ptr s, dht::decorated_key dk, lw_shared_ptr<partition_snapshot> snp,
-        query::clustering_key_filtering_context fc, const query::clustering_row_ranges& crr,
+        query::clustering_key_filter_ranges crr,
         logalloc::region& region, logalloc::allocating_section& read_section,
         boost::any pointer_to_container);
     ~partition_snapshot_reader();
@@ -329,6 +328,6 @@ public:
 };
 
 streamed_mutation make_partition_snapshot_reader(schema_ptr s, dht::decorated_key dk,
-    query::clustering_key_filtering_context fc, const query::clustering_row_ranges& crr,
+    query::clustering_key_filter_ranges crr,
     lw_shared_ptr<partition_snapshot> snp, logalloc::region& region,
     logalloc::allocating_section& read_section, boost::any pointer_to_container);

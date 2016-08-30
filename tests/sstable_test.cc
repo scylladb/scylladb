@@ -1024,8 +1024,7 @@ static query::partition_slice make_partition_slice(const schema& s, sstring ck1,
 static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key, sstring ck1, sstring ck2) {
     return seastar::async([sstp, s, key, ck1, ck2] () mutable {
         auto ps = make_partition_slice(*s, ck1, ck2);
-        auto row = sstp->read_row(s, sstables::key(key.c_str()),
-               query::clustering_key_filtering_context::create(s, ps)).get0();
+        auto row = sstp->read_row(s, sstables::key(key.c_str()), ps).get0();
         if (!row) {
             return 0;
         }
@@ -1065,8 +1064,7 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key) {
 static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring ck1, sstring ck2) {
     return seastar::async([sstp, s, ck1, ck2] () mutable {
         auto ps = make_partition_slice(*s, ck1, ck2);
-        auto reader = sstp->read_range_rows(s, query::full_partition_range,
-               query::clustering_key_filtering_context::create(s, ps));
+        auto reader = sstp->read_range_rows(s, query::full_partition_range, ps);
         int nrows = 0;
         auto smopt = reader.read().get0();
         while (smopt) {
