@@ -209,6 +209,7 @@ public:
     {
         std::vector<mutation_reader> readers;
         for (const lw_shared_ptr<sstables::sstable>& sst : _sstables->select(pr)) {
+            tracing::trace(_trace_state, "Reading partition range {} from sstable {}", _pr, seastar::value_of([&sst] { return sst->get_filename(); }));
             // FIXME: make sstable::read_range_rows() return ::mutation_reader so that we can drop this wrapper.
             mutation_reader reader =
                 make_mutation_reader<sstable_range_wrapping_reader>(sst, s, pr, slice, _pc);
@@ -264,6 +265,7 @@ public:
         }
         return parallel_for_each(_sstables->select(query::partition_range(_rp)),
             [this](const lw_shared_ptr<sstables::sstable>& sstable) {
+                tracing::trace(_trace_state, "Reading key {} from sstable {}", *_rp.key(), seastar::value_of([&sstable] { return sstable->get_filename(); }));
                 return sstable->read_row(_schema, _key, _slice, _pc).then([this](auto smo) {
                     if (smo) {
                         _mutations.emplace_back(std::move(*smo));
