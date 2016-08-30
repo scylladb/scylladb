@@ -2955,15 +2955,23 @@ future<std::unordered_map<sstring, column_family::snapshot_details>> column_fami
 }
 
 future<> column_family::flush() {
-    // FIXME: this will synchronously wait for this write to finish, but doesn't guarantee
-    // anything about previous writes.
     _stats.pending_flushes++;
-    return _memtables->seal_active_memtable(memtable_list::flush_behavior::immediate).finally([this]() mutable {
+
+    auto fut = _memtables->seal_active_memtable(memtable_list::flush_behavior::immediate);
+    // this rp is either:
+    // a.) Done - no-op
+    // b.) Ours
+    // c.) The last active flush not finished. If our latest memtable is
+    //     empty it still makes sense for this api call to wait for this.
+    auto high_rp = _highest_flushed_rp;
+
+    return fut.finally([this, high_rp] {
         _stats.pending_flushes--;
         // In origin memtable_switch_count is incremented inside
         // ColumnFamilyMeetrics Flush.run
         _stats.memtable_switch_count++;
-        return make_ready_future<>();
+        // wait for all up until us.
+        return _flush_queue->wait_for_pending(high_rp);
     });
 }
 
