@@ -73,6 +73,24 @@ done
 
 echo Setting parameters on $SYSCONFIG/scylla-server
 
+if [ $SET_NIC = "yes" ]; then
+   RPS_CPUS=$(/usr/lib/scylla/posix_net_conf.sh --cpu-mask $NIC)
+   RPS_CPUS=${RPS_CPUS//0x}
+   RPS_CPUS=${RPS_CPUS//,}
+   if [ "$RPS_CPUS" != "" ]; then
+       BITS=$(echo "obase=2;ibase=16;${RPS_CPUS~~}"|bc|rev)
+       for ((i=0; i < ${#BITS}; i++)); do
+           if [ ${BITS:$i:1} -eq 1 ]; then
+               CPUSET="$CPUSET$i"
+               if [ $i -lt $((${#BITS} - 1)) ]; then
+                   CPUSET="$CPUSET,"
+               fi
+           fi
+       done
+       /usr/lib/scylla/scylla_cpuset_setup --cpuset $CPUSET
+   fi
+fi
+
 ETHDRV=`/usr/lib/scylla/dpdk_nic_bind.py --status | grep if=$NIC | sed -e "s/^.*drv=//" -e "s/ .*$//"`
 ETHPCIID=`/usr/lib/scylla/dpdk_nic_bind.py --status | grep if=$NIC | awk '{print $1}'`
 sed -e s#^NETWORK_MODE=.*#NETWORK_MODE=$NETWORK_MODE# \
