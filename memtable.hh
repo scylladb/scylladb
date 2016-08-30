@@ -59,7 +59,7 @@ public:
     partition_entry& partition() { return _pe; }
     const schema_ptr& schema() const { return _schema; }
     schema_ptr& schema() { return _schema; }
-    streamed_mutation read(lw_shared_ptr<memtable> mtbl, const schema_ptr&, const query::clustering_key_filtering_context&);
+    streamed_mutation read(lw_shared_ptr<memtable> mtbl, const schema_ptr&, const query::partition_slice&);
 
     struct compare {
         dht::decorated_key::less_comparator _c;
@@ -144,7 +144,7 @@ public:
     // Mutations returned by the reader will all have given schema.
     mutation_reader make_reader(schema_ptr,
                                 const query::partition_range& range = query::full_partition_range,
-                                const query::clustering_key_filtering_context& ck_filtering = query::no_clustering_key_filtering,
+                                const query::partition_slice& slice = query::full_slice,
                                 const io_priority_class& pc = default_priority_class());
 
     mutation_source as_data_source();

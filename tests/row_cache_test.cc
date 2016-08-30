@@ -1315,24 +1315,22 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
         row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
 
         auto run_tests = [&] (auto& ps, std::deque<int> expected) {
-            auto ck_filtering = query::clustering_key_filtering_context::create(s, ps);
-
             cache.clear().get0();
 
-            auto reader = cache.make_reader(s, query::full_partition_range, ck_filtering);
+            auto reader = cache.make_reader(s, query::full_partition_range, ps);
             test_sliced_read_row_presence(std::move(reader), s, ps, expected);
 
-            reader = cache.make_reader(s, query::full_partition_range, ck_filtering);
+            reader = cache.make_reader(s, query::full_partition_range, ps);
             test_sliced_read_row_presence(std::move(reader), s, ps, expected);
 
             auto dk = dht::global_partitioner().decorate_key(*s, pk);
 
-            reader = cache.make_reader(s, query::partition_range::make_singular(dk), ck_filtering);
+            reader = cache.make_reader(s, query::partition_range::make_singular(dk), ps);
             test_sliced_read_row_presence(std::move(reader), s, ps, expected);
 
             cache.clear().get0();
 
-            reader = cache.make_reader(s, query::partition_range::make_singular(dk), ck_filtering);
+            reader = cache.make_reader(s, query::partition_range::make_singular(dk), ps);
             test_sliced_read_row_presence(std::move(reader), s, ps, expected);
         };
 

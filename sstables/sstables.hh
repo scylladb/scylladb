@@ -240,7 +240,7 @@ public:
     future<streamed_mutation_opt> read_row(
         schema_ptr schema,
         const key& k,
-        query::clustering_key_filtering_context ck_filtering = query::no_clustering_key_filtering,
+        const query::partition_slice& slice = query::full_slice,
         const io_priority_class& pc = default_priority_class());
     /**
      * @param schema a schema_ptr object describing this table
@@ -257,7 +257,7 @@ public:
     mutation_reader read_range_rows(
         schema_ptr schema,
         const query::partition_range& range,
-        query::clustering_key_filtering_context ck_filtering = query::no_clustering_key_filtering,
+        const query::partition_slice& slice = query::full_slice,
         const io_priority_class& pc = default_priority_class());
 
     // read_rows() returns each of the rows in the sstable, in sequence,
@@ -539,11 +539,11 @@ private:
     // the summary and index files - but if the index contains a "promoted
     // index" (a sample of column positions for each key) it may be a smaller
     // range. The returned range may contain columns beyond those requested
-    // in ck_filtering, so it is the reader's duty to use ck_filtering again
+    // in slice, so it is the reader's duty to use slice again
     // when parsing the data read from the returned range.
     future<disk_read_range> find_disk_ranges(schema_ptr schema,
             const sstables::key& key,
-            query::clustering_key_filtering_context ck_filtering,
+            const query::partition_slice& slice,
             const io_priority_class& pc);
 
     future<summary_entry&> read_summary_entry(size_t i);

@@ -23,7 +23,6 @@
 
 #pragma once
 
-#include "core/shared_ptr.hh"
 #include "schema.hh"
 #include "query-request.hh"
 
@@ -55,29 +54,14 @@ public:
     auto end() const { return _ref.end(); }
     bool empty() const { return _ref.empty(); }
     size_t size() const { return _ref.size(); }
+
+    static clustering_key_filter_ranges get_ranges(const schema& schema, const query::partition_slice& slice, const partition_key& key) {
+        const query::clustering_row_ranges& ranges = slice.row_ranges(schema, key);
+        if (slice.options.contains(query::partition_slice::option::reversed)) {
+            return clustering_key_filter_ranges(clustering_key_filter_ranges::reversed{}, ranges);
+        }
+        return clustering_key_filter_ranges(ranges);
+    }
 };
-
-// A factory for clustering key filter which can be reused for multiple clustering keys.
-class clustering_key_filter_factory {
-public:
-    virtual clustering_key_filter_ranges get_ranges(const partition_key&) = 0;
-
-    virtual ~clustering_key_filter_factory() = default;
-};
-
-class clustering_key_filtering_context {
-private:
-    shared_ptr<clustering_key_filter_factory> _factory;
-    clustering_key_filtering_context() {};
-    clustering_key_filtering_context(shared_ptr<clustering_key_filter_factory> factory) : _factory(factory) {}
-public:
-    clustering_key_filter_ranges get_ranges(const partition_key& key) const;
-
-    static const clustering_key_filtering_context create(schema_ptr, const partition_slice&);
-
-    static clustering_key_filtering_context create_no_filtering();
-};
-
-extern const clustering_key_filtering_context no_clustering_key_filtering;
 
 }

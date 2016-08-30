@@ -122,9 +122,9 @@ public:
     // Requires: !wide_partition()
     streamed_mutation read(row_cache&, const schema_ptr&);
     // Requires: !wide_partition()
-    streamed_mutation read(row_cache&, const schema_ptr&, query::clustering_key_filtering_context);
+    streamed_mutation read(row_cache&, const schema_ptr&, const query::partition_slice&);
     // May return disengaged optional if the partition is empty.
-    future<streamed_mutation_opt> read_wide(row_cache&, schema_ptr, query::clustering_key_filtering_context, const io_priority_class&);
+    future<streamed_mutation_opt> read_wide(row_cache&, schema_ptr, const query::partition_slice&, const io_priority_class&);
     bool continuous() const { return _continuous; }
     void set_continuous(bool value) { _continuous = value; }
     bool wide_partition() const { return _wide_partition; }
@@ -260,7 +260,7 @@ private:
     mutation_reader make_scanning_reader(schema_ptr,
                                          const query::partition_range&,
                                          const io_priority_class& pc,
-                                         query::clustering_key_filtering_context ck_filtering);
+                                         const query::partition_slice& slice);
     void on_hit();
     void on_miss();
     void on_uncached_wide_partition();
@@ -282,7 +282,7 @@ public:
     // The range must not wrap around.
     mutation_reader make_reader(schema_ptr,
                                 const query::partition_range& = query::full_partition_range,
-                                query::clustering_key_filtering_context = query::no_clustering_key_filtering,
+                                const query::partition_slice& slice = query::full_slice,
                                 const io_priority_class& = default_priority_class());
 
     const stats& stats() const { return _stats; }
