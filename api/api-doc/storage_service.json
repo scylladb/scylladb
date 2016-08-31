@@ -1737,6 +1737,57 @@
          ]
       },
       {
+         "path":"/storage_service/slow_query",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Set slow query parameter",
+               "type":"void",
+               "nickname":"set_slow_query",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"enable",
+                     "description":"set it to true to enable, anything else to disable",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"ttl",
+                     "description":"TTL in seconds",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"threshold",
+                     "description":"Slow query record threshold in microseconds",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"Returns the slow query record configuration.",
+               "type":"slow_query_info",
+               "nickname":"get_slow_query_info",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/auto_compaction/{keyspace}",
          "operations":[
             {
@@ -2130,6 +2181,24 @@
                   "type":"snapshot"
                },
                "description":"The column family"
+            }
+         }
+      },
+      "slow_query_info": {
+         "id":"slow_query_info",
+         "description":"Slow query triggering information",
+         "properties":{
+            "enable":{
+               "type":"boolean",
+               "description":"Is slow query logging enable or disable"
+            },
+            "ttl":{
+               "type":"long",
+               "description":"The slow query TTL in seconds"
+            },
+            "threshold":{
+               "type":"long",
+               "description":"The slow query logging threshold in microseconds. Queries that takes longer, will be logged"
             }
          }
       },
