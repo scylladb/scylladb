@@ -27,7 +27,7 @@
 #include "gc_clock.hh"
 #include "tombstone.hh"
 #include "streaming_histogram.hh"
-#include "estimated_histogram.hh"
+#include "utils/estimated_histogram.hh"
 #include "column_name_helper.hh"
 #include "sstables/key.hh"
 #include "db/commitlog/replay_position.hh"

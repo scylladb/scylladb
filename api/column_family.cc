@@ -24,7 +24,7 @@
 #include <vector>
 #include "http/exception.hh"
 #include "sstables/sstables.hh"
-#include "sstables/estimated_histogram.hh"
+#include "utils/estimated_histogram.hh"
 #include <algorithm>
 
 namespace api {

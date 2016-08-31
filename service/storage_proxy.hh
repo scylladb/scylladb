@@ -49,7 +49,7 @@
 #include "db/consistency_level.hh"
 #include "db/write_type.hh"
 #include "utils/histogram.hh"
-#include "sstables/estimated_histogram.hh"
+#include "utils/estimated_histogram.hh"
 #include "tracing/trace_state.hh"
 
 namespace service {

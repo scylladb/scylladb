@@ -67,7 +67,7 @@
 #include "sstables/compaction_manager.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/histogram.hh"
-#include "sstables/estimated_histogram.hh"
+#include "utils/estimated_histogram.hh"
 #include "sstables/compaction.hh"
 #include "sstables/sstable_set.hh"
 #include "key_reader.hh"
