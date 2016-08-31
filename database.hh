@@ -333,7 +333,7 @@ public:
         utils::timed_rate_moving_average_and_histogram writes{256};
         utils::estimated_histogram estimated_read;
         utils::estimated_histogram estimated_write;
-        utils::estimated_histogram estimated_sstable_per_read;
+        utils::estimated_histogram estimated_sstable_per_read{35};
         utils::timed_rate_moving_average_and_histogram tombstone_scanned;
         utils::timed_rate_moving_average_and_histogram live_scanned;
     };
