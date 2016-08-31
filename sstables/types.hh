@@ -192,8 +192,8 @@ struct compaction_metadata : public metadata {
 };
 
 struct ka_stats_metadata : public metadata {
-    estimated_histogram estimated_row_size;
-    estimated_histogram estimated_column_count;
+    utils::estimated_histogram estimated_row_size;
+    utils::estimated_histogram estimated_column_count;
     db::replay_position position;
     int64_t min_timestamp;
     int64_t max_timestamp;

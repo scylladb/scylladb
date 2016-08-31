@@ -654,7 +654,7 @@ inline void write(file_writer& out, statistics& s) {
     }
 }
 
-future<> parse(random_access_reader& in, estimated_histogram& eh) {
+future<> parse(random_access_reader& in, utils::estimated_histogram& eh) {
     auto len = std::make_unique<uint32_t>();
 
     auto f = parse(in, *len);
@@ -682,7 +682,7 @@ future<> parse(random_access_reader& in, estimated_histogram& eh) {
     });
 }
 
-inline void write(file_writer& out, estimated_histogram& eh) {
+inline void write(file_writer& out, utils::estimated_histogram& eh) {
     uint32_t len = 0;
     check_truncate_and_assign(len, eh.buckets.size());
 

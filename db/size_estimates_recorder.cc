@@ -75,7 +75,7 @@ static std::vector<db::system_keyspace::range_estimates> estimates_for(const col
     // Each range defines both bounds.
     for (auto& range : local_ranges) {
         int64_t count{0};
-        sstables::estimated_histogram hist{0};
+        utils::estimated_histogram hist{0};
         unwrapped.clear();
         if (range.is_wrap_around(dht::ring_position_comparator(*cf.schema()))) {
             auto uw = range.unwrap();

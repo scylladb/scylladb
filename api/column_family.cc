@@ -395,14 +395,14 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_estimated_row_size_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], sstables::estimated_histogram(0), [](column_family& cf) {
-            sstables::estimated_histogram res(0);
+        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
+            utils::estimated_histogram res(0);
             for (auto i: *cf.get_sstables() ) {
                 res.merge(i->get_stats_metadata().estimated_row_size);
             }
             return res;
         },
-        sstables::merge, utils_json::estimated_histogram());
+        utils::estimated_histogram_merge, utils_json::estimated_histogram());
     });
 
     cf::get_estimated_row_count.set(r, [&ctx] (std::unique_ptr<request> req) {
@@ -417,14 +417,14 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_estimated_column_count_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], sstables::estimated_histogram(0), [](column_family& cf) {
-            sstables::estimated_histogram res(0);
+        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
+            utils::estimated_histogram res(0);
             for (auto i: *cf.get_sstables() ) {
                 res.merge(i->get_stats_metadata().estimated_column_count);
             }
             return res;
         },
-        sstables::merge, utils_json::estimated_histogram());
+        utils::estimated_histogram_merge, utils_json::estimated_histogram());
     });
 
     cf::get_all_compression_ratio.set(r, [] (std::unique_ptr<request> req) {
@@ -799,10 +799,10 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_sstables_per_read_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], sstables::estimated_histogram(0), [](column_family& cf) {
+        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
             return cf.get_stats().estimated_sstable_per_read;
         },
-        sstables::merge, utils_json::estimated_histogram());
+        utils::estimated_histogram_merge, utils_json::estimated_histogram());
     });
 
     cf::get_tombstone_scanned_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
@@ -861,17 +861,17 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_read_latency_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], sstables::estimated_histogram(0), [](column_family& cf) {
+        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
             return cf.get_stats().estimated_read;
         },
-        sstables::merge, utils_json::estimated_histogram());
+        utils::estimated_histogram_merge, utils_json::estimated_histogram());
     });
 
     cf::get_write_latency_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], sstables::estimated_histogram(0), [](column_family& cf) {
+        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
             return cf.get_stats().estimated_write;
         },
-        sstables::merge, utils_json::estimated_histogram());
+        utils::estimated_histogram_merge, utils_json::estimated_histogram());
     });
 
     cf::set_compaction_strategy_class.set(r, [&ctx](std::unique_ptr<request> req) {

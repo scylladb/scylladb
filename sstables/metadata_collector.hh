@@ -195,9 +195,9 @@ public:
     }
 private:
     // EH of 150 can track a max value of 1697806495183, i.e., > 1.5PB
-    estimated_histogram _estimated_row_size{150};
+    utils::estimated_histogram _estimated_row_size{150};
     // EH of 114 can track a max value of 2395318855, i.e., > 2B columns
-    estimated_histogram _estimated_column_count{114};
+    utils::estimated_histogram _estimated_column_count{114};
     db::replay_position _replay_position;
     uint64_t _min_timestamp = std::numeric_limits<uint64_t>::max();
     uint64_t _max_timestamp = std::numeric_limits<uint64_t>::min();

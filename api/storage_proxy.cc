@@ -52,9 +52,9 @@ static future<json::json_return_type>  sum_timed_rate_as_long(distributed<proxy>
     });
 }
 
-static future<json::json_return_type>  sum_estimated_histogram(http_context& ctx, sstables::estimated_histogram proxy::stats::*f) {
-    return ctx.sp.map_reduce0([f](const proxy& p) {return p.get_stats().*f;}, sstables::estimated_histogram(),
-            sstables::merge).then([](const sstables::estimated_histogram& val) {
+static future<json::json_return_type>  sum_estimated_histogram(http_context& ctx, utils::estimated_histogram proxy::stats::*f) {
+    return ctx.sp.map_reduce0([f](const proxy& p) {return p.get_stats().*f;}, utils::estimated_histogram(),
+            utils::estimated_histogram_merge).then([](const utils::estimated_histogram& val) {
         utils_json::estimated_histogram res;
         res = val;
         return make_ready_future<json::json_return_type>(res);

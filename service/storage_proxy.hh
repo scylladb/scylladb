@@ -142,9 +142,9 @@ public:
         utils::timed_rate_moving_average_and_histogram read;
         utils::timed_rate_moving_average_and_histogram write;
         utils::timed_rate_moving_average_and_histogram range;
-        sstables::estimated_histogram estimated_read;
-        sstables::estimated_histogram estimated_write;
-        sstables::estimated_histogram estimated_range;
+        utils::estimated_histogram estimated_read;
+        utils::estimated_histogram estimated_write;
+        utils::estimated_histogram estimated_range;
         uint64_t background_writes = 0; // client no longer waits for the write
         uint64_t background_write_bytes = 0;
         uint64_t queued_write_bytes = 0;
