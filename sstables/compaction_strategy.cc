@@ -180,11 +180,11 @@ public:
         auto ipair = query(range);
         auto b = std::move(ipair.first);
         auto e = std::move(ipair.second);
-        std::vector<shared_sstable> result;
+        value_set result;
         while (b != e) {
-            boost::copy(b++->second, std::back_inserter(result));
+            boost::copy(b++->second, std::inserter(result, result.end()));
         }
-        return result;
+        return std::vector<shared_sstable>(result.begin(), result.end());
     }
     virtual void insert(shared_sstable sst) override {
         auto first = sst->get_first_decorated_key(*_schema).token();
