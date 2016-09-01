@@ -67,7 +67,7 @@
 #include "sstables/compaction_manager.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/histogram.hh"
-#include "sstables/estimated_histogram.hh"
+#include "utils/estimated_histogram.hh"
 #include "sstables/compaction.hh"
 #include "sstables/sstable_set.hh"
 #include "key_reader.hh"
@@ -331,9 +331,9 @@ public:
         int64_t pending_compactions = 0;
         utils::timed_rate_moving_average_and_histogram reads{256};
         utils::timed_rate_moving_average_and_histogram writes{256};
-        sstables::estimated_histogram estimated_read;
-        sstables::estimated_histogram estimated_write;
-        sstables::estimated_histogram estimated_sstable_per_read;
+        utils::estimated_histogram estimated_read;
+        utils::estimated_histogram estimated_write;
+        utils::estimated_histogram estimated_sstable_per_read{35};
         utils::timed_rate_moving_average_and_histogram tombstone_scanned;
         utils::timed_rate_moving_average_and_histogram live_scanned;
     };
@@ -345,7 +345,7 @@ public:
 private:
     schema_ptr _schema;
     config _config;
-    stats _stats;
+    mutable stats _stats;
 
     lw_shared_ptr<memtable_list> _memtables;
 

@@ -39,6 +39,7 @@
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
+thread_local utils::estimated_histogram dummy_histogram;
 
 using namespace std::chrono_literals;
 
@@ -107,7 +108,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying) {
             return make_reader_returning(m);
         }), key_source([m] (auto&&) {
             return make_key_from_mutation_reader(make_reader_returning(m));
-        }), tracker);
+        }), dummy_histogram, tracker);
 
         assert_that(cache.make_reader(s, query::full_partition_range))
             .produces(m)
@@ -127,7 +128,7 @@ SEASTAR_TEST_CASE(test_cache_works_after_clearing) {
             return make_reader_returning(m);
         }), key_source([m] (auto&&) {
             return make_key_from_mutation_reader(make_reader_returning(m));
-        }), tracker);
+        }), dummy_histogram, tracker);
 
         assert_that(cache.make_reader(s, query::full_partition_range))
             .produces(m)
@@ -152,7 +153,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_for_wide_partitio
             return make_reader_returning(m);
         }), key_source([&m] (auto&&) {
             return make_key_from_mutation_reader(make_reader_returning(m));
-        }), tracker, 0);
+        }), dummy_histogram, tracker, 0);
 
         assert_that(cache.make_reader(s, query::full_partition_range))
             .produces(m)
@@ -178,7 +179,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_for_wide_partitio
             return make_reader_returning(m);
         }), key_source([&m] (auto&&) {
             return make_key_from_mutation_reader(make_reader_returning(m));
-        }), tracker, 0);
+        }), dummy_histogram, tracker, 0);
 
         assert_that(cache.make_reader(s, query::partition_range::make_singular(query::ring_position(m.decorated_key()))))
             .produces(m)
@@ -203,7 +204,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_full_range)
             return make_empty_reader();
         }), key_source([] (auto&&) {
             return make_key_from_mutation_reader(make_empty_reader());
-        }), tracker);
+        }), dummy_histogram, tracker);
 
         assert_that(cache.make_reader(s, query::full_partition_range))
             .produces_end_of_stream();
@@ -229,7 +230,7 @@ void test_cache_delegates_to_underlying_only_once_with_single_partition(schema_p
         }
     }), key_source([m] (auto&&) {
         return make_key_from_mutation_reader(make_reader_returning(m));
-    }), tracker);
+    }), dummy_histogram, tracker);
 
     assert_that(cache.make_reader(s, range))
         .produces(m)
@@ -335,7 +336,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
                 return mt->as_data_source()(s, range);
             });
 
-            return make_lw_shared<row_cache>(s, secondary, mt->as_key_source(), tracker);
+            return make_lw_shared<row_cache>(s, secondary, mt->as_key_source(), dummy_histogram, tracker);
         };
 
         auto make_ds = [&make_cache](schema_ptr s, int& secondary_calls_count) -> mutation_source {
@@ -492,7 +493,7 @@ SEASTAR_TEST_CASE(test_query_of_incomplete_range_goes_to_underlying) {
         }
 
         cache_tracker tracker;
-        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
+        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), dummy_histogram, tracker);
 
         auto get_partition_range = [] (const mutation& m) {
             return query::partition_range::make_singular(query::ring_position(m.decorated_key()));
@@ -539,7 +540,7 @@ SEASTAR_TEST_CASE(test_single_key_queries_after_population_in_reverse_order) {
         }
 
         cache_tracker tracker;
-        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
+        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), dummy_histogram, tracker);
 
         auto get_partition_range = [] (const mutation& m) {
             return query::partition_range::make_singular(query::ring_position(m.decorated_key()));
@@ -572,7 +573,7 @@ SEASTAR_TEST_CASE(test_row_cache_conforms_to_mutation_source) {
                 mt->apply(m);
             }
 
-            auto cache = make_lw_shared<row_cache>(s, mt->as_data_source(), mt->as_key_source(), tracker);
+            auto cache = make_lw_shared<row_cache>(s, mt->as_data_source(), mt->as_key_source(), dummy_histogram, tracker);
             return mutation_source([cache] (schema_ptr s, const query::partition_range& range) {
                 return cache->make_reader(s, range);
             });
@@ -586,7 +587,7 @@ SEASTAR_TEST_CASE(test_eviction) {
         auto mt = make_lw_shared<memtable>(s);
 
         cache_tracker tracker;
-        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
+        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), dummy_histogram, tracker);
 
         std::vector<dht::decorated_key> keys;
         for (int i = 0; i < 100000; i++) {
@@ -634,7 +635,7 @@ SEASTAR_TEST_CASE(test_update) {
         auto cache_mt = make_lw_shared<memtable>(s);
 
         cache_tracker tracker;
-        row_cache cache(s, cache_mt->as_data_source(), cache_mt->as_key_source(), tracker);
+        row_cache cache(s, cache_mt->as_data_source(), cache_mt->as_key_source(), dummy_histogram, tracker);
 
         BOOST_TEST_MESSAGE("Check cache miss with populate");
 
@@ -719,7 +720,7 @@ SEASTAR_TEST_CASE(test_update_failure) {
         auto cache_mt = make_lw_shared<memtable>(s);
 
         cache_tracker tracker;
-        row_cache cache(s, cache_mt->as_data_source(), cache_mt->as_key_source(), tracker);
+        row_cache cache(s, cache_mt->as_data_source(), cache_mt->as_key_source(), dummy_histogram, tracker);
 
         int partition_count = 1000;
 
@@ -902,7 +903,7 @@ SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
         lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
         cache_tracker tracker;
-        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
+        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), dummy_histogram, tracker);
 
         auto ring = make_ring(s, 4);
         for (auto&& m : ring) {
@@ -956,7 +957,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
         std::vector<lw_shared_ptr<memtable>> memtables;
         throttled_mutation_source cache_source(make_mutation_source(memtables));
         cache_tracker tracker;
-        row_cache cache(s, cache_source, make_key_source(s, memtables), tracker);
+        row_cache cache(s, cache_source, make_key_source(s, memtables), dummy_histogram, tracker);
 
         auto mt1 = make_lw_shared<memtable>(s);
         memtables.push_back(mt1);
@@ -1026,7 +1027,7 @@ SEASTAR_TEST_CASE(test_invalidate) {
         auto mt = make_lw_shared<memtable>(s);
 
         cache_tracker tracker;
-        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
+        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), dummy_histogram, tracker);
 
         int partition_count = 1000;
 
@@ -1084,7 +1085,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
         std::vector<lw_shared_ptr<memtable>> memtables;
         throttled_mutation_source cache_source(make_mutation_source(memtables));
         cache_tracker tracker;
-        row_cache cache(s, cache_source, make_key_source(s, memtables), tracker);
+        row_cache cache(s, cache_source, make_key_source(s, memtables), dummy_histogram, tracker);
 
         auto mt1 = make_lw_shared<memtable>(s);
         memtables.push_back(mt1);
@@ -1150,7 +1151,7 @@ SEASTAR_TEST_CASE(test_invalidate_works_with_wrap_arounds) {
         auto mt = make_lw_shared<memtable>(s);
 
         cache_tracker tracker;
-        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
+        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), dummy_histogram, tracker);
 
         std::vector<mutation> ring = make_ring(s, 8);
 
@@ -1212,7 +1213,7 @@ SEASTAR_TEST_CASE(test_mvcc) {
             partition_key::equality eq(*s);
 
             cache_tracker tracker;
-            row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
+            row_cache cache(s, mt->as_data_source(), mt->as_key_source(), dummy_histogram, tracker);
 
             auto pk = m1.key();
             cache.populate(m1);
@@ -1312,7 +1313,7 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
         mt->apply(m);
 
         cache_tracker tracker;
-        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
+        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), dummy_histogram, tracker);
 
         auto run_tests = [&] (auto& ps, std::deque<int> expected) {
             cache.clear().get0();

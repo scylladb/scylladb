@@ -35,6 +35,7 @@
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
+thread_local utils::estimated_histogram dummy_histogram;
 
 static
 partition_key new_key(schema_ptr s) {
@@ -73,7 +74,7 @@ int main(int argc, char** argv) {
             auto mt0 = make_lw_shared<memtable>(s);
 
             cache_tracker tracker;
-            row_cache cache(s, mt0->as_data_source(), mt0->as_key_source(), tracker);
+            row_cache cache(s, mt0->as_data_source(), mt0->as_key_source(), dummy_histogram, tracker);
 
             auto mt = make_lw_shared<memtable>(s);
             std::vector<dht::decorated_key> keys;

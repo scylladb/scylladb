@@ -41,13 +41,12 @@
 
 #pragma once
 
-#include "disk_types.hh"
 #include <cmath>
 #include <algorithm>
 #include <vector>
 #include <chrono>
 
-namespace sstables {
+namespace utils {
 
 struct estimated_histogram {
     using clock = std::chrono::steady_clock;
@@ -457,7 +456,7 @@ public:
 #endif
 };
 
-inline estimated_histogram merge(estimated_histogram a, const estimated_histogram& b) {
+inline estimated_histogram estimated_histogram_merge(estimated_histogram a, const estimated_histogram& b) {
     return a.merge(b);
 }
 
