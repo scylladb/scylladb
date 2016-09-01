@@ -808,7 +808,6 @@ row_cache::make_reader(schema_ptr s,
                 cache_entry& e = *i;
                 _tracker.touch(e);
                 on_hit();
-                _underlying_hit_histogram.add(0);
                 upgrade_entry(e);
                 if (e.wide_partition()) {
                     _tracker.on_uncached_wide_partition();
@@ -1085,14 +1084,12 @@ bool row_cache::has_continuous_entry(const dht::ring_position& key) const {
 }
 
 row_cache::row_cache(schema_ptr s, mutation_source fallback_factory, key_source underlying_keys,
-    utils::estimated_histogram& underlying_histogram,
     cache_tracker& tracker, uint64_t max_cached_partition_size_in_bytes)
     : _tracker(tracker)
     , _schema(std::move(s))
     , _partitions(cache_entry::compare(_schema))
     , _underlying(std::move(fallback_factory))
     , _underlying_keys(std::move(underlying_keys))
-    , _underlying_hit_histogram(underlying_histogram)
     , _max_cached_partition_size_in_bytes(max_cached_partition_size_in_bytes)
 {
     with_allocator(_tracker.allocator(), [this] {
