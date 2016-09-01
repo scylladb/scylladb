@@ -54,6 +54,9 @@ public:
     public:
         virtual ~impl() {}
         virtual future<streamed_mutation_opt> operator()() = 0;
+        virtual future<> fast_forward_to(const query::partition_range&) {
+            throw std::bad_function_call();
+        }
     };
 private:
     class null_impl final : public impl {
@@ -70,6 +73,14 @@ public:
     mutation_reader& operator=(mutation_reader&&) = default;
     mutation_reader& operator=(const mutation_reader&) = delete;
     future<streamed_mutation_opt> operator()() { return _impl->operator()(); }
+
+    // Changes the range of partitions to pr. The range can only be moved
+    // forwards. pr.begin() needs to be larger than pr.end() of the previousl
+    // used range (i.e. either the initial one passed to the constructor or a
+    // previous fast forward target).
+    // pr needs to be valid until the reader is destroyed or fast_forward_to()
+    // is called again.
+    future<> fast_forward_to(const query::partition_range& pr) { return _impl->fast_forward_to(pr); }
 };
 
 // Impl: derived from mutation_reader::impl; Args/args: arguments for Impl's constructor
