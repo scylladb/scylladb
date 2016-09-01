@@ -373,6 +373,11 @@ public:
             throw malformed_sstable_exception("end of input, but not end of row");
         }
     }
+
+    void reset() {
+        _state = state::ROW_START;
+        _consumer.reset();
+    }
 };
 
 // data_consume_rows() and data_consume_rows_at_once() both can read just a

@@ -623,6 +623,12 @@ public:
 
         _skip_partition = true;
     }
+
+    virtual void reset() override {
+        _pending_collection = { };
+        _in_progress = { };
+        _ready = { };
+    }
 };
 
 struct sstable_data_source {

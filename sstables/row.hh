@@ -80,6 +80,12 @@ public:
     // proceed consuming more data.
     virtual proceed consume_row_end() = 0;
 
+    // Called when the reader is fast forwarded.
+    // Clears all partially read data and prepares the consumer for a new
+    // partition. reset() call is always going to be followed by either another
+    // reset() or consume_row_start().
+    virtual void reset() = 0;
+
     // Under which priority class to place I/O coming from this consumer
     virtual const io_priority_class& io_priority() = 0;
 
