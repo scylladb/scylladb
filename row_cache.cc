@@ -240,15 +240,17 @@ class single_partition_populating_reader final : public mutation_reader::impl {
     const query::partition_slice& _slice;
     query::partition_range _large_partition_range;
     mutation_reader _large_partition_reader;
+    tracing::trace_state_ptr _trace_state;
 public:
     single_partition_populating_reader(schema_ptr s, row_cache& cache, mutation_source& underlying,
-        mutation_reader delegate, const io_priority_class pc, const query::partition_slice& slice)
+        mutation_reader delegate, const io_priority_class pc, const query::partition_slice& slice, tracing::trace_state_ptr trace_state)
         : _schema(std::move(s))
         , _cache(cache)
         , _underlying(underlying)
         , _delegate(std::move(delegate))
         , _pc(pc)
         , _slice(slice)
+        , _trace_state(std::move(trace_state))
     { }
 
     virtual future<streamed_mutation_opt> operator()() override {
@@ -275,7 +277,7 @@ public:
                         _cache.on_uncached_wide_partition();
                         _cache.mark_partition_as_wide(dk);
                         _large_partition_range = query::partition_range::make_singular(std::move(dk));
-                        _large_partition_reader = _underlying(_schema, _large_partition_range, _slice, _pc);
+                        _large_partition_reader = _underlying(_schema, _large_partition_range, _slice, _pc, _trace_state);
                         return _large_partition_reader();
                     }
                 });
@@ -424,6 +426,7 @@ class range_populating_reader final : public mutation_reader::impl {
     const query::partition_slice& _slice;
     utils::phased_barrier::phase_type _populate_phase;
     const io_priority_class _pc;
+    tracing::trace_state_ptr _trace_state;
     mutation_source& _underlying;
     mutation_reader _reader;
     std::experimental::optional<dht::ring_position> _last_key;
@@ -438,7 +441,7 @@ class range_populating_reader final : public mutation_reader::impl {
             auto cmp = dht::ring_position_comparator(*_schema);
             _range = _range.split_after(*_last_key, cmp);
             _populate_phase = _cache._populate_phaser.phase();
-            _reader = _underlying(_cache._schema, _range, query::full_slice, _pc);
+            _reader = _underlying(_cache._schema, _range, query::full_slice, _pc, _trace_state);
         }
     }
 
@@ -470,6 +473,7 @@ public:
         query::partition_range& range,
         const query::partition_slice& slice,
         const io_priority_class pc,
+        tracing::trace_state_ptr trace_state,
         mutation_source& underlying,
         std::experimental::optional<dht::ring_position> last_key,
         utils::phased_barrier::phase_type last_key_populate_phase,
@@ -480,8 +484,9 @@ public:
         , _slice(slice)
         , _populate_phase(_cache._populate_phaser.phase())
         , _pc(pc)
+        , _trace_state(std::move(trace_state))
         , _underlying(underlying)
-        , _reader(_underlying(_cache._schema, _range, query::full_slice, _pc))
+        , _reader(_underlying(_cache._schema, _range, query::full_slice, _pc, _trace_state))
         , _last_key(std::move(last_key))
         , _last_key_populate_phase(last_key_populate_phase)
         , _make_last_entry_continuous(make_last_entry_continuous)
@@ -513,7 +518,7 @@ public:
                         _cache.on_uncached_wide_partition();
                         _cache.mark_partition_as_wide(*dk);
                         _large_partition_range = query::partition_range::make_singular(*dk);
-                        _large_partition_reader = _underlying(_schema, _large_partition_range, _slice, _pc);
+                        _large_partition_reader = _underlying(_schema, _large_partition_range, _slice, _pc, _trace_state);
                         return _large_partition_reader().then([this, dk = std::move(*dk)] (auto smopt) mutable -> streamed_mutation_opt {
                             _large_partition_reader = {};
                             if (!smopt) {
@@ -557,7 +562,7 @@ class scanning_and_populating_reader final : public mutation_reader::impl{
         just_cache_scanning_reader::cache_data _primary;
         secondary_then_primary_state(mutation_reader&& secondary, just_cache_scanning_reader::cache_data&& primary)
             : _secondary(std::move(secondary)), _primary(std::move(primary)) {};
-    }; 
+    };
 
     class state_machine : public boost::static_visitor<future<streamed_mutation_opt>> {
         row_cache& _cache;
@@ -569,6 +574,7 @@ class scanning_and_populating_reader final : public mutation_reader::impl{
         utils::phased_barrier::phase_type _last_key_from_primary_populate_phase;
         uint64_t _last_key_from_primary_continuity_flags_cleared;
         const query::partition_slice& _slice;
+        tracing::trace_state_ptr _trace_state;
         boost::variant<end_state,
                        secondary_only_state,
                        start_state,
@@ -615,7 +621,7 @@ class scanning_and_populating_reader final : public mutation_reader::impl{
                 return make_ready_future<streamed_mutation_opt>();
             }
             mutation_reader secondary = make_mutation_reader<range_populating_reader>(_cache, _schema, _range, _slice, _pc,
-                _cache._underlying, _last_key_from_primary.value, _last_key_from_primary_populate_phase,
+                _trace_state, _cache._underlying, _last_key_from_primary.value, _last_key_from_primary_populate_phase,
                 mark_end_as_continuous(mark_end_as_continuous::override(), !_range.end()));
             _state = secondary_only_state(std::move(secondary));
             return (*this)();
@@ -652,20 +658,21 @@ class scanning_and_populating_reader final : public mutation_reader::impl{
             if (range.is_wrap_around(dht::ring_position_comparator(*_schema))) {
                 return switch_to_after_primary(std::move(data));
             }
-            mutation_reader secondary = make_mutation_reader<range_populating_reader>(_cache, _schema, range, _slice, _pc,
+            mutation_reader secondary = make_mutation_reader<range_populating_reader>(_cache, _schema, range, _slice, _pc, _trace_state,
                 _cache._underlying, _last_key_from_primary.value, _last_key_from_primary_populate_phase, mark_end_as_continuous(data.mut->decorated_key()));
             _state = secondary_then_primary_state(std::move(secondary), std::move(data));
             return (*this)();
         }
     public:
         state_machine(schema_ptr s, row_cache& cache, const query::partition_range& range,
-                      const query::partition_slice& slice, const io_priority_class& pc)
+                      const query::partition_slice& slice, const io_priority_class& pc, tracing::trace_state_ptr trace_state)
             : _cache(cache)
             , _schema(std::move(s))
             , _range(range)
             , _pc(pc)
             , _primary(_schema, _cache, _range, slice, pc)
             , _slice(slice)
+            , _trace_state(std::move(trace_state))
             , _state(start_state{}) {}
         future<streamed_mutation_opt> operator()(const end_state& state) {
             return make_ready_future<streamed_mutation_opt>();
@@ -759,8 +766,9 @@ public:
                                     row_cache& cache,
                                     const query::partition_range& range,
                                     const query::partition_slice& slice,
-                                    const io_priority_class& pc)
-        : _state_machine(s, cache, range, slice, pc) {}
+                                    const io_priority_class& pc,
+                                    tracing::trace_state_ptr trace_state)
+        : _state_machine(s, cache, range, slice, pc, std::move(trace_state)) {}
     virtual future<streamed_mutation_opt> operator()() override {
         return _state_machine();
     }
@@ -770,24 +778,26 @@ mutation_reader
 row_cache::make_scanning_reader(schema_ptr s,
                                 const query::partition_range& range,
                                 const io_priority_class& pc,
-                                const query::partition_slice& slice) {
+                                const query::partition_slice& slice,
+                                tracing::trace_state_ptr trace_state) {
     if (range.is_wrap_around(dht::ring_position_comparator(*s))) {
         warn(unimplemented::cause::WRAP_AROUND);
         throw std::runtime_error("row_cache doesn't support wrap-around ranges");
     }
-    return make_mutation_reader<scanning_and_populating_reader>(std::move(s), *this, range, slice, pc);
+    return make_mutation_reader<scanning_and_populating_reader>(std::move(s), *this, range, slice, pc, std::move(trace_state));
 }
 
 mutation_reader
 row_cache::make_reader(schema_ptr s,
                        const query::partition_range& range,
                        const query::partition_slice& slice,
-                       const io_priority_class& pc) {
+                       const io_priority_class& pc,
+                       tracing::trace_state_ptr trace_state) {
     if (range.is_singular()) {
         const query::ring_position& pos = range.start()->value();
 
         if (!pos.has_key()) {
-            return make_scanning_reader(std::move(s), range, pc, slice);
+            return make_scanning_reader(std::move(s), range, pc, slice, std::move(trace_state));
         }
 
         return _read_section(_tracker.region(), [&] {
@@ -802,19 +812,19 @@ row_cache::make_reader(schema_ptr s,
                 upgrade_entry(e);
                 if (e.wide_partition()) {
                     _tracker.on_uncached_wide_partition();
-                    return _underlying(s, range, slice, pc);
+                    return _underlying(s, range, slice, pc, std::move(trace_state));
                 }
                 return make_reader_returning(e.read(*this, s, slice));
             } else {
                 on_miss();
                 return make_mutation_reader<single_partition_populating_reader>(s, *this, _underlying,
-                    _underlying(_schema, range, query::full_slice, pc), pc, slice);
+                    _underlying(_schema, range, query::full_slice, pc, trace_state), pc, slice, trace_state);
             }
           });
         });
     }
 
-    return make_scanning_reader(std::move(s), range, pc, slice);
+    return make_scanning_reader(std::move(s), range, pc, slice, std::move(trace_state));
 }
 
 row_cache::~row_cache() {

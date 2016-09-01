@@ -35,6 +35,7 @@
 #include "utils/histogram.hh"
 #include "partition_version.hh"
 #include "utils/estimated_histogram.hh"
+#include "tracing/trace_state.hh"
 
 namespace scollectd {
 
@@ -262,7 +263,8 @@ private:
     mutation_reader make_scanning_reader(schema_ptr,
                                          const query::partition_range&,
                                          const io_priority_class& pc,
-                                         const query::partition_slice& slice);
+                                         const query::partition_slice& slice,
+                                         tracing::trace_state_ptr trace_state);
     void on_hit();
     void on_miss();
     void on_uncached_wide_partition();
@@ -286,7 +288,8 @@ public:
     mutation_reader make_reader(schema_ptr,
                                 const query::partition_range& = query::full_partition_range,
                                 const query::partition_slice& slice = query::full_slice,
-                                const io_priority_class& = default_priority_class());
+                                const io_priority_class& = default_priority_class(),
+                                tracing::trace_state_ptr trace_state = nullptr);
 
     const stats& stats() const { return _stats; }
 public:
