@@ -47,7 +47,6 @@
 #include "exceptions.hh"
 #include "mutation_reader.hh"
 #include "query-request.hh"
-#include "key_reader.hh"
 #include "compound_compat.hh"
 
 namespace sstables {
@@ -662,7 +661,6 @@ public:
     // will then re-export as public every method it needs.
     friend class test;
 
-    friend class key_reader;
     friend class components_writer;
     friend class sstable_writer;
     friend class index_reader;
@@ -671,9 +669,6 @@ public:
 
 using shared_sstable = lw_shared_ptr<sstable>;
 using sstable_list = std::unordered_set<shared_sstable>;
-
-::key_reader make_key_reader(schema_ptr s, shared_sstable sst, const query::partition_range& range,
-                             const io_priority_class& pc = default_priority_class());
 
 struct entry_descriptor {
     sstring ks;

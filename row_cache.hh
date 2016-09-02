@@ -30,7 +30,6 @@
 #include "mutation_reader.hh"
 #include "mutation_partition.hh"
 #include "utils/logalloc.hh"
-#include "key_reader.hh"
 #include "utils/phased_barrier.hh"
 #include "utils/histogram.hh"
 #include "partition_version.hh"
@@ -243,7 +242,6 @@ private:
     schema_ptr _schema;
     partitions_type _partitions; // Cached partitions are complete.
     mutation_source _underlying;
-    key_source _underlying_keys;
     uint64_t _max_cached_partition_size_in_bytes;
 
     // Synchronizes populating reads with updates of underlying data source to ensure that cache
@@ -274,7 +272,7 @@ private:
     static thread_local seastar::thread_scheduling_group _update_thread_scheduling_group;
 public:
     ~row_cache();
-    row_cache(schema_ptr, mutation_source underlying, key_source, cache_tracker&, uint64_t _max_cached_partition_size_in_bytes = 10 * 1024 * 1024);
+    row_cache(schema_ptr, mutation_source underlying, cache_tracker&, uint64_t _max_cached_partition_size_in_bytes = 10 * 1024 * 1024);
     row_cache(row_cache&&) = default;
     row_cache(const row_cache&) = delete;
     row_cache& operator=(row_cache&&) = default;

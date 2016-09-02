@@ -1096,13 +1096,12 @@ bool row_cache::has_continuous_entry(const dht::ring_position& key) const {
     });
 }
 
-row_cache::row_cache(schema_ptr s, mutation_source fallback_factory, key_source underlying_keys,
+row_cache::row_cache(schema_ptr s, mutation_source fallback_factory,
     cache_tracker& tracker, uint64_t max_cached_partition_size_in_bytes)
     : _tracker(tracker)
     , _schema(std::move(s))
     , _partitions(cache_entry::compare(_schema))
     , _underlying(std::move(fallback_factory))
-    , _underlying_keys(std::move(underlying_keys))
     , _max_cached_partition_size_in_bytes(max_cached_partition_size_in_bytes)
 {
     with_allocator(_tracker.allocator(), [this] {

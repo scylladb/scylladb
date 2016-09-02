@@ -128,7 +128,7 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog* cl
     , _streaming_memtables(_config.enable_disk_writes ? make_streaming_memtable_list() : make_memory_only_memtable_list())
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
     , _sstables(make_lw_shared(_compaction_strategy.make_sstable_set(_schema)))
-    , _cache(_schema, sstables_as_mutation_source(), sstables_as_key_source(), global_cache_tracker(), _config.max_cached_partition_size_in_bytes)
+    , _cache(_schema, sstables_as_mutation_source(), global_cache_tracker(), _config.max_cached_partition_size_in_bytes)
     , _commitlog(cl)
     , _compaction_manager(compaction_manager)
     , _flush_queue(std::make_unique<memtable_flush_queue>())
@@ -525,23 +525,6 @@ column_family::make_sstable_reader(schema_ptr s,
         // range_sstable_reader is not movable so we need to wrap it
         return restrict_reader(make_mutation_reader<range_sstable_reader>(std::move(s), _sstables, pr, slice, pc, std::move(trace_state)));
     }
-}
-
-key_source column_family::sstables_as_key_source() const {
-    return key_source([this] (const query::partition_range& range, const io_priority_class& pc) {
-        std::vector<key_reader> readers;
-        readers.reserve(_sstables->all()->size());
-        std::transform(_sstables->all()->begin(), _sstables->all()->end(), std::back_inserter(readers), [&] (auto&& sst) {
-            auto rd = sstables::make_key_reader(_schema, sst, range, pc);
-            if (sst->is_shared()) {
-                rd = make_filtering_reader(std::move(rd), [] (const dht::decorated_key& dk) {
-                    return dht::shard_of(dk.token()) == engine().cpu_id();
-                });
-            }
-            return rd;
-        });
-        return make_combined_reader(_schema, std::move(readers));
-    });
 }
 
 // Exposed for testing, not performance critical.
