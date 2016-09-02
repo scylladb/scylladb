@@ -43,6 +43,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include "locator/simple_snitch.hh"
 #include <boost/algorithm/cxx11/all_of.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/function_output_iterator.hpp>
 #include <boost/range/algorithm/heap_algorithm.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
@@ -187,13 +188,127 @@ bool belongs_to_current_shard(const streamed_mutation& m) {
     return dht::shard_of(m.decorated_key().token()) == engine().cpu_id();
 }
 
-// Filter out sstables for reader using bloom filter.
-std::vector<sstables::shared_sstable>
-filter_sstable_for_reader(std::vector<sstables::shared_sstable>&& sstables, const sstables::key& key) {
+// Stores ranges for all components of the same clustering key, index 0 referring to component
+// range 0, and so on.
+using ck_filter_clustering_key_components = std::vector<nonwrapping_range<bytes_view>>;
+// Stores an entry for each clustering key range specified by the filter.
+using ck_filter_clustering_key_ranges = std::vector<ck_filter_clustering_key_components>;
+
+// Used to split a clustering key range into a range for each component.
+// If a range in ck_filtering_all_ranges is composite, a range will be created
+// for each component. If it's not composite, a single range is created.
+// This split is needed to check for overlap in each component individually.
+static ck_filter_clustering_key_ranges
+ranges_for_clustering_key_filter(const schema_ptr& schema, const query::clustering_row_ranges& ck_filtering_all_ranges) {
+    ck_filter_clustering_key_ranges ranges;
+
+    for (auto& r : ck_filtering_all_ranges) {
+        // this vector stores a range for each component of a key, only one if not composite.
+        ck_filter_clustering_key_components composite_ranges;
+
+        if (r.is_full()) {
+            ranges.push_back({ nonwrapping_range<bytes_view>::make_open_ended_both_sides() });
+            continue;
+        }
+        auto start = r.start() ? r.start()->value().components() : clustering_key_prefix::make_empty().components();
+        auto end = r.end() ? r.end()->value().components() : clustering_key_prefix::make_empty().components();
+        auto start_it = start.begin();
+        auto end_it = end.begin();
+
+        // This test is enough because equal bounds in nonwrapping_range are inclusive.
+        auto is_singular = [&schema] (const auto& type_it, const bytes_view& b1, const bytes_view& b2) {
+            if (type_it == schema->clustering_key_type()->types().end()) {
+                throw std::runtime_error(sprint("clustering key filter passed more components than defined in schema of %s.%s",
+                    schema->ks_name(), schema->cf_name()));
+            }
+            return (*type_it)->compare(b1, b2) == 0;
+        };
+        auto type_it = schema->clustering_key_type()->types().begin();
+        composite_ranges.reserve(schema->clustering_key_size());
+
+        // the rule is to ignore any component cn if another component ck (k < n) is not if the form [v, v].
+        // If we have [v1, v1], [v2, v2], ... {vl3, vr3}, ....
+        // then we generate [v1, v1], [v2, v2], ... {vl3, vr3}. Where {  = '(' or '[', etc.
+        while (start_it != start.end() && end_it != end.end() && is_singular(type_it++, *start_it, *end_it)) {
+            composite_ranges.push_back(nonwrapping_range<bytes_view>({{ std::move(*start_it++), true }},
+                {{ std::move(*end_it++), true }}));
+        }
+        // handle a single non-singular tail element, if present
+        if (start_it != start.end() && end_it != end.end()) {
+            composite_ranges.push_back(nonwrapping_range<bytes_view>({{ std::move(*start_it), r.start()->is_inclusive() }},
+                {{ std::move(*end_it), r.end()->is_inclusive() }}));
+        } else if (start_it != start.end()) {
+            composite_ranges.push_back(nonwrapping_range<bytes_view>({{ std::move(*start_it), r.start()->is_inclusive() }}, {}));
+        } else if (end_it != end.end()) {
+            composite_ranges.push_back(nonwrapping_range<bytes_view>({}, {{ std::move(*end_it), r.end()->is_inclusive() }}));
+        }
+
+        ranges.push_back(std::move(composite_ranges));
+    }
+    return ranges;
+}
+
+// Return true if this sstable possibly stores clustering row(s) specified by ranges.
+static inline bool
+contains_rows(const sstables::sstable& sst, const schema_ptr& schema, const ck_filter_clustering_key_ranges& ranges) {
+    auto& clustering_key_types = schema->clustering_key_type()->types();
+    auto& clustering_components_ranges = sst.clustering_components_ranges();
+
+    if (!schema->clustering_key_size() || clustering_components_ranges.empty()) {
+        return true;
+    }
+    return boost::algorithm::any_of(ranges, [&] (const ck_filter_clustering_key_components& range) {
+        auto s = std::min(range.size(), clustering_components_ranges.size());
+        return boost::algorithm::all_of(boost::irange<unsigned>(0, s), [&] (unsigned i) {
+            auto& type = clustering_key_types[i];
+            return range[i].is_full() || range[i].overlaps(clustering_components_ranges[i], type->as_tri_comparator());
+        });
+    });
+}
+
+// Filter out sstables for reader using bloom filter and sstable metadata that keeps track
+// of a range for each clustering component.
+static std::vector<sstables::shared_sstable>
+filter_sstable_for_reader(std::vector<sstables::shared_sstable>&& sstables, const schema_ptr& schema,
+        const sstables::key& key, const query::partition_slice& slice) {
     auto sstable_has_not_key = [&] (const sstables::shared_sstable& sst) {
         return !sst->filter_has_key(key);
     };
     sstables.erase(boost::remove_if(sstables, sstable_has_not_key), sstables.end());
+
+    // no clustering filtering is applied if schema defines no clustering key.
+    if (!schema->clustering_key_size()) {
+        return sstables;
+    }
+    auto ck_filtering_all_ranges = slice.get_all_ranges();
+    // fast path to include all sstables if only one full range was specified.
+    // For example, this happens if query only specifies a partition key.
+    if (ck_filtering_all_ranges.size() == 1 && ck_filtering_all_ranges[0].is_full()) {
+        return sstables;
+    }
+    auto ranges = ranges_for_clustering_key_filter(schema, ck_filtering_all_ranges);
+    if (ranges.empty()) {
+        return {};
+    }
+
+    int64_t min_timestamp = std::numeric_limits<int64_t>::max();
+    auto sstable_has_clustering_key = [&min_timestamp, &schema, &ranges] (const sstables::shared_sstable& sst) {
+        if (!contains_rows(*sst, schema, ranges)) {
+            return false; // ordered after sstables that contain clustering rows.
+        } else {
+            min_timestamp = std::min(min_timestamp, sst->get_stats_metadata().min_timestamp);
+            return true;
+        }
+    };
+    auto sstable_has_relevant_tombstone = [&min_timestamp] (const sstables::shared_sstable& sst) {
+        const auto& stats = sst->get_stats_metadata();
+        // re-add sstable as candidate if it contains a tombstone that may cover a row in an included sstable.
+        return (stats.max_timestamp > min_timestamp && stats.estimated_tombstone_drop_time.bin.map.size());
+    };
+    auto skipped = std::partition(sstables.begin(), sstables.end(), sstable_has_clustering_key);
+    auto actually_skipped = std::partition(skipped, sstables.end(), sstable_has_relevant_tombstone);
+    sstables.erase(actually_skipped, sstables.end());
+
     return sstables;
 }
 
@@ -273,7 +388,7 @@ public:
         if (_done) {
             return make_ready_future<streamed_mutation_opt>();
         }
-        auto candidates = filter_sstable_for_reader(_sstables->select(query::partition_range(_rp)), _key);
+        auto candidates = filter_sstable_for_reader(_sstables->select(query::partition_range(_rp)), _schema, _key, _slice);
         return parallel_for_each(std::move(candidates),
             [this](const lw_shared_ptr<sstables::sstable>& sstable) {
                 tracing::trace(_trace_state, "Reading key {} from sstable {}", *_rp.key(), seastar::value_of([&sstable] { return sstable->get_filename(); }));
