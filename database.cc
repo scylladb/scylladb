@@ -269,16 +269,17 @@ contains_rows(const sstables::sstable& sst, const schema_ptr& schema, const ck_f
 // Filter out sstables for reader using bloom filter and sstable metadata that keeps track
 // of a range for each clustering component.
 static std::vector<sstables::shared_sstable>
-filter_sstable_for_reader(std::vector<sstables::shared_sstable>&& sstables, const schema_ptr& schema,
+filter_sstable_for_reader(std::vector<sstables::shared_sstable>&& sstables, const column_family& cf, const schema_ptr& schema,
         const sstables::key& key, const query::partition_slice& slice) {
     auto sstable_has_not_key = [&] (const sstables::shared_sstable& sst) {
         return !sst->filter_has_key(key);
     };
     sstables.erase(boost::remove_if(sstables, sstable_has_not_key), sstables.end());
 
-    // no clustering filtering is applied if schema defines no clustering key.
-    if (!schema->clustering_key_size()) {
-        return sstables;
+    // no clustering filtering is applied if schema defines no clustering key or
+    // compaction strategy thinks it will not benefit from such an optimization.
+    if (!schema->clustering_key_size() || !cf.get_compaction_strategy().use_clustering_key_filter()) {
+         return sstables;
     }
     auto ck_filtering_all_ranges = slice.get_all_ranges();
     // fast path to include all sstables if only one full range was specified.
@@ -354,6 +355,7 @@ public:
 };
 
 class single_key_sstable_reader final : public mutation_reader::impl {
+    const column_family* _cf;
     schema_ptr _schema;
     dht::ring_position _rp;
     sstables::key _key;
@@ -367,14 +369,16 @@ class single_key_sstable_reader final : public mutation_reader::impl {
     const query::partition_slice& _slice;
     tracing::trace_state_ptr _trace_state;
 public:
-    single_key_sstable_reader(schema_ptr schema,
+    single_key_sstable_reader(const column_family* cf,
+                              schema_ptr schema,
                               lw_shared_ptr<sstables::sstable_set> sstables,
                               utils::estimated_histogram& sstable_histogram,
                               const partition_key& key,
                               const query::partition_slice& slice,
                               const io_priority_class& pc,
                               tracing::trace_state_ptr trace_state)
-        : _schema(std::move(schema))
+        : _cf(cf)
+        , _schema(std::move(schema))
         , _rp(dht::global_partitioner().decorate_key(*_schema, key))
         , _key(sstables::key::from_partition_key(*_schema, key))
         , _sstables(std::move(sstables))
@@ -388,7 +392,7 @@ public:
         if (_done) {
             return make_ready_future<streamed_mutation_opt>();
         }
-        auto candidates = filter_sstable_for_reader(_sstables->select(query::partition_range(_rp)), _schema, _key, _slice);
+        auto candidates = filter_sstable_for_reader(_sstables->select(query::partition_range(_rp)), *_cf, _schema, _key, _slice);
         return parallel_for_each(std::move(candidates),
             [this](const lw_shared_ptr<sstables::sstable>& sstable) {
                 tracing::trace(_trace_state, "Reading key {} from sstable {}", *_rp.key(), seastar::value_of([&sstable] { return sstable->get_filename(); }));
@@ -428,7 +432,8 @@ column_family::make_sstable_reader(schema_ptr s,
         if (dht::shard_of(pos.token()) != engine().cpu_id()) {
             return make_empty_reader(); // range doesn't belong to this shard
         }
-        return restrict_reader(make_mutation_reader<single_key_sstable_reader>(std::move(s), _sstables, _stats.estimated_sstable_per_read, *pos.key(), slice, pc, std::move(trace_state)));
+        return restrict_reader(make_mutation_reader<single_key_sstable_reader>(this, std::move(s), _sstables,
+            _stats.estimated_sstable_per_read, *pos.key(), slice, pc, std::move(trace_state)));
     } else {
         // range_sstable_reader is not movable so we need to wrap it
         return restrict_reader(make_mutation_reader<range_sstable_reader>(std::move(s), _sstables, pr, slice, pc, std::move(trace_state)));
