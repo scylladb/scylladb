@@ -187,6 +187,16 @@ bool belongs_to_current_shard(const streamed_mutation& m) {
     return dht::shard_of(m.decorated_key().token()) == engine().cpu_id();
 }
 
+// Filter out sstables for reader using bloom filter.
+std::vector<sstables::shared_sstable>
+filter_sstable_for_reader(std::vector<sstables::shared_sstable>&& sstables, const sstables::key& key) {
+    auto sstable_has_not_key = [&] (const sstables::shared_sstable& sst) {
+        return !sst->filter_has_key(key);
+    };
+    sstables.erase(boost::remove_if(sstables, sstable_has_not_key), sstables.end());
+    return sstables;
+}
+
 class range_sstable_reader final : public mutation_reader::impl {
     const query::partition_range& _pr;
     lw_shared_ptr<sstables::sstable_set> _sstables;
@@ -263,7 +273,8 @@ public:
         if (_done) {
             return make_ready_future<streamed_mutation_opt>();
         }
-        return parallel_for_each(_sstables->select(query::partition_range(_rp)),
+        auto candidates = filter_sstable_for_reader(_sstables->select(query::partition_range(_rp)), _key);
+        return parallel_for_each(std::move(candidates),
             [this](const lw_shared_ptr<sstables::sstable>& sstable) {
                 tracing::trace(_trace_state, "Reading key {} from sstable {}", *_rp.key(), seastar::value_of([&sstable] { return sstable->get_filename(); }));
                 return sstable->read_row(_schema, _key, _slice, _pc).then([this](auto smo) {
