@@ -113,6 +113,7 @@ class key;
 class sstable_writer;
 
 using index_list = std::vector<index_entry>;
+class index_reader;
 
 class sstable : public enable_lw_shared_from_this<sstable> {
 public:
@@ -494,6 +495,7 @@ private:
     future<> create_data();
 
     future<index_list> read_indexes(uint64_t summary_idx, const io_priority_class& pc);
+    index_reader get_index_reader(const io_priority_class& pc);
 
     // Return an input_stream which reads exactly the specified byte range
     // from the data file (after uncompression, if the file is compressed).
@@ -659,6 +661,7 @@ public:
     friend class key_reader;
     friend class components_writer;
     friend class sstable_writer;
+    friend class index_reader;
 };
 
 using shared_sstable = lw_shared_ptr<sstable>;

@@ -880,35 +880,15 @@ thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> dow
 thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_original_index_cache;
 
 future<index_list> sstable::read_indexes(uint64_t summary_idx, const io_priority_class& pc) {
-    if (summary_idx >= _summary.header.size) {
-        return make_ready_future<index_list>(index_list());
-    }
-
-    uint64_t position = _summary.entries[summary_idx].position;
-    uint64_t quantity = downsampling::get_effective_index_interval_after_index(summary_idx, _summary.header.sampling_level,
-        _summary.header.min_index_interval);
-
-    uint64_t end;
-    if (++summary_idx >= _summary.header.size) {
-        end = index_size();
-    } else {
-        end = _summary.entries[summary_idx].position;
-    }
-
-    return do_with(index_consumer(quantity), [this, position, end, &pc] (index_consumer& ic) {
-        file_input_stream_options options;
-        options.buffer_size = sstable_buffer_size;
-        options.io_priority_class = pc;
-        auto stream = make_file_input_stream(this->_index_file, position, end - position, std::move(options));
-        // TODO: it's redundant to constrain the consumer here to stop at
-        // index_size()-position, the input stream is already constrained.
-        auto ctx = make_lw_shared<index_consume_entry_context<index_consumer>>(ic, std::move(stream), position, this->index_size() - position);
-        return ctx->consume_input(*ctx).finally([ctx] {
-            return ctx->close();
-        }).then([ctx, &ic] {
-            return make_ready_future<index_list>(std::move(ic.indexes));
+    return do_with(get_index_reader(pc), [summary_idx] (index_reader& ir) {
+        return ir.get_index_entries(summary_idx).finally([&ir] {
+            return ir.close();
         });
     });
+}
+
+index_reader sstable::get_index_reader(const io_priority_class& pc) {
+    return index_reader(shared_from_this(), pc);
 }
 
 template <sstable::component_type Type, typename T>
