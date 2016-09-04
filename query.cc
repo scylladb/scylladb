@@ -123,6 +123,15 @@ void partition_slice::clear_range(const schema& s, const partition_key& k) {
     }
 }
 
+clustering_row_ranges partition_slice::get_all_ranges() const {
+    auto all_ranges = default_row_ranges();
+    const auto& specific_ranges = get_specific_ranges();
+    if (specific_ranges) {
+        all_ranges.insert(all_ranges.end(), specific_ranges->ranges().begin(), specific_ranges->ranges().end());
+    }
+    return all_ranges;
+}
+
 sstring
 result::pretty_print(schema_ptr s, const query::partition_slice& slice) const {
     std::ostringstream out;

@@ -211,6 +211,8 @@ public:
 };
 
 class compaction_strategy_impl {
+protected:
+    bool _use_clustering_key_filter = false;
 public:
     virtual ~compaction_strategy_impl() {}
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) = 0;
@@ -221,6 +223,9 @@ public:
     virtual int64_t estimated_pending_compactions(column_family& cf) const = 0;
     virtual std::unique_ptr<sstable_set_impl> make_sstable_set(schema_ptr schema) const {
         return std::make_unique<bag_sstable_set>();
+    }
+    bool use_clustering_key_filter() const {
+        return _use_clustering_key_filter;
     }
 };
 
@@ -642,7 +647,9 @@ class date_tiered_compaction_strategy : public compaction_strategy_impl {
 public:
     date_tiered_compaction_strategy(const std::map<sstring, sstring>& options)
         : _manifest(options)
-        {}
+    {
+        _use_clustering_key_filter = true;
+    }
 
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override {
         auto gc_before = gc_clock::now() - cfs.schema()->gc_grace_seconds();
@@ -685,6 +692,10 @@ bool compaction_strategy::parallel_compaction() const {
 
 int64_t compaction_strategy::estimated_pending_compactions(column_family& cf) const {
     return _compaction_strategy_impl->estimated_pending_compactions(cf);
+}
+
+bool compaction_strategy::use_clustering_key_filter() const {
+    return _compaction_strategy_impl->use_clustering_key_filter();
 }
 
 sstable_set

@@ -43,6 +43,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include "locator/simple_snitch.hh"
 #include <boost/algorithm/cxx11/all_of.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/function_output_iterator.hpp>
 #include <boost/range/algorithm/heap_algorithm.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
@@ -187,6 +188,138 @@ bool belongs_to_current_shard(const streamed_mutation& m) {
     return dht::shard_of(m.decorated_key().token()) == engine().cpu_id();
 }
 
+// Stores ranges for all components of the same clustering key, index 0 referring to component
+// range 0, and so on.
+using ck_filter_clustering_key_components = std::vector<nonwrapping_range<bytes_view>>;
+// Stores an entry for each clustering key range specified by the filter.
+using ck_filter_clustering_key_ranges = std::vector<ck_filter_clustering_key_components>;
+
+// Used to split a clustering key range into a range for each component.
+// If a range in ck_filtering_all_ranges is composite, a range will be created
+// for each component. If it's not composite, a single range is created.
+// This split is needed to check for overlap in each component individually.
+static ck_filter_clustering_key_ranges
+ranges_for_clustering_key_filter(const schema_ptr& schema, const query::clustering_row_ranges& ck_filtering_all_ranges) {
+    ck_filter_clustering_key_ranges ranges;
+
+    for (auto& r : ck_filtering_all_ranges) {
+        // this vector stores a range for each component of a key, only one if not composite.
+        ck_filter_clustering_key_components composite_ranges;
+
+        if (r.is_full()) {
+            ranges.push_back({ nonwrapping_range<bytes_view>::make_open_ended_both_sides() });
+            continue;
+        }
+        auto start = r.start() ? r.start()->value().components() : clustering_key_prefix::make_empty().components();
+        auto end = r.end() ? r.end()->value().components() : clustering_key_prefix::make_empty().components();
+        auto start_it = start.begin();
+        auto end_it = end.begin();
+
+        // This test is enough because equal bounds in nonwrapping_range are inclusive.
+        auto is_singular = [&schema] (const auto& type_it, const bytes_view& b1, const bytes_view& b2) {
+            if (type_it == schema->clustering_key_type()->types().end()) {
+                throw std::runtime_error(sprint("clustering key filter passed more components than defined in schema of %s.%s",
+                    schema->ks_name(), schema->cf_name()));
+            }
+            return (*type_it)->compare(b1, b2) == 0;
+        };
+        auto type_it = schema->clustering_key_type()->types().begin();
+        composite_ranges.reserve(schema->clustering_key_size());
+
+        // the rule is to ignore any component cn if another component ck (k < n) is not if the form [v, v].
+        // If we have [v1, v1], [v2, v2], ... {vl3, vr3}, ....
+        // then we generate [v1, v1], [v2, v2], ... {vl3, vr3}. Where {  = '(' or '[', etc.
+        while (start_it != start.end() && end_it != end.end() && is_singular(type_it++, *start_it, *end_it)) {
+            composite_ranges.push_back(nonwrapping_range<bytes_view>({{ std::move(*start_it++), true }},
+                {{ std::move(*end_it++), true }}));
+        }
+        // handle a single non-singular tail element, if present
+        if (start_it != start.end() && end_it != end.end()) {
+            composite_ranges.push_back(nonwrapping_range<bytes_view>({{ std::move(*start_it), r.start()->is_inclusive() }},
+                {{ std::move(*end_it), r.end()->is_inclusive() }}));
+        } else if (start_it != start.end()) {
+            composite_ranges.push_back(nonwrapping_range<bytes_view>({{ std::move(*start_it), r.start()->is_inclusive() }}, {}));
+        } else if (end_it != end.end()) {
+            composite_ranges.push_back(nonwrapping_range<bytes_view>({}, {{ std::move(*end_it), r.end()->is_inclusive() }}));
+        }
+
+        ranges.push_back(std::move(composite_ranges));
+    }
+    return ranges;
+}
+
+// Return true if this sstable possibly stores clustering row(s) specified by ranges.
+static inline bool
+contains_rows(const sstables::sstable& sst, const schema_ptr& schema, const ck_filter_clustering_key_ranges& ranges) {
+    auto& clustering_key_types = schema->clustering_key_type()->types();
+    auto& clustering_components_ranges = sst.clustering_components_ranges();
+
+    if (!schema->clustering_key_size() || clustering_components_ranges.empty()) {
+        return true;
+    }
+    return boost::algorithm::any_of(ranges, [&] (const ck_filter_clustering_key_components& range) {
+        auto s = std::min(range.size(), clustering_components_ranges.size());
+        return boost::algorithm::all_of(boost::irange<unsigned>(0, s), [&] (unsigned i) {
+            auto& type = clustering_key_types[i];
+            return range[i].is_full() || range[i].overlaps(clustering_components_ranges[i], type->as_tri_comparator());
+        });
+    });
+}
+
+// Filter out sstables for reader using bloom filter and sstable metadata that keeps track
+// of a range for each clustering component.
+static std::vector<sstables::shared_sstable>
+filter_sstable_for_reader(std::vector<sstables::shared_sstable>&& sstables, column_family& cf, const schema_ptr& schema,
+        const sstables::key& key, const query::partition_slice& slice) {
+    auto sstable_has_not_key = [&] (const sstables::shared_sstable& sst) {
+        return !sst->filter_has_key(key);
+    };
+    sstables.erase(boost::remove_if(sstables, sstable_has_not_key), sstables.end());
+
+    // no clustering filtering is applied if schema defines no clustering key or
+    // compaction strategy thinks it will not benefit from such an optimization.
+    if (!schema->clustering_key_size() || !cf.get_compaction_strategy().use_clustering_key_filter()) {
+         return sstables;
+    }
+    ::cf_stats* stats = cf.cf_stats();
+    stats->clustering_filter_count++;
+    stats->sstables_checked_by_clustering_filter += sstables.size();
+
+    auto ck_filtering_all_ranges = slice.get_all_ranges();
+    // fast path to include all sstables if only one full range was specified.
+    // For example, this happens if query only specifies a partition key.
+    if (ck_filtering_all_ranges.size() == 1 && ck_filtering_all_ranges[0].is_full()) {
+        stats->clustering_filter_fast_path_count++;
+        stats->surviving_sstables_after_clustering_filter += sstables.size();
+        return sstables;
+    }
+    auto ranges = ranges_for_clustering_key_filter(schema, ck_filtering_all_ranges);
+    if (ranges.empty()) {
+        return {};
+    }
+
+    int64_t min_timestamp = std::numeric_limits<int64_t>::max();
+    auto sstable_has_clustering_key = [&min_timestamp, &schema, &ranges] (const sstables::shared_sstable& sst) {
+        if (!contains_rows(*sst, schema, ranges)) {
+            return false; // ordered after sstables that contain clustering rows.
+        } else {
+            min_timestamp = std::min(min_timestamp, sst->get_stats_metadata().min_timestamp);
+            return true;
+        }
+    };
+    auto sstable_has_relevant_tombstone = [&min_timestamp] (const sstables::shared_sstable& sst) {
+        const auto& stats = sst->get_stats_metadata();
+        // re-add sstable as candidate if it contains a tombstone that may cover a row in an included sstable.
+        return (stats.max_timestamp > min_timestamp && stats.estimated_tombstone_drop_time.bin.map.size());
+    };
+    auto skipped = std::partition(sstables.begin(), sstables.end(), sstable_has_clustering_key);
+    auto actually_skipped = std::partition(skipped, sstables.end(), sstable_has_relevant_tombstone);
+    sstables.erase(actually_skipped, sstables.end());
+    stats->surviving_sstables_after_clustering_filter += sstables.size();
+
+    return sstables;
+}
+
 class range_sstable_reader final : public mutation_reader::impl {
     const query::partition_range& _pr;
     lw_shared_ptr<sstables::sstable_set> _sstables;
@@ -229,6 +362,7 @@ public:
 };
 
 class single_key_sstable_reader final : public mutation_reader::impl {
+    column_family* _cf;
     schema_ptr _schema;
     dht::ring_position _rp;
     sstables::key _key;
@@ -242,14 +376,16 @@ class single_key_sstable_reader final : public mutation_reader::impl {
     const query::partition_slice& _slice;
     tracing::trace_state_ptr _trace_state;
 public:
-    single_key_sstable_reader(schema_ptr schema,
+    single_key_sstable_reader(column_family* cf,
+                              schema_ptr schema,
                               lw_shared_ptr<sstables::sstable_set> sstables,
                               utils::estimated_histogram& sstable_histogram,
                               const partition_key& key,
                               const query::partition_slice& slice,
                               const io_priority_class& pc,
                               tracing::trace_state_ptr trace_state)
-        : _schema(std::move(schema))
+        : _cf(cf)
+        , _schema(std::move(schema))
         , _rp(dht::global_partitioner().decorate_key(*_schema, key))
         , _key(sstables::key::from_partition_key(*_schema, key))
         , _sstables(std::move(sstables))
@@ -263,7 +399,8 @@ public:
         if (_done) {
             return make_ready_future<streamed_mutation_opt>();
         }
-        return parallel_for_each(_sstables->select(query::partition_range(_rp)),
+        auto candidates = filter_sstable_for_reader(_sstables->select(query::partition_range(_rp)), *_cf, _schema, _key, _slice);
+        return parallel_for_each(std::move(candidates),
             [this](const lw_shared_ptr<sstables::sstable>& sstable) {
                 tracing::trace(_trace_state, "Reading key {} from sstable {}", *_rp.key(), seastar::value_of([&sstable] { return sstable->get_filename(); }));
                 return sstable->read_row(_schema, _key, _slice, _pc).then([this](auto smo) {
@@ -302,7 +439,8 @@ column_family::make_sstable_reader(schema_ptr s,
         if (dht::shard_of(pos.token()) != engine().cpu_id()) {
             return make_empty_reader(); // range doesn't belong to this shard
         }
-        return restrict_reader(make_mutation_reader<single_key_sstable_reader>(std::move(s), _sstables, _stats.estimated_sstable_per_read, *pos.key(), slice, pc, std::move(trace_state)));
+        return restrict_reader(make_mutation_reader<single_key_sstable_reader>(const_cast<column_family*>(this), std::move(s), _sstables,
+            _stats.estimated_sstable_per_read, *pos.key(), slice, pc, std::move(trace_state)));
     } else {
         // range_sstable_reader is not movable so we need to wrap it
         return restrict_reader(make_mutation_reader<range_sstable_reader>(std::move(s), _sstables, pr, slice, pc, std::move(trace_state)));
@@ -632,7 +770,7 @@ future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sst
     }
 
     return load_sstable(sstables::sstable(
-            _schema->ks_name(), _schema->cf_name(), sstdir, comps.generation,
+            _schema, sstdir, comps.generation,
             comps.version, comps.format)).then_wrapped([fname, comps] (future<> f) {
         try {
             f.get();
@@ -725,7 +863,7 @@ column_family::seal_active_streaming_memtable_immediate() {
 
         _config.streaming_dirty_memory_manager->serialize_flush([this, old] {
           return with_lock(_sstables_lock.for_read(), [this, old] {
-            auto newtab = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(),
+            auto newtab = make_lw_shared<sstables::sstable>(_schema,
                 _config.datadir, calculate_generation_for_new_table(),
                 sstables::sstable::version_types::ka,
                 sstables::sstable::format_types::big);
@@ -780,7 +918,7 @@ future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_bi
     return with_gate(_streaming_flush_gate, [this, old, &smb] {
         return with_gate(smb.flush_in_progress, [this, old, &smb] {
             return with_lock(_sstables_lock.for_read(), [this, old, &smb] {
-                auto newtab = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(),
+                auto newtab = make_lw_shared<sstables::sstable>(_schema,
                                                                 _config.datadir, calculate_generation_for_new_table(),
                                                                 sstables::sstable::version_types::ka,
                                                                 sstables::sstable::format_types::big);
@@ -845,7 +983,7 @@ future<stop_iteration>
 column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
     auto gen = calculate_generation_for_new_table();
 
-    auto newtab = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(),
+    auto newtab = make_lw_shared<sstables::sstable>(_schema,
         _config.datadir, gen,
         sstables::sstable::version_types::ka,
         sstables::sstable::format_types::big);
@@ -934,7 +1072,7 @@ future<std::vector<sstables::entry_descriptor>> column_family::flush_upload_dir(
             if (comps.component != sstables::sstable::component_type::TOC) {
                 return make_ready_future<>();
             }
-            auto sst = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(),
+            auto sst = make_lw_shared<sstables::sstable>(_schema,
                                                         _config.datadir + "/upload", comps.generation,
                                                         comps.version, comps.format);
             work.sstables.emplace(comps.generation, std::move(sst));
@@ -989,7 +1127,7 @@ column_family::reshuffle_sstables(std::set<int64_t> all_generations, int64_t sta
             if (work.all_generations.count(comps.generation) != 0) {
                 return make_ready_future<>();
             }
-            auto sst = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(),
+            auto sst = make_lw_shared<sstables::sstable>(_schema,
                                                          _config.datadir, comps.generation,
                                                          comps.version, comps.format);
             work.sstables.emplace(comps.generation, std::move(sst));
@@ -1115,7 +1253,7 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
         auto create_sstable = [this] {
                 auto gen = this->calculate_generation_for_new_table();
                 // FIXME: use "tmp" marker in names of incomplete sstable
-                auto sst = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), _config.datadir, gen,
+                auto sst = make_lw_shared<sstables::sstable>(_schema, _config.datadir, gen,
                         sstables::sstable::version_types::ka,
                         sstables::sstable::format_types::big);
                 sst->set_unshared();
@@ -1165,7 +1303,7 @@ future<>
 column_family::load_new_sstables(std::vector<sstables::entry_descriptor> new_tables) {
     return parallel_for_each(new_tables, [this] (auto comps) {
         return this->load_sstable(sstables::sstable(
-                _schema->ks_name(), _schema->cf_name(), _config.datadir,
+                _schema, _config.datadir,
                 comps.generation, comps.version, comps.format), true);
     }).then([this] {
         start_rewrite();
@@ -1443,6 +1581,34 @@ database::setup_collectd() {
                 , scollectd::per_cpu_plugin_instance
                 , "bytes", "pending_flushes")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, _cf_stats.pending_memtables_flushes_bytes)
+    ));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "clustering_filter")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _cf_stats.clustering_filter_count)
+    ));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "clustering_filter")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _cf_stats.sstables_checked_by_clustering_filter)
+    ));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "clustering_filter")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _cf_stats.clustering_filter_fast_path_count)
+    ));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "clustering_filter")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _cf_stats.surviving_sstables_after_clustering_filter)
     ));
 
     _collectd.push_back(

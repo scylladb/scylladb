@@ -799,7 +799,7 @@ void sstable::write_toc(const io_priority_class& pc) {
         // the generation of a sstable that exists.
         f.close().get();
         remove_file(file_path).get();
-        throw std::runtime_error(sprint("SSTable write failed due to existence of TOC file for generation %ld of %s.%s", _generation, _ks, _cf));
+        throw std::runtime_error(sprint("SSTable write failed due to existence of TOC file for generation %ld of %s.%s", _generation, _schema->ks_name(), _schema->cf_name()));
     }
 
     file_output_stream_options options;
@@ -842,7 +842,7 @@ future<> sstable::seal_sstable() {
             return sstable_write_io_check([&] { return dir_f.close(); });
         }).then([this, dir_f] {
             // If this point was reached, sstable should be safe in disk.
-            sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", _generation, _ks, _cf);
+            sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", _generation, _schema->ks_name(), _schema->cf_name());
         });
     });
 }
@@ -969,6 +969,84 @@ void sstable::write_compression(const io_priority_class& pc) {
     write_simple<component_type::CompressionInfo>(_compression, pc);
 }
 
+void sstable::validate_min_max_metadata() {
+    auto entry = _statistics.contents.find(metadata_type::Stats);
+    if (entry == _statistics.contents.end()) {
+        throw std::runtime_error("Stats metadata not available");
+    }
+    auto& p = entry->second;
+    if (!p) {
+        throw std::runtime_error("Statistics is malformed");
+    }
+
+    stats_metadata& s = *static_cast<stats_metadata *>(p.get());
+    auto is_composite_valid = [] (const bytes& b) {
+        auto v = composite_view(b);
+        try {
+            size_t s = 0;
+            for (auto& c : v.components()) {
+                s += c.first.size() + sizeof(composite::size_type) + sizeof(composite::eoc_type);
+            }
+            return s == b.size();
+        } catch (marshal_exception&) {
+            return false;
+        }
+    };
+    auto clear_incorrect_min_max_column_names = [&s] {
+        s.min_column_names.elements.clear();
+        s.max_column_names.elements.clear();
+    };
+    auto& min_column_names = s.min_column_names.elements;
+    auto& max_column_names = s.max_column_names.elements;
+
+    if (min_column_names.empty() && max_column_names.empty()) {
+        return;
+    }
+
+    // The min/max metadata is wrong if:
+    // 1) it's not empty and schema defines no clustering key.
+    // 2) their size differ.
+    // 3) column name is stored instead of clustering value.
+    // 4) clustering component is stored as composite.
+    if ((!_schema->clustering_key_size() && (min_column_names.size() || max_column_names.size())) ||
+            (min_column_names.size() != max_column_names.size())) {
+        clear_incorrect_min_max_column_names();
+        return;
+    }
+
+    for (auto i = 0U; i < min_column_names.size(); i++) {
+        if (_schema->get_column_definition(min_column_names[i].value) || _schema->get_column_definition(max_column_names[i].value)) {
+            clear_incorrect_min_max_column_names();
+            break;
+        }
+
+        if (_schema->is_compound() && _schema->clustering_key_size() > 1 && _schema->is_dense() &&
+                (is_composite_valid(min_column_names[i].value) || is_composite_valid(max_column_names[i].value))) {
+            clear_incorrect_min_max_column_names();
+            break;
+        }
+    }
+}
+
+void sstable::set_clustering_components_ranges() {
+    if (!_schema->clustering_key_size()) {
+        return;
+    }
+    auto& min_column_names = get_stats_metadata().min_column_names.elements;
+    auto& max_column_names = get_stats_metadata().max_column_names.elements;
+
+    auto s = std::min(min_column_names.size(), max_column_names.size());
+    _clustering_components_ranges.reserve(s);
+    for (auto i = 0U; i < s; i++) {
+        auto r = nonwrapping_range<bytes_view>({{ min_column_names[i].value, true }}, {{ max_column_names[i].value, true }});
+        _clustering_components_ranges.push_back(std::move(r));
+    }
+}
+
+const std::vector<nonwrapping_range<bytes_view>>& sstable::clustering_components_ranges() const {
+    return _clustering_components_ranges;
+}
+
 future<> sstable::read_statistics(const io_priority_class& pc) {
     return read_simple<component_type::Statistics>(_statistics, pc);
 }
@@ -1029,6 +1107,8 @@ future<> sstable::open_data() {
               _index_file_size = size;
             });
         }).then([this] {
+            this->set_clustering_components_ranges();
+
             // Get disk usage for this sstable (includes all components).
             _bytes_on_disk = 0;
             return do_for_each(_components, [this] (component_type c) {
@@ -1065,6 +1145,8 @@ future<> sstable::load() {
     return read_toc().then([this] {
         return read_statistics(default_priority_class());
     }).then([this] {
+        validate_min_max_metadata();
+        set_clustering_components_ranges();
         return read_compression(default_priority_class());
     }).then([this] {
         return read_filter(default_priority_class());
@@ -1867,7 +1949,7 @@ const bool sstable::has_component(component_type f) const {
 }
 
 const sstring sstable::filename(component_type f) const {
-    return filename(_dir, _ks, _cf, _version, _generation, _format, f);
+    return filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
 }
 
 std::vector<sstring> sstable::component_filenames() const {
@@ -1901,7 +1983,7 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
 
 future<> sstable::create_links(sstring dir, int64_t generation) const {
     // TemporaryTOC is always first, TOC is always last
-    auto dst = sstable::filename(dir, _ks, _cf, _version, generation, _format, component_type::TemporaryTOC);
+    auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
     return sstable_write_io_check(::link_file, filename(component_type::TOC), dst).then([dir] {
         return sstable_write_io_check(sync_directory, dir);
     }).then([this, dir, generation] {
@@ -1910,14 +1992,14 @@ future<> sstable::create_links(sstring dir, int64_t generation) const {
             if (comp == component_type::TOC) {
                 return make_ready_future<>();
             }
-            auto dst = sstable::filename(dir, _ks, _cf, _version, generation, _format, comp);
+            auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, comp);
             return sstable_write_io_check(::link_file, this->filename(comp), dst);
         });
     }).then([dir] {
         return sstable_write_io_check(sync_directory, dir);
     }).then([dir, this, generation] {
-        auto src = sstable::filename(dir, _ks, _cf, _version, generation, _format, component_type::TemporaryTOC);
-        auto dst = sstable::filename(dir, _ks, _cf, _version, generation, _format, component_type::TOC);
+        auto src = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
+        auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TOC);
         return sstable_write_io_check([&] {
             return engine().rename_file(src, dst);
         });
@@ -2296,8 +2378,8 @@ sstable::get_sstable_key_range(const schema& s) {
     });
 }
 
-void sstable::mark_sstable_for_deletion(sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f) {
-    auto sst = sstable(ks, cf, dir, generation, v, f);
+void sstable::mark_sstable_for_deletion(const schema_ptr& schema, sstring dir, int64_t generation, version_types v, format_types f) {
+    auto sst = sstable(schema, dir, generation, v, f);
     sst.mark_for_deletion();
 }
 

@@ -358,6 +358,7 @@ public:
 };
 
 class serialized_compare;
+class serialized_tri_compare;
 class user_type_impl;
 
 class abstract_type : public enable_shared_from_this<abstract_type> {
@@ -373,6 +374,7 @@ public:
     virtual bool less(bytes_view v1, bytes_view v2) const = 0;
     // returns a callable that can be called with two byte_views, and calls this->less() on them.
     serialized_compare as_less_comparator() const ;
+    serialized_tri_compare as_tri_comparator() const ;
     static data_type parse_type(const sstring& name);
     virtual size_t hash(bytes_view v) const = 0;
     virtual bool equal(bytes_view v1, bytes_view v2) const {
@@ -1058,6 +1060,21 @@ inline
 serialized_compare
 abstract_type::as_less_comparator() const {
     return serialized_compare(shared_from_this());
+}
+
+class serialized_tri_compare {
+    data_type _type;
+public:
+    serialized_tri_compare(data_type type) : _type(type) {}
+    bool operator()(const bytes_view& v1, const bytes_view& v2) const {
+        return _type->compare(v1, v2);
+    }
+};
+
+inline
+serialized_tri_compare
+abstract_type::as_tri_comparator() const {
+    return serialized_tri_compare(shared_from_this());
 }
 
 using key_compare = serialized_compare;

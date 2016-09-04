@@ -300,6 +300,15 @@ using sstable_list = sstables::sstable_list;
 struct cf_stats {
     int64_t pending_memtables_flushes_count = 0;
     int64_t pending_memtables_flushes_bytes = 0;
+
+    // number of time the clustering filter was executed
+    int64_t clustering_filter_count = 0;
+    // sstables considered by the filter (so dividing this by the previous one we get average sstables per read)
+    int64_t sstables_checked_by_clustering_filter = 0;
+    // number of times the filter passed the fast-path checks
+    int64_t clustering_filter_fast_path_count = 0;
+    // how many sstables survived the clustering key checks
+    int64_t surviving_sstables_after_clustering_filter = 0;
 };
 
 class column_family {
@@ -673,6 +682,10 @@ public:
 
     const stats& get_stats() const {
         return _stats;
+    }
+
+    ::cf_stats* cf_stats() {
+        return _config.cf_stats;
     }
 
     compaction_manager& get_compaction_manager() const {

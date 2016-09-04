@@ -778,9 +778,6 @@ sstables::sstable::read_row(schema_ptr schema,
 
     assert(schema);
 
-    if (!filter_has_key(key)) {
-        return make_ready_future<streamed_mutation_opt>();
-    }
     return find_disk_ranges(schema, key, slice, pc).then([this, &key, &slice, &pc, schema] (disk_read_range toread) {
         if (!toread.found_row()) {
             _filter_tracker.add_false_positive();
