@@ -249,7 +249,7 @@ struct string_type_impl : public concrete_type<sstring> {
             }
         } else {
             try {
-                boost::locale::conv::utf_to_utf<char>(v.data(), v.end(), boost::locale::conv::stop);
+                boost::locale::conv::utf_to_utf<char>(v.begin(), v.end(), boost::locale::conv::stop);
             } catch (const boost::locale::conv::conversion_error& ex) {
                 throw marshal_exception(ex.what());
             }
@@ -533,7 +533,7 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
             return bytes();
         }
         static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
-        if (!std::regex_match(s.data(), re)) {
+        if (!std::regex_match(s.begin(), s.end(), re)) {
             throw marshal_exception();
         }
         utils::UUID v(s);
@@ -799,7 +799,7 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
             return bytes();
         }
         static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
-        if (!std::regex_match(s.data(), re)) {
+        if (!std::regex_match(s.begin(), s.end(), re)) {
             throw marshal_exception();
         }
         utils::UUID v(s);
@@ -878,7 +878,7 @@ struct inet_addr_type_impl : concrete_type<net::ipv4_address> {
         }
         native_type ipv4;
         try {
-            ipv4 = net::ipv4_address(s.data());
+            ipv4 = net::ipv4_address(std::string(s.data(), s.size()));
         } catch (...) {
             throw marshal_exception();
         }
