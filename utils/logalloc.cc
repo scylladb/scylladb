@@ -1156,6 +1156,8 @@ private:
 
     template<typename Func>
     void for_each_live(segment* seg, Func&& func) {
+        // scylla-gdb.py:scylla_lsa_segment is coupled with this implementation.
+
         static_assert(std::is_same<void, std::result_of_t<Func(object_descriptor*, void*)>>::value, "bad Func signature");
 
         size_t offset = 0;

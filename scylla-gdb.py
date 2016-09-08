@@ -379,6 +379,47 @@ class scylla_lsa_zones(gdb.Command):
                 .format(z_base=int(zone['_base']), z_size=int(zone['_segments']['_bits_count']),
                     z_used=int(zone['_used_segment_count'])));
 
+names = {} # addr (int) -> name (str)
+def resolve(addr):
+    if addr in names:
+        return names[addr]
+
+    infosym = gdb.execute('info symbol 0x%x' % (addr), False, True)
+    if infosym.startswith('No symbol'):
+        name = None
+    else:
+        name = infosym[:infosym.find('in section')]
+    names[addr] = name
+    return name
+
+class scylla_lsa_segment(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla lsa-segment', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    def invoke(self, arg, from_tty):
+        # See logalloc::region_impl::for_each_live()
+        ptr = int(arg, 0)
+        seg = gdb.parse_and_eval('(char*)(%d & ~(\'logalloc\'::segment::size - 1))' % (ptr))
+        segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
+        obj_desc_size = int(gdb.parse_and_eval('sizeof(\'logalloc\'::region_impl::object_descriptor)'))
+        obj_desc_ptr = gdb.lookup_type('logalloc::region_impl::object_descriptor').pointer()
+        offset = 0
+        while offset < segment_size:
+            padding = seg[offset] >> 2
+            offset += padding
+            if seg[offset] & 2:
+                break;
+            flags = seg[offset]
+            desc = (seg + offset).reinterpret_cast(obj_desc_ptr)
+            offset += obj_desc_size;
+            addr = seg + offset
+            if flags & 1:
+                migrator_name = resolve(int(desc['_migrator'])) or ('0x%x' % (addr))
+                gdb.write('0x%x: live size=%d migrator=%s\n' % (addr, desc['_size'], migrator_name))
+            else:
+                gdb.write('0x%x: free size=%d\n' % (addr, desc['_size']))
+            offset += desc['_size'];
+
 class scylla_timers(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla timers', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
@@ -625,6 +666,7 @@ scylla_mem_ranges()
 scylla_mem_range()
 scylla_lsa()
 scylla_lsa_zones()
+scylla_lsa_segment()
 scylla_timers()
 scylla_apply()
 scylla_shard()
