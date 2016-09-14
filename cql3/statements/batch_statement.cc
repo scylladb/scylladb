@@ -58,7 +58,7 @@ bool batch_statement::depends_on_column_family(const sstring& cf_name) const
 }
 
 void batch_statement::verify_batch_size(const std::vector<mutation>& mutations) {
-    size_t warn_threshold = service::get_local_storage_proxy().get_db().local().get_config().batch_size_warn_threshold_in_kb();
+    size_t warn_threshold = service::get_local_storage_proxy().get_db().local().get_config().batch_size_warn_threshold_in_kb() * 1024;
 
     class my_partition_visitor : public mutation_partition_visitor {
     public:
@@ -87,17 +87,15 @@ void batch_statement::verify_batch_size(const std::vector<mutation>& mutations) 
         m.partition().accept(*m.schema(), v);
     }
 
-    auto size = v.size / 1024;
-
-    if (size > warn_threshold) {
+    if (v.size > warn_threshold) {
         std::unordered_set<sstring> ks_cf_pairs;
         for (auto&& m : mutations) {
             ks_cf_pairs.insert(m.schema()->ks_name() + "." + m.schema()->cf_name());
         }
         _logger.warn(
                         "Batch of prepared statements for {} is of size {}, exceeding specified threshold of {} by {}.{}",
-                        join(", ", ks_cf_pairs), size, warn_threshold,
-                        size - warn_threshold, "");
+                        join(", ", ks_cf_pairs), v.size, warn_threshold,
+                        v.size - warn_threshold, "");
     }
 }
 
