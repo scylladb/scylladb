@@ -1601,7 +1601,15 @@ database::setup_collectd() {
                 , scollectd::per_cpu_plugin_instance
                 , "bytes", "dirty")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
-            return dirty_memory_region_group().memory_used();
+            return _dirty_memory_manager.real_dirty_memory();
+    })));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("memory"
+                , scollectd::per_cpu_plugin_instance
+                , "bytes", "virtual_dirty")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
+            return _dirty_memory_manager.virtual_dirty_memory();
     })));
 
     _collectd.push_back(
