@@ -807,17 +807,21 @@ row_cache::make_reader(schema_ptr s,
             if (i != _partitions.end() && i != _partitions.begin()) {
                 cache_entry& e = *i;
                 _tracker.touch(e);
-                on_hit();
                 upgrade_entry(e);
+                mutation_reader reader;
                 if (e.wide_partition()) {
+                    reader = _underlying(s, range, slice, pc, std::move(trace_state));
                     _tracker.on_uncached_wide_partition();
-                    return _underlying(s, range, slice, pc, std::move(trace_state));
+                } else {
+                    reader = make_reader_returning(e.read(*this, s, slice));
                 }
-                return make_reader_returning(e.read(*this, s, slice));
+                on_hit();
+                return reader;
             } else {
-                on_miss();
-                return make_mutation_reader<single_partition_populating_reader>(s, *this, _underlying,
+                auto reader = make_mutation_reader<single_partition_populating_reader>(s, *this, _underlying,
                     _underlying(_schema, range, query::full_slice, pc, trace_state), pc, slice, trace_state);
+                on_miss();
+                return reader;
             }
           });
         });
