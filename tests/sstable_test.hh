@@ -137,12 +137,14 @@ public:
         _sst->_statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
         _sst->_summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
         _sst->_summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
+        _sst->set_first_and_last_keys();
     }
 
     void set_values(sstring first_key, sstring last_key, stats_metadata stats) {
         _sst->_statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
         _sst->_summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
         _sst->_summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
+        _sst->set_first_and_last_keys();
     }
 };
 

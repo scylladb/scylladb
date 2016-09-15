@@ -1108,6 +1108,7 @@ future<> sstable::open_data() {
             });
         }).then([this] {
             this->set_clustering_components_ranges();
+            this->set_first_and_last_keys();
 
             // Get disk usage for this sstable (includes all components).
             _bytes_on_disk = 0;
@@ -2095,32 +2096,41 @@ future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, cons
     });
 }
 
-partition_key
-sstable::get_first_partition_key() const {
-    if (_summary.first_key.value.empty()) {
-        throw std::runtime_error("first key of summary is empty");
+void sstable::set_first_and_last_keys() {
+    if (_first && _last) {
+        return;
     }
-    return key::from_bytes(_summary.first_key.value).to_partition_key(*_schema);
+    auto decorate_key = [this] (const char *m, const bytes& value) {
+        if (value.empty()) {
+            throw std::runtime_error(sprint("%s key of summary of %s is empty", m, get_filename()));
+        }
+        auto pk = key::from_bytes(value).to_partition_key(*_schema);
+        return dht::global_partitioner().decorate_key(*_schema, std::move(pk));
+    };
+    _first = decorate_key("first", _summary.first_key.value);
+    _last = decorate_key("last", _summary.last_key.value);
 }
 
-partition_key
-sstable::get_last_partition_key() const {
-    if (_summary.last_key.value.empty()) {
-        throw std::runtime_error("last key of summary is empty");
+const partition_key& sstable::get_first_partition_key() const {
+    return get_first_decorated_key().key();
+ }
+
+const partition_key& sstable::get_last_partition_key() const {
+    return get_last_decorated_key().key();
+}
+
+const dht::decorated_key& sstable::get_first_decorated_key() const {
+    if (!_first) {
+        throw std::runtime_error(sprint("first key of %s wasn't set", get_filename()));
     }
-    return key::from_bytes(_summary.last_key.value).to_partition_key(*_schema);
+    return *_first;
 }
 
-dht::decorated_key sstable::get_first_decorated_key() const {
-    // FIXME: we can avoid generating the decorated key over and over again by
-    // storing it in the sstable object. The same applies to last().
-    auto pk = get_first_partition_key();
-    return dht::global_partitioner().decorate_key(*_schema, std::move(pk));
-}
-
-dht::decorated_key sstable::get_last_decorated_key() const {
-    auto pk = get_last_partition_key();
-    return dht::global_partitioner().decorate_key(*_schema, std::move(pk));
+const dht::decorated_key& sstable::get_last_decorated_key() const {
+    if (!_last) {
+        throw std::runtime_error(sprint("last key of %s wasn't set", get_filename()));
+    }
+    return *_last;
 }
 
 int sstable::compare_by_first_key(const sstable& other) const {
@@ -2372,9 +2382,8 @@ future<range<partition_key>>
 sstable::get_sstable_key_range(const schema& s) {
     auto fut = read_summary(default_priority_class());
     return std::move(fut).then([this, &s] () mutable {
-        auto first = get_first_partition_key();
-        auto last = get_last_partition_key();
-        return make_ready_future<range<partition_key>>(range<partition_key>::make(first, last));
+        this->set_first_and_last_keys();
+        return make_ready_future<range<partition_key>>(range<partition_key>::make(get_first_partition_key(), get_last_partition_key()));
     });
 }
 
