@@ -394,6 +394,9 @@ public:
             return bounds_range_type::bound(prefix, is_inclusive(b));
         };
         auto range = bounds_range_type(read_bound(statements::bound::START), read_bound(statements::bound::END));
+        if (query::is_wrap_around(range, *_schema)) {
+            return {};
+        }
         return { range };
     }
 #if 0

@@ -29,6 +29,7 @@
 #include "mutation_partition_serializer.hh"
 #include "query-result-reader.hh"
 #include "query_result_merger.hh"
+#include "clustering_bounds_comparator.hh"
 
 namespace query {
 
@@ -233,6 +234,11 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
     std::move(partitions).end_partitions().end_query_result();
 
     return make_foreign(make_lw_shared<query::result>(std::move(w), row_count));
+}
+
+bool is_wrap_around(const query::clustering_range& r, const schema& s) {
+    auto bounds = bound_view::from_range(s, r);
+    return bound_view::compare(s)(bounds.second, bounds.first);
 }
 
 }
