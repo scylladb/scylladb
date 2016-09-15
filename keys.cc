@@ -23,6 +23,7 @@
 
 #include "keys.hh"
 #include "dht/i_partitioner.hh"
+#include "clustering_bounds_comparator.hh"
 
 std::ostream& operator<<(std::ostream& out, const partition_key& pk) {
     return out << "pk{" << to_hex(pk) << "}";
@@ -52,3 +53,43 @@ partition_key_view::ring_order_tri_compare(const schema& s, partition_key_view k
     }
     return legacy_tri_compare(s, k2);
 }
+
+std::ostream& operator<<(std::ostream& out, const bound_kind k) {
+    switch(k) {
+    case bound_kind::excl_end:
+        return out << "excl end";
+    case bound_kind::incl_start:
+        return out << "incl start";
+    case bound_kind::incl_end:
+        return out << "incl end";
+    case bound_kind::excl_start:
+        return out << "excl start";
+    }
+    abort();
+}
+
+bound_kind invert_kind(bound_kind k) {
+    switch(k) {
+    case bound_kind::excl_start: return bound_kind::incl_end;
+    case bound_kind::incl_start: return bound_kind::excl_end;
+    case bound_kind::excl_end:   return bound_kind::incl_start;
+    case bound_kind::incl_end:   return bound_kind::excl_start;
+    }
+    abort();
+}
+
+int32_t weight(bound_kind k) {
+    switch(k) {
+    case bound_kind::excl_end:
+        return -2;
+    case bound_kind::incl_start:
+        return -1;
+    case bound_kind::incl_end:
+        return 1;
+    case bound_kind::excl_start:
+        return 2;
+    }
+    abort();
+}
+
+const thread_local clustering_key_prefix bound_view::empty_prefix = clustering_key::make_empty();

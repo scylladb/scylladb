@@ -394,7 +394,11 @@ public:
             return bounds_range_type::bound(prefix, is_inclusive(b));
         };
         auto range = bounds_range_type(read_bound(statements::bound::START), read_bound(statements::bound::END));
-        return { range };
+        auto bounds = bound_view::from_range(range);
+        if (bound_view::compare(*_schema)(bounds.second, bounds.first)) {
+            return { };
+        }
+        return { std::move(range) };
     }
 #if 0
         @Override
