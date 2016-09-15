@@ -334,15 +334,15 @@ public:
     // Returns the total bytes of all components.
     uint64_t bytes_on_disk();
 
-    partition_key get_first_partition_key(const schema& s) const;
-    partition_key get_last_partition_key(const schema& s) const;
+    partition_key get_first_partition_key() const;
+    partition_key get_last_partition_key() const;
 
-    dht::decorated_key get_first_decorated_key(const schema& s) const;
-    dht::decorated_key get_last_decorated_key(const schema& s) const;
+    dht::decorated_key get_first_decorated_key() const;
+    dht::decorated_key get_last_decorated_key() const;
 
     // SSTable comparator using the first key (decorated key).
     // Return values are those of a trichotomic comparison.
-    int compare_by_first_key(const schema& s, const sstable& other) const;
+    int compare_by_first_key(const sstable& other) const;
 
     // SSTable comparator using the max timestamp.
     // Return values are those of a trichotomic comparison.

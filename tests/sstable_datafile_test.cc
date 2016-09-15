@@ -1695,11 +1695,10 @@ static shared_sstable get_sstable(const lw_shared_ptr<column_family>& cf, int64_
 }
 
 static bool sstable_overlaps(const lw_shared_ptr<column_family>& cf, int64_t gen1, int64_t gen2) {
-    const schema& s = *cf->schema();
     auto candidate1 = get_sstable(cf, gen1);
-    auto range1 = range<dht::token>::make(candidate1->get_first_decorated_key(s)._token, candidate1->get_last_decorated_key(s)._token);
+    auto range1 = range<dht::token>::make(candidate1->get_first_decorated_key()._token, candidate1->get_last_decorated_key()._token);
     auto candidate2 = get_sstable(cf, gen2);
-    auto range2 = range<dht::token>::make(candidate2->get_first_decorated_key(s)._token, candidate2->get_last_decorated_key(s)._token);
+    auto range2 = range<dht::token>::make(candidate2->get_first_decorated_key()._token, candidate2->get_last_decorated_key()._token);
     return range1.overlaps(range2, dht::token_comparator());
 }
 

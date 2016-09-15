@@ -2096,35 +2096,35 @@ future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, cons
 }
 
 partition_key
-sstable::get_first_partition_key(const schema& s) const {
+sstable::get_first_partition_key() const {
     if (_summary.first_key.value.empty()) {
         throw std::runtime_error("first key of summary is empty");
     }
-    return key::from_bytes(_summary.first_key.value).to_partition_key(s);
+    return key::from_bytes(_summary.first_key.value).to_partition_key(*_schema);
 }
 
 partition_key
-sstable::get_last_partition_key(const schema& s) const {
+sstable::get_last_partition_key() const {
     if (_summary.last_key.value.empty()) {
         throw std::runtime_error("last key of summary is empty");
     }
-    return key::from_bytes(_summary.last_key.value).to_partition_key(s);
+    return key::from_bytes(_summary.last_key.value).to_partition_key(*_schema);
 }
 
-dht::decorated_key sstable::get_first_decorated_key(const schema& s) const {
+dht::decorated_key sstable::get_first_decorated_key() const {
     // FIXME: we can avoid generating the decorated key over and over again by
     // storing it in the sstable object. The same applies to last().
-    auto pk = get_first_partition_key(s);
-    return dht::global_partitioner().decorate_key(s, std::move(pk));
+    auto pk = get_first_partition_key();
+    return dht::global_partitioner().decorate_key(*_schema, std::move(pk));
 }
 
-dht::decorated_key sstable::get_last_decorated_key(const schema& s) const {
-    auto pk = get_last_partition_key(s);
-    return dht::global_partitioner().decorate_key(s, std::move(pk));
+dht::decorated_key sstable::get_last_decorated_key() const {
+    auto pk = get_last_partition_key();
+    return dht::global_partitioner().decorate_key(*_schema, std::move(pk));
 }
 
-int sstable::compare_by_first_key(const schema& s, const sstable& other) const {
-    return get_first_decorated_key(s).tri_compare(s, other.get_first_decorated_key(s));
+int sstable::compare_by_first_key(const sstable& other) const {
+    return get_first_decorated_key().tri_compare(*_schema, other.get_first_decorated_key());
 }
 
 double sstable::get_compression_ratio() const {
@@ -2372,8 +2372,8 @@ future<range<partition_key>>
 sstable::get_sstable_key_range(const schema& s) {
     auto fut = read_summary(default_priority_class());
     return std::move(fut).then([this, &s] () mutable {
-        auto first = get_first_partition_key(s);
-        auto last = get_last_partition_key(s);
+        auto first = get_first_partition_key();
+        auto last = get_last_partition_key();
         return make_ready_future<range<partition_key>>(range<partition_key>::make(first, last));
     });
 }

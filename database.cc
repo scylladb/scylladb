@@ -1269,8 +1269,8 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
 static bool needs_cleanup(const lw_shared_ptr<sstables::sstable>& sst,
                    const lw_shared_ptr<std::vector<range<dht::token>>>& owned_ranges,
                    schema_ptr s) {
-    auto first = sst->get_first_partition_key(*s);
-    auto last = sst->get_last_partition_key(*s);
+    auto first = sst->get_first_partition_key();
+    auto last = sst->get_last_partition_key();
     auto first_token = dht::global_partitioner().get_token(*s, first);
     auto last_token = dht::global_partitioner().get_token(*s, last);
     range<dht::token> sst_token_range = range<dht::token>::make(first_token, last_token);

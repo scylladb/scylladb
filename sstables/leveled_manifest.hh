@@ -165,20 +165,20 @@ public:
         const schema& s = *_schema;
 
         _generations[level].sort([&s] (auto& i, auto& j) {
-            return i->compare_by_first_key(s, *j) < 0;
+            return i->compare_by_first_key(*j) < 0;
         });
 
         std::vector<sstables::shared_sstable> out_of_order_sstables;
 
         for (auto& current : _generations[level]) {
-            auto current_first = current->get_first_decorated_key(s);
+            auto current_first = current->get_first_decorated_key();
 
-            if (previous != nullptr && current_first.tri_compare(s, previous->get_last_decorated_key(s)) <= 0) {
+            if (previous != nullptr && current_first.tri_compare(s, previous->get_last_decorated_key()) <= 0) {
 
                 logger.warn("At level {}, {} [{}, {}] overlaps {} [{}, {}]. This could be caused by the fact that you have dropped " \
                     "sstables from another node into the data directory. Sending back to L0.",
-                    level, previous->get_filename(), previous->get_first_partition_key(s), previous->get_last_partition_key(s),
-                    current->get_filename(), current->get_first_partition_key(s), current->get_last_partition_key(s));
+                    level, previous->get_filename(), previous->get_first_partition_key(), previous->get_last_partition_key(),
+                    current->get_filename(), current->get_first_partition_key(), current->get_last_partition_key());
 
                 out_of_order_sstables.push_back(current);
             } else {
@@ -209,14 +209,14 @@ public:
         auto copy_level = _generations[level];
         copy_level.push_back(sstable);
         copy_level.sort([&s] (auto& i, auto& j) {
-            return i->compare_by_first_key(s, *j) < 0;
+            return i->compare_by_first_key(*j) < 0;
         });
 
         const sstables::sstable *previous = nullptr;
         for (auto& current : copy_level) {
             if (previous != nullptr) {
-                auto current_first = current->get_first_decorated_key(s);
-                auto previous_last = previous->get_last_decorated_key(s);
+                auto current_first = current->get_first_decorated_key();
+                auto previous_last = previous->get_last_decorated_key();
 
                 if (current_first.tri_compare(s, previous_last) <= 0) {
                     return false;
@@ -504,13 +504,13 @@ public:
         auto it = candidates.begin();
         auto& first_sstable = *it;
         it++;
-        dht::token first = first_sstable->get_first_decorated_key(s)._token;
-        dht::token last = first_sstable->get_last_decorated_key(s)._token;
+        dht::token first = first_sstable->get_first_decorated_key()._token;
+        dht::token last = first_sstable->get_last_decorated_key()._token;
         while (it != candidates.end()) {
             auto& candidate_sstable = *it;
             it++;
-            dht::token first_candidate = candidate_sstable->get_first_decorated_key(s)._token;
-            dht::token last_candidate = candidate_sstable->get_last_decorated_key(s)._token;
+            dht::token first_candidate = candidate_sstable->get_first_decorated_key()._token;
+            dht::token last_candidate = candidate_sstable->get_last_decorated_key()._token;
 
             first = first <= first_candidate? first : first_candidate;
             last = last >= last_candidate ? last : last_candidate;
@@ -520,7 +520,7 @@ public:
 
     template <typename T>
     static std::vector<sstables::shared_sstable> overlapping(const schema& s, sstables::shared_sstable& sstable, T& others) {
-        return overlapping(s, sstable->get_first_decorated_key(s)._token, sstable->get_last_decorated_key(s)._token, others);
+        return overlapping(s, sstable->get_first_decorated_key()._token, sstable->get_last_decorated_key()._token, others);
     }
 
     /**
@@ -534,7 +534,7 @@ public:
         auto range = ::range<dht::token>::make(start, end);
 
         for (auto& candidate : sstables) {
-            auto candidate_range = ::range<dht::token>::make(candidate->get_first_decorated_key(s)._token, candidate->get_last_decorated_key(s)._token);
+            auto candidate_range = ::range<dht::token>::make(candidate->get_first_decorated_key()._token, candidate->get_last_decorated_key()._token);
 
             if (range.overlaps(candidate_range, dht::token_comparator())) {
                 overlapped.push_back(candidate);
@@ -658,7 +658,7 @@ public:
 
         // for non-L0 compactions, pick up where we left off last time
         get_level(level).sort([&s] (auto& i, auto& j) {
-            return i->compare_by_first_key(s, *j) < 0;
+            return i->compare_by_first_key(*j) < 0;
         });
         int start = 0; // handles case where the prior compaction touched the very last range
 #if 0

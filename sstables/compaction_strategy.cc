@@ -187,8 +187,8 @@ public:
         return std::vector<shared_sstable>(result.begin(), result.end());
     }
     virtual void insert(shared_sstable sst) override {
-        auto first = sst->get_first_decorated_key(*_schema).token();
-        auto last = sst->get_last_decorated_key(*_schema).token();
+        auto first = sst->get_first_decorated_key().token();
+        auto last = sst->get_last_decorated_key().token();
         using bound = query::partition_range::bound;
         _sstables.add({
                 make_interval(
@@ -198,8 +198,8 @@ public:
                 value_set({sst})});
     }
     virtual void erase(shared_sstable sst) override {
-        auto first = sst->get_first_decorated_key(*_schema).token();
-        auto last = sst->get_last_decorated_key(*_schema).token();
+        auto first = sst->get_first_decorated_key().token();
+        auto last = sst->get_last_decorated_key().token();
         using bound = query::partition_range::bound;
         _sstables.subtract({
                 make_interval(
