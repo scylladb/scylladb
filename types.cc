@@ -773,11 +773,9 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
         }
 
         if (v1 == 1) {
-            auto c1 = timeuuid_type_impl::compare_bytes(b1, b2);
-            auto c2 = timeuuid_type_impl::compare_bytes(b2, b1);
-            // Require strict ordering
-            if (c1 != c2) {
-                return c1;
+            auto c = timeuuid_type_impl::compare_bytes(b1, b2);
+            if (c) {
+                return c < 0;
             }
         }
         return less_unsigned(b1, b2);
