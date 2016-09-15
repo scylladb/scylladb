@@ -30,7 +30,7 @@
 
 BOOST_AUTO_TEST_CASE(test_empty_fragmented_stream) {
     bytes_ostream b;
-    utils::fragmented_input_stream in(b.fragments().begin(), b.size());
+    utils::input_stream::fragmented in(b.fragments().begin(), b.size());
     BOOST_REQUIRE_EQUAL(in.size(), 0);
     try {
         in.skip(5);
@@ -62,7 +62,7 @@ BOOST_AUTO_TEST_CASE(test_fragmented_stream) {
     bytes_ostream b;
     b.write(big_buffer);
 
-    utils::fragmented_input_stream in(b.fragments().begin(), b.size());
+    utils::input_stream::fragmented in(b.fragments().begin(), b.size());
     BOOST_REQUIRE_EQUAL(in.size(), b.size());
 
     auto in2 = in;

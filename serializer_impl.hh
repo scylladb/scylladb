@@ -258,10 +258,11 @@ struct serializer<std::map<K, V>> {
     }
 };
 
+template<typename Iterator>
 class deserialized_bytes_proxy {
-    utils::input_stream _stream;
+    seastar::memory_stream<Iterator> _stream;
 public:
-    explicit deserialized_bytes_proxy(utils::input_stream stream)
+    explicit deserialized_bytes_proxy(seastar::memory_stream<Iterator> stream)
         : _stream(std::move(stream)) { }
 
     [[gnu::always_inline]]
@@ -289,9 +290,9 @@ public:
 template<>
 struct serializer<bytes> {
     template<typename Input>
-    static deserialized_bytes_proxy read(Input& in) {
+    static deserialized_bytes_proxy<typename Input::iterator_type> read(Input& in) {
         auto sz = deserialize(in, boost::type<uint32_t>());
-        return deserialized_bytes_proxy(in.read_substream(sz));
+        return deserialized_bytes_proxy<typename Input::iterator_type>(in.read_substream(sz));
     }
     template<typename Output>
     static void write(Output& out, bytes_view v) {
@@ -452,7 +453,7 @@ T deserialize_from_buffer(const Buffer& buf, boost::type<T> type, size_t head_sp
 
 inline
 utils::input_stream as_input_stream(bytes_view b) {
-    return seastar::simple_input_stream(reinterpret_cast<const char*>(b.begin()), b.size());
+    return utils::input_stream::simple(reinterpret_cast<const char*>(b.begin()), b.size());
 }
 
 inline
@@ -460,7 +461,7 @@ utils::input_stream as_input_stream(const bytes_ostream& b) {
     if (b.is_linearized()) {
         return as_input_stream(b.view());
     }
-    return utils::fragmented_input_stream(b.fragments().begin(), b.size());
+    return utils::input_stream::fragmented(b.fragments().begin(), b.size());
 }
 
 template<typename Output, typename ...T>
@@ -478,7 +479,7 @@ void serialize(Output& out, const unknown_variant_type& v) {
 }
 template<typename Input>
 unknown_variant_type deserialize(Input& in, boost::type<unknown_variant_type>) {
-    return utils::input_stream::with_stream(in, [] (auto& in) {
+    return seastar::with_serialized_stream(in, [] (auto& in) {
         auto size = deserialize(in, boost::type<size_type>());
         auto index = deserialize(in, boost::type<size_type>());
         auto sz = size - sizeof(size_type) * 2;
