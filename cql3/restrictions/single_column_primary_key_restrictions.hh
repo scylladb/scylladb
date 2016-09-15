@@ -352,7 +352,9 @@ single_column_primary_key_restrictions<partition_key>::bounds_ranges(const query
 template<>
 std::vector<query::clustering_range>
 single_column_primary_key_restrictions<clustering_key_prefix>::bounds_ranges(const query_options& options) const {
-    auto bounds = compute_bounds(options);
+    auto wrapping_bounds = compute_bounds(options);
+    auto bounds = boost::copy_range<query::clustering_row_ranges>(wrapping_bounds
+            | boost::adaptors::filtered([&](auto&& r) { return !query::is_wrap_around(r, *_schema); }));
     auto less_cmp = clustering_key_prefix::less_compare(*_schema);
     std::sort(bounds.begin(), bounds.end(), [&] (query::clustering_range& x, query::clustering_range& y) {
         if (!x.start() && !y.start()) {
