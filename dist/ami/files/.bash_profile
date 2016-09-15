@@ -87,7 +87,7 @@ else
 			tput bold
 			echo "    $TYPE is not supported instance type!"
 			tput sgr0
-			echo -n "To continue startup ScyllaDB on this instance, run 'scylla_io_setup' "
+			echo -n "To continue startup ScyllaDB on this instance, run 'sudo scylla_io_setup' "
 			if [ "$ID" = "ubuntu" ]; then
 				echo "then 'initctl start scylla-server'."
 			else
