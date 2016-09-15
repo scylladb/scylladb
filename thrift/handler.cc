@@ -556,9 +556,13 @@ public:
             uint32_t row_limit;
             if (s.thrift().is_dynamic()) {
                 row_limit = request.count;
+                auto cmp = bound_view::compare(s);
                 clustering_ranges = make_non_overlapping_ranges<clustering_key_prefix>(std::move(request.column_slices), [&s](auto&& cslice) {
                     return make_clustering_range(s, cslice.start, cslice.finish);
-                }, clustering_key_prefix::prefix_equal_tri_compare(s), request.reversed);
+                }, clustering_key_prefix::prefix_equal_tri_compare(s), [cmp = std::move(cmp)](auto& range) {
+                    auto bounds = bound_view::from_range(range);
+                    return cmp(bounds.second, bounds.first);
+                }, request.reversed);
                 regular_columns.emplace_back(s.regular_begin()->id);
                 if (request.reversed) {
                     opts.set(query::partition_slice::option::reversed);
@@ -566,9 +570,10 @@ public:
             } else {
                 row_limit = query::max_rows;
                 clustering_ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
+                auto cmp = [&s](auto&& s1, auto&& s2) { return s.regular_column_name_type()->compare(s1, s2); };
                 auto ranges = make_non_overlapping_ranges<bytes>(std::move(request.column_slices), [](auto&& cslice) {
                     return make_range(cslice.start, cslice.finish);
-                }, [&s](auto&& s1, auto&& s2) { return s.regular_column_name_type()->compare(s1, s2); }, request.reversed);
+                }, cmp, [&](auto& range) { return range.is_wrap_around(cmp); }, request.reversed);
                 auto on_range = [&](auto&& range) {
                     auto start = range.start() ? s.regular_lower_bound(range.start()->value()) : s.regular_begin();
                     auto end  = range.end() ? s.regular_upper_bound(range.end()->value()) : s.regular_end();
@@ -1318,7 +1323,8 @@ private:
     }
     static query::clustering_range make_clustering_range_and_validate(const schema& s, const std::string& start, const std::string& end) {
         auto range = make_clustering_range(s, start, end);
-        if (range.is_wrap_around(clustering_key_prefix::prefix_equal_tri_compare(s))) {
+        auto bounds = bound_view::from_range(range);
+        if (bound_view::compare(s)(bounds.second, bounds.first)) {
             throw make_exception<InvalidRequestException>("Range finish must come after start in the order of traversal");
         }
         return query::clustering_range(std::move(range));
@@ -1608,22 +1614,23 @@ private:
         });
         return ret;
     }
-    template<typename RangeType, typename Comparator>
+    template<typename RangeType, typename Comparator, typename RangeComparator>
     static std::vector<nonwrapping_range<RangeType>> make_non_overlapping_ranges(
             std::vector<ColumnSlice> column_slices,
             const std::function<wrapping_range<RangeType>(ColumnSlice&&)> mapper,
             Comparator&& cmp,
+            RangeComparator&& is_wrap_around,
             bool reversed) {
         std::vector<nonwrapping_range<RangeType>> ranges;
         std::transform(column_slices.begin(), column_slices.end(), std::back_inserter(ranges), [&](auto&& cslice) {
             auto range = mapper(std::move(cslice));
-            if (!reversed && range.is_wrap_around(cmp)) {
+            if (!reversed && is_wrap_around(range)) {
                 throw make_exception<InvalidRequestException>("Column slice had start %s greater than finish %s", cslice.start, cslice.finish);
-            } else if (reversed && !range.is_wrap_around(cmp)) {
+            } else if (reversed && !is_wrap_around(range)) {
                 throw make_exception<InvalidRequestException>("Reversed column slice had start %s less than finish %s", cslice.start, cslice.finish);
             } else if (reversed) {
                 range.reverse();
-                if (range.is_wrap_around(cmp)) {
+                if (is_wrap_around(range)) {
                     // If a wrap around range is still wrapping after reverse, then it's (a, a). This is equivalent
                     // to an open ended range.
                     range = wrapping_range<RangeType>::make_open_ended_both_sides();
