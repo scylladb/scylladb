@@ -833,7 +833,15 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
 
     auto q_state = std::make_unique<cql_query_state>(client_state);
     auto& query_state = q_state->query_state;
-    q_state->options = read_options(buf);
+    if (_version == 1) {
+        std::vector<bytes_view_opt> values;
+        read_value_view_list(buf, values);
+        auto consistency = read_consistency(buf);
+        q_state->options = std::make_unique<cql3::query_options>(consistency, std::experimental::nullopt, values, false,
+                                                                 cql3::query_options::specific_options::DEFAULT, _cql_serialization_format);
+    } else {
+        q_state->options = read_options(buf);
+    }
     auto& options = *q_state->options;
     options.prepare(prepared->bound_names);
 
