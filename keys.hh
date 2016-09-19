@@ -158,8 +158,12 @@ protected:
         return TopLevel::get_compound_type(s);
     }
 public:
+    static TopLevel make_empty() {
+        return from_exploded(std::vector<bytes>());
+    }
+
     static TopLevel make_empty(const schema& s) {
-        return from_exploded(s, {});
+        return make_empty();
     }
 
     template<typename RangeOfSerializedComponents>
