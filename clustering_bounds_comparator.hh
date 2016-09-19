@@ -54,6 +54,7 @@ static inline bound_kind flip_bound_kind(bound_kind bk)
 }
 
 class bound_view {
+    const static thread_local clustering_key empty_prefix;
 public:
     const clustering_key_prefix& prefix;
     bound_kind kind;
@@ -100,10 +101,10 @@ public:
         return invert_kind(other.kind) == kind && prefix.equal(s, other.prefix);
     }
     static bound_view bottom(const schema& s) {
-        return {clustering_key_prefix::make_empty(s), bound_kind::incl_start};
+        return {empty_prefix, bound_kind::incl_start};
     }
     static bound_view top(const schema& s) {
-        return {clustering_key_prefix::make_empty(s), bound_kind::incl_end};
+        return {empty_prefix, bound_kind::incl_end};
     }
     /*
     template<template<typename> typename T, typename U>
