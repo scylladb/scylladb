@@ -75,6 +75,26 @@ class std_array:
     def __bool__(self):
         return self.__nonzero__()
 
+class std_vector:
+    def __init__(self, ref):
+        self.ref = ref
+
+    def __len__(self):
+        return self.ref['_M_impl']['_M_finish'] - self.ref['_M_impl']['_M_start']
+
+    def __iter__(self):
+        i = self.ref['_M_impl']['_M_start']
+        end = self.ref['_M_impl']['_M_finish']
+        while i != end:
+            yield i.dereference()
+            i += 1
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__nonzero__()
+
 def uint64_t(val):
     val = int(val)
     if val < 0:
