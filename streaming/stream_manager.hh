@@ -121,6 +121,7 @@ public:
     void show_streams();
 
     future<> stop() {
+        fail_all_sessions();
         return make_ready_future<>();
     }
 
@@ -153,6 +154,7 @@ public:
     virtual void on_restart(inet_address endpoint, endpoint_state ep_state) override;
 
 private:
+    void fail_all_sessions();
     void fail_sessions(inet_address endpoint);
     bool has_peer(inet_address endpoint);
 };

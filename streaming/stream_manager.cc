@@ -237,6 +237,14 @@ void stream_manager::fail_sessions(inet_address endpoint) {
     }
 }
 
+void stream_manager::fail_all_sessions() {
+    for (auto sr : get_all_streams()) {
+        for (auto session : sr->get_coordinator()->get_all_stream_sessions()) {
+            session->close_session(stream_session_state::FAILED);
+        }
+    }
+}
+
 void stream_manager::on_remove(inet_address endpoint) {
     if (has_peer(endpoint)) {
         sslog.info("stream_manager: Close all stream_session with peer = {} in on_remove", endpoint);
