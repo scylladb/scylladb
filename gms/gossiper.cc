@@ -124,7 +124,12 @@ gossiper::setup_collectd() {
             scollectd::type_instance_id("gossip", scollectd::per_cpu_plugin_instance,
                     "derive", "heart_beat_version"),
             scollectd::make_typed(scollectd::data_type::DERIVE, [ep, this] {
-                return this->endpoint_state_map.at(ep).get_heart_beat_state().get_heart_beat_version(); })),
+                if (this->endpoint_state_map.count(ep)) {
+                    return this->endpoint_state_map.at(ep).get_heart_beat_state().get_heart_beat_version();
+                } else {
+                    return 0;
+                }
+            })),
     };
 }
 
