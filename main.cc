@@ -419,7 +419,7 @@ int main(int ac, char** av) {
             ctx.http_server.start().get();
             api::set_server_init(ctx).get();
             ctx.http_server.listen(ipv4_addr{ip, api_port}).get();
-            print("Scylla API server listening on %s:%s ...\n", api_address, api_port);
+            startlog.info("Scylla API server listening on {}:{} ...", api_address, api_port);
             supervisor_notify("initializing storage service");
             init_storage_service(db);
             supervisor_notify("starting per-shard database core");
