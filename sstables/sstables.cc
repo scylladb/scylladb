@@ -1260,8 +1260,6 @@ void sstable::maybe_flush_pi_block(file_writer& out,
     }
 }
 
-// @clustering_key: it's expected that clustering key is already in its composite form.
-// NOTE: empty clustering key means that there is no clustering key.
 void sstable::write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker) {
     // was defined in the schema, for example.
     auto c = composite::from_exploded(column_names, marker);
@@ -1416,7 +1414,7 @@ void sstable::write_collection(file_writer& out, const composite& clustering_key
     }
 }
 
-// write_datafile_clustered_row() is about writing a clustered_row to data file according to SSTables format.
+// This function is about writing a clustered_row to data file according to SSTables format.
 // clustered_row contains a set of cells sharing the same clustering key.
 void sstable::write_clustered_row(file_writer& out, const schema& schema, const clustering_row& clustered_row) {
     auto clustering_key = composite::from_clustering_element(schema, clustered_row.key());
@@ -1600,7 +1598,7 @@ static void seal_statistics(statistics& s, metadata_collector& collector,
 
     collector.construct_stats(stats);
     // NOTE: method serialized_size of stats_metadata must be implemented for
-    // a new type of compaction to get supported.
+    // a new type of stats to get supported.
     s.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
     s.hash.map[metadata_type::Stats] = offset;
 }
@@ -1778,8 +1776,6 @@ void components_writer::consume_end_of_stream() {
         _sst._collector.add_compression_ratio(_sst._compression.compressed_file_length(), _sst._compression.uncompressed_file_length());
     }
 
-    // NOTE: Cassandra gets partition name by calling getClass().getCanonicalName() on
-    // partition class.
     seal_statistics(_sst._statistics, _sst._collector, dht::global_partitioner().name(), _schema.bloom_filter_fp_chance());
 }
 
@@ -1842,7 +1838,6 @@ void sstable_writer::consume_end_of_stream()
     _sst.write_summary(_pc);
     _sst.write_filter(_pc);
     _sst.write_statistics(_pc);
-    // NOTE: write_compression means maybe_write_compression.
     _sst.write_compression(_pc);
 
     if (!_leave_unsealed) {
