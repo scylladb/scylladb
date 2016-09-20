@@ -52,6 +52,7 @@
 #include <cassert>
 #include <string>
 
+#include <snappy-c.h>
 #include <lz4.h>
 
 namespace transport {
@@ -226,6 +227,7 @@ public:
 private:
     std::vector<char> compress(const std::vector<char>& body, cql_compression compression);
     std::vector<char> compress_lz4(const std::vector<char>& body);
+    std::vector<char> compress_snappy(const std::vector<char>& body);
 
     template <typename CqlFrameHeaderType>
     sstring make_frame_one(uint8_t version, uint8_t flags, size_t length) {
@@ -714,6 +716,22 @@ future<temporary_buffer<char>> cql_server::connection::read_and_decompress_frame
                 }
                 return make_ready_future<temporary_buffer<char>>(std::move(uncomp));
             });
+        } else if (_compression == cql_compression::snappy) {
+            return _read_buf.read_exactly(length).then([this] (temporary_buffer<char> buf) {
+                const char* input = buf.get();
+                size_t input_len = buf.size();
+                size_t uncomp_len;
+                if (snappy_uncompressed_length(input, input_len, &uncomp_len) != SNAPPY_OK) {
+                    throw std::runtime_error("CQL frame Snappy uncompressed size is unknown");
+                }
+                temporary_buffer<char> uncomp{uncomp_len};
+                char *output = uncomp.get_write();
+                size_t output_len = uncomp_len;
+                if (snappy_uncompress(input, input_len, output, &output_len) != SNAPPY_OK) {
+                    throw std::runtime_error("CQL frame Snappy uncompression failure");
+                }
+                return make_ready_future<temporary_buffer<char>>(std::move(uncomp));
+            });
         } else {
             throw exceptions::protocol_exception(sprint("Unknown compression algorithm"));
         }
@@ -738,6 +756,8 @@ future<response_type> cql_server::connection::process_startup(uint16_t stream, b
          std::transform(compression.begin(), compression.end(), compression.begin(), ::tolower);
          if (compression == "lz4") {
              _compression = cql_compression::lz4;
+         } else if (compression == "snappy") {
+             _compression = cql_compression::snappy;
          } else {
              throw exceptions::protocol_exception(sprint("Unknown compression algorithm: %s", compression));
          }
@@ -1068,6 +1088,7 @@ shared_ptr<cql_server::response> cql_server::connection::make_supported(int16_t 
     std::multimap<sstring, sstring> opts;
     opts.insert({"CQL_VERSION", cql3::query_processor::CQL_VERSION});
     opts.insert({"COMPRESSION", "lz4"});
+    opts.insert({"COMPRESSION", "snappy"});
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::SUPPORTED);
     response->write_string_multimap(opts);
     return response;
@@ -1467,6 +1488,7 @@ std::vector<char> cql_server::response::compress(const std::vector<char>& body, 
 {
     switch (compression) {
     case cql_compression::lz4:    return compress_lz4(body);
+    case cql_compression::snappy: return compress_snappy(body);
     default:                      throw std::invalid_argument("Invalid CQL compression algorithm");
     }
 }
@@ -1487,6 +1509,21 @@ std::vector<char> cql_server::response::compress_lz4(const std::vector<char>& bo
         throw std::runtime_error("CQL frame LZ4 compression failure");
     }
     size_t output_len = ret + 4;
+    comp.resize(output_len);
+    return comp;
+}
+
+std::vector<char> cql_server::response::compress_snappy(const std::vector<char>& body)
+{
+    const char* input = body.data();
+    size_t input_len = body.size();
+    std::vector<char> comp;
+    comp.resize(snappy_max_compressed_length(input_len));
+    char *output = comp.data();
+    size_t output_len;
+    if (snappy_compress(input, input_len, output, &output_len) != SNAPPY_OK) {
+        throw std::runtime_error("CQL frame Snappy compression failure");
+    }
     comp.resize(output_len);
     return comp;
 }

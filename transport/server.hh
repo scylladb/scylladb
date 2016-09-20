@@ -46,6 +46,7 @@ namespace transport {
 enum class cql_compression {
     none,
     lz4,
+    snappy,
 };
 
 enum cql_frame_flags {
