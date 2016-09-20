@@ -600,4 +600,62 @@ inline void stop_foreground(const trace_state_ptr& state) {
         state->stop_foreground_and_write();
     }
 }
+
+// global_trace_state_ptr is a helper class that may be used for creating spans
+// of an existing tracing session on other shards. When a tracing span on a
+// different shard is needed global_trace_state_ptr would create a secondary
+// tracing session on that shard similarly to what we do when we create tracing
+// spans on remote Nodes.
+//
+// The usage is straight forward:
+// 1. Create a global_trace_state_ptr from the existing trace_state_ptr object.
+// 2. Pass it to the execution unit that (possibly) runs on a different shard
+//    and pass the global_trace_state_ptr object instead of a trace_state_ptr
+//    object.
+class global_trace_state_ptr {
+    unsigned _cpu_of_origin;
+    trace_state_ptr _ptr;
+public:
+    // Note: the trace_state_ptr must come from the current shard
+    global_trace_state_ptr(trace_state_ptr t)
+            : _cpu_of_origin(engine().cpu_id())
+            , _ptr(std::move(t))
+    { }
+
+    // May be invoked across shards.
+    global_trace_state_ptr(const global_trace_state_ptr& other)
+            : global_trace_state_ptr(other.get())
+    { }
+
+    // May be invoked across shards.
+    global_trace_state_ptr(global_trace_state_ptr&& other)
+            : global_trace_state_ptr(other.get())
+    { }
+
+    global_trace_state_ptr& operator=(const global_trace_state_ptr&) = delete;
+
+    // May be invoked across shards.
+    trace_state_ptr get() const {
+        // optimize the "tracing not enabled" case
+        if (!_ptr) {
+            return nullptr;
+        }
+
+        if (_cpu_of_origin != engine().cpu_id()) {
+            auto opt_trace_info = make_trace_info(_ptr);
+            if (opt_trace_info) {
+                trace_state_ptr new_trace_state = tracing::get_local_tracing_instance().create_session(*opt_trace_info);
+                begin(new_trace_state);
+                return new_trace_state;
+            } else {
+                return nullptr;
+            }
+        }
+
+        return _ptr;
+    }
+
+    // May be invoked across shards.
+    operator trace_state_ptr() const { return get(); }
+};
 }

@@ -3452,8 +3452,8 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
             });
         });
     } else {
-        return _db.map_reduce(mutation_result_merger{cmd, s}, [cmd, &pr, gs = global_schema_ptr(s), trace_state = std::move(trace_state)] (database& db) {
-            return db.query_mutations(gs, *cmd, pr, trace_state).then([] (reconcilable_result&& result) {
+        return _db.map_reduce(mutation_result_merger{ cmd, s }, [cmd, &pr, gs=global_schema_ptr(s), gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) {
+            return db.query_mutations(gs, *cmd, pr, gt).then([] (reconcilable_result&& result) {
                 return make_foreign(make_lw_shared(std::move(result)));
             });
         }).then([] (reconcilable_result&& result) {
