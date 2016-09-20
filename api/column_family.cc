@@ -275,6 +275,14 @@ static double get_compression_ratio(column_family& cf) {
     return std::move(result).get();
 }
 
+static std::vector<uint64_t> concat_sstable_count_per_level(std::vector<uint64_t> a, std::vector<uint64_t>&& b) {
+    a.resize(std::max(a.size(), b.size()), 0UL);
+    for (auto i = 0U; i < b.size(); i++) {
+        a[i] += b[i];
+    }
+    return a;
+}
+
 void set_column_family(http_context& ctx, routes& r) {
     cf::get_column_family_name.set(r, [&ctx] (const_req req){
         vector<sstring> res;
@@ -900,12 +908,11 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_sstable_count_per_level.set(r, [&ctx](std::unique_ptr<request> req) {
-        // TBD
-        // FIXME
-        // This is a workaround, until there will be an API to return the count
-        // per level, we return an empty array
-        vector<uint64_t> res;
-        return make_ready_future<json::json_return_type>(res);
+        return map_reduce_cf_raw(ctx, req->param["name"], std::vector<uint64_t>(), [](const column_family& cf) {
+            return cf.sstable_count_per_level();
+        }, concat_sstable_count_per_level).then([](const std::vector<uint64_t>& res) {
+            return make_ready_future<json::json_return_type>(res);
+        });
     });
 }
 }

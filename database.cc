@@ -1363,6 +1363,19 @@ size_t column_family::sstables_count() const {
     return _sstables->all()->size();
 }
 
+std::vector<uint64_t> column_family::sstable_count_per_level() const {
+    std::vector<uint64_t> count_per_level;
+    for (auto&& sst : *_sstables->all()) {
+        auto level = sst->get_sstable_level();
+
+        if (level + 1 > count_per_level.size()) {
+            count_per_level.resize(level + 1, 0UL);
+        }
+        count_per_level[level]++;
+    }
+    return count_per_level;
+}
+
 int64_t column_family::get_unleveled_sstables() const {
     // TODO: when we support leveled compaction, we should return the number of
     // SSTables in L0. If leveled compaction is enabled in this column family,
