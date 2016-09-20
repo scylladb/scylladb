@@ -319,6 +319,21 @@ class scylla_ptr(gdb.Command):
         gdb.write(msg + '\n')
         return
 
+class scylla_segment_descs(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla segment-descs', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+    def invoke(self, arg, from_tty):
+        # FIXME: handle debug-mode build
+        base = int(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments_base'))
+        segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
+        addr = base
+        for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
+            if desc['_lsa_managed']:
+                gdb.write('0x%x: lsa free=%d region=0x%x zone=0x%x\n' % (addr, desc['_free_space'], desc['_region'], desc['_zone']))
+            else:
+                gdb.write('0x%x: std\n' % (addr))
+            addr += segment_size
+
 class scylla_lsa(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla lsa', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
@@ -667,6 +682,7 @@ scylla_mem_range()
 scylla_lsa()
 scylla_lsa_zones()
 scylla_lsa_segment()
+scylla_segment_descs()
 scylla_timers()
 scylla_apply()
 scylla_shard()
