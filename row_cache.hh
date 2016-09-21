@@ -63,8 +63,10 @@ class cache_entry {
     dht::ring_position _key;
     partition_entry _pe;
     // True when we know that there is nothing between this entry and the next one in cache
-    bool _continuous : 1;
-    bool _wide_partition : 1;
+    struct {
+        bool _continuous : 1;
+        bool _wide_partition : 1;
+    } _flags{};
     lru_link_type _lru_link;
     cache_link_type _cache_link;
     friend class size_calculator;
@@ -75,8 +77,6 @@ public:
     cache_entry(schema_ptr s)
         : _schema(std::move(s))
         , _key(dht::ring_position::starting_at(dht::minimum_token()))
-        , _continuous(false)
-        , _wide_partition(false)
     { }
 
     struct wide_partition_tag{};
@@ -84,32 +84,26 @@ public:
     cache_entry(schema_ptr s, const dht::decorated_key& key, wide_partition_tag)
         : _schema(std::move(s))
         , _key(key)
-        , _continuous(false)
-        , _wide_partition(true)
-    { }
+    {
+        _flags._wide_partition = true;
+    }
 
-    cache_entry(schema_ptr s, const dht::decorated_key& key, const mutation_partition& p, bool continuous = false)
+    cache_entry(schema_ptr s, const dht::decorated_key& key, const mutation_partition& p)
         : _schema(std::move(s))
         , _key(key)
         , _pe(p)
-        , _continuous(continuous)
-        , _wide_partition(false)
     { }
 
-    cache_entry(schema_ptr s, dht::decorated_key&& key, mutation_partition&& p, bool continuous = false) noexcept
+    cache_entry(schema_ptr s, dht::decorated_key&& key, mutation_partition&& p) noexcept
         : _schema(std::move(s))
         , _key(std::move(key))
         , _pe(std::move(p))
-        , _continuous(continuous)
-        , _wide_partition(false)
     { }
 
-    cache_entry(schema_ptr s, dht::decorated_key&& key, partition_entry&& pe, bool continuous = false) noexcept
+    cache_entry(schema_ptr s, dht::decorated_key&& key, partition_entry&& pe) noexcept
         : _schema(std::move(s))
         , _key(std::move(key))
         , _pe(std::move(pe))
-        , _continuous(continuous)
-        , _wide_partition(false)
     { }
 
     cache_entry(cache_entry&&) noexcept;
@@ -126,11 +120,11 @@ public:
     streamed_mutation read(row_cache&, const schema_ptr&, const query::partition_slice&);
     // May return disengaged optional if the partition is empty.
     future<streamed_mutation_opt> read_wide(row_cache&, schema_ptr, const query::partition_slice&, const io_priority_class&);
-    bool continuous() const { return _continuous; }
-    void set_continuous(bool value) { _continuous = value; }
-    bool wide_partition() const { return _wide_partition; }
+    bool continuous() const { return _flags._continuous; }
+    void set_continuous(bool value) { _flags._continuous = value; }
+    bool wide_partition() const { return _flags._wide_partition; }
     void set_wide_partition() {
-        _wide_partition = true;
+        _flags._wide_partition = true;
         _pe = {};
     }
 

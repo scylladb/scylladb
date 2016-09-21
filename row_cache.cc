@@ -1121,8 +1121,7 @@ cache_entry::cache_entry(cache_entry&& o) noexcept
     : _schema(std::move(o._schema))
     , _key(std::move(o._key))
     , _pe(std::move(o._pe))
-    , _continuous(o._continuous)
-    , _wide_partition(o._wide_partition)
+    , _flags(o._flags)
     , _lru_link()
     , _cache_link()
 {
