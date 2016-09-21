@@ -220,6 +220,9 @@ public:
     virtual future<streamed_mutation_opt> operator()() override {
         return make_ready_future<streamed_mutation_opt>();
     }
+    virtual future<> fast_forward_to(const query::partition_range&) override {
+        return make_ready_future<>();
+    }
 };
 
 mutation_reader make_empty_reader() {
@@ -257,6 +260,10 @@ public:
             _waited = true;
             return _base();
         });
+    }
+
+    virtual future<> fast_forward_to(const query::partition_range& pr) override {
+        return _base.fast_forward_to(pr);
     }
 };
 

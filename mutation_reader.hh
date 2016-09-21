@@ -206,6 +206,9 @@ public:
             return make_ready_future<streamed_mutation_opt>(std::move(_current));
         });
     };
+    virtual future<> fast_forward_to(const query::partition_range& pr) override {
+        return _rd.fast_forward_to(pr);
+    }
 };
 
 // Creates a mutation_reader wrapper which creates a new stream of mutations
