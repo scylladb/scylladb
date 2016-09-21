@@ -1151,17 +1151,6 @@ future<uint64_t> sstable::upper_bound(schema_ptr s, const dht::ring_position& po
     });
 }
 
-mutation_reader sstable::read_range_rows(schema_ptr schema,
-        const dht::token& min_token, const dht::token& max_token, const io_priority_class& pc) {
-    if (max_token < min_token) {
-        return std::make_unique<mutation_reader::impl>();
-    }
-    return read_range_rows(std::move(schema),
-        query::range<dht::ring_position>::make(
-            dht::ring_position::starting_at(min_token),
-            dht::ring_position::ending_at(max_token)), query::full_slice, pc);
-}
-
 mutation_reader
 sstable::read_range_rows(schema_ptr schema,
                          const query::partition_range& range,

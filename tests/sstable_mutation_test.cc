@@ -310,9 +310,11 @@ future<> test_range_reads(const dht::token& min, const dht::token& max, std::vec
         auto s = uncompressed_schema();
         auto count = make_lw_shared<size_t>(0);
         auto expected_size = expected.size();
-        auto mutations = sstp->read_range_rows(s, min, max);
         auto stop = make_lw_shared<bool>(false);
-        return do_until([stop] { return *stop; },
+        return do_with(query::range<dht::ring_position>::make(dht::ring_position::starting_at(min),
+                                                              dht::ring_position::ending_at(max)), [&, sstp, s] (auto& pr) {
+            auto mutations = sstp->read_range_rows(s, pr);
+            return do_until([stop] { return *stop; },
                 // Note: The data in the following lambda, including
                 // "mutations", continues to live until after the last
                 // iteration's future completes, so its lifetime is safe.
@@ -330,6 +332,7 @@ future<> test_range_reads(const dht::token& min, const dht::token& max, std::vec
             }).then([count, expected_size] {
                 BOOST_REQUIRE(*count == expected_size);
             });
+        });
     });
 }
 

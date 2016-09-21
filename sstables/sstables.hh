@@ -241,16 +241,6 @@ public:
         const key& k,
         const query::partition_slice& slice = query::full_slice,
         const io_priority_class& pc = default_priority_class());
-    /**
-     * @param schema a schema_ptr object describing this table
-     * @param min the minimum token we want to search for (inclusive)
-     * @param max the maximum token we want to search for (inclusive)
-     * @return a mutation_reader object that can be used to iterate over
-     * mutations.
-     */
-    mutation_reader read_range_rows(schema_ptr schema,
-            const dht::token& min, const dht::token& max,
-            const io_priority_class& pc = default_priority_class());
 
     // Returns a mutation_reader for given range of partitions
     mutation_reader read_range_rows(
