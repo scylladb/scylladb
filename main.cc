@@ -496,7 +496,8 @@ int main(int ac, char** av) {
                     , cfg->internode_compression()
                     , seed_provider
                     , cluster_name
-                    , phi);
+                    , phi
+                    , cfg->listen_on_broadcast_address());
             supervisor_notify("starting messaging service");
             supervisor_notify("starting storage proxy");
             proxy.start(std::ref(db)).get();

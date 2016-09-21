@@ -181,12 +181,13 @@ private:
     uint16_t _ssl_port;
     encrypt_what _encrypt_what;
     compress_what _compress_what;
+    bool _should_listen_to_broadcast_address;
     // map: Node broadcast address -> Node internal IP for communication within the same data center
     std::unordered_map<gms::inet_address, gms::inet_address> _preferred_ip_cache;
     std::unique_ptr<rpc_protocol_wrapper> _rpc;
-    std::unique_ptr<rpc_protocol_server_wrapper> _server;
+    std::array<std::unique_ptr<rpc_protocol_server_wrapper>, 2> _server;
     ::shared_ptr<seastar::tls::server_credentials> _credentials;
-    std::unique_ptr<rpc_protocol_server_wrapper> _server_tls;
+    std::array<std::unique_ptr<rpc_protocol_server_wrapper>, 2> _server_tls;
     std::array<clients_map, 3> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
     bool _stopping = false;
@@ -197,7 +198,7 @@ public:
             uint16_t port = 7000, bool listen_now = true);
     messaging_service(gms::inet_address ip, uint16_t port, encrypt_what, compress_what,
             uint16_t ssl_port, std::shared_ptr<seastar::tls::credentials_builder>,
-            bool listen_now = true);
+            bool sltba = false, bool listen_now = true);
     ~messaging_service();
 public:
     void start_listen();

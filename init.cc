@@ -48,7 +48,8 @@ void init_ms_fd_gossiper(sstring listen_address
                 , sstring ms_compress
                 , db::seed_provider_type seed_provider
                 , sstring cluster_name
-                , double phi)
+                , double phi
+                , bool sltba)
 {
     const gms::inet_address listen(listen_address);
 
@@ -90,7 +91,7 @@ void init_ms_fd_gossiper(sstring listen_address
     // Init messaging_service
     // Delay listening messaging_service until gossip message handlers are registered
     bool listen_now = false;
-    net::get_messaging_service().start(listen, storage_port, ew, cw, ssl_storage_port, creds, listen_now).get();
+    net::get_messaging_service().start(listen, storage_port, ew, cw, ssl_storage_port, creds, sltba, listen_now).get();
 
     // #293 - do not stop anything
     //engine().at_exit([] { return net::get_messaging_service().stop(); });
