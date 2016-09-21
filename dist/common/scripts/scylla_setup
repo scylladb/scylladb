@@ -29,6 +29,7 @@ print_usage() {
     echo "  --no-sysconfig-setup		skip sysconfig setup"
     echo "  --no-io-setup		skip IO configuration setup"
     echo "  --no-version-check		skip daily version check"
+    echo "  --no-node-exporter        do not install the node exporter"
     exit 1
 }
 
@@ -89,6 +90,7 @@ RAID_SETUP=1
 COREDUMP_SETUP=1
 SYSCONFIG_SETUP=1
 IO_SETUP=1
+NODE_EXPORTER=1
 
 if [ $# -ne 0 ]; then
     INTERACTIVE=0
@@ -164,6 +166,10 @@ while [ $# -gt 0 ]; do
             ;;
         "--no-io-setup")
             IO_SETUP=0
+            shift 1
+            ;;
+        "--no-node-exporter")
+            NODE_EXPORTER=0
             shift 1
             ;;
         "-h" | "--help")
@@ -358,6 +364,16 @@ if [ $INTERACTIVE -eq 1 ]; then
     interactive_ask_service "Do you want to setup IO configuration?" "Answer yes to let iotune study what are your disks IO profile and adapt Scylla to it. Answer no to skip this action." "yes" &&:
     IO_SETUP=$?
 fi
+
+if [ $INTERACTIVE -eq 1 ]; then
+    interactive_ask_service "Do you want to install node exporter, that exports prometheus data from the node?" "Answer yes to install it; answer no to skip this installation." "yes" &&:
+    NODE_EXPORTER=$?
+fi
+
+if [ $NODE_EXPORTER -eq 1 ]; then
+    /usr/lib/scylla/node_exporter_install
+fi
+
 if [ $IO_SETUP -eq 1 ]; then
     /usr/lib/scylla/scylla_io_setup
 fi
