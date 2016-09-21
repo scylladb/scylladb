@@ -270,6 +270,13 @@ private:
     void invalidate_unwrapped(const query::partition_range&);
     void clear_now() noexcept;
     static thread_local seastar::thread_scheduling_group _update_thread_scheduling_group;
+
+    template<typename CreateEntry, typename VisitEntry>
+    //requires requires(CreateEntry create, VisitEntry visit, partitions_type::iterator it) {
+    //        { create(it) } -> partitions_type::iterator;
+    //        { visit(it) } -> void;
+    //    }
+    void do_find_or_create_entry(const dht::decorated_key& key, CreateEntry&& create_entry, VisitEntry&& visit_entry);
 public:
     ~row_cache();
     row_cache(schema_ptr, mutation_source underlying, cache_tracker&, uint64_t _max_cached_partition_size_in_bytes = 10 * 1024 * 1024);

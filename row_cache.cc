@@ -862,43 +862,50 @@ void row_cache::clear_now() noexcept {
     });
 }
 
-void row_cache::mark_partition_as_wide(const dht::decorated_key& key) {
-    with_allocator(_tracker.allocator(), [this, &key] {
+template<typename CreateEntry, typename VisitEntry>
+//requires requires(CreateEntry create, VisitEntry visit, row_cache::partitions_type::iterator it) {
+//        { create(it) } -> row_cache::partitions_type::iterator;
+//        { visit(it) } -> void;
+//    }
+void row_cache::do_find_or_create_entry(const dht::decorated_key& key, CreateEntry&& create_entry, VisitEntry&& visit_entry)
+{
+    with_allocator(_tracker.allocator(), [&] {
         _populate_section(_tracker.region(), [&] {
             with_linearized_managed_bytes([&] {
                 auto i = _partitions.lower_bound(key, cache_entry::compare(_schema));
                 if (i == _partitions.end() || !i->key().equal(*_schema, key)) {
-                    cache_entry* entry = current_allocator().construct<cache_entry>(
-                            _schema, key, cache_entry::wide_partition_tag{});
-                    _tracker.insert(*entry);
-                    _partitions.insert(i, *entry);
+                    i = create_entry(i);
                 } else {
-                    i->set_wide_partition();
+                    visit_entry(i);
                 }
             });
         });
     });
 }
 
+void row_cache::mark_partition_as_wide(const dht::decorated_key& key) {
+    do_find_or_create_entry(key, [&] (auto i) {
+        cache_entry* entry = current_allocator().construct<cache_entry>(
+                _schema, key, cache_entry::wide_partition_tag{});
+        _tracker.insert(*entry);
+        return _partitions.insert(i, *entry);
+    }, [&] (auto i) {
+        i->set_wide_partition();
+    });
+}
+
 void row_cache::populate(const mutation& m) {
-    with_allocator(_tracker.allocator(), [this, &m] {
-        _populate_section(_tracker.region(), [&] {
-          with_linearized_managed_bytes([&] {
-            auto i = _partitions.lower_bound(m.decorated_key(), cache_entry::compare(_schema));
-            if (i == _partitions.end() || !i->key().equal(*_schema, m.decorated_key())) {
-                cache_entry* entry = current_allocator().construct<cache_entry>(
-                        m.schema(), m.decorated_key(), m.partition());
-                upgrade_entry(*entry);
-                _tracker.insert(*entry);
-                _partitions.insert(i, *entry);
-            } else {
-                _tracker.touch(*i);
-                // We cache whole partitions right now, so if cache already has this partition,
-                // it must be complete, so do nothing.
-                _tracker.on_miss_already_populated();  // #1534
-            }
-          });
-        });
+    do_find_or_create_entry(m.decorated_key(), [&] (auto i) {
+        cache_entry* entry = current_allocator().construct<cache_entry>(
+                m.schema(), m.decorated_key(), m.partition());
+        upgrade_entry(*entry);
+        _tracker.insert(*entry);
+        return _partitions.insert(i, *entry);
+    }, [&] (auto i) {
+        _tracker.touch(*i);
+        // We cache whole partitions right now, so if cache already has this partition,
+        // it must be complete, so do nothing.
+        _tracker.on_miss_already_populated();  // #1534
     });
 }
 
