@@ -107,7 +107,7 @@ memtable::slice(const query::partition_range& range) const {
 class iterator_reader: public mutation_reader::impl {
     lw_shared_ptr<memtable> _memtable;
     schema_ptr _schema;
-    const query::partition_range& _range;
+    const query::partition_range* _range;
     stdx::optional<dht::decorated_key> _last;
     memtable::partitions_type::iterator _i;
     memtable::partitions_type::iterator _end;
@@ -116,10 +116,10 @@ class iterator_reader: public mutation_reader::impl {
 
     memtable::partitions_type::iterator lookup_end() {
         auto cmp = memtable_entry::compare(_memtable->_schema);
-        return _range.end()
-            ? (_range.end()->is_inclusive()
-                ? _memtable->partitions.upper_bound(_range.end()->value(), cmp)
-                : _memtable->partitions.lower_bound(_range.end()->value(), cmp))
+        return _range->end()
+            ? (_range->end()->is_inclusive()
+                ? _memtable->partitions.upper_bound(_range->end()->value(), cmp)
+                : _memtable->partitions.lower_bound(_range->end()->value(), cmp))
             : _memtable->partitions.end();
     }
     void update_iterators() {
@@ -135,10 +135,10 @@ class iterator_reader: public mutation_reader::impl {
             }
         } else {
             // Initial lookup
-            _i = _range.start()
-                 ? (_range.start()->is_inclusive()
-                    ? _memtable->partitions.lower_bound(_range.start()->value(), cmp)
-                    : _memtable->partitions.upper_bound(_range.start()->value(), cmp))
+            _i = _range->start()
+                 ? (_range->start()->is_inclusive()
+                    ? _memtable->partitions.lower_bound(_range->start()->value(), cmp)
+                    : _memtable->partitions.upper_bound(_range->start()->value(), cmp))
                  : _memtable->partitions.begin();
             _end = lookup_end();
             _last_partition_count = _memtable->partition_count();
@@ -151,7 +151,7 @@ protected:
                     const query::partition_range& range)
         : _memtable(std::move(m))
         , _schema(std::move(s))
-        , _range(range)
+        , _range(&range)
     { }
 
     memtable_entry* fetch_next_entry() {
@@ -186,7 +186,7 @@ protected:
     std::experimental::optional<query::partition_range> get_delegate_range() {
         // We cannot run concurrently with row_cache::update().
         if (_memtable->is_flushed()) {
-            return _last ? _range.split_after(*_last, dht::ring_position_comparator(*_memtable->_schema)) : _range;
+            return _last ? _range->split_after(*_last, dht::ring_position_comparator(*_memtable->_schema)) : *_range;
         }
         return {};
     }
@@ -199,6 +199,12 @@ protected:
         _memtable = {};
         _last = {};
         return ret;
+    }
+public:
+    virtual future<> fast_forward_to(const query::partition_range& pr) override {
+        _range = &pr;
+        _last = { };
+        return make_ready_future<>();
     }
 };
 
