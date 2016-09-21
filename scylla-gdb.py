@@ -75,6 +75,26 @@ class std_array:
     def __bool__(self):
         return self.__nonzero__()
 
+class std_vector:
+    def __init__(self, ref):
+        self.ref = ref
+
+    def __len__(self):
+        return self.ref['_M_impl']['_M_finish'] - self.ref['_M_impl']['_M_start']
+
+    def __iter__(self):
+        i = self.ref['_M_impl']['_M_start']
+        end = self.ref['_M_impl']['_M_finish']
+        while i != end:
+            yield i.dereference()
+            i += 1
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__nonzero__()
+
 def uint64_t(val):
     val = int(val)
     if val < 0:
@@ -296,8 +316,30 @@ class scylla_ptr(gdb.Command):
                 msg += ', live (0x%x +%d)' % (ptr - offset_in_object, offset_in_object)
         else:
             msg += ', large'
+
+        # FIXME: handle debug-mode build
+        segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
+        index = gdb.parse_and_eval('(%d - \'logalloc\'::shard_segment_pool._segments_base) / \'logalloc\'::segment::size' % (ptr))
+        desc = gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments[%d]' % (index))
+        if desc['_lsa_managed']:
+            msg += ', LSA-managed'
+
         gdb.write(msg + '\n')
-        return
+
+class scylla_segment_descs(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla segment-descs', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+    def invoke(self, arg, from_tty):
+        # FIXME: handle debug-mode build
+        base = int(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments_base'))
+        segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
+        addr = base
+        for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
+            if desc['_lsa_managed']:
+                gdb.write('0x%x: lsa free=%d region=0x%x zone=0x%x\n' % (addr, desc['_free_space'], desc['_region'], desc['_zone']))
+            else:
+                gdb.write('0x%x: std\n' % (addr))
+            addr += segment_size
 
 class scylla_lsa(gdb.Command):
     def __init__(self):
@@ -358,6 +400,47 @@ class scylla_lsa_zones(gdb.Command):
                 '      - used: {z_used:>12}\n'
                 .format(z_base=int(zone['_base']), z_size=int(zone['_segments']['_bits_count']),
                     z_used=int(zone['_used_segment_count'])));
+
+names = {} # addr (int) -> name (str)
+def resolve(addr):
+    if addr in names:
+        return names[addr]
+
+    infosym = gdb.execute('info symbol 0x%x' % (addr), False, True)
+    if infosym.startswith('No symbol'):
+        name = None
+    else:
+        name = infosym[:infosym.find('in section')]
+    names[addr] = name
+    return name
+
+class scylla_lsa_segment(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla lsa-segment', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    def invoke(self, arg, from_tty):
+        # See logalloc::region_impl::for_each_live()
+        ptr = int(arg, 0)
+        seg = gdb.parse_and_eval('(char*)(%d & ~(\'logalloc\'::segment::size - 1))' % (ptr))
+        segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
+        obj_desc_size = int(gdb.parse_and_eval('sizeof(\'logalloc\'::region_impl::object_descriptor)'))
+        obj_desc_ptr = gdb.lookup_type('logalloc::region_impl::object_descriptor').pointer()
+        offset = 0
+        while offset < segment_size:
+            padding = seg[offset] >> 2
+            offset += padding
+            if seg[offset] & 2:
+                break;
+            flags = seg[offset]
+            desc = (seg + offset).reinterpret_cast(obj_desc_ptr)
+            offset += obj_desc_size;
+            addr = seg + offset
+            if flags & 1:
+                migrator_name = resolve(int(desc['_migrator'])) or ('0x%x' % (addr))
+                gdb.write('0x%x: live size=%d migrator=%s\n' % (addr, desc['_size'], migrator_name))
+            else:
+                gdb.write('0x%x: free size=%d\n' % (addr, desc['_size']))
+            offset += desc['_size'];
 
 class scylla_timers(gdb.Command):
     def __init__(self):
@@ -605,6 +688,8 @@ scylla_mem_ranges()
 scylla_mem_range()
 scylla_lsa()
 scylla_lsa_zones()
+scylla_lsa_segment()
+scylla_segment_descs()
 scylla_timers()
 scylla_apply()
 scylla_shard()
