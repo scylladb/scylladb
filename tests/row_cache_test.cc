@@ -137,6 +137,27 @@ SEASTAR_TEST_CASE(test_cache_works_after_clearing) {
     });
 }
 
+class partition_counting_reader final : public mutation_reader::impl {
+    mutation_reader _reader;
+    int& _counter;
+public:
+    partition_counting_reader(mutation_reader mr, int& counter)
+        : _reader(std::move(mr)), _counter(counter) { }
+
+    virtual future<streamed_mutation_opt> operator()() override {
+        _counter++;
+        return _reader();
+    }
+
+    virtual future<> fast_forward_to(const query::partition_range& pr) override {
+        return _reader.fast_forward_to(pr);
+    }
+};
+
+mutation_reader make_counting_reader(mutation_reader mr, int& counter) {
+    return make_mutation_reader<partition_counting_reader>(std::move(mr), counter);
+}
+
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_for_wide_partition_full_range) {
     return seastar::async([] {
         auto s = make_schema();
@@ -144,19 +165,20 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_for_wide_partitio
         int secondary_calls_count = 0;
         cache_tracker tracker;
         row_cache cache(s, mutation_source([&secondary_calls_count, &m] (schema_ptr s, const query::partition_range& range) {
-            ++secondary_calls_count;
-            return make_reader_returning(m);
+            return make_counting_reader(make_reader_returning(m), secondary_calls_count);
         }), tracker, 0);
 
         assert_that(cache.make_reader(s, query::full_partition_range))
             .produces(m)
             .produces_end_of_stream();
-        BOOST_REQUIRE_EQUAL(secondary_calls_count, 2);
+        // 2 from cache reader (m & eos) + 1 from large partition read
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 3);
         BOOST_REQUIRE_EQUAL(tracker.uncached_wide_partitions(), 1);
         assert_that(cache.make_reader(s, query::full_partition_range))
             .produces(m)
             .produces_end_of_stream();
-        BOOST_REQUIRE_EQUAL(secondary_calls_count, 3);
+        // previous 3 + 1 from large partition read
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 4);
         BOOST_REQUIRE_EQUAL(tracker.uncached_wide_partitions(), 2);
     });
 }
@@ -168,19 +190,18 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_for_wide_partitio
         int secondary_calls_count = 0;
         cache_tracker tracker;
         row_cache cache(s, mutation_source([&secondary_calls_count, &m] (schema_ptr s, const query::partition_range& range) {
-            ++secondary_calls_count;
-            return make_reader_returning(m);
+            return make_counting_reader(make_reader_returning(m), secondary_calls_count);
         }), tracker, 0);
 
         assert_that(cache.make_reader(s, query::partition_range::make_singular(query::ring_position(m.decorated_key()))))
             .produces(m)
             .produces_end_of_stream();
-        BOOST_REQUIRE_EQUAL(secondary_calls_count, 2);
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 3);
         BOOST_REQUIRE_EQUAL(tracker.uncached_wide_partitions(), 1);
         assert_that(cache.make_reader(s, query::partition_range::make_singular(query::ring_position(m.decorated_key()))))
             .produces(m)
             .produces_end_of_stream();
-        BOOST_REQUIRE_EQUAL(secondary_calls_count, 3);
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 5);
         BOOST_REQUIRE_EQUAL(tracker.uncached_wide_partitions(), 2);
     });
 }
@@ -188,45 +209,43 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_for_wide_partitio
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_full_range) {
     return seastar::async([] {
         auto s = make_schema();
-        std::atomic<int> secondary_calls_count{0};
+        int secondary_calls_count = 0;
         cache_tracker tracker;
         row_cache cache(s, mutation_source([&secondary_calls_count] (schema_ptr s, const query::partition_range& range) {
-            ++secondary_calls_count;
-            return make_empty_reader();
+            return make_counting_reader(make_empty_reader(), secondary_calls_count);
         }), tracker);
 
         assert_that(cache.make_reader(s, query::full_partition_range))
             .produces_end_of_stream();
-        BOOST_REQUIRE_EQUAL(secondary_calls_count.load(), 1);
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 1);
         assert_that(cache.make_reader(s, query::full_partition_range))
             .produces_end_of_stream();
-        BOOST_REQUIRE_EQUAL(secondary_calls_count.load(), 1);
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 1);
     });
 }
 
 void test_cache_delegates_to_underlying_only_once_with_single_partition(schema_ptr s,
                                                                         const mutation& m,
                                                                         const query::partition_range& range) {
-    std::atomic<int> secondary_calls_count{0};
+    int secondary_calls_count = 0;
     cache_tracker tracker;
     row_cache cache(s, mutation_source([m, &secondary_calls_count] (schema_ptr s, const query::partition_range& range) {
         assert(m.schema() == s);
-        ++secondary_calls_count;
         if (range.contains(dht::ring_position(m.decorated_key()), dht::ring_position_comparator(*s))) {
-            return make_reader_returning(m);
+            return make_counting_reader(make_reader_returning(m), secondary_calls_count);
         } else {
-            return make_empty_reader();
+            return make_counting_reader(make_empty_reader(), secondary_calls_count);
         }
     }), tracker);
 
     assert_that(cache.make_reader(s, range))
         .produces(m)
         .produces_end_of_stream();
-    BOOST_REQUIRE_EQUAL(secondary_calls_count.load(), 1);
+    BOOST_REQUIRE_EQUAL(secondary_calls_count, 2);
     assert_that(cache.make_reader(s, range))
         .produces(m)
         .produces_end_of_stream();
-    BOOST_REQUIRE_EQUAL(secondary_calls_count.load(), 1);
+    BOOST_REQUIRE_EQUAL(secondary_calls_count, 2);
 }
 
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_single_key_range) {
@@ -246,24 +265,12 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_full_range) {
     });
 }
 
-SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_range_open_exclusive) {
+SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_range_open) {
     return seastar::async([] {
         auto s = make_schema();
         auto m = make_new_mutation(s);
-        query::partition_range::bound start = {dht::ring_position::starting_at(dht::minimum_token()), false};
         query::partition_range::bound end = {dht::ring_position(m.decorated_key()), true};
-        query::partition_range range = query::partition_range::make(start, end);
-        test_cache_delegates_to_underlying_only_once_with_single_partition(s, m, range);
-    });
-}
-
-SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_range_inclusive) {
-    return seastar::async([] {
-        auto s = make_schema();
-        auto m = make_new_mutation(s);
-        query::partition_range::bound start = {dht::ring_position::starting_at(dht::minimum_token()), true};
-        query::partition_range::bound end = {dht::ring_position(m.decorated_key()), true};
-        query::partition_range range = query::partition_range::make(start, end);
+        query::partition_range range = query::partition_range::make_ending_with(end);
         test_cache_delegates_to_underlying_only_once_with_single_partition(s, m, range);
     });
 }
@@ -319,8 +326,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
 
         auto make_cache = [&tracker, &mt](schema_ptr s, int& secondary_calls_count) -> lw_shared_ptr<row_cache> {
             auto secondary = mutation_source([&mt, &secondary_calls_count] (schema_ptr s, const query::partition_range& range) {
-                ++secondary_calls_count;
-                return mt->as_data_source()(s, range);
+                return make_counting_reader(mt->as_data_source()(s, range), secondary_calls_count);
             });
 
             return make_lw_shared<row_cache>(s, secondary, tracker);
@@ -333,82 +339,88 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
             });
         };
 
-        auto test = [&s, &partitions] (const mutation_source& ds, const query::partition_range& range, int& secondary_calls_count) {
+        auto do_test = [&s, &partitions] (const mutation_source& ds, const query::partition_range& range,
+                                          int& secondary_calls_count, int expected_calls) {
             assert_that(ds(s, range))
                 .produces(slice(partitions, range))
                 .produces_end_of_stream();
-            BOOST_CHECK_EQUAL( 1, secondary_calls_count);
+            BOOST_CHECK_EQUAL(expected_calls, secondary_calls_count);
         };
 
         {
             int secondary_calls_count = 0;
+            auto test = [&] (const mutation_source& ds, const query::partition_range& range, int expected_count) {
+                do_test(ds, range, secondary_calls_count, expected_count);
+            };
+            
             auto ds = make_ds(s, secondary_calls_count);
-            test(ds, query::full_partition_range, secondary_calls_count);
-            test(ds, query::full_partition_range, secondary_calls_count);
-            test(ds, query::partition_range::make_ending_with({partitions[0].decorated_key(), false}), secondary_calls_count);
-            test(ds, query::partition_range::make_ending_with({partitions[0].decorated_key(), true}), secondary_calls_count);
-            test(ds, query::partition_range::make_starting_with({partitions.back().decorated_key(), false}), secondary_calls_count);
-            test(ds, query::partition_range::make_starting_with({partitions.back().decorated_key(), true}), secondary_calls_count);
-            test(ds, query::partition_range::make_ending_with({partitions[1].decorated_key(), false}), secondary_calls_count);
-            test(ds, query::partition_range::make_ending_with({partitions[1].decorated_key(), true}), secondary_calls_count);
-            test(ds, query::partition_range::make_starting_with({partitions[1].decorated_key(), false}), secondary_calls_count);
-            test(ds, query::partition_range::make_starting_with({partitions[1].decorated_key(), true}), secondary_calls_count);
-            test(ds, query::partition_range::make_ending_with({partitions.back().decorated_key(), false}), secondary_calls_count);
-            test(ds, query::partition_range::make_ending_with({partitions.back().decorated_key(), true}), secondary_calls_count);
-            test(ds, query::partition_range::make_starting_with({partitions[0].decorated_key(), false}), secondary_calls_count);
-            test(ds, query::partition_range::make_starting_with({partitions[0].decorated_key(), true}), secondary_calls_count);
+            auto expected = partitions.size() + 1;
+            test(ds, query::full_partition_range, expected);
+            test(ds, query::full_partition_range, expected);
+            test(ds, query::partition_range::make_ending_with({partitions[0].decorated_key(), false}), expected);
+            test(ds, query::partition_range::make_ending_with({partitions[0].decorated_key(), true}), expected);
+            test(ds, query::partition_range::make_starting_with({partitions.back().decorated_key(), false}), expected);
+            test(ds, query::partition_range::make_starting_with({partitions.back().decorated_key(), true}), expected);
+            test(ds, query::partition_range::make_ending_with({partitions[1].decorated_key(), false}), expected);
+            test(ds, query::partition_range::make_ending_with({partitions[1].decorated_key(), true}), expected);
+            test(ds, query::partition_range::make_starting_with({partitions[1].decorated_key(), false}), expected);
+            test(ds, query::partition_range::make_starting_with({partitions[1].decorated_key(), true}), expected);
+            test(ds, query::partition_range::make_ending_with({partitions.back().decorated_key(), false}), expected);
+            test(ds, query::partition_range::make_ending_with({partitions.back().decorated_key(), true}), expected);
+            test(ds, query::partition_range::make_starting_with({partitions[0].decorated_key(), false}), expected);
+            test(ds, query::partition_range::make_starting_with({partitions[0].decorated_key(), true}), expected);
             test(ds, query::partition_range::make(
                 {dht::ring_position::starting_at(key_before_all.token())},
                 {dht::ring_position::ending_at(key_after_all.token())}),
-                secondary_calls_count);
+                expected);
             test(ds, query::partition_range::make(
                 {partitions[0].decorated_key(), true},
                 {partitions[1].decorated_key(), true}),
-                secondary_calls_count);
+                expected);
             test(ds, query::partition_range::make(
                 {partitions[0].decorated_key(), false},
                 {partitions[1].decorated_key(), true}),
-                secondary_calls_count);
+                expected);
             test(ds, query::partition_range::make(
                 {partitions[0].decorated_key(), true},
                 {partitions[1].decorated_key(), false}),
-                secondary_calls_count);
+                expected);
             test(ds, query::partition_range::make(
                 {partitions[0].decorated_key(), false},
                 {partitions[1].decorated_key(), false}),
-                secondary_calls_count);
+                expected);
             test(ds, query::partition_range::make(
                 {partitions[1].decorated_key(), true},
                 {partitions[2].decorated_key(), true}),
-                secondary_calls_count);
+                expected);
             test(ds, query::partition_range::make(
                 {partitions[1].decorated_key(), false},
                 {partitions[2].decorated_key(), true}),
-                secondary_calls_count);
+                expected);
             test(ds, query::partition_range::make(
                 {partitions[1].decorated_key(), true},
                 {partitions[2].decorated_key(), false}),
-                secondary_calls_count);
+                expected);
             test(ds, query::partition_range::make(
                 {partitions[1].decorated_key(), false},
                 {partitions[2].decorated_key(), false}),
-                secondary_calls_count);
+                expected);
             test(ds, query::partition_range::make(
                 {partitions[0].decorated_key(), true},
                 {partitions[2].decorated_key(), true}),
-                secondary_calls_count);
+                expected);
             test(ds, query::partition_range::make(
                 {partitions[0].decorated_key(), false},
                 {partitions[2].decorated_key(), true}),
-                secondary_calls_count);
+                expected);
             test(ds, query::partition_range::make(
                 {partitions[0].decorated_key(), true},
                 {partitions[2].decorated_key(), false}),
-                secondary_calls_count);
+                expected);
             test(ds, query::partition_range::make(
                 {partitions[0].decorated_key(), false},
                 {partitions[2].decorated_key(), false}),
-                secondary_calls_count);
+                expected);
         }
         {
             int secondary_calls_count = 0;
@@ -419,42 +431,46 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
             assert_that(ds(s, range))
                 .produces(slice(partitions, range))
                 .produces_end_of_stream();
-            BOOST_CHECK_EQUAL( 1, secondary_calls_count);
+            BOOST_CHECK_EQUAL(3, secondary_calls_count);
             assert_that(ds(s, range))
                 .produces(slice(partitions, range))
                 .produces_end_of_stream();
-            BOOST_CHECK_EQUAL( 1, secondary_calls_count);
+            BOOST_CHECK_EQUAL(3, secondary_calls_count);
             auto range2 = query::partition_range::make(
                 {partitions[0].decorated_key(), true},
                 {partitions[1].decorated_key(), false});
             assert_that(ds(s, range2))
                 .produces(slice(partitions, range2))
                 .produces_end_of_stream();
-            BOOST_CHECK_EQUAL( 1, secondary_calls_count);
+            BOOST_CHECK_EQUAL(3, secondary_calls_count);
             auto range3 = query::partition_range::make(
                 {dht::ring_position::starting_at(key_before_all.token())},
                 {partitions[2].decorated_key(), false});
             assert_that(ds(s, range3))
                 .produces(slice(partitions, range3))
                 .produces_end_of_stream();
-            BOOST_CHECK_EQUAL( 3, secondary_calls_count);
+            BOOST_CHECK_EQUAL(5, secondary_calls_count);
         }
         {
             int secondary_calls_count = 0;
+            auto test = [&] (const mutation_source& ds, const query::partition_range& range, int expected_count) {
+                do_test(ds, range, secondary_calls_count, expected_count);
+            };
+
             auto cache = make_cache(s, secondary_calls_count);
             auto ds = mutation_source([cache] (schema_ptr s, const query::partition_range& range) {
                     return cache->make_reader(s, range);
             });
 
-            test(ds, query::full_partition_range, secondary_calls_count);
-            test(ds, query::full_partition_range, secondary_calls_count);
+            test(ds, query::full_partition_range, partitions.size() + 1);
+            test(ds, query::full_partition_range, partitions.size() + 1);
 
             cache->invalidate(key_after_all);
 
             assert_that(ds(s, query::full_partition_range))
                 .produces(slice(partitions, query::full_partition_range))
                 .produces_end_of_stream();
-            BOOST_CHECK_EQUAL( 2, secondary_calls_count);
+            BOOST_CHECK_EQUAL(partitions.size() + 2, secondary_calls_count);
         }
     });
 }
