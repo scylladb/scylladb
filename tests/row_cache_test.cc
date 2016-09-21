@@ -839,6 +839,10 @@ private:
                     return _throttle.enter();
                 });
             }
+
+            virtual future<> fast_forward_to(const query::partition_range& pr) override {
+                return _reader.fast_forward_to(pr);
+            }
         };
     public:
         impl(mutation_source underlying)
