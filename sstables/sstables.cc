@@ -1242,7 +1242,7 @@ void sstable::maybe_flush_pi_block(file_writer& out,
         // block size of new data.
         if (!clustering_key.empty()) {
             auto& rts = _pi_write.tombstone_accumulator->range_tombstones_for_row(
-                    clustering_key_prefix(clustering_key.values()));
+                    clustering_key_prefix::from_range(clustering_key.values()));
             for (const auto& rt : rts) {
                 auto start = composite::from_clustering_element(*_pi_write.schemap, rt.start);
                 auto end = composite::from_clustering_element(*_pi_write.schemap, rt.end);
