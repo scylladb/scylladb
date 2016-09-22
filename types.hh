@@ -1066,7 +1066,7 @@ class serialized_tri_compare {
     data_type _type;
 public:
     serialized_tri_compare(data_type type) : _type(type) {}
-    bool operator()(const bytes_view& v1, const bytes_view& v2) const {
+    int operator()(const bytes_view& v1, const bytes_view& v2) const {
         return _type->compare(v1, v2);
     }
 };
