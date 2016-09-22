@@ -109,8 +109,7 @@ future<> do_send_mutations(auto si, auto fm, bool fragmented) {
 
 future<> send_mutations(auto si) {
     auto& cf = si->db.find_column_family(si->cf_id);
-    auto& priority = service::get_local_streaming_read_priority();
-    return do_with(cf.make_reader(cf.schema(), si->pr, query::full_slice, priority), [si] (auto& reader) {
+    return do_with(cf.make_streaming_reader(cf.schema(), si->pr), [si] (auto& reader) {
         return repeat([si, &reader] () {
             return reader().then([si] (auto smopt) {
                 if (smopt && si->db.column_family_exists(si->cf_id)) {
