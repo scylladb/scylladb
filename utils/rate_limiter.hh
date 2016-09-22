@@ -36,7 +36,7 @@ class rate_limiter {
 private:
     timer<lowres_clock> _timer;
     size_t _units_per_s;
-    semaphore _sem;
+    semaphore _sem {0};
 
     void on_timer();
 public:

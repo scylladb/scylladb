@@ -56,7 +56,7 @@ const sstring trace_keyspace_helper::NODE_SLOW_QUERY_LOG("node_slow_log");
 
 struct trace_keyspace_backend_sesssion_state final : public backend_session_state_base {
     int64_t last_nanos = 0;
-    semaphore write_sem;
+    semaphore write_sem {1};
     virtual ~trace_keyspace_backend_sesssion_state() {}
 };
 

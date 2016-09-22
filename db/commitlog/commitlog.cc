@@ -163,7 +163,7 @@ public:
 
     bool _shutdown = false;
 
-    semaphore _new_segment_semaphore;
+    semaphore _new_segment_semaphore {1};
     semaphore _write_semaphore;
     semaphore _flush_semaphore;
 
