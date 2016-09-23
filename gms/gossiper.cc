@@ -1196,9 +1196,9 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     }
     if (!is_dead_state(eps) && !_in_shadow_round) {
         if (endpoint_state_map.count(ep))  {
-            logger.info("Node {} has restarted, now UP, status = {}", ep, get_gossip_status(eps));
+            logger.debug("Node {} has restarted, now UP, status = {}", ep, get_gossip_status(eps));
         } else {
-            logger.info("Node {} is now part of the cluster, status = {}", ep, get_gossip_status(eps));
+            logger.debug("Node {} is now part of the cluster, status = {}", ep, get_gossip_status(eps));
         }
     }
     logger.trace("Adding endpoint state for {}, status = {}", ep, get_gossip_status(eps));
