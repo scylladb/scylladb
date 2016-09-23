@@ -749,10 +749,10 @@ void gossiper::convict(inet_address endpoint, double phi) {
         return;
     }
     auto& state = it->second;
-    logger.debug("Convicting {} with status {} - alive {}", endpoint, get_gossip_status(state), state.is_alive());
     if (!state.is_alive()) {
         return;
     }
+    logger.debug("Convicting {} with status {} - alive {}", endpoint, get_gossip_status(state), state.is_alive());
 
     logger.trace("convict ep={}, phi={}, is_alive={}, is_dead_state={}", endpoint, phi, state.is_alive(), is_dead_state(state));
     if (is_shutdown(endpoint)) {
