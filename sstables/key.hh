@@ -64,14 +64,16 @@ public:
 // In order to be able to achieve read and write compatibility for sstables - so they can
 // be imported and exported - we need to always convert a key to this representation.
 class key {
+public:
     enum class kind {
         before_all_keys,
         regular,
         after_all_keys,
     };
+private:
     kind _kind;
     bytes _bytes;
-private:
+
     static bool is_compound(const schema& s) {
         return s.partition_key_size() > 1;
     }
