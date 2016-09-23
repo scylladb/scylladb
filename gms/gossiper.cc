@@ -980,7 +980,10 @@ future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
         if (rand_dbl < prob) {
             std::set<inet_address> addrs;
             for (auto&& x : _unreachable_endpoints) {
-                addrs.insert(x.first);
+                // Ignore the node which is decommissioned
+                if (get_gossip_status(x.first) != sstring(versioned_value::STATUS_LEFT)) {
+                    addrs.insert(x.first);
+                }
             }
             logger.trace("do_gossip_to_unreachable_member: live_endpoint nr={} unreachable_endpoints nr={}",
                 live_endpoint_count, unreachable_endpoint_count);
