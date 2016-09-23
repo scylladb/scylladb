@@ -216,6 +216,17 @@ future<stream_bytes> stream_manager::get_progress_on_all_shards() {
     );
 }
 
+bool stream_manager::has_peer(inet_address endpoint) {
+    for (auto sr : get_all_streams()) {
+        for (auto session : sr->get_coordinator()->get_all_stream_sessions()) {
+            if (session->peer == endpoint) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void stream_manager::fail_sessions(inet_address endpoint) {
     for (auto sr : get_all_streams()) {
         for (auto session : sr->get_coordinator()->get_all_stream_sessions()) {
