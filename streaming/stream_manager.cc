@@ -216,6 +216,17 @@ future<stream_bytes> stream_manager::get_progress_on_all_shards() {
     );
 }
 
+bool stream_manager::has_peer(inet_address endpoint) {
+    for (auto sr : get_all_streams()) {
+        for (auto session : sr->get_coordinator()->get_all_stream_sessions()) {
+            if (session->peer == endpoint) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void stream_manager::fail_sessions(inet_address endpoint) {
     for (auto sr : get_all_streams()) {
         for (auto session : sr->get_coordinator()->get_all_stream_sessions()) {
@@ -227,21 +238,25 @@ void stream_manager::fail_sessions(inet_address endpoint) {
 }
 
 void stream_manager::on_remove(inet_address endpoint) {
-    sslog.info("stream_manager: Close all stream_session with peer = {} in on_remove", endpoint);
-    get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
-        sm.fail_sessions(endpoint);
-    }).handle_exception([endpoint] (auto ep) {
-        sslog.warn("stream_manager: Fail to close sessions peer = {} in on_remove", endpoint);
-    });
+    if (has_peer(endpoint)) {
+        sslog.info("stream_manager: Close all stream_session with peer = {} in on_remove", endpoint);
+        get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
+            sm.fail_sessions(endpoint);
+        }).handle_exception([endpoint] (auto ep) {
+            sslog.warn("stream_manager: Fail to close sessions peer = {} in on_remove", endpoint);
+        });
+    }
 }
 
 void stream_manager::on_restart(inet_address endpoint, endpoint_state ep_state) {
-    sslog.info("stream_manager: Close all stream_session with peer = {} in on_restart", endpoint);
-    get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
-        sm.fail_sessions(endpoint);
-    }).handle_exception([endpoint] (auto ep) {
-        sslog.warn("stream_manager: Fail to close sessions peer = {} in on_restart", endpoint);
-    });
+    if (has_peer(endpoint)) {
+        sslog.info("stream_manager: Close all stream_session with peer = {} in on_restart", endpoint);
+        get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
+            sm.fail_sessions(endpoint);
+        }).handle_exception([endpoint] (auto ep) {
+            sslog.warn("stream_manager: Fail to close sessions peer = {} in on_restart", endpoint);
+        });
+    }
 }
 
 } // namespace streaming

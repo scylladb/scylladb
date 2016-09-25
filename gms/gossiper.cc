@@ -749,10 +749,10 @@ void gossiper::convict(inet_address endpoint, double phi) {
         return;
     }
     auto& state = it->second;
-    logger.debug("Convicting {} with status {} - alive {}", endpoint, get_gossip_status(state), state.is_alive());
     if (!state.is_alive()) {
         return;
     }
+    logger.debug("Convicting {} with status {} - alive {}", endpoint, get_gossip_status(state), state.is_alive());
 
     logger.trace("convict ep={}, phi={}, is_alive={}, is_dead_state={}", endpoint, phi, state.is_alive(), is_dead_state(state));
     if (is_shutdown(endpoint)) {
@@ -980,7 +980,10 @@ future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
         if (rand_dbl < prob) {
             std::set<inet_address> addrs;
             for (auto&& x : _unreachable_endpoints) {
-                addrs.insert(x.first);
+                // Ignore the node which is decommissioned
+                if (get_gossip_status(x.first) != sstring(versioned_value::STATUS_LEFT)) {
+                    addrs.insert(x.first);
+                }
             }
             logger.trace("do_gossip_to_unreachable_member: live_endpoint nr={} unreachable_endpoints nr={}",
                 live_endpoint_count, unreachable_endpoint_count);
@@ -1162,7 +1165,7 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
     _expire_time_endpoint_map.erase(addr);
     logger.debug("removing expire time for endpoint : {}", addr);
     if (!_in_shadow_round) {
-        logger.info("InetAddress {} is now UP", addr);
+        logger.info("InetAddress {} is now UP, status = {}", addr, get_gossip_status(local_state));
     }
 
     _subscribers.for_each([addr, local_state] (auto& subscriber) {
@@ -1178,7 +1181,7 @@ void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     _live_endpoints.erase(addr);
     _live_endpoints_just_added.remove(addr);
     _unreachable_endpoints[addr] = now();
-    logger.info("InetAddress {} is now DOWN", addr);
+    logger.info("InetAddress {} is now DOWN, status = {}", addr, get_gossip_status(local_state));
     _subscribers.for_each([addr, local_state] (auto& subscriber) {
         subscriber->on_dead(addr, local_state);
         logger.trace("Notified {}", subscriber.get());
@@ -1193,9 +1196,9 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     }
     if (!is_dead_state(eps) && !_in_shadow_round) {
         if (endpoint_state_map.count(ep))  {
-            logger.info("Node {} has restarted, now UP", ep);
+            logger.debug("Node {} has restarted, now UP, status = {}", ep, get_gossip_status(eps));
         } else {
-            logger.info("Node {} is now part of the cluster", ep);
+            logger.debug("Node {} is now part of the cluster, status = {}", ep, get_gossip_status(eps));
         }
     }
     logger.trace("Adding endpoint state for {}, status = {}", ep, get_gossip_status(eps));
@@ -1588,7 +1591,10 @@ bool gossiper::is_in_shadow_round() {
 }
 
 void gossiper::add_expire_time_for_endpoint(inet_address endpoint, clk::time_point expire_time) {
-    logger.debug("adding expire time for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
+    auto n = now();
+    logger.debug("adding expire time for endpoint : {} (expire={}, now={}, diff={} seconds)",
+            endpoint, expire_time.time_since_epoch().count(), n.time_since_epoch().count(),
+            std::chrono::duration_cast<std::chrono::seconds>(expire_time - n).count());
     _expire_time_endpoint_map[endpoint] = expire_time;
 }
 

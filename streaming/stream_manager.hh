@@ -154,6 +154,7 @@ public:
 
 private:
     void fail_sessions(inet_address endpoint);
+    bool has_peer(inet_address endpoint);
 };
 
 extern distributed<stream_manager> _the_stream_manager;
