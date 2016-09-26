@@ -417,7 +417,7 @@ future<partition_checksum> checksum_range(seastar::sharded<database> &db,
     });
 }
 
-static void sync_range(seastar::sharded<database>& db,
+static void request_transfer_ranges(seastar::sharded<database>& db,
         const sstring& keyspace, const sstring& cf,
         const ::range<dht::token>& range,
         const std::vector<gms::inet_address>& neighbors_in,
@@ -595,13 +595,13 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
                         if (checksum0 != checksum) {
                             logger.info("Found differing range {} on nodes {}, in = {}, out = {}", range,
                                     live_neighbors, live_neighbors_in, live_neighbors_out);
-                            sync_range(db, keyspace, cf, range, live_neighbors_in, live_neighbors_out, sp_in, sp_out);
+                            request_transfer_ranges(db, keyspace, cf, range, live_neighbors_in, live_neighbors_out, sp_in, sp_out);
                             return make_ready_future<>();
                         }
                     }
                     return make_ready_future<>();
                 }).handle_exception([&success, &cf, &range, &failed_ranges] (std::exception_ptr eptr) {
-                    // Something above (e.g., sync_range) failed. We could
+                    // Something above (e.g., request_transfer_ranges) failed. We could
                     // stop the repair immediately, or let it continue with
                     // other ranges (at the moment, we do the latter). But in
                     // any case, we need to remember that the repair failed to
