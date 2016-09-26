@@ -521,6 +521,13 @@ public:
             const io_priority_class& pc = default_priority_class(),
             tracing::trace_state_ptr trace_state = nullptr) const;
 
+    // The streaming mutation reader differs from the regular mutation reader in that:
+    //  - Reflects all writes accepted by replica prior to creation of the
+    //    reader and a _bounded_ amount of writes which arrive later.
+    //  - Does not populate the cache
+    mutation_reader make_streaming_reader(schema_ptr schema,
+            const query::partition_range& range = query::full_partition_range) const;
+
     mutation_source as_mutation_source(tracing::trace_state_ptr trace_state) const;
 
     // Queries can be satisfied from multiple data sources, so they are returned
