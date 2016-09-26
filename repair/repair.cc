@@ -356,10 +356,7 @@ static future<partition_checksum> checksum_range_shard(database &db,
         const ::range<dht::token>& range, repair_checksum hash_version) {
     auto& cf = db.find_column_family(keyspace_name, cf_name);
     return do_with(dht::to_partition_range(range), [&cf, hash_version] (const auto& partition_range) {
-        auto reader = cf.make_reader(cf.schema(),
-                                     partition_range,
-                                     query::full_slice,
-                                     service::get_local_streaming_read_priority());
+        auto reader = cf.make_streaming_reader(cf.schema(), partition_range);
         return do_with(std::move(reader), partition_checksum(),
             [hash_version] (auto& reader, auto& checksum) {
             return repeat([&reader, &checksum, hash_version] () {
