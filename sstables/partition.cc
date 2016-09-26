@@ -1096,22 +1096,6 @@ mutation_reader sstable::read_rows(schema_ptr schema, const io_priority_class& p
     return std::make_unique<mutation_reader::impl>(shared_from_this(), schema, pc);
 }
 
-future<uint64_t> sstable::lower_bound(schema_ptr s, const dht::ring_position& pos, const io_priority_class& pc) {
-    return do_with(get_index_reader(pc), [s, pos] (index_reader& ir) {
-        return ir.lower_bound(*s, pos).finally([&ir] {
-            return ir.close();
-        });
-    });
-}
-
-future<uint64_t> sstable::upper_bound(schema_ptr s, const dht::ring_position& pos, const io_priority_class& pc) {
-    return do_with(get_index_reader(pc), [s, pos] (index_reader& ir) {
-        return ir.upper_bound(*s, pos).finally([&ir] {
-            return ir.close();
-        });
-    });
-}
-
 mutation_reader
 sstable::read_range_rows(schema_ptr schema,
                          const query::partition_range& range,

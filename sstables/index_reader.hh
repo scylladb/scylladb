@@ -267,7 +267,7 @@ public:
             return _reader ? std::move(_reader->_consumer.indexes) : index_list();
         });
     }
-
+private:
     enum class bound_kind { lower, upper };
 
     template<bound_kind bound>
@@ -330,7 +330,7 @@ public:
     future<uint64_t> upper_bound(const schema& s, const dht::ring_position& pos) {
         return find_bound<bound_kind::upper>(s, pos);
     }
-
+public:
     future<sstable::disk_read_range> get_disk_read_range(const schema& s, const query::partition_range& range) {
         return start_position(s, range).then([this, &s, &range] (uint64_t start) {
             return end_position(s, range).then([&s, &range, start] (uint64_t end) {

@@ -531,20 +531,6 @@ private:
         return binary_search(entries, sk, dht::global_partitioner().get_token(key_view(sk)));
     }
 
-    // Returns position in the data file of the first entry which is not
-    // smaller than the supplied ring_position. If no such entry exists, a
-    // position right after all entries is returned.
-    //
-    // The ring_position doesn't have to survive deferring.
-    future<uint64_t> lower_bound(schema_ptr, const dht::ring_position&, const io_priority_class& pc);
-
-    // Returns position in the data file of the first partition which is
-    // greater than the supplied ring_position. If no such entry exists, a
-    // position right after all entries is returned.
-    //
-    // The ring_position doesn't have to survive deferring.
-    future<uint64_t> upper_bound(schema_ptr, const dht::ring_position&, const io_priority_class& pc);
-
     // find_disk_ranges finds the ranges of bytes we need to read from the
     // sstable to read the desired columns out of the given key. This range
     // may be the entire byte range of the given partition - as found using
