@@ -677,6 +677,21 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
     });
 }
 
+future<> gossiper::force_remove_endpoint(inet_address endpoint) {
+    if (endpoint == get_broadcast_address()) {
+        return make_exception_future<>(std::runtime_error(format("Can not force remove node {} itself", endpoint)));
+    }
+    return get_gossiper().invoke_on(0, [endpoint] (auto& gossiper) mutable {
+        return seastar::async([&gossiper, g = gossiper.shared_from_this(), endpoint] () mutable {
+            gossiper.remove_endpoint(endpoint);
+            gossiper.evict_from_membership(endpoint);
+            logger.info("Finished to force remove node {}", endpoint);
+        }).handle_exception([endpoint] (auto ep) {
+            logger.warn("Failed to force remove node {}: {}", endpoint, ep);
+        });
+    });
+}
+
 // Runs inside seastar::async context
 void gossiper::remove_endpoint(inet_address endpoint) {
     // do subscribers first so anything in the subscriber that depends on gossiper state won't get confused

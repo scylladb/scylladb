@@ -66,6 +66,13 @@ void set_gossiper(http_context& ctx, routes& r) {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
+
+    httpd::gossiper_json::force_remove_endpoint.set(r, [](std::unique_ptr<request> req) {
+        gms::inet_address ep(req->param["addr"]);
+        return gms::get_local_gossiper().force_remove_endpoint(ep).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
 }
 
 }

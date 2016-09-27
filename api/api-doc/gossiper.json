@@ -148,6 +148,30 @@
                ]
             }
          ]
+      },
+      {
+         "path":"/gossiper/force_remove_endpoint/{addr}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Force remove an endpoint from gossip",
+               "type":"void",
+               "nickname":"force_remove_endpoint",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"addr",
+                     "description":"The endpoint address",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
       }
    ]
 }

@@ -301,6 +301,7 @@ public:
      * Removes the endpoint from Gossip but retains endpoint state
      */
     void remove_endpoint(inet_address endpoint);
+    future<> force_remove_endpoint(inet_address endpoint);
 private:
     /**
      * Quarantines the endpoint for QUARANTINE_DELAY
