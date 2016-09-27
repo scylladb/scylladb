@@ -151,6 +151,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_unitdir}/scylla-server.service
 %{_unitdir}/scylla-housekeeping.service
 %{_unitdir}/scylla-housekeeping.timer
+%{_unitdir}/node-exporter.service
 %{_bindir}/scylla
 %{_bindir}/iotune
 %{_bindir}/scyllatop
@@ -159,6 +160,8 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/scylla_prepare
 %{_prefix}/lib/scylla/scylla_stop
 %{_prefix}/lib/scylla/scylla_setup
+%{_prefix}/lib/scylla/node_exporter_install
+%{_sbindir}/node_exporter_install
 %{_prefix}/lib/scylla/scylla_coredump_setup
 %{_prefix}/lib/scylla/scylla_raid_setup
 %{_prefix}/lib/scylla/scylla_sysconfig_setup

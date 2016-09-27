@@ -1,0 +1,56 @@
+#!/bin/sh
+#
+# Copyright 2016 ScyllaDB
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+
+if [ "`id -u`" -ne 0 ]; then
+    echo "Requires root permission."
+    exit 1
+fi
+
+if [ -f /usr/bin/node_exporter ]; then
+    echo "node_exporter already installed"
+    exit 1
+fi
+
+version=0.12.0
+dir=/usr/lib/scylla/Prometheus/node_exporter
+mkdir -p $dir
+cd $dir
+wget https://github.com/prometheus/node_exporter/releases/download/$version/node_exporter-$version.linux-amd64.tar.gz -O $dir/node_exporter-$version.linux-amd64.tar.gz
+tar -xvzf $dir/node_exporter-$version.linux-amd64.tar.gz
+rm $dir/node_exporter-$version.linux-amd64.tar.gz
+ln -s $dir/node_exporter-$version.linux-amd64/node_exporter /usr/bin
+. /etc/os-release
+
+ if [ "$(cat /proc/1/comm)" = "systemd" ]; then
+    systemctl enable node-exporter
+    systemctl start node-exporter
+else
+    cat <<EOT >> /etc/init/node_exporter.conf
+# Run node_exporter
+
+start on startup
+
+script
+   /usr/bin/node_exporter
+end script
+EOT
+    service node_exporter start
+fi
+
+printf "node_exporter successfully installed\n"
