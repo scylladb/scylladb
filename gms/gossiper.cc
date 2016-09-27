@@ -1591,10 +1591,14 @@ bool gossiper::is_in_shadow_round() {
 }
 
 void gossiper::add_expire_time_for_endpoint(inet_address endpoint, clk::time_point expire_time) {
-    auto n = now();
-    logger.debug("adding expire time for endpoint : {} (expire={}, now={}, diff={} seconds)",
-            endpoint, expire_time.time_since_epoch().count(), n.time_since_epoch().count(),
-            std::chrono::duration_cast<std::chrono::seconds>(expire_time - n).count());
+    char expire_time_buf[100];
+    auto expire_time_tm = std::chrono::system_clock::to_time_t(expire_time);
+    auto now_ = now();
+    strftime(expire_time_buf, sizeof(expire_time_buf), "%Y-%m-%d %T", std::localtime(&expire_time_tm));
+    auto diff = std::chrono::duration_cast<std::chrono::seconds>(expire_time - now_).count();
+    logger.info("Node {} will be removed from gossip at [{}]: (expire = {}, now = {}, diff = {} seconds)",
+            endpoint, expire_time_buf, expire_time.time_since_epoch().count(),
+            now_.time_since_epoch().count(), diff);
     _expire_time_endpoint_map[endpoint] = expire_time;
 }
 
