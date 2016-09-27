@@ -219,7 +219,7 @@ void register_handler(messaging_service* ms, messaging_verb verb, Func&& func) {
 }
 
 messaging_service::messaging_service(gms::inet_address ip, uint16_t port, bool listen_now)
-    : messaging_service(std::move(ip), port, encrypt_what::none, compress_what::none, 0, nullptr, listen_now)
+    : messaging_service(std::move(ip), port, encrypt_what::none, compress_what::none, 0, nullptr, false, listen_now)
 {}
 
 static
@@ -233,6 +233,7 @@ rpc_resource_limits() {
 }
 
 void messaging_service::start_listen() {
+    bool listen_to_bc = _should_listen_to_broadcast_address && _listen_address != utils::fb_utilities::get_broadcast_address();
     rpc::server_options so;
     if (_compress_what != compress_what::none) {
         so.compressor_factory = &compressor_factory;
@@ -244,7 +245,7 @@ void messaging_service::start_listen() {
                     so, addr, rpc_resource_limits()));
         };
         _server[0] = listen(_listen_address);
-        if (_should_listen_to_broadcast_address) {
+        if (listen_to_bc) {
             _server[1] = listen(utils::fb_utilities::get_broadcast_address());
         }
     }
@@ -264,7 +265,7 @@ void messaging_service::start_listen() {
             }());
         };
         _server_tls[0] = listen(_listen_address);
-        if (_should_listen_to_broadcast_address) {
+        if (listen_to_bc) {
             _server_tls[1] = listen(utils::fb_utilities::get_broadcast_address());
         }
 
