@@ -26,6 +26,6 @@
 
 namespace utils {
 
-using input_stream = seastar::memory_stream<bytes_ostream::fragment_iterator>;
+using input_stream = seastar::memory_input_stream<bytes_ostream::fragment_iterator>;
 
 }

@@ -174,7 +174,7 @@ public:
         value_type* ptr;
         // makes the place_holder looks like a stream
         seastar::simple_output_stream get_stream() {
-            return seastar::simple_output_stream{reinterpret_cast<char*>(ptr)};
+            return seastar::simple_output_stream(reinterpret_cast<char*>(ptr), sizeof(T));
         }
     };
 

@@ -25,17 +25,12 @@
 namespace ser {
 
 template<typename T>
-void set_size(seastar::simple_output_stream& os, const T& obj) {
-    serialize(os, get_sizeof(obj));
-}
-
-template<typename T>
 void set_size(seastar::measuring_output_stream& os, const T& obj) {
     serialize(os, uint32_t(0));
 }
 
-template<typename T>
-void set_size(bytes_ostream& os, const T& obj) {
+template<typename Stream, typename T>
+void set_size(Stream& os, const T& obj) {
     serialize(os, get_sizeof(obj));
 }
 
@@ -260,9 +255,9 @@ struct serializer<std::map<K, V>> {
 
 template<typename Iterator>
 class deserialized_bytes_proxy {
-    seastar::memory_stream<Iterator> _stream;
+    seastar::memory_input_stream<Iterator> _stream;
 public:
-    explicit deserialized_bytes_proxy(seastar::memory_stream<Iterator> stream)
+    explicit deserialized_bytes_proxy(seastar::memory_input_stream<Iterator> stream)
         : _stream(std::move(stream)) { }
 
     [[gnu::always_inline]]
@@ -440,7 +435,7 @@ Buffer serialize_to_buffer(const T& v, size_t head_space) {
     seastar::measuring_output_stream measure;
     ser::serialize(measure, v);
     Buffer ret(typename Buffer::initialized_later(), measure.size() + head_space);
-    seastar::simple_output_stream out(reinterpret_cast<char*>(ret.begin()), head_space);
+    seastar::simple_output_stream out(reinterpret_cast<char*>(ret.begin()), ret.size(), head_space);
     ser::serialize(out, v);
     return ret;
 }

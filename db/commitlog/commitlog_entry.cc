@@ -73,7 +73,7 @@ void commitlog_entry_writer::compute_size() {
 }
 
 void commitlog_entry_writer::write(data_output& out) const {
-    seastar::simple_output_stream str(out.reserve(size()));
+    seastar::simple_output_stream str(out.reserve(size()), size());
     ser::serialize(str, get_entry());
 }
 
