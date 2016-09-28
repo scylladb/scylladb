@@ -1053,6 +1053,9 @@ future<> storage_service::stop_transport() {
             ss.do_stop_ms().get();
             logger.info("Stop transport: shutdown messaging_service done");
 
+            ss.do_stop_stream_manager().get();
+            logger.info("Stop transport: shutdown stream_manager done");
+
             auth::auth::shutdown().get();
             logger.info("Stop transport: auth shutdown");
 
@@ -1662,6 +1665,18 @@ future<> storage_service::do_stop_ms() {
         return ms.stop();
     }).then([] {
         logger.info("messaging_service stopped");
+    });
+}
+
+future<> storage_service::do_stop_stream_manager() {
+    if (_stream_manager_stopped) {
+        return make_ready_future<>();
+    }
+    _stream_manager_stopped = true;
+    return streaming::get_stream_manager().invoke_on_all([] (auto& sm) {
+        return sm.stop();
+    }).then([] {
+        logger.info("stream_manager stopped");
     });
 }
 

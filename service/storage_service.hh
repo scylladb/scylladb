@@ -126,6 +126,7 @@ private:
     sstring _operation_in_progress;
     bool _force_remove_completion = false;
     bool _ms_stopped = false;
+    bool _stream_manager_stopped = false;
 public:
     storage_service(distributed<database>& db)
         : _db(db) {
@@ -316,6 +317,7 @@ private:
     future<> do_stop_rpc_server();
     future<> do_stop_native_transport();
     future<> do_stop_ms();
+    future<> do_stop_stream_manager();
 #if 0
     public void stopTransports()
     {
