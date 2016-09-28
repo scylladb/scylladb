@@ -8,14 +8,14 @@ In addition to required packages by Seastar, the following packages are required
 Scylla uses submodules, so make sure you pull the submodules first by doing:
 ```
 git submodule init
-git submodule update --recursive
+git submodule update --init --recursive
 ```
 
 ### Building and Running Scylla on Fedora
 * Installing required packages:
 
 ```
-sudo dnf install yaml-cpp-devel lz4-devel zlib-devel snappy-devel jsoncpp-devel thrift-devel antlr3-tool antlr3-C++-devel libasan libubsan gcc-c++ gnutls-devel ninja-build ragel libaio-devel cryptopp-devel xfsprogs-devel numactl-devel hwloc-devel libpciaccess-devel libxml2-devel python3-pyparsing lksctp-tools-devel protobuf-devel protobuf-compiler systemd-devel
+sudo dnf install yaml-cpp-devel lz4-devel zlib-devel snappy-devel jsoncpp-devel thrift-devel antlr3-tool antlr3-C++-devel libasan libubsan gcc-c++ gnutls-devel ninja-build ragel libaio-devel cryptopp-devel xfsprogs-devel numactl-devel hwloc-devel libpciaccess-devel libxml2-devel python3-pyparsing lksctp-tools-devel protobuf-devel protobuf-compiler systemd-devel libunwind-devel
 ```
 
 * Build Scylla
