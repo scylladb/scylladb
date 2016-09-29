@@ -634,10 +634,10 @@ public:
             auto addresses = entry.second;
             token_range tr;
             if (range.start()) {
-                tr._start_token = boost::lexical_cast<std::string>(range.start()->value());
+                tr._start_token = dht::global_partitioner().to_sstring(range.start()->value());
             }
             if (range.end()) {
-                tr._end_token = boost::lexical_cast<std::string>(range.end()->value());
+                tr._end_token = dht::global_partitioner().to_sstring(range.end()->value());
             }
             for (auto endpoint : addresses) {
                 endpoint_details details;
