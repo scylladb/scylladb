@@ -2421,6 +2421,18 @@ stdx::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_ra
     return stdx::nullopt;
 }
 
+std::vector<dht::decorated_key> sstable::get_key_samples(const schema& s, const nonwrapping_range<dht::token>& range) {
+    auto index_range = get_sample_indexes_for_range(range);
+    std::vector<dht::decorated_key> res;
+    if (index_range) {
+        for (auto idx = index_range->first; idx < index_range->second; ++idx) {
+            auto pkey = _summary.entries[idx].get_key().to_partition_key(s);
+            res.push_back(dht::global_partitioner().decorate_key(s, std::move(pkey)));
+        }
+    }
+    return res;
+}
+
 uint64_t sstable::estimated_keys_for_range(const nonwrapping_range<dht::token>& range) {
     auto sample_index_range = get_sample_indexes_for_range(range);
     uint64_t sample_key_count = sample_index_range ? sample_index_range->second - sample_index_range->first : 0;
