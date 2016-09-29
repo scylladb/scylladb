@@ -81,7 +81,8 @@ if [ `is_developer_mode` -eq 0 ]; then
             output_to_user "/var/lib/scylla did not pass validation tests, it may not be on XFS and/or has limited disk space."
             output_to_user "This is a non-supported setup, and performance is expected to be very bad."
             output_to_user "For better performance, placing your data on XFS-formatted directories is required."
-            output_to_user " To override this error, see the developer_mode configuration option."
+            output_to_user "To override this error, enable developer mode as follow:"
+            output_to_user " sudo /usr/lib/scylla/scylla_dev_mode_setup --developer-mode 1"
         fi
     fi
 fi
