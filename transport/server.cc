@@ -1518,9 +1518,9 @@ std::vector<char> cql_server::response::compress_snappy(const std::vector<char>&
     const char* input = body.data();
     size_t input_len = body.size();
     std::vector<char> comp;
-    comp.resize(snappy_max_compressed_length(input_len));
+    size_t output_len = snappy_max_compressed_length(input_len);
+    comp.resize(output_len);
     char *output = comp.data();
-    size_t output_len;
     if (snappy_compress(input, input_len, output, &output_len) != SNAPPY_OK) {
         throw std::runtime_error("CQL frame Snappy compression failure");
     }
