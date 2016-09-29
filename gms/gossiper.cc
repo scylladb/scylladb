@@ -484,8 +484,6 @@ void gossiper::remove_endpoint(inet_address endpoint) {
     _live_endpoints.erase(endpoint);
     _live_endpoints_just_added.remove(endpoint);
     _unreachable_endpoints.erase(endpoint);
-    // do not remove endpointState until the quarantine expires
-    get_local_failure_detector().remove(endpoint);
     quarantine_endpoint(endpoint);
     logger.debug("removing endpoint {}", endpoint);
 }
@@ -783,6 +781,7 @@ void gossiper::evict_from_membership(inet_address endpoint) {
     _unreachable_endpoints.erase(endpoint);
     endpoint_state_map.erase(endpoint);
     _expire_time_endpoint_map.erase(endpoint);
+    get_local_failure_detector().remove(endpoint);
     quarantine_endpoint(endpoint);
     logger.debug("evicting {} from gossip", endpoint);
 }
