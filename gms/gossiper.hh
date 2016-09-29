@@ -102,7 +102,7 @@ private:
         return msg_addr{to, _default_cpuid};
     }
     void do_sort(std::vector<gossip_digest>& g_digest_list);
-    timer<std::chrono::steady_clock> _scheduled_gossip_task;
+    timer<lowres_clock> _scheduled_gossip_task;
     bool _enabled = false;
     std::set<inet_address> _seeds_from_config;
     sstring _cluster_name;
