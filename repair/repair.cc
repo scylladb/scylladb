@@ -504,12 +504,19 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
 
     // FIXME: we should have an on-the-fly iterator generator here, not
     // fill a vector in advance.
+    // FIXME: this "100" needs to be a parameter.
+    uint64_t target_partitions = 100;
     std::vector<::range<dht::token>> tosplit;
-    ranges.swap(tosplit);
-    for (const auto& range : tosplit) {
-        // FIXME: this "100" needs to be a parameter.
-        split_and_add(ranges, range, estimated_partitions, 100);
+    while (estimated_partitions > target_partitions) {
+        tosplit.clear();
+        ranges.swap(tosplit);
+        for (const auto& range : tosplit) {
+            split_and_add(ranges, range, estimated_partitions, target_partitions);
+        }
+        estimated_partitions /= 2;
     }
+    logger.debug("target_partitions={}, estimated_partitions={}, ranges.size={}, range={} -> ranges={}",
+                  target_partitions, estimated_partitions, ranges.size(), range, ranges);
 
     return do_with(seastar::gate(), true, std::move(keyspace), std::move(cf), std::move(ranges),
         [&db, &neighbors, &sp_in, &sp_out, &failed_ranges] (auto& completion, auto& success, const auto& keyspace, const auto& cf, const auto& ranges) {
