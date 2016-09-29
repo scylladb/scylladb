@@ -97,7 +97,14 @@ public:
             if (!buf) {
                 throw exceptions::invalid_request_exception("Invalid null token value");
             }
-            return dht::token(dht::token::kind::key, *buf);
+            auto tk = dht::global_partitioner().from_bytes(*buf);
+            if (tk.is_minimum() && !is_start(b)) {
+                // The token was parsed as a minimum marker (token::kind::before_all_keys), but
+                // as it appears in the end bound position, it is actually the maximum marker
+                // (token::kind::after_all_keys).
+                return dht::maximum_token();
+            }
+            return tk;
         };
 
         const auto start_token = get_token_bound(statements::bound::START);
