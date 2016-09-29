@@ -1824,64 +1824,15 @@ public:
         Iterator<Appender<ILoggingEvent>> it = logger.iteratorForAppenders();
         return it.hasNext();
     }
-
-    /**
-     * @return list of Token ranges (_not_ keys!) together with estimated key count,
-     *      breaking up the data this node is responsible for into pieces of roughly keysPerSplit
-     */
-    public List<Pair<Range<Token>, Long>> getSplits(String keyspaceName, String cfName, Range<Token> range, int keysPerSplit)
-    {
-        Keyspace t = Keyspace.open(keyspaceName);
-        ColumnFamilyStore cfs = t.getColumnFamilyStore(cfName);
-        List<DecoratedKey> keys = keySamples(Collections.singleton(cfs), range);
-
-        long totalRowCountEstimate = cfs.estimatedKeysForRange(range);
-
-        // splitCount should be much smaller than number of key samples, to avoid huge sampling error
-        int minSamplesPerSplit = 4;
-        int maxSplitCount = keys.size() / minSamplesPerSplit + 1;
-        int splitCount = Math.max(1, Math.min(maxSplitCount, (int)(totalRowCountEstimate / keysPerSplit)));
-
-        List<Token> tokens = keysToTokens(range, keys);
-        return getSplits(tokens, splitCount, cfs);
-    }
-
-    private List<Pair<Range<Token>, Long>> getSplits(List<Token> tokens, int splitCount, ColumnFamilyStore cfs)
-    {
-        double step = (double) (tokens.size() - 1) / splitCount;
-        Token prevToken = tokens.get(0);
-        List<Pair<Range<Token>, Long>> splits = Lists.newArrayListWithExpectedSize(splitCount);
-        for (int i = 1; i <= splitCount; i++)
-        {
-            int index = (int) Math.round(i * step);
-            Token token = tokens.get(index);
-            Range<Token> range = new Range<>(prevToken, token);
-            // always return an estimate > 0 (see CASSANDRA-7322)
-            splits.add(Pair.create(range, Math.max(cfs.metadata.getMinIndexInterval(), cfs.estimatedKeysForRange(range))));
-            prevToken = token;
-        }
-        return splits;
-    }
-
-    private List<Token> keysToTokens(Range<Token> range, List<DecoratedKey> keys)
-    {
-        List<Token> tokens = Lists.newArrayListWithExpectedSize(keys.size() + 2);
-        tokens.add(range.left);
-        for (DecoratedKey key : keys)
-            tokens.add(key.getToken());
-        tokens.add(range.right);
-        return tokens;
-    }
-
-    private List<DecoratedKey> keySamples(Iterable<ColumnFamilyStore> cfses, Range<Token> range)
-    {
-        List<DecoratedKey> keys = new ArrayList<>();
-        for (ColumnFamilyStore cfs : cfses)
-            Iterables.addAll(keys, cfs.keySamples(range));
-        FBUtilities.sortSampledKeys(keys, range);
-        return keys;
-    }
 #endif
+    /**
+     * @return Vector of Token ranges (_not_ keys!) together with estimated key count,
+     *      breaking up the data this node is responsible for into pieces of roughly keys_per_split
+     */
+    std::vector<std::pair<nonwrapping_range<dht::token>, uint64_t>> get_splits(const sstring& ks_name,
+            const sstring& cf_name,
+            range<dht::token> range,
+            uint32_t keys_per_split);
 public:
     future<> decommission();
 
