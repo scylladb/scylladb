@@ -46,6 +46,7 @@
 #include "gms/endpoint_state.hh"
 #include "gms/application_state.hh"
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/scollectd.hh>
 #include <map>
 
 namespace streaming {
@@ -94,7 +95,14 @@ private:
     std::unordered_map<UUID, shared_ptr<stream_result_future>> _receiving_streams;
     std::unordered_map<UUID, std::unordered_map<gms::inet_address, stream_bytes>> _stream_bytes;
     semaphore _mutation_send_limiter{256};
+    std::unique_ptr<scollectd::registrations> _collectd_registrations;
+
+private:
+    scollectd::registrations setup_collectd();
+
 public:
+    stream_manager();
+
     semaphore& mutation_send_limiter() { return _mutation_send_limiter; }
 
     void register_sending(shared_ptr<stream_result_future> result);
@@ -143,6 +151,8 @@ public:
     future<stream_bytes> get_progress_on_all_shards(gms::inet_address peer);
 
     future<stream_bytes> get_progress_on_all_shards();
+
+    stream_bytes get_progress_on_local_shard();
 
 public:
     virtual void on_join(inet_address endpoint, endpoint_state ep_state) override {}
