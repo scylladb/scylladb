@@ -195,6 +195,14 @@ dht::token random_partitioner::from_sstring(const sstring& t) const {
     }
 }
 
+dht::token random_partitioner::from_bytes(bytes_view bytes) const {
+    if (bytes.empty()) {
+        return minimum_token();
+    } else {
+        return dht::token(dht::token::kind::key, bytes);
+    }
+}
+
 unsigned random_partitioner::shard_of(const token& t) const {
     switch (t._kind) {
         case token::kind::before_all_keys:
