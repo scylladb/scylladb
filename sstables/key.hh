@@ -39,6 +39,10 @@ public:
         return composite_view(_bytes, s.partition_key_size() > 1).explode();
     }
 
+    partition_key to_partition_key(const schema& s) const {
+        return partition_key::from_exploded(s, explode(s));
+    }
+
     bool operator==(const key_view& k) const { return k._bytes == _bytes; }
     bool operator!=(const key_view& k) const { return !(k == *this); }
 
