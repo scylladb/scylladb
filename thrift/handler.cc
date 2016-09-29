@@ -721,50 +721,26 @@ public:
         return cob("dummy trace");
     }
 
-    static std::vector<CfSplit> to_cf_splits(std::vector<db::system_keyspace::range_estimates> estimates, int32_t keys_per_split) {
-        std::vector<CfSplit> splits;
-        if (estimates.empty()) {
-            return splits;
-        }
-        auto&& acc = estimates[0];
-        auto emplace_acc = [&] {
-        splits.emplace_back();
-            auto start_token = dht::global_partitioner().to_sstring(acc.range_start_token);
-            auto end_token = dht::global_partitioner().to_sstring(acc.range_end_token);
-            splits.back().__set_start_token(bytes_to_string(to_bytes_view(start_token)));
-            splits.back().__set_end_token(bytes_to_string(to_bytes_view(end_token)));
-            splits.back().__set_row_count(acc.partitions_count);
-        };
-        for (auto&& e : estimates | boost::adaptors::sliced(1, estimates.size())) {
-            if (acc.partitions_count + e.partitions_count > keys_per_split) {
-                emplace_acc();
-                acc = std::move(e);
-            } else {
-                acc.range_end_token = std::move(e.range_end_token);
-                acc.partitions_count += e.partitions_count;
-            }
-        }
-        emplace_acc();
-        return splits;
-    }
-
     void describe_splits_ex(tcxx::function<void(std::vector<CfSplit>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& cfName, const std::string& start_token, const std::string& end_token, const int32_t keys_per_split) {
         with_cob(std::move(cob), std::move(exn_cob), [&]{
+            std::vector<nonwrapping_range<dht::token>> ranges;
             auto tstart = start_token.empty() ? dht::minimum_token() : dht::global_partitioner().from_sstring(sstring(start_token));
             auto tend = end_token.empty() ? dht::maximum_token() : dht::global_partitioner().from_sstring(sstring(end_token));
+            range<dht::token> r({{ std::move(tstart), false }}, {{ std::move(tend), true }});
             auto cf = sstring(cfName);
-            auto f = db::system_keyspace::query_size_estimates(current_keyspace(), cf, tstart, tend);
-            return f.then([this, keys_per_split, cf = std::move(cf), tstart = std::move(tstart), tend = std::move(tend)](auto&& estimates) {
-                if (!estimates.empty()) {
-                    return make_ready_future<std::vector<CfSplit>>(to_cf_splits(std::move(estimates), keys_per_split));
-                }
-                return db::get_local_size_estimates_recorder().record_size_estimates()
-                    .then([this, keys_per_split, cf = std::move(cf), tstart = std::move(tstart), tend = std::move(tend)]() {
-                        return db::system_keyspace::query_size_estimates(this->current_keyspace(), std::move(cf), std::move(tstart), std::move(tend)).then([keys_per_split](auto&& estimates) {
-                            return to_cf_splits(std::move(estimates), keys_per_split);
-                        });
-                    });
-            });
+            auto splits = service::get_local_storage_service().get_splits(current_keyspace(), cf, std::move(r), keys_per_split);
+
+            std::vector<CfSplit> res;
+            for (auto&& s : splits) {
+                res.emplace_back();
+                assert(s.first.start() && s.first.end());
+                auto start_token = dht::global_partitioner().to_sstring(s.first.start()->value());
+                auto end_token = dht::global_partitioner().to_sstring(s.first.end()->value());
+                res.back().__set_start_token(bytes_to_string(to_bytes_view(start_token)));
+                res.back().__set_end_token(bytes_to_string(to_bytes_view(end_token)));
+                res.back().__set_row_count(s.second);
+            }
+            return res;
         });
     }
 
