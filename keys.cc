@@ -28,6 +28,9 @@
 std::ostream& operator<<(std::ostream& out, const partition_key& pk) {
     return out << "pk{" << to_hex(pk) << "}";
 }
+std::ostream& operator<<(std::ostream& out, const partition_key_view& pk) {
+    return out << "pk{" << to_hex(pk.representation()) << "}";
+}
 
 std::ostream& operator<<(std::ostream& out, const clustering_key_prefix& ckp) {
     return out << "ckp{" << to_hex(ckp) << "}";
