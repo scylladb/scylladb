@@ -78,13 +78,13 @@ cp dist/ubuntu/scylla-server.install.in debian/scylla-server.install
 if [ "$RELEASE" = "14.04" ]; then
     sed -i -e "s/@@DH_INSTALLINIT@@/--upstart-only/g" debian/rules
     sed -i -e "s/@@COMPILER@@/g++-5/g" debian/rules
-    sed -i -e "s/@@BUILD_DEPENDS@@/g++-5/g" debian/control
+    sed -i -e "s/@@BUILD_DEPENDS@@/g++-5, libunwind8-dev/g" debian/control
     sed -i -e "s#@@INSTALL@@#dist/ubuntu/sudoers.d/scylla etc/sudoers.d#g" debian/scylla-server.install
     sed -i -e "s#@@HKDOTTIMER@@##g" debian/scylla-server.install
 else
     sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
     sed -i -e "s/@@COMPILER@@/g++/g" debian/rules
-    sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++/g" debian/control
+    sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++, libunwind-dev/g" debian/control
     sed -i -e "s#@@INSTALL@@##g" debian/scylla-server.install
     sed -i -e "s#@@HKDOTTIMER@@#dist/common/systemd/scylla-housekeeping.timer /lib/systemd/system#g" debian/scylla-server.install
 fi
