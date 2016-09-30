@@ -64,9 +64,6 @@ class leveled_manifest {
 
     schema_ptr _schema;
     std::vector<std::list<sstables::shared_sstable>> _generations;
-#if 0
-    private final RowPosition[] lastCompactedKeys;
-#endif
     uint64_t _max_sstable_size_in_bytes;
 #if 0
     private final SizeTieredCompactionStrategyOptions options;
@@ -74,6 +71,8 @@ class leveled_manifest {
 #endif
 
 public:
+    static constexpr int MAX_LEVELS = 9; // log10(1000^3);
+
     leveled_manifest(column_family& cfs, int max_sstable_size_in_MB)
         : logger("LeveledManifest")
         , _schema(cfs.schema())
@@ -82,15 +81,8 @@ public:
         // allocate enough generations for a PB of data, with a 1-MB sstable size.  (Note that if maxSSTableSize is
         // updated, we will still have sstables of the older, potentially smaller size.  So don't make this
         // dependent on maxSSTableSize.)
-        uint64_t n = 9; // log10(1000^3)
-        _generations.resize(n);
+        _generations.resize(MAX_LEVELS);
 #if 0
-        lastCompactedKeys = new RowPosition[n];
-        for (int i = 0; i < generations.length; i++)
-        {
-            generations[i] = new ArrayList<>();
-            lastCompactedKeys[i] = cfs.partitioner.getMinimumToken().minKeyBound();
-        }
         compactionCounter = new int[n];
 #endif
     }
@@ -128,37 +120,6 @@ public:
         logger.debug("Adding {} to L{}", sstable->get_filename(), level);
         _generations[level].push_back(sstable);
     }
-
-#if 0
-    public synchronized void replace(Collection<SSTableReader> removed, Collection<SSTableReader> added)
-    {
-        assert !removed.isEmpty(); // use add() instead of promote when adding new sstables
-        logDistribution();
-        if (logger.isDebugEnabled())
-            logger.debug("Replacing [{}]", toString(removed));
-
-        // the level for the added sstables is the max of the removed ones,
-        // plus one if the removed were all on the same level
-        int minLevel = Integer.MAX_VALUE;
-
-        for (SSTableReader sstable : removed)
-        {
-            int thisLevel = remove(sstable);
-            minLevel = Math.min(minLevel, thisLevel);
-        }
-
-        // it's valid to do a remove w/o an add (e.g. on truncate)
-        if (added.isEmpty())
-            return;
-
-        if (logger.isDebugEnabled())
-            logger.debug("Adding [{}]", toString(added));
-
-        for (SSTableReader ssTableReader : added)
-            add(ssTableReader);
-        lastCompactedKeys[minLevel] = SSTableReader.sstableOrdering.max(added).last;
-    }
-#endif
 
     void repair_overlapping_sstables(int level) {
         const sstables::sstable *previous = nullptr;
@@ -272,7 +233,7 @@ public:
      * @return highest-priority sstables to compact, and level to compact them to
      * If no compactions are necessary, will return null
      */
-    sstables::compaction_descriptor get_compaction_candidates() {
+    sstables::compaction_descriptor get_compaction_candidates(const std::vector<stdx::optional<dht::decorated_key>>& last_compacted_keys) {
 #if 0
         // during bootstrap we only do size tiering in L0 to make sure
         // the streamed files can be placed in their original levels
@@ -339,7 +300,7 @@ public:
                     }
                 }
                 // L0 is fine, proceed with this level
-                auto candidates = get_candidates_for(i);
+                auto candidates = get_candidates_for(i, last_compacted_keys);
                 if (!candidates.empty()) {
                     int next_level = get_next_level(candidates);
 #if 0
@@ -359,7 +320,7 @@ public:
         if (get_level(0).empty()) {
             return sstables::compaction_descriptor();
         }
-        auto candidates = get_candidates_for(0);
+        auto candidates = get_candidates_for(0, last_compacted_keys);
         if (candidates.empty()) {
             return sstables::compaction_descriptor();
         }
@@ -557,7 +518,7 @@ public:
      * If no compactions are possible (because of concurrent compactions or because some sstables are blacklisted
      * for prior failure), will return an empty list.  Never returns null.
      */
-    std::vector<sstables::shared_sstable> get_candidates_for(int level) {
+    std::vector<sstables::shared_sstable> get_candidates_for(int level, const std::vector<stdx::optional<dht::decorated_key>>& last_compacted_keys) {
         const schema& s = *_schema;
         assert(!get_level(level).empty());
 
@@ -657,31 +618,35 @@ public:
         }
 
         // for non-L0 compactions, pick up where we left off last time
-        get_level(level).sort([&s] (auto& i, auto& j) {
+        std::list<sstables::shared_sstable>& sstables = get_level(level);
+        sstables.sort([&s] (auto& i, auto& j) {
             return i->compare_by_first_key(*j) < 0;
         });
         int start = 0; // handles case where the prior compaction touched the very last range
-#if 0
-        for (int i = 0; i < getLevel(level).size(); i++)
-        {
-            SSTableReader sstable = getLevel(level).get(i);
-            if (sstable.first.compareTo(lastCompactedKeys[level]) > 0)
-            {
-                start = i;
+        int idx = 0;
+        for (auto& sstable : sstables) {
+            if (uint32_t(level) >= last_compacted_keys.size()) {
+                throw std::runtime_error(sprint("Invalid level %u out of %ld", level, (last_compacted_keys.size() - 1)));
+            }
+            auto& sstable_first = sstable->get_first_decorated_key();
+            if (!last_compacted_keys[level] || sstable_first.tri_compare(s, *last_compacted_keys[level]) > 0) {
+                start = idx;
                 break;
             }
+            idx++;
         }
-#endif
+
         // look for a non-suspect keyspace to compact with, starting with where we left off last time,
         // and wrapping back to the beginning of the generation if necessary
-        for (auto i = 0U; i < get_level(level).size(); i++) {
+        for (auto i = 0U; i < sstables.size(); i++) {
             // get an iterator to the element of position pos from the list get_level(level).
-            auto pos = (start + i) % get_level(level).size();
-            auto it = get_level(level).begin();
+            auto pos = (start + i) % sstables.size();
+            auto it = sstables.begin();
             std::advance(it, pos);
 
-            auto sstable = *it;
+            auto& sstable = *it;
             auto candidates = overlapping(*_schema, sstable, get_level(level + 1));
+
             candidates.push_back(sstable);
 #if 0
             if (Iterables.any(candidates, suspectP))
