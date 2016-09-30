@@ -1283,6 +1283,7 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
         };
         return sstables::compact_sstables(*sstables_to_compact, *this, create_sstable, descriptor.max_sstable_bytes, descriptor.level,
                 cleanup).then([this, sstables_to_compact] (auto new_sstables) {
+            _compaction_strategy.notify_completion(*sstables_to_compact, new_sstables);
             return this->rebuild_sstable_list(new_sstables, *sstables_to_compact);
         });
     });
