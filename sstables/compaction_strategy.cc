@@ -216,6 +216,7 @@ protected:
 public:
     virtual ~compaction_strategy_impl() {}
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) = 0;
+    virtual void notify_completion(const std::vector<lw_shared_ptr<sstable>>& removed, const std::vector<lw_shared_ptr<sstable>>& added) { }
     virtual compaction_strategy_type type() const = 0;
     virtual bool parallel_compaction() const {
         return true;
@@ -583,6 +584,8 @@ class leveled_compaction_strategy : public compaction_strategy_impl {
     const sstring SSTABLE_SIZE_OPTION = "sstable_size_in_mb";
 
     int32_t _max_sstable_size_in_mb = DEFAULT_MAX_SSTABLE_SIZE_IN_MB;
+    std::vector<stdx::optional<dht::decorated_key>> _last_compacted_keys;
+    std::vector<int> _compaction_counter;
 public:
     leveled_compaction_strategy(const std::map<sstring, sstring>& options) {
         using namespace cql3::statements;
@@ -596,9 +599,13 @@ public:
             logger.warn("Max sstable size of {}MB is configured. Testing done for CASSANDRA-5727 indicates that performance improves up to 160MB",
                 _max_sstable_size_in_mb);
         }
+        _last_compacted_keys.resize(leveled_manifest::MAX_LEVELS);
+        _compaction_counter.resize(leveled_manifest::MAX_LEVELS);
     }
 
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override;
+
+    virtual void notify_completion(const std::vector<lw_shared_ptr<sstable>>& removed, const std::vector<lw_shared_ptr<sstable>>& added) override;
 
     virtual int64_t estimated_pending_compactions(column_family& cf) const override;
 
@@ -621,7 +628,7 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(c
     // sstable in it may be marked for deletion after compacted.
     // Currently, we create a new manifest whenever it's time for compaction.
     leveled_manifest manifest = leveled_manifest::create(cfs, candidates, _max_sstable_size_in_mb);
-    auto candidate = manifest.get_compaction_candidates();
+    auto candidate = manifest.get_compaction_candidates(_last_compacted_keys, _compaction_counter);
 
     if (candidate.sstables.empty()) {
         return sstables::compaction_descriptor();
@@ -630,6 +637,24 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(c
     logger.debug("leveled: Compacting {} out of {} sstables", candidate.sstables.size(), cfs.get_sstables()->size());
 
     return std::move(candidate);
+}
+
+void leveled_compaction_strategy::notify_completion(const std::vector<lw_shared_ptr<sstable>>& removed, const std::vector<lw_shared_ptr<sstable>>& added) {
+    if (removed.empty() || added.empty()) {
+        return;
+    }
+    auto min_level = std::numeric_limits<uint32_t>::max();
+    for (auto& sstable : removed) {
+        min_level = std::min(min_level, sstable->get_sstable_level());
+    }
+
+    const sstables::sstable *last = nullptr;
+    for (auto& candidate : added) {
+        if (!last || last->compare_by_first_key(*candidate) < 0) {
+            last = &*candidate;
+        }
+    }
+    _last_compacted_keys[min_level] = last->get_last_decorated_key();
 }
 
 int64_t leveled_compaction_strategy::estimated_pending_compactions(column_family& cf) const {
@@ -684,6 +709,10 @@ compaction_strategy_type compaction_strategy::type() const {
 
 compaction_descriptor compaction_strategy::get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) {
     return _compaction_strategy_impl->get_sstables_for_compaction(cfs, std::move(candidates));
+}
+
+void compaction_strategy::notify_completion(const std::vector<lw_shared_ptr<sstable>>& removed, const std::vector<lw_shared_ptr<sstable>>& added) {
+    _compaction_strategy_impl->notify_completion(removed, added);
 }
 
 bool compaction_strategy::parallel_compaction() const {
