@@ -65,6 +65,13 @@ public:
             return token(token::kind::key, bytes(data.begin(), data.end()));
         }
     }
+    virtual dht::token from_bytes(bytes_view bytes) const override {
+        if (bytes.empty()) {
+            return minimum_token();
+        } else {
+            return token(token::kind::key, bytes);
+        }
+    }
     virtual unsigned shard_of(const token& t) const override;
 };
 

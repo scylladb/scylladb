@@ -101,6 +101,21 @@ dht::token murmur3_partitioner::from_sstring(const sstring& t) const {
     }
 }
 
+dht::token murmur3_partitioner::from_bytes(bytes_view bytes) const {
+    if (bytes.size() != sizeof(int64_t)) {
+        throw runtime_exception(sprint("Invalid token. Should have size %ld, has size %ld\n", sizeof(int64_t), bytes.size()));
+    }
+
+    int64_t v;
+    std::copy_n(bytes.begin(), sizeof(v), reinterpret_cast<int8_t *>(&v));
+    auto tok = net::ntoh(v);
+    if (tok == std::numeric_limits<int64_t>::min()) {
+        return minimum_token();
+    } else {
+        return dht::token(dht::token::kind::key, bytes);
+    }
+}
+
 int murmur3_partitioner::tri_compare(const token& t1, const token& t2) {
     auto l1 = long_token(t1);
     auto l2 = long_token(t2);
