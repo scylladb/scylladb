@@ -24,22 +24,57 @@ else
 	DEV_MODE="--developer-mode true"
 fi
 
-IP=$(hostname -i)
+if [[ -n $SCYLLA_LISTEN_DEVICE ]]
+then
+	echo "SCYLLA_LISTEN_DEVICE was pre-set via environment to: $SCYLLA_LISTEN_DEVICE. Getting IP of device..."
+	DEVICE_IP=$(ip -4 a show eth0 | awk '/inet /{ gsub(/\/[0-9]*/, "", $2); print $2 }')
+
+	if [ $? -eq 0 ]
+	then
+		echo "IP sucessfully retrieved. Setting $DEVICE_IP as SCYLLA_LISTEN_ADDRESS."
+		SCYLLA_LISTEN_ADDRESS=$DEVICE_IP
+	else
+		echo "IP of device could not be retrieved! Not setting SCYLLA_LISTEN_ADDRESS."
+	fi
+fi
+
+if [[ -z $SCYLLA_LISTEN_ADDRESS ]]
+then
+	SCYLLA_LISTEN_ADDRESS=$(hostname -i)
+	echo "SCYLLA_LISTEN_ADDRESS was dynamically set to 'hostname -i' address: $SCYLLA_LISTEN_ADDRESS"
+else
+	echo "SCYLLA_LISTEN_ADDRESS was pre-set via environment to: $SCYLLA_LISTEN_ADDRESS"
+	if [[ $SCYLLA_LISTEN_ADDRESS =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]
+	then
+		echo "SCYLLA_LISTEN_ADDRESS appears to be a valid IP address, moving on."
+	else
+		echo "SCYLLA_LISTEN_ADDRESS does not appear to be a valid IP address, trying to resolve..."
+		RESOLVED_IP=$(host $SCYLLA_LISTEN_ADDRESS)
+
+		if [ $? -eq 0 ]
+		then
+			SCYLLA_LISTEN_ADDRESS=$(echo $RESOLVED_IP | awk '{ print $4 }')
+			echo "Resolved SCYLLA_LISTEN_ADDRESS to $SCYLLA_LISTEN_ADDRESS."
+		else
+			echo "Could not successfully resolve SCYLLA_LISTEN_ADDRESS, continuing."
+		fi
+	fi
+fi
 
 if [ x"$SCYLLA_SEEDS" != "x" ];then
 	SEEDS="$SCYLLA_SEEDS"
 else
-	SEEDS="$IP"
+	SEEDS="$SCYLLA_LISTEN_ADDRESS"
 fi
 
 sed -i "s/seeds: \"127.0.0.1\"/seeds: \"$SEEDS\"/g" /etc/scylla/scylla.yaml
-sed -i "s/listen_address: localhost/listen_address: $IP/g" /etc/scylla/scylla.yaml
+sed -i "s/listen_address: localhost/listen_address: $SCYLLA_LISTEN_ADDRESS/g" /etc/scylla/scylla.yaml
 
 if [ x"$SCYLLA_BROADCAST_ADDRESS" != "x" ];then
 	sed -i "s/.*broadcast_address:.*/broadcast_address: $SCYLLA_BROADCAST_ADDRESS/g" /etc/scylla/scylla.yaml
 fi
 
-/usr/bin/scylla --log-to-syslog 1 --log-to-stdout 0 $DEV_MODE $SEASTAR_IO $CPU_SET --default-log-level info --options-file /etc/scylla/scylla.yaml --listen-address $IP --rpc-address $IP --network-stack posix &
+/usr/bin/scylla --log-to-syslog 1 --log-to-stdout 0 $DEV_MODE $SEASTAR_IO $CPU_SET --default-log-level info --options-file /etc/scylla/scylla.yaml --listen-address $SCYLLA_LISTEN_ADDRESS --rpc-address $SCYLLA_LISTEN_ADDRESS --network-stack posix &
 
 source /etc/default/scylla-jmx
 export SCYLLA_HOME SCYLLA_CONF

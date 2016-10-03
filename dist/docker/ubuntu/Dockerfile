@@ -1,6 +1,6 @@
 FROM	ubuntu:14.04
 RUN	sudo apt-get update
-RUN 	sudo apt-get install -y wget
+RUN 	sudo apt-get install -y wget dnsutils
 RUN	sudo wget -O /etc/apt/sources.list.d/scylla.list http://downloads.scylladb.com/deb/ubuntu/scylla.list
 RUN	sudo apt-get update
 RUN	sudo apt-get install -y scylla-server scylla-jmx scylla-tools --force-yes
