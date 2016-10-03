@@ -1327,6 +1327,7 @@ column_family::load_new_sstables(std::vector<sstables::entry_descriptor> new_tab
                 comps.generation, comps.version, comps.format), true);
     }).then([this] {
         start_rewrite();
+        trigger_compaction();
         // Drop entire cache for this column family because it may be populated
         // with stale data.
         return get_row_cache().clear();
