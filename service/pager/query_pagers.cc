@@ -103,7 +103,9 @@ private:
                     }
 
                     bool remove = !found
-                            || (contains && (i->is_singular() && !inclusive))
+                            || (contains && !inclusive && (i->is_singular()
+                                || (reversed && i->start() && !cmp(i->start()->value(), lo))
+                                || (!reversed && i->end() && !cmp(i->end()->value(), lo))))
                             ;
 
                     if (remove) {
