@@ -234,6 +234,8 @@ future<::shared_ptr<auth::authenticated_user> > auth::password_authenticator::au
             std::throw_with_nested(exceptions::authentication_exception("Could not verify password"));
         } catch (exceptions::request_execution_exception& e) {
             std::throw_with_nested(exceptions::authentication_exception(e.what()));
+        } catch (...) {
+            std::throw_with_nested(exceptions::authentication_exception("authentication failed"));
         }
     });
 }
