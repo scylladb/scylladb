@@ -1242,9 +1242,6 @@ column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>&
     // consider this compaction completed.
     seastar::with_gate(_sstable_deletion_gate, [this, sstables_to_remove] {
         return sstables::delete_atomically(sstables_to_remove).then([this, sstables_to_remove] {
-            auto current_sstables = _sstables;
-            auto new_sstable_list = make_lw_shared<sstable_list>();
-
             std::unordered_set<sstables::shared_sstable> s(
                    sstables_to_remove.begin(), sstables_to_remove.end());
             auto e = boost::range::remove_if(_sstables_compacted_but_not_deleted, [&] (sstables::shared_sstable sst) -> bool {
