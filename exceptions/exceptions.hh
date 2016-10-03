@@ -79,7 +79,7 @@ private:
     sstring _msg;
 protected:
     template<typename... Args>
-    inline sstring prepare_message(const char* fmt, Args&&... args) noexcept {
+    static inline sstring prepare_message(const char* fmt, Args&&... args) noexcept {
         try {
             return sprint(fmt, std::forward<Args>(args)...);
         } catch (...) {
