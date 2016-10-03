@@ -97,6 +97,16 @@ For example, to configure Scylla to run with two seed nodes `192.168.0.100` and 
 $ docker run --name some-scylla -d scylladb/scylla --seeds 192.168.0.100,192.168.0.200
 ```
 
+### `--listen-address ADDR`
+
+The `--listen-address` command line option configures the IP address the Scylla instance listens for client connections.
+
+For example, to configure Scylla to use listen address `10.0.0.5`:
+
+```console
+$ docker run --name some-scylla -d scylladb/scylla --listen-address 10.0.0.5
+```
+
 ### `--broadcast-address ADDR`
 
 The `--broadcast-address` command line option configures the IP address the Scylla instance tells other Scylla nodes in the cluster to connect to.

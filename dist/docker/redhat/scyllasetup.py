@@ -8,6 +8,7 @@ class ScyllaSetup:
         self._developerMode = arguments.developerMode
         self._seeds = arguments.seeds
         self._cpuset = arguments.cpuset
+        self._listenAddress = arguments.listenAddress
         self._broadcastAddress = arguments.broadcastAddress
         self._broadcastRpcAddress = arguments.broadcastRpcAddress
         self._smp = arguments.smp
@@ -31,14 +32,15 @@ class ScyllaSetup:
 
     def scyllaYAML(self):
         configuration = yaml.load(open('/etc/scylla/scylla.yaml'))
-        IP = subprocess.check_output(['hostname', '-i']).decode('ascii').strip()
-        configuration['listen_address'] = IP
-        configuration['rpc_address'] = IP
+        if self._listenAddress is None:
+            self._listenAddress = subprocess.check_output(['hostname', '-i']).decode('ascii').strip()
+        configuration['listen_address'] = self._listenAddress
+        configuration['rpc_address'] = self._listenAddress
         if self._seeds is None:
             if self._broadcastAddress is not None:
                 self._seeds = self._broadcastAddress
             else:
-                self._seeds = IP
+                self._seeds = self._listenAddress
         configuration['seed_provider'] = [
                 {'class_name': 'org.apache.cassandra.locator.SimpleSeedProvider',
                  'parameters': [{'seeds': self._seeds}]}
