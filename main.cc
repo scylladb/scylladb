@@ -532,20 +532,6 @@ int main(int ac, char** av) {
                 }
                 return db.load_sstables(proxy);
             }).get();
-            // If the same sstable is shared by several shards, it cannot be
-            // deleted until all shards decide to compact it. So we want to
-            // start thse compactions now. Note we start compacting only after
-            // all sstables in this CF were loaded on all shards - otherwise
-            // we will have races between the compaction and loading processes
-            // We also want to trigger regular compaction on boot.
-            db.invoke_on_all([&proxy] (database& db) {
-                for (auto& x : db.get_column_families()) {
-                    column_family& cf = *(x.second);
-                    // We start the rewrite, but do not wait for it.
-                    cf.start_rewrite();
-                    cf.trigger_compaction();
-                }
-            }).get();
             supervisor_notify("setting up system keyspace");
             db::system_keyspace::setup(db, qp).get();
             supervisor_notify("starting commit log");
@@ -566,6 +552,20 @@ int main(int ac, char** av) {
                     }
                 }
             }
+            // If the same sstable is shared by several shards, it cannot be
+            // deleted until all shards decide to compact it. So we want to
+            // start thse compactions now. Note we start compacting only after
+            // all sstables in this CF were loaded on all shards - otherwise
+            // we will have races between the compaction and loading processes
+            // We also want to trigger regular compaction on boot.
+            db.invoke_on_all([&proxy] (database& db) {
+                for (auto& x : db.get_column_families()) {
+                    column_family& cf = *(x.second);
+                    // We start the rewrite, but do not wait for it.
+                    cf.start_rewrite();
+                    cf.trigger_compaction();
+                }
+            }).get();
             api::set_server_storage_service(ctx).get();
             api::set_server_gossip(ctx).get();
             api::set_server_snitch(ctx).get();
