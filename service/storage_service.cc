@@ -2705,9 +2705,6 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
         if (new_tables.size() > 0) {
             new_gen = new_tables.back().generation;
         }
-        if (new_tables.empty() && !eptr) {
-            logger.info("No new SSTables were found for {}.{}", ks_name, cf_name);
-        }
 
         logger.debug("Now accepting writes for sstables with generation larger or equal than {}", new_gen);
         return _db.invoke_on_all([ks_name, cf_name, new_gen] (database& db) {
@@ -2727,12 +2724,11 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
             auto& cf = db.find_column_family(ks_name, cf_name);
             return cf.flush_upload_dir();
         }).then([new_tables = std::move(new_tables), ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables_from_upload) mutable {
-            if (new_tables_from_upload.empty()) {
-                logger.info("No new SSTables were found for {}.{} in upload directory", ks_name, cf_name);
-            } else {
-                // merge new sstables found in both column family and upload directories.
-                new_tables.insert(new_tables.end(), new_tables_from_upload.begin(), new_tables_from_upload.end());
+            if (new_tables.empty() && new_tables_from_upload.empty()) {
+                logger.info("No new SSTables were found for {}.{}", ks_name, cf_name);
             }
+            // merge new sstables found in both column family and upload directories, if any.
+            new_tables.insert(new_tables.end(), new_tables_from_upload.begin(), new_tables_from_upload.end());
             return make_ready_future<std::vector<sstables::entry_descriptor>>(std::move(new_tables));
         });
     }).then([this, ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables) {
