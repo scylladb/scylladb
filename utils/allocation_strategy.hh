@@ -23,6 +23,7 @@
 
 #include <cstdlib>
 #include <seastar/core/memory.hh>
+#include <malloc.h>
 
 // A function used by compacting collectors to migrate objects during
 // compaction. The function should reconstruct the object located at src
@@ -97,6 +98,14 @@ public:
     // Doesn't invalidate references to objects allocated with this strategy.
     virtual void free(void*) = 0;
 
+    // Returns the total immutable memory size used by the allocator to host
+    // this object.  This will be at least the size of the object itself, plus
+    // any immutable overhead needed to represent the object (if any).
+    //
+    // The immutable overhead is the overhead that cannot change over the
+    // lifetime of the object (such as padding, etc).
+    virtual size_t object_memory_size_in_allocator(const void* obj) const noexcept = 0;
+
     // Like alloc() but also constructs the object with a migrator using
     // standard move semantics. Allocates respecting object's alignment
     // requirement.
@@ -137,6 +146,10 @@ public:
 
     virtual void free(void* obj) override {
         ::free(obj);
+    }
+
+    virtual size_t object_memory_size_in_allocator(const void* obj) const noexcept {
+        return ::malloc_usable_size(const_cast<void *>(obj));
     }
 };
 

@@ -61,6 +61,10 @@ public:
     schema_ptr& schema() { return _schema; }
     streamed_mutation read(lw_shared_ptr<memtable> mtbl, const schema_ptr&, const query::partition_slice&);
 
+    size_t memory_usage_without_rows() const {
+        return _key.key().memory_usage();
+    }
+
     struct compare {
         dht::decorated_key::less_comparator _c;
 
@@ -147,6 +151,9 @@ public:
                                 const query::partition_slice& slice = query::full_slice,
                                 const io_priority_class& pc = default_priority_class());
 
+
+    mutation_reader make_flush_reader(schema_ptr);
+
     mutation_source as_data_source();
     key_source as_key_source();
 
@@ -158,5 +165,5 @@ public:
         return _replay_position;
     }
 
-    friend class scanning_reader;
+    friend class iterator_reader;
 };

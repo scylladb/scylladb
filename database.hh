@@ -74,6 +74,7 @@
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/shared_future.hh>
 #include "tracing/trace_state.hh"
+#include <boost/intrusive/parent_from_member.hpp>
 
 class frozen_mutation;
 class reconcilable_result;
@@ -133,6 +134,7 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
     // default values here.
     size_t _concurrency;
     semaphore _flush_serializer;
+    int64_t _dirty_bytes_released_pre_accounted = 0;
 
     seastar::gate _waiting_flush_gate;
     std::vector<shared_memtable> _pending_flushes;
@@ -156,12 +158,35 @@ public:
                                                                          , _region_group(&parent->_region_group, *this)
                                                                          , _concurrency(concurrency)
                                                                          , _flush_serializer(concurrency) {}
+
+    static dirty_memory_manager& from_region_group(logalloc::region_group *rg) {
+        return *(boost::intrusive::get_parent_from_member(rg, &dirty_memory_manager::_region_group));
+    }
+
     logalloc::region_group& region_group() {
         return _region_group;
     }
 
     const logalloc::region_group& region_group() const {
         return _region_group;
+    }
+
+    void revert_potentially_cleaned_up_memory(int64_t delta) {
+        _region_group.update(delta);
+        _dirty_bytes_released_pre_accounted -= delta;
+    }
+
+    void account_potentially_cleaned_up_memory(int64_t delta) {
+        _region_group.update(-delta);
+        _dirty_bytes_released_pre_accounted += delta;
+    }
+
+    size_t real_dirty_memory() const {
+        return _region_group.memory_used() + _dirty_bytes_released_pre_accounted;
+    }
+
+    size_t virtual_dirty_memory() const {
+        return _region_group.memory_used();
     }
 
     template <typename Func>

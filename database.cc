@@ -1581,8 +1581,22 @@ database::database(const db::config& cfg)
     // in a different region group. This is because throttled requests are serviced in FIFO order,
     // and we don't want system requests to be waiting for a long time behind user requests.
     , _system_dirty_memory_manager(*this, _memtable_total_space + (10 << 20))
-    , _dirty_memory_manager(*this, &_system_dirty_memory_manager, _memtable_total_space)
-    , _streaming_dirty_memory_manager(*this, &_dirty_memory_manager, _streaming_memtable_total_space)
+    // The total space that can be used by memtables is _memtable_total_space, but we will only
+    // allow the region_group to grow to half of that. This is because of virtual_dirty: memtables
+    // can take a long time to flush, and if we are using the maximum amount of memory possible,
+    // then requests will block until we finish flushing at least one memtable.
+    //
+    // We can free memory until the whole memtable is flushed because we need to keep it in memory
+    // until the end, but we can fake freeing memory. When we are done with an element of the
+    // memtable, we will update the region group pretending memory just went down by that amount.
+    //
+    // Because the amount of memory that we pretend to free should be close enough to the actual
+    // memory used by the memtables, that effectively creates two sub-regions inside the dirty
+    // region group, of equal size. In the worst case, we will have _memtable_total_space dirty
+    // bytes used, and half of that already virtually freed.
+    , _dirty_memory_manager(*this, &_system_dirty_memory_manager, _memtable_total_space / 2)
+    // The same goes for streaming in respect to virtual dirty.
+    , _streaming_dirty_memory_manager(*this, &_dirty_memory_manager, _streaming_memtable_total_space / 2)
     , _version(empty_version)
     , _enable_incremental_backups(cfg.incremental_backups())
 {
@@ -1599,7 +1613,15 @@ database::setup_collectd() {
                 , scollectd::per_cpu_plugin_instance
                 , "bytes", "dirty")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
-            return dirty_memory_region_group().memory_used();
+            return _dirty_memory_manager.real_dirty_memory();
+    })));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("memory"
+                , scollectd::per_cpu_plugin_instance
+                , "bytes", "virtual_dirty")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
+            return _dirty_memory_manager.virtual_dirty_memory();
     })));
 
     _collectd.push_back(
@@ -1607,6 +1629,15 @@ database::setup_collectd() {
                 , scollectd::per_cpu_plugin_instance
                 , "queue_length", "pending_flushes")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, _cf_stats.pending_memtables_flushes_count)
+    ));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
+                , "queue_length", "requests_blocked_memory")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
+                    return _dirty_memory_manager.region_group().blocked_requests();
+                })
     ));
 
     _collectd.push_back(

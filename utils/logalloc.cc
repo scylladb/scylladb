@@ -517,7 +517,7 @@ public:
     segment* new_segment(region::impl* r);
     segment_descriptor& descriptor(const segment*);
     // Returns segment containing given object or nullptr.
-    segment* containing_segment(void* obj) const;
+    segment* containing_segment(const void* obj) const;
     void free_segment(segment*) noexcept;
     void free_segment(segment*, segment_descriptor&) noexcept;
     size_t segments_in_use() const;
@@ -720,7 +720,7 @@ segment_pool::descriptor(const segment* seg) {
 }
 
 segment*
-segment_pool::containing_segment(void* obj) const {
+segment_pool::containing_segment(const void* obj) const {
     auto addr = reinterpret_cast<uintptr_t>(obj);
     auto offset = addr & (segment::size - 1);
     auto index = (addr - _segments_base) >> segment::size_shift;
@@ -830,7 +830,7 @@ public:
         _segments.erase(i);
         ::free(seg);
     }
-    segment* containing_segment(void* obj) const {
+    segment* containing_segment(const void* obj) const {
         uintptr_t addr = reinterpret_cast<uintptr_t>(obj);
         auto seg = reinterpret_cast<segment*>(align_down(addr, static_cast<uintptr_t>(segment::size)));
         auto i = _segments.find(seg);
@@ -1295,6 +1295,10 @@ public:
         return total;
     }
 
+    region_group* group() {
+        return _group;
+    }
+
     occupancy_stats compactible_occupancy() const {
         return _closed_occupancy;
     }
@@ -1377,6 +1381,17 @@ public:
             } else {
                 _closed_occupancy += seg_desc.occupancy();
             }
+        }
+    }
+
+    virtual size_t object_memory_size_in_allocator(const void* obj) const noexcept override {
+        segment* seg = shard_segment_pool.containing_segment(obj);
+
+        if (!seg) {
+            return standard_allocator().object_memory_size_in_allocator(obj);
+        } else {
+            auto desc = reinterpret_cast<object_descriptor*>(reinterpret_cast<uintptr_t>(obj) - sizeof(object_descriptor));
+            return sizeof(object_descriptor) + desc->size();
         }
     }
 
@@ -1609,6 +1624,10 @@ region::~region() {
 
 occupancy_stats region::occupancy() const {
     return _impl->occupancy();
+}
+
+region_group* region::group() {
+    return _impl->group();
 }
 
 void region::merge(region& other) {

@@ -399,6 +399,7 @@ public:
     // supposed to fill a buffer with mutation fragments until is_buffer_full()
     // or end of stream is encountered.
     class impl {
+        circular_buffer<mutation_fragment> _buffer;
     protected:
         // FIXME: use size in bytes of the mutation_fragments
         static constexpr size_t buffer_size = 16;
@@ -408,7 +409,6 @@ public:
         tombstone _partition_tombstone;
 
         bool _end_of_stream = false;
-        circular_buffer<mutation_fragment> _buffer;
 
         friend class streamed_mutation;
     protected:
