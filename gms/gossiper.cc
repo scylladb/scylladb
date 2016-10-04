@@ -72,6 +72,10 @@ constexpr int64_t gossiper::MAX_GENERATION_DIFFERENCE;
 
 distributed<gossiper> _the_gossiper;
 
+net::msg_addr gossiper::get_msg_addr(inet_address to) {
+    return msg_addr{to, _default_cpuid};
+}
+
 sstring gossiper::get_cluster_name() {
     return _cluster_name;
 }

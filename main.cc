@@ -52,6 +52,7 @@
 #include "tracing/tracing.hh"
 #include "db/size_estimates_recorder.hh"
 #include "core/prometheus.hh"
+#include "message/messaging_service.hh"
 
 #ifdef HAVE_LIBSYSTEMD
 #include <systemd/sd-daemon.h>

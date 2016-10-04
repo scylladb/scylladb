@@ -25,6 +25,7 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/core/thread.hh>
 #include "service/storage_service.hh"
+#include "message/messaging_service.hh"
 
 class storage_service_for_tests {
     distributed<database> _db;

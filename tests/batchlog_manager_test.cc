@@ -38,6 +38,7 @@
 #include "db/batchlog_manager.hh"
 
 #include "disk-error-handler.hh"
+#include "message/messaging_service.hh"
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;

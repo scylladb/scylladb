@@ -27,6 +27,7 @@
 #include "db/config.hh"
 #include "service/storage_service.hh"
 #include "service/priority_manager.hh"
+#include "message/messaging_service.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>

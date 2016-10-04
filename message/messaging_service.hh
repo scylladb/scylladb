@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "messaging_service_fwd.hh"
 #include "core/reactor.hh"
 #include "core/distributed.hh"
 #include "core/sstring.hh"

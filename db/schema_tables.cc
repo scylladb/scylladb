@@ -56,6 +56,7 @@
 #include "log.hh"
 #include "frozen_schema.hh"
 #include "schema_registry.hh"
+#include "mutation_query.hh"
 
 #include "db/marshal/type_parser.hh"
 #include "db/config.hh"

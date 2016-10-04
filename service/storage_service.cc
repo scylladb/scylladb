@@ -69,6 +69,7 @@
 #include "auth/auth.hh"
 #include <seastar/net/tls.hh>
 #include "utils/exceptions.hh"
+#include "message/messaging_service.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
