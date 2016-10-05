@@ -352,8 +352,12 @@ memtable::make_reader(schema_ptr s,
 }
 
 mutation_reader
-memtable::make_flush_reader(schema_ptr s) {
-    return make_mutation_reader<flush_reader>(std::move(s), shared_from_this());
+memtable::make_flush_reader(schema_ptr s, const io_priority_class& pc) {
+    if (group()) {
+        return make_mutation_reader<flush_reader>(std::move(s), shared_from_this());
+    } else {
+        return make_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), query::full_partition_range, query::full_slice, pc);
+    }
 }
 
 void

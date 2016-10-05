@@ -152,7 +152,7 @@ public:
                                 const io_priority_class& pc = default_priority_class());
 
 
-    mutation_reader make_flush_reader(schema_ptr);
+    mutation_reader make_flush_reader(schema_ptr, const io_priority_class& pc);
 
     mutation_source as_data_source();
     key_source as_key_source();
