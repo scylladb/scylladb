@@ -684,8 +684,8 @@ void set_storage_service(http_context& ctx, routes& r) {
     ss::get_slow_query_info.set(r, [](const_req req) {
         ss::slow_query_info res;
         res.enable = tracing::tracing::get_local_tracing_instance().slow_query_tracing_enabled();
-        res.ttl = std::chrono::duration_cast<std::chrono::microseconds>(tracing::tracing::get_local_tracing_instance().slow_query_record_ttl()).count() ;
-        res.threshold = std::chrono::duration_cast<std::chrono::microseconds>(tracing::tracing::get_local_tracing_instance().slow_query_threshold()).count();
+        res.ttl = tracing::tracing::get_local_tracing_instance().slow_query_record_ttl().count() ;
+        res.threshold = tracing::tracing::get_local_tracing_instance().slow_query_threshold().count();
         return res;
     });
 
