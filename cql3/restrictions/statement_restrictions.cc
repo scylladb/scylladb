@@ -134,13 +134,13 @@ statement_restrictions::statement_restrictions(schema_ptr schema)
     , _clustering_columns_restrictions(get_initial_key_restrictions<clustering_key_prefix>())
     , _nonprimary_key_restrictions(::make_shared<single_column_restrictions>(schema))
 { }
-
+#if 0
 static const column_definition*
 to_column_definition(const schema_ptr& schema, const ::shared_ptr<column_identifier::raw>& entity) {
     return get_column_definition(schema,
             *entity->prepare_column_identifier(schema));
 }
-
+#endif
 
 statement_restrictions::statement_restrictions(database& db,
         schema_ptr schema,
