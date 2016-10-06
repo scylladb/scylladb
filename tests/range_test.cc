@@ -33,6 +33,16 @@
 #include "disk-error-handler.hh"
 #include "locator/token_metadata.hh"
 
+// yuck, but what can one do?  needed for BOOST_REQUIRE_EQUAL
+namespace std {
+
+ostream&
+operator<<(ostream& os, const stdx::nullopt_t&) {
+    return os << "{}";
+}
+
+}
+
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
 
@@ -504,4 +514,64 @@ BOOST_AUTO_TEST_CASE(test_range_interval_map) {
     BOOST_REQUIRE(search_item("7") == true);
     BOOST_REQUIRE(search_item("8") == true);
     BOOST_REQUIRE(search_item("9") == false);
+}
+
+BOOST_AUTO_TEST_CASE(test_split_after) {
+    using b = range_bound<unsigned>;
+    using wr = wrapping_range<unsigned>;
+    using nwr = nonwrapping_range<unsigned>;
+    auto cmp = unsigned_comparator();
+
+    auto nwr1 = nwr(b(5), b(8));
+    BOOST_REQUIRE_EQUAL(nwr1.split_after(2, cmp), nwr1);
+    BOOST_REQUIRE_EQUAL(nwr1.split_after(5, cmp), nwr(b(5, false), b(8)));
+    BOOST_REQUIRE_EQUAL(nwr1.split_after(6, cmp), nwr(b(6, false), b(8)));
+    BOOST_REQUIRE_EQUAL(nwr1.split_after(8, cmp), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(nwr1.split_after(9, cmp), stdx::nullopt);
+    auto nwr2 = nwr(b(5, false), b(8, false));
+    BOOST_REQUIRE_EQUAL(nwr2.split_after(2, cmp), nwr2);
+    BOOST_REQUIRE_EQUAL(nwr2.split_after(5, cmp), nwr(b(5, false), b(8, false)));
+    BOOST_REQUIRE_EQUAL(nwr2.split_after(6, cmp), nwr(b(6, false), b(8, false)));
+    BOOST_REQUIRE_EQUAL(nwr2.split_after(8, cmp), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(nwr2.split_after(9, cmp), stdx::nullopt);
+    auto nwr3 = nwr(b(5, false), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(nwr3.split_after(2, cmp), nwr3);
+    BOOST_REQUIRE_EQUAL(nwr3.split_after(5, cmp), nwr3);
+    BOOST_REQUIRE_EQUAL(nwr3.split_after(6, cmp), nwr(b(6, false), stdx::nullopt));
+    auto nwr4 = nwr(stdx::nullopt, b(5, false));
+    BOOST_REQUIRE_EQUAL(nwr4.split_after(2, cmp), nwr(b(2, false), b(5, false)));
+    BOOST_REQUIRE_EQUAL(nwr4.split_after(5, cmp), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(nwr4.split_after(6, cmp), stdx::nullopt);
+    auto nwr5 = nwr(stdx::nullopt, stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(nwr5.split_after(2, cmp), nwr(b(2, false), stdx::nullopt));
+
+    auto wr1 = wr(b(5), b(8));
+    BOOST_REQUIRE_EQUAL(wr1.split_after(2, cmp), wr1);
+    BOOST_REQUIRE_EQUAL(wr1.split_after(5, cmp), wr(b(5, false), b(8)));
+    BOOST_REQUIRE_EQUAL(wr1.split_after(6, cmp), wr(b(6, false), b(8)));
+    BOOST_REQUIRE_EQUAL(wr1.split_after(8, cmp), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(wr1.split_after(9, cmp), stdx::nullopt);
+    auto wr2 = wr(b(5, false), b(8, false));
+    BOOST_REQUIRE_EQUAL(wr2.split_after(2, cmp), wr2);
+    BOOST_REQUIRE_EQUAL(wr2.split_after(5, cmp), wr(b(5, false), b(8, false)));
+    BOOST_REQUIRE_EQUAL(wr2.split_after(6, cmp), wr(b(6, false), b(8, false)));
+    BOOST_REQUIRE_EQUAL(wr2.split_after(8, cmp), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(wr2.split_after(9, cmp), stdx::nullopt);
+    auto wr3 = wr(b(5, false), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(wr3.split_after(2, cmp), wr3);
+    BOOST_REQUIRE_EQUAL(wr3.split_after(5, cmp), wr3);
+    BOOST_REQUIRE_EQUAL(wr3.split_after(6, cmp), wr(b(6, false), stdx::nullopt));
+    auto wr4 = wr(stdx::nullopt, b(5, false));
+    BOOST_REQUIRE_EQUAL(wr4.split_after(2, cmp), wr(b(2, false), b(5, false)));
+    BOOST_REQUIRE_EQUAL(wr4.split_after(5, cmp), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(wr4.split_after(6, cmp), stdx::nullopt);
+    auto wr5 = wr(stdx::nullopt, stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(wr5.split_after(2, cmp), wr(b(2, false), stdx::nullopt));
+    auto wr6 = wr(b(8), b(5));
+    BOOST_REQUIRE_EQUAL(wr6.split_after(2, cmp), wr(b(2, false), b(5)));
+    BOOST_REQUIRE_EQUAL(wr6.split_after(5, cmp), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(wr6.split_after(6, cmp), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(wr6.split_after(8, cmp), wr(b(8, false), b(5)));
+    BOOST_REQUIRE_EQUAL(wr6.split_after(9, cmp), wr(b(9, false), b(5)));
+
 }

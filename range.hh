@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "stdx.hh"
 #include <experimental/optional>
 #include <iostream>
 #include <boost/range/algorithm/copy.hpp>
@@ -332,12 +333,22 @@ public:
         wrapping_range right(bound(split_point, false), end());
         return std::make_pair(std::move(left), std::move(right));
     }
-    // Create a sub-range including values greater than the split_point. split_point has to be inside the range
+    // Create a sub-range including values greater than the split_point. Returns stdx::nullopt if
+    // split_point is after the end (but not included in the range, in case of wraparound ranges)
     // Comparator must define a total ordering on T.
     template<typename Comparator>
-    wrapping_range<T> split_after(const T& split_point, Comparator&& cmp) const {
-        assert(contains(split_point, std::forward<Comparator>(cmp)));
-        return wrapping_range(bound(split_point, false), end());
+    stdx::optional<wrapping_range<T>> split_after(const T& split_point, Comparator&& cmp) const {
+        if (contains(split_point, std::forward<Comparator>(cmp))
+                && (!end() || cmp(split_point, end()->value()) != 0)) {
+            return wrapping_range(bound(split_point, false), end());
+        } else if (end() && cmp(split_point, end()->value()) >= 0) {
+            // whether to return stdx::nullopt or the full range is not
+            // well-defined for wraparound ranges; we return nullopt
+            // if split_point is after the end.
+            return stdx::nullopt;
+        } else {
+            return *this;
+        }
     }
     // Transforms this range into a new range of a different value type
     // Supplied transformer should transform value of type T (the old type) into value of type U (the new type).
@@ -512,12 +523,17 @@ public:
         nonwrapping_range right(bound(split_point, false), end());
         return std::make_pair(std::move(left), std::move(right));
     }
-    // Create a sub-range including values greater than the split_point. split_point has to be inside the range
-    // Comparator must define a total ordering on T.
+    // Create a sub-range including values greater than the split_point. If split_point is after
+    // the end, returns stdx::nullopt.
     template<typename Comparator>
-    nonwrapping_range<T> split_after(const T& split_point, Comparator&& cmp) const {
-        assert(contains(split_point, std::forward<Comparator>(cmp)));
-        return nonwrapping_range(bound(split_point, false), end());
+    stdx::optional<nonwrapping_range> split_after(const T& split_point, Comparator&& cmp) const {
+        if (end() && cmp(split_point, end()->value()) >= 0) {
+            return stdx::nullopt;
+        } else if (start() && cmp(split_point, start()->value()) < 0) {
+            return *this;
+        } else {
+            return nonwrapping_range(range_bound<T>(split_point, false), end());
+        }
     }
     // Transforms this range into a new range of a different value type
     // Supplied transformer should transform value of type T (the old type) into value of type U (the new type).

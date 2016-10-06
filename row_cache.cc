@@ -439,9 +439,14 @@ class range_populating_reader final : public mutation_reader::impl {
         if (_populate_phase != _cache._populate_phaser.phase()) {
             assert(_last_key);
             auto cmp = dht::ring_position_comparator(*_schema);
-            _range = _range.split_after(*_last_key, cmp);
+            auto&& new_range = _range.split_after(*_last_key, cmp);
             _populate_phase = _cache._populate_phaser.phase();
-            _reader = _underlying(_cache._schema, _range, query::full_slice, _pc, _trace_state);
+            if (new_range) {
+                _range = std::move(new_range).value();
+                _reader = _underlying(_cache._schema, _range, query::full_slice, _pc, _trace_state);
+            } else {
+                _reader = make_empty_reader();
+            }
         }
     }
 
@@ -614,11 +619,13 @@ class scanning_and_populating_reader final : public mutation_reader::impl{
         }
         future<streamed_mutation_opt> switch_to_secondary_only() {
             if (_last_key_from_primary.value && !_last_key_from_primary.outside_the_range) {
-                _range = _range.split_after(*_last_key_from_primary.value, dht::ring_position_comparator(*_schema));
-            }
-            if (_range.is_wrap_around(dht::ring_position_comparator(*_schema))) {
-                switch_to_end();
-                return make_ready_future<streamed_mutation_opt>();
+                auto&& new_range = _range.split_after(*_last_key_from_primary.value, dht::ring_position_comparator(*_schema));
+                if (!new_range) {
+                    switch_to_end();
+                    return make_ready_future<streamed_mutation_opt>();
+                } else {
+                    _range = std::move(new_range).value();
+                }
             }
             mutation_reader secondary = make_mutation_reader<range_populating_reader>(_cache, _schema, _range, _slice, _pc,
                 _trace_state, _cache._underlying, _last_key_from_primary.value, _last_key_from_primary_populate_phase,
@@ -647,11 +654,13 @@ class scanning_and_populating_reader final : public mutation_reader::impl{
         future<streamed_mutation_opt> switch_to_secondary_or_primary(just_cache_scanning_reader::cache_data&& data) {
             assert(data.mut);
             if (_last_key_from_primary.value && !_last_key_from_primary.outside_the_range) {
-                _range = _range.split_after(*_last_key_from_primary.value, dht::ring_position_comparator(*_schema));
-            }
-            if (_range.is_wrap_around(dht::ring_position_comparator(*_schema))) {
-                switch_to_end();
-                return make_ready_future<streamed_mutation_opt>();
+                auto&& new_range = _range.split_after(*_last_key_from_primary.value, dht::ring_position_comparator(*_schema));
+                if (!new_range) {
+                    switch_to_end();
+                    return make_ready_future<streamed_mutation_opt>();
+                } else {
+                    _range = std::move(new_range).value();
+                }
             }
             query::partition_range range(_range.start(),
                                          std::move(query::partition_range::bound(data.mut->decorated_key(), false)));
