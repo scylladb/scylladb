@@ -84,7 +84,7 @@ get_unused_disks() {
         if [ -f /usr/sbin/pvs ]; then
             count_pvs=$(pvs|grep $dev|wc -l)
         fi
-        count_swap=$(swapon --show |grep `realpath $dev`|wc -l)
+        count_swap=$(swapon -s |grep `realpath $dev`|wc -l)
         if [ $count_raw -eq 0 -a $count_pvs -eq 0 -a $count_swap -eq 0 ]; then
             echo -n "$dev "
         fi
