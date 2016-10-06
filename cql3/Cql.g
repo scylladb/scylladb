@@ -40,6 +40,7 @@ options {
 #include "cql3/statements/drop_keyspace_statement.hh"
 #include "cql3/statements/create_index_statement.hh"
 #include "cql3/statements/create_table_statement.hh"
+#include "cql3/statements/create_view_statement.hh"
 #include "cql3/statements/create_type_statement.hh"
 #include "cql3/statements/drop_type_statement.hh"
 #include "cql3/statements/alter_type_statement.hh"
@@ -340,6 +341,7 @@ cqlStatement returns [shared_ptr<raw::parsed_statement> stmt]
     | st30=createAggregateStatement    { $stmt = st30; }
     | st31=dropAggregateStatement      { $stmt = st31; }
 #endif
+    | st32=createViewStatement         { $stmt = st32; }
     ;
 
 /*
@@ -787,6 +789,41 @@ indexIdent returns [::shared_ptr<index_target::raw> id]
     | K_FULL '(' c=cident ')'    { $id = index_target::raw::full_collection(c); }
     ;
 
+/**
+ * CREATE MATERIALIZED VIEW <viewName> AS
+ *  SELECT <columns>
+ *  FROM <CF>
+ *  WHERE <pkColumns> IS NOT NULL
+ *  PRIMARY KEY (<pkColumns>)
+ *  WITH <property> = <value> AND ...;
+ */
+createViewStatement returns [::shared_ptr<create_view_statement> expr]
+    @init {
+        bool if_not_exists = false;
+        std::vector<::shared_ptr<cql3::column_identifier::raw>> partition_keys;
+        std::vector<::shared_ptr<cql3::column_identifier::raw>> composite_keys;
+        auto props = make_shared<cf_prop_defs>();
+    }
+    : K_CREATE K_MATERIALIZED K_VIEW (K_IF K_NOT K_EXISTS { if_not_exists = true; })? cf=columnFamilyName K_AS
+        K_SELECT sclause=selectClause K_FROM basecf=columnFamilyName
+        (K_WHERE wclause=whereClause)?
+        K_PRIMARY K_KEY (
+        '(' '(' k1=cident { partition_keys.push_back(k1); } ( ',' kn=cident { partition_keys.push_back(kn); } )* ')' ( ',' c1=cident { composite_keys.push_back(c1); } )* ')'
+    |   '(' k1=cident { partition_keys.push_back(k1); } ( ',' cn=cident { composite_keys.push_back(cn); } )* ')'
+        )
+        (K_WITH properties[props])?
+        {
+             $expr = ::make_shared<create_view_statement>(
+                std::move(cf),
+                std::move(basecf),
+                std::move(sclause),
+                std::move(wclause),
+                std::move(partition_keys),
+                std::move(composite_keys),
+                std::move(props),
+                if_not_exists);
+        }
+    ;
 
 #if 0
 /**
@@ -1304,7 +1341,8 @@ relation[std::vector<cql3::relation_ptr>& clauses]
 
     | K_TOKEN l=tupleOfIdentifiers type=relationType t=term
         { $clauses.emplace_back(::make_shared<cql3::token_relation>(std::move(l), *type, std::move(t))); }
-
+    | name=cident K_IS K_NOT K_NULL {
+          $clauses.emplace_back(make_shared<cql3::single_column_relation>(std::move(name), cql3::operator_type::IS_NOT, cql3::constants::NULL_LITERAL)); }
     | name=cident K_IN marker=inMarker
         { $clauses.emplace_back(make_shared<cql3::single_column_relation>(std::move(name), cql3::operator_type::IN, std::move(marker))); }
     | name=cident K_IN in_values=singleColumnInValues
@@ -1528,6 +1566,8 @@ K_KEYSPACE:    ( K E Y S P A C E
 K_KEYSPACES:   K E Y S P A C E S;
 K_COLUMNFAMILY:( C O L U M N F A M I L Y
                  | T A B L E );
+K_MATERIALIZED:M A T E R I A L I Z E D;
+K_VIEW:        V I E W;
 K_INDEX:       I N D E X;
 K_CUSTOM:      C U S T O M;
 K_ON:          O N;
@@ -1551,6 +1591,7 @@ K_DESC:        D E S C;
 K_ALLOW:       A L L O W;
 K_FILTERING:   F I L T E R I N G;
 K_IF:          I F;
+K_IS:          I S;
 K_CONTAINS:    C O N T A I N S;
 
 K_GRANT:       G R A N T;

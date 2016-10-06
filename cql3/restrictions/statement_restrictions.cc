@@ -28,6 +28,9 @@
 #include "single_column_primary_key_restrictions.hh"
 #include "token_restriction.hh"
 
+#include "cql3/single_column_relation.hh"
+#include "cql3/constants.hh"
+
 namespace cql3 {
 namespace restrictions {
 
@@ -132,12 +135,20 @@ statement_restrictions::statement_restrictions(schema_ptr schema)
     , _nonprimary_key_restrictions(::make_shared<single_column_restrictions>(schema))
 { }
 
+static const column_definition*
+to_column_definition(const schema_ptr& schema, const ::shared_ptr<column_identifier::raw>& entity) {
+    return get_column_definition(schema,
+            *entity->prepare_column_identifier(schema));
+}
+
+
 statement_restrictions::statement_restrictions(database& db,
         schema_ptr schema,
         const std::vector<::shared_ptr<relation>>& where_clause,
         ::shared_ptr<variable_specifications> bound_names,
         bool selects_only_static_columns,
-        bool select_a_collection)
+        bool select_a_collection,
+        bool for_view)
     : statement_restrictions(schema)
 {
     /*
@@ -149,7 +160,31 @@ statement_restrictions::statement_restrictions(database& db,
      */
     if (!where_clause.empty()) {
         for (auto&& relation : where_clause) {
-            add_restriction(relation->to_restriction(db, schema, bound_names));
+            if (relation->get_operator() == cql3::operator_type::IS_NOT) {
+                single_column_relation* r =
+                        dynamic_cast<single_column_relation*>(relation.get());
+                // The "IS NOT NULL" restriction is only supported (and
+                // mandatory) for materialized view creation:
+                if (!r) {
+                    throw exceptions::invalid_request_exception("IS NOT only supports single column");
+                }
+                // currently, the grammar only allows the NULL argument to be
+                // "IS NOT", so this assertion should not be able to fail
+                assert(r->get_value() == cql3::constants::NULL_LITERAL);
+
+                auto col_id = r->get_entity()->prepare_column_identifier(schema);
+                const auto *cd = get_column_definition(schema, *col_id);
+                if (!cd) {
+                    throw exceptions::invalid_request_exception(sprint("restriction '%s' unknown column %s", relation->to_string(), r->get_entity()->to_string()));
+                }
+                _not_null_columns.insert(cd);
+
+                if (!for_view) {
+                    throw exceptions::invalid_request_exception(sprint("restriction '%s' is only supported in materialized view creation", relation->to_string()));
+                }
+            } else {
+                add_restriction(relation->to_restriction(db, schema, bound_names));
+            }
         }
     }
 

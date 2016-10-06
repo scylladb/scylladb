@@ -83,6 +83,8 @@ private:
      */
     ::shared_ptr<single_column_restrictions> _nonprimary_key_restrictions;
 
+    std::unordered_set<const column_definition*> _not_null_columns;
+
     /**
      * The restrictions used to build the index expressions
      */
@@ -112,7 +114,8 @@ public:
         const std::vector<::shared_ptr<relation>>& where_clause,
         ::shared_ptr<variable_specifications> bound_names,
         bool selects_only_static_columns,
-        bool select_a_collection);
+        bool select_a_collection,
+        bool for_view = false);
 private:
     void add_restriction(::shared_ptr<restriction> restriction);
     void add_single_column_restriction(::shared_ptr<single_column_restriction> restriction);
