@@ -119,20 +119,6 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
     // memtable is totally gone. That means that if we have throttled requests, they will stay
     // throttled for a long time. Even when we have virtual dirty, that only provides a rough
     // estimate, and we can't release requests that early.
-    //
-    // Ideally, we'd allow one memtable flush per shard (or per database object), and write-behind
-    // would take care of the rest. But that still has issues, so we'll limit parallelism to some
-    // number (4), that we will hopefully reduce to 1 when write behind works.
-    //
-    // When streaming is going on, we'll separate half of that for the streaming code, which
-    // effectively increases the total to 6. That is a bit ugly and a bit redundant with the I/O
-    // Scheduler, but it's the easiest way not to hurt the common case (no streaming) and will have
-    // to do for the moment. Hopefully we can set both to 1 soon (with write behind)
-    //
-    // FIXME: enable write behind and set both to 1. Right now we will take advantage of the fact
-    // that memtables and streaming will use different specialized classes here and set them as
-    // default values here.
-    size_t _concurrency;
     semaphore _flush_serializer;
     int64_t _dirty_bytes_released_pre_accounted = 0;
 
@@ -145,19 +131,17 @@ protected:
 public:
     future<> shutdown();
 
-    dirty_memory_manager(database* db, size_t threshold, size_t concurrency)
+    dirty_memory_manager(database* db, size_t threshold)
                                            : logalloc::region_group_reclaimer(threshold)
                                            , _db(db)
                                            , _region_group(*this)
-                                           , _concurrency(concurrency)
-                                           , _flush_serializer(concurrency) {}
+                                           , _flush_serializer(1) {}
 
-    dirty_memory_manager(database* db, dirty_memory_manager *parent, size_t threshold, size_t concurrency)
+    dirty_memory_manager(database* db, dirty_memory_manager *parent, size_t threshold)
                                                                          : logalloc::region_group_reclaimer(threshold)
                                                                          , _db(db)
                                                                          , _region_group(&parent->_region_group, *this)
-                                                                         , _concurrency(concurrency)
-                                                                         , _flush_serializer(concurrency) {}
+                                                                         , _flush_serializer(1) {}
 
     static dirty_memory_manager& from_region_group(logalloc::region_group *rg) {
         return *(boost::intrusive::get_parent_from_member(rg, &dirty_memory_manager::_region_group));
@@ -202,17 +186,17 @@ public:
 class streaming_dirty_memory_manager: public dirty_memory_manager {
     virtual memtable_list& get_memtable_list(column_family& cf) override;
 public:
-    streaming_dirty_memory_manager(database& db, dirty_memory_manager *parent, size_t threshold) : dirty_memory_manager(&db, parent, threshold, 2) {}
+    streaming_dirty_memory_manager(database& db, dirty_memory_manager *parent, size_t threshold) : dirty_memory_manager(&db, parent, threshold) {}
 };
 
 class memtable_dirty_memory_manager: public dirty_memory_manager {
     virtual memtable_list& get_memtable_list(column_family& cf) override;
 public:
-    memtable_dirty_memory_manager(database& db, dirty_memory_manager* parent, size_t threshold) : dirty_memory_manager(&db, parent, threshold, 4) {}
+    memtable_dirty_memory_manager(database& db, dirty_memory_manager* parent, size_t threshold) : dirty_memory_manager(&db, parent, threshold) {}
     // This constructor will be called for the system tables (no parent). Its flushes are usually drive by us
     // and not the user, and tend to be small in size. So we'll allow only two slots.
-    memtable_dirty_memory_manager(database& db, size_t threshold) : dirty_memory_manager(&db, threshold, 2) {}
-    memtable_dirty_memory_manager() : dirty_memory_manager(nullptr, std::numeric_limits<size_t>::max(), 4) {}
+    memtable_dirty_memory_manager(database& db, size_t threshold) : dirty_memory_manager(&db, threshold) {}
+    memtable_dirty_memory_manager() : dirty_memory_manager(nullptr, std::numeric_limits<size_t>::max()) {}
 };
 
 extern thread_local memtable_dirty_memory_manager default_dirty_memory_manager;

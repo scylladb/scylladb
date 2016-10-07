@@ -2462,7 +2462,7 @@ void dirty_memory_manager::maybe_do_active_flush() {
     }
 
     // Flush already ongoing. We don't need to initiate an active flush at this moment.
-    if (_flush_serializer.current() != _concurrency) {
+    if (_flush_serializer.current() == 0) {
         return;
     }
 
