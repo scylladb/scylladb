@@ -427,8 +427,14 @@ column_family::make_sstable_reader(schema_ptr s,
                                    tracing::trace_state_ptr trace_state) const {
     // restricts a reader's concurrency if the configuration specifies it
     auto restrict_reader = [&] (mutation_reader&& in) {
-        if (_config.read_concurrency_config.sem) {
-            return make_restricted_reader(_config.read_concurrency_config, 1, std::move(in));
+        auto&& config = [this, &pc] () -> const restricted_mutation_reader_config& {
+            if (service::get_local_streaming_read_priority().id() == pc.id()) {
+                return _config.streaming_read_concurrency_config;
+            }
+            return _config.read_concurrency_config;
+        }();
+        if (config.sem) {
+            return make_restricted_reader(config, 1, std::move(in));
         } else {
             return std::move(in);
         }
@@ -2070,6 +2076,7 @@ keyspace::make_column_family_config(const schema& s, const db::config& db_config
     cfg.dirty_memory_manager = _config.dirty_memory_manager;
     cfg.streaming_dirty_memory_manager = _config.streaming_dirty_memory_manager;
     cfg.read_concurrency_config = _config.read_concurrency_config;
+    cfg.streaming_read_concurrency_config = _config.streaming_read_concurrency_config;
     cfg.cf_stats = _config.cf_stats;
     cfg.enable_incremental_backups = _config.enable_incremental_backups;
     cfg.max_cached_partition_size_in_bytes = db_config.max_cached_partition_size_in_kb() * 1024;
@@ -2559,6 +2566,8 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
         ++_stats->sstable_read_queue_overloaded;
         throw std::runtime_error("sstable inactive read queue overloaded");
     };
+    cfg.streaming_read_concurrency_config = cfg.read_concurrency_config;
+    cfg.streaming_read_concurrency_config.timeout = {};
     cfg.cf_stats = &_cf_stats;
     cfg.enable_incremental_backups = _enable_incremental_backups;
     return cfg;
