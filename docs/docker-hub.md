@@ -107,6 +107,8 @@ For example, to configure Scylla to use listen address `10.0.0.5`:
 $ docker run --name some-scylla -d scylladb/scylla --listen-address 10.0.0.5
 ```
 
+**Since: 1.4**
+
 ### `--broadcast-address ADDR`
 
 The `--broadcast-address` command line option configures the IP address the Scylla instance tells other Scylla nodes in the cluster to connect to.
