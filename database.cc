@@ -1187,6 +1187,11 @@ void column_family::set_metrics() {
             ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks),
             ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks)
     });
+    if (_schema->ks_name() != db::system_keyspace::NAME) {
+        _metrics.add_group("column_family", {
+                ms::make_gauge("cache_hit_rate", ms::description("Cache hit rate"), [this] {return float(_global_cache_hit_rate);})(cf)(ks)
+        });
+    }
 }
 
 void column_family::rebuild_statistics() {

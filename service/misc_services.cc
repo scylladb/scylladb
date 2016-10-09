@@ -39,6 +39,8 @@
  */
 
 #include "load_broadcaster.hh"
+#include "cache_hitrate_calculator.hh"
+#include "db/system_keyspace.hh"
 
 namespace service {
 
@@ -76,6 +78,95 @@ void load_broadcaster::start_broadcasting() {
 future<> load_broadcaster::stop_broadcasting() {
     _timer.cancel();
     return std::move(_done);
+}
+
+
+// cache_hitrate_calculator implementation
+cache_hitrate_calculator::cache_hitrate_calculator(seastar::sharded<database>& db, seastar::sharded<cache_hitrate_calculator>& me) : _db(db), _me(me),
+        _timer(std::bind(std::mem_fn(&cache_hitrate_calculator::recalculate_timer), this))
+{}
+
+void cache_hitrate_calculator::recalculate_timer() {
+    recalculate_hitrates().then_wrapped([p = shared_from_this()] (future<lowres_clock::duration> f) {
+        lowres_clock::duration d;
+        if (f.failed()) {
+            d = std::chrono::milliseconds(2000);
+        } else {
+            d = f.get0();
+        }
+        p->run_on((engine().cpu_id() + 1) % smp::count, d);
+    });
+}
+
+void cache_hitrate_calculator::run_on(size_t master, lowres_clock::duration d) {
+    if (!_stopped) {
+        _me.invoke_on(master, [d] (cache_hitrate_calculator& local) {
+            local._timer.arm(d);
+        }).handle_exception_type([] (seastar::no_sharded_instance_exception&) { /* ignore */ });
+    }
+}
+
+future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() {
+    struct stat {
+        float h = 0;
+        float m = 0;
+        stat& operator+=(stat& o) {
+            h += o.h;
+            m += o.m;
+            return *this;
+        }
+    };
+
+    static auto non_system_filter = [] (const std::pair<utils::UUID, lw_shared_ptr<column_family>>& cf) {
+        return cf.second->schema()->ks_name() != db::system_keyspace::NAME;
+    };
+
+    auto cf_to_cache_hit_stats = [] (database& db) {
+        return boost::copy_range<std::unordered_map<utils::UUID, stat>>(db.get_column_families() | boost::adaptors::filtered(non_system_filter) |
+                boost::adaptors::transformed([]  (const std::pair<utils::UUID, lw_shared_ptr<column_family>>& cf) {
+            auto& stats = cf.second->get_row_cache().stats();
+            return std::make_pair(cf.first, stat{float(stats.hits.rate().rates[0]), float(stats.misses.rate().rates[0])});
+        }));
+    };
+
+    auto sum_stats_per_cf = [] (std::unordered_map<utils::UUID, stat> a, std::unordered_map<utils::UUID, stat> b) {
+        for (auto& r : b) {
+            a[r.first] += r.second;
+        }
+        return std::move(a);
+    };
+
+    return _db.map_reduce0(cf_to_cache_hit_stats, std::unordered_map<utils::UUID, stat>(), sum_stats_per_cf).then([this] (std::unordered_map<utils::UUID, stat> rates) mutable {
+        _diff = 0;
+        // set calculated rates on all shards
+        return _db.invoke_on_all([this, rates = std::move(rates), cpuid = engine().cpu_id()] (database& db) {
+            for (auto& cf : db.get_column_families() | boost::adaptors::filtered(non_system_filter)) {
+                stat s = rates.at(cf.first);
+                float rate = 0;
+                if (s.h) {
+                    rate = s.h / (s.h + s.m);
+                }
+                if (engine().cpu_id() == cpuid) {
+                    // calculate max difference between old rate and new one for all cfs
+                    _diff = std::max(_diff, std::abs(float(cf.second->get_global_cache_hit_rate()) - rate));
+                }
+                cf.second->set_global_cache_hit_rate(cache_temperature(rate));
+            }
+        });
+    }).then([this] {
+        // if max difference during this round is big schedule next recalculate earlier
+        if (_diff < 0.01) {
+            return std::chrono::milliseconds(2000);
+        } else {
+            return std::chrono::milliseconds(500);
+        }
+    });
+}
+
+future<> cache_hitrate_calculator::stop() {
+    _timer.cancel();
+    _stopped = true;
+    return make_ready_future<>();
 }
 
 }

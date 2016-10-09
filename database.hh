@@ -554,6 +554,10 @@ private:
     std::unique_ptr<cell_locker> _counter_cell_locks;
     void set_metrics();
     seastar::metrics::metric_groups _metrics;
+
+    // holds average cache hit rate of all shards
+    // recalculated periodically
+    cache_temperature _global_cache_hit_rate = cache_temperature(0.0f);
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, std::vector<unsigned>&& shards_for_the_sstable);
     // Adds new sstable to the set of sstables
@@ -843,6 +847,14 @@ public:
 
     compaction_manager& get_compaction_manager() const {
         return _compaction_manager;
+    }
+
+    cache_temperature get_global_cache_hit_rate() const {
+        return _global_cache_hit_rate;
+    }
+
+    void set_global_cache_hit_rate(cache_temperature rate) {
+        _global_cache_hit_rate = rate;
     }
 
     template<typename Func, typename Result = futurize_t<std::result_of_t<Func()>>>
