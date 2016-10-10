@@ -176,6 +176,8 @@ class region_group {
     // complication in release_requests and keep the main request execution path simpler.
     circular_buffer<std::unique_ptr<allocating_function>> _blocked_requests;
 
+    uint64_t _blocked_requests_counter = 0;
+
     // All requests waiting for execution are kept in _blocked_requests (explained above) in the
     // region_group they were executed against. However, it could be that they are blocked not due
     // to their region group but to an ancestor. To handle these cases we will keep a list of
@@ -287,6 +289,7 @@ public:
         auto fn = std::make_unique<concrete_allocating_function<Func>>(std::forward<Func>(func));
         auto fut = fn->get_future();
         _blocked_requests.push_back(std::move(fn));
+        ++_blocked_requests_counter;
 
         // This is called here, and not at update(), for two reasons: the first, is that things that
         // are done during the free() path should be done carefuly, in the sense that they can
@@ -321,6 +324,10 @@ public:
 
     size_t blocked_requests() {
         return _blocked_requests.size();
+    }
+
+    uint64_t blocked_requests_counter() const {
+        return _blocked_requests_counter;
     }
 private:
     // Make sure we get a notification and can call release_requests when one of our ancestors that
