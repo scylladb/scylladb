@@ -67,12 +67,22 @@ def version_compare(a, b):
 def check_version(ar):
     if config and (not config.has_option("housekeeping", "check-version") or not config.getboolean("housekeeping", "check-version")):
         return
-    current_version = get_api('/storage_service/scylla_release_version')
-    if current_version == "":
-        # API is down, nothing to do
-        return
+    if ar.version and ar.version != '':
+        current_version = ar.version
+    else:
+        current_version = get_api('/storage_service/scylla_release_version')
+        if current_version == "":
+            # API is down, nothing to do
+            return
     try:
-        latest_version = get_json_from_url(version_url + "?version=" + current_version)["version"]
+        params = "?version=" + current_version
+        if ar.mode:
+            # mode would accept any string.
+            # use i for install, c (default) for running from the command line 
+            params = params + "&sts=" + ar.mode
+        if uuid:
+            params = params + "&uu=" + uuid
+        latest_version = get_json_from_url(version_url + params)["version"]
     except:
         traceln("Unable to retrieve version information")
         return
@@ -82,11 +92,14 @@ def check_version(ar):
 parser = argparse.ArgumentParser(description='ScyllaDB help report tool', conflict_handler="resolve")
 parser.add_argument('-q', '--quiet', action='store_true', default=False, help='Quiet mode')
 parser.add_argument('-c', '--config', default="", help='An optional config file. Specifying a missing file will terminate the script')
+parser.add_argument('--uuid', default="", help='A uuid for the requests')
 
 subparsers = parser.add_subparsers(help='Available commands')
 parser_help = subparsers.add_parser('help', help='Display help information')
 parser_help.set_defaults(func=help)
 parser_system = subparsers.add_parser('version', help='Check if the current running version is the latest one')
+parser_system.add_argument('--mode', default="c", help='Which mode the version check runs')
+parser_system.add_argument('--version', default="", help='Use a given version to compare to')
 parser_system.set_defaults(func=check_version)
 
 args = parser.parse_args()
@@ -98,4 +111,7 @@ if args.config != "":
         sys.exit(0)
     config = ConfigParser.SafeConfigParser()
     config.read(args.config)
+uuid = None
+if args.uuid != "":
+    uuid = args.uuid
 args.func(args)

@@ -254,6 +254,18 @@ if [ $ENABLE_SERVICE -eq 1 ]; then
     fi
 fi
 
+if [ ! -f /etc/scylla.d/housekeeping.uuid ]; then
+   uuidgen > /etc/scylla.d/housekeeping.uuid
+fi
+
+UUID=`cat /etc/scylla.d/housekeeping.uuid` || true
+CUR_VERSION=`scylla --version` || true
+if [ "$CUR_VERSION" != "" ] && [ "$UUID" != "" ]; then
+    NEW_VERSION=`/usr/lib/scylla/scylla-housekeeping --uuid $UUID version --version $CUR_VERSION --mode i` || true
+    if [ "$NEW_VERSION" != "" ]; then
+       echo $NEW_VERSION
+    fi
+fi
 if [ $INTERACTIVE -eq 1 ]; then
     interactive_ask_service "Do you want to disable SELinux?" "Answer yes to disable SELinux; this improves performance; answer no to keep it activated." "yes" &&:
     SELINUX_SETUP=$?
