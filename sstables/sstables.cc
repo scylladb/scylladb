@@ -2387,6 +2387,60 @@ void sstable::mark_sstable_for_deletion(const schema_ptr& schema, sstring dir, i
     sst.mark_for_deletion();
 }
 
+/**
+ * Returns a pair of positions [p1, p2) in the summary file corresponding to entries
+ * covered by the specified range, or a disengaged optional if no such pair exists.
+ */
+stdx::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_range(const nonwrapping_range<dht::token>& range) {
+    auto entries_size = _summary.entries.size();
+    auto search = [this](bool before, const dht::token& token) {
+        auto kind = before ? key::kind::before_all_keys : key::kind::after_all_keys;
+        key k(kind);
+        // Binary search will never returns positive values.
+        return uint64_t((binary_search(_summary.entries, k, token) + 1) * -1);
+    };
+    uint64_t left = 0;
+    if (range.start()) {
+        left = search(range.start()->is_inclusive(), range.start()->value());
+        if (left == entries_size) {
+            // left is past the end of the sampling.
+            return stdx::nullopt;
+        }
+    }
+    uint64_t right = entries_size;
+    if (range.end()) {
+        right = search(!range.end()->is_inclusive(), range.end()->value());
+        if (right == 0) {
+            // The first key is strictly greater than right.
+            return stdx::nullopt;
+        }
+    }
+    if (left < right) {
+        return stdx::optional<std::pair<uint64_t, uint64_t>>(stdx::in_place_t(), left, right);
+    }
+    return stdx::nullopt;
+}
+
+std::vector<dht::decorated_key> sstable::get_key_samples(const schema& s, const nonwrapping_range<dht::token>& range) {
+    auto index_range = get_sample_indexes_for_range(range);
+    std::vector<dht::decorated_key> res;
+    if (index_range) {
+        for (auto idx = index_range->first; idx < index_range->second; ++idx) {
+            auto pkey = _summary.entries[idx].get_key().to_partition_key(s);
+            res.push_back(dht::global_partitioner().decorate_key(s, std::move(pkey)));
+        }
+    }
+    return res;
+}
+
+uint64_t sstable::estimated_keys_for_range(const nonwrapping_range<dht::token>& range) {
+    auto sample_index_range = get_sample_indexes_for_range(range);
+    uint64_t sample_key_count = sample_index_range ? sample_index_range->second - sample_index_range->first : 0;
+    // adjust for the current sampling level
+    uint64_t estimated_keys = sample_key_count * ((downsampling::BASE_SAMPLING_LEVEL * _summary.header.min_index_interval) / _summary.header.sampling_level);
+    return std::max(uint64_t(1), estimated_keys);
+}
+
 std::ostream&
 operator<<(std::ostream& os, const sstable_to_delete& std) {
     return os << std.name << "(" << (std.shared ? "shared" : "unshared") << ")";
