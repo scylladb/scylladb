@@ -414,6 +414,7 @@ segment_zone::segment_zone()
         if (!can_allocate_more_memory(size << segment::size_shift)) {
             continue;
         }
+        memory::disable_abort_on_alloc_failure_temporarily no_abort_guard;
         auto ptr = aligned_alloc(segment::size, size << segment::size_shift);
         if (!ptr) {
             continue;
