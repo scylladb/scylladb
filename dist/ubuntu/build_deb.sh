@@ -102,6 +102,7 @@ fi
 cp dist/common/systemd/scylla-server.service.in debian/scylla-server.service
 sed -i -e "s#@@SYSCONFDIR@@#/etc/default#g" debian/scylla-server.service
 cp dist/common/systemd/scylla-housekeeping.service debian/scylla-server.scylla-housekeeping.service
+cp dist/common/systemd/node-exporter.service debian/scylla-server.node-exporter.service
 
 if [ "$RELEASE" = "14.04" ] && [ $REBUILD -eq 0 ]; then
     if [ ! -f /etc/apt/sources.list.d/scylla-3rdparty-trusty.list ]; then
