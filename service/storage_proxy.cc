@@ -3354,10 +3354,13 @@ class mutation_result_merger {
     // Adapts reconcilable_result to a consumable sequence of partitions.
     struct partition_run {
         foreign_ptr<lw_shared_ptr<reconcilable_result>> result;
+        // we order by (priority, partition_key) to preserve ordering in wraparound
+        // queries.
+        unsigned priority;
         size_t index = 0;
 
-        partition_run(foreign_ptr<lw_shared_ptr<reconcilable_result>> result)
-            : result(std::move(result))
+        partition_run(std::pair<foreign_ptr<lw_shared_ptr<reconcilable_result>>, unsigned> result)
+            : result(std::move(result.first)), priority(result.second)
         { }
 
         const partition& current() const {
@@ -3386,14 +3389,20 @@ public:
         _runs.reserve(shard_count);
     }
 
-    void operator()(foreign_ptr<lw_shared_ptr<reconcilable_result>> result) {
-        if (result->partitions().size() > 0) {
+    future<> operator()(std::pair<foreign_ptr<lw_shared_ptr<reconcilable_result>>, unsigned> result) {
+        if (result.first->partitions().size() > 0) {
             _runs.emplace_back(partition_run(std::move(result)));
         }
+        return make_ready_future<>();
     }
 
     future<reconcilable_result> get() {
         auto cmp = [this] (const partition_run& r1, const partition_run& r2) {
+            if (r1.priority < r2.priority) {
+                return false;
+            } else if (r1.priority > r2.priority) {
+                return true;
+            }
             const partition& p1 = r1.current();
             const partition& p2 = r2.current();
             return p1._m.key(*_schema).ring_order_tri_compare(*_schema, p2._m.key(*_schema)) > 0;
@@ -3452,14 +3461,45 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
             });
         });
     } else {
-        return _db.map_reduce(mutation_result_merger{ cmd, s }, [cmd, &pr, gs=global_schema_ptr(s), gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) {
-            return db.query_mutations(gs, *cmd, pr, gt).then([] (reconcilable_result&& result) {
-                return make_foreign(make_lw_shared(std::move(result)));
+        return query_nonsingular_mutations_locally(std::move(s), std::move(cmd), pr, std::move(trace_state));
+    }
+}
+
+
+future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr, tracing::trace_state_ptr trace_state) {
+    struct part {
+        query::partition_range pr;
+        unsigned shard;
+        unsigned priority;
+    };
+    std::vector<part> parts;
+    auto shard_nonwrapped_partition_range = [&] (const query::partition_range& pr, unsigned priority) {
+        for (auto shard : smp::all_cpus()) {
+            parts.push_back(part{pr, shard, priority});
+        }
+    };
+    if (pr.is_wrap_around(dht::ring_position_comparator(*s))) {
+        parts.reserve(smp::count * 2);
+        auto unw = pr.unwrap();
+        shard_nonwrapped_partition_range(unw.first, 0);
+        shard_nonwrapped_partition_range(unw.second, 1);
+    } else {
+        parts.reserve(smp::count);
+        shard_nonwrapped_partition_range(pr, 0);
+    }
+    return do_with(std::move(parts), [this, s, cmd, trace_state] (std::vector<part>& parts) mutable {
+        auto query_part = [this, cmd, gs=global_schema_ptr(s), gt = tracing::global_trace_state_ptr(std::move(trace_state))] (part p) mutable {
+            return _db.invoke_on(p.shard, [cmd, gs, gt, p] (database& db) mutable {
+                return db.query_mutations(gs, *cmd, p.pr, gt).then([priority = p.priority] (reconcilable_result&& result) {
+                    return std::make_pair(make_foreign(make_lw_shared(std::move(result))), priority);
+                });
             });
-        }).then([] (reconcilable_result&& result) {
+        };
+        return map_reduce(parts.begin(), parts.end(), query_part, mutation_result_merger{ cmd, s }).then([] (reconcilable_result&& result) {
             return make_foreign(make_lw_shared(std::move(result)));
         });
-    }
+    });
 }
 
 future<>

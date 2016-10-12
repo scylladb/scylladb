@@ -242,6 +242,8 @@ private:
     void handle_read_error(std::exception_ptr eptr);
     template<typename Range>
     future<> mutate_internal(Range mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state);
+    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_nonsingular_mutations_locally(
+            schema_ptr s, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr, tracing::trace_state_ptr trace_state);
 
 public:
     storage_proxy(distributed<database>& db);
