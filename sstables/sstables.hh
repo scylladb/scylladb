@@ -377,6 +377,8 @@ public:
 private:
     sstable(size_t wbuffer_size, schema_ptr schema, sstring dir, int64_t generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now())
         : sstable_buffer_size(wbuffer_size)
+        , _single_partition_history(make_lw_shared<file_input_stream_history>())
+        , _partition_range_history(make_lw_shared<file_input_stream_history>())
         , _schema(std::move(schema))
         , _dir(std::move(dir))
         , _generation(generation)
@@ -411,6 +413,9 @@ private:
     std::vector<nonwrapping_range<bytes_view>> _clustering_components_ranges;
     stdx::optional<dht::decorated_key> _first;
     stdx::optional<dht::decorated_key> _last;
+
+    lw_shared_ptr<file_input_stream_history> _single_partition_history;
+    lw_shared_ptr<file_input_stream_history> _partition_range_history;
 
     // _pi_write is used temporarily for building the promoted
     // index (column sample) of one partition when writing a new sstable.
@@ -508,7 +513,8 @@ private:
     // of bytes to be read using this stream, we can make better choices
     // about the buffer size to read, and where exactly to stop reading
     // (even when a large buffer size is used).
-    input_stream<char> data_stream(uint64_t pos, size_t len, const io_priority_class& pc);
+    input_stream<char> data_stream(uint64_t pos, size_t len, const io_priority_class& pc,
+                                   lw_shared_ptr<file_input_stream_history> history);
 
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read

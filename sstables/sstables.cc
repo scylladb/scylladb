@@ -2050,12 +2050,12 @@ sstable::component_type sstable::component_from_sstring(sstring &s) {
     return reverse_map(s, _component_map);
 }
 
-input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_priority_class& pc) {
+input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_priority_class& pc, lw_shared_ptr<file_input_stream_history> history) {
     file_input_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.io_priority_class = pc;
     options.read_ahead = 4;
-    options.dynamic_adjustments = make_lw_shared<file_input_stream_history>();
+    options.dynamic_adjustments = std::move(history);
     if (_compression) {
         return make_compressed_file_input_stream(_data_file, &_compression,
                 pos, len, std::move(options));
@@ -2065,7 +2065,7 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_prior
 }
 
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, const io_priority_class& pc) {
-    return do_with(data_stream(pos, len, pc), [len] (auto& stream) {
+    return do_with(data_stream(pos, len, pc, { }), [len] (auto& stream) {
         return stream.read_exactly(len).finally([&stream] {
             return stream.close();
         });

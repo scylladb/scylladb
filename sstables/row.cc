@@ -429,14 +429,14 @@ data_consume_context sstable::data_consume_rows(
         row_consumer& consumer, sstable::disk_read_range toread) {
     return std::make_unique<data_consume_context::impl>(shared_from_this(),
             consumer, data_stream(toread.start, data_size() - toread.start,
-                consumer.io_priority()), toread.start, toread.end - toread.start, toread.ri);
+                consumer.io_priority(), _partition_range_history), toread.start, toread.end - toread.start, toread.ri);
 }
 
 data_consume_context sstable::data_consume_single_partition(
         row_consumer& consumer, sstable::disk_read_range toread) {
     return std::make_unique<data_consume_context::impl>(shared_from_this(),
             consumer, data_stream(toread.start, toread.end - toread.start,
-                 consumer.io_priority()), toread.start, toread.end - toread.start, toread.ri);
+                 consumer.io_priority(), _single_partition_history), toread.start, toread.end - toread.start, toread.ri);
 }
 
 
