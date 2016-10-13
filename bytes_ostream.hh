@@ -59,7 +59,6 @@ private:
     };
     // FIXME: consider increasing chunk size as the buffer grows
     static constexpr size_type chunk_size{512};
-    static constexpr size_type usable_chunk_size{chunk_size - sizeof(chunk)};
 private:
     std::unique_ptr<chunk> _begin;
     chunk* _current;
@@ -100,6 +99,19 @@ private:
         }
         return _current->size - _current->offset;
     }
+    // Figure out next chunk size.
+    //   - must be enough for data_size
+    //   - must be at least chunk_size
+    //   - try to double each time to prevent too many allocations
+    //   - do not exceed max_chunk_size
+    size_type next_alloc_size(size_t data_size) const {
+        auto next_size = _current
+                ? _current->size * 2
+                : chunk_size;
+        next_size = std::min(next_size, max_chunk_size);
+        // FIXME: check for overflow?
+        return std::max<size_type>(next_size, data_size + sizeof(chunk));
+    }
     // Makes room for a contiguous region of given size.
     // The region is accounted for as already written.
     // size must not be zero.
@@ -110,7 +122,7 @@ private:
             _size += size;
             return ret;
         } else {
-            auto alloc_size = size <= usable_chunk_size ? chunk_size : (size + sizeof(chunk));
+            auto alloc_size = next_alloc_size(size);
             auto space = malloc(alloc_size);
             if (!space) {
                 throw std::bad_alloc();
