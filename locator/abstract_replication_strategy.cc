@@ -54,14 +54,17 @@ static void unwrap_first_range(std::vector<range<token>>& ret) {
 
 std::unique_ptr<abstract_replication_strategy> abstract_replication_strategy::create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, token_metadata& tk_metadata, const std::map<sstring, sstring>& config_options) {
     assert(locator::i_endpoint_snitch::get_local_snitch_ptr());
-
-    return create_object<abstract_replication_strategy,
-                         const sstring&,
-                         token_metadata&,
-                         snitch_ptr&,
-                         const std::map<sstring, sstring>&>
-        (strategy_name, ks_name, tk_metadata,
-         locator::i_endpoint_snitch::get_local_snitch_ptr(), config_options);
+    try {
+        return create_object<abstract_replication_strategy,
+                             const sstring&,
+                             token_metadata&,
+                             snitch_ptr&,
+                             const std::map<sstring, sstring>&>
+            (strategy_name, ks_name, tk_metadata,
+             locator::i_endpoint_snitch::get_local_snitch_ptr(), config_options);
+    } catch (const no_such_class& e) {
+        throw exceptions::configuration_exception(e.what());
+    }
 }
 
 void abstract_replication_strategy::validate_replication_strategy(const sstring& ks_name,
