@@ -39,3 +39,5 @@ fi
 if [ "$ID" = "ubuntu" ]; then
     hugeadm --create-mounts
 fi
+
+/usr/lib/scylla/scylla-blocktune

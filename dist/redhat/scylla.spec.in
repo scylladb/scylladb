@@ -84,6 +84,7 @@ install -m755 seastar/dpdk/tools/dpdk_nic_bind.py $RPM_BUILD_ROOT%{_prefix}/lib/
 install -m755 build/release/scylla $RPM_BUILD_ROOT%{_bindir}
 install -m755 build/release/iotune $RPM_BUILD_ROOT%{_bindir}
 install -m755 dist/common/bin/scyllatop $RPM_BUILD_ROOT%{_bindir}
+install -m755 scylla-blocktune $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 scylla-housekeeping $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 if @@HOUSEKEEPING_CONF@@; then
     install -m644 conf/housekeeping.cfg $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
@@ -156,6 +157,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_bindir}/iotune
 %{_bindir}/scyllatop
 %{_sbindir}/scylla*
+%{_prefix}/lib/scylla/scylla-blocktune
 %{_prefix}/lib/scylla/scylla-housekeeping
 %{_prefix}/lib/scylla/scylla_prepare
 %{_prefix}/lib/scylla/scylla_stop
