@@ -245,10 +245,8 @@ public:
     uint64_t get_completed_tasks() const;
     uint64_t get_flush_count() const;
     uint64_t get_pending_tasks() const;
-    uint64_t get_pending_writes() const;
     uint64_t get_pending_flushes() const;
     uint64_t get_pending_allocations() const;
-    uint64_t get_write_limit_exceeded_count() const;
     uint64_t get_flush_limit_exceeded_count() const;
     uint64_t get_num_segments_created() const;
     uint64_t get_num_segments_destroyed() const;
