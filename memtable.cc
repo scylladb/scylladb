@@ -260,10 +260,12 @@ public:
         dirty_memory_manager::from_region_group(_region.group()).revert_potentially_cleaned_up_memory(_bytes_read);
     }
     void account_component(memtable_entry& e) {
-        auto delta = _region.allocator().object_memory_size_in_allocator(&e) +
-                     _region.allocator().object_memory_size_in_allocator(&*(partition_snapshot(e.schema(), &(e.partition())).version())) +
-                     e.memory_usage_without_rows();
+        auto delta = _region.allocator().object_memory_size_in_allocator(&e)
+                     + e.memory_usage_without_rows();
         update_bytes_read(delta);
+    }
+    void account_component(partition_snapshot& snp) {
+        update_bytes_read(_region.allocator().object_memory_size_in_allocator(&*snp.version()));
     }
 };
 
@@ -320,6 +322,7 @@ public:
             auto snp = e->partition().read(schema());
             auto mpsr = make_partition_snapshot_reader<partition_snapshot_accounter>(schema(), e->key(), std::move(cr), snp, region(), read_section(), mtbl(), _flushed_memory);
             _flushed_memory.account_component(*e);
+            _flushed_memory.account_component(*snp);
             return make_ready_future<streamed_mutation_opt>(std::move(mpsr));
         }
     }
