@@ -350,7 +350,10 @@ private:
     bool migrate_segment(size_t from, size_t to);
     size_t shrink_by(size_t delta);
 public:
-    segment_zone();
+    segment_zone(segment* base, size_t size) : _base(base) {
+        _segments.resize(size, true);
+    }
+    static std::unique_ptr<segment_zone> try_creating_zone();
     ~segment_zone() {
         assert(empty());
         if (_segments.size()) {
@@ -404,8 +407,9 @@ public:
 thread_local size_t segment_zone::next_attempt_size = segment_zone::initial_size;
 constexpr size_t segment_zone::minimum_size;
 
-segment_zone::segment_zone()
+std::unique_ptr<segment_zone> segment_zone::try_creating_zone()
 {
+    std::unique_ptr<segment_zone> zone;
     auto next_size = next_attempt_size;
     while (next_size) {
         auto size = next_size;
@@ -419,23 +423,22 @@ segment_zone::segment_zone()
         if (!ptr) {
             continue;
         }
-        _base = static_cast<segment*>(ptr);
         try {
-            _segments.resize(size, true);
-            logger.debug("Creating new zone @{}, size: {}", this, size);
+            zone = std::make_unique<segment_zone>(static_cast<segment*>(ptr), size);
+            logger.debug("Creating new zone @{}, size: {}", zone.get(), size);
             next_attempt_size = std::max(size << 1, minimum_size);
             while (size--) {
-                auto seg = segment_from_position(size);
-                _free_segments.push_front(*new (seg) free_segment);
+                auto seg = zone->segment_from_position(size);
+                zone->_free_segments.push_front(*new (seg) free_segment);
             }
-            return;
+            return zone;
         } catch (const std::bad_alloc&) {
-            free(_base);
+            free(ptr);
         }
     }
-    logger.trace("Failed to create zone @{}", this);
+    logger.trace("Failed to create zone");
     next_attempt_size = minimum_size;
-    throw std::bad_alloc();
+    return zone;
 }
 
 struct segment_zone_base_address_compare {
@@ -661,7 +664,10 @@ segment* segment_pool::allocate_segment()
         if (can_allocate_more_memory(segment::size)) {
             segment_zone* zone;
             try {
-                zone = new segment_zone;
+                zone = segment_zone::try_creating_zone().release();
+                if (!zone) {
+                    continue;
+                }
             } catch (const std::bad_alloc&) {
                 continue;
             }
