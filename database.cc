@@ -279,7 +279,7 @@ column_family::make_sstable_reader(schema_ptr s,
     // restricts a reader's concurrency if the configuration specifies it
     auto restrict_reader = [&] (mutation_reader&& in) {
         auto&& config = [this, &pc] () -> const restricted_mutation_reader_config& {
-            if (service::get_local_streaming_read_priority().id() == pc.id()) {
+            if (service::get_local_streaming_read_priority() == pc) {
                 return _config.streaming_read_concurrency_config;
             }
             return _config.read_concurrency_config;
