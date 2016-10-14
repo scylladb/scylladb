@@ -228,41 +228,7 @@ public:
         return cfg.mode == sync_mode::BATCH || _write_semaphore.waiters() > 0 || _flush_semaphore.waiters() > 0;
     }
 
-    segment_manager(config c)
-        : cfg([&c] {
-            config cfg(c);
-
-            if (cfg.commit_log_location.empty()) {
-                cfg.commit_log_location = "/var/lib/scylla/commitlog";
-            }
-
-            if (cfg.max_active_writes == 0) {
-                cfg.max_active_writes = // TODO: call someone to get an idea...
-                                25 * smp::count;
-            }
-            cfg.max_active_writes = std::max(uint64_t(1), cfg.max_active_writes / smp::count);
-            if (cfg.max_active_flushes == 0) {
-                cfg.max_active_flushes = // TODO: call someone to get an idea...
-                                5 * smp::count;
-            }
-            cfg.max_active_flushes = std::max(uint64_t(1), cfg.max_active_flushes / smp::count);
-
-            return cfg;
-        }())
-        , max_size(std::min<size_t>(std::numeric_limits<position_type>::max(), std::max<size_t>(cfg.commitlog_segment_size_in_mb, 1) * 1024 * 1024))
-        , max_mutation_size(max_size >> 1)
-        , max_disk_size(size_t(std::ceil(cfg.commitlog_total_space_in_mb / double(smp::count))) * 1024 * 1024)
-        , _write_semaphore(cfg.max_active_writes)
-        , _flush_semaphore(cfg.max_active_flushes)
-    {
-        assert(max_size > 0);
-
-        logger.trace("Commitlog {} maximum disk size: {} MB / cpu ({} cpus)",
-                cfg.commit_log_location, max_disk_size / (1024 * 1024),
-                smp::count);
-
-        _regs = create_counters();
-    }
+    segment_manager(config c);
     ~segment_manager() {
         logger.trace("Commitlog {} disposed", cfg.commit_log_location);
     }
@@ -946,6 +912,42 @@ public:
 };
 
 const size_t db::commitlog::segment::default_size;
+
+db::commitlog::segment_manager::segment_manager(config c)
+    : cfg([&c] {
+        config cfg(c);
+
+        if (cfg.commit_log_location.empty()) {
+            cfg.commit_log_location = "/var/lib/scylla/commitlog";
+        }
+
+        if (cfg.max_active_writes == 0) {
+            cfg.max_active_writes = // TODO: call someone to get an idea...
+                            25 * smp::count;
+        }
+        cfg.max_active_writes = std::max(uint64_t(1), cfg.max_active_writes / smp::count);
+        if (cfg.max_active_flushes == 0) {
+            cfg.max_active_flushes = // TODO: call someone to get an idea...
+                            5 * smp::count;
+        }
+        cfg.max_active_flushes = std::max(uint64_t(1), cfg.max_active_flushes / smp::count);
+
+        return cfg;
+    }())
+    , max_size(std::min<size_t>(std::numeric_limits<position_type>::max(), std::max<size_t>(cfg.commitlog_segment_size_in_mb, 1) * 1024 * 1024))
+    , max_mutation_size(max_size >> 1)
+    , max_disk_size(size_t(std::ceil(cfg.commitlog_total_space_in_mb / double(smp::count))) * 1024 * 1024)
+    , _write_semaphore(cfg.max_active_writes)
+    , _flush_semaphore(cfg.max_active_flushes)
+{
+    assert(max_size > 0);
+
+    logger.trace("Commitlog {} maximum disk size: {} MB / cpu ({} cpus)",
+            cfg.commit_log_location, max_disk_size / (1024 * 1024),
+            smp::count);
+
+    _regs = create_counters();
+}
 
 future<std::vector<db::commitlog::descriptor>>
 db::commitlog::segment_manager::list_descriptors(sstring dirname) {
