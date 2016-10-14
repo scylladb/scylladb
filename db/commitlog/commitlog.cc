@@ -358,8 +358,6 @@ class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
     uint64_t _buf_pos = 0;
     bool _closed = false;
 
-    size_t _needed_size = 0;
-
     using buffer_type = segment_manager::buffer_type;
     using sseg_ptr = segment_manager::sseg_ptr;
     using clock_type = segment_manager::clock_type;
@@ -558,9 +556,6 @@ public:
      */
     void new_buffer(size_t s) {
         assert(_buffer.empty());
-
-        s += _needed_size;
-        _needed_size = 0;
 
         auto overhead = segment_overhead_size;
         if (_file_pos == 0) {
@@ -798,7 +793,6 @@ public:
         } else if (_buffer.empty()) {
             new_buffer(s);
         } else if (s > (_buffer.size() - _buf_pos)) { // enough data?
-            _needed_size += s; // hint to next new_buffer, in case we are not first.
             if (_segment_manager->cfg.mode == sync_mode::BATCH) {
                 // TODO: this could cause starvation if we're really unlucky.
                 // If we run batch mode and find ourselves not fit in a non-empty
