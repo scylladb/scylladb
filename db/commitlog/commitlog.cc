@@ -194,6 +194,10 @@ public:
 
     stats totals;
 
+    size_t pending_allocations() const {
+        return totals.pending_allocations;
+    }
+
     future<> begin_write() {
         ++totals.pending_writes; // redundant, given semaphore. but easier to read
         if (totals.pending_writes >= cfg.max_active_writes) {
@@ -1080,6 +1084,11 @@ scollectd::registrations db::commitlog::segment_manager::create_counters() {
         ),
 
         add_polled_metric(type_instance_id("commitlog"
+                        , per_cpu_plugin_instance, "queue_length", "pending_allocations")
+                , make_typed(data_type::GAUGE, [this] { return pending_allocations(); })
+        ),
+
+        add_polled_metric(type_instance_id("commitlog"
                         , per_cpu_plugin_instance, "total_operations", "write_limit_exceeded")
                 , make_typed(data_type::DERIVE, totals.write_limit_exceeded)
         ),
@@ -1801,7 +1810,7 @@ uint64_t db::commitlog::get_pending_flushes() const {
 }
 
 uint64_t db::commitlog::get_pending_allocations() const {
-    return _segment_manager->totals.pending_allocations;
+    return _segment_manager->pending_allocations();
 }
 
 uint64_t db::commitlog::get_write_limit_exceeded_count() const {
