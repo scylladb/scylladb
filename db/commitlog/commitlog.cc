@@ -201,6 +201,7 @@ public:
         uint64_t total_size = 0;
         uint64_t buffer_list_bytes = 0;
         uint64_t total_size_on_disk = 0;
+        uint64_t requests_blocked_memory = 0;
     };
 
     stats totals;
@@ -871,12 +872,14 @@ db::commitlog::segment_manager::allocate_when_possible(const cf_id_type& id, sha
     }
 
     auto fut = get_units(_request_controller, size);
+    if (!fut.available()) {
+        totals.requests_blocked_memory++;
+    }
     return fut.then([this, id, writer = std::move(writer)] (auto permit) mutable {
         return this->active_segment().then([this, id, writer = std::move(writer), permit = std::move(permit)] (auto s) mutable {
             return s->allocate(id, std::move(writer), std::move(permit));
         });
     });
-
 }
 
 const size_t db::commitlog::segment::default_size;
@@ -1056,6 +1059,11 @@ scollectd::registrations db::commitlog::segment_manager::create_counters() {
         add_polled_metric(type_instance_id("commitlog"
                         , per_cpu_plugin_instance, "queue_length", "pending_allocations")
                 , make_typed(data_type::GAUGE, [this] { return pending_allocations(); })
+        ),
+
+        add_polled_metric(type_instance_id("commitlog"
+                        , per_cpu_plugin_instance, "total_operations", "requests_blocked_memory")
+                , make_typed(data_type::DERIVE, totals.requests_blocked_memory)
         ),
 
         add_polled_metric(type_instance_id("commitlog"
