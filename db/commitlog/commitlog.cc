@@ -1424,6 +1424,7 @@ future<db::replay_position> db::commitlog::add(const cf_id_type& id,
             : _func(std::move(func)), _size(sz)
         { }
         virtual size_t size(segment&) override { return _size; }
+        virtual size_t size() override { return _size; }
         virtual void write(segment&, output& out) override {
             _func(out);
         }
@@ -1443,6 +1444,9 @@ future<db::replay_position> db::commitlog::add_entry(const cf_id_type& id, const
         virtual size_t size(segment& seg) override {
             _writer.set_with_schema(!seg.is_schema_version_known(_writer.schema()));
             return _writer.size();
+        }
+        virtual size_t size() override {
+            return _writer.mutation_size();
         }
         virtual void write(segment& seg, output& out) override {
             if (_writer.with_schema()) {
