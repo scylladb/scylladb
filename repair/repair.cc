@@ -724,6 +724,16 @@ struct repair_options {
         }
         string_opt(start_token, options, START_TOKEN);
         string_opt(end_token, options, END_TOKEN);
+
+        bool trace;
+        bool_opt(trace, options, TRACE_KEY);
+        if (trace) {
+            throw std::runtime_error("unsupported trace");
+        }
+        // Consume, ignore.
+        int job_threads;
+        int_opt(job_threads, options, JOB_THREADS_KEY);
+
         // The parsing code above removed from the map options we have parsed.
         // If anything is left there in the end, it's an unsupported option.
         if (!options.empty()) {
