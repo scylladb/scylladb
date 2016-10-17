@@ -38,7 +38,7 @@ class bytes_ostream {
 public:
     using size_type = bytes::size_type;
     using value_type = bytes::value_type;
-    static constexpr size_type max_chunk_size = 16 * 1024;
+    static constexpr size_type max_chunk_size() { return 16 * 1024; }
 private:
     static_assert(sizeof(value_type) == 1, "value_type is assumed to be one byte long");
     struct chunk {
@@ -108,7 +108,7 @@ private:
         auto next_size = _current
                 ? _current->size * 2
                 : chunk_size;
-        next_size = std::min(next_size, max_chunk_size);
+        next_size = std::min(next_size, max_chunk_size());
         // FIXME: check for overflow?
         return std::max<size_type>(next_size, data_size + sizeof(chunk));
     }
@@ -217,7 +217,7 @@ public:
         }
 
         while (!v.empty()) {
-            auto this_size = std::min(v.size(), size_t(max_chunk_size));
+            auto this_size = std::min(v.size(), size_t(max_chunk_size()));
             std::copy_n(v.begin(), this_size, alloc(this_size));
             v.remove_prefix(this_size);
         }
@@ -341,7 +341,7 @@ public:
         // if its size is below max_chunk_size. We probably could also gain
         // some read performance by doing "real" reduction, i.e. merging
         // all chunks until all but the last one is max_chunk_size.
-        if (size() < max_chunk_size) {
+        if (size() < max_chunk_size()) {
             linearize();
         }
     }
