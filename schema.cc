@@ -33,8 +33,6 @@
 
 constexpr int32_t schema::NAME_LENGTH;
 
-const std::experimental::optional<sstring> schema::DEFAULT_COMPRESSOR = sstring("LZ4Compressor");
-
 sstring to_sstring(column_kind k) {
     switch (k) {
     case column_kind::partition_key:  return "PARTITION_KEY";

@@ -64,12 +64,6 @@ create_table_statement::create_table_statement(::shared_ptr<cf_name> name,
     , _properties{properties}
     , _if_not_exists{if_not_exists}
 {
-    if (!properties->has_property(cf_prop_defs::KW_COMPRESSION) && schema::DEFAULT_COMPRESSOR) {
-        std::map<sstring, sstring> compression = {
-            { sstring(compression_parameters::SSTABLE_COMPRESSION), schema::DEFAULT_COMPRESSOR.value() },
-        };
-        properties->add_property(cf_prop_defs::KW_COMPRESSION, compression);
-    }
 }
 
 future<> create_table_statement::check_access(const service::client_state& state) {

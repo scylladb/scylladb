@@ -74,14 +74,6 @@ create_view_statement::create_view_statement(
     , _properties{properties}
     , _if_not_exists{if_not_exists}
 {
-    // If no compression property is specified explicitly for the new table,
-    // use the default one:
-    if (!properties->has_property(cf_prop_defs::KW_COMPRESSION) && schema::DEFAULT_COMPRESSOR) {
-        std::map<sstring, sstring> compression = {
-            { sstring(compression_parameters::SSTABLE_COMPRESSION), schema::DEFAULT_COMPRESSOR.value() },
-        };
-        properties->add_property(cf_prop_defs::KW_COMPRESSION, compression);
-    }
     // TODO: probably need to create a "statement_restrictions" like select does
     // based on the select_clause, base_name and where_clause; However need to
     // pass for_view=true.
