@@ -75,7 +75,13 @@ sed -i -e "s/@@CODENAME@@/$CODENAME/g" debian/changelog
 cp dist/ubuntu/rules.in debian/rules
 cp dist/ubuntu/control.in debian/control
 cp dist/ubuntu/scylla-server.install.in debian/scylla-server.install
-if [ "$VERSION_ID" = "14.04" ]; then
+if [ "$DISTRIBUTION" = "Debian" ]; then
+    sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
+    sed -i -e "s/@@COMPILER@@/g++-5/g" debian/rules
+    sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++-5, libunwind-dev/g" debian/control
+    sed -i -e "s#@@INSTALL@@##g" debian/scylla-server.install
+    sed -i -e "s#@@HKDOTTIMER@@#dist/common/systemd/scylla-housekeeping.timer /lib/systemd/system#g" debian/scylla-server.install
+elif [ "$VERSION_ID" = "14.04" ]; then
     sed -i -e "s/@@DH_INSTALLINIT@@/--upstart-only/g" debian/rules
     sed -i -e "s/@@COMPILER@@/g++-5/g" debian/rules
     sed -i -e "s/@@BUILD_DEPENDS@@/g++-5, libunwind8-dev/g" debian/control

@@ -1,0 +1,133 @@
+diff -Nur debian/rules.conf /home/syuu/gcc-5-5.4.1/debian/rules.conf
+--- debian/rules.conf	2016-10-14 04:54:21.000000000 +0000
++++ /home/syuu/gcc-5-5.4.1/debian/rules.conf	2016-10-12 17:28:54.138711378 +0000
+@@ -206,7 +206,7 @@
+   ifneq (,$(filter $(distrelease),vivid))
+     BINUTILSBDV = 2.25-3~
+   else ifneq (,$(filter $(distrelease),jessie))
+-    BINUTILSBDV = 2.25-7~
++    BINUTILSBDV = 2.25-5~
+   else ifneq (,$(filter $(distrelease),sid stretch xenial))
+     BINUTILSBDV = 2.26.1
+   endif
+@@ -387,9 +387,9 @@
+ endif
+ 
+ ISL_BUILD_DEP = libisl-dev,
+-ifneq (,$(filter $(distrelease),jessie sid experimental))
+-  ISL_BUILD_DEP = libisl-dev (>= 0.14),
+-endif
++#ifneq (,$(filter $(distrelease),jessie sid experimental))
++#  ISL_BUILD_DEP = libisl-dev (>= 0.14),
++#endif
+ 
+ ifneq (,$(filter $(distrelease),lenny etch squeeze wheezy dapper hardy jaunty karmic lucid maverick natty oneiric precise quantal raring))
+   MPC_BUILD_DEP = libmpc-dev,
+@@ -411,13 +411,6 @@
+   SDT_BUILD_DEP = systemtap-sdt-dev [linux-any kfreebsd-any hurd-any],
+ endif
+ 
+-# ensure that the common libs, built from the next GCC version are available
+-ifeq ($(PKGSOURCE),gcc-$(BASE_VERSION))
+-  ifneq ($(with_common_libs),yes)
+-    BASE_BUILD_DEP = gcc-6-base,
+-  endif
+-endif
+-
+ ifneq ($(DEB_CROSS),yes)
+ # all archs for which to create b-d's
+ any_archs = alpha amd64 armel armhf arm64 i386 mips mipsel mips64 mips64el powerpc ppc64 ppc64el m68k sh4 sparc64 s390x x32
+diff -Nur debian/rules.defs /home/syuu/gcc-5-5.4.1/debian/rules.defs
+--- debian/rules.defs	2016-10-14 04:54:21.000000000 +0000
++++ /home/syuu/gcc-5-5.4.1/debian/rules.defs	2016-10-13 10:18:51.647631508 +0000
+@@ -412,7 +412,7 @@
+ # gcc versions (fixincludes, libgcj-common) ...
+ #with_common_pkgs := yes
+ # ... and some libraries, which do not change (libgcc1, libssp0).
+-#with_common_libs := yes
++with_common_libs := yes
+ # XXX: should with_common_libs be "yes" only if this is the default compiler
+ # version on the targeted arch?
+ 
+@@ -560,7 +560,7 @@
+ # C ---------------------------
+ enabled_languages := c
+ 
+-with_jit = yes
++with_jit = no
+ 
+ # FIXME: compiler bug
+ jit_no_cpus	:= ia64
+@@ -660,6 +660,8 @@
+ endif
+ with_ada := $(call envfilt, ada, , , $(with_ada))
+ 
++with_ada := no
++
+ 
+ ifeq ($(DEB_STAGE)-$(filter libgnat, $(with_rtlibs)),rtlibs-)
+   with_ada := disabled for rtlibs stage
+@@ -786,6 +788,8 @@
+ endif
+ with_java := $(call envfilt, java, , c++, $(with_java))
+ 
++with_java := no
++
+ ifeq ($(DEB_STAGE)-$(filter libgcj, $(with_rtlibs)),rtlibs-)
+   with_java := disabled for rtlibs stage
+ endif
+@@ -915,6 +919,8 @@
+ endif
+ with_go := $(call envfilt, go, , , $(with_go))
+ 
++with_go := no
++
+ # Build all packages needed for Go development
+ ifneq (,$(findstring gcc, $(PKGSOURCE)))
+   ifeq ($(with_go),yes)
+@@ -961,6 +967,8 @@
+ endif
+ with_d := $(call envfilt, d, , , $(with_d))
+ 
++with_d := no
++
+ ifeq ($(with_base_only),yes)
+   with_d := no
+ endif
+@@ -1016,6 +1024,8 @@
+ 
+ with_fortran := $(call envfilt, fortran, , , $(with_fortran))
+ 
++with_fortran := no
++
+ # Build all packages needed for Fortran development
+ ifeq ($(with_fortran),yes)
+   ifeq ($(with_dev),yes)
+@@ -1063,6 +1073,8 @@
+ endif
+ with_objc := $(call envfilt, objc, obj-c++, , $(with_objc))
+ 
++with_objc := no
++
+ ifeq ($(with_objc),yes)
+   # the ObjC runtime with garbage collection enabled needs the Boehm GC
+   with_objc_gc := yes
+@@ -1103,6 +1115,8 @@
+ endif
+ with_objcxx := $(call envfilt, obj-c++, , c++ objc, $(with_objcxx))
+ 
++with_objcxx := no
++
+ ifeq ($(with_objcxx),yes)
+   enabled_languages += obj-c++
+ endif
+@@ -1480,6 +1494,9 @@
+   with_check := disabled for D
+ endif
+ with_check := $(call envfilt, check, , , $(with_check))
++
++with_check := no
++
+ ifdef WITHOUT_CHECK
+   with_check := disabled by environment
+ endif
