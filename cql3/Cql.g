@@ -718,7 +718,7 @@ createTableStatement returns [shared_ptr<cql3::statements::create_table_statemen
 
 cfamDefinition[shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
     : '(' cfamColumns[expr] ( ',' cfamColumns[expr]? )* ')'
-      ( K_WITH cfamProperty[expr] ( K_AND cfamProperty[expr] )*)?
+      ( K_WITH cfamProperty[$expr->properties()] ( K_AND cfamProperty[$expr->properties()] )*)?
     ;
 
 cfamColumns[shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
@@ -734,15 +734,15 @@ pkDef[shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
     | '(' k1=ident { l.push_back(k1); } ( ',' kn=ident { l.push_back(kn); } )* ')' { $expr->add_key_aliases(l); }
     ;
 
-cfamProperty[shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
-    : property[expr->properties]
-    | K_COMPACT K_STORAGE { $expr->set_compact_storage(); }
+cfamProperty[cql3::statements::cf_properties& expr]
+    : property[$expr.properties()]
+    | K_COMPACT K_STORAGE { $expr.set_compact_storage(); }
     | K_CLUSTERING K_ORDER K_BY '(' cfamOrdering[expr] (',' cfamOrdering[expr])* ')'
     ;
 
-cfamOrdering[shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
+cfamOrdering[cql3::statements::cf_properties& expr]
     @init{ bool reversed=false; }
-    : k=ident (K_ASC | K_DESC { reversed=true;} ) { $expr->set_ordering(k, reversed); }
+    : k=ident (K_ASC | K_DESC { reversed=true;} ) { $expr.set_ordering(k, reversed); }
     ;
 
 

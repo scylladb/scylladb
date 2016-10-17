@@ -188,9 +188,9 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
         throw exceptions::invalid_request_exception(sprint("Multiple definition of identifier %s", (*i)->text()));
     }
 
-    properties->validate();
+    _properties.validate();
 
-    auto stmt = ::make_shared<create_table_statement>(_cf_name, properties, _if_not_exists, _static_columns);
+    auto stmt = ::make_shared<create_table_statement>(_cf_name, _properties.properties(), _if_not_exists, _static_columns);
 
     std::experimental::optional<std::map<bytes, data_type>> defined_multi_cell_collections;
     for (auto&& entry : _definitions) {
@@ -214,7 +214,7 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
         throw exceptions::invalid_request_exception("Multiple PRIMARY KEYs specifed (exactly one required)");
     }
 
-    stmt->_use_compact_storage = _use_compact_storage;
+    stmt->_use_compact_storage = _properties.use_compact_storage();
 
     auto& key_aliases = _key_aliases[0];
     std::vector<data_type> key_types;
@@ -233,7 +233,7 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
 
     // Handle column aliases
     if (_column_aliases.empty()) {
-        if (_use_compact_storage) {
+        if (_properties.use_compact_storage()) {
             // There should remain some column definition since it is a non-composite "static" CF
             if (stmt->_columns.empty()) {
                 throw exceptions::invalid_request_exception("No definition found that is not part of the PRIMARY KEY");
@@ -246,7 +246,7 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
     } else {
         // If we use compact storage and have only one alias, it is a
         // standard "dynamic" CF, otherwise it's a composite
-        if (_use_compact_storage && _column_aliases.size() == 1) {
+        if (_properties.use_compact_storage() && _column_aliases.size() == 1) {
             if (defined_multi_cell_collections) {
                 throw exceptions::invalid_request_exception("Collection types are not supported with COMPACT STORAGE");
             }
@@ -274,7 +274,7 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
                 types.emplace_back(type);
             }
 
-            if (_use_compact_storage) {
+            if (_properties.use_compact_storage()) {
                 if (defined_multi_cell_collections) {
                     throw exceptions::invalid_request_exception("Collection types are not supported with COMPACT STORAGE");
                 }
@@ -287,7 +287,7 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
 
     if (!_static_columns.empty()) {
         // Only CQL3 tables can have static columns
-        if (_use_compact_storage) {
+        if (_properties.use_compact_storage()) {
             throw exceptions::invalid_request_exception("Static columns are not supported in COMPACT STORAGE tables");
         }
         // Static columns only make sense if we have at least one clustering column. Otherwise everything is static anyway
@@ -296,7 +296,7 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
         }
     }
 
-    if (_use_compact_storage && !stmt->_column_aliases.empty()) {
+    if (_properties.use_compact_storage() && !stmt->_column_aliases.empty()) {
         if (stmt->_columns.empty()) {
 #if 0
             // The only value we'll insert will be the empty one, so the default validator don't matter
@@ -322,7 +322,7 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
     } else {
         // For compact, we are in the "static" case, so we need at least one column defined. For non-compact however, having
         // just the PK is fine since we have CQL3 row marker.
-        if (_use_compact_storage && stmt->_columns.empty()) {
+        if (_properties.use_compact_storage() && stmt->_columns.empty()) {
             throw exceptions::invalid_request_exception("COMPACT STORAGE with non-composite PRIMARY KEY require one column not part of the PRIMARY KEY, none given");
         }
 #if 0
@@ -335,18 +335,18 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
     }
 
     // If we give a clustering order, we must explicitly do so for all aliases and in the order of the PK
-    if (!_defined_ordering.empty()) {
-        if (_defined_ordering.size() > _column_aliases.size()) {
+    if (!_properties.defined_ordering().empty()) {
+        if (_properties.defined_ordering().size() > _column_aliases.size()) {
             throw exceptions::invalid_request_exception("Only clustering key columns can be defined in CLUSTERING ORDER directive");
         }
 
         int i = 0;
-        for (auto& pair: _defined_ordering){
+        for (auto& pair: _properties.defined_ordering()){
             auto& id = pair.first;
             auto& c = _column_aliases.at(i);
 
             if (!(*id == *c)) {
-                if (find_ordering_info(c)) {
+                if (_properties.find_ordering_info(c)) {
                     throw exceptions::invalid_request_exception(sprint("The order of columns in the CLUSTERING ORDER directive must be the one of the clustering key (%s must appear before %s)", c, id));
                 } else {
                     throw exceptions::invalid_request_exception(sprint("Missing CLUSTERING ORDER for column %s", c));
@@ -371,12 +371,7 @@ data_type create_table_statement::raw_statement::get_type_and_remove(column_map_
     }
     columns.erase(t);
 
-    auto is_reversed = find_ordering_info(t);
-    if (!is_reversed) {
-        return type;
-    } else {
-        return *is_reversed ? reversed_type_impl::get_instance(type) : type;
-    }
+    return _properties.get_reversable_type(t, type);
 }
 
 void create_table_statement::raw_statement::add_definition(::shared_ptr<column_identifier> def, ::shared_ptr<cql3_type::raw> type, bool is_static) {
@@ -393,14 +388,6 @@ void create_table_statement::raw_statement::add_key_aliases(const std::vector<::
 
 void create_table_statement::raw_statement::add_column_alias(::shared_ptr<column_identifier> alias) {
     _column_aliases.emplace_back(alias);
-}
-
-void create_table_statement::raw_statement::set_ordering(::shared_ptr<column_identifier> alias, bool reversed) {
-    _defined_ordering.emplace_back(alias, reversed);
-}
-
-void create_table_statement::raw_statement::set_compact_storage() {
-    _use_compact_storage = true;
 }
 
 }
