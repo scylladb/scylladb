@@ -21,6 +21,7 @@
 
 #include "cql3/statements/schema_altering_statement.hh"
 #include "cql3/statements/cf_prop_defs.hh"
+#include "cql3/statements/cf_properties.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/selection/raw_selector.hh"
 #include "cql3/relation.hh"
@@ -47,7 +48,7 @@ private:
     std::vector<::shared_ptr<relation>> _where_clause;
     std::vector<::shared_ptr<cql3::column_identifier::raw>> _partition_keys;
     std::vector<::shared_ptr<cql3::column_identifier::raw>> _clustering_keys;
-    const ::shared_ptr<cf_prop_defs> _properties;
+    cf_properties _properties;
     bool _if_not_exists;
 
 public:
@@ -58,8 +59,11 @@ public:
             std::vector<::shared_ptr<relation>> where_clause,
             std::vector<::shared_ptr<cql3::column_identifier::raw>> partition_keys,
             std::vector<::shared_ptr<cql3::column_identifier::raw>> clustering_keys,
-            ::shared_ptr<cf_prop_defs> properties,
             bool if_not_exists);
+
+    auto& properties() {
+        return _properties;
+    }
 
     // Functions we need to override to subclass schema_altering_statement
     virtual future<> check_access(const service::client_state& state) override;

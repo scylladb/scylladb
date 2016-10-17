@@ -63,7 +63,6 @@ create_view_statement::create_view_statement(
         std::vector<::shared_ptr<relation>> where_clause,
         std::vector<::shared_ptr<cql3::column_identifier::raw>> partition_keys,
         std::vector<::shared_ptr<cql3::column_identifier::raw>> clustering_keys,
-        ::shared_ptr<cf_prop_defs> properties,
         bool if_not_exists)
     : schema_altering_statement{view_name}
     , _base_name{base_name}
@@ -71,13 +70,12 @@ create_view_statement::create_view_statement(
     , _where_clause{where_clause}
     , _partition_keys{partition_keys}
     , _clustering_keys{clustering_keys}
-    , _properties{properties}
     , _if_not_exists{if_not_exists}
 {
     // TODO: probably need to create a "statement_restrictions" like select does
     // based on the select_clause, base_name and where_clause; However need to
     // pass for_view=true.
-    throw exceptions::unsupported_operation_exception("Materialized views not yet supported");
+    fail(unimplemented::cause::VIEWS);
 }
 
 // FIXME: I copied the following from create_table_statement. I don't know
