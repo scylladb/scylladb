@@ -1,5 +1,6 @@
 #!/bin/bash -e
 
+. /etc/os-release
 print_usage() {
     echo "build_deb.sh --rebuild-dep"
     echo "  --dist  create a public distribution package"
@@ -52,10 +53,9 @@ if [ ! -f /usr/bin/wget ]; then
 fi
 
 DISTRIBUTION=`lsb_release -i|awk '{print $3}'`
-RELEASE=`lsb_release -r|awk '{print $2}'`
 CODENAME=`lsb_release -c|awk '{print $2}'`
-if [ `grep -c $RELEASE dist/ubuntu/supported_release` -lt 1 ]; then
-    echo "Unsupported release: $RELEASE"
+if [ `grep -c $VERSION_ID dist/ubuntu/supported_release` -lt 1 ]; then
+    echo "Unsupported release: $VERSION_ID"
     echo "Pless any key to continue..."
     read input
 fi
@@ -75,7 +75,7 @@ sed -i -e "s/@@CODENAME@@/$CODENAME/g" debian/changelog
 cp dist/ubuntu/rules.in debian/rules
 cp dist/ubuntu/control.in debian/control
 cp dist/ubuntu/scylla-server.install.in debian/scylla-server.install
-if [ "$RELEASE" = "14.04" ]; then
+if [ "$VERSION_ID" = "14.04" ]; then
     sed -i -e "s/@@DH_INSTALLINIT@@/--upstart-only/g" debian/rules
     sed -i -e "s/@@COMPILER@@/g++-5/g" debian/rules
     sed -i -e "s/@@BUILD_DEPENDS@@/g++-5, libunwind8-dev/g" debian/control
@@ -104,7 +104,7 @@ sed -i -e "s#@@SYSCONFDIR@@#/etc/default#g" debian/scylla-server.service
 cp dist/common/systemd/scylla-housekeeping.service debian/scylla-server.scylla-housekeeping.service
 cp dist/common/systemd/node-exporter.service debian/scylla-server.node-exporter.service
 
-if [ "$RELEASE" = "14.04" ] && [ $REBUILD -eq 0 ]; then
+if [ "$VERSION_ID" = "14.04" ] && [ $REBUILD -eq 0 ]; then
     if [ ! -f /etc/apt/sources.list.d/scylla-3rdparty-trusty.list ]; then
         cd /etc/apt/sources.list.d
         sudo wget https://s3.amazonaws.com/downloads.scylladb.com/deb/3rdparty/ubuntu/scylla-3rdparty-trusty.list
@@ -116,7 +116,7 @@ else
     ./dist/ubuntu/dep/build_dependency.sh
 fi
 
-if [ "$RELEASE" = "14.04" ]; then
+if [ "$VERSION_ID" = "14.04" ]; then
     sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
     sudo apt-get -y update
 elif [ "$DISTRIBUTION" = "Ubuntu" ]; then

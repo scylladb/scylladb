@@ -1,10 +1,10 @@
 #!/bin/bash -e
 
+. /etc/os-release
 DISTRIBUTION=`lsb_release -i|awk '{print $3}'`
-RELEASE=`lsb_release -r|awk '{print $2}'`
 
 sudo apt-get install -y gdebi-core
-if [ "$RELEASE" = "14.04" ] || [ "$DISTRIBUTION" = "Debian" ]; then
+if [ "$VERSION_ID" = "14.04" ] || [ "$DISTRIBUTION" = "Debian" ]; then
     if [ ! -f build/antlr3_3.5.2-1_all.deb ]; then
         rm -rf build/antlr3-3.5.2
         mkdir -p build/antlr3-3.5.2
@@ -70,7 +70,7 @@ if [ ! -f build/libthrift0_1.0.0-dev_amd64.deb ]; then
     tar xpf thrift-0.9.1.tar.gz
     cd thrift-0.9.1
     patch -p0 < ../../dist/ubuntu/dep/thrift.diff
-    if [ "$RELEASE" = "16.04" ]; then
+    if [ "$VERSION_ID" = "16.04" ]; then
         sed -i "s/, python-support//" debian/control
         sed -i "s/dh_pysupport//" debian/rules
     fi
@@ -79,7 +79,7 @@ if [ ! -f build/libthrift0_1.0.0-dev_amd64.deb ]; then
     cd ../..
 fi
 
-if [ "$RELEASE" = "14.04" ]; then
+if [ "$VERSION_ID" = "14.04" ]; then
     sudo gdebi -n build/antlr3_*.deb
     sudo gdebi -n build/thrift-compiler_*.deb
 elif [ "$DISTRIBUTION" = "Debian" ]; then
