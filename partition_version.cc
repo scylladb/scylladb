@@ -36,7 +36,8 @@ static void remove_or_mark_as_unique_owner(partition_version* current)
 }
 
 partition_version::partition_version(partition_version&& pv) noexcept
-    : _backref(pv._backref)
+    : anchorless_list_base_hook(std::move(pv))
+    , _backref(pv._backref)
     , _partition(std::move(pv._partition))
 {
     if (_backref) {
