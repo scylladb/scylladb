@@ -36,6 +36,9 @@ public:
     }
 
     void operator()(foreign_ptr<lw_shared_ptr<query::result>> r) {
+        if (!_partial.empty() && _partial.back()->is_short_read()) {
+            return;
+        }
         _partial.emplace_back(std::move(r));
     }
 

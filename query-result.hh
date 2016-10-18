@@ -27,6 +27,7 @@
 #include "query-request.hh"
 #include "md5_hasher.hh"
 #include <experimental/optional>
+#include <seastar/util/bool_class.hh>
 
 namespace stdx = std::experimental;
 
@@ -92,23 +93,35 @@ public:
 //  - query-result-reader.hh
 //  - query-result-writer.hh
 
+struct short_read_tag { };
+using short_read = bool_class<short_read_tag>;
 
 class result {
     bytes_ostream _w;
     stdx::optional<result_digest> _digest;
     stdx::optional<uint32_t> _row_count;
     api::timestamp_type _last_modified = api::missing_timestamp;
-
+    short_read _short_read;
 public:
     class builder;
     class partition_writer;
     friend class result_merger;
 
     result();
-    result(bytes_ostream&& w, stdx::optional<uint32_t> c = {}) : _w(std::move(w)), _row_count(c) {
+    result(bytes_ostream&& w, short_read sr, stdx::optional<uint32_t> c = { })
+        : _w(std::move(w))
+        , _row_count(c)
+        , _short_read(sr)
+    {
         w.reduce_chunk_count();
     }
-    result(bytes_ostream&& w, stdx::optional<result_digest> d, api::timestamp_type last_modified, stdx::optional<uint32_t> c = {}) : _w(std::move(w)), _digest(d), _row_count(c), _last_modified(last_modified) {
+    result(bytes_ostream&& w, stdx::optional<result_digest> d, api::timestamp_type last_modified, short_read sr, stdx::optional<uint32_t> c = { })
+        : _w(std::move(w))
+        , _digest(d)
+        , _row_count(c)
+        , _last_modified(last_modified)
+        , _short_read(sr)
+    {
         w.reduce_chunk_count();
     }
     result(result&&) = default;
@@ -130,6 +143,10 @@ public:
 
     const api::timestamp_type last_modified() const {
         return _last_modified;
+    }
+
+    short_read is_short_read() const {
+        return _short_read;
     }
 
     uint32_t calculate_row_count(const query::partition_slice&);

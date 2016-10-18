@@ -94,7 +94,8 @@ constexpr auto max_rows = std::numeric_limits<uint32_t>::max();
 // Schema-dependent.
 class partition_slice {
 public:
-    enum class option { send_clustering_key, send_partition_key, send_timestamp, send_expiry, reversed, distinct, collections_as_maps, send_ttl };
+    enum class option { send_clustering_key, send_partition_key, send_timestamp, send_expiry, reversed, distinct, collections_as_maps, send_ttl,
+                        allow_short_read, };
     using option_set = enum_set<super_enum<option,
         option::send_clustering_key,
         option::send_partition_key,
@@ -103,7 +104,8 @@ public:
         option::reversed,
         option::distinct,
         option::collections_as_maps,
-        option::send_ttl>>;
+        option::send_ttl,
+        option::allow_short_read>>;
     clustering_row_ranges _row_ranges;
 public:
     std::vector<column_id> static_columns; // TODO: consider using bitmap
