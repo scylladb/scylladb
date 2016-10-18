@@ -213,6 +213,22 @@ mutation& mutation::operator=(const mutation& m) {
     return *this = mutation(m);
 }
 
+mutation mutation::operator+(const mutation& other) const {
+    auto m = *this;
+    m.apply(other);
+    return m;
+}
+
+mutation& mutation::operator+=(const mutation& other) {
+    apply(other);
+    return *this;
+}
+
+mutation& mutation::operator+=(mutation&& other) {
+    apply(std::move(other));
+    return *this;
+}
+
 enum class limit_mutation_size { yes, no };
 
 template <limit_mutation_size with_limit>
