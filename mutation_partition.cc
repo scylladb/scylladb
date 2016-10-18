@@ -1877,7 +1877,7 @@ public:
     }
 
     reconcilable_result consume_end_of_stream() {
-        return reconcilable_result(_total_live_rows, std::move(_result));
+        return reconcilable_result(_total_live_rows, std::move(_result), query::short_read::no);
     }
 };
 

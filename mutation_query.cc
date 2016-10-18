@@ -31,8 +31,9 @@ reconcilable_result::reconcilable_result()
     : _row_count(0)
 { }
 
-reconcilable_result::reconcilable_result(uint32_t row_count, std::vector<partition> p)
+reconcilable_result::reconcilable_result(uint32_t row_count, std::vector<partition> p, query::short_read short_read)
     : _row_count(row_count)
+    , _short_read(short_read)
     , _partitions(std::move(p))
 { }
 
@@ -62,11 +63,15 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
         }
         p.mut().unfreeze(s).query(builder, slice, gc_clock::time_point::min(), query::max_rows);
     }
+    if (r.is_short_read()) {
+        builder.mark_as_short_read();
+    }
     return builder.build();
 }
 
 std::ostream& operator<<(std::ostream& out, const reconcilable_result::printer& pr) {
-    out << "{rows=" << pr.self.row_count() << ", [";
+    out << "{rows=" << pr.self.row_count() << ", short_read="
+        << pr.self.is_short_read() << ", [";
     bool first = true;
     for (const partition& p : pr.self.partitions()) {
         if (!first) {

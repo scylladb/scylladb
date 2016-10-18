@@ -2079,7 +2079,7 @@ public:
             return std::ref(a);
         });
 
-        return reconcilable_result(_total_live_count, std::move(r.get()));
+        return reconcilable_result(_total_live_count, std::move(r.get()), query::short_read::no);
     }
     auto total_live_count() const {
         return _total_live_count;
@@ -3421,6 +3421,7 @@ void storage_proxy::uninit_messaging_service() {
 class mutation_result_merger {
     unsigned _row_count = 0;
     unsigned _partition_count = 0;
+    query::short_read _short_read;
     std::vector<partition> _partitions;
 public:
     void add_result(foreign_ptr<lw_shared_ptr<reconcilable_result>> partial_result) {
@@ -3430,9 +3431,13 @@ public:
             _row_count += p._row_count;
             _partition_count += p._row_count > 0;
         }
+        _short_read = partial_result->is_short_read();
     }
     reconcilable_result get() && {
-        return reconcilable_result(_row_count, std::move(_partitions));
+        return reconcilable_result(_row_count, std::move(_partitions), _short_read);
+    }
+    bool short_read() const {
+        return bool(_short_read);
     }
     unsigned partition_count() const {
         return _partition_count;
@@ -3495,7 +3500,7 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
                 });
             }).then([&] (foreign_ptr<lw_shared_ptr<reconcilable_result>> rr) -> stdx::optional<reconcilable_result> {
                 mrm.add_result(std::move(rr));
-                if (mrm.partition_count() >= cmd->partition_limit || mrm.row_count() >= cmd->row_limit) {
+                if (mrm.short_read() || mrm.partition_count() >= cmd->partition_limit || mrm.row_count() >= cmd->row_limit) {
                     return std::move(mrm).get();
                 }
                 return stdx::nullopt;
