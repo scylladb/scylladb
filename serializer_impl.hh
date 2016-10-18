@@ -22,6 +22,8 @@
 #pragma once
 
 #include "serializer.hh"
+#include <seastar/util/bool_class.hh>
+
 namespace ser {
 
 template<typename T>
@@ -250,6 +252,24 @@ struct serializer<std::map<K, V>> {
             serializer<K>::skip(in);
             serializer<V>::skip(in);
         }
+    }
+};
+
+template<typename Tag>
+struct serializer<bool_class<Tag>> {
+    template<typename Input>
+    static bool_class<Tag> read(Input& in) {
+        return bool_class<Tag>(deserialize(in, boost::type<bool>()));
+    }
+
+    template<typename Output>
+    static void write(Output& out, bool_class<Tag> v) {
+        serialize(out, bool(v));
+    }
+
+    template<typename Input>
+    static void skip(Input& in) {
+        read(in);
     }
 };
 
