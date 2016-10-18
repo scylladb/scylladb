@@ -455,6 +455,7 @@ public:
     reactor::idle_cpu_handler_result compact_on_idle(reactor::work_waiting_on_reactor);
 
     // Compacts as much as possible. Very expensive, mainly for testing.
+    // Guarantees that every live object from reclaimable regions will be moved.
     // Invalidates references to objects in all compactible and evictable regions.
     void full_compaction();
 

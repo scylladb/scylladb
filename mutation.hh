@@ -131,6 +131,10 @@ public:
 
     void apply(mutation&&);
     void apply(const mutation&);
+
+    mutation operator+(const mutation& other) const;
+    mutation& operator+=(const mutation& other);
+    mutation& operator+=(mutation&& other);
 private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };

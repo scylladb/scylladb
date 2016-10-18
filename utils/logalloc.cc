@@ -1706,7 +1706,7 @@ void tracker::impl::full_compaction() {
     logger.debug("Full compaction on all regions, {}", region_occupancy());
 
     for (region_impl* r : _regions) {
-        if (r->is_compactible()) {
+        if (r->reclaiming_enabled()) {
             r->full_compaction();
         }
     }
