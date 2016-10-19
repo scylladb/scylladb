@@ -46,6 +46,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <unordered_map>
 #include <unordered_set>
+#include <exception>
 
 #include <core/align.hh>
 #include <core/reactor.hh>
@@ -235,6 +236,16 @@ public:
 
     uint64_t next_id() {
         return ++_ids;
+    }
+
+    std::exception_ptr sanity_check_size(size_t size) {
+        if (size > max_mutation_size) {
+            return make_exception_ptr(std::invalid_argument(
+                            "Mutation of " + std::to_string(size)
+                                    + " bytes is too large for the maxiumum size of "
+                                    + std::to_string(max_mutation_size)));
+        }
+        return nullptr;
     }
 
     future<> init();
@@ -773,12 +784,9 @@ public:
     future<replay_position> allocate(const cf_id_type& id, shared_ptr<entry_writer> writer) {
         const auto size = writer->size(*this);
         const auto s = size + entry_overhead_size; // total size
-        if (s > _segment_manager->max_mutation_size) {
-            return make_exception_future<replay_position>(
-                    std::invalid_argument(
-                            "Mutation of " + std::to_string(s)
-                                    + " bytes is too large for the maxiumum size of "
-                                    + std::to_string(_segment_manager->max_mutation_size)));
+        auto ep = _segment_manager->sanity_check_size(s);
+        if (ep) {
+            return make_exception_future<replay_position>(std::move(ep));
         }
 
         std::experimental::optional<future<sseg_ptr>> op;
