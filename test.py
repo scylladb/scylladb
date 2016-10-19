@@ -61,7 +61,6 @@ boost_tests = [
     'config_test',
     'dynamic_bitset_test',
     'gossip_test',
-    'key_reader_test',
     'managed_vector_test',
     'map_difference_test',
     'memtable_test',

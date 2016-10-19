@@ -70,7 +70,6 @@
 #include "utils/estimated_histogram.hh"
 #include "sstables/compaction.hh"
 #include "sstables/sstable_set.hh"
-#include "key_reader.hh"
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/shared_future.hh>
 #include "tracing/trace_state.hh"
@@ -492,7 +491,6 @@ private:
                                         tracing::trace_state_ptr trace_state) const;
 
     mutation_source sstables_as_mutation_source();
-    key_source sstables_as_key_source() const;
     partition_presence_checker make_partition_presence_checker(sstables::shared_sstable exclude_sstable);
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
     void do_trigger_compaction();

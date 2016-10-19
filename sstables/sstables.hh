@@ -47,7 +47,6 @@
 #include "exceptions.hh"
 #include "mutation_reader.hh"
 #include "query-request.hh"
-#include "key_reader.hh"
 #include "compound_compat.hh"
 
 namespace sstables {
@@ -75,6 +74,7 @@ class data_consume_context {
     friend class sstable;
 public:
     future<> read();
+    void fast_forward_to(uint64_t begin, uint64_t end);
     // Define (as defaults) the destructor and move operations in the source
     // file, so here we don't need to know the incomplete impl type.
     ~data_consume_context();
@@ -102,6 +102,7 @@ class mutation_reader {
     friend class sstable;
 public:
     future<streamed_mutation_opt> read();
+    future<> fast_forward_to(const query::partition_range&);
     // Define (as defaults) the destructor and move operations in the source
     // file, so here we don't need to know the incomplete impl type.
     ~mutation_reader();
@@ -113,6 +114,7 @@ class key;
 class sstable_writer;
 
 using index_list = std::vector<index_entry>;
+class index_reader;
 
 class sstable : public enable_lw_shared_from_this<sstable> {
 public:
@@ -209,6 +211,8 @@ public:
     // progress (i.e., returned a future which hasn't completed yet).
     data_consume_context data_consume_rows(row_consumer& consumer, disk_read_range toread);
 
+    data_consume_context data_consume_single_partition(row_consumer& consumer, disk_read_range toread);
+
     // Like data_consume_rows() with bounds, but iterates over whole range
     data_consume_context data_consume_rows(row_consumer& consumer);
 
@@ -241,16 +245,6 @@ public:
         const key& k,
         const query::partition_slice& slice = query::full_slice,
         const io_priority_class& pc = default_priority_class());
-    /**
-     * @param schema a schema_ptr object describing this table
-     * @param min the minimum token we want to search for (inclusive)
-     * @param max the maximum token we want to search for (inclusive)
-     * @return a mutation_reader object that can be used to iterate over
-     * mutations.
-     */
-    mutation_reader read_range_rows(schema_ptr schema,
-            const dht::token& min, const dht::token& max,
-            const io_priority_class& pc = default_priority_class());
 
     // Returns a mutation_reader for given range of partitions
     mutation_reader read_range_rows(
@@ -383,6 +377,8 @@ public:
 private:
     sstable(size_t wbuffer_size, schema_ptr schema, sstring dir, int64_t generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now())
         : sstable_buffer_size(wbuffer_size)
+        , _single_partition_history(make_lw_shared<file_input_stream_history>())
+        , _partition_range_history(make_lw_shared<file_input_stream_history>())
         , _schema(std::move(schema))
         , _dir(std::move(dir))
         , _generation(generation)
@@ -417,6 +413,9 @@ private:
     std::vector<nonwrapping_range<bytes_view>> _clustering_components_ranges;
     stdx::optional<dht::decorated_key> _first;
     stdx::optional<dht::decorated_key> _last;
+
+    lw_shared_ptr<file_input_stream_history> _single_partition_history;
+    lw_shared_ptr<file_input_stream_history> _partition_range_history;
 
     // _pi_write is used temporarily for building the promoted
     // index (column sample) of one partition when writing a new sstable.
@@ -504,6 +503,7 @@ private:
     future<> create_data();
 
     future<index_list> read_indexes(uint64_t summary_idx, const io_priority_class& pc);
+    index_reader get_index_reader(const io_priority_class& pc);
 
     // Return an input_stream which reads exactly the specified byte range
     // from the data file (after uncompression, if the file is compressed).
@@ -513,7 +513,8 @@ private:
     // of bytes to be read using this stream, we can make better choices
     // about the buffer size to read, and where exactly to stop reading
     // (even when a large buffer size is used).
-    input_stream<char> data_stream(uint64_t pos, size_t len, const io_priority_class& pc);
+    input_stream<char> data_stream(uint64_t pos, size_t len, const io_priority_class& pc,
+                                   lw_shared_ptr<file_input_stream_history> history);
 
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read
@@ -535,20 +536,6 @@ private:
     int binary_search(const T& entries, const key& sk) {
         return binary_search(entries, sk, dht::global_partitioner().get_token(key_view(sk)));
     }
-
-    // Returns position in the data file of the first entry which is not
-    // smaller than the supplied ring_position. If no such entry exists, a
-    // position right after all entries is returned.
-    //
-    // The ring_position doesn't have to survive deferring.
-    future<uint64_t> lower_bound(schema_ptr, const dht::ring_position&, const io_priority_class& pc);
-
-    // Returns position in the data file of the first partition which is
-    // greater than the supplied ring_position. If no such entry exists, a
-    // position right after all entries is returned.
-    //
-    // The ring_position doesn't have to survive deferring.
-    future<uint64_t> upper_bound(schema_ptr, const dht::ring_position&, const io_priority_class& pc);
 
     // find_disk_ranges finds the ranges of bytes we need to read from the
     // sstable to read the desired columns out of the given key. This range
@@ -666,16 +653,14 @@ public:
     // will then re-export as public every method it needs.
     friend class test;
 
-    friend class key_reader;
     friend class components_writer;
     friend class sstable_writer;
+    friend class index_reader;
+    friend class mutation_reader::impl;
 };
 
 using shared_sstable = lw_shared_ptr<sstable>;
 using sstable_list = std::unordered_set<shared_sstable>;
-
-::key_reader make_key_reader(schema_ptr s, shared_sstable sst, const query::partition_range& range,
-                             const io_priority_class& pc = default_priority_class());
 
 struct entry_descriptor {
     sstring ks;

@@ -880,35 +880,15 @@ thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> dow
 thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_original_index_cache;
 
 future<index_list> sstable::read_indexes(uint64_t summary_idx, const io_priority_class& pc) {
-    if (summary_idx >= _summary.header.size) {
-        return make_ready_future<index_list>(index_list());
-    }
-
-    uint64_t position = _summary.entries[summary_idx].position;
-    uint64_t quantity = downsampling::get_effective_index_interval_after_index(summary_idx, _summary.header.sampling_level,
-        _summary.header.min_index_interval);
-
-    uint64_t end;
-    if (++summary_idx >= _summary.header.size) {
-        end = index_size();
-    } else {
-        end = _summary.entries[summary_idx].position;
-    }
-
-    return do_with(index_consumer(quantity), [this, position, end, &pc] (index_consumer& ic) {
-        file_input_stream_options options;
-        options.buffer_size = sstable_buffer_size;
-        options.io_priority_class = pc;
-        auto stream = make_file_input_stream(this->_index_file, position, end - position, std::move(options));
-        // TODO: it's redundant to constrain the consumer here to stop at
-        // index_size()-position, the input stream is already constrained.
-        auto ctx = make_lw_shared<index_consume_entry_context<index_consumer>>(ic, std::move(stream), this->index_size() - position);
-        return ctx->consume_input(*ctx).finally([ctx] {
-            return ctx->close();
-        }).then([ctx, &ic] {
-            return make_ready_future<index_list>(std::move(ic.indexes));
+    return do_with(get_index_reader(pc), [summary_idx] (index_reader& ir) {
+        return ir.get_index_entries(summary_idx).finally([&ir] {
+            return ir.close();
         });
     });
+}
+
+index_reader sstable::get_index_reader(const io_priority_class& pc) {
+    return index_reader(shared_from_this(), pc);
 }
 
 template <sstable::component_type Type, typename T>
@@ -1911,7 +1891,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                 options.io_priority_class = pc;
                 auto stream = make_file_input_stream(index_file, 0, size, std::move(options));
                 return do_with(summary_generator(_summary), [this, &pc, stream = std::move(stream), size] (summary_generator& s) mutable {
-                    auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(s, std::move(stream), size);
+                    auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(s, std::move(stream), 0, size);
                     return ctx->consume_input(*ctx).finally([ctx] {
                         return ctx->close();
                     }).then([this, ctx, &s] {
@@ -2070,11 +2050,12 @@ sstable::component_type sstable::component_from_sstring(sstring &s) {
     return reverse_map(s, _component_map);
 }
 
-input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_priority_class& pc) {
+input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_priority_class& pc, lw_shared_ptr<file_input_stream_history> history) {
     file_input_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.io_priority_class = pc;
     options.read_ahead = 4;
+    options.dynamic_adjustments = std::move(history);
     if (_compression) {
         return make_compressed_file_input_stream(_data_file, &_compression,
                 pos, len, std::move(options));
@@ -2084,7 +2065,7 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_prior
 }
 
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, const io_priority_class& pc) {
-    return do_with(data_stream(pos, len, pc), [len] (auto& stream) {
+    return do_with(data_stream(pos, len, pc, { }), [len] (auto& stream) {
         return stream.read_exactly(len).finally([&stream] {
             return stream.close();
         });

@@ -29,6 +29,7 @@
 #include "utils/move.hh"
 #include "dht/i_partitioner.hh"
 #include <seastar/core/byteorder.hh>
+#include "index_reader.hh"
 
 namespace sstables {
 
@@ -623,12 +624,19 @@ public:
 
         _skip_partition = true;
     }
+
+    virtual void reset() override {
+        _pending_collection = { };
+        _in_progress = { };
+        _ready = { };
+    }
 };
 
 struct sstable_data_source {
     shared_sstable _sst;
     mp_row_consumer _consumer;
     data_consume_context _context;
+    std::unique_ptr<index_reader> _index;
 
     sstable_data_source(shared_sstable sst, mp_row_consumer&& consumer)
         : _sst(std::move(sst))
@@ -636,18 +644,26 @@ struct sstable_data_source {
         , _context(_sst->data_consume_rows(_consumer))
     { }
 
-    sstable_data_source(shared_sstable sst, mp_row_consumer&& consumer, sstable::disk_read_range toread)
+    sstable_data_source(shared_sstable sst, mp_row_consumer&& consumer, sstable::disk_read_range toread, std::unique_ptr<index_reader> index)
         : _sst(std::move(sst))
         , _consumer(std::move(consumer))
         , _context(_sst->data_consume_rows(_consumer, std::move(toread)))
+        , _index(std::move(index))
     { }
 
     sstable_data_source(schema_ptr s, shared_sstable sst, const sstables::key& k, const io_priority_class& pc,
             const query::partition_slice& slice, sstable::disk_read_range toread)
         : _sst(std::move(sst))
         , _consumer(k, s, slice, pc)
-        , _context(_sst->data_consume_rows(_consumer, std::move(toread)))
+        , _context(_sst->data_consume_single_partition(_consumer, std::move(toread)))
     { }
+
+    ~sstable_data_source() {
+        if (_index) {
+            auto f = _index->close();
+            f.handle_exception([index = std::move(_index)] (auto&&) { });
+        }
+    }
 };
 
 class sstable_streamed_mutation : public streamed_mutation::impl {
@@ -976,6 +992,8 @@ sstables::sstable::find_disk_ranges(
 
 class mutation_reader::impl {
 private:
+    sstable* _sst;
+    const io_priority_class& _pc;
     schema_ptr _schema;
     lw_shared_ptr<sstable_data_source> _ds;
     // For some reason std::function requires functors to be copyable and that's
@@ -987,15 +1005,15 @@ private:
 public:
     impl(shared_sstable sst, schema_ptr schema, sstable::disk_read_range toread,
          const io_priority_class &pc)
-        : _schema(schema)
+        : _sst(&*sst), _pc(pc), _schema(schema)
         , _consumer(schema, query::full_slice, pc)
         , _get_data_source([this, sst = std::move(sst), toread] {
-            auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), std::move(toread));
+            auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), std::move(toread), std::unique_ptr<index_reader>());
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
     impl(shared_sstable sst, schema_ptr schema,
          const io_priority_class &pc)
-        : _schema(schema)
+        : _sst(&*sst), _pc(pc), _schema(schema)
         , _consumer(schema, query::full_slice, pc)
         , _get_data_source([this, sst = std::move(sst)] {
             auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer));
@@ -1003,20 +1021,19 @@ public:
         }) { }
     impl(shared_sstable sst,
          schema_ptr schema,
-         std::function<future<uint64_t>()> start,
-         std::function<future<uint64_t>()> end,
+         const query::partition_range& pr,
          const query::partition_slice& slice,
          const io_priority_class& pc)
-        : _schema(schema)
+        : _sst(&*sst), _pc(pc), _schema(schema)
         , _consumer(schema, slice, pc)
-        , _get_data_source([this, sst = std::move(sst), start = std::move(start), end = std::move(end)] () mutable {
-            return start().then([this, sst = std::move(sst), end = std::move(end)] (uint64_t start) mutable {
-                return end().then([this, sst = std::move(sst), start] (uint64_t end) mutable {
-                    return make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), sstable::disk_read_range{start, end});
-                });
+        , _get_data_source([this, &pr, sst = std::move(sst)] () mutable {
+            auto index = std::make_unique<index_reader>(_sst->get_index_reader(_pc));
+            auto f = index->get_disk_read_range(*_schema, pr);
+            return f.then([this, index = std::move(index), sst = std::move(sst)] (sstable::disk_read_range drr) mutable {
+                return make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), std::move(drr), std::move(index));
             });
         }) { }
-    impl() : _get_data_source() { }
+    impl() : _pc(default_priority_class()), _get_data_source() { }
 
     // Reference to _consumer is passed to data_consume_rows() in the constructor so we must not allow move/copy
     impl(impl&&) = delete;
@@ -1034,6 +1051,12 @@ public:
         return (_get_data_source)().then([this] (lw_shared_ptr<sstable_data_source> ds) {
             _ds = std::move(ds);
             return do_read();
+        });
+    }
+    future<> fast_forward_to(const query::partition_range& pr) {
+        assert(_ds->_index);
+        return _ds->_index->get_disk_read_range(*_schema, pr).then([this] (sstable::disk_read_range drr) {
+            return _ds->_context.fast_forward_to(drr.start, drr.end);
         });
     }
 private:
@@ -1065,95 +1088,12 @@ mutation_reader::mutation_reader(std::unique_ptr<impl> p)
 future<streamed_mutation_opt> mutation_reader::read() {
     return _pimpl->read();
 }
+future<> mutation_reader::fast_forward_to(const query::partition_range& pr) {
+    return _pimpl->fast_forward_to(pr);
+}
 
 mutation_reader sstable::read_rows(schema_ptr schema, const io_priority_class& pc) {
     return std::make_unique<mutation_reader::impl>(shared_from_this(), schema, pc);
-}
-
-// Less-comparator for lookups in the partition index.
-class index_comparator {
-    const schema& _s;
-public:
-    index_comparator(const schema& s) : _s(s) {}
-
-    int tri_cmp(key_view k2, const dht::ring_position& pos) const {
-        auto k2_token = dht::global_partitioner().get_token(k2);
-
-        if (k2_token == pos.token()) {
-            if (pos.has_key()) {
-                return k2.tri_compare(_s, *pos.key());
-            } else {
-                return -pos.relation_to_keys();
-            }
-        } else {
-            return k2_token < pos.token() ? -1 : 1;
-        }
-    }
-
-    bool operator()(const summary_entry& e, const dht::ring_position& rp) const {
-        return tri_cmp(e.get_key(), rp) < 0;
-    }
-
-    bool operator()(const index_entry& e, const dht::ring_position& rp) const {
-        return tri_cmp(e.get_key(), rp) < 0;
-    }
-
-    bool operator()(const dht::ring_position& rp, const summary_entry& e) const {
-        return tri_cmp(e.get_key(), rp) > 0;
-    }
-
-    bool operator()(const dht::ring_position& rp, const index_entry& e) const {
-        return tri_cmp(e.get_key(), rp) > 0;
-    }
-};
-
-future<uint64_t> sstable::lower_bound(schema_ptr s, const dht::ring_position& pos, const io_priority_class& pc) {
-    uint64_t summary_idx = std::distance(std::begin(_summary.entries),
-        std::lower_bound(_summary.entries.begin(), _summary.entries.end(), pos, index_comparator(*s)));
-
-    if (summary_idx == 0) {
-        return make_ready_future<uint64_t>(0);
-    }
-
-    --summary_idx;
-
-    return read_indexes(summary_idx, pc).then([this, s, pos, summary_idx, &pc] (index_list il) {
-        auto i = std::lower_bound(il.begin(), il.end(), pos, index_comparator(*s));
-        if (i == il.end()) {
-            return this->data_end_position(summary_idx, pc);
-        }
-        return make_ready_future<uint64_t>(i->position());
-    });
-}
-
-future<uint64_t> sstable::upper_bound(schema_ptr s, const dht::ring_position& pos, const io_priority_class& pc) {
-    uint64_t summary_idx = std::distance(std::begin(_summary.entries),
-        std::upper_bound(_summary.entries.begin(), _summary.entries.end(), pos, index_comparator(*s)));
-
-    if (summary_idx == 0) {
-        return make_ready_future<uint64_t>(0);
-    }
-
-    --summary_idx;
-
-    return read_indexes(summary_idx, pc).then([this, s, pos, summary_idx, &pc] (index_list il) {
-        auto i = std::upper_bound(il.begin(), il.end(), pos, index_comparator(*s));
-        if (i == il.end()) {
-            return this->data_end_position(summary_idx, pc);
-        }
-        return make_ready_future<uint64_t>(i->position());
-    });
-}
-
-mutation_reader sstable::read_range_rows(schema_ptr schema,
-        const dht::token& min_token, const dht::token& max_token, const io_priority_class& pc) {
-    if (max_token < min_token) {
-        return std::make_unique<mutation_reader::impl>();
-    }
-    return read_range_rows(std::move(schema),
-        query::range<dht::ring_position>::make(
-            dht::ring_position::starting_at(min_token),
-            dht::ring_position::ending_at(max_token)), query::full_slice, pc);
 }
 
 mutation_reader
@@ -1164,129 +1104,8 @@ sstable::read_range_rows(schema_ptr schema,
     if (query::is_wrap_around(range, *schema)) {
         fail(unimplemented::cause::WRAP_AROUND);
     }
-
-    auto start = [this, range, schema, &pc] {
-        return range.start() ? (range.start()->is_inclusive()
-                 ? lower_bound(schema, range.start()->value(), pc)
-                 : upper_bound(schema, range.start()->value(), pc))
-        : make_ready_future<uint64_t>(0);
-    };
-
-    auto end = [this, range, schema, &pc] {
-        return range.end() ? (range.end()->is_inclusive()
-                 ? upper_bound(schema, range.end()->value(), pc)
-                 : lower_bound(schema, range.end()->value(), pc))
-        : make_ready_future<uint64_t>(data_size());
-    };
-
     return std::make_unique<mutation_reader::impl>(
-        shared_from_this(), std::move(schema), std::move(start), std::move(end), slice, pc);
-}
-
-
-class key_reader final : public ::key_reader::impl {
-    schema_ptr _s;
-    shared_sstable _sst;
-    index_list _bucket;
-    int64_t _current_bucket_id;
-    int64_t _end_bucket_id;
-    int64_t _begin_bucket_id;
-    int64_t _position_in_bucket = 0;
-    int64_t _end_of_bucket = 0;
-    query::partition_range _range;
-    const io_priority_class& _pc;
-private:
-    dht::decorated_key decorate(const index_entry& ie) {
-        auto pk = partition_key::from_exploded(*_s, ie.get_key().explode(*_s));
-        return dht::global_partitioner().decorate_key(*_s, std::move(pk));
-    }
-public:
-    key_reader(schema_ptr s, shared_sstable sst, const query::partition_range& range, const io_priority_class& pc)
-        : _s(s), _sst(std::move(sst)), _range(range), _pc(pc)
-    {
-        auto& summary = _sst->_summary;
-        using summary_entries_type = std::decay_t<decltype(summary.entries)>;
-
-        _begin_bucket_id = 0;
-        if (range.start()) {
-            summary_entries_type::iterator pos;
-            if (range.start()->is_inclusive()) {
-                pos = std::lower_bound(summary.entries.begin(), summary.entries.end(),
-                    range.start()->value(), index_comparator(*s));
-
-            } else {
-                pos = std::upper_bound(summary.entries.begin(), summary.entries.end(),
-                    range.start()->value(), index_comparator(*s));
-            }
-            _begin_bucket_id = std::distance(summary.entries.begin(), pos);
-            if (_begin_bucket_id) {
-                _begin_bucket_id--;
-            }
-        }
-        _current_bucket_id = _begin_bucket_id - 1;
-
-        _end_bucket_id = summary.header.size;
-        if (range.end()) {
-            summary_entries_type::iterator pos;
-            if (range.end()->is_inclusive()) {
-                pos = std::upper_bound(summary.entries.begin(), summary.entries.end(),
-                    range.end()->value(), index_comparator(*s));
-            } else {
-                pos = std::lower_bound(summary.entries.begin(), summary.entries.end(),
-                    range.end()->value(), index_comparator(*s));
-            }
-            _end_bucket_id = std::distance(summary.entries.begin(), pos);
-            if (_end_bucket_id) {
-                _end_bucket_id--;
-            }
-        }
-    }
-    virtual future<dht::decorated_key_opt> operator()() override;
-};
-
-future<dht::decorated_key_opt> key_reader::operator()()
-{
-    if (_position_in_bucket < _end_of_bucket) {
-        auto& ie = _bucket[_position_in_bucket++];
-        return make_ready_future<dht::decorated_key_opt>(decorate(ie));
-    }
-    if (_current_bucket_id == _end_bucket_id) {
-        return make_ready_future<dht::decorated_key_opt>();
-    }
-    return _sst->read_indexes(++_current_bucket_id, _pc).then([this] (index_list il) mutable {
-        _bucket = std::move(il);
-
-        if (_range.start() && _current_bucket_id == _begin_bucket_id) {
-            index_list::const_iterator pos;
-            if (_range.start()->is_inclusive()) {
-                pos = std::lower_bound(_bucket.begin(), _bucket.end(), _range.start()->value(), index_comparator(*_s));
-            } else {
-                pos = std::upper_bound(_bucket.begin(), _bucket.end(), _range.start()->value(), index_comparator(*_s));
-            }
-            _position_in_bucket = std::distance(_bucket.cbegin(), pos);
-        } else {
-            _position_in_bucket = 0;
-        }
-
-        if (_range.end() && _current_bucket_id == _end_bucket_id) {
-            index_list::const_iterator pos;
-            if (_range.end()->is_inclusive()) {
-                pos = std::upper_bound(_bucket.begin(), _bucket.end(), _range.end()->value(), index_comparator(*_s));
-            } else {
-                pos = std::lower_bound(_bucket.begin(), _bucket.end(), _range.end()->value(), index_comparator(*_s));
-            }
-            _end_of_bucket = std::distance(_bucket.cbegin(), pos);
-        } else {
-            _end_of_bucket = _bucket.size();
-        }
-
-        return operator()();
-    });
-}
-
-::key_reader make_key_reader(schema_ptr s, shared_sstable sst, const query::partition_range& range, const io_priority_class& pc)
-{
-    return ::make_key_reader<key_reader>(std::move(s), std::move(sst), range, pc);
+        shared_from_this(), std::move(schema), range, slice, pc);
 }
 
 }

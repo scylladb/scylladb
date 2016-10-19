@@ -155,7 +155,6 @@ public:
     mutation_reader make_flush_reader(schema_ptr, const io_priority_class& pc);
 
     mutation_source as_data_source();
-    key_source as_key_source();
 
     bool empty() const { return partitions.empty(); }
     void mark_flushed(lw_shared_ptr<sstables::sstable> sst);

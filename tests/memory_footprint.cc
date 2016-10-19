@@ -175,7 +175,7 @@ static sizes calculate_sizes(const mutation& m) {
     auto s = m.schema();
     auto mt = make_lw_shared<memtable>(s);
     cache_tracker tracker;
-    row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
+    row_cache cache(s, mt->as_data_source(), tracker);
 
     auto cache_initial_occupancy = tracker.region().occupancy().used_space();
 
