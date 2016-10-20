@@ -78,10 +78,8 @@ create_view_statement::create_view_statement(
     fail(unimplemented::cause::VIEWS);
 }
 
-// FIXME: I copied the following from create_table_statement. I don't know
-// what they do or whether they need to change for create view.
 future<> create_view_statement::check_access(const service::client_state& state) {
-    return state.has_keyspace_access(keyspace(), auth::permission::CREATE);
+    return state.has_column_family_access(keyspace(), _base_name->get_column_family(), auth::permission::ALTER);
 }
 
 void create_view_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state) {
