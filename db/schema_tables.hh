@@ -66,6 +66,7 @@ static constexpr auto TRIGGERS = "schema_triggers";
 static constexpr auto USERTYPES = "schema_usertypes";
 static constexpr auto FUNCTIONS = "schema_functions";
 static constexpr auto AGGREGATES = "schema_aggregates";
+static constexpr auto VIEWS = "views";
 
 extern std::vector<const char*> ALL;
 
@@ -148,6 +149,7 @@ data_type parse_type(sstring str);
 
 schema_ptr columns();
 schema_ptr columnfamilies();
+schema_ptr views();
 
 template<typename Hasher>
 void feed_hash_for_schema_digest(Hasher& h, const mutation& m) {

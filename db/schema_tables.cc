@@ -111,7 +111,7 @@ static void merge_types(distributed<service::storage_proxy>& proxy,
     schema_result&& before,
     schema_result&& after);
 
-std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USERTYPES, /* not present in 2.1.8: FUNCTIONS, AGGREGATES */ };
+std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USERTYPES, VIEWS, /* not present in 2.1.8: FUNCTIONS, AGGREGATES */ };
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -357,6 +357,55 @@ future<> save_system_keyspace_schema() {
         auto mvec  = make_create_keyspace_mutations(ksm, schema_creation_timestamp(), true);
         return qctx->proxy().mutate_locally(std::move(mvec));
     });
+}
+
+/* static */ schema_ptr views() {
+    static thread_local auto views = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, VIEWS), NAME, VIEWS,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"view_name", utf8_type}},
+        // regular columns
+        {
+            {"base_table_id", uuid_type},
+            {"base_table_name", utf8_type},
+            {"where_clause", utf8_type},
+            {"bloom_filter_fp_chance", double_type},
+            {"caching", utf8_type},
+            {"comment", utf8_type},
+            {"compaction_strategy_class", utf8_type},
+            {"compaction_strategy_options", utf8_type},
+            {"comparator", utf8_type},
+            {"compression_parameters", utf8_type},
+            {"local_read_repair_chance", double_type},
+            {"default_time_to_live", int32_type},
+            {"gc_grace_seconds", int32_type},
+            {"key_validator", utf8_type},
+            {"id", uuid_type},
+            {"include_all_columns", boolean_type},
+            {"max_compaction_threshold", int32_type},
+            {"max_index_interval", int32_type},
+            {"memtable_flush_period_in_ms", int32_type},
+            {"min_compaction_threshold", int32_type},
+            {"min_index_interval", int32_type},
+            {"read_repair_chance", double_type},
+            {"speculative_retry", utf8_type},
+            {"dropped_columns",  map_type_impl::get_instance(utf8_type, long_type, true)},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "view definitions"
+        )));
+        builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
+        builder.with(schema_builder::compact_storage::no);
+        builder.with_version(generate_schema_version(builder.uuid()));
+        return builder.build();
+    }();
+    return views;
 }
 
 #if 0
@@ -1929,6 +1978,7 @@ data_type parse_type(sstring str)
 std::vector<schema_ptr> all_tables() {
     return {
         keyspaces(), columnfamilies(), columns(), triggers(), usertypes(), /* Not in 2.1.8 functions(), aggregates() */
+        views(),
     };
 }
 
