@@ -50,6 +50,7 @@
 #include "cql3/statements/prepared_statement.hh"
 #include "schema_builder.hh"
 #include "service/storage_proxy.hh"
+#include "validation.hh"
 
 
 namespace cql3 {
@@ -135,26 +136,11 @@ future<bool> create_view_statement::announce_migration(distributed<service::stor
                 _base_name->get_keyspace(), keyspace()));
     }
 
-    // Validate that the keyspace and the base table exist, and is not a
-    // special table on which we cannot create views:
-    // CONTINUE HERE: something like the code below taken from migration_manager instead of the validateColumFamily below
-    auto& db = service::get_local_storage_proxy().get_db().local();
-    if (!db.has_keyspace(_base_name->get_keyspace())) {
-        throw exceptions::invalid_request_exception(sprint(
-                "Keyspace '%s' does not exist", _base_name->get_keyspace()));
-    }
-//    auto& ks = db.find_keyspace(_base_name->get_keyspace());
-    if (!db.has_schema(_base_name->get_keyspace(), _base_name->get_column_family())) {
-        throw exceptions::invalid_request_exception(sprint(
-                "Base table '%s' does not exist",
-                _base_name->get_column_family()));
-    }
+    auto&& db = proxy.local().get_db().local();
+    validation::validate_column_family(db, _base_name->get_keyspace(), _base_name->get_column_family());
+
     return make_ready_future<bool>(true);
-//    if (db.has_schema(_base_name->get_keyspace(), _base_name->get_column_family())) {
-//            throw exceptions::already_exists_exception(cfm->ks_name(), cfm->cf_name());
-//        }
 #if 0
-    CFMetaData cfm = ThriftValidation.validateColumnFamily(baseName.getKeyspace(), baseName.getColumnFamily());
 
     if (cfm.isCounter())
         throw new InvalidRequestException("Materialized views are not supported on counter tables");
