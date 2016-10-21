@@ -787,10 +787,8 @@ public:
         _gate.leave();
 
         if (_segment_manager->cfg.mode == sync_mode::BATCH) {
-            return _pending_ops.wait_for_pending().then([this, rp = std::move(rp)] {
-                return batch_cycle().then([rp](auto s) {
-                    return make_ready_future<replay_position>(rp);
-                });
+            return batch_cycle().then([rp](auto s) {
+                return make_ready_future<replay_position>(rp);
             });
         } else {
             // If this buffer alone is too big, potentially bigger than the maximum allowed size,
