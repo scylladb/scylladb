@@ -1723,28 +1723,28 @@ database::setup_collectd() {
     _collectd.push_back(
         scollectd::add_polled_metric(scollectd::type_instance_id("database"
                 , scollectd::per_cpu_plugin_instance
-                , "total_operations", "clustering_filter")
+                , "total_operations", "clustering_filter_count")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _cf_stats.clustering_filter_count)
     ));
 
     _collectd.push_back(
         scollectd::add_polled_metric(scollectd::type_instance_id("database"
                 , scollectd::per_cpu_plugin_instance
-                , "total_operations", "clustering_filter")
+                , "total_operations", "clustering_filter_sstables_checked")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _cf_stats.sstables_checked_by_clustering_filter)
     ));
 
     _collectd.push_back(
         scollectd::add_polled_metric(scollectd::type_instance_id("database"
                 , scollectd::per_cpu_plugin_instance
-                , "total_operations", "clustering_filter")
+                , "total_operations", "clustering_filter_fast_path_count")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _cf_stats.clustering_filter_fast_path_count)
     ));
 
     _collectd.push_back(
         scollectd::add_polled_metric(scollectd::type_instance_id("database"
                 , scollectd::per_cpu_plugin_instance
-                , "total_operations", "clustering_filter")
+                , "total_operations", "clustering_filter_surviving_sstables")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _cf_stats.surviving_sstables_after_clustering_filter)
     ));
 
