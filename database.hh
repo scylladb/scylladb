@@ -154,12 +154,12 @@ public:
         return _region_group;
     }
 
-    void revert_potentially_cleaned_up_memory(int64_t delta) {
+    void revert_potentially_cleaned_up_memory(logalloc::region* from, int64_t delta) {
         _region_group.update(delta);
         _dirty_bytes_released_pre_accounted -= delta;
     }
 
-    void account_potentially_cleaned_up_memory(int64_t delta) {
+    void account_potentially_cleaned_up_memory(logalloc::region* from, int64_t delta) {
         _region_group.update(-delta);
         _dirty_bytes_released_pre_accounted += delta;
     }
