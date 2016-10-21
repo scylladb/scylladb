@@ -734,7 +734,7 @@ public:
             return finish_and_get_new().then([id, writer = std::move(writer), permit = std::move(permit)] (auto new_seg) mutable {
                 return new_seg->allocate(id, std::move(writer), std::move(permit));
             });
-        } else if (!_buffer.empty() && (size > (_buffer.size() - _buf_pos))) {  // enough data?
+        } else if (!_buffer.empty() && (s > (_buffer.size() - _buf_pos))) {  // enough data?
             if (_segment_manager->cfg.mode == sync_mode::BATCH) {
                 // TODO: this could cause starvation if we're really unlucky.
                 // If we run batch mode and find ourselves not fit in a non-empty
