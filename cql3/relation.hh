@@ -220,6 +220,15 @@ public:
     virtual ::shared_ptr<restrictions::restriction> new_contains_restriction(database& db, schema_ptr schema,
         ::shared_ptr<variable_specifications> bound_names, bool isKey) = 0;
 
+    /**
+     * Renames an identifier in this Relation, if applicable.
+     * @param from the old identifier
+     * @param to the new identifier
+     * @return a pointer object, if the old identifier is not in the set of entities that this relation covers;
+     *         otherwise a new Relation with "from" replaced by "to" is returned.
+     */
+    virtual ::shared_ptr<relation> maybe_rename_identifier(const column_identifier::raw& from, column_identifier::raw to) = 0;
+
 protected:
 
     /**
