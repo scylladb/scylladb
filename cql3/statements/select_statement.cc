@@ -382,6 +382,10 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
     return ::make_shared<transport::messages::result_message::rows>(std::move(rs));
 }
 
+::shared_ptr<restrictions::statement_restrictions> select_statement::get_restrictions() const {
+    return _restrictions;
+}
+
 namespace raw {
 
 select_statement::select_statement(::shared_ptr<cf_name> cf_name,

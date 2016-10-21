@@ -39,21 +39,30 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <unordered_set>
+#include <vector>
 
-#include <inttypes.h>
-#include <regex>
-
+#include <boost/range/iterator_range.hpp>
+#include <boost/range/join.hpp>
 #include <boost/range/adaptor/map.hpp>
-#include <boost/range/algorithm/adjacent_find.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 
+#include "cql3/column_identifier.hh"
+#include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/statements/create_view_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
+#include "cql3/statements/select_statement.hh"
+#include "cql3/statements/raw/select_statement.hh"
+#include "cql3/selection/selectable.hh"
+#include "cql3/selection/selectable_with_field_selection.hh"
+#include "cql3/selection/selection.hh"
+#include "cql3/selection/writetime_or_ttl.hh"
+#include "cql3/util.hh"
 #include "schema_builder.hh"
 #include "service/storage_proxy.hh"
 #include "validation.hh"
 #include "db/config.hh"
 #include "service/storage_service.hh"
-
 
 namespace cql3 {
 
@@ -79,10 +88,6 @@ create_view_statement::create_view_statement(
     if (!service::get_local_storage_service().cluster_supports_materialized_views()) {
         throw exceptions::invalid_request_exception("Can't create materialized views until the whole cluster has been upgraded");
     }
-    // TODO: probably need to create a "statement_restrictions" like select does
-    // based on the select_clause, base_name and where_clause; However need to
-    // pass for_view=true.
-    fail(unimplemented::cause::VIEWS);
 }
 
 future<> create_view_statement::check_access(const service::client_state& state) {
@@ -93,26 +98,48 @@ void create_view_statement::validate(distributed<service::storage_proxy>&, const
     // validated in announceMigration()
 }
 
-future<bool> create_view_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
-    // FIXME: this code from create_table_view is probably wrong, the Java CreateViewStatement.announceMigration is much more elaborate
-#if 0
-    ****** Our implementation in creat_table_statement (simpler code but that was simpler also in Java)
-    return make_ready_future<>().then([this, is_local_only] {
-        return service::get_local_migration_manager().announce_new_column_family(get_cf_meta_data(), is_local_only);
-    }).then_wrapped([this] (auto&& f) {
-        try {
-            f.get();
-            return true;
-        } catch (const exceptions::already_exists_exception& e) {
-            if (_if_not_exists) {
-                return false;
-            }
-            throw e;
+static const column_definition* get_column_definition(schema_ptr schema, column_identifier::raw& identifier) {
+    auto prepared = identifier.prepare(schema);
+    assert(dynamic_pointer_cast<column_identifier>(prepared));
+    auto id = static_pointer_cast<column_identifier>(prepared);
+    return schema->get_column_definition(id->name());
+}
+
+static bool validate_primary_key(
+        schema_ptr schema,
+        const column_definition* def,
+        const std::unordered_set<const column_definition*>& base_pk,
+        bool has_non_pk_column,
+        const restrictions::statement_restrictions& restrictions) {
+
+    if (def->type->is_multi_cell()) {
+        throw exceptions::invalid_request_exception(sprint(
+                "Cannot use MultiCell column '%s' in PRIMARY KEY of materialized view", def->name_as_text()));
+    }
+    if (def->is_static()) {
+        throw exceptions::invalid_request_exception(sprint(
+                "Cannot use Static column '%s' in PRIMARY KEY of materialized view", def->name_as_text()));
+    }
+
+    if (base_pk.find(def) == base_pk.end()) {
+        if (has_non_pk_column) {
+            throw exceptions::invalid_request_exception(sprint(
+                    "Cannot include more than one non-primary key column '%s' in materialized view primary key", def->name_as_text()));
         }
-    });
-#endif
-#if 0
-    ***** This if 0 code is from Cassandra CreateViewStatement
+        return true;
+    }
+
+    // We don't need to include the "IS NOT NULL" filter on a non-composite partition key
+    // because we will never allow a single partition key to be NULL
+    if (schema->partition_key_columns().size() > 1 && !restrictions.is_restricted(def)) {
+        throw exceptions::invalid_request_exception(sprint(
+                "Primary key column '%s' is required to be filtered by 'IS NOT NULL'", def->name_as_text()));
+    }
+
+    return false;
+}
+
+future<bool> create_view_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
     // We need to make sure that:
     //  - primary key includes all columns in base table's primary key
     //  - make sure that the select statement does not have anything other than columns
@@ -120,13 +147,14 @@ future<bool> create_view_statement::announce_migration(distributed<service::stor
     //  - make sure that primary key does not include any collections
     //  - make sure there is no where clause in the select statement
     //  - make sure there is not currently a table or view
-    //  - make sure baseTable gcGraceSeconds > 0
+    //  - make sure base_table gc_grace_seconds > 0
 
-    properties.validate();
+    _properties.validate();
 
-    if (properties.useCompactStorage)
-        throw new InvalidRequestException("Cannot use 'COMPACT STORAGE' when defining a materialized view");
-#endif
+    if (_properties.use_compact_storage()) {
+        throw exceptions::invalid_request_exception(sprint(
+                "Cannot use 'COMPACT STORAGE' when defining a materialized view"));
+    }
 
     // View and base tables must be in the same keyspace, to ensure that RF
     // is the same (because we assign a view replica to each base replica).
@@ -143,184 +171,167 @@ future<bool> create_view_statement::announce_migration(distributed<service::stor
     }
 
     auto&& db = proxy.local().get_db().local();
-    validation::validate_column_family(db, _base_name->get_keyspace(), _base_name->get_column_family());
+    schema_ptr schema = validation::validate_column_family(db, _base_name->get_keyspace(), _base_name->get_column_family());
 
-    return make_ready_future<bool>(true);
-#if 0
-
-    if (cfm.isCounter())
-        throw new InvalidRequestException("Materialized views are not supported on counter tables");
-    if (cfm.isView())
-        throw new InvalidRequestException("Materialized views cannot be created against other materialized views");
-
-    if (cfm.params.gcGraceSeconds == 0)
-    {
-        throw new InvalidRequestException(String.format("Cannot create materialized view '%s' for base table " +
-                                                        "'%s' with gc_grace_seconds of 0, since this value is " +
-                                                        "used to TTL undelivered updates. Setting gc_grace_seconds" +
-                                                        " too low might cause undelivered updates to expire " +
-                                                        "before being replayed.", cfName.getColumnFamily(),
-                                                        baseName.getColumnFamily()));
+    if (schema->is_counter()) {
+        throw exceptions::invalid_request_exception(sprint(
+                "Materialized views are not supported on counter tables"));
     }
 
-    Set<ColumnIdentifier> included = new HashSet<>();
-    for (RawSelector selector : selectClause)
-    {
-        Selectable.Raw selectable = selector.selectable;
-        if (selectable instanceof Selectable.WithFieldSelection.Raw)
-            throw new InvalidRequestException("Cannot select out a part of type when defining a materialized view");
-        if (selectable instanceof Selectable.WithFunction.Raw)
-            throw new InvalidRequestException("Cannot use function when defining a materialized view");
-        if (selectable instanceof Selectable.WritetimeOrTTL.Raw)
-            throw new InvalidRequestException("Cannot use function when defining a materialized view");
-        ColumnIdentifier identifier = (ColumnIdentifier) selectable.prepare(cfm);
-        if (selector.alias != null)
-            throw new InvalidRequestException(String.format("Cannot alias column '%s' as '%s' when defining a materialized view", identifier.toString(), selector.alias.toString()));
-
-        ColumnDefinition cdef = cfm.getColumnDefinition(identifier);
-
-        if (cdef == null)
-            throw new InvalidRequestException("Unknown column name detected in CREATE MATERIALIZED VIEW statement : "+identifier);
-
-        included.add(identifier);
+    if (schema->is_view()) {
+        throw exceptions::invalid_request_exception(sprint(
+                "Materialized views cannot be created against other materialized views"));
     }
 
-    Set<ColumnIdentifier.Raw> targetPrimaryKeys = new HashSet<>();
-    for (ColumnIdentifier.Raw identifier : Iterables.concat(partitionKeys, clusteringKeys))
-    {
-        if (!targetPrimaryKeys.add(identifier))
-            throw new InvalidRequestException("Duplicate entry found in PRIMARY KEY: "+identifier);
-
-        ColumnDefinition cdef = cfm.getColumnDefinition(identifier.prepare(cfm));
-
-        if (cdef == null)
-            throw new InvalidRequestException("Unknown column name detected in CREATE MATERIALIZED VIEW statement : "+identifier);
-
-        if (cfm.getColumnDefinition(identifier.prepare(cfm)).type.isMultiCell())
-            throw new InvalidRequestException(String.format("Cannot use MultiCell column '%s' in PRIMARY KEY of materialized view", identifier));
-
-        if (cdef.isStatic())
-            throw new InvalidRequestException(String.format("Cannot use Static column '%s' in PRIMARY KEY of materialized view", identifier));
+    if (schema->gc_grace_seconds().count() == 0) {
+        throw exceptions::invalid_request_exception(sprint(
+                "Cannot create materialized view '%s' for base table "
+                "'%s' with gc_grace_seconds of 0, since this value is "
+                "used to TTL undelivered updates. Setting gc_grace_seconds "
+                "too low might cause undelivered updates to expire "
+                "before being replayed.", column_family(), _base_name->get_column_family()));
     }
 
-    // build the select statement
-    Map<ColumnIdentifier.Raw, Boolean> orderings = Collections.emptyMap();
-    SelectStatement.Parameters parameters = new SelectStatement.Parameters(orderings, false, true, false);
-    SelectStatement.RawStatement rawSelect = new SelectStatement.RawStatement(baseName, parameters, selectClause, whereClause, null, null);
+    // Gather all included columns, as specified by the select clause
+    auto included = boost::copy_range<std::unordered_set<const column_definition*>>(_select_clause | boost::adaptors::transformed([&](auto&& selector) {
+        if (selector->alias) {
+            throw exceptions::invalid_request_exception(sprint(
+                    "Cannot use alias when defining a materialized view"));
+        }
 
-    ClientState state = ClientState.forInternalCalls();
-    state.setKeyspace(keyspace());
+        auto selectable = selector->selectable_;
+        if (dynamic_pointer_cast<selection::selectable::with_field_selection::raw>(selectable)) {
+            throw exceptions::invalid_request_exception(sprint(
+                    "Cannot select out a part of type when defining a materialized view"));
+        }
+        if (dynamic_pointer_cast<selection::selectable::with_function::raw>(selectable)) {
+            throw exceptions::invalid_request_exception(sprint(
+                    "Cannot use function when defining a materialized view"));
+        }
+        if (dynamic_pointer_cast<selection::selectable::writetime_or_ttl::raw>(selectable)) {
+            throw exceptions::invalid_request_exception(sprint(
+                    "Cannot use function when defining a materialized view"));
+        }
 
-    rawSelect.prepareKeyspace(state);
-    rawSelect.setBoundVariables(getBoundVariables());
+        assert(dynamic_pointer_cast<column_identifier::raw>(selectable));
+        auto identifier = static_pointer_cast<column_identifier::raw>(selectable);
+        auto* def = get_column_definition(schema, *identifier);
+        if (!def) {
+            throw exceptions::invalid_request_exception(sprint(
+                    "Unknown column name detected in CREATE MATERIALIZED VIEW statement : ", identifier));
+        }
+        return def;
+    }));
 
-    ParsedStatement.Prepared prepared = rawSelect.prepare(true);
-    SelectStatement select = (SelectStatement) prepared.statement;
-    StatementRestrictions restrictions = select.getRestrictions();
-
-    if (!prepared.boundNames.isEmpty())
-        throw new InvalidRequestException("Cannot use query parameters in CREATE MATERIALIZED VIEW statements");
-
-    if (!restrictions.nonPKRestrictedColumns(false).isEmpty())
-    {
-        throw new InvalidRequestException(String.format(
-                "Non-primary key columns cannot be restricted in the SELECT statement used for materialized view " +
-                "creation (got restrictions on: %s)",
-                restrictions.nonPKRestrictedColumns(false).stream().map(def -> def.name.toString()).collect(Collectors.joining(", "))));
+    if (!get_bound_variables()->empty()) {
+        throw exceptions::invalid_request_exception(sprint(
+                    "Cannot use query parameters in CREATE MATERIALIZED VIEW statements"));
     }
 
-    String whereClauseText = View.relationsToWhereClause(whereClause.relations);
+    auto parameters = ::make_shared<raw::select_statement::parameters>(raw::select_statement::parameters::orderings_type(), false, true);
+    raw::select_statement raw_select(_base_name, std::move(parameters), _select_clause, _where_clause, nullptr);
+    raw_select.prepare_keyspace(keyspace());
+    raw_select.set_bound_variables({});
 
-    Set<ColumnIdentifier> basePrimaryKeyCols = new HashSet<>();
-    for (ColumnDefinition definition : Iterables.concat(cfm.partitionKeyColumns(), cfm.clusteringColumns()))
-        basePrimaryKeyCols.add(definition.name);
+    cql_stats ignored;
+    auto prepared = raw_select.prepare(db, ignored, true);
+    auto restrictions = static_pointer_cast<statements::select_statement>(prepared->statement)->get_restrictions();
 
-    List<ColumnIdentifier> targetClusteringColumns = new ArrayList<>();
-    List<ColumnIdentifier> targetPartitionKeys = new ArrayList<>();
+    auto base_primary_key_cols = boost::copy_range<std::unordered_set<const column_definition*>>(
+            boost::range::join(schema->partition_key_columns(), schema->clustering_key_columns())
+            | boost::adaptors::transformed([](auto&& def) { return &def; }));
 
-    // This is only used as an intermediate state; this is to catch whether multiple non-PK columns are used
-    boolean hasNonPKColumn = false;
-    for (ColumnIdentifier.Raw raw : partitionKeys)
-        hasNonPKColumn |= getColumnIdentifier(cfm, basePrimaryKeyCols, hasNonPKColumn, raw, targetPartitionKeys, restrictions);
+    if (_partition_keys.empty()) {
+        throw exceptions::invalid_request_exception(sprint("Must select at least a column for a Materialized View"));
+    }
+    if (_clustering_keys.empty()) {
+        throw exceptions::invalid_request_exception(sprint("No columns are defined for Materialized View other than primary key"));
+    }
 
-    for (ColumnIdentifier.Raw raw : clusteringKeys)
-        hasNonPKColumn |= getColumnIdentifier(cfm, basePrimaryKeyCols, hasNonPKColumn, raw, targetClusteringColumns, restrictions);
+    // Validate the primary key clause, ensuring only one non-PK base column is used in the view's PK.
+    bool has_non_pk_column = false;
+    std::unordered_set<const column_definition*> target_primary_keys;
+    std::vector<const column_definition*> target_partition_keys;
+    std::vector<const column_definition*> target_clustering_keys;
+    auto validate_pk = [&] (const std::vector<::shared_ptr<cql3::column_identifier::raw>>& keys, std::vector<const column_definition*>& target_keys) mutable {
+        for (auto&& identifier : keys) {
+            auto* def = get_column_definition(schema, *identifier);
+            if (!def) {
+                throw exceptions::invalid_request_exception(sprint(
+                        "Unknown column name detected in CREATE MATERIALIZED VIEW statement : ", identifier));
+            }
+            if (!target_primary_keys.insert(def).second) {
+                throw exceptions::invalid_request_exception(sprint(
+                        "Duplicate entry found in PRIMARY KEY: ", identifier));
+            }
+            target_keys.push_back(def);
+            has_non_pk_column |= validate_primary_key(schema, def, base_primary_key_cols, has_non_pk_column, *restrictions);
+        }
+    };
+    validate_pk(_partition_keys, target_partition_keys);
+    validate_pk(_clustering_keys, target_clustering_keys);
+
+    std::vector<const column_definition*> missing_pk_columns;
+    std::vector<const column_definition*> target_non_pk_columns;
 
     // We need to include all of the primary key columns from the base table in order to make sure that we do not
     // overwrite values in the view. We cannot support "collapsing" the base table into a smaller number of rows in
     // the view because if we need to generate a tombstone, we have no way of knowing which value is currently being
     // used in the view and whether or not to generate a tombstone. In order to not surprise our users, we require
     // that they include all of the columns. We provide them with a list of all of the columns left to include.
-    boolean missingClusteringColumns = false;
-    StringBuilder columnNames = new StringBuilder();
-    List<ColumnIdentifier> includedColumns = new ArrayList<>();
-    for (ColumnDefinition def : cfm.allColumns())
-    {
-        ColumnIdentifier identifier = def.name;
-        boolean includeDef = included.isEmpty() || included.contains(identifier);
-
-        if (includeDef && def.isStatic())
-        {
-            throw new InvalidRequestException(String.format("Unable to include static column '%s' which would be included by Materialized View SELECT * statement", identifier));
+    for (auto* def : schema->all_columns() | boost::adaptors::map_values) {
+        bool included_def = included.empty() || included.find(def) != included.end();
+        if (included_def && def->is_static()) {
+            throw exceptions::invalid_request_exception(sprint(
+                    "Unable to include static column '%s' which would be included by Materialized View SELECT * statement", *def));
         }
 
-        if (includeDef && !targetClusteringColumns.contains(identifier) && !targetPartitionKeys.contains(identifier))
-        {
-            includedColumns.add(identifier);
-        }
-        if (!def.isPrimaryKeyColumn()) continue;
-
-        if (!targetClusteringColumns.contains(identifier) && !targetPartitionKeys.contains(identifier))
-        {
-            if (missingClusteringColumns)
-                columnNames.append(',');
-            else
-                missingClusteringColumns = true;
-            columnNames.append(identifier);
+        bool def_in_target_pk = std::find(target_primary_keys.begin(), target_primary_keys.end(), def) != target_primary_keys.end();
+        if (included_def && !def_in_target_pk) {
+            target_non_pk_columns.push_back(def);
+        } else if (def->is_primary_key() && !def_in_target_pk) {
+            missing_pk_columns.push_back(def);
         }
     }
-    if (missingClusteringColumns)
-        throw new InvalidRequestException(String.format("Cannot create Materialized View %s without primary key columns from base %s (%s)",
-                                                        columnFamily(), baseName.getColumnFamily(), columnNames.toString()));
 
-    if (targetPartitionKeys.isEmpty())
-        throw new InvalidRequestException("Must select at least a column for a Materialized View");
-
-    if (targetClusteringColumns.isEmpty())
-        throw new InvalidRequestException("No columns are defined for Materialized View other than primary key");
-
-    CFMetaData.Builder cfmBuilder = CFMetaData.Builder.createView(keyspace(), columnFamily());
-    add(cfm, targetPartitionKeys, cfmBuilder::addPartitionKey);
-    add(cfm, targetClusteringColumns, cfmBuilder::addClusteringColumn);
-    add(cfm, includedColumns, cfmBuilder::addRegularColumn);
-    cfmBuilder.withId(properties.properties.getId());
-    TableParams params = properties.properties.asNewTableParams();
-    CFMetaData viewCfm = cfmBuilder.build().params(params);
-    ViewDefinition definition = new ViewDefinition(keyspace(),
-                                                   columnFamily(),
-                                                   Schema.instance.getId(keyspace(), baseName.getColumnFamily()),
-                                                   baseName.getColumnFamily(),
-                                                   included.isEmpty(),
-                                                   rawSelect,
-                                                   whereClauseText,
-                                                   viewCfm);
-
-    try
-    {
-        MigrationManager.announceNewView(definition, isLocalOnly);
-        return new Event.SchemaChange(Event.SchemaChange.Change.CREATED, Event.SchemaChange.Target.TABLE, keyspace(), columnFamily());
+    if (!missing_pk_columns.empty()) {
+        auto column_names = ::join(", ", missing_pk_columns | boost::adaptors::transformed(std::mem_fn(&column_definition::name)));
+        throw exceptions::invalid_request_exception(sprint(
+                        "Cannot create Materialized View %s without primary key columns from base %s (%s)",
+                        column_family(), _base_name->get_column_family(), column_names));
     }
-    catch (AlreadyExistsException e)
-    {
-        if (ifNotExists)
-            return null;
-        throw e;
-    }
-#endif
+
+    schema_builder builder{keyspace(), column_family()};
+    auto add_columns = [this, &builder] (std::vector<const column_definition*>& defs, column_kind kind) mutable {
+        for (auto* def : defs) {
+            auto&& type = _properties.get_reversable_type(def->column_specification->name, def->type);
+            builder.with_column(def->name(), type, kind);
+        }
+    };
+    add_columns(target_partition_keys, column_kind::partition_key);
+    add_columns(target_clustering_keys, column_kind::clustering_key);
+    add_columns(target_non_pk_columns, column_kind::regular_column);
+    _properties.properties()->apply_to_builder(builder);
+
+    auto where_clause_text = util::relations_to_where_clause(_where_clause);
+    builder.with_view_info(schema->id(), schema->cf_name(), included.empty(), std::move(where_clause_text));
+
+    return make_ready_future<>().then([definition = view_ptr(builder.build()), is_local_only]() mutable {
+        return service::get_local_migration_manager().announce_new_view(definition, is_local_only);
+    }).then_wrapped([this] (auto&& f) {
+        try {
+            f.get();
+            return true;
+        } catch (const exceptions::already_exists_exception& e) {
+            if (_if_not_exists) {
+                return false;
+            }
+            throw e;
+        }
+    });
 }
 
 shared_ptr<transport::event::schema_change> create_view_statement::change_event() {
-    // FIXME: this is probably wrong, I just copied it from create_table_statement
     return make_shared<transport::event::schema_change>(transport::event::schema_change::change_type::CREATED, transport::event::schema_change::target_type::TABLE, keyspace(), column_family());
 }
 
