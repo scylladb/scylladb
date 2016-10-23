@@ -100,6 +100,10 @@ class Alarm(Exception):
 def alarm_handler(signum, frame):
     raise Alarm
 
+def boost_test_wants_double_dash(path):
+    magic = b'All the arguments after the -- are ignored'
+    return magic in subprocess.check_output([path, '--help'], stderr=subprocess.STDOUT)
+
 if __name__ == "__main__":
     all_modes = ['debug', 'release']
 
@@ -131,14 +135,19 @@ if __name__ == "__main__":
             test_to_run.append((os.path.join(prefix, test), 'boost'))
 
     if 'release' in modes_to_run:
-        test_to_run.append(('build/release/tests/lsa_async_eviction_test -c1 -m200M --size 1024 --batch 3000 --count 2000000','other'))
-        test_to_run.append(('build/release/tests/lsa_sync_eviction_test -c1 -m100M --count 10 --standard-object-size 3000000','other'))
-        test_to_run.append(('build/release/tests/lsa_sync_eviction_test -c1 -m100M --count 24000 --standard-object-size 2048','other'))
-        test_to_run.append(('build/release/tests/lsa_sync_eviction_test -c1 -m1G --count 4000000 --standard-object-size 128','other'))
-        test_to_run.append(('build/release/tests/row_cache_alloc_stress -c1 -m1G','other'))
-        test_to_run.append(('build/release/tests/sstable_test -c1','boost'))
+        test_to_run.append(('build/release/tests/lsa_async_eviction_test', 'other',
+                            '-c1 -m200M --size 1024 --batch 3000 --count 2000000'.split()))
+        test_to_run.append(('build/release/tests/lsa_sync_eviction_test', 'other',
+                            '-c1 -m100M --count 10 --standard-object-size 3000000'.split()))
+        test_to_run.append(('build/release/tests/lsa_sync_eviction_test', 'other',
+                            '-c1 -m100M --count 24000 --standard-object-size 2048'.split()))
+        test_to_run.append(('build/release/tests/lsa_sync_eviction_test', 'other',
+                            '-c1 -m1G --count 4000000 --standard-object-size 128'.split()))
+        test_to_run.append(('build/release/tests/row_cache_alloc_stress', 'other',
+                            '-c1 -m1G'.split()))
+        test_to_run.append(('build/release/tests/sstable_test', 'boost', ['-c1']))
     if 'debug' in modes_to_run:
-        test_to_run.append(('build/debug/tests/sstable_test -c1','boost'))
+        test_to_run.append(('build/debug/tests/sstable_test', 'boost', ['-c1']))
 
     if args.name:
         test_to_run = [t for t in test_to_run if args.name in t[0]]
@@ -151,8 +160,10 @@ if __name__ == "__main__":
     env['ASAN_OPTIONS'] = 'alloc_dealloc_mismatch=0'
     for n, test in enumerate(test_to_run):
         path = test[0]
+        exec_args = test[2] if len(test) >= 3 else []
+        boost_args = []
         prefix = '[%d/%d]' % (n + 1, n_total)
-        path += ' --collectd 0'
+        exec_args += '--collectd 0'.split()
         signal.signal(signal.SIGALRM, alarm_handler)
         if args.jenkins and test[1] == 'boost':
             mode = 'release'
@@ -160,9 +171,11 @@ if __name__ == "__main__":
                 mode = 'debug'
             xmlout = (args.jenkins + "." + mode + "." +
                       os.path.basename(test[0].split()[0]) + ".boost.xml")
-            path = path + " --output_format=XML --log_level=test_suite --report_level=no --log_sink=" + xmlout
-        print_status('%s RUNNING %s' % (prefix, path))
-        proc = subprocess.Popen(shlex.split(path), stdout=subprocess.PIPE,
+            boost_args += ['--output_format=XML', '--log_level=test_suite', '--report_level=no', '--log_sink=' + xmlout]
+        print_status('%s RUNNING %s %s' % (prefix, path, ' '.join(boost_args + exec_args)))
+        if test[1] == 'boost' and boost_test_wants_double_dash(path):
+            boost_args += ['--']
+        proc = subprocess.Popen([path] + boost_args + exec_args, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT,
                                 env=env, preexec_fn=os.setsid)
         out = None
