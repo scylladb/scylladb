@@ -27,7 +27,7 @@ import argparse, os, os.path
 def try_write(path, data):
     try:
         open(path, 'w').write(data)
-    except e:
+    except Exception:
         print("warning: unable to tune {} to {}".format(path, data))
 
 # update a sysfs path if it does not satisfy a check
