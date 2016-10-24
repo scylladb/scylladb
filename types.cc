@@ -172,7 +172,12 @@ struct integer_type_impl : simple_type_impl<T> {
     }
     T parse_int(sstring_view s) const {
         try {
-            return boost::lexical_cast<T>(s.begin(), s.size());
+            auto value64 = boost::lexical_cast<int64_t>(s.begin(), s.size());
+            auto value = static_cast<T>(value64);
+            if (value != value64) {
+                throw marshal_exception(sprint("Value out of range for type %s: '%s'", this->name(), s));
+            }
+            return static_cast<T>(value);
         } catch (const boost::bad_lexical_cast& e) {
             throw marshal_exception(sprint("Invalid number format '%s'", s));
         }
