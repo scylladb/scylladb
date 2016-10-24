@@ -971,7 +971,7 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) {
         }
     };
 
-    return open_checked_directory(commit_error, dirname).then([this, dirname](file dir) {
+    return open_checked_directory(commit_error_handler, dirname).then([this, dirname](file dir) {
         auto h = make_lw_shared<helper>(std::move(dirname), std::move(dir));
         return h->done().then([h]() {
             return make_ready_future<std::vector<db::commitlog::descriptor>>(std::move(h->_result));
@@ -1123,7 +1123,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     descriptor d(next_id());
     file_open_options opt;
     opt.extent_allocation_size_hint = max_size;
-    return open_checked_file_dma(commit_error, cfg.commit_log_location + "/" + d.filename(), open_flags::wo | open_flags::create, opt).then([this, d, active](file f) {
+    return open_checked_file_dma(commit_error_handler, cfg.commit_log_location + "/" + d.filename(), open_flags::wo | open_flags::create, opt).then([this, d, active](file f) {
         // xfs doesn't like files extended betond eof, so enlarge the file
         return f.truncate(max_size).then([this, d, active, f] () mutable {
             auto s = make_lw_shared<segment>(this->shared_from_this(), d, std::move(f), active);
@@ -1527,7 +1527,7 @@ const db::commitlog::config& db::commitlog::active_config() const {
 // on error at startup if required
 future<std::unique_ptr<subscription<temporary_buffer<char>, db::replay_position>>>
 db::commitlog::read_log_file(const sstring& filename, commit_load_reader_func next, position_type off) {
-    return open_checked_file_dma(commit_error, filename, open_flags::ro).then([next = std::move(next), off](file f) {
+    return open_checked_file_dma(commit_error_handler, filename, open_flags::ro).then([next = std::move(next), off](file f) {
        return std::make_unique<subscription<temporary_buffer<char>, replay_position>>(
            read_log_file(std::move(f), std::move(next), off));
     });

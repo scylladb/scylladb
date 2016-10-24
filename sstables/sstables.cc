@@ -56,7 +56,6 @@
 #include "range_tombstone_list.hh"
 
 #include "checked-file-impl.hh"
-#include "disk-error-handler.hh"
 #include "service/storage_service.hh"
 
 thread_local disk_error_signal_type sstable_read_error;
@@ -66,15 +65,16 @@ namespace sstables {
 
 logging::logger sstlog("sstable");
 
-future<file> new_sstable_component_file(disk_error_signal_type& signal, sstring name, open_flags flags) {
-    return open_checked_file_dma(signal, name, flags).handle_exception([name] (auto ep) {
+future<file> new_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags) {
+    return open_checked_file_dma(error_handler, name, flags).handle_exception([name] (auto ep) {
         sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
         return make_exception_future<file>(ep);
     });
 }
 
-future<file> new_sstable_component_file(disk_error_signal_type& signal, sstring name, open_flags flags, file_open_options options) {
-    return open_checked_file_dma(signal, name, flags, options).handle_exception([name] (auto ep) {
+future<file> new_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags,
+        file_open_options options) {
+    return open_checked_file_dma(error_handler, name, flags, options).handle_exception([name] (auto ep) {
         sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
         return make_exception_future<file>(ep);
     });
@@ -717,7 +717,7 @@ future<> sstable::read_toc() {
 
     sstlog.debug("Reading TOC file {} ", file_path);
 
-    return open_checked_file_dma(sstable_read_error, file_path, open_flags::ro).then([this, file_path] (file f) {
+    return open_checked_file_dma(_read_error_handler, file_path, open_flags::ro).then([this, file_path] (file f) {
         auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
         auto buf = bufptr.get();
 
@@ -792,7 +792,7 @@ void sstable::write_toc(const io_priority_class& pc) {
     // If creation of temporary TOC failed, it implies that that boot failed to
     // delete a sstable with temporary for this column family, or there is a
     // sstable being created in parallel with the same generation.
-    file f = new_sstable_component_file(sstable_write_error, file_path, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
+    file f = new_sstable_component_file(_write_error_handler, file_path, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
 
     bool toc_exists = file_exists(filename(sstable::component_type::TOC)).get0();
     if (toc_exists) {
@@ -819,7 +819,7 @@ void sstable::write_toc(const io_priority_class& pc) {
 
     // Flushing parent directory to guarantee that temporary TOC file reached
     // the disk.
-    file dir_f = open_checked_directory(sstable_write_error, _dir).get0();
+    file dir_f = open_checked_directory(_write_error_handler, _dir).get0();
     sstable_write_io_check([&] {
         dir_f.flush().get();
         dir_f.close().get();
@@ -829,7 +829,7 @@ void sstable::write_toc(const io_priority_class& pc) {
 future<> sstable::seal_sstable() {
     // SSTable sealing is about renaming temporary TOC file after guaranteeing
     // that each component reached the disk safely.
-    return open_checked_directory(sstable_write_error, _dir).then([this] (file dir_f) {
+    return open_checked_directory(_write_error_handler, _dir).then([this] (file dir_f) {
         // Guarantee that every component of this sstable reached the disk.
         return sstable_write_io_check([&] { return dir_f.flush(); }).then([this] {
             // Rename TOC because it's no longer temporary.
@@ -848,11 +848,11 @@ future<> sstable::seal_sstable() {
     });
 }
 
-void write_crc(const sstring file_path, checksum& c) {
+void write_crc(io_error_handler& error_handler, const sstring file_path, checksum& c) {
     sstlog.debug("Writing CRC file {} ", file_path);
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    file f = new_sstable_component_file(sstable_write_error, file_path, oflags).get0();
+    file f = new_sstable_component_file(error_handler, file_path, oflags).get0();
 
     file_output_stream_options options;
     options.buffer_size = 4096;
@@ -862,11 +862,11 @@ void write_crc(const sstring file_path, checksum& c) {
 }
 
 // Digest file stores the full checksum of data file converted into a string.
-void write_digest(const sstring file_path, uint32_t full_checksum) {
+void write_digest(io_error_handler& error_handler, const sstring file_path, uint32_t full_checksum) {
     sstlog.debug("Writing Digest file {} ", file_path);
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    auto f = new_sstable_component_file(sstable_write_error, file_path, oflags).get0();
+    auto f = new_sstable_component_file(error_handler, file_path, oflags).get0();
 
     file_output_stream_options options;
     options.buffer_size = 4096;
@@ -898,7 +898,7 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
     auto file_path = filename(Type);
     sstlog.debug(("Reading " + _component_map[Type] + " file {} ").c_str(), file_path);
     return open_file_dma(file_path, open_flags::ro).then([this, &component] (file fi) {
-        auto f = make_checked_file(sstable_read_error, fi);
+        auto f = make_checked_file(_read_error_handler, fi);
         auto r = make_lw_shared<file_random_access_reader>(std::move(f), sstable_buffer_size);
         auto fut = parse(*r, component);
         return fut.finally([r = std::move(r)] {
@@ -919,7 +919,7 @@ template <sstable::component_type Type, typename T>
 void sstable::write_simple(T& component, const io_priority_class& pc) {
     auto file_path = filename(Type);
     sstlog.debug(("Writing " + _component_map[Type] + " file {} ").c_str(), file_path);
-    file f = new_sstable_component_file(sstable_write_error, file_path, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
+    file f = new_sstable_component_file(_write_error_handler, file_path, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
 
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
@@ -1039,7 +1039,7 @@ void sstable::write_statistics(const io_priority_class& pc) {
 void sstable::rewrite_statistics(const io_priority_class& pc) {
     auto file_path = filename(component_type::TemporaryStatistics);
     sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
-    file f = new_sstable_component_file(sstable_write_error, file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
+    file f = new_sstable_component_file(_write_error_handler, file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
 
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
@@ -1072,8 +1072,8 @@ future<> sstable::read_summary(const io_priority_class& pc) {
 }
 
 future<> sstable::open_data() {
-    return when_all(open_checked_file_dma(sstable_read_error, filename(component_type::Index), open_flags::ro),
-                    open_checked_file_dma(sstable_read_error, filename(component_type::Data), open_flags::ro))
+    return when_all(open_checked_file_dma(_read_error_handler, filename(component_type::Index), open_flags::ro),
+                    open_checked_file_dma(_read_error_handler, filename(component_type::Data), open_flags::ro))
                     .then([this] (auto files) {
         _index_file = std::get<file>(std::get<0>(files).get());
         _data_file  = std::get<file>(std::get<1>(files).get());
@@ -1094,7 +1094,7 @@ future<> sstable::open_data() {
             // Get disk usage for this sstable (includes all components).
             _bytes_on_disk = 0;
             return do_for_each(_components, [this] (component_type c) {
-                return sstable_write_io_check([&] {
+                return this->sstable_write_io_check([&] {
                     return engine().file_size(this->filename(c));
                 }).then([this] (uint64_t bytes) {
                     _bytes_on_disk += bytes;
@@ -1110,8 +1110,8 @@ future<> sstable::create_data() {
     file_open_options opt;
     opt.extent_allocation_size_hint = 32 << 20;
     opt.sloppy_size = true;
-    return when_all(new_sstable_component_file(sstable_write_error, filename(component_type::Index), oflags, opt),
-                    new_sstable_component_file(sstable_write_error, filename(component_type::Data), oflags, opt)).then([this] (auto files) {
+    return when_all(new_sstable_component_file(_write_error_handler, filename(component_type::Index), oflags, opt),
+                    new_sstable_component_file(_write_error_handler, filename(component_type::Data), oflags, opt)).then([this] (auto files) {
         // FIXME: If both files could not be created, the first get below will
         // throw an exception, and second get() will not be attempted, and
         // we'll get a warning about the second future being destructed
@@ -1788,10 +1788,10 @@ void sstable_writer::finish_file_writer()
 
     if (!_compression_enabled) {
         auto chksum_wr = static_pointer_cast<checksummed_file_writer>(_writer);
-        write_digest(_sst.filename(sstable::component_type::Digest), chksum_wr->full_checksum());
-        write_crc(_sst.filename(sstable::component_type::CRC), chksum_wr->finalize_checksum());
+        write_digest(_sst._write_error_handler, _sst.filename(sstable::component_type::Digest), chksum_wr->full_checksum());
+        write_crc(_sst._write_error_handler, _sst.filename(sstable::component_type::CRC), chksum_wr->finalize_checksum());
     } else {
-        write_digest(_sst.filename(sstable::component_type::Digest), _sst._compression.full_checksum());
+        write_digest(_sst._write_error_handler, _sst.filename(sstable::component_type::Digest), _sst._compression.full_checksum());
     }
 }
 
@@ -1878,7 +1878,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
         }
     };
 
-    return open_checked_file_dma(sstable_read_error, filename(component_type::Index), open_flags::ro).then([this, &pc] (file index_file) {
+    return open_checked_file_dma(_read_error_handler, filename(component_type::Index), open_flags::ro).then([this, &pc] (file index_file) {
         return do_with(std::move(index_file), [this, &pc] (file index_file) {
             return index_file.size().then([this, &pc, index_file] (auto size) {
                 // an upper bound. Surely to be less than this.
@@ -1961,7 +1961,7 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
 future<> sstable::create_links(sstring dir, int64_t generation) const {
     // TemporaryTOC is always first, TOC is always last
     auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
-    return sstable_write_io_check(::link_file, filename(component_type::TOC), dst).then([dir] {
+    return sstable_write_io_check(::link_file, filename(component_type::TOC), dst).then([this, dir] {
         return sstable_write_io_check(sync_directory, dir);
     }).then([this, dir, generation] {
         // FIXME: Should clean already-created links if we failed midway.
@@ -1970,9 +1970,9 @@ future<> sstable::create_links(sstring dir, int64_t generation) const {
                 return make_ready_future<>();
             }
             auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, comp);
-            return sstable_write_io_check(::link_file, this->filename(comp), dst);
+            return this->sstable_write_io_check(::link_file, this->filename(comp), dst);
         });
-    }).then([dir] {
+    }).then([this, dir] {
         return sstable_write_io_check(sync_directory, dir);
     }).then([dir, this, generation] {
         auto src = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
@@ -1980,7 +1980,7 @@ future<> sstable::create_links(sstring dir, int64_t generation) const {
         return sstable_write_io_check([&] {
             return engine().rename_file(src, dst);
         });
-    }).then([dir] {
+    }).then([this, dir] {
         return sstable_write_io_check(sync_directory, dir);
     });
 }
@@ -2220,9 +2220,9 @@ dirname(sstring fname) {
 }
 
 future<>
-fsync_directory(sstring fname) {
-    return sstable_write_io_check([&] {
-        return open_checked_directory(sstable_write_error ,dirname(fname)).then([] (file f) {
+fsync_directory(const io_error_handler& error_handler, sstring fname) {
+    return ::sstable_io_check(error_handler, [&] {
+        return open_checked_directory(error_handler, dirname(fname)).then([] (file f) {
             return do_with(std::move(f), [] (file& f) {
                 return f.flush();
             });
@@ -2231,21 +2231,21 @@ fsync_directory(sstring fname) {
 }
 
 future<>
-remove_by_toc_name(sstring sstable_toc_name) {
-    return seastar::async([sstable_toc_name] {
+remove_by_toc_name(sstring sstable_toc_name, const io_error_handler& error_handler) {
+    return seastar::async([sstable_toc_name, &error_handler] () mutable {
         sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - TOC_SUFFIX.size());
         auto new_toc_name = prefix + TEMPORARY_TOC_SUFFIX;
         sstring dir;
 
-        if (sstable_write_io_check(file_exists, sstable_toc_name).get0()) {
+        if (sstable_io_check(error_handler, file_exists, sstable_toc_name).get0()) {
             dir = dirname(sstable_toc_name);
-            sstable_write_io_check(rename_file, sstable_toc_name, new_toc_name).get();
-            sstable_write_io_check(fsync_directory, dir).get();
+            sstable_io_check(error_handler, rename_file, sstable_toc_name, new_toc_name).get();
+            fsync_directory(error_handler, dir).get();
         } else {
             dir = dirname(new_toc_name);
         }
 
-        auto toc_file = open_checked_file_dma(sstable_read_error, new_toc_name, open_flags::ro).get0();
+        auto toc_file = open_checked_file_dma(error_handler, new_toc_name, open_flags::ro).get0();
         auto in = make_file_input_stream(toc_file);
         auto size = toc_file.size().get0();
         auto text = in.read_exactly(size).get0();
@@ -2253,7 +2253,7 @@ remove_by_toc_name(sstring sstable_toc_name) {
         std::vector<sstring> components;
         sstring all(text.begin(), text.end());
         boost::split(components, all, boost::is_any_of("\n"));
-        parallel_for_each(components, [prefix] (sstring component) {
+        parallel_for_each(components, [prefix, &error_handler] (sstring component) mutable {
             if (component.empty()) {
                 // eof
                 return make_ready_future<>();
@@ -2263,7 +2263,7 @@ remove_by_toc_name(sstring sstable_toc_name) {
                 return make_ready_future<>();
             }
             auto fname = prefix + component;
-            return sstable_write_io_check(remove_file, prefix + component).then_wrapped([fname = std::move(fname)] (future<> f) {
+            return sstable_io_check(error_handler, remove_file, prefix + component).then_wrapped([fname = std::move(fname)] (future<> f) {
                 // forgive ENOENT, since the component may not have been written;
                 try {
                     f.get();
@@ -2276,8 +2276,8 @@ remove_by_toc_name(sstring sstable_toc_name) {
                 return make_ready_future<>();
             });
         }).get();
-        sstable_write_io_check(fsync_directory, dir).get();
-        sstable_write_io_check(remove_file, new_toc_name).get();
+        fsync_directory(error_handler, dir).get();
+        sstable_io_check(error_handler, remove_file, new_toc_name).get();
     });
 }
 
@@ -2288,7 +2288,7 @@ sstable::mark_for_deletion_on_disk() {
     auto toc_name = filename(component_type::TOC);
     auto shard = std::hash<sstring>()(toc_name) % smp::count;
 
-    return smp::submit_to(shard, [toc_name] {
+    return smp::submit_to(shard, [this, toc_name] {
         static thread_local std::unordered_set<sstring> renaming;
 
         if (renaming.count(toc_name) > 0) {
@@ -2297,17 +2297,17 @@ sstable::mark_for_deletion_on_disk() {
 
         renaming.emplace(toc_name);
 
-        return seastar::async([toc_name] {
+        return seastar::async([this, toc_name] {
             if (!sstable_write_io_check(file_exists, toc_name).get0()) {
                 return; // already gone
             }
 
             auto dir = dirname(toc_name);
-            auto toc_file = open_checked_file_dma(sstable_read_error, toc_name, open_flags::ro).get0();
+            auto toc_file = open_checked_file_dma(_read_error_handler, toc_name, open_flags::ro).get0();
             sstring prefix = toc_name.substr(0, toc_name.size() - TOC_SUFFIX.size());
             auto new_toc_name = prefix + TEMPORARY_TOC_SUFFIX;
             sstable_write_io_check(rename_file, toc_name, new_toc_name).get();
-            sstable_write_io_check(fsync_directory, dir).get();
+            fsync_directory(_write_error_handler, dir).get();
         }).finally([toc_name] {
             renaming.erase(toc_name);
         });
@@ -2317,11 +2317,12 @@ sstable::mark_for_deletion_on_disk() {
 future<>
 sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f) {
     return seastar::async([ks, cf, dir, generation, v, f] {
-        auto toc = sstable_write_io_check(file_exists, filename(dir, ks, cf, v, generation, f, component_type::TOC)).get0();
+        const io_error_handler& error_handler = sstable_write_error_handler;
+        auto toc = sstable_io_check(error_handler, file_exists, filename(dir, ks, cf, v, generation, f, component_type::TOC)).get0();
         // assert that toc doesn't exist for sstable with temporary toc.
         assert(toc == false);
 
-        auto tmptoc = sstable_write_io_check(file_exists, filename(dir, ks, cf, v, generation, f, component_type::TemporaryTOC)).get0();
+        auto tmptoc = sstable_io_check(error_handler, file_exists, filename(dir, ks, cf, v, generation, f, component_type::TemporaryTOC)).get0();
         // assert that temporary toc exists for this sstable.
         assert(tmptoc == true);
 
@@ -2341,17 +2342,17 @@ sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64
 
             auto file_path = filename(dir, ks, cf, v, generation, f, entry.first);
             // Skip component that doesn't exist.
-            auto exists = sstable_write_io_check(file_exists, file_path).get0();
+            auto exists = sstable_io_check(error_handler, file_exists, file_path).get0();
             if (!exists) {
                 continue;
             }
-            sstable_write_io_check(remove_file, file_path).get();
+            sstable_io_check(error_handler, remove_file, file_path).get();
         }
-        sstable_write_io_check(fsync_directory, dir).get();
+        fsync_directory(error_handler, dir).get();
         // Removing temporary
-        sstable_write_io_check(remove_file, filename(dir, ks, cf, v, generation, f, component_type::TemporaryTOC)).get();
+        sstable_io_check(error_handler, remove_file, filename(dir, ks, cf, v, generation, f, component_type::TemporaryTOC)).get();
         // Fsync'ing column family dir to guarantee that deletion completed.
-        sstable_write_io_check(fsync_directory, dir).get();
+        fsync_directory(error_handler, dir).get();
     });
 }
 
