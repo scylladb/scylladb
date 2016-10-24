@@ -191,8 +191,8 @@ static double update_ratio(double acc, double f, double total) {
     return acc;
 }
 
-static ratio_holder mean_row_size(column_family& cf) {
-    ratio_holder res;
+static integral_ratio_holder mean_row_size(column_family& cf) {
+    integral_ratio_holder res;
     for (auto i: *cf.get_sstables() ) {
         auto c = i->get_stats_metadata().estimated_row_size.count();
         res.sub += i->get_stats_metadata().estimated_row_size.mean() * c;
@@ -562,11 +562,13 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_mean_row_size.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], ratio_holder(), mean_row_size, std::plus<ratio_holder>());
+        // Cassandra 3.x mean values are truncated as integrals.
+        return map_reduce_cf(ctx, req->param["name"], integral_ratio_holder(), mean_row_size, std::plus<integral_ratio_holder>());
     });
 
     cf::get_all_mean_row_size.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, ratio_holder(), mean_row_size, std::plus<ratio_holder>());
+        // Cassandra 3.x mean values are truncated as integrals.
+        return map_reduce_cf(ctx, integral_ratio_holder(), mean_row_size, std::plus<integral_ratio_holder>());
     });
 
     cf::get_bloom_filter_false_positives.set(r, [&ctx] (std::unique_ptr<request> req) {
