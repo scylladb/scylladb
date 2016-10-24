@@ -42,6 +42,7 @@
 #include <boost/locale/encoding_utf.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
 #include "utils/big_decimal.hh"
+#include "utils/date.h"
 
 template<typename T>
 sstring time_point_to_string(const T& tp)
@@ -62,6 +63,7 @@ static const char* boolean_type_name   = "org.apache.cassandra.db.marshal.Boolea
 static const char* timeuuid_type_name  = "org.apache.cassandra.db.marshal.TimeUUIDType";
 static const char* timestamp_type_name = "org.apache.cassandra.db.marshal.TimestampType";
 static const char* date_type_name      = "org.apache.cassandra.db.marshal.DateType";
+static const char* simple_date_type_name = "org.apache.cassandra.db.marshal.SimpleDateType";
 static const char* uuid_type_name      = "org.apache.cassandra.db.marshal.UUIDType";
 static const char* inet_addr_type_name = "org.apache.cassandra.db.marshal.InetAddressType";
 static const char* double_type_name    = "org.apache.cassandra.db.marshal.DoubleType";
@@ -768,6 +770,98 @@ public:
     }
 };
 logging::logger timestamp_type_impl::_logger(timestamp_type_name);
+
+struct simple_date_type_impl : public simple_type_impl<uint32_t> {
+    simple_date_type_impl() : simple_type_impl{simple_date_type_name}
+    { }
+    virtual void serialize(const void* value, bytes::iterator& out) const override {
+        if (!value) {
+            return;
+        }
+        auto&& v1 = from_value(value);
+        if (v1.empty()) {
+            return;
+        }
+        uint32_t v = v1.get();
+        v = net::hton(v);
+        out = std::copy_n(reinterpret_cast<const char*>(&v), sizeof(v), out);
+
+    }
+    virtual size_t serialized_size(const void* value) const override {
+        if (!value || from_value(value).empty()) {
+            return 0;
+        }
+        return 4;
+    }
+    virtual data_value deserialize(bytes_view in) const override {
+        if (in.empty()) {
+            return make_empty();
+        }
+        auto v = read_simple_exactly<uint32_t>(in);
+        return make_value(v);
+    }
+    virtual void validate(bytes_view v) const override {
+        if (v.size() != 0 && v.size() != 4) {
+            throw marshal_exception(sprint("Expected 4 byte long for date (%d)", v.size()));
+        }
+    }
+    virtual bytes from_string(sstring_view s) const override {
+        if (s.empty()) {
+            return bytes();
+        }
+        uint32_t ts = net::hton(days_from_string(s));
+        bytes b(bytes::initialized_later(), sizeof(int32_t));
+        std::copy_n(reinterpret_cast<const int8_t*>(&ts), sizeof(ts), b.begin());
+        return b;
+    }
+    static uint32_t days_from_string(sstring_view s) {
+        std::string str;
+        str.resize(s.size());
+        std::transform(s.begin(), s.end(), str.begin(), ::tolower);
+        char* end;
+        auto v = std::strtoll(s.begin(), &end, 10);
+        if (end == s.begin() + s.size()) {
+            return v;
+        }
+        static std::regex date_re("^(-?\\d+)-(\\d+)-(\\d+)");
+        std::smatch dsm;
+        if (!std::regex_match(str, dsm, date_re)) {
+            throw marshal_exception(sprint("Unable to coerce '%s' to a formatted date (long)", str));
+        }
+        auto t = get_time(dsm);
+        return serialize(str, date::local_days(t).time_since_epoch().count());
+    }
+    static date::year_month_day get_time(const std::smatch& sm) {
+        auto year = boost::lexical_cast<long>(sm[1]);
+        auto month = boost::lexical_cast<unsigned>(sm[2]);
+        auto day = boost::lexical_cast<unsigned>(sm[3]);
+        return date::year_month_day{date::year{year}, date::month{month}, date::day{day}};
+    }
+    static uint32_t serialize(const std::string& input, int64_t days) {
+        if (days < std::numeric_limits<int32_t>::min()) {
+            throw marshal_exception(sprint("Input date %s is less than min supported date -5877641-06-23", input));
+        }
+        if (days > std::numeric_limits<int32_t>::max()) {
+            throw marshal_exception(sprint("Input date %s is greater than max supported date 5881580-07-11", input));
+        }
+        days += 1UL << 31;
+        return static_cast<uint32_t>(days);
+    }
+    virtual sstring to_string(const bytes& b) const override {
+        auto v = deserialize(b);
+        if (v.is_null()) {
+            return "";
+        }
+        date::days days{from_value(v).get() - (1UL << 31)};
+        date::year_month_day ymd{date::local_days{days}};
+        std::ostringstream str;
+        str << ymd;
+        return str.str();
+    }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
+        return cql3::cql3_type::date;
+    }
+};
 
 struct uuid_type_impl : concrete_type<utils::UUID> {
     uuid_type_impl() : concrete_type(uuid_type_name) {}
@@ -2859,6 +2953,7 @@ thread_local const shared_ptr<const abstract_type> boolean_type(make_shared<bool
 thread_local const shared_ptr<const abstract_type> date_type(make_shared<date_type_impl>());
 thread_local const shared_ptr<const abstract_type> timeuuid_type(make_shared<timeuuid_type_impl>());
 thread_local const shared_ptr<const abstract_type> timestamp_type(make_shared<timestamp_type_impl>());
+thread_local const shared_ptr<const abstract_type> simple_date_type(make_shared<simple_date_type_impl>());
 thread_local const shared_ptr<const abstract_type> uuid_type(make_shared<uuid_type_impl>());
 thread_local const shared_ptr<const abstract_type> inet_addr_type(make_shared<inet_addr_type_impl>());
 thread_local const shared_ptr<const abstract_type> float_type(make_shared<float_type_impl>());
@@ -2882,6 +2977,7 @@ data_type abstract_type::parse_type(const sstring& name)
         { date_type_name,      date_type      },
         { timeuuid_type_name,  timeuuid_type  },
         { timestamp_type_name, timestamp_type },
+        { simple_date_type_name, simple_date_type },
         { uuid_type_name,      uuid_type      },
         { inet_addr_type_name, inet_addr_type },
         { float_type_name,     float_type     },

@@ -97,7 +97,8 @@ constants::literal::test_assignment(database& db, const sstring& keyspace, ::sha
                     cql3_type::kind::TEXT,
                     cql3_type::kind::INET,
                     cql3_type::kind::VARCHAR,
-                    cql3_type::kind::TIMESTAMP>::contains(kind)) {
+                    cql3_type::kind::TIMESTAMP,
+                    cql3_type::kind::DATE>::contains(kind)) {
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
             }
             break;
@@ -111,6 +112,7 @@ constants::literal::test_assignment(database& db, const sstring& keyspace, ::sha
                     cql3_type::kind::INT,
                     cql3_type::kind::SMALLINT,
                     cql3_type::kind::TIMESTAMP,
+                    cql3_type::kind::DATE,
                     cql3_type::kind::TINYINT,
                     cql3_type::kind::VARINT>::contains(kind)) {
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;

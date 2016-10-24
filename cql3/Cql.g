@@ -1473,6 +1473,7 @@ native_type returns [shared_ptr<cql3_type> t]
     | K_VARCHAR   { $t = cql3_type::varchar; }
     | K_VARINT    { $t = cql3_type::varint; }
     | K_TIMEUUID  { $t = cql3_type::timeuuid; }
+    | K_DATE      { $t = cql3_type::date; }
     ;
 
 collection_type returns [shared_ptr<cql3::cql3_type::raw> pt]
@@ -1655,6 +1656,7 @@ K_VARINT:      V A R I N T;
 K_TIMEUUID:    T I M E U U I D;
 K_TOKEN:       T O K E N;
 K_WRITETIME:   W R I T E T I M E;
+K_DATE:        D A T E;
 
 K_NULL:        N U L L;
 K_NOT:         N O T;

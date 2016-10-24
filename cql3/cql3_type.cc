@@ -280,6 +280,7 @@ thread_local shared_ptr<cql3_type> cql3_type::tinyint = make("tinyint", byte_typ
 thread_local shared_ptr<cql3_type> cql3_type::uuid = make("uuid", uuid_type, cql3_type::kind::UUID);
 thread_local shared_ptr<cql3_type> cql3_type::varchar = make("varchar", utf8_type, cql3_type::kind::TEXT);
 thread_local shared_ptr<cql3_type> cql3_type::timeuuid = make("timeuuid", timeuuid_type, cql3_type::kind::TIMEUUID);
+thread_local shared_ptr<cql3_type> cql3_type::date = make("date", simple_date_type, cql3_type::kind::DATE);
 thread_local shared_ptr<cql3_type> cql3_type::inet = make("inet", inet_addr_type, cql3_type::kind::INET);
 thread_local shared_ptr<cql3_type> cql3_type::varint = make("varint", varint_type, cql3_type::kind::VARINT);
 thread_local shared_ptr<cql3_type> cql3_type::decimal = make("decimal", decimal_type, cql3_type::kind::DECIMAL);
@@ -306,6 +307,7 @@ cql3_type::values() {
         cql3_type::varchar,
         cql3_type::varint,
         cql3_type::timeuuid,
+        cql3_type::date,
     };
     return v;
 }
