@@ -388,7 +388,7 @@ public:
     proceed flush_if_needed(bool is_static, position_in_partition&& pos) {
         position_in_partition::equal_compare eq(*_schema);
         proceed ret = proceed::yes;
-        if (_in_progress && !eq(*_in_progress, pos)) {
+        if (_in_progress && !eq(_in_progress->position(), pos)) {
             ret = _skip_clustering_row ? proceed::yes : proceed::no;
             flush();
         }
@@ -701,18 +701,18 @@ private:
                     // If sstable uses promoted index it will repeat relevant range tombstones in
                     // each block. Do not emit these duplicates as they will break the guarantee
                     // that mutation fragment are produced in ascending order.
-                    if (!_last_position || !_cmp(*mf, *_last_position)) {
-                        _last_position = mf->position();
+                    if (!_last_position || !_cmp(mf->position(), *_last_position)) {
+                        _last_position = position_in_partition(mf->position());
                         _range_tombstones.apply(std::move(mf->as_range_tombstone()));
                     }
                 } else {
                     // mp_row_consumer may produce mutation_fragments in parts if they are
                     // interrupted by range tombstone duplicate. Make sure they are merged
                     // before emitting them.
-                    _last_position = mf->position();
+                    _last_position = position_in_partition(mf->position());
                     if (!_current_candidate) {
                         _current_candidate = std::move(mf);
-                    } else if (_current_candidate && _eq(*_current_candidate, *mf)) {
+                    } else if (_current_candidate && _eq(_current_candidate->position(), mf->position())) {
                         _current_candidate->apply(*_schema, std::move(*mf));
                     } else {
                         _next_candidate = std::move(mf);

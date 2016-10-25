@@ -20,6 +20,7 @@
  */
 
 #include "range_tombstone.hh"
+#include "streamed_mutation.hh"
 
 std::ostream& operator<<(std::ostream& out, const range_tombstone& rt) {
     if (rt) {
@@ -46,6 +47,10 @@ stdx::optional<range_tombstone> range_tombstone::apply(const schema& s, range_to
         return range_tombstone(end, invert_kind(end_kind), std::move(src.end), src.end_kind, src.tomb);
     }
     return { };
+}
+
+position_in_partition_view range_tombstone::position() const {
+    return position_in_partition_view(position_in_partition_view::range_tombstone_tag_t(), start_bound());
 }
 
 void range_tombstone_accumulator::update_current_tombstone() {

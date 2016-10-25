@@ -1247,9 +1247,9 @@ SEASTAR_TEST_CASE(test_mvcc) {
             auto mf = (*sm3)().get0();
             while (mf) {
                 if (previous) {
-                    BOOST_REQUIRE(cmp(*previous, *mf));
+                    BOOST_REQUIRE(cmp(*previous, mf->position()));
                 }
-                previous = mf->position();
+                previous = position_in_partition(mf->position());
                 mf = (*sm3)().get0();
             }
             sm3 = { };

@@ -286,11 +286,26 @@ class partition_snapshot_reader : public streamed_mutation::impl, public MemoryA
     };
 
     class heap_compare {
-        position_in_partition::less_compare& _cmp;
+        rows_entry::compare _cmp;
     public:
-        explicit heap_compare(position_in_partition::less_compare cmp) : _cmp(cmp) { }
+        explicit heap_compare(const schema& s) : _cmp(s) { }
         bool operator()(const rows_position& a, const rows_position& b) {
             return _cmp(*b._position, *a._position);
+        }
+    };
+    class rows_entry_compare {
+        position_in_partition::less_compare _cmp;
+    public:
+        explicit rows_entry_compare(const schema& s) : _cmp(s) { }
+        bool operator()(const rows_entry& a, const position_in_partition& b) {
+            position_in_partition_view a_view(position_in_partition_view::clustering_row_tag_t(),
+                                              a.key());
+            return _cmp(a_view, b);
+        }
+        bool operator()(const position_in_partition& a, const rows_entry& b) {
+            position_in_partition_view b_view(position_in_partition_view::clustering_row_tag_t(),
+                                              b.key());
+            return _cmp(a, b_view);
         }
     };
 private:
@@ -303,8 +318,9 @@ private:
     query::clustering_row_ranges::const_iterator _ck_range_end;
     bool _in_ck_range = false;
 
-    position_in_partition::less_compare _cmp;
-    position_in_partition::equal_compare _eq;
+    rows_entry_compare _cmp;
+    clustering_key_prefix::equality _eq;
+    heap_compare _heap_cmp;
 
     lw_shared_ptr<partition_snapshot> _snapshot;
     stdx::optional<position_in_partition> _last_entry;
@@ -346,7 +362,7 @@ private:
         }
 
         _in_ck_range = true;
-        boost::range::make_heap(_clustering_rows, heap_compare(_cmp));
+        boost::range::make_heap(_clustering_rows, _heap_cmp);
     }
 
     void pop_clustering_row() {
@@ -355,7 +371,7 @@ private:
         if (current._position == current._end) {
             _clustering_rows.pop_back();
         } else {
-            boost::range::push_heap(_clustering_rows, heap_compare(_cmp));
+            boost::range::push_heap(_clustering_rows, _heap_cmp);
         }
     }
 
@@ -381,16 +397,16 @@ private:
                 return mf;
             }
 
-            boost::range::pop_heap(_clustering_rows, heap_compare(_cmp));
+            boost::range::pop_heap(_clustering_rows, _heap_cmp);
             clustering_row result = *_clustering_rows.back()._position;
             pop_clustering_row();
-            while (!_clustering_rows.empty() && _eq(*_clustering_rows.front()._position, result)) {
-                boost::range::pop_heap(_clustering_rows, heap_compare(_cmp));
+            while (!_clustering_rows.empty() && _eq(_clustering_rows.front()._position->key(), result.key())) {
+                boost::range::pop_heap(_clustering_rows, _heap_cmp);
                 auto& current = _clustering_rows.back();
                 result.apply(*_schema, *current._position);
                 pop_clustering_row();
             }
-            _last_entry = result.position();
+            _last_entry = position_in_partition(result.position());
             return mutation_fragment(std::move(result));
         }
         return _range_tombstones.get_next();
@@ -453,6 +469,7 @@ public:
     , _ck_range_end(_ck_ranges.end())
     , _cmp(*s)
     , _eq(*s)
+    , _heap_cmp(*s)
     , _snapshot(snp)
     , _range_tombstones(*s)
     , _lsa_region(region)

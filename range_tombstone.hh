@@ -32,6 +32,8 @@
 namespace bi = boost::intrusive;
 namespace stdx = std::experimental;
 
+class position_in_partition_view;
+
 /**
  * Represents a ranged deletion operation. Can be empty.
  */
@@ -90,6 +92,7 @@ public:
     const bound_view end_bound() const {
         return bound_view(end, end_kind);
     }
+    position_in_partition_view position() const;
     bool empty() const {
         return !bool(tomb);
     }

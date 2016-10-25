@@ -39,7 +39,7 @@ namespace stdx = std::experimental;
 // mutation_fragment objects. It reflects the order in which content of
 // partition appears in the sstables.
 
-class position_in_partition;
+class position_in_partition_view;
 
 class clustering_row {
     clustering_key_prefix _ck;
@@ -88,7 +88,7 @@ public:
         _cells.apply(s, column_kind::regular_column, r.row().cells());
     }
 
-    position_in_partition position() const;
+    position_in_partition_view position() const;
 
     size_t memory_usage() const {
         return _ck.memory_usage() + _cells.memory_usage();
@@ -119,7 +119,7 @@ public:
         _cells.apply(def, std::move(value));
     }
 
-    position_in_partition position() const;
+    position_in_partition_view position() const;
 
     size_t memory_usage() const {
         return _cells.memory_usage();
@@ -151,8 +151,6 @@ private:
     void destroy_data() noexcept;
     friend class optimized_optional<mutation_fragment>;
 
-    int row_type_weight() const { return !is_static_row(); }
-    int bound_kind_weight() const;
     friend class position_in_partition;
 public:
     mutation_fragment(static_row&& r);
@@ -175,7 +173,7 @@ public:
         }
     }
 
-    position_in_partition position() const;
+    position_in_partition_view position() const;
 
     bool has_key() const { return !is_static_row(); }
     // Requirements: has_key() == true
@@ -251,13 +249,28 @@ public:
 
 std::ostream& operator<<(std::ostream&, mutation_fragment::kind);
 
+class position_in_partition;
+
+class position_in_partition_view {
+    friend position_in_partition;
+
+    int _bound_weight = 0;
+    const clustering_key_prefix* _ck; // nullptr for static row
+public:
+    struct static_row_tag_t { };
+    struct clustering_row_tag_t { };
+    struct range_tombstone_tag_t { };
+
+    explicit position_in_partition_view(static_row_tag_t) : _ck(nullptr) { }
+    position_in_partition_view(clustering_row_tag_t, const clustering_key_prefix& ck)
+        : _ck(&ck) { }
+    position_in_partition_view(range_tombstone_tag_t, bound_view bv)
+        : _bound_weight(weight(bv.kind)), _ck(&bv.prefix) { }
+};
+
 class position_in_partition {
     int _bound_weight = 0;
     stdx::optional<clustering_key_prefix> _ck;
-private:
-    // 0 for static row, 1 for clustering row and range tombstones begin/end
-    int row_type_weight() const { return !!_ck; }
-    int bound_kind_weight() const { return _bound_weight; }
 public:
     struct static_row_tag_t { };
     struct clustering_row_tag_t { };
@@ -268,6 +281,13 @@ public:
         : _ck(std::move(ck)) { }
     position_in_partition(range_tombstone_tag_t, bound_view bv)
         : _bound_weight(weight(bv.kind)), _ck(bv.prefix) { }
+    explicit position_in_partition(position_in_partition_view view)
+        : _bound_weight(view._bound_weight)
+        {
+            if (view._ck) {
+                _ck = *view._ck;
+            }
+        }
 
     clustering_key_prefix& key() {
         return *_ck;
@@ -281,94 +301,63 @@ public:
     private:
         template<typename T, typename U>
         bool compare(const T& a, const U& b) const {
-            auto a_rt_weight = a.row_type_weight();
-            auto b_rt_weight = b.row_type_weight();
+            bool a_rt_weight = bool(a._ck);
+            bool b_rt_weight = bool(b._ck);
             if (!a_rt_weight || !b_rt_weight) {
                 return a_rt_weight < b_rt_weight;
             }
-            return _cmp(a.key(), a.bound_kind_weight(), b.key(), b.bound_kind_weight());
+            return _cmp(*a._ck, a._bound_weight, *b._ck, b._bound_weight);
         }
     public:
         less_compare(const schema& s) : _cmp(s) { }
         bool operator()(const position_in_partition& a, const position_in_partition& b) const {
             return compare(a, b);
         }
-        bool operator()(const mutation_fragment& a, const mutation_fragment& b) const {
+        bool operator()(const position_in_partition_view& a, const position_in_partition_view& b) const {
             return compare(a, b);
         }
-        bool operator()(const position_in_partition& a, const mutation_fragment& b) const {
+        bool operator()(const position_in_partition& a, const position_in_partition_view& b) const {
             return compare(a, b);
         }
-        bool operator()(const mutation_fragment& a, const position_in_partition& b) const {
+        bool operator()(const position_in_partition_view& a, const position_in_partition& b) const {
             return compare(a, b);
-        }
-        bool operator()(const position_in_partition& a, const rows_entry& b) const {
-            return !a.row_type_weight() || _cmp(a.key(), a.bound_kind_weight(), b.key(), 0);
-        }
-        bool operator()(const rows_entry& a, const position_in_partition& b) const {
-            return b.row_type_weight() && _cmp(a.key(), 0, b.key(), b.bound_kind_weight());
-        }
-        bool operator()(const rows_entry& a, const rows_entry& b) const {
-            return _cmp(a.key(), 0, b.key(), 0);
-        }
-        bool operator()(const range_tombstone& a, const mutation_fragment& b) const {
-            return b.row_type_weight() && _cmp(a.start, weight(a.start_kind), b.key(), b.bound_kind_weight());
-        }
-        bool operator()(const mutation_fragment& a, const range_tombstone& b) const {
-            return !a.row_type_weight() || _cmp(a.key(), a.bound_kind_weight(), b.start, weight(b.start_kind));
-        }
-        bool operator()(const bound_view& a, const rows_entry& b) const {
-            return _cmp(a.prefix, weight(a.kind), b.key(), 0);
-        }
-        bool operator()(const rows_entry& a, const bound_view& b) const {
-            return _cmp(a.key(), 0, b.prefix, weight(b.kind));
-        }
-        bool operator()(const bound_view& a, const mutation_fragment& b) const {
-            return b.row_type_weight() && _cmp(a.prefix, weight(a.kind), b.key(), b.bound_kind_weight());
         }
     };
     class equal_compare {
         clustering_key_prefix::equality _equal;
         template<typename T, typename U>
         bool compare(const T& a, const U& b) const {
-            return a.row_type_weight() == b.row_type_weight()
-                   && (!a.row_type_weight() || (_equal(a.key(), b.key())
-                        && a.bound_kind_weight() == b.bound_kind_weight()));
+            bool a_rt_weight = bool(a._ck);
+            bool b_rt_weight = bool(b._ck);
+            return a_rt_weight == b_rt_weight
+                   && (!a_rt_weight || (_equal(*a._ck, *b._ck)
+                        && a._bound_weight == b._bound_weight));
         }
     public:
         equal_compare(const schema& s) : _equal(s) { }
         bool operator()(const position_in_partition& a, const position_in_partition& b) const {
             return compare(a, b);
         }
-        bool operator()(const mutation_fragment& a, const mutation_fragment& b) const {
+        bool operator()(const position_in_partition_view& a, const position_in_partition_view& b) const {
             return compare(a, b);
         }
-        bool operator()(const position_in_partition& a, const mutation_fragment& b) const {
+        bool operator()(const position_in_partition_view& a, const position_in_partition& b) const {
             return compare(a, b);
         }
-        bool operator()(const mutation_fragment& a, const position_in_partition& b) const {
+        bool operator()(const position_in_partition& a, const position_in_partition_view& b) const {
             return compare(a, b);
-        }
-        bool operator()(const rows_entry& a, const clustering_row& b) const {
-            return _equal(a.key(), b.key());
-        }
-        bool operator()(const clustering_row& a, const clustering_row& b) const {
-            return _equal(a.key(), b.key());
-        }
-        bool operator()(const clustering_row& a, const rows_entry& b) const {
-            return _equal(a.key(), b.key());
         }
     };
 };
 
-inline position_in_partition static_row::position() const
+inline position_in_partition_view static_row::position() const
 {
-    return position_in_partition(position_in_partition::static_row_tag_t());
+    return position_in_partition_view(position_in_partition_view::static_row_tag_t());
 }
 
-inline position_in_partition clustering_row::position() const
+inline position_in_partition_view clustering_row::position() const
 {
-    return position_in_partition(position_in_partition::clustering_row_tag_t(), _ck);
+    return position_in_partition_view(position_in_partition_view::clustering_row_tag_t(), _ck);
 }
 
 template<>
