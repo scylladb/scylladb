@@ -759,6 +759,7 @@ future<> sstable::read_toc() {
             if (e.code() == std::error_code(ENOENT, std::system_category())) {
                 throw malformed_sstable_exception(file_path + ": file not found");
             }
+            throw;
         }
     });
 
