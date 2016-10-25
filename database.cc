@@ -1144,6 +1144,12 @@ column_family::stop() {
     });
 }
 
+static io_error_handler error_handler_for_upload_dir() {
+    return [] (std::exception_ptr eptr) {
+        // do nothing about sstable exception and caller will just rethrow it.
+    };
+}
+
 future<std::vector<sstables::entry_descriptor>> column_family::flush_upload_dir() {
     struct work {
         std::map<int64_t, sstables::shared_sstable> sstables;
@@ -1158,9 +1164,9 @@ future<std::vector<sstables::entry_descriptor>> column_family::flush_upload_dir(
             if (comps.component != sstables::sstable::component_type::TOC) {
                 return make_ready_future<>();
             }
-            auto sst = make_lw_shared<sstables::sstable>(_schema,
-                                                        _config.datadir + "/upload", comps.generation,
-                                                        comps.version, comps.format);
+            auto sst = make_lw_shared<sstables::sstable>(_schema, _config.datadir + "/upload", comps.generation,
+                comps.version, comps.format, gc_clock::now(),
+                [] (disk_error_signal_type&) { return error_handler_for_upload_dir(); });
             work.sstables.emplace(comps.generation, std::move(sst));
             work.descriptors.emplace(comps.generation, std::move(comps));
             return make_ready_future<>();
@@ -1181,7 +1187,7 @@ future<std::vector<sstables::entry_descriptor>> column_family::flush_upload_dir(
                 }).then([this, &sst, gen] {
                     return sst->create_links(_config.datadir, gen);
                 }).then([&sst] {
-                    return sstables::remove_by_toc_name(sst->toc_filename());
+                    return sstables::remove_by_toc_name(sst->toc_filename(), error_handler_for_upload_dir());
                 });
             });
         }).then([&work] {
