@@ -719,7 +719,9 @@ void row_cache::do_find_or_create_entry(const dht::decorated_key& key,
                     return;
                 }
 
-                if ((!previous->_key && i == _partitions.begin()) || (previous->_key && std::prev(i)->key().equal(*_schema, *previous->_key))) {
+                if ((!previous->_key && i == _partitions.begin())
+                    || (previous->_key && i != _partitions.begin()
+                        && std::prev(i)->key().equal(*_schema, *previous->_key))) {
                     i->set_continuous(true);
                 }
             });
