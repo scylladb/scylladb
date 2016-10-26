@@ -1253,5 +1253,21 @@ future<std::vector<range_estimates>> query_size_estimates(sstring ks_name, sstri
     });
 }
 
+mutation make_size_estimates_mutation(const sstring& ks, std::vector<range_estimates> estimates) {
+    auto&& schema = db::system_keyspace::size_estimates();
+    auto timestamp = api::new_timestamp();
+    mutation m_to_apply{partition_key::from_single_value(*schema, utf8_type->decompose(ks)), schema};
+
+    for (auto&& e : estimates) {
+        auto ck = clustering_key_prefix(std::vector<bytes>{
+                utf8_type->decompose(e.schema->cf_name()), e.range_start_token, e.range_end_token});
+
+        m_to_apply.set_clustered_cell(ck, "mean_partition_size", e.mean_partition_size, timestamp);
+        m_to_apply.set_clustered_cell(ck, "partitions_count", e.partitions_count, timestamp);
+    }
+
+    return m_to_apply;
+}
+
 } // namespace system_keyspace
 } // namespace db

@@ -585,5 +585,10 @@ future<> clear_size_estimates(sstring ks_name, sstring cf_name);
  */
 future<std::vector<range_estimates>> query_size_estimates(sstring ks_name, sstring cf_name, dht::token start_token, dht::token end_token);
 
+/**
+ * Builds a mutation for SIZE_ESTIMATES_CF containing the specified estimates.
+ */
+mutation make_size_estimates_mutation(const sstring& ks, std::vector<range_estimates> estimates);
+
 } // namespace system_keyspace
 } // namespace db
