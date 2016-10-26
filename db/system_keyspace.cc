@@ -70,6 +70,7 @@
 #include "service/storage_proxy.hh"
 #include "message/messaging_service.hh"
 #include "mutation_query.hh"
+#include "db/size_estimates_virtual_reader.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -1022,6 +1023,12 @@ std::vector<schema_ptr> all_tables() {
     return r;
 }
 
+static void maybe_add_virtual_reader(schema_ptr s, database& db) {
+    if (s.get() == size_estimates().get()) {
+        db.find_column_family(s).set_virtual_reader(db::size_estimates::virtual_reader());
+    }
+}
+
 void make(database& db, bool durable, bool volatile_testing_only) {
     auto ksm = make_lw_shared<keyspace_metadata>(NAME,
             "org.apache.cassandra.locator.LocalStrategy",
@@ -1046,6 +1053,7 @@ void make(database& db, bool durable, bool volatile_testing_only) {
     auto& ks = db.find_keyspace(NAME);
     for (auto&& table : all_tables()) {
         db.add_column_family(table, ks.make_column_family_config(*table, db.get_config()));
+        maybe_add_virtual_reader(table, db);
     }
 }
 
