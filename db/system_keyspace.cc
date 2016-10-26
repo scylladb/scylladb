@@ -1242,6 +1242,7 @@ future<std::vector<range_estimates>> query_size_estimates(sstring ks_name, sstri
             auto estimate_range = range<dht::token>::make({std::move(range_start)}, {std::move(range_end)});
             if (query_range.contains(estimate_range, &dht::tri_compare)) {
                 estimates.emplace_back(range_estimates{
+                    nullptr,
                     std::move(*estimate_range.start()).value(),
                     std::move(*estimate_range.end()).value(),
                     row.get_as<int64_t>("partitions_count"),

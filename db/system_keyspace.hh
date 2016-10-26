@@ -81,6 +81,7 @@ static constexpr auto SIZE_ESTIMATES = "size_estimates";
 
 // Partition estimates for a given range of tokens.
 struct range_estimates {
+    schema_ptr schema;
     dht::token range_start_token;
     dht::token range_end_token;
     int64_t partitions_count;
