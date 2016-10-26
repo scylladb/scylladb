@@ -62,18 +62,14 @@ if [ ! -f build/antlr3-c++-dev_3.5.2-1_all.deb ]; then
 fi
 
 if [ ! -f build/libthrift0_1.0.0-dev_amd64.deb ]; then
-    rm -rf build/thrift-0.9.1
-    if [ ! -f build/thrift-0.9.1.tar.gz ]; then
-        wget -O build/thrift-0.9.1.tar.gz http://archive.apache.org/dist/thrift/0.9.1/thrift-0.9.1.tar.gz
+    rm -rf build/thrift-0.9.3
+    if [ ! -f build/thrift-0.9.3.tar.gz ]; then
+        wget -O build/thrift-0.9.3.tar.gz http://archive.apache.org/dist/thrift/0.9.3/thrift-0.9.3.tar.gz
     fi
     cd build
-    tar xpf thrift-0.9.1.tar.gz
-    cd thrift-0.9.1
+    tar xpf thrift-0.9.3.tar.gz
+    cd thrift-0.9.3
     patch -p0 < ../../dist/ubuntu/dep/thrift.diff
-    if [ "$VERSION_ID" = "16.04" ]; then
-        sed -i "s/, python-support//" debian/control
-        sed -i "s/dh_pysupport//" debian/rules
-    fi
     echo Y | sudo mk-build-deps -i -r
     debuild -r fakeroot --no-tgz-check -us -uc
     cd ../..

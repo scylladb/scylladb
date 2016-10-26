@@ -1,97 +1,51 @@
---- debian/changelog	2013-08-15 23:04:29.000000000 +0900
-+++ ../thrift-0.9.1-ubuntu/debian/changelog	2016-01-15 23:22:11.189982999 +0900
-@@ -1,65 +1,4 @@
--thrift (1.0.0-dev) stable; urgency=low
--  * update version
--  * fix libthrift0.install
-+thrift (0.9.1-ubuntu1) trusty; urgency=medium
-+  * Make it able to build on Ubuntu 14.04LTS
- 
-- -- Roger Meier <roger@apache.org>  Tue, 08 Jan 2013 22:40:12 +0100
--
--thrift (0.9.0) stable; urgency=low
--
--  * update to 0.9.0
--
-- -- Jake Farrell <jfarrell@apache.org>  Wed, 10 Oct 2012 12:00:00 -0500
--
--thrift (0.7.0) stable; urgency=low
--
--  * update to 0.7.0
--
-- -- Jake Farrell <jfarrell@apache.org>  Tue, 10 Aug 2011 17:01:53 -0500
--
--thrift (0.7.0-dev1) stable; urgency=low
--  * added glib
--  * fix location of libthrift.jar
--
-- -- Roger Meier <roger@apache.org>  Tue, 12 Apr 2011 21:41:18 +0200
--
--thrift (0.6.0-dev1) stable; urgency=low
--
--  * update version field
--  * added debian folder to thrift/contrib
--  * changed a few details in control file
--  * update copyright file
--
-- -- Roger Meier <roger@apache.org>  Tue, 14 Dec 2010 12:12:33 -0800
--
--thrift (0.5.0+nmu2) stable; urgency=low
--
--  * Non-maintainer upload.
--  * Merged THRIFT-71_v9.patch to skip ./bootstrap.sh if not exists.
--    https://issues.apache.org/jira/secure/attachment/12465360/THRIFT-71_v9.patch
--
-- -- Yamashita Yuu <yamashita@geishatokyo.com>  Tue, 07 Dec 2010 15:00:55 +0900
--
--thrift (0.5.0+nmu1) stable; urgency=low
--
--  * Non-maintainer upload.
--  * Imported package information for php5-thrift from https://github.com/simplegeo/thrift.
--
-- -- Yamashita Yuu <yamashita@geishatokyo.com>  Tue, 07 Dec 2010 01:00:17 +0900
--
--thrift (0.5.0) stable; urgency=low
--
--  * update to 0.5.0
--
-- -- Roger Meier <roger@apache.org>  Fri, 08 Oct 2010 11:23:53 +0200
--
--thrift (0.4.0) stable; urgency=low
--
--  * update to 0.4.0
--
-- -- Roger Meier <roger@bufferoverflow.ch>  Sun, 22 Aug 2010 21:26:00 +0100
--
--thrift (0.2008.12.30~8.04) hardy; urgency=low
--
--  * Initial release.
--
-- -- Esteve Fernandez <esteve@fluidinfo.com>  Thu, 15 Jan 2009 11:34:24 +0100
+diff -Nur debian/changelog ../thrift-0.9.3.new/debian/changelog
+--- debian/changelog	2015-09-27 02:50:44.000000000 +0000
++++ ../thrift-0.9.3.new/debian/changelog	2016-10-26 15:56:10.709140547 +0000
+@@ -1,3 +1,8 @@
++thrift (0.9.3-ubuntu1) stable; urgency=low
++  * update to 0.9.3
++
 + -- Takuya ASADA <syuu@scylladb.com>  Wed, 28 Oct 2015 05:11:38 +0900
---- debian/control	2013-08-18 23:58:22.000000000 +0900
-+++ ../thrift-0.9.1-ubuntu/debian/control	2016-01-15 23:32:47.373982999 +0900
++
+ thrift (0.9.3) stable; urgency=low
+   * update to 0.9.3
+ 
+diff -Nur debian/control ../thrift-0.9.3.new/debian/control
+--- debian/control	2015-01-26 02:06:23.000000000 +0000
++++ ../thrift-0.9.3.new/debian/control	2016-10-26 15:59:09.569954856 +0000
 @@ -1,12 +1,10 @@
  Source: thrift
  Section: devel
  Priority: extra
 -Build-Depends: debhelper (>= 5), build-essential, mono-gmcs, python-dev, ant,
--    mono-devel,  libmono-system-web2.0-cil, erlang-base, ruby1.8-dev, autoconf, python-support,
--    automake, pkg-config, libtool, bison, flex, libboost-dev | libboost1.40-dev, python-all,
--    python-all-dev, python-all-dbg, openjdk-6-jdk | java-sdk, libcommons-lang3-java,
+-    mono-devel,  libmono-system-web2.0-cil, erlang-base, ruby1.8-dev, autoconf, automake,
+-    pkg-config, libtool, bison, flex, libboost-dev | libboost1.40-dev, python-all,
+-    python-all-dev, python-all-dbg, openjdk-6-jdk | java-sdk,
 -    libboost-test-dev | libboost-test1.40-dev, libevent-dev, perl (>= 5.8.0-7),
 -    php5, php5-dev, libglib2.0-dev, libqt4-dev
-+Build-Depends: debhelper (>= 5), build-essential, autoconf, 
-+    automake, pkg-config, libtool, bison, flex, libboost-dev | libboost1.55-dev, 
-+    libboost-test-dev | libboost-test1.55-dev, libevent-dev, 
-+    libglib2.0-dev, libqt4-dev, libssl-dev, python-support
++Build-Depends: debhelper (>= 5), build-essential, autoconf, automake,
++    pkg-config, libtool, bison, flex, libboost-dev | libboost1.40-dev,
++    libboost-test-dev | libboost-test1.40-dev, libevent-dev,
++    libglib2.0-dev, libqt4-dev
  Maintainer: Thrift Developer's <dev@thrift.apache.org>
  Homepage: http://thrift.apache.org/
  Vcs-Git: https://git-wip-us.apache.org/repos/asf/thrift.git
-@@ -26,98 +24,6 @@
-  from .thrift files (containing the definitions) to the language binding
-  for the supported languages.
+@@ -14,109 +12,6 @@
+ Standards-Version: 3.7.2
+ X-Python-Version: >= 2.6
  
+-Package: thrift-compiler
+-Architecture: any
+-Depends: ${shlibs:Depends}, ${misc:Depends}
+-Description: Compiler for Thrift definition files
+- Thrift is a software framework for scalable cross-language services
+- development. It combines a software stack with a code generation engine to
+- build services that work efficiently and seamlessly.
+- .
+- This package contains the Thrift compiler that is used for translating
+- from .thrift files (containing the definitions) to the language binding
+- for the supported languages.
+-
 -Package: python-thrift
 -Architecture: any
 -Section: python
@@ -144,7 +98,6 @@
 -Architecture: all
 -Section: libs
 -Depends: java-gcj-compat | java1-runtime | java2-runtime, ${misc:Depends}
--Recommends: libcommons-lang3-java
 -Description: Java bindings for Thrift
 - Thrift is a software framework for scalable cross-language services
 - development. It combines a software stack with a code generation engine to
@@ -187,7 +140,7 @@
  Package: libthrift0
  Architecture: any
  Depends: ${shlibs:Depends}, ${misc:Depends}
-@@ -140,15 +46,3 @@
+@@ -139,15 +34,3 @@
   .
   This package contains the development libraries required for writing C++
   applications using Thrift.
@@ -203,8 +156,15 @@
 - build services that work efficiently and seamlessly.
 - .
 - This package contains the PHP bindings for Thrift.
---- debian/rules	2013-08-15 23:04:29.000000000 +0900
-+++ ../thrift-0.9.1-ubuntu/debian/rules	2016-01-15 23:22:11.189982999 +0900
+diff -Nur debian/dirs ../thrift-0.9.3.new/debian/dirs
+--- debian/dirs	2015-01-26 02:06:23.000000000 +0000
++++ ../thrift-0.9.3.new/debian/dirs	2016-10-26 19:29:25.481685721 +0000
+@@ -1,2 +1 @@
+ usr/bin
+-usr/sbin
+diff -Nur debian/rules ../thrift-0.9.3.new/debian/rules
+--- debian/rules	2015-01-26 02:06:23.000000000 +0000
++++ ../thrift-0.9.3.new/debian/rules	2016-10-26 19:48:00.789903084 +0000
 @@ -45,18 +45,6 @@
  	# Compile C (glib) library
  	$(MAKE) -C $(CURDIR)/lib/c_glib
@@ -276,10 +236,16 @@
  	dh_install -i
  
  install-arch:
-@@ -144,23 +94,6 @@
- 		$(CURDIR)/debian/thrift-compiler/usr/bin/thrift && \
- 	rmdir $(CURDIR)/debian/thrift-compiler/usr/sbin
+@@ -138,29 +88,6 @@
+ 	# debian/tmp.
+ 	#$(MAKE) DESTDIR=$(CURDIR)/debian/thrift install
  
+-	# Compiler
+-	mkdir -p $(CURDIR)/debian/thrift-compiler/usr/bin && \
+-	cp $(CURDIR)/compiler/cpp/thrift \
+-		$(CURDIR)/debian/thrift-compiler/usr/bin/thrift && \
+-	rmdir $(CURDIR)/debian/thrift-compiler/usr/sbin
+-
 -	# Python
 -	cd $(CURDIR)/lib/py && \
 -	for py in $(PYVERS); do \
@@ -300,7 +266,7 @@
  	# C++ and C (glib)
  	mkdir -p $(CURDIR)/debian/tmp; \
  	cd $(CURDIR)/lib/cpp && \
-@@ -182,8 +115,8 @@
+@@ -182,8 +109,8 @@
  	dh_installexamples
  	dh_installman
  	dh_link
@@ -310,10 +276,10 @@
 +	dh_strip
  	dh_compress
  	dh_fixperms
- 	dh_pysupport
-@@ -200,7 +133,6 @@
+ 	dh_makeshlibs
+@@ -199,7 +126,6 @@
  
- # Build architecture dependant packages using the common target.
+ # Build architecture dependent packages using the common target.
  binary-arch: build-arch install-arch
 -	echo "php:Depends=phpapi-$(php-config5 --phpapi)" > debian/substvars
  	$(MAKE) -f debian/rules DH_OPTIONS=-s binary-common
