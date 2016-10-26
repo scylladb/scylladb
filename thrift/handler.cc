@@ -52,7 +52,6 @@
 #include <boost/range/adaptor/indirected.hpp>
 #include "query-result-reader.hh"
 #include "thrift/server.hh"
-#include "db/size_estimates_recorder.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;

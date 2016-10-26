@@ -571,21 +571,6 @@ future<> set_bootstrap_state(bootstrap_state state);
     api::timestamp_type schema_creation_timestamp();
 
 /**
- * Writes the current partition count and size estimates into SIZE_ESTIMATES_CF
- */
-future<> update_size_estimates(sstring ks_name, sstring cf_name, std::vector<range_estimates> estimates);
-
-/**
- * Clears size estimates for a table (on table drop)
- */
-future<> clear_size_estimates(sstring ks_name, sstring cf_name);
-
-/**
- * Queries the size estimates within the specified range
- */
-future<std::vector<range_estimates>> query_size_estimates(sstring ks_name, sstring cf_name, dht::token start_token, dht::token end_token);
-
-/**
  * Builds a mutation for SIZE_ESTIMATES_CF containing the specified estimates.
  */
 mutation make_size_estimates_mutation(const sstring& ks, std::vector<range_estimates> estimates);
