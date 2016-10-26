@@ -545,7 +545,6 @@ private:
         if (!_first_element) {
             return false;
         }
-        _first_element = false;
         return _pr.start() && _pr.start()->is_inclusive() && _pr.start()->value().equal(*_schema, dk);
     }
 
@@ -553,6 +552,7 @@ private:
         return _primary_reader().then([this] (just_cache_scanning_reader::cache_data cd) {
             auto& smopt = cd.mut;
             if (cd.continuous || (smopt && is_inclusive_start_bound(smopt->decorated_key()))) {
+                _first_element = false;
                 update_last_key(smopt);
                 return make_ready_future<streamed_mutation_opt>(std::move(smopt));
             } else {
