@@ -74,8 +74,7 @@ cache_tracker::cache_tracker() {
             }
             cache_entry& ce = _lru.back();
             auto it = row_cache::partitions_type::s_iterator_to(ce);
-            --it;
-            clear_continuity(*it);
+            clear_continuity(*std::next(it));
             _lru.pop_back_and_dispose(current_deleter<cache_entry>());
             --_partitions;
             ++_evictions;
