@@ -40,6 +40,7 @@
  */
 
 #include <unordered_map>
+#include <boost/algorithm/string.hpp>
 #include "permission.hh"
 
 const auth::permission_set auth::permissions::ALL_DATA =
@@ -75,7 +76,9 @@ const sstring& auth::permissions::to_string(permission p) {
 }
 
 auth::permission auth::permissions::from_string(const sstring& s) {
-    return permission_names.at(s);
+    sstring upper(s);
+    boost::to_upper(upper);
+    return permission_names.at(upper);
 }
 
 std::unordered_set<sstring> auth::permissions::to_strings(const permission_set& set) {
