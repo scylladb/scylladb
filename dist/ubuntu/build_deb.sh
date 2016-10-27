@@ -113,7 +113,7 @@ cp dist/common/systemd/node-exporter.service debian/scylla-server.node-exporter.
 if [ "$VERSION_ID" = "14.04" ] && [ $REBUILD -eq 0 ]; then
     if [ ! -f /etc/apt/sources.list.d/scylla-3rdparty-trusty.list ]; then
         cd /etc/apt/sources.list.d
-        sudo wget https://s3.amazonaws.com/downloads.scylladb.com/deb/3rdparty/ubuntu/scylla-3rdparty-trusty.list
+        sudo wget -nv https://s3.amazonaws.com/downloads.scylladb.com/deb/3rdparty/ubuntu/scylla-3rdparty-trusty.list
         cd -
     fi
     sudo apt-get -y update

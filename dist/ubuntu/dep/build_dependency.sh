@@ -10,7 +10,7 @@ if [ "$VERSION_ID" = "14.04" ] || [ "$DISTRIBUTION" = "Debian" ]; then
         mkdir -p build/antlr3-3.5.2
         cp -a dist/ubuntu/dep/antlr3-3.5.2/* build/antlr3-3.5.2
         cd build/antlr3-3.5.2
-        wget http://www.antlr3.org/download/antlr-3.5.2-complete-no-st3.jar
+        wget -nv http://www.antlr3.org/download/antlr-3.5.2-complete-no-st3.jar
         echo Y | sudo mk-build-deps -i -r
         debuild -r fakeroot --no-tgz-check -us -uc
         cd -
@@ -25,13 +25,13 @@ if [ "$VERSION_ID" = "14.04" ] || [ "$DISTRIBUTION" = "Debian" ]; then
     if [ ! -f build/scylla-gdb_7.11-0ubuntu1_amd64.deb ]; then
         rm -rf build/gdb-7.11
         if [ ! -f build/gdb_7.11-0ubuntu1.dsc ]; then
-            wget -O build/gdb_7.11-0ubuntu1.dsc http://archive.ubuntu.com/ubuntu/pool/main/g/gdb/gdb_7.11-0ubuntu1.dsc
+            wget -nv -O build/gdb_7.11-0ubuntu1.dsc http://archive.ubuntu.com/ubuntu/pool/main/g/gdb/gdb_7.11-0ubuntu1.dsc
         fi
         if [ ! -f build/gdb_7.11.orig.tar.xz ]; then
-            wget -O build/gdb_7.11.orig.tar.xz http://archive.ubuntu.com/ubuntu/pool/main/g/gdb/gdb_7.11.orig.tar.xz
+            wget -nv -O build/gdb_7.11.orig.tar.xz http://archive.ubuntu.com/ubuntu/pool/main/g/gdb/gdb_7.11.orig.tar.xz
         fi
         if [ ! -f build/gdb_7.11-0ubuntu1.debian.tar.xz ]; then
-            wget -O build/gdb_7.11-0ubuntu1.debian.tar.xz http://archive.ubuntu.com/ubuntu/pool/main/g/gdb/gdb_7.11-0ubuntu1.debian.tar.xz
+            wget -nv -O build/gdb_7.11-0ubuntu1.debian.tar.xz http://archive.ubuntu.com/ubuntu/pool/main/g/gdb/gdb_7.11-0ubuntu1.debian.tar.xz
         fi
         cd build
         dpkg-source -x gdb_7.11-0ubuntu1.dsc
@@ -48,7 +48,7 @@ fi
 if [ ! -f build/antlr3-c++-dev_3.5.2-1_all.deb ]; then
     rm -rf build/antlr3-c++-dev-3.5.2
     if [ ! -f build/3.5.2.tar.gz ]; then
-        wget -O build/3.5.2.tar.gz https://github.com/antlr/antlr3/archive/3.5.2.tar.gz
+        wget -nv -O build/3.5.2.tar.gz https://github.com/antlr/antlr3/archive/3.5.2.tar.gz
     fi
     cd build
     tar xpf 3.5.2.tar.gz
@@ -64,7 +64,7 @@ fi
 if [ ! -f build/libthrift0_1.0.0-dev_amd64.deb ]; then
     rm -rf build/thrift-0.9.3
     if [ ! -f build/thrift-0.9.3.tar.gz ]; then
-        wget -O build/thrift-0.9.3.tar.gz http://archive.apache.org/dist/thrift/0.9.3/thrift-0.9.3.tar.gz
+        wget -nv -O build/thrift-0.9.3.tar.gz http://archive.apache.org/dist/thrift/0.9.3/thrift-0.9.3.tar.gz
     fi
     cd build
     tar xpf thrift-0.9.3.tar.gz

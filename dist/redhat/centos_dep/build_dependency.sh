@@ -13,35 +13,35 @@ mkdir -p build/srpms
 cd build/srpms
 
 if [ ! -f binutils-2.25-15.fc23.src.rpm ]; then
-    wget https://kojipkgs.fedoraproject.org//packages/binutils/2.25/15.fc23/src/binutils-2.25-15.fc23.src.rpm
+    wget -nv https://kojipkgs.fedoraproject.org//packages/binutils/2.25/15.fc23/src/binutils-2.25-15.fc23.src.rpm
 fi
 
 if [ ! -f isl-0.14-4.fc23.src.rpm ]; then
-    wget https://kojipkgs.fedoraproject.org//packages/isl/0.14/4.fc23/src/isl-0.14-4.fc23.src.rpm
+    wget -nv https://kojipkgs.fedoraproject.org//packages/isl/0.14/4.fc23/src/isl-0.14-4.fc23.src.rpm
 fi
 
 if [ ! -f gcc-5.3.1-2.fc23.src.rpm ]; then
-    wget https://kojipkgs.fedoraproject.org//packages/gcc/5.3.1/2.fc23/src/gcc-5.3.1-2.fc23.src.rpm
+    wget -nv https://kojipkgs.fedoraproject.org//packages/gcc/5.3.1/2.fc23/src/gcc-5.3.1-2.fc23.src.rpm
 fi
 
 if [ ! -f boost-1.58.0-11.fc23.src.rpm ]; then
-    wget https://kojipkgs.fedoraproject.org//packages/boost/1.58.0/11.fc23/src/boost-1.58.0-11.fc23.src.rpm
+    wget -nv https://kojipkgs.fedoraproject.org//packages/boost/1.58.0/11.fc23/src/boost-1.58.0-11.fc23.src.rpm
 fi
 
 if [ ! -f ninja-build-1.6.0-2.fc23.src.rpm ]; then
-    wget https://kojipkgs.fedoraproject.org//packages/ninja-build/1.6.0/2.fc23/src/ninja-build-1.6.0-2.fc23.src.rpm
+    wget -nv https://kojipkgs.fedoraproject.org//packages/ninja-build/1.6.0/2.fc23/src/ninja-build-1.6.0-2.fc23.src.rpm
 fi
 
 if [ ! -f ragel-6.8-5.fc23.src.rpm ]; then
-   wget https://kojipkgs.fedoraproject.org//packages/ragel/6.8/5.fc23/src/ragel-6.8-5.fc23.src.rpm
+   wget -nv https://kojipkgs.fedoraproject.org//packages/ragel/6.8/5.fc23/src/ragel-6.8-5.fc23.src.rpm
 fi
 
 if [ ! -f gdb-7.10.1-30.fc23.src.rpm ]; then
-   wget https://kojipkgs.fedoraproject.org//packages/gdb/7.10.1/30.fc23/src/gdb-7.10.1-30.fc23.src.rpm
+   wget -nv https://kojipkgs.fedoraproject.org//packages/gdb/7.10.1/30.fc23/src/gdb-7.10.1-30.fc23.src.rpm
 fi
 
 if [ ! -f pyparsing-2.0.3-2.fc23.src.rpm ]; then
-   wget https://kojipkgs.fedoraproject.org//packages/pyparsing/2.0.3/2.fc23/src/pyparsing-2.0.3-2.fc23.src.rpm
+   wget -nv https://kojipkgs.fedoraproject.org//packages/pyparsing/2.0.3/2.fc23/src/pyparsing-2.0.3-2.fc23.src.rpm
 fi
 
 cd -
@@ -126,7 +126,7 @@ if [ ! -f $RPMBUILD/RPMS/noarch/scylla-antlr3-tool-3.5.2-1.el7.centos.noarch.rpm
    mkdir build/scylla-antlr3-tool-3.5.2
    cp dist/redhat/centos_dep/antlr3 build/scylla-antlr3-tool-3.5.2
    cd build/scylla-antlr3-tool-3.5.2
-   wget http://www.antlr3.org/download/antlr-3.5.2-complete-no-st3.jar
+   wget -nv http://www.antlr3.org/download/antlr-3.5.2-complete-no-st3.jar
    cd -
    cd build
    tar cJpf $RPMBUILD/SOURCES/scylla-antlr3-tool-3.5.2.tar.xz scylla-antlr3-tool-3.5.2
@@ -136,7 +136,7 @@ fi
 do_install scylla-antlr3-tool-3.5.2-1.el7.centos.noarch.rpm
 
 if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-antlr3-C++-devel-3.5.2-1.el7.centos.x86_64.rpm ];then
-   wget -O build/3.5.2.tar.gz https://github.com/antlr/antlr3/archive/3.5.2.tar.gz
+   wget -nv -O build/3.5.2.tar.gz https://github.com/antlr/antlr3/archive/3.5.2.tar.gz
    mv build/3.5.2.tar.gz $RPMBUILD/SOURCES
    rpmbuild --define "_topdir $RPMBUILD" -ba dist/redhat/centos_dep/scylla-antlr3-C++-devel.spec
 fi
