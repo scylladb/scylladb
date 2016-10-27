@@ -56,6 +56,7 @@ private:
 
     static const sstring ROOT_NAME;
 
+    level _level;
     sstring _ks;
     sstring _cf;
 
