@@ -74,8 +74,7 @@ cache_tracker::cache_tracker() {
             }
             cache_entry& ce = _lru.back();
             auto it = row_cache::partitions_type::s_iterator_to(ce);
-            --it;
-            clear_continuity(*it);
+            clear_continuity(*std::next(it));
             _lru.pop_back_and_dispose(current_deleter<cache_entry>());
             --_partitions;
             ++_evictions;
@@ -546,7 +545,6 @@ private:
         if (!_first_element) {
             return false;
         }
-        _first_element = false;
         return _pr.start() && _pr.start()->is_inclusive() && _pr.start()->value().equal(*_schema, dk);
     }
 
@@ -554,6 +552,7 @@ private:
         return _primary_reader().then([this] (just_cache_scanning_reader::cache_data cd) {
             auto& smopt = cd.mut;
             if (cd.continuous || (smopt && is_inclusive_start_bound(smopt->decorated_key()))) {
+                _first_element = false;
                 update_last_key(smopt);
                 return make_ready_future<streamed_mutation_opt>(std::move(smopt));
             } else {
@@ -720,7 +719,9 @@ void row_cache::do_find_or_create_entry(const dht::decorated_key& key,
                     return;
                 }
 
-                if ((!previous->_key && i == _partitions.begin()) || (previous->_key && std::prev(i)->key().equal(*_schema, *previous->_key))) {
+                if ((!previous->_key && i == _partitions.begin())
+                    || (previous->_key && i != _partitions.begin()
+                        && std::prev(i)->key().equal(*_schema, *previous->_key))) {
                     i->set_continuous(true);
                 }
             });
