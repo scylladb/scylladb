@@ -50,7 +50,7 @@ This package contains ScyllaDB server.
 %if 0%{?rhel}
 python3.4 ./configure.py --disable-xen --enable-dpdk --mode=release --static-stdc++ --compiler=/opt/scylladb/bin/g++ --python python3.4
 %endif
-ninja-build %{?_smp_mflags} build/release/scylla build/release/iotune
+ninja-build %{?_smp_mflags} %{?rhel:--static-boost} build/release/scylla build/release/iotune
 cp dist/common/systemd/scylla-server.service.in build/scylla-server.service
 sed -i -e "s#@@SYSCONFDIR@@#/etc/sysconfig#g" build/scylla-server.service
 
