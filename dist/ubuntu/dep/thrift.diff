@@ -1,6 +1,6 @@
 diff -Nur debian/changelog ../thrift-0.9.3.new/debian/changelog
 --- debian/changelog	2015-09-27 02:50:44.000000000 +0000
-+++ ../thrift-0.9.3.new/debian/changelog	2016-10-26 15:56:10.709140547 +0000
++++ ../thrift-0.9.3.new/debian/changelog	2016-10-28 15:42:54.337509518 +0000
 @@ -1,3 +1,8 @@
 +thrift (0.9.3-ubuntu1) stable; urgency=low
 +  * update to 0.9.3
@@ -12,7 +12,7 @@ diff -Nur debian/changelog ../thrift-0.9.3.new/debian/changelog
  
 diff -Nur debian/control ../thrift-0.9.3.new/debian/control
 --- debian/control	2015-01-26 02:06:23.000000000 +0000
-+++ ../thrift-0.9.3.new/debian/control	2016-10-26 15:59:09.569954856 +0000
++++ ../thrift-0.9.3.new/debian/control	2016-10-28 16:49:35.226677090 +0000
 @@ -1,12 +1,10 @@
  Source: thrift
  Section: devel
@@ -26,7 +26,7 @@ diff -Nur debian/control ../thrift-0.9.3.new/debian/control
 +Build-Depends: debhelper (>= 5), build-essential, autoconf, automake,
 +    pkg-config, libtool, bison, flex, libboost-dev | libboost1.40-dev,
 +    libboost-test-dev | libboost-test1.40-dev, libevent-dev,
-+    libglib2.0-dev, libqt4-dev
++    libglib2.0-dev, libqt4-dev, libssl-dev
  Maintainer: Thrift Developer's <dev@thrift.apache.org>
  Homepage: http://thrift.apache.org/
  Vcs-Git: https://git-wip-us.apache.org/repos/asf/thrift.git
@@ -158,13 +158,13 @@ diff -Nur debian/control ../thrift-0.9.3.new/debian/control
 - This package contains the PHP bindings for Thrift.
 diff -Nur debian/dirs ../thrift-0.9.3.new/debian/dirs
 --- debian/dirs	2015-01-26 02:06:23.000000000 +0000
-+++ ../thrift-0.9.3.new/debian/dirs	2016-10-26 19:29:25.481685721 +0000
++++ ../thrift-0.9.3.new/debian/dirs	2016-10-28 15:42:54.337509518 +0000
 @@ -1,2 +1 @@
  usr/bin
 -usr/sbin
 diff -Nur debian/rules ../thrift-0.9.3.new/debian/rules
 --- debian/rules	2015-01-26 02:06:23.000000000 +0000
-+++ ../thrift-0.9.3.new/debian/rules	2016-10-26 19:48:00.789903084 +0000
++++ ../thrift-0.9.3.new/debian/rules	2016-10-28 15:42:54.337509518 +0000
 @@ -45,18 +45,6 @@
  	# Compile C (glib) library
  	$(MAKE) -C $(CURDIR)/lib/c_glib
