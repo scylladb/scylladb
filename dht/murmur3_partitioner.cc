@@ -75,7 +75,7 @@ token murmur3_partitioner::get_random_token() {
 }
 
 inline int64_t long_token(const token& t) {
-    if (t.is_minimum()) {
+    if (t.is_minimum() || t.is_maximum()) {
         return std::numeric_limits<long>::min();
     }
 
