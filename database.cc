@@ -39,6 +39,7 @@
 #include <boost/algorithm/string/split.hpp>
 #include "sstables/sstables.hh"
 #include "sstables/compaction.hh"
+#include "sstables/remove.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "locator/simple_snitch.hh"
@@ -744,7 +745,7 @@ private:
 
 
 future<> lister::scan_dir(sstring name, lister::dir_entry_types type, walker_type walker, filter_type filter) {
-    return open_checked_directory(general_disk_error, name).then([type, walker = std::move(walker), filter = std::move(filter), name] (file f) {
+    return open_checked_directory(general_disk_error_handler, name).then([type, walker = std::move(walker), filter = std::move(filter), name] (file f) {
             auto l = make_lw_shared<lister>(std::move(f), type, walker, filter, name);
             return l->done().then([l] { });
     });
@@ -1143,6 +1144,12 @@ column_family::stop() {
     });
 }
 
+static io_error_handler error_handler_for_upload_dir() {
+    return [] (std::exception_ptr eptr) {
+        // do nothing about sstable exception and caller will just rethrow it.
+    };
+}
+
 future<std::vector<sstables::entry_descriptor>> column_family::flush_upload_dir() {
     struct work {
         std::map<int64_t, sstables::shared_sstable> sstables;
@@ -1157,9 +1164,9 @@ future<std::vector<sstables::entry_descriptor>> column_family::flush_upload_dir(
             if (comps.component != sstables::sstable::component_type::TOC) {
                 return make_ready_future<>();
             }
-            auto sst = make_lw_shared<sstables::sstable>(_schema,
-                                                        _config.datadir + "/upload", comps.generation,
-                                                        comps.version, comps.format);
+            auto sst = make_lw_shared<sstables::sstable>(_schema, _config.datadir + "/upload", comps.generation,
+                comps.version, comps.format, gc_clock::now(),
+                [] (disk_error_signal_type&) { return error_handler_for_upload_dir(); });
             work.sstables.emplace(comps.generation, std::move(sst));
             work.descriptors.emplace(comps.generation, std::move(comps));
             return make_ready_future<>();
@@ -1180,7 +1187,7 @@ future<std::vector<sstables::entry_descriptor>> column_family::flush_upload_dir(
                 }).then([this, &sst, gen] {
                     return sst->create_links(_config.datadir, gen);
                 }).then([&sst] {
-                    return sstables::remove_by_toc_name(sst->toc_filename());
+                    return sstables::remove_by_toc_name(sst->toc_filename(), error_handler_for_upload_dir());
                 });
             });
         }).then([&work] {
@@ -2885,7 +2892,7 @@ seal_snapshot(sstring jsondir) {
     dblog.debug("Storing manifest {}", jsonfile);
 
     return io_check(recursive_touch_directory, jsondir).then([jsonfile, json = std::move(json)] {
-        return open_checked_file_dma(general_disk_error, jsonfile, open_flags::wo | open_flags::create | open_flags::truncate).then([json](file f) {
+        return open_checked_file_dma(general_disk_error_handler, jsonfile, open_flags::wo | open_flags::create | open_flags::truncate).then([json](file f) {
             return do_with(make_file_output_stream(std::move(f)), [json] (output_stream<char>& out) {
                 return out.write(json.c_str(), json.size()).then([&out] {
                    return out.flush();
@@ -2973,7 +2980,7 @@ future<> column_family::snapshot(sstring name) {
 
 future<bool> column_family::snapshot_exists(sstring tag) {
     sstring jsondir = _config.datadir + "/snapshots/" + tag;
-    return open_checked_directory(general_disk_error, std::move(jsondir)).then_wrapped([] (future<file> f) {
+    return open_checked_directory(general_disk_error_handler, std::move(jsondir)).then_wrapped([] (future<file> f) {
         try {
             f.get0();
             return make_ready_future<bool>(true);
