@@ -152,38 +152,13 @@ bool is_local(gms::inet_address endpoint) {
 }
 
 std::vector<gms::inet_address>
-filter_for_query_dc_local(consistency_level cl,
-                          keyspace& ks,
-                          const std::vector<gms::inet_address>& live_endpoints) {
-    using namespace gms;
-
-    std::vector<inet_address> local;
-    std::vector<inet_address> other;
-    local.reserve(live_endpoints.size());
-    other.reserve(live_endpoints.size());
-
-    std::partition_copy(live_endpoints.begin(), live_endpoints.end(),
-                        std::back_inserter(local), std::back_inserter(other),
-                        is_local);
-
-    // check if blockfor more than we have localep's
-    size_t bf = block_for(ks, cl);
-    if (local.size() < bf) {
-        size_t other_items_count = std::min(bf - local.size(), other.size());
-        local.reserve(local.size() + other_items_count);
-
-        std::move(other.begin(), other.begin() + other_items_count,
-                  std::back_inserter(local));
-    }
-
-    return local;
-}
-
-std::vector<gms::inet_address>
 filter_for_query(consistency_level cl,
                  keyspace& ks,
                  std::vector<gms::inet_address> live_endpoints,
                  read_repair_decision read_repair) {
+    size_t local_ep_count = live_endpoints.size();
+    size_t bf;
+
     /*
      * Endpoints are expected to be restricted to live replicas, sorted by
      * snitch preference. For LOCAL_QUORUM, move local-DC replicas in front
@@ -191,25 +166,28 @@ filter_for_query(consistency_level cl,
      * replica gets the data read) or not (since we'll take the block_for first
      * ones).
      */
-    if (is_datacenter_local(cl)) {
-        boost::range::stable_partition(live_endpoints, is_local);
+    if (is_datacenter_local(cl) || read_repair == read_repair_decision::DC_LOCAL) {
+        auto it = boost::range::stable_partition(live_endpoints, is_local);
+        local_ep_count = std::distance(live_endpoints.begin(), it);
     }
 
     switch (read_repair) {
     case read_repair_decision::NONE:
-    {
-        size_t start_pos = std::min(live_endpoints.size(), block_for(ks, cl));
-
-        live_endpoints.erase(live_endpoints.begin() + start_pos, live_endpoints.end());
-    }
-        // fall through
-    case read_repair_decision::GLOBAL:
-        return std::move(live_endpoints);
+        bf = block_for(ks, cl);
+        break;
     case read_repair_decision::DC_LOCAL:
-        return filter_for_query_dc_local(cl, ks, live_endpoints);
+        bf = std::max(block_for(ks, cl), local_ep_count);
+        break;
+    case read_repair_decision::GLOBAL:
+        bf = live_endpoints.size();
+        break;
     default:
         throw std::runtime_error("Unknown read repair type");
     }
+
+    live_endpoints.erase(live_endpoints.begin() + std::min(live_endpoints.size(), bf), live_endpoints.end());
+
+    return std::move(live_endpoints);
 }
 
 std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& ks, std::vector<gms::inet_address>& live_endpoints) {
