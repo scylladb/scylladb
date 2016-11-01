@@ -2762,10 +2762,13 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     const dht::token& token = pr.start()->value().token();
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
+    speculative_retry::type retry_type = schema->speculative_retry().get_type();
+    gms::inet_address extra_replica;
 
     std::vector<gms::inet_address> all_replicas = get_live_sorted_endpoints(ks, token);
     db::read_repair_decision repair_decision = new_read_repair_decision(*schema);
-    std::vector<gms::inet_address> target_replicas = db::filter_for_query(cl, ks, all_replicas, repair_decision);
+    std::vector<gms::inet_address> target_replicas = db::filter_for_query(cl, ks, all_replicas, repair_decision,
+            retry_type == speculative_retry::type::NONE ? nullptr : &extra_replica);
 
     slogger.trace("creating read executor for token {} with all: {} targets: {} rp decision: {}", token, all_replicas, target_replicas, repair_decision);
     tracing::trace(trace_state, "Creating read executor for token {} with all: {} targets: {} repair decision: {}", token, all_replicas, target_replicas, repair_decision);
@@ -2786,7 +2789,6 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
 #if 0
     ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(command.cfName);
 #endif
-    speculative_retry::type retry_type = schema->speculative_retry().get_type();
 
     size_t block_for = db::block_for(ks, cl);
     auto p = shared_from_this();
@@ -2805,26 +2807,13 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
 
     // RRD.NONE or RRD.DC_LOCAL w/ multiple DCs.
     if (target_replicas.size() == block_for) { // If RRD.DC_LOCAL extra replica may already be present
-        auto good_replica = [&target_replicas, local_only = is_datacenter_local(cl)] (gms::inet_address ep) {
-            if (local_only && !db::is_local(ep)) {
-                return false;
-            } else {
-                return boost::range::find(target_replicas, ep) == target_replicas.end();
-            }
-        };
-        gms::inet_address extra_replica = all_replicas[target_replicas.size()];
-        // With repair decision DC_LOCAL all replicas/target replicas may be in different order, so
-        // we might have to find a replacement that's not already in targetReplicas.
-        if (!good_replica(extra_replica)) {
-            auto it = boost::range::find_if(all_replicas, std::move(good_replica));
-            if (it == all_replicas.end()) {
-                slogger.trace("read executor no extra target to speculate");
-                return ::make_shared<never_speculating_read_executor>(schema, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
-            }
-            extra_replica = *it;
+        if (is_datacenter_local(cl) && !db::is_local(extra_replica)) {
+            slogger.trace("read executor no extra target to speculate");
+            return ::make_shared<never_speculating_read_executor>(schema, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
+        } else {
+            target_replicas.push_back(extra_replica);
+            slogger.trace("creating read executor with extra target {}", extra_replica);
         }
-        target_replicas.push_back(extra_replica);
-        slogger.trace("creating read executor with extra target {}", extra_replica);
     }
 
     if (retry_type == speculative_retry::type::ALWAYS) {

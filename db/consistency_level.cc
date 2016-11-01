@@ -155,7 +155,7 @@ std::vector<gms::inet_address>
 filter_for_query(consistency_level cl,
                  keyspace& ks,
                  std::vector<gms::inet_address> live_endpoints,
-                 read_repair_decision read_repair) {
+                 read_repair_decision read_repair, gms::inet_address* extra) {
     size_t local_ep_count = live_endpoints.size();
     size_t bf;
 
@@ -185,13 +185,17 @@ filter_for_query(consistency_level cl,
         throw std::runtime_error("Unknown read repair type");
     }
 
+    if (extra && bf < live_endpoints.size()) {
+        *extra = live_endpoints[bf]; // extra replica for speculation
+    }
+
     live_endpoints.erase(live_endpoints.begin() + std::min(live_endpoints.size(), bf), live_endpoints.end());
 
     return std::move(live_endpoints);
 }
 
 std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& ks, std::vector<gms::inet_address>& live_endpoints) {
-    return filter_for_query(cl, ks, live_endpoints, read_repair_decision::NONE);
+    return filter_for_query(cl, ks, live_endpoints, read_repair_decision::NONE, nullptr);
 }
 
 bool
