@@ -232,7 +232,7 @@ uint32_t selection::add_column_for_ordering(const column_definition& c) {
             raw_selector::to_selectables(raw_selectors, schema), db, schema, defs);
 
     auto metadata = collect_metadata(schema, raw_selectors, *factories);
-    if (processes_selection(raw_selectors)) {
+    if (processes_selection(raw_selectors) || raw_selectors.size() != defs.size()) {
         return ::make_shared<selection_with_processing>(schema, std::move(defs), std::move(metadata), std::move(factories));
     } else {
         return ::make_shared<simple_selection>(schema, std::move(defs), std::move(metadata), false);
