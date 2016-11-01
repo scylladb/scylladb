@@ -304,7 +304,7 @@ public:
             std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets,
             std::vector<gms::inet_address> pending_endpoints, std::vector<gms::inet_address> dead_endpoints, tracing::trace_state_ptr tr_state) :
                 abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh),
-                        std::move(targets), std::move(tr_state), boost::range::count_if(pending_endpoints, db::is_local), std::move(dead_endpoints)) {}
+                        std::move(targets), std::move(tr_state), db::count_local_endpoints(pending_endpoints), std::move(dead_endpoints)) {}
 };
 
 class write_response_handler : public abstract_write_response_handler {
