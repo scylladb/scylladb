@@ -131,6 +131,7 @@ public:
         Statistics,
         TemporaryTOC,
         TemporaryStatistics,
+        Unknown,
     };
     enum class version_types { ka, la };
     enum class format_types { big };
@@ -225,6 +226,8 @@ public:
     static format_types format_from_sstring(sstring& s);
     static const sstring filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
                                   format_types format, component_type component);
+    static const sstring filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
+                                  format_types format, sstring component);
     // WARNING: it should only be called to remove components of a sstable with
     // a temporary TOC file.
     static future<> remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64_t generation,
@@ -362,6 +365,8 @@ public:
         return _collector;
     }
 
+    std::vector<std::pair<component_type, sstring>> all_components() const;
+
     future<> create_links(sstring dir, int64_t generation) const;
 
     future<> create_links(sstring dir) const {
@@ -405,6 +410,7 @@ private:
     static std::unordered_map<component_type, sstring, enum_hash<component_type>> _component_map;
 
     std::unordered_set<component_type, enum_hash<component_type>> _components;
+    std::vector<sstring> _unrecognized_components;
 
     bool _shared = true;  // across shards; safe default
     compression _compression;

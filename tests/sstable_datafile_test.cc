@@ -3031,3 +3031,22 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
             .produces_end_of_stream();
     });
 }
+
+SEASTAR_TEST_CASE(test_unknown_component) {
+    return seastar::async([] {
+        auto tmp = make_lw_shared<tmpdir>();
+        auto sstp = reusable_sst(uncompressed_schema(), "tests/sstables/unknown_component", 1).get0();
+        sstp->create_links(tmp->path).get();
+        // check that create_links() moved unknown component to new dir
+        BOOST_REQUIRE(file_exists(tmp->path + "/la-1-big-UNKNOWN.txt").get0());
+
+        sstp = reusable_sst(uncompressed_schema(), tmp->path, 1).get0();
+        sstp->set_generation(2).get();
+        BOOST_REQUIRE(!file_exists(tmp->path +  "/la-1-big-UNKNOWN.txt").get0());
+        BOOST_REQUIRE(file_exists(tmp->path + "/la-2-big-UNKNOWN.txt").get0());
+
+        sstables::delete_atomically({sstp}).get();
+        // assure unknown component is deleted
+        BOOST_REQUIRE(!file_exists(tmp->path + "/la-2-big-UNKNOWN.txt").get0());
+    });
+}
