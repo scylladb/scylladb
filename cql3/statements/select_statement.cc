@@ -386,7 +386,7 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
     , _limit(std::move(limit))
 { }
 
-::shared_ptr<prepared_statement> select_statement::prepare(database& db) {
+::shared_ptr<prepared_statement> select_statement::prepare(database& db, cql_stats& stats) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto bound_names = get_bound_variables();
 

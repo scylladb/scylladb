@@ -124,7 +124,7 @@ shared_ptr<transport::event::schema_change> create_keyspace_statement::change_ev
 }
 
 shared_ptr<cql3::statements::prepared_statement>
-cql3::statements::create_keyspace_statement::prepare(database& db) {
+cql3::statements::create_keyspace_statement::prepare(database& db, cql_stats& stats) {
     return make_shared<prepared_statement>(make_shared<create_keyspace_statement>(*this));
 }
 

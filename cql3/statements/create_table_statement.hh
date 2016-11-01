@@ -103,7 +103,7 @@ public:
 
     virtual shared_ptr<transport::event::schema_change> change_event() override;
 
-    virtual shared_ptr<prepared> prepare(database& db) override;
+    virtual shared_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 
     schema_ptr get_cf_meta_data();
 
@@ -148,7 +148,7 @@ private:
 public:
     raw_statement(::shared_ptr<cf_name> name, bool if_not_exists);
 
-    virtual ::shared_ptr<prepared> prepare(database& db) override;
+    virtual ::shared_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 
     data_type get_type_and_remove(column_map_type& columns, ::shared_ptr<column_identifier> t);
 

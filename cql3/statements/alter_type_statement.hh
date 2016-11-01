@@ -84,7 +84,7 @@ public:
                  const shared_ptr<column_identifier> field_name,
                  const shared_ptr<cql3_type::raw> field_type);
     virtual user_type make_updated_type(database& db, user_type to_update) const override;
-    virtual shared_ptr<prepared> prepare(database& db) override;
+    virtual shared_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 private:
     user_type do_add(database& db, user_type to_update) const;
     user_type do_alter(database& db, user_type to_update) const;
@@ -101,7 +101,7 @@ public:
     void add_rename(shared_ptr<column_identifier> previous_name, shared_ptr<column_identifier> new_name);
 
     virtual user_type make_updated_type(database& db, user_type to_update) const override;
-    virtual shared_ptr<prepared> prepare(database& db) override;
+    virtual shared_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 };
 
 }

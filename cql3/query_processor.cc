@@ -285,7 +285,7 @@ query_processor::get_statement(const sstring_view& query, const service::client_
         Tracing.trace("Preparing statement");
 #endif
     ++_stats.prepare_invocations;
-    return statement->prepare(_db.local());
+    return statement->prepare(_db.local(), _cql_stats);
 }
 
 ::shared_ptr<raw::parsed_statement>
@@ -346,7 +346,7 @@ query_options query_processor::make_internal_options(::shared_ptr<statements::pr
 {
     auto& p = _internal_statements[query_string];
     if (p == nullptr) {
-        auto np = parse_statement(query_string)->prepare(_db.local());
+        auto np = parse_statement(query_string)->prepare(_db.local(), _cql_stats);
         np->statement->validate(_proxy, *_internal_state);
         p = std::move(np); // inserts it into map
     }
@@ -382,7 +382,7 @@ query_processor::process(const sstring& query_string,
                          const std::initializer_list<data_value>& values,
                          bool cache)
 {
-    auto p = cache ? prepare_internal(query_string) : parse_statement(query_string)->prepare(_db.local());
+    auto p = cache ? prepare_internal(query_string) : parse_statement(query_string)->prepare(_db.local(), _cql_stats);
     if (!cache) {
         p->statement->validate(_proxy, *_internal_state);
     }

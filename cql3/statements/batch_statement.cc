@@ -102,7 +102,7 @@ void batch_statement::verify_batch_size(const std::vector<mutation>& mutations) 
 namespace raw {
 
 shared_ptr<prepared_statement>
-batch_statement::prepare(database& db) {
+batch_statement::prepare(database& db, cql_stats& stats) {
     auto&& bound_names = get_bound_variables();
 
     std::vector<shared_ptr<cql3::statements::modification_statement>> statements;

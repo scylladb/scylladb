@@ -157,7 +157,7 @@ void create_table_statement::add_column_metadata_from_aliases(schema_builder& bu
 }
 
 shared_ptr<prepared_statement>
-create_table_statement::prepare(database& db) {
+create_table_statement::prepare(database& db, cql_stats& stats) {
     // Cannot happen; create_table_statement is never instantiated as a raw statement
     // (instead we instantiate create_table_statement::raw_statement)
     abort();
@@ -169,7 +169,7 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
     , _if_not_exists{if_not_exists}
 { }
 
-::shared_ptr<prepared_statement> create_table_statement::raw_statement::prepare(database& db) {
+::shared_ptr<prepared_statement> create_table_statement::raw_statement::prepare(database& db, cql_stats& stats) {
     // Column family name
     const sstring& cf_name = _cf_name->get_column_family();
     std::regex name_regex("\\w+");

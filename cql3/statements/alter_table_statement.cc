@@ -274,7 +274,7 @@ shared_ptr<transport::event::schema_change> alter_table_statement::change_event(
 }
 
 shared_ptr<cql3::statements::prepared_statement>
-cql3::statements::alter_table_statement::prepare(database& db) {
+cql3::statements::alter_table_statement::prepare(database& db, cql_stats& stats) {
     return make_shared<prepared_statement>(make_shared<alter_table_statement>(*this));
 }
 

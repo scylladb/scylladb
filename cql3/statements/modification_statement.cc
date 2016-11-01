@@ -573,7 +573,7 @@ modification_statement::process_where_clause(database& db, std::vector<relation_
 namespace raw {
 
 ::shared_ptr<prepared_statement>
-modification_statement::modification_statement::prepare(database& db) {
+modification_statement::modification_statement::prepare(database& db, cql_stats& stats) {
     auto bound_names = get_bound_variables();
     auto statement = prepare(db, bound_names);
     return ::make_shared<prepared>(std::move(statement), *bound_names);
