@@ -99,6 +99,12 @@ query_processor::query_processor(distributed<service::storage_proxy>& proxy,
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "statements_prepared")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.prepare_invocations)));
+    _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id("cql"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "reads")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.reads)));
+
     service::get_local_migration_manager().register_listener(_migration_subscriber.get());
 }
 

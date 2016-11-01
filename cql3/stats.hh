@@ -26,6 +26,7 @@
 namespace cql3 {
 
 struct cql_stats {
+    uint64_t reads = 0;
 };
 
 }
