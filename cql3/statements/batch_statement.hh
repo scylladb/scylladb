@@ -199,6 +199,7 @@ public:
 
     virtual future<shared_ptr<transport::messages::result_message>> execute(
             distributed<service::storage_proxy>& storage, service::query_state& state, const query_options& options) override {
+        ++_stats.batches;
         return execute(storage, state, options, false, options.get_timestamp(state));
     }
 private:

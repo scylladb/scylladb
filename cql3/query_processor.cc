@@ -119,6 +119,11 @@ query_processor::query_processor(distributed<service::storage_proxy>& proxy,
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "deletes")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.deletes)));
+    _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id("cql"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "batches")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.batches)));
 
     service::get_local_migration_manager().register_listener(_migration_subscriber.get());
 }
