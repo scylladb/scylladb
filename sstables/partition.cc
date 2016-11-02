@@ -1101,9 +1101,6 @@ sstable::read_range_rows(schema_ptr schema,
                          const query::partition_range& range,
                          const query::partition_slice& slice,
                          const io_priority_class& pc) {
-    if (query::is_wrap_around(range, *schema)) {
-        fail(unimplemented::cause::WRAP_AROUND);
-    }
     return std::make_unique<mutation_reader::impl>(
         shared_from_this(), std::move(schema), range, slice, pc);
 }

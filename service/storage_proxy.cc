@@ -39,6 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "partition_range_compat.hh"
 #include "db/consistency_level.hh"
 #include "db/commitlog/commitlog.hh"
 #include "storage_proxy.hh"
@@ -2905,7 +2906,7 @@ get_restricted_ranges(locator::token_metadata& tm, const schema& s, query::parti
     dht::ring_position_comparator cmp(s);
 
     // special case for bounds containing exactly 1 token
-    if (start_token(range) == end_token(range) && !range.is_wrap_around(cmp)) {
+    if (start_token(range) == end_token(range)) {
         if (start_token(range).is_minimum()) {
             return {};
         }
@@ -2915,13 +2916,7 @@ get_restricted_ranges(locator::token_metadata& tm, const schema& s, query::parti
     std::vector<query::partition_range> ranges;
 
     auto add_range = [&ranges, &cmp] (query::partition_range&& r) {
-        if (r.is_wrap_around(cmp)) {
-            auto unwrapped = r.unwrap();
-            ranges.emplace_back(std::move(unwrapped.second)); // Append in split order
-            ranges.emplace_back(std::move(unwrapped.first));
-        } else {
-            ranges.emplace_back(std::move(r));
-        }
+        ranges.emplace_back(std::move(r));
     };
 
     // divide the queryRange into pieces delimited by the ring
@@ -3269,7 +3264,7 @@ void storage_proxy::init_messaging_service() {
             return net::messaging_service::no_wait();
         });
     });
-    ms.register_read_data([] (const rpc::client_info& cinfo, query::read_command cmd, query::partition_range pr) {
+    ms.register_read_data([] (const rpc::client_info& cinfo, query::read_command cmd, compat::wrapping_partition_range pr) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = net::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
@@ -3278,16 +3273,21 @@ void storage_proxy::init_messaging_service() {
             tracing::trace(trace_state_ptr, "read_data: message received from /{}", src_addr.addr);
         }
 
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr)] (const query::partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr)] (compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
             auto src_ip = src_addr.addr;
             return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr] (schema_ptr s) {
-                return p->query_singular_local(std::move(s), cmd, pr, query::result_request::result_and_digest, trace_state_ptr);
+                auto pr2 = compat::unwrap(std::move(pr), *s);
+                if (pr2.second) {
+                    // this function assumes singular queries but doesn't validate
+                    throw std::runtime_error("READ_DATA called with wrapping range");
+                }
+                return p->query_singular_local(std::move(s), cmd, std::move(pr2.first), query::result_request::result_and_digest, trace_state_ptr);
             }).finally([&trace_state_ptr, src_ip] () mutable {
                 tracing::trace(trace_state_ptr, "read_data handling is done, sending a response to /{}", src_ip);
             });
         });
     });
-    ms.register_read_mutation_data([] (const rpc::client_info& cinfo, query::read_command cmd, query::partition_range pr) {
+    ms.register_read_mutation_data([] (const rpc::client_info& cinfo, query::read_command cmd, compat::wrapping_partition_range pr) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = net::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
@@ -3295,16 +3295,16 @@ void storage_proxy::init_messaging_service() {
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "read_mutation_data: message received from /{}", src_addr.addr);
         }
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr)] (const query::partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr)] (compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
             auto src_ip = src_addr.addr;
-            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr] (schema_ptr s) {
-                return p->query_mutations_locally(std::move(s), cmd, pr, trace_state_ptr);
+            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr] (schema_ptr s) mutable {
+                return p->query_mutations_locally(std::move(s), cmd, compat::unwrap(std::move(pr), *s), trace_state_ptr);
             }).finally([&trace_state_ptr, src_ip] () mutable {
                 tracing::trace(trace_state_ptr, "read_mutation_data handling is done, sending a response to /{}", src_ip);
             });
         });
     });
-    ms.register_read_digest([] (const rpc::client_info& cinfo, query::read_command cmd, query::partition_range pr) {
+    ms.register_read_digest([] (const rpc::client_info& cinfo, query::read_command cmd, compat::wrapping_partition_range pr) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = net::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
@@ -3312,10 +3312,15 @@ void storage_proxy::init_messaging_service() {
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "read_digest: message received from /{}", src_addr.addr);
         }
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr)] (const query::partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr)] (compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
             auto src_ip = src_addr.addr;
             return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr] (schema_ptr s) {
-                return p->query_singular_local_digest(std::move(s), cmd, pr, trace_state_ptr);
+                auto pr2 = compat::unwrap(std::move(pr), *s);
+                if (pr2.second) {
+                    // this function assumes singular queries but doesn't validate
+                    throw std::runtime_error("READ_DIGEST called with wrapping range");
+                }
+                return p->query_singular_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr);
             }).finally([&trace_state_ptr, src_ip] () mutable {
                 tracing::trace(trace_state_ptr, "read_digest handling is done, sending a response to /{}", src_ip);
             });
@@ -3461,13 +3466,22 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
             });
         });
     } else {
+        return query_nonsingular_mutations_locally(std::move(s), std::move(cmd), {pr}, std::move(trace_state));
+    }
+}
+
+future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const compat::one_or_two_partition_ranges& pr, tracing::trace_state_ptr trace_state) {
+    if (!pr.second) {
+        return query_mutations_locally(std::move(s), std::move(cmd), pr.first, std::move(trace_state));
+    } else {
         return query_nonsingular_mutations_locally(std::move(s), std::move(cmd), pr, std::move(trace_state));
     }
 }
 
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
-storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr, tracing::trace_state_ptr trace_state) {
+storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const std::vector<query::partition_range>& prs, tracing::trace_state_ptr trace_state) {
     struct part {
         query::partition_range pr;
         unsigned shard;
@@ -3479,14 +3493,10 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
             parts.push_back(part{pr, shard, priority});
         }
     };
-    if (pr.is_wrap_around(dht::ring_position_comparator(*s))) {
-        parts.reserve(smp::count * 2);
-        auto unw = pr.unwrap();
-        shard_nonwrapped_partition_range(unw.first, 0);
-        shard_nonwrapped_partition_range(unw.second, 1);
-    } else {
-        parts.reserve(smp::count);
-        shard_nonwrapped_partition_range(pr, 0);
+    parts.reserve(smp::count * prs.size());
+    auto priority = 0u;
+    for (auto&& pr : prs) {
+        shard_nonwrapped_partition_range(pr, priority++);
     }
     return do_with(std::move(parts), [this, s, cmd, trace_state] (std::vector<part>& parts) mutable {
         auto query_part = [this, cmd, gs=global_schema_ptr(s), gt = tracing::global_trace_state_ptr(std::move(trace_state))] (part p) mutable {

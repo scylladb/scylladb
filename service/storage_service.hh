@@ -195,7 +195,7 @@ public:
     }
 #endif
 public:
-    std::vector<range<token>> get_local_ranges(const sstring& keyspace_name) {
+    std::vector<nonwrapping_range<token>> get_local_ranges(const sstring& keyspace_name) {
         return get_ranges_for_endpoint(keyspace_name, get_broadcast_address());
     }
 #if 0
@@ -548,18 +548,18 @@ public:
         return map;
     }
 #endif
-    std::unordered_map<range<token>, std::vector<inet_address>> get_range_to_address_map(const sstring& keyspace) const {
+    std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> get_range_to_address_map(const sstring& keyspace) const {
         return get_range_to_address_map(keyspace, _token_metadata.sorted_tokens());
     }
 
-    std::unordered_map<range<token>, std::vector<inet_address>> get_range_to_address_map_in_local_dc(
+    std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> get_range_to_address_map_in_local_dc(
             const sstring& keyspace) const {
         std::function<bool(const inet_address&)> filter =  [this](const inet_address& address) {
             return is_local_dc(address);
         };
 
         auto orig_map = get_range_to_address_map(keyspace, get_tokens_in_local_dc());
-        std::unordered_map<range<token>, std::vector<inet_address>> filtered_map;
+        std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> filtered_map;
         for (auto entry : orig_map) {
             auto& addresses = filtered_map[entry.first];
             addresses.reserve(entry.second.size());
@@ -585,7 +585,7 @@ public:
         return remote_dc == local_dc;
     }
 
-    std::unordered_map<range<token>, std::vector<inet_address>> get_range_to_address_map(const sstring& keyspace,
+    std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> get_range_to_address_map(const sstring& keyspace,
             const std::vector<token>& sorted_tokens) const {
         // some people just want to get a visual representation of things. Allow null and set it to the first
         // non-system keyspace.
@@ -625,7 +625,7 @@ public:
         std::vector<token_range> ranges;
         //Token.TokenFactory tf = getPartitioner().getTokenFactory();
 
-        std::unordered_map<range<token>, std::vector<inet_address>> range_to_address_map =
+        std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> range_to_address_map =
                 include_only_local_dc
                         ? get_range_to_address_map_in_local_dc(keyspace)
                         : get_range_to_address_map(keyspace);
@@ -649,6 +649,13 @@ public:
                 tr._endpoint_details.push_back(details);
             }
             ranges.push_back(tr);
+        }
+        // Convert to wrapping ranges
+        auto& rf = ranges.front();
+        auto& rb = ranges.back();
+        if (rf._start_token.empty() && rb._end_token.empty() && rf._endpoints == rb._endpoints) {
+            rf._start_token = std::move(rb._start_token);
+            ranges.pop_back();
         }
         return ranges;
     }
@@ -681,10 +688,10 @@ public:
      * @param ranges
      * @return mapping of ranges to the replicas responsible for them.
     */
-    std::unordered_map<range<token>, std::vector<inet_address>> construct_range_to_endpoint_map(
+    std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> construct_range_to_endpoint_map(
             const sstring& keyspace,
-            const std::vector<range<token>>& ranges) const {
-        std::unordered_map<range<token>, std::vector<inet_address>> res;
+            const std::vector<nonwrapping_range<token>>& ranges) const {
+        std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> res;
         for (auto r : ranges) {
             res[r] = _db.local().find_keyspace(keyspace).get_replication_strategy().get_natural_endpoints(r.end()->value());
         }
@@ -849,7 +856,7 @@ private:
      * @param ranges the ranges to find sources for
      * @return multimap of addresses to ranges the address is responsible for
      */
-    std::unordered_multimap<inet_address, range<token>> get_new_source_ranges(const sstring& keyspaceName, const std::vector<range<token>>& ranges);
+    std::unordered_multimap<inet_address, nonwrapping_range<token>> get_new_source_ranges(const sstring& keyspaceName, const std::vector<nonwrapping_range<token>>& ranges);
 public:
     future<> confirm_replication(inet_address node);
 
@@ -875,7 +882,7 @@ private:
     future<> restore_replica_count(inet_address endpoint, inet_address notify_endpoint);
 
     // needs to be modified to accept either a keyspace or ARS.
-    std::unordered_multimap<range<token>, inet_address> get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint);
+    std::unordered_multimap<nonwrapping_range<token>, inet_address> get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint);
 public:
     /** raw load value */
     double get_load();
@@ -1692,7 +1699,7 @@ public:
      * @param ep endpoint we are interested in.
      * @return ranges for the specified endpoint.
      */
-    std::vector<range<token>> get_ranges_for_endpoint(const sstring& name, const gms::inet_address& ep) const {
+    std::vector<nonwrapping_range<token>> get_ranges_for_endpoint(const sstring& name, const gms::inet_address& ep) const {
         return _db.local().find_keyspace(name).get_replication_strategy().get_ranges(ep);
     }
 
@@ -1702,19 +1709,18 @@ public:
      * ranges.
      * @return ranges in sorted order
     */
-    std::vector<range<token>> get_all_ranges(const std::vector<token>& sorted_tokens) const{
+    std::vector<nonwrapping_range<token>> get_all_ranges(const std::vector<token>& sorted_tokens) const{
 
         if (sorted_tokens.empty())
-            return std::vector<range<token>>();
+            return std::vector<nonwrapping_range<token>>();
         int size = sorted_tokens.size();
-        std::vector<range<token>> ranges;
+        std::vector<nonwrapping_range<token>> ranges;
+        ranges.push_back(nonwrapping_range<token>::make_ending_with(range_bound<token>(sorted_tokens[0], true)));
         for (int i = 1; i < size; ++i) {
-            range<token> r(range<token>::bound(sorted_tokens[i - 1], false), range<token>::bound(sorted_tokens[i], true));
+            nonwrapping_range<token> r(range<token>::bound(sorted_tokens[i - 1], false), range<token>::bound(sorted_tokens[i], true));
             ranges.push_back(r);
         }
-        range<token> r(range<token>::bound(sorted_tokens[size - 1], false),
-                range<token>::bound(sorted_tokens[0], true));
-        ranges.push_back(r);
+        ranges.push_back(nonwrapping_range<token>::make_starting_with(range_bound<token>(sorted_tokens[size-1], false)));
 
         return ranges;
     }
@@ -2098,7 +2104,7 @@ private:
      * @param rangesToStreamByKeyspace keyspaces and data ranges with endpoints included for each
      * @return async Future for whether stream was success
      */
-    future<> stream_ranges(std::unordered_map<sstring, std::unordered_multimap<range<token>, inet_address>> ranges_to_stream_by_keyspace);
+    future<> stream_ranges(std::unordered_map<sstring, std::unordered_multimap<nonwrapping_range<token>, inet_address>> ranges_to_stream_by_keyspace);
 
 public:
     /**
@@ -2109,8 +2115,8 @@ public:
      * @param updated collection of the ranges after token is changed
      * @return pair of ranges to stream/fetch for given current and updated range collections
      */
-    std::pair<std::unordered_set<range<token>>, std::unordered_set<range<token>>>
-    calculate_stream_and_fetch_ranges(const std::vector<range<token>>& current, const std::vector<range<token>>& updated);
+    std::pair<std::unordered_set<nonwrapping_range<token>>, std::unordered_set<nonwrapping_range<token>>>
+    calculate_stream_and_fetch_ranges(const std::vector<nonwrapping_range<token>>& current, const std::vector<nonwrapping_range<token>>& updated);
 #if 0
     public void bulkLoad(String directory)
     {

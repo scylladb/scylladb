@@ -55,7 +55,7 @@ namespace streaming {
 
 extern logging::logger sslog;
 
-stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, std::vector<range<dht::token>> ranges, long total_size)
+stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, std::vector<nonwrapping_range<dht::token>> ranges, long total_size)
     : stream_task(session, cf_id)
     , _ranges(std::move(ranges))
     , _total_size(total_size) {
@@ -171,7 +171,7 @@ void stream_transfer_task::start() {
     });
 }
 
-void stream_transfer_task::append_ranges(const std::vector<range<dht::token>>& ranges) {
+void stream_transfer_task::append_ranges(const std::vector<nonwrapping_range<dht::token>>& ranges) {
     _ranges.insert(_ranges.end(), ranges.begin(), ranges.end());
 }
 

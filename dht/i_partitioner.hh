@@ -422,7 +422,7 @@ i_partitioner& global_partitioner();
 
 unsigned shard_of(const token&);
 
-range<ring_position> to_partition_range(range<dht::token>);
+nonwrapping_range<ring_position> to_partition_range(nonwrapping_range<dht::token>);
 
 } // dht
 

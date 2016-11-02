@@ -628,10 +628,6 @@ row_cache::make_scanning_reader(schema_ptr s,
                                 const io_priority_class& pc,
                                 const query::partition_slice& slice,
                                 tracing::trace_state_ptr trace_state) {
-    if (range.is_wrap_around(dht::ring_position_comparator(*s))) {
-        warn(unimplemented::cause::WRAP_AROUND);
-        throw std::runtime_error("row_cache doesn't support wrap-around ranges");
-    }
     return make_mutation_reader<scanning_and_populating_reader>(std::move(s), *this, range, slice, pc, std::move(trace_state));
 }
 
@@ -881,13 +877,7 @@ return _populate_phaser.advance_and_await().then([this, &dk] {
 future<> row_cache::invalidate(const query::partition_range& range) {
     return _populate_phaser.advance_and_await().then([this, &range] {
         with_linearized_managed_bytes([&] {
-            if (range.is_wrap_around(dht::ring_position_comparator(*_schema))) {
-                auto unwrapped = range.unwrap();
-                invalidate_unwrapped(unwrapped.first);
-                invalidate_unwrapped(unwrapped.second);
-            } else {
-                invalidate_unwrapped(range);
-            }
+            invalidate_unwrapped(range);
         });
     });
 }

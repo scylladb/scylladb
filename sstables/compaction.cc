@@ -96,7 +96,7 @@ static api::timestamp_type get_max_purgeable_timestamp(schema_ptr schema,
     return timestamp;
 }
 
-static bool belongs_to_current_node(const dht::token& t, const std::vector<range<dht::token>>& sorted_owned_ranges) {
+static bool belongs_to_current_node(const dht::token& t, const std::vector<nonwrapping_range<dht::token>>& sorted_owned_ranges) {
     auto low = std::lower_bound(sorted_owned_ranges.begin(), sorted_owned_ranges.end(), t,
             [] (const range<dht::token>& a, const dht::token& b) {
         // check that range a is before token b.
@@ -104,7 +104,7 @@ static bool belongs_to_current_node(const dht::token& t, const std::vector<range
     });
 
     if (low != sorted_owned_ranges.end()) {
-        const range<dht::token>& r = *low;
+        const nonwrapping_range<dht::token>& r = *low;
         return r.contains(t, dht::token_comparator());
     }
 
@@ -267,7 +267,7 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
         info->cf = schema->cf_name();
         logger.info("{} {}", (!cleanup) ? "Compacting" : "Cleaning", sstable_logger_msg);
 
-        std::vector<range<dht::token>> owned_ranges;
+        std::vector<nonwrapping_range<dht::token>> owned_ranges;
         if (cleanup) {
             owned_ranges = service::get_local_storage_service().get_local_ranges(schema->ks_name());
         }

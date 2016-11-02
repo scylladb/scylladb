@@ -572,11 +572,6 @@ column_family::make_reader(schema_ptr s,
                            const query::partition_slice& slice,
                            const io_priority_class& pc,
                            tracing::trace_state_ptr trace_state) const {
-    if (query::is_wrap_around(range, *s)) {
-        // make_combined_reader() can't handle streams that wrap around yet.
-        fail(unimplemented::cause::WRAP_AROUND);
-    }
-
     std::vector<mutation_reader> readers;
     readers.reserve(_memtables->size() + 1);
 
@@ -618,10 +613,6 @@ column_family::make_streaming_reader(schema_ptr s,
                            const query::partition_range& range) const {
     auto& slice = query::full_slice;
     auto& pc = service::get_local_streaming_read_priority();
-    if (query::is_wrap_around(range, *s)) {
-        // make_combined_reader() can't handle streams that wrap around yet.
-        fail(unimplemented::cause::WRAP_AROUND);
-    }
 
     std::vector<mutation_reader> readers;
     readers.reserve(_memtables->size() + 1);
@@ -1357,13 +1348,13 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
 }
 
 static bool needs_cleanup(const lw_shared_ptr<sstables::sstable>& sst,
-                   const lw_shared_ptr<std::vector<range<dht::token>>>& owned_ranges,
+                   const lw_shared_ptr<std::vector<nonwrapping_range<dht::token>>>& owned_ranges,
                    schema_ptr s) {
     auto first = sst->get_first_partition_key();
     auto last = sst->get_last_partition_key();
     auto first_token = dht::global_partitioner().get_token(*s, first);
     auto last_token = dht::global_partitioner().get_token(*s, last);
-    range<dht::token> sst_token_range = range<dht::token>::make(first_token, last_token);
+    nonwrapping_range<dht::token> sst_token_range = nonwrapping_range<dht::token>::make(first_token, last_token);
 
     // return true iff sst partition range isn't fully contained in any of the owned ranges.
     for (auto& r : *owned_ranges) {
@@ -1375,8 +1366,8 @@ static bool needs_cleanup(const lw_shared_ptr<sstables::sstable>& sst,
 }
 
 future<> column_family::cleanup_sstables(sstables::compaction_descriptor descriptor) {
-    std::vector<range<dht::token>> r = service::get_local_storage_service().get_local_ranges(_schema->ks_name());
-    auto owned_ranges = make_lw_shared<std::vector<range<dht::token>>>(std::move(r));
+    std::vector<nonwrapping_range<dht::token>> r = service::get_local_storage_service().get_local_ranges(_schema->ks_name());
+    auto owned_ranges = make_lw_shared<std::vector<nonwrapping_range<dht::token>>>(std::move(r));
     auto sstables_to_cleanup = make_lw_shared<std::vector<sstables::shared_sstable>>(std::move(descriptor.sstables));
 
     return parallel_for_each(*sstables_to_cleanup, [this, owned_ranges = std::move(owned_ranges), sstables_to_cleanup] (auto& sst) {

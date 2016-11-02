@@ -339,10 +339,6 @@ memtable::make_reader(schema_ptr s,
                       const query::partition_range& range,
                       const query::partition_slice& slice,
                       const io_priority_class& pc) {
-    if (query::is_wrap_around(range, *s)) {
-        fail(unimplemented::cause::WRAP_AROUND);
-    }
-
     if (query::is_single_partition(range)) {
         const query::ring_position& pos = range.start()->value();
         return _read_section(*this, [&] {

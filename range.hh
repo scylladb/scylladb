@@ -22,6 +22,7 @@
 #pragma once
 
 #include "stdx.hh"
+#include <list>
 #include <experimental/optional>
 #include <iostream>
 #include <boost/range/algorithm/copy.hpp>
@@ -436,12 +437,17 @@ public:
     explicit nonwrapping_range(wrapping_range<T>&& r)
         : _range(std::move(r))
     { }
+    // Can only be called if !r.is_wrap_around().
+    explicit nonwrapping_range(const wrapping_range<T>& r)
+        : _range(r)
+    { }
     operator wrapping_range<T>() const & {
         return _range;
     }
     operator wrapping_range<T>() && {
         return std::move(_range);
     }
+
     // the point is before the range.
     // Comparator must define a total ordering on T.
     template<typename Comparator>
@@ -465,6 +471,9 @@ public:
 
         return wrapping_range<T>::greater_than_or_equal(_range.end_bound(), other._range.start_bound(), cmp)
             && wrapping_range<T>::greater_than_or_equal(other._range.end_bound(), _range.start_bound(), cmp);
+    }
+    static nonwrapping_range make(bound start, bound end) {
+        return nonwrapping_range({std::move(start)}, {std::move(end)});
     }
     static nonwrapping_range make_open_ended_both_sides() {
         return {{}, {}};

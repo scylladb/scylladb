@@ -71,25 +71,16 @@ static std::vector<db::system_keyspace::range_estimates> estimates_for(const col
     std::vector<db::system_keyspace::range_estimates> estimates;
     estimates.reserve(local_ranges.size());
 
-    std::vector<query::partition_range> unwrapped;
-    // Each range defines both bounds.
-    for (auto& range : local_ranges) {
+    // Each range defines both bounds (with the call to compat::wrap)
+    for (auto& range : compat::wrap(local_ranges)) {
         int64_t count{0};
         utils::estimated_histogram hist{0};
-        unwrapped.clear();
-        if (range.is_wrap_around(dht::ring_position_comparator(*cf.schema()))) {
-            auto uw = range.unwrap();
-            unwrapped.push_back(std::move(uw.first));
-            unwrapped.push_back(std::move(uw.second));
-        } else {
-            unwrapped.push_back(range);
-        }
-        for (auto&& uwr : unwrapped) {
-            for (auto&& sstable : cf.select_sstables(uwr)) {
-                nonwrapping_range<dht::token> r(std::move(uwr).transform([](auto&& rp) { return rp.token(); }));
-                count += sstable->estimated_keys_for_range(r);
-                hist.merge(sstable->get_stats_metadata().estimated_row_size);
-            }
+        for (auto uwr : std::vector<query::partition_range>(compat::unwrap(range, *cf.schema()))) {
+          for (auto&& sstable : cf.select_sstables(uwr)) {
+            nonwrapping_range<dht::token> r(std::move(uwr).transform([](auto&& rp) { return rp.token(); }));
+            count += sstable->estimated_keys_for_range(r);
+            hist.merge(sstable->get_stats_metadata().estimated_row_size);
+          }
         }
         estimates.emplace_back(db::system_keyspace::range_estimates{
                 range.start()->value().token(),
@@ -97,7 +88,6 @@ static std::vector<db::system_keyspace::range_estimates> estimates_for(const col
                 count,
                 count > 0 ? hist.mean() : 0});
     }
-
     return estimates;
 }
 

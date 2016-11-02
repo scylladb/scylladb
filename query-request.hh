@@ -36,15 +36,10 @@ template <typename T>
 using range = wrapping_range<T>;
 
 using ring_position = dht::ring_position;
-using partition_range = range<ring_position>;
+using partition_range = nonwrapping_range<ring_position>;
 using clustering_range = nonwrapping_range<clustering_key_prefix>;
 
 extern const partition_range full_partition_range;
-
-inline
-bool is_wrap_around(const query::partition_range& range, const schema& s) {
-    return range.is_wrap_around(dht::ring_position_comparator(s));
-}
 
 inline
 bool is_single_partition(const query::partition_range& range) {
