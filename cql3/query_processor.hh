@@ -77,7 +77,7 @@ private:
 
     cql_stats _cql_stats;
 
-    std::vector<scollectd::registration> _collectd_regs;
+    scollectd::registrations _collectd_regs;
 
     class internal_state;
     std::unique_ptr<internal_state> _internal_state;

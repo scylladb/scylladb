@@ -92,39 +92,33 @@ query_processor::query_processor(distributed<service::storage_proxy>& proxy,
     : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
     , _proxy(proxy)
     , _db(db)
+    , _collectd_regs{
+        scollectd::add_polled_metric(scollectd::type_instance_id("query_processor"
+            , scollectd::per_cpu_plugin_instance
+            , "total_operations", "statements_prepared")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.prepare_invocations)),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cql"
+            , scollectd::per_cpu_plugin_instance
+            , "total_operations", "reads")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.reads)),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cql"
+            , scollectd::per_cpu_plugin_instance
+            , "total_operations", "inserts")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.inserts)),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cql"
+            , scollectd::per_cpu_plugin_instance
+            , "total_operations", "updates")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.updates)),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cql"
+            , scollectd::per_cpu_plugin_instance
+            , "total_operations", "deletes")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.deletes)),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cql"
+            , scollectd::per_cpu_plugin_instance
+            , "total_operations", "batches")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.batches))}
     , _internal_state(new internal_state())
 {
-    _collectd_regs.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("query_processor"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "statements_prepared")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.prepare_invocations)));
-    _collectd_regs.push_back(
-            scollectd::add_polled_metric(scollectd::type_instance_id("cql"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "reads")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.reads)));
-    _collectd_regs.push_back(
-            scollectd::add_polled_metric(scollectd::type_instance_id("cql"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "inserts")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.inserts)));
-    _collectd_regs.push_back(
-            scollectd::add_polled_metric(scollectd::type_instance_id("cql"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "updates")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.updates)));
-    _collectd_regs.push_back(
-            scollectd::add_polled_metric(scollectd::type_instance_id("cql"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "deletes")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.deletes)));
-    _collectd_regs.push_back(
-            scollectd::add_polled_metric(scollectd::type_instance_id("cql"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "batches")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.batches)));
-
     service::get_local_migration_manager().register_listener(_migration_subscriber.get());
 }
 
