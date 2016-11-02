@@ -452,6 +452,22 @@ public:
     stdx::optional<ring_position_range_and_shard> next(const schema& s);
 };
 
+class ring_position_range_vector_sharder {
+    using vec_type = std::vector<nonwrapping_range<ring_position>>;
+    vec_type _ranges;
+    vec_type::iterator _current_range;
+    stdx::optional<ring_position_range_sharder> _current_sharder;
+private:
+    void next_range() {
+        if (_current_range != _ranges.end()) {
+            _current_sharder.emplace(std::move(*_current_range++));
+        }
+    }
+public:
+    explicit ring_position_range_vector_sharder(std::vector<nonwrapping_range<ring_position>> ranges);
+    stdx::optional<ring_position_range_and_shard> next(const schema& s);
+};
+
 nonwrapping_range<ring_position> to_partition_range(nonwrapping_range<dht::token>);
 
 } // dht
