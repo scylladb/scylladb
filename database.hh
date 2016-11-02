@@ -1061,12 +1061,12 @@ public:
     void drop_keyspace(const sstring& name);
     const auto& keyspaces() const { return _keyspaces; }
     std::vector<sstring> get_non_system_keyspaces() const;
-    column_family& find_column_family(const sstring& ks, const sstring& name);
-    const column_family& find_column_family(const sstring& ks, const sstring& name) const;
-    column_family& find_column_family(const utils::UUID&);
-    const column_family& find_column_family(const utils::UUID&) const;
-    column_family& find_column_family(const schema_ptr&);
-    const column_family& find_column_family(const schema_ptr&) const;
+    lw_shared_ptr<column_family> find_column_family(const sstring& ks, const sstring& name);
+    const lw_shared_ptr<column_family> find_column_family(const sstring& ks, const sstring& name) const;
+    lw_shared_ptr<column_family> find_column_family(const utils::UUID&);
+    const lw_shared_ptr<column_family> find_column_family(const utils::UUID&) const;
+    lw_shared_ptr<column_family> find_column_family(const schema_ptr&);
+    const lw_shared_ptr<column_family> find_column_family(const schema_ptr&) const;
     bool column_family_exists(const utils::UUID& uuid) const;
     schema_ptr find_schema(const sstring& ks_name, const sstring& cf_name) const;
     schema_ptr find_schema(const utils::UUID&) const;

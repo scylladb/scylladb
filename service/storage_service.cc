@@ -1684,8 +1684,8 @@ future<> storage_service::do_stop_stream_manager() {
 future<> check_snapshot_not_exist(database& db, sstring ks_name, sstring name) {
     auto& ks = db.find_keyspace(ks_name);
     return parallel_for_each(ks.metadata()->cf_meta_data(), [&db, ks_name = std::move(ks_name), name = std::move(name)] (auto& pair) {
-        auto& cf = db.find_column_family(pair.second);
-        return cf.snapshot_exists(name).then([ks_name = std::move(ks_name), name] (bool exists) {
+        auto cf = db.find_column_family(pair.second);
+        return cf->snapshot_exists(name).then([ks_name = std::move(ks_name), name] (bool exists) {
             if (exists) {
                 throw std::runtime_error(sprint("Keyspace %s: snapshot %s already exists.", ks_name, name));
             }
@@ -1715,8 +1715,8 @@ future<> storage_service::take_snapshot(sstring tag, std::vector<sstring> keyspa
                 return parallel_for_each(keyspace_names, [&db, tag = std::move(tag)] (auto& ks_name) {
                     auto& ks = db.find_keyspace(ks_name);
                     return parallel_for_each(ks.metadata()->cf_meta_data(), [&db, tag = std::move(tag)] (auto& pair) {
-                        auto& cf = db.find_column_family(pair.second);
-                        return cf.snapshot(tag);
+                        auto cf = db.find_column_family(pair.second);
+                        return cf->snapshot(tag);
                     });
                 });
             });
@@ -1747,8 +1747,8 @@ future<> storage_service::take_column_family_snapshot(sstring ks_name, sstring c
     }).then([this, ks_name = std::move(ks_name), cf_name = std::move(cf_name), tag = std::move(tag)] {
         return check_snapshot_not_exist(_db.local(), ks_name, tag).then([this, ks_name, cf_name, tag] {
             return _db.invoke_on_all([ks_name, cf_name, tag] (database &db) {
-                auto& cf = db.find_column_family(ks_name, cf_name);
-                return cf.snapshot(tag);
+                auto cf = db.find_column_family(ks_name, cf_name);
+                return cf->snapshot(tag);
             });
         });
     });
@@ -1813,8 +1813,8 @@ storage_service::get_snapshot_details() {
             std::vector<service::storage_service::snapshot_details> details;
 
             for (auto&& snap_map: pair.second) {
-                auto& cf = _db.local().find_column_family(snap_map.first);
-                details.push_back({ snap_map.second.live, snap_map.second.total, cf.schema()->cf_name(), cf.schema()->ks_name() });
+                auto cf = _db.local().find_column_family(snap_map.first);
+                details.push_back({ snap_map.second.live, snap_map.second.total, cf->schema()->cf_name(), cf->schema()->ks_name() });
             }
             result.emplace(pair.first, std::move(details));
         }
@@ -2652,8 +2652,8 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
     // The statement above is valid at least from the Scylla side of things: it is still totally possible
     // that someones just copies the table over existing ones. There isn't much we can do about it.
     return _db.map_reduce(max_element(), [ks_name, cf_name] (database& db) {
-        auto& cf = db.find_column_family(ks_name, cf_name);
-        return cf.disable_sstable_write();
+        auto cf = db.find_column_family(ks_name, cf_name);
+        return cf->disable_sstable_write();
     }).then([this, cf_name, ks_name] (int64_t max_seen_sstable) {
         // Then, we will reshuffle the tables to make sure that the generation numbers don't go too high.
         // We will do all of it the same CPU, to make sure that we won't have two parallel shufflers stepping
@@ -2674,17 +2674,17 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
         // We provide to reshuffle_sstables() the generation of all existing sstables, such that it will
         // easily know which sstables are new.
         return _db.map_reduce(all_generations(), [ks_name, cf_name] (database& db) {
-            auto& cf = db.find_column_family(ks_name, cf_name);
+            auto cf = db.find_column_family(ks_name, cf_name);
             std::set<int64_t> generations;
-            for (auto& p : *(cf.get_sstables())) {
+            for (auto& p : *(cf->get_sstables())) {
                 generations.insert(p->generation());
             }
             return make_ready_future<std::set<int64_t>>(std::move(generations));
         }).then([this, max_seen_sstable, ks_name, cf_name] (std::set<int64_t> all_generations) {
             auto shard = std::hash<sstring>()(cf_name) % smp::count;
             return _db.invoke_on(shard, [ks_name, cf_name, max_seen_sstable, all_generations = std::move(all_generations)] (database& db) {
-                auto& cf = db.find_column_family(ks_name, cf_name);
-                return cf.reshuffle_sstables(std::move(all_generations), max_seen_sstable + 1);
+                auto cf = db.find_column_family(ks_name, cf_name);
+                return cf->reshuffle_sstables(std::move(all_generations), max_seen_sstable + 1);
             });
         });
     }).then_wrapped([this, ks_name, cf_name] (future<std::vector<sstables::entry_descriptor>> f) {
@@ -2708,8 +2708,8 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
 
         logger.debug("Now accepting writes for sstables with generation larger or equal than {}", new_gen);
         return _db.invoke_on_all([ks_name, cf_name, new_gen] (database& db) {
-            auto& cf = db.find_column_family(ks_name, cf_name);
-            auto disabled = std::chrono::duration_cast<std::chrono::microseconds>(cf.enable_sstable_write(new_gen)).count();
+            auto cf = db.find_column_family(ks_name, cf_name);
+            auto disabled = std::chrono::duration_cast<std::chrono::microseconds>(cf->enable_sstable_write(new_gen)).count();
             logger.info("CF {}.{} at shard {} had SSTables writes disabled for {} usec", ks_name, cf_name, engine().cpu_id(), disabled);
             return make_ready_future<>();
         }).then([new_tables = std::move(new_tables), eptr = std::move(eptr)] {
@@ -2721,8 +2721,8 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
     }).then([this, ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables) {
         auto shard = std::hash<sstring>()(cf_name) % smp::count;
         return _db.invoke_on(shard, [ks_name, cf_name] (database& db) {
-            auto& cf = db.find_column_family(ks_name, cf_name);
-            return cf.flush_upload_dir();
+            auto cf = db.find_column_family(ks_name, cf_name);
+            return cf->flush_upload_dir();
         }).then([new_tables = std::move(new_tables), ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables_from_upload) mutable {
             if (new_tables.empty() && new_tables_from_upload.empty()) {
                 logger.info("No new SSTables were found for {}.{}", ks_name, cf_name);
@@ -2733,8 +2733,8 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
         });
     }).then([this, ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables) {
         return _db.invoke_on_all([ks_name = std::move(ks_name), cf_name = std::move(cf_name), new_tables = std::move(new_tables)] (database& db) {
-            auto& cf = db.find_column_family(ks_name, cf_name);
-            return cf.load_new_sstables(new_tables).then([ks_name = std::move(ks_name), cf_name = std::move(cf_name)] {
+            auto cf = db.find_column_family(ks_name, cf_name);
+            return cf->load_new_sstables(new_tables).then([ks_name = std::move(ks_name), cf_name = std::move(cf_name)] {
                 logger.info("Done loading new SSTables for {}.{}", ks_name, cf_name);
             });
         });
@@ -3212,9 +3212,9 @@ calculate_splits(std::vector<dht::token> tokens, uint32_t split_count, column_fa
 std::vector<std::pair<nonwrapping_range<dht::token>, uint64_t>>
 storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, range<dht::token> range, uint32_t keys_per_split) {
     using range_type = nonwrapping_range<dht::token>;
-    auto& cf = _db.local().find_column_family(ks_name, cf_name);
-    auto schema = cf.schema();
-    auto sstables = cf.get_sstables();
+    auto cf = _db.local().find_column_family(ks_name, cf_name);
+    auto schema = cf->schema();
+    auto sstables = cf->get_sstables();
     uint64_t total_row_count_estimate = 0;
     std::vector<dht::token> tokens;
     std::vector<range_type> unwrapped;
@@ -3230,7 +3230,7 @@ storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, rang
         std::vector<dht::token> range_tokens;
         for (auto &&sst : *sstables) {
             total_row_count_estimate += sst->estimated_keys_for_range(r);
-            auto keys = sst->get_key_samples(*cf.schema(), r);
+            auto keys = sst->get_key_samples(*cf->schema(), r);
             std::transform(keys.begin(), keys.end(), std::back_inserter(range_tokens), [](auto&& k) { return std::move(k.token()); });
         }
         std::sort(range_tokens.begin(), range_tokens.end());
@@ -3243,7 +3243,7 @@ storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, rang
     uint64_t max_split_count = tokens.size() / min_samples_per_split + 1;
     uint32_t split_count = std::max(uint32_t(1), static_cast<uint32_t>(std::min(max_split_count, total_row_count_estimate / keys_per_split)));
 
-    return calculate_splits(std::move(tokens), split_count, cf);
+    return calculate_splits(std::move(tokens), split_count, *cf);
 };
 
 } // namespace service

@@ -58,7 +58,7 @@ future<> foreach_column_family(http_context& ctx, const sstring& name, function<
     auto uuid = get_uuid(name, ctx.db.local());
 
     return ctx.db.invoke_on_all([f, uuid](database& db) {
-        f(db.find_column_family(uuid));
+        f(*(db.find_column_family(uuid)));
     });
 }
 
@@ -91,8 +91,8 @@ static future<json::json_return_type>  get_cf_stats_sum(http_context& ctx, const
         // so to get an estimation of sum, we multiply the mean
         // with count. The information is gather in nano second,
         // but reported in micro
-        column_family& cf = db.find_column_family(uuid);
-        return ((cf.get_stats().*f).hist.count/1000.0) * (cf.get_stats().*f).hist.mean;
+        auto cf = db.find_column_family(uuid);
+        return ((cf->get_stats().*f).hist.count/1000.0) * (cf->get_stats().*f).hist.mean;
     }, 0.0, std::plus<double>()).then([](double res) {
         return make_ready_future<json::json_return_type>((int64_t)res);
     });
@@ -110,7 +110,7 @@ static future<json::json_return_type>  get_cf_histogram(http_context& ctx, const
         utils::timed_rate_moving_average_and_histogram column_family::stats::*f) {
     utils::UUID uuid = get_uuid(name, ctx.db.local());
     return ctx.db.map_reduce0([f, uuid](const database& p) {
-        return (p.find_column_family(uuid).get_stats().*f).hist;},
+        return (p.find_column_family(uuid)->get_stats().*f).hist;},
             utils::ihistogram(),
             std::plus<utils::ihistogram>())
             .then([](const utils::ihistogram& val) {
@@ -137,7 +137,7 @@ static future<json::json_return_type>  get_cf_rate_and_histogram(http_context& c
         utils::timed_rate_moving_average_and_histogram column_family::stats::*f) {
     utils::UUID uuid = get_uuid(name, ctx.db.local());
     return ctx.db.map_reduce0([f, uuid](const database& p) {
-        return (p.find_column_family(uuid).get_stats().*f).rate();},
+        return (p.find_column_family(uuid)->get_stats().*f).rate();},
             utils::rate_moving_average_and_histogram(),
             std::plus<utils::rate_moving_average_and_histogram>())
             .then([](const utils::rate_moving_average_and_histogram& val) {
@@ -219,8 +219,8 @@ static future<json::json_return_type>  sum_sstable(http_context& ctx, const sstr
     auto uuid = get_uuid(name, ctx.db.local());
     return ctx.db.map_reduce0([uuid, total](database& db) {
         std::unordered_map<sstring, uint64_t> m;
-        auto sstables = (total) ? db.find_column_family(uuid).get_sstables_including_compacted_undeleted() :
-                db.find_column_family(uuid).get_sstables();
+        auto sstables = (total) ? db.find_column_family(uuid)->get_sstables_including_compacted_undeleted() :
+                db.find_column_family(uuid)->get_sstables();
         for (auto t : *sstables) {
             m[t->get_filename()] = t->bytes_on_disk();
         }
@@ -723,7 +723,7 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_true_snapshots_size.set(r, [&ctx] (std::unique_ptr<request> req) {
         auto uuid = get_uuid(req->param["name"], ctx.db.local());
-        return ctx.db.local().find_column_family(uuid).get_snapshot_details().then([](
+        return ctx.db.local().find_column_family(uuid)->get_snapshot_details().then([](
                 const std::unordered_map<sstring, column_family::snapshot_details>& sd) {
             int64_t res = 0;
             for (auto i : sd) {
@@ -861,8 +861,8 @@ void set_column_family(http_context& ctx, routes& r) {
         auto uuid = get_uuid(req->param["name"], ctx.db.local());
 
         return ctx.db.map_reduce(sum_ratio<double>(), [uuid](database& db) {
-            column_family& cf = db.find_column_family(uuid);
-            return make_ready_future<double>(get_compression_ratio(cf));
+            auto cf = db.find_column_family(uuid);
+            return make_ready_future<double>(get_compression_ratio(*cf));
         }).then([] (const double& result) {
             return make_ready_future<json::json_return_type>(result);
         });
@@ -892,7 +892,7 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_compaction_strategy_class.set(r, [&ctx](const_req req) {
-        return ctx.db.local().find_column_family(get_uuid(req.param["name"], ctx.db.local())).get_compaction_strategy().name();
+        return ctx.db.local().find_column_family(get_uuid(req.param["name"], ctx.db.local()))->get_compaction_strategy().name();
     });
 
     cf::set_compression_parameters.set(r, [&ctx](std::unique_ptr<request> req) {

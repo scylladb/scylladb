@@ -1924,8 +1924,8 @@ database::init_system_keyspace() {
         auto& ks = find_keyspace(db::system_keyspace::NAME);
         return parallel_for_each(ks.metadata()->cf_meta_data(), [this] (auto& pair) {
             auto cfm = pair.second;
-            auto& cf = this->find_column_family(cfm);
-            cf.mark_ready_for_writes();
+            auto cf = this->find_column_family(cfm);
+            cf->mark_ready_for_writes();
             return make_ready_future<>();
         });
     });
@@ -2089,7 +2089,7 @@ std::vector<lw_shared_ptr<column_family>> database::get_non_system_column_famili
             }));
 }
 
-column_family& database::find_column_family(const sstring& ks_name, const sstring& cf_name) {
+lw_shared_ptr<column_family> database::find_column_family(const sstring& ks_name, const sstring& cf_name) {
     try {
         return find_column_family(find_uuid(ks_name, cf_name));
     } catch (...) {
@@ -2097,7 +2097,7 @@ column_family& database::find_column_family(const sstring& ks_name, const sstrin
     }
 }
 
-const column_family& database::find_column_family(const sstring& ks_name, const sstring& cf_name) const {
+const lw_shared_ptr<column_family> database::find_column_family(const sstring& ks_name, const sstring& cf_name) const {
     try {
         return find_column_family(find_uuid(ks_name, cf_name));
     } catch (...) {
@@ -2105,17 +2105,17 @@ const column_family& database::find_column_family(const sstring& ks_name, const 
     }
 }
 
-column_family& database::find_column_family(const utils::UUID& uuid) {
+lw_shared_ptr<column_family> database::find_column_family(const utils::UUID& uuid) {
     try {
-        return *_column_families.at(uuid);
+        return _column_families.at(uuid);
     } catch (...) {
         std::throw_with_nested(no_such_column_family(uuid));
     }
 }
 
-const column_family& database::find_column_family(const utils::UUID& uuid) const {
+const lw_shared_ptr<column_family> database::find_column_family(const utils::UUID& uuid) const {
     try {
-        return *_column_families.at(uuid);
+        return _column_families.at(uuid);
     } catch (...) {
         std::throw_with_nested(no_such_column_family(uuid));
     }
@@ -2209,11 +2209,11 @@ no_such_column_family::no_such_column_family(const sstring& ks_name, const sstri
 {
 }
 
-column_family& database::find_column_family(const schema_ptr& schema) {
+lw_shared_ptr<column_family> database::find_column_family(const schema_ptr& schema) {
     return find_column_family(schema->id());
 }
 
-const column_family& database::find_column_family(const schema_ptr& schema) const {
+const lw_shared_ptr<column_family> database::find_column_family(const schema_ptr& schema) const {
     return find_column_family(schema->id());
 }
 
@@ -2233,7 +2233,7 @@ schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name)
 }
 
 schema_ptr database::find_schema(const utils::UUID& uuid) const {
-    return find_column_family(uuid).schema();
+    return find_column_family(uuid)->schema();
 }
 
 bool database::has_schema(const sstring& ks_name, const sstring& cf_name) const {
@@ -2382,8 +2382,8 @@ column_family::as_mutation_source(tracing::trace_state_ptr trace_state) const {
 
 future<lw_shared_ptr<query::result>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges, tracing::trace_state_ptr trace_state) {
-    column_family& cf = find_column_family(cmd.cf_id);
-    return cf.query(std::move(s), cmd, request, ranges, std::move(trace_state)).then([this, s = _stats] (auto&& res) {
+    auto cf = find_column_family(cmd.cf_id);
+    return cf->query(std::move(s), cmd, request, ranges, std::move(trace_state)).then([this, s = _stats] (auto&& res) {
         ++s->total_reads;
         return std::move(res);
     });
@@ -2391,8 +2391,8 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_requ
 
 future<reconcilable_result>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const query::partition_range& range, tracing::trace_state_ptr trace_state) {
-    column_family& cf = find_column_family(cmd.cf_id);
-    return mutation_query(std::move(s), cf.as_mutation_source(std::move(trace_state)), range, cmd.slice, cmd.row_limit, cmd.partition_limit,
+    auto cf = find_column_family(cmd.cf_id);
+    return mutation_query(std::move(s), cf->as_mutation_source(std::move(trace_state)), range, cmd.slice, cmd.row_limit, cmd.partition_limit,
             cmd.timestamp).then([this, s = _stats] (auto&& res) {
         ++s->total_reads;
         return std::move(res);
@@ -2543,8 +2543,8 @@ void dirty_memory_manager::maybe_do_active_flush() {
     // However, since we'll very soon have a mechanism in place to account for the memory
     // that was already written in one form or another, that disadvantage is mitigated.
     memtable& biggest_memtable = memtable::from_region(*_region_group.get_largest_region());
-    auto& biggest_cf = _db->find_column_family(biggest_memtable.schema());
-    memtable_list& mtlist = get_memtable_list(biggest_cf);
+    auto biggest_cf = _db->find_column_family(biggest_memtable.schema());
+    memtable_list& mtlist = get_memtable_list(*biggest_cf);
     // Please note that this will eventually take the semaphore and prevent two concurrent flushes.
     // We don't need any other extra protection.
     mtlist.seal_active_memtable(memtable_list::flush_behavior::immediate);
@@ -2565,8 +2565,8 @@ void dirty_memory_manager::start_reclaiming() {
 future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position rp) {
     return _dirty_memory_manager.region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), rp = std::move(rp)] {
         try {
-            auto& cf = find_column_family(m.column_family_id());
-            cf.apply(m, m_schema, rp);
+            auto cf = find_column_family(m.column_family_id());
+            cf->apply(m, m_schema, rp);
         } catch (no_such_column_family&) {
             dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
         }
@@ -2578,14 +2578,14 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m) {
     // is a little in flux and commitlog is created only when db is
     // initied from datadir.
     auto uuid = m.column_family_id();
-    auto& cf = find_column_family(uuid);
+    auto cf = find_column_family(uuid);
     if (!s->is_synced()) {
         throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
                                  s->ks_name(), s->cf_name(), s->version()));
     }
-    if (cf.commitlog() != nullptr) {
+    if (cf->commitlog() != nullptr) {
         commitlog_entry_writer cew(s, m);
-        return cf.commitlog()->add_entry(uuid, cew).then([&m, this, s](auto rp) {
+        return cf->commitlog()->add_entry(uuid, cew).then([&m, this, s](auto rp) {
             return this->apply_in_memory(m, s, rp).handle_exception([this, s, &m] (auto ep) {
                 try {
                     std::rethrow_exception(ep);
@@ -2620,8 +2620,8 @@ future<> database::apply_streaming_mutation(schema_ptr s, utils::UUID plan_id, c
     }
     return _streaming_dirty_memory_manager.region_group().run_when_memory_available([this, &m, plan_id, fragmented, s = std::move(s)] {
         auto uuid = m.column_family_id();
-        auto& cf = find_column_family(uuid);
-        cf.apply_streaming_mutation(s, plan_id, std::move(m), fragmented);
+        auto cf = find_column_family(uuid);
+        cf->apply_streaming_mutation(s, plan_id, std::move(m), fragmented);
     });
 }
 
@@ -2743,8 +2743,8 @@ future<> database::flush_all_memtables() {
 
 future<> database::truncate(sstring ksname, sstring cfname, timestamp_func tsf) {
     auto& ks = find_keyspace(ksname);
-    auto& cf = find_column_family(ksname, cfname);
-    return truncate(ks, cf, std::move(tsf));
+    auto cf = find_column_family(ksname, cfname);
+    return truncate(ks, *cf, std::move(tsf));
 }
 
 future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf)
@@ -2810,8 +2810,8 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
 
     return parallel_for_each(keyspaces, [this, tag] (auto& ks) {
         return parallel_for_each(ks.get().metadata()->cf_meta_data(), [this, tag] (auto& pair) {
-            auto& cf = this->find_column_family(pair.second);
-            return cf.clear_snapshot(tag);
+            auto cf = this->find_column_family(pair.second);
+            return cf->clear_snapshot(tag);
          }).then_wrapped([] (future<> f) {
             dblog.debug("Cleared out snapshot directories");
          });

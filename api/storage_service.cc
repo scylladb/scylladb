@@ -263,11 +263,11 @@ void set_storage_service(http_context& ctx, routes& r) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
         return ctx.db.invoke_on_all([keyspace, column_families] (database& db) {
-            std::vector<column_family*> column_families_vec;
+            std::vector<lw_shared_ptr<column_family>> column_families_vec;
             for (auto cf : column_families) {
-                column_families_vec.push_back(&db.find_column_family(keyspace, cf));
+                column_families_vec.push_back(db.find_column_family(keyspace, cf));
             }
-            return parallel_for_each(column_families_vec, [] (column_family* cf) {
+            return parallel_for_each(column_families_vec, [] (lw_shared_ptr<column_family> cf) {
                     return cf->compact_all_sstables();
             });
         }).then([]{
@@ -282,13 +282,13 @@ void set_storage_service(http_context& ctx, routes& r) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
         return ctx.db.invoke_on_all([keyspace, column_families] (database& db) {
-            std::vector<column_family*> column_families_vec;
+            std::vector<lw_shared_ptr<column_family>> column_families_vec;
             auto& cm = db.get_compaction_manager();
             for (auto cf : column_families) {
-                column_families_vec.push_back(&db.find_column_family(keyspace, cf));
+                column_families_vec.push_back(db.find_column_family(keyspace, cf));
             }
-            return parallel_for_each(column_families_vec, [&cm] (column_family* cf) {
-                return cm.perform_cleanup(cf);
+            return parallel_for_each(column_families_vec, [&cm] (lw_shared_ptr<column_family> cf) {
+                return cm.perform_cleanup(&*cf);
             });
         }).then([]{
             return make_ready_future<json::json_return_type>(0);
@@ -322,7 +322,7 @@ void set_storage_service(http_context& ctx, routes& r) {
         }
         return ctx.db.invoke_on_all([keyspace, column_families] (database& db) {
             return parallel_for_each(column_families, [&db, keyspace](const sstring& cf) mutable {
-                return db.find_column_family(keyspace, cf).flush();
+                return db.find_column_family(keyspace, cf)->flush();
             });
         }).then([]{
                 return make_ready_future<json::json_return_type>(json_void());

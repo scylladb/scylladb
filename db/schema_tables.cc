@@ -615,8 +615,8 @@ future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector
        if (do_flush) {
            proxy.local().get_db().invoke_on_all([s, cfs = std::move(column_families)] (database& db) {
                return parallel_for_each(cfs.begin(), cfs.end(), [&db] (auto& id) {
-                   auto& cf = db.find_column_family(id);
-                   return cf.flush();
+                   auto cf = db.find_column_family(id);
+                   return cf->flush();
                });
            }).get();
        }
@@ -699,17 +699,17 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
 }
 
 static future<> update_column_family(database& db, schema_ptr new_schema) {
-    column_family& cfm = db.find_column_family(new_schema->id());
+    auto cfm = db.find_column_family(new_schema->id());
     keyspace& ks = db.find_keyspace(new_schema->ks_name());
 
-    bool columns_changed = !cfm.schema()->equal_columns(*new_schema);
+    bool columns_changed = !cfm->schema()->equal_columns(*new_schema);
 
     auto s = local_schema_registry().learn(new_schema);
     s->registry_entry()->mark_synced();
-    cfm.set_schema(std::move(s));
+    cfm->set_schema(std::move(s));
     ks.metadata()->add_or_update_column_family(new_schema);
 
-    return service::get_local_migration_manager().notify_update_column_family(cfm.schema(), columns_changed);
+    return service::get_local_migration_manager().notify_update_column_family(cfm->schema(), columns_changed);
 }
 
 // see the comments for merge_keyspaces()
@@ -751,8 +751,8 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
                     auto& ks = db.find_keyspace(s->ks_name());
                     auto cfg = ks.make_column_family_config(*s, db.get_config());
                     db.add_column_family(s, cfg);
-                    auto& cf = db.find_column_family(s);
-                    cf.mark_ready_for_writes();
+                    auto cf = db.find_column_family(s);
+                    cf->mark_ready_for_writes();
                     ks.make_directory_for_column_family(s->cf_name(), s->id()).get();
                     service::get_local_migration_manager().notify_create_column_family(s).get();
                 }

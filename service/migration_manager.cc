@@ -453,7 +453,7 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
 #endif
     try {
         auto& db = get_local_storage_proxy().get_db().local();
-        auto&& old_schema = db.find_column_family(cfm->ks_name(), cfm->cf_name()).schema(); // FIXME: Should we lookup by id?
+        auto&& old_schema = db.find_column_family(cfm->ks_name(), cfm->cf_name())->schema(); // FIXME: Should we lookup by id?
 #if 0
         oldCfm.validateCompatility(cfm);
 #endif

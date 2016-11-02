@@ -38,7 +38,7 @@ future<I> map_reduce_cf_raw(http_context& ctx, const sstring& name, I init,
         Mapper mapper, Reducer reducer) {
     auto uuid = get_uuid(name, ctx.db.local());
     return ctx.db.map_reduce0([mapper, uuid](database& db) {
-        return mapper(db.find_column_family(uuid));
+        return mapper(*(db.find_column_family(uuid)));
     }, init, reducer);
 }
 
@@ -56,7 +56,7 @@ future<I> map_reduce_cf_raw(http_context& ctx, const sstring& name, I init,
         Mapper mapper, Reducer reducer, Result result) {
     auto uuid = get_uuid(name, ctx.db.local());
     return ctx.db.map_reduce0([mapper, uuid](database& db) {
-        return mapper(db.find_column_family(uuid));
+        return mapper(*(db.find_column_family(uuid)));
     }, init, reducer);
 }
 

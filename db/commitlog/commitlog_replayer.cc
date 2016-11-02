@@ -251,25 +251,25 @@ future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> 
             // TODO: might need better verification that the deserialized mutation
             // is schema compatible. My guess is that just applying the mutation
             // will not do this.
-            auto& cf = db.find_column_family(fm.column_family_id());
+            auto cf = db.find_column_family(fm.column_family_id());
 
             if (logger.is_enabled(logging::log_level::debug)) {
                 logger.debug("replaying at {} v={} {}:{} at {}", fm.column_family_id(), fm.schema_version(),
-                        cf.schema()->ks_name(), cf.schema()->cf_name(), rp);
+                        cf->schema()->ks_name(), cf->schema()->cf_name(), rp);
             }
             // Removed forwarding "new" RP. Instead give none/empty.
             // This is what origin does, and it should be fine.
             // The end result should be that once sstables are flushed out
             // their "replay_position" attribute will be empty, which is
             // lower than anything the new session will produce.
-            if (cf.schema()->version() != fm.schema_version()) {
+            if (cf->schema()->version() != fm.schema_version()) {
                 const column_mapping& cm = cm_it->second;
-                mutation m(fm.decorated_key(*cf.schema()), cf.schema());
-                converting_mutation_partition_applier v(cm, *cf.schema(), m.partition());
+                mutation m(fm.decorated_key(*cf->schema()), cf->schema());
+                converting_mutation_partition_applier v(cm, *cf->schema(), m.partition());
                 fm.partition().accept(cm, v);
-                cf.apply(std::move(m));
+                cf->apply(std::move(m));
             } else {
-                cf.apply(fm, cf.schema());
+                cf->apply(fm, cf->schema());
             }
             s->applied_mutations++;
             return make_ready_future<>();

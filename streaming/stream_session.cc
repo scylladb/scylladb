@@ -158,12 +158,12 @@ void stream_session::init_messaging_service_handler() {
                 }
                 std::vector<query::partition_range> query_ranges;
                 try {
-                    auto& cf = db.find_column_family(cf_id);
+                    auto cf = db.find_column_family(cf_id);
                     query_ranges.reserve(ranges.size());
                     for (auto& range : ranges) {
                         query_ranges.push_back(dht::to_partition_range(range));
                     }
-                    return cf.flush_streaming_mutations(plan_id, std::move(query_ranges));
+                    return cf->flush_streaming_mutations(plan_id, std::move(query_ranges));
                 } catch (no_such_column_family) {
                     sslog.warn("[Stream #{}] STREAM_MUTATION_DONE from {}: cf_id={} is missing, assume the table is dropped",
                                 plan_id, from, cf_id);
@@ -386,26 +386,26 @@ void stream_session::start_streaming_files() {
     }
 }
 
-std::vector<column_family*> stream_session::get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families) {
+std::vector<lw_shared_ptr<column_family>> stream_session::get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families) {
     // if columnfamilies are not specified, we add all cf under the keyspace
-    std::vector<column_family*> stores;
+    std::vector<lw_shared_ptr<column_family>> stores;
     auto& db = get_local_db();
     if (column_families.empty()) {
         for (auto& x : db.get_column_families()) {
-            column_family& cf = *(x.second);
-            auto cf_name = cf.schema()->cf_name();
-            auto ks_name = cf.schema()->ks_name();
+            auto cf = x.second;
+            auto cf_name = cf->schema()->cf_name();
+            auto ks_name = cf->schema()->ks_name();
             if (ks_name == keyspace) {
                 sslog.debug("Find ks={} cf={}", ks_name, cf_name);
-                stores.push_back(&cf);
+                stores.push_back(cf);
             }
         }
     } else {
         // TODO: We can move this to database class and use shared_ptr<column_family> instead
         for (auto& cf_name : column_families) {
             try {
-                auto& x = db.find_column_family(keyspace, cf_name);
-                stores.push_back(&x);
+                auto x = db.find_column_family(keyspace, cf_name);
+                stores.push_back(x);
             } catch (no_such_column_family) {
                 sslog.warn("stream_session: {}.{} does not exist: {}\n", keyspace, cf_name, std::current_exception());
                 continue;
@@ -434,8 +434,8 @@ future<> stream_session::receiving_failed(UUID cf_id)
 {
     return get_db().invoke_on_all([cf_id, plan_id = plan_id()] (database& db) {
         try {
-            auto& cf = db.find_column_family(cf_id);
-            return cf.fail_streaming_mutations(plan_id);
+            auto cf = db.find_column_family(cf_id);
+            return cf->fail_streaming_mutations(plan_id);
         } catch (no_such_column_family) {
             return make_ready_future<>();
         }
