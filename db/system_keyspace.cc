@@ -1210,8 +1210,8 @@ future<> update_size_estimates(sstring ks_name, sstring cf_name, std::vector<ran
     for (auto&& e : estimates) {
         auto ck = clustering_key_prefix(std::vector<bytes>{
                      utf8_type->decompose(cf_name),
-                     utf8_type->decompose(dht::global_partitioner().to_sstring(e.range_start_token)),
-                     utf8_type->decompose(dht::global_partitioner().to_sstring(e.range_end_token))});
+                     e.range_start_token,
+                     e.range_end_token});
 
         auto mean_partition_size_col = schema->get_column_definition("mean_partition_size");
         auto cell = atomic_cell::make_live(timestamp, long_type->decompose(e.mean_partition_size), { });
@@ -1243,8 +1243,8 @@ future<std::vector<range_estimates>> query_size_estimates(sstring ks_name, sstri
             if (query_range.contains(estimate_range, &dht::tri_compare)) {
                 estimates.emplace_back(range_estimates{
                     nullptr,
-                    std::move(*estimate_range.start()).value(),
-                    std::move(*estimate_range.end()).value(),
+                    utf8_type->decompose(dht::global_partitioner().to_sstring(estimate_range.start()->value())),
+                    utf8_type->decompose(dht::global_partitioner().to_sstring(estimate_range.end()->value())),
                     row.get_as<int64_t>("partitions_count"),
                     row.get_as<int64_t>("mean_partition_size")});
             }

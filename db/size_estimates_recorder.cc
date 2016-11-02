@@ -85,8 +85,8 @@ static std::vector<db::system_keyspace::range_estimates> estimates_for(const col
         }
         estimates.emplace_back(db::system_keyspace::range_estimates{
                 nullptr,
-                range.start()->value().token(),
-                range.end()->value().token(),
+                utf8_type->decompose(dht::global_partitioner().to_sstring(range.start()->value().token())),
+                utf8_type->decompose(dht::global_partitioner().to_sstring(range.end()->value().token())),
                 count,
                 count > 0 ? hist.mean() : 0});
     }
