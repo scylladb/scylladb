@@ -2361,7 +2361,7 @@ column_family::query(schema_ptr s, const query::read_command& cmd, query::result
         }).then([qs_ptr = std::move(qs_ptr), &qs] {
             return make_ready_future<lw_shared_ptr<query::result>>(
                     make_lw_shared<query::result>(qs.builder.build()));
-        }).finally([lc, this]() mutable {
+        }).finally([lc = std::move(lc), this]() mutable {
             _stats.reads.mark(lc);
             if (lc.is_start()) {
                 _stats.estimated_read.add(lc.latency(), _stats.reads.hist.count);
