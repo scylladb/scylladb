@@ -976,7 +976,7 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
     tracing::set_optional_serial_consistency_level(client_state.get_trace_state(), options.get_serial_consistency());
     tracing::trace(client_state.get_trace_state(), "Creating a batch statement");
 
-    auto batch = ::make_shared<cql3::statements::batch_statement>(-1, cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none());
+    auto batch = ::make_shared<cql3::statements::batch_statement>(-1, cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none(), _server._query_processor.local().get_cql_stats());
     return _server._query_processor.local().process_batch(batch, query_state, options).then([this, stream, batch] (auto msg) {
         return this->make_result(stream, msg);
     }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {

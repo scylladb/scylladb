@@ -73,12 +73,13 @@ operator<<(std::ostream& out, modification_statement::statement_type t) {
     return out;
 }
 
-modification_statement::modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_)
+modification_statement::modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_, uint64_t* cql_stats_counter_ptr)
     : type{type_}
     , _bound_terms{bound_terms}
     , s{schema_}
     , attrs{std::move(attrs_)}
     , _column_operations{}
+    , _cql_modification_counter_ptr(cql_stats_counter_ptr)
 { }
 
 bool modification_statement::uses_function(const sstring& ks_name, const sstring& function_name) const {
@@ -453,6 +454,8 @@ modification_statement::execute(distributed<service::storage_proxy>& proxy, serv
         return execute_with_condition(proxy, qs, options);
     }
 
+    inc_cql_stats();
+
     return execute_without_condition(proxy, qs, options).then([] {
         return make_ready_future<::shared_ptr<transport::messages::result_message>>(
                 ::shared_ptr<transport::messages::result_message>{});
@@ -512,6 +515,8 @@ modification_statement::execute_internal(distributed<service::storage_proxy>& pr
     }
 
     tracing::add_table_name(qs.get_trace_state(), keyspace(), column_family());
+
+    inc_cql_stats();
 
     return get_mutations(proxy, options, true, options.get_timestamp(qs), qs.get_trace_state()).then(
             [&proxy] (auto mutations) {
@@ -575,18 +580,18 @@ namespace raw {
 ::shared_ptr<prepared_statement>
 modification_statement::modification_statement::prepare(database& db, cql_stats& stats) {
     auto bound_names = get_bound_variables();
-    auto statement = prepare(db, bound_names);
+    auto statement = prepare(db, bound_names, stats);
     return ::make_shared<prepared>(std::move(statement), *bound_names);
 }
 
 ::shared_ptr<cql3::statements::modification_statement>
-modification_statement::prepare(database& db, ::shared_ptr<variable_specifications> bound_names) {
+modification_statement::prepare(database& db, ::shared_ptr<variable_specifications> bound_names, cql_stats& stats) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
 
     auto prepared_attributes = _attrs->prepare(db, keyspace(), column_family());
     prepared_attributes->collect_marker_specification(bound_names);
 
-    ::shared_ptr<cql3::statements::modification_statement> stmt = prepare_internal(db, schema, bound_names, std::move(prepared_attributes));
+    ::shared_ptr<cql3::statements::modification_statement> stmt = prepare_internal(db, schema, bound_names, std::move(prepared_attributes), stats);
 
     if (_if_not_exists || _if_exists || !_conditions.empty()) {
         if (stmt->is_counter()) {

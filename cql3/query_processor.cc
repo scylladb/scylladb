@@ -104,6 +104,21 @@ query_processor::query_processor(distributed<service::storage_proxy>& proxy,
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "reads")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.reads)));
+    _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id("cql"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "inserts")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.inserts)));
+    _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id("cql"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "updates")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.updates)));
+    _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id("cql"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "deletes")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.deletes)));
 
     service::get_local_migration_manager().register_listener(_migration_subscriber.get());
 }

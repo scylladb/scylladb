@@ -109,8 +109,10 @@ private:
             return cond->column;
         };
 
+    uint64_t* _cql_modification_counter_ptr = nullptr;
+
 public:
-    modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_);
+    modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_, uint64_t* cql_stats_counter_ptr);
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
 
@@ -152,6 +154,11 @@ public:
                                 staticConditions == null ? Collections.<ColumnDefinition>emptyList() : Iterables.transform(staticConditions, getColumnForCondition));
     }
 #endif
+
+    void inc_cql_stats() {
+        ++(*_cql_modification_counter_ptr);
+    }
+
 public:
     void add_condition(::shared_ptr<column_condition> cond);
 
