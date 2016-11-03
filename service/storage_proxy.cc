@@ -2455,7 +2455,8 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     size_t block_for = db::block_for(ks, cl);
     auto p = shared_from_this();
     // Speculative retry is disabled *OR* there are simply no extra replicas to speculate.
-    if (retry_type == speculative_retry::type::NONE || db::block_for(ks, cl) == all_replicas.size()) {
+    if (retry_type == speculative_retry::type::NONE || block_for == all_replicas.size()
+            || (repair_decision == db::read_repair_decision::DC_LOCAL && is_datacenter_local(cl) && block_for == target_replicas.size())) {
         return ::make_shared<never_speculating_read_executor>(schema, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
     }
 
@@ -2467,18 +2468,28 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     }
 
     // RRD.NONE or RRD.DC_LOCAL w/ multiple DCs.
-    gms::inet_address extra_replica = all_replicas[target_replicas.size()];
-    // With repair decision DC_LOCAL all replicas/target replicas may be in different order, so
-    // we might have to find a replacement that's not already in targetReplicas.
-    if (repair_decision == db::read_repair_decision::DC_LOCAL && boost::range::find(target_replicas, extra_replica) != target_replicas.end()) {
-        auto it = boost::range::find_if(all_replicas, [&target_replicas] (gms::inet_address& a){
-            return boost::range::find(target_replicas, a) == target_replicas.end();
-        });
-        extra_replica = *it;
+    if (target_replicas.size() == block_for) { // If RRD.DC_LOCAL extra replica may already be present
+        auto good_replica = [&target_replicas, local_only = is_datacenter_local(cl)] (gms::inet_address ep) {
+            if (local_only && !db::is_local(ep)) {
+                return false;
+            } else {
+                return boost::range::find(target_replicas, ep) == target_replicas.end();
+            }
+        };
+        gms::inet_address extra_replica = all_replicas[target_replicas.size()];
+        // With repair decision DC_LOCAL all replicas/target replicas may be in different order, so
+        // we might have to find a replacement that's not already in targetReplicas.
+        if (!good_replica(extra_replica)) {
+            auto it = boost::range::find_if(all_replicas, std::move(good_replica));
+            if (it == all_replicas.end()) {
+                logger.trace("read executor no extra target to speculate");
+                return ::make_shared<never_speculating_read_executor>(schema, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
+            }
+            extra_replica = *it;
+        }
+        target_replicas.push_back(extra_replica);
+        logger.trace("creating read executor with extra target {}", extra_replica);
     }
-    target_replicas.push_back(extra_replica);
-
-    logger.trace("creating read executor with extra target {}", extra_replica);
 
     if (retry_type == speculative_retry::type::ALWAYS) {
         return ::make_shared<always_speculating_read_executor>(schema, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
