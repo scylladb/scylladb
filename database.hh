@@ -502,6 +502,8 @@ private:
                               const std::vector<sstables::shared_sstable>& sstables_to_remove);
     void rebuild_statistics();
 private:
+    using virtual_reader_type = std::function<mutation_reader(schema_ptr, const query::partition_range&, const query::partition_slice&, const io_priority_class&, tracing::trace_state_ptr)>;
+    virtual_reader_type _virtual_reader;
     // Creates a mutation reader which covers sstables.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
     // The 'range' parameter must be live as long as the reader is used.
@@ -559,6 +561,10 @@ public:
             const query::partition_range& range = query::full_partition_range) const;
 
     mutation_source as_mutation_source(tracing::trace_state_ptr trace_state) const;
+
+    void set_virtual_reader(virtual_reader_type virtual_reader) {
+        _virtual_reader = std::move(virtual_reader);
+    }
 
     // Queries can be satisfied from multiple data sources, so they are returned
     // as temporaries.

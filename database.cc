@@ -572,6 +572,10 @@ column_family::make_reader(schema_ptr s,
                            const query::partition_slice& slice,
                            const io_priority_class& pc,
                            tracing::trace_state_ptr trace_state) const {
+    if (_virtual_reader) {
+        return _virtual_reader(s, range, slice, pc, trace_state);
+    }
+
     std::vector<mutation_reader> readers;
     readers.reserve(_memtables->size() + 1);
 
