@@ -157,6 +157,7 @@ public:
         uint64_t reads = 0;
         uint64_t background_reads = 0; // client no longer waits for the read
         uint64_t read_retries = 0; // read is retried with new limit
+        uint64_t throttled_writes = 0; // total number of writes ever delayed due to throttling
 
         // Data read attempts
         split_stats data_read_attempts;

@@ -231,6 +231,7 @@ public:
              if (_proxy->need_throttle_writes()) {
                  _throttled = true;
                  _proxy->_throttled_writes.push_back(_id);
+                 ++_proxy->_stats.throttled_writes;
              } else {
                  unthrottle();
              }
@@ -468,6 +469,16 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
                 , scollectd::per_cpu_plugin_instance
                 , "queue_length", "background writes")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, _stats.background_writes)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "queue_length", "throttled writes")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _throttled_writes.size(); })
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "throttled writes")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.throttled_writes)
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
