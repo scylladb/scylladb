@@ -651,11 +651,18 @@ public:
             ranges.push_back(tr);
         }
         // Convert to wrapping ranges
-        auto& rf = ranges.front();
-        auto& rb = ranges.back();
-        if (rf._start_token.empty() && rb._end_token.empty() && rf._endpoints == rb._endpoints) {
-            rf._start_token = std::move(rb._start_token);
-            ranges.pop_back();
+        auto left_inf = boost::find_if(ranges, [] (const token_range& tr) {
+            return tr._start_token.empty();
+        });
+        auto right_inf = boost::find_if(ranges, [] (const token_range& tr) {
+            return tr._end_token.empty();
+        });
+        if (left_inf != right_inf
+                && left_inf != ranges.end()
+                && right_inf != ranges.end()
+                && left_inf->_endpoints == right_inf->_endpoints) {
+            left_inf->_start_token = std::move(right_inf->_start_token);
+            ranges.erase(right_inf);
         }
         return ranges;
     }
