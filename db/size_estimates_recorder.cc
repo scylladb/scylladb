@@ -43,6 +43,7 @@
 #include "database.hh"
 #include "db/system_keyspace.hh"
 #include "service/storage_service.hh"
+#include <boost/range/algorithm/sort.hpp>
 
 static seastar::logger _logger("size_estimates_recorder");
 
@@ -117,6 +118,20 @@ future<> size_estimates_recorder::record_size_estimates() {
                     return dht::ring_position::starting_at(std::move(t));
                 }));
             }
+
+            // compat::wrap(vector<ring_position>) expects ranges to be sorted, so sort them:
+            using rng_type = nonwrapping_range<dht::ring_position>;
+            boost::sort(local_ranges, [&] (const rng_type& r1, const rng_type& r2) {
+                auto&& s1 = r1.start();
+                auto&& s2 = r2.start();
+                if (bool(s1) != bool(s2)) {
+                    return !s1;
+                }
+                if (!s1) {
+                    return false;
+                }
+                return s1->value().token() < s2->value().token();
+            });
 
             _logger.debug("Recording size estimates");
 
