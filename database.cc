@@ -2463,15 +2463,27 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
 
 void
 column_family::apply(const mutation& m, const db::replay_position& rp) {
+    utils::latency_counter lc;
+    _stats.writes.set_latency(lc);
     _memtables->active_memtable().apply(m, rp);
     _memtables->seal_on_overflow();
+    _stats.writes.mark(lc);
+    if (lc.is_start()) {
+        _stats.estimated_write.add(lc.latency(), _stats.writes.hist.count);
+    }
 }
 
 void
 column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& rp) {
+    utils::latency_counter lc;
+    _stats.writes.set_latency(lc);
     check_valid_rp(rp);
     _memtables->active_memtable().apply(m, m_schema, rp);
     _memtables->seal_on_overflow();
+    _stats.writes.mark(lc);
+    if (lc.is_start()) {
+        _stats.estimated_write.add(lc.latency(), _stats.writes.hist.count);
+    }
 }
 
 void column_family::apply_streaming_mutation(schema_ptr m_schema, utils::UUID plan_id, const frozen_mutation& m, bool fragmented) {
@@ -2572,15 +2584,12 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m) {
                                  s->ks_name(), s->cf_name(), s->version()));
     }
 
-    utils::latency_counter lc;
-    cf->get_stats().writes.set_latency(lc);
-
     auto commitlog_work = make_ready_future<db::replay_position>(db::replay_position());
     if (cf->commitlog() != nullptr) {
         commitlog_entry_writer cew(s, m);
         commitlog_work = cf->commitlog()->add_entry(uuid, cew);
     }
-    return commitlog_work.then([this, &m, s, cf] (auto rp) {
+    return commitlog_work.then([this, &m, s] (auto rp) {
         return this->apply_in_memory(m, s, rp).handle_exception([this, s, &m] (auto ep) {
             try {
                 std::rethrow_exception(ep);
@@ -2594,11 +2603,6 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m) {
                 return this->apply(s, m);
             }
         });
-    }).then([cf, lc = std::move(lc)] () mutable {
-        cf->get_stats().writes.mark(lc);
-        if (lc.is_start()) {
-            cf->get_stats().estimated_write.add(lc.latency(), cf->get_stats().writes.hist.count);
-        }
     });
 }
 

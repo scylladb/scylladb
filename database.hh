@@ -700,10 +700,6 @@ public:
         return _stats;
     }
 
-    stats& get_stats() {
-        return _stats;
-    }
-
     ::cf_stats* cf_stats() {
         return _config.cf_stats;
     }
