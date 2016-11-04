@@ -222,6 +222,7 @@ scylla_tests = [
     'tests/database_test',
     'tests/nonwrapping_range_test',
     'tests/input_stream_test',
+    'tests/sstable_atomic_deletion_test',
 ]
 
 apps = [
@@ -309,6 +310,7 @@ scylla_core = (['database.cc',
                  'sstables/compaction.cc',
                  'sstables/compaction_strategy.cc',
                  'sstables/compaction_manager.cc',
+                 'sstables/atomic_deletion.cc',
                  'transport/event.cc',
                  'transport/event_notifier.cc',
                  'transport/server.cc',

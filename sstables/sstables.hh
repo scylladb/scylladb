@@ -49,6 +49,7 @@
 #include "query-request.hh"
 #include "key_reader.hh"
 #include "compound_compat.hh"
+#include "atomic_deletion.hh"
 
 namespace sstables {
 
@@ -697,14 +698,6 @@ future<> await_background_jobs();
 // Invokes await_background_jobs() on all shards
 future<> await_background_jobs_on_all_shards();
 
-struct sstable_to_delete {
-    sstable_to_delete(sstring name, bool shared) : name(std::move(name)), shared(shared) {}
-    sstring name;
-    bool shared = false;
-    friend std::ostream& operator<<(std::ostream& os, const sstable_to_delete& std);
-};
-
-
 // When we compact sstables, we have to atomically instantiate the new
 // sstable and delete the old ones.  Otherwise, if we compact A+B into C,
 // and if A contained some data that was tombstoned by B, and if B was
@@ -722,17 +715,6 @@ struct sstable_to_delete {
 // This function only solves the second problem for now.
 future<> delete_atomically(std::vector<shared_sstable> ssts);
 future<> delete_atomically(std::vector<sstable_to_delete> ssts);
-
-class atomic_deletion_cancelled : public std::exception {
-    std::string _msg;
-public:
-    explicit atomic_deletion_cancelled(std::vector<sstring> names);
-    template <typename StringRange>
-    explicit atomic_deletion_cancelled(StringRange range)
-            : atomic_deletion_cancelled(std::vector<sstring>{range.begin(), range.end()}) {
-    }
-    const char* what() const noexcept override;
-};
 
 // Cancel any deletions scheduled by delete_atomically() and make their
 // futures complete (with an atomic_deletion_cancelled exception).
