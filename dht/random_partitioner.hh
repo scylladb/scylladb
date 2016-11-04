@@ -29,7 +29,9 @@
 namespace dht {
 
 class random_partitioner final : public i_partitioner {
+    unsigned _shard_count;
 public:
+    random_partitioner(unsigned shard_count = smp::count) : _shard_count(shard_count) {}
     virtual const sstring name() { return "org.apache.cassandra.dht.RandomPartitioner"; }
     virtual token get_token(const schema& s, partition_key_view key) override;
     virtual token get_token(const sstables::key_view& key) override;
@@ -38,12 +40,13 @@ public:
     virtual std::map<token, float> describe_ownership(const std::vector<token>& sorted_tokens) override;
     virtual data_type get_token_validator() override { return varint_type; }
     virtual bytes token_to_bytes(const token& t) const override;
-    virtual int tri_compare(const token& t1, const token& t2) override;
+    virtual int tri_compare(const token& t1, const token& t2) const override;
     virtual token midpoint(const token& t1, const token& t2) const;
     virtual sstring to_sstring(const dht::token& t) const override;
     virtual dht::token from_sstring(const sstring& t) const override;
     virtual dht::token from_bytes(bytes_view bytes) const override;
     virtual unsigned shard_of(const token& t) const override;
+    virtual token token_for_next_shard(const token& t) const override;
 private:
     token get_token(bytes data);
 };

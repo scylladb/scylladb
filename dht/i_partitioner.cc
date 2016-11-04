@@ -112,7 +112,7 @@ static inline unsigned char get_byte(bytes_view b, size_t off) {
     }
 }
 
-int i_partitioner::tri_compare(const token& t1, const token& t2) {
+int i_partitioner::tri_compare(const token& t1, const token& t2) const {
     size_t sz = std::max(t1._data.size(), t2._data.size());
 
     for (size_t i = 0; i < sz; i++) {
@@ -261,6 +261,49 @@ std::ostream& operator<<(std::ostream& out, const ring_position& pos) {
 
 unsigned shard_of(const token& t) {
     return global_partitioner().shard_of(t);
+}
+
+stdx::optional<ring_position_range_and_shard>
+ring_position_range_sharder::next(const schema& s) {
+    if (_done) {
+        return {};
+    }
+    auto start = _range.start();
+    auto end = _range.end();
+    auto shard = start ? shard_of(start->value().token()) : global_partitioner().shard_of_minimum_token();
+    auto shard_boundary_token = _partitioner.token_for_next_shard(start ? start->value().token() : minimum_token());
+    auto shard_boundary = ring_position::starting_at(shard_boundary_token);
+    if ((!_range.end() || shard_boundary.less_compare(s, _range.end()->value()))
+            && shard_boundary_token != maximum_token()) {
+        // split the range at end_of_shard
+        end = range_bound<ring_position>(shard_boundary, false);
+        _range = nonwrapping_range<ring_position>(
+                range_bound<ring_position>(shard_boundary, true),
+                std::move(_range.end()));
+    } else {
+        _done = true;
+    }
+    auto ret = ring_position_range_and_shard{nonwrapping_range<ring_position>(std::move(start), std::move(end)), shard};
+    return std::move(ret);
+}
+
+ring_position_range_vector_sharder::ring_position_range_vector_sharder(std::vector<nonwrapping_range<ring_position>> ranges)
+        : _ranges(std::move(ranges))
+        , _current_range(_ranges.begin()) {
+    next_range();
+}
+
+stdx::optional<ring_position_range_and_shard>
+ring_position_range_vector_sharder::next(const schema& s) {
+    if (!_current_sharder) {
+        return stdx::nullopt;
+    }
+    auto ret = _current_sharder->next(s);
+    while (!ret && _current_range != _ranges.end()) {
+        next_range();
+        ret = _current_sharder->next(s);
+    }
+    return ret;
 }
 
 int ring_position_comparator::operator()(const ring_position& lh, const ring_position& rh) const {

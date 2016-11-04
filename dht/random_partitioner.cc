@@ -108,7 +108,7 @@ token random_partitioner::get_token(const sstables::key_view& key) {
     return get_token(bytes(v.begin(), v.end()));
 }
 
-int random_partitioner::tri_compare(const token& t1, const token& t2) {
+int random_partitioner::tri_compare(const token& t1, const token& t2) const {
     auto l1 = token_to_cppint(t1);
     auto l2 = token_to_cppint(t2);
 
@@ -208,18 +208,40 @@ unsigned random_partitioner::shard_of(const token& t) const {
         case token::kind::before_all_keys:
             return 0;
         case token::kind::after_all_keys:
-            return smp::count - 1;
+            return _shard_count - 1;
         case token::kind::key:
-            auto i = (boost::multiprecision::uint256_t(token_to_cppint(t)) * smp::count) >> 127;
-            // token can be [0, 2^127], make sure smp be [0, smp::count)
+            auto i = (boost::multiprecision::uint256_t(token_to_cppint(t)) * _shard_count) >> 127;
+            // token can be [0, 2^127], make sure smp be [0, _shard_count)
             auto smp = i.convert_to<unsigned>();
-            if (smp >= smp::count) {
-                return smp::count - 1;
+            if (smp >= _shard_count) {
+                return _shard_count - 1;
             }
             return smp;
     }
     assert(0);
 }
+
+token
+random_partitioner::token_for_next_shard(const token& t) const {
+    switch (t._kind) {
+        case token::kind::after_all_keys:
+            return maximum_token();
+        case token::kind::before_all_keys:
+        case token::kind::key:
+            auto s = shard_of(t) + 1;
+            if (s == _shard_count) {
+                return maximum_token();
+            }
+            auto t = (boost::multiprecision::uint256_t(s) << 127) / _shard_count;
+            // division truncates, so adjust
+            while (((t * _shard_count) >> 127) != s) {
+                ++t;
+            }
+            return cppint_to_token(t.convert_to<boost::multiprecision::uint128_t>());
+    }
+    assert(0);
+}
+
 
 bytes random_partitioner::token_to_bytes(const token& t) const {
     static const bytes zero_byte(1, int8_t(0x00));
