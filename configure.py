@@ -226,6 +226,7 @@ scylla_tests = [
     'tests/database_test',
     'tests/nonwrapping_range_test',
     'tests/input_stream_test',
+    'tests/sstable_atomic_deletion_test',
 ]
 
 apps = [
