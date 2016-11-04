@@ -206,8 +206,10 @@ public:
             size_t pending_endpoints = 0, std::vector<gms::inet_address> dead_endpoints = {})
             : _id(p->_next_response_id++), _proxy(std::move(p)), _trace_state(trace_state), _cl(cl), _ks(ks), _type(type), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
               _pending_endpoints(pending_endpoints), _dead_endpoints(std::move(dead_endpoints)) {
+        ++_proxy->_stats.writes;
     }
     virtual ~abstract_write_response_handler() {
+        --_proxy->_stats.writes;
         if (_cl_achieved) {
             if (_throttled) {
                 _ready.set_value();
@@ -463,7 +465,7 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
                 , "queue_length", "foreground writes")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _response_handlers.size() - _stats.background_writes; })
+                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _stats.writes - _stats.background_writes; })
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance

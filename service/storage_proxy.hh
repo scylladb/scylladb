@@ -151,6 +151,7 @@ public:
         utils::estimated_histogram estimated_read;
         utils::estimated_histogram estimated_write;
         utils::estimated_histogram estimated_range;
+        uint64_t writes = 0;
         uint64_t background_writes = 0; // client no longer waits for the write
         uint64_t background_write_bytes = 0;
         uint64_t queued_write_bytes = 0;
