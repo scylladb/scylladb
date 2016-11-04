@@ -75,7 +75,9 @@ private:
         uint64_t prepare_invocations = 0;
     } _stats;
 
-    std::vector<scollectd::registration> _collectd_regs;
+    cql_stats _cql_stats;
+
+    scollectd::registrations _collectd_regs;
 
     class internal_state;
     std::unique_ptr<internal_state> _internal_state;
@@ -92,6 +94,11 @@ public:
     distributed<service::storage_proxy>& proxy() {
         return _proxy;
     }
+
+    cql_stats& get_cql_stats() {
+        return _cql_stats;
+    }
+
 #if 0
     public static final QueryProcessor instance = new QueryProcessor();
 #endif

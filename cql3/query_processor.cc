@@ -92,13 +92,33 @@ query_processor::query_processor(distributed<service::storage_proxy>& proxy,
     : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
     , _proxy(proxy)
     , _db(db)
+    , _collectd_regs{
+        scollectd::add_polled_metric(scollectd::type_instance_id("query_processor"
+            , scollectd::per_cpu_plugin_instance
+            , "total_operations", "statements_prepared")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.prepare_invocations)),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cql"
+            , scollectd::per_cpu_plugin_instance
+            , "total_operations", "reads")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.reads)),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cql"
+            , scollectd::per_cpu_plugin_instance
+            , "total_operations", "inserts")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.inserts)),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cql"
+            , scollectd::per_cpu_plugin_instance
+            , "total_operations", "updates")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.updates)),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cql"
+            , scollectd::per_cpu_plugin_instance
+            , "total_operations", "deletes")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.deletes)),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cql"
+            , scollectd::per_cpu_plugin_instance
+            , "total_operations", "batches")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.batches))}
     , _internal_state(new internal_state())
 {
-    _collectd_regs.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("query_processor"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "statements_prepared")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.prepare_invocations)));
     service::get_local_migration_manager().register_listener(_migration_subscriber.get());
 }
 
@@ -285,7 +305,7 @@ query_processor::get_statement(const sstring_view& query, const service::client_
         Tracing.trace("Preparing statement");
 #endif
     ++_stats.prepare_invocations;
-    return statement->prepare(_db.local());
+    return statement->prepare(_db.local(), _cql_stats);
 }
 
 ::shared_ptr<raw::parsed_statement>
@@ -346,7 +366,7 @@ query_options query_processor::make_internal_options(::shared_ptr<statements::pr
 {
     auto& p = _internal_statements[query_string];
     if (p == nullptr) {
-        auto np = parse_statement(query_string)->prepare(_db.local());
+        auto np = parse_statement(query_string)->prepare(_db.local(), _cql_stats);
         np->statement->validate(_proxy, *_internal_state);
         p = std::move(np); // inserts it into map
     }
@@ -382,7 +402,7 @@ query_processor::process(const sstring& query_string,
                          const std::initializer_list<data_value>& values,
                          bool cache)
 {
-    auto p = cache ? prepare_internal(query_string) : parse_statement(query_string)->prepare(_db.local());
+    auto p = cache ? prepare_internal(query_string) : parse_statement(query_string)->prepare(_db.local(), _cql_stats);
     if (!cache) {
         p->statement->validate(_proxy, *_internal_state);
     }

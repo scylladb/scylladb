@@ -87,7 +87,8 @@ select_statement::select_statement(schema_ptr schema,
                                    ::shared_ptr<restrictions::statement_restrictions> restrictions,
                                    bool is_reversed,
                                    ordering_comparator_type ordering_comparator,
-                                   ::shared_ptr<term> limit)
+                                   ::shared_ptr<term> limit,
+                                   cql_stats& stats)
     : _schema(schema)
     , _bound_terms(bound_terms)
     , _parameters(std::move(parameters))
@@ -96,6 +97,7 @@ select_statement::select_statement(schema_ptr schema,
     , _is_reversed(is_reversed)
     , _limit(std::move(limit))
     , _ordering_comparator(std::move(ordering_comparator))
+    , _stats(stats)
 {
     _opts = _selection->get_query_options();
 }
@@ -107,7 +109,7 @@ bool select_statement::uses_function(const sstring& ks_name, const sstring& func
 }
 
 ::shared_ptr<select_statement>
-select_statement::for_selection(schema_ptr schema, ::shared_ptr<selection::selection> selection) {
+select_statement::for_selection(schema_ptr schema, ::shared_ptr<selection::selection> selection, cql_stats& stats) {
     return ::make_shared<select_statement>(schema,
         0,
         _default_parameters,
@@ -115,7 +117,8 @@ select_statement::for_selection(schema_ptr schema, ::shared_ptr<selection::selec
         ::make_shared<restrictions::statement_restrictions>(schema),
         false,
         ordering_comparator_type{},
-        ::shared_ptr<term>{});
+        ::shared_ptr<term>{},
+        stats);
 }
 
 ::shared_ptr<const cql3::metadata> select_statement::get_result_metadata() const {
@@ -227,6 +230,8 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
     int32_t limit = get_limit(options);
     auto now = db_clock::now();
 
+    ++_stats.reads;
+
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
         make_partition_slice(options), limit, to_gc_clock(now), tracing::make_trace_info(state.get_trace_state()), query::max_partitions, options.get_timestamp(state));
 
@@ -331,6 +336,8 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy,
 
     tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
 
+    ++_stats.reads;
+
     if (needs_post_query_ordering() && _limit) {
         return do_with(std::move(partition_ranges), [this, &proxy, &state, command] (auto prs) {
             query::result_merger merger;
@@ -386,7 +393,7 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
     , _limit(std::move(limit))
 { }
 
-::shared_ptr<prepared_statement> select_statement::prepare(database& db) {
+::shared_ptr<prepared_statement> select_statement::prepare(database& db, cql_stats& stats) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto bound_names = get_bound_variables();
 
@@ -418,7 +425,8 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
         std::move(restrictions),
         is_reversed_,
         std::move(ordering_comparator),
-        prepare_limit(db, bound_names));
+        prepare_limit(db, bound_names),
+        stats);
 
     return ::make_shared<prepared>(std::move(stmt), std::move(*bound_names));
 }

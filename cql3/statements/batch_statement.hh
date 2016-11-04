@@ -74,6 +74,7 @@ private:
     std::vector<shared_ptr<modification_statement>> _statements;
     std::unique_ptr<attributes> _attrs;
     bool _has_conditions;
+    cql_stats& _stats;
 public:
     /**
      * Creates a new BatchStatement from a list of statements and a
@@ -85,10 +86,12 @@ public:
      */
     batch_statement(int bound_terms, type type_,
                     std::vector<shared_ptr<modification_statement>> statements,
-                    std::unique_ptr<attributes> attrs)
+                    std::unique_ptr<attributes> attrs,
+                    cql_stats& stats)
             : _bound_terms(bound_terms), _type(type_), _statements(std::move(statements))
             , _attrs(std::move(attrs))
-            , _has_conditions(boost::algorithm::any_of(_statements, std::mem_fn(&modification_statement::has_conditions))) {
+            , _has_conditions(boost::algorithm::any_of(_statements, std::mem_fn(&modification_statement::has_conditions)))
+            , _stats(stats) {
     }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
@@ -175,6 +178,7 @@ private:
                                boost::make_counting_iterator<size_t>(_statements.size()),
                                [this, &storage, &options, now, local, &result, trace_state] (size_t i) {
                 auto&& statement = _statements[i];
+                statement->inc_cql_stats();
                 auto&& statement_options = options.for_statement(i);
                 auto timestamp = _attrs->get_timestamp(now, statement_options);
                 return statement->get_mutations(storage, statement_options, local, timestamp, trace_state).then([&result] (auto&& more) {
@@ -195,6 +199,7 @@ public:
 
     virtual future<shared_ptr<transport::messages::result_message>> execute(
             distributed<service::storage_proxy>& storage, service::query_state& state, const query_options& options) override {
+        ++_stats.batches;
         return execute(storage, state, options, false, options.get_timestamp(state));
     }
 private:

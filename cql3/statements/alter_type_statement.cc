@@ -229,12 +229,12 @@ user_type alter_type_statement::renames::make_updated_type(database& db, user_ty
 }
 
 shared_ptr<cql3::statements::prepared_statement>
-alter_type_statement::add_or_alter::prepare(database& db) {
+alter_type_statement::add_or_alter::prepare(database& db, cql_stats& stats) {
     return make_shared<prepared_statement>(make_shared<alter_type_statement::add_or_alter>(*this));
 }
 
 shared_ptr<cql3::statements::prepared_statement>
-alter_type_statement::renames::prepare(database& db) {
+alter_type_statement::renames::prepare(database& db, cql_stats& stats) {
     return make_shared<prepared_statement>(make_shared<alter_type_statement::renames>(*this));
 }
 

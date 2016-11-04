@@ -46,8 +46,8 @@ namespace cql3 {
 
 namespace statements {
 
-delete_statement::delete_statement(statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs)
-        : modification_statement{type, bound_terms, std::move(s), std::move(attrs)}
+delete_statement::delete_statement(statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs, cql_stats& stats)
+        : modification_statement{type, bound_terms, std::move(s), std::move(attrs), &stats.deletes}
 { }
 
 bool delete_statement::require_full_clustering_key() const {
@@ -80,10 +80,10 @@ void delete_statement::add_update_for_key(mutation& m, const exploded_clustering
 namespace raw {
 
 ::shared_ptr<cql3::statements::modification_statement>
-delete_statement::prepare_internal(database& db, schema_ptr schema, ::shared_ptr<variable_specifications> bound_names,
-        std::unique_ptr<attributes> attrs) {
+delete_statement::prepare_internal(database& db, schema_ptr schema, shared_ptr<variable_specifications> bound_names,
+        std::unique_ptr<attributes> attrs, cql_stats& stats) {
     using statement_type = cql3::statements::modification_statement::statement_type;
-    auto stmt = ::make_shared<cql3::statements::delete_statement>(statement_type::DELETE, bound_names->size(), schema, std::move(attrs));
+    auto stmt = ::make_shared<cql3::statements::delete_statement>(statement_type::DELETE, bound_names->size(), schema, std::move(attrs), stats);
 
     for (auto&& deletion : _deletions) {
         auto&& id = deletion->affected_column()->prepare_column_identifier(schema);

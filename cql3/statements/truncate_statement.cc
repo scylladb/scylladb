@@ -59,7 +59,7 @@ uint32_t truncate_statement::get_bound_terms()
     return 0;
 }
 
-::shared_ptr<prepared_statement> truncate_statement::prepare(database& db)
+::shared_ptr<prepared_statement> truncate_statement::prepare(database& db,cql_stats& stats)
 {
     return ::make_shared<prepared>(this->shared_from_this());
 }

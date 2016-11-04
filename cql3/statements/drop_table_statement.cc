@@ -100,7 +100,7 @@ shared_ptr<transport::event::schema_change> drop_table_statement::change_event()
 }
 
 shared_ptr<cql3::statements::prepared_statement>
-drop_table_statement::prepare(database& db) {
+drop_table_statement::prepare(database& db, cql_stats& stats) {
     return make_shared<prepared_statement>(make_shared<drop_table_statement>(*this));
 }
 

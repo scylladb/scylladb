@@ -83,11 +83,11 @@ protected:
     modification_statement(::shared_ptr<cf_name> name, ::shared_ptr<attributes::raw> attrs, conditions_vector conditions, bool if_not_exists, bool if_exists);
 
 public:
-    virtual ::shared_ptr<prepared> prepare(database& db) override;
-    ::shared_ptr<cql3::statements::modification_statement> prepare(database& db, ::shared_ptr<variable_specifications> bound_names);;
+    virtual ::shared_ptr<prepared> prepare(database& db, cql_stats& stats) override;
+    ::shared_ptr<cql3::statements::modification_statement> prepare(database& db, ::shared_ptr<variable_specifications> bound_names, cql_stats& stats);
 protected:
     virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(database& db, schema_ptr schema,
-        ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs) = 0;
+        ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats) = 0;
 };
 
 }
