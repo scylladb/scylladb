@@ -919,8 +919,8 @@ future<> force_blocking_flush(sstring cfname) {
     assert(qctx);
     return qctx->_db.invoke_on_all([cfname = std::move(cfname)](database& db) {
         // if (!Boolean.getBoolean("cassandra.unsafesystem"))
-        auto cf = db.find_column_family(NAME, cfname);
-        return cf->flush();
+        column_family& cf = db.find_column_family(NAME, cfname);
+        return cf.flush();
     });
 }
 

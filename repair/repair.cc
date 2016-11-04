@@ -359,9 +359,9 @@ std::ostream& operator<<(std::ostream& out, const partition_checksum& c) {
 static future<partition_checksum> checksum_range_shard(database &db,
         const sstring& keyspace_name, const sstring& cf_name,
         const ::nonwrapping_range<dht::token>& range, repair_checksum hash_version) {
-    auto cf = db.find_column_family(keyspace_name, cf_name);
-    return do_with(dht::to_partition_range(range), [cf, hash_version] (const auto& partition_range) {
-        auto reader = cf->make_streaming_reader(cf->schema(), partition_range);
+    auto& cf = db.find_column_family(keyspace_name, cf_name);
+    return do_with(dht::to_partition_range(range), [&cf, hash_version] (const auto& partition_range) {
+        auto reader = cf.make_streaming_reader(cf.schema(), partition_range);
         return do_with(std::move(reader), partition_checksum(),
             [hash_version] (auto& reader, auto& checksum) {
             return repeat([&reader, &checksum, hash_version] () {
@@ -485,7 +485,7 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
     // FIXME: column_family should have a method to estimate the number of
     // partitions (and of course it should use cardinality estimation bitmaps,
     // not trivial sum). We shouldn't have this ugly code here...
-    auto sstables = db.local().find_column_family(keyspace, cf)->get_sstables();
+    auto sstables = db.local().find_column_family(keyspace, cf).get_sstables();
     uint64_t estimated_partitions = 0;
     for (auto sst : *sstables) {
         estimated_partitions += sst->get_estimated_key_count();
