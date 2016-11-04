@@ -171,7 +171,7 @@ public:
     }
 };
 
-class abstract_write_response_handler {
+class abstract_write_response_handler : public enable_shared_from_this<abstract_write_response_handler> {
 protected:
     storage_proxy::response_id_type _id;
     promise<> _ready; // available when cl is achieved
@@ -345,7 +345,7 @@ void storage_proxy::unthrottle() {
    }
 }
 
-storage_proxy::response_id_type storage_proxy::register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h) {
+storage_proxy::response_id_type storage_proxy::register_response_handler(shared_ptr<abstract_write_response_handler>&& h) {
     auto id = h->id();
     auto e = _response_handlers.emplace(id, rh_entry(std::move(h), [this, id] {
         auto& e = _response_handlers.find(id)->second;
@@ -395,22 +395,22 @@ future<> storage_proxy::response_wait(storage_proxy::response_id_type id, clock_
     return e.handler->wait();
 }
 
-abstract_write_response_handler& storage_proxy::get_write_response_handler(storage_proxy::response_id_type id) {
-        return *_response_handlers.find(id)->second.handler;
+::shared_ptr<abstract_write_response_handler>& storage_proxy::get_write_response_handler(storage_proxy::response_id_type id) {
+        return _response_handlers.find(id)->second.handler;
 }
 
 storage_proxy::response_id_type storage_proxy::create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m,
                              std::unordered_set<gms::inet_address> targets, const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address> dead_endpoints, tracing::trace_state_ptr tr_state)
 {
-    std::unique_ptr<abstract_write_response_handler> h;
+    shared_ptr<abstract_write_response_handler> h;
     auto& rs = ks.get_replication_strategy();
 
     if (db::is_datacenter_local(cl)) {
-        h = std::make_unique<datacenter_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), std::move(pending_endpoints), std::move(dead_endpoints), std::move(tr_state));
+        h = ::make_shared<datacenter_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), std::move(pending_endpoints), std::move(dead_endpoints), std::move(tr_state));
     } else if (cl == db::consistency_level::EACH_QUORUM && rs.get_type() == locator::replication_strategy_type::network_topology){
-        h = std::make_unique<datacenter_sync_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), std::move(pending_endpoints), std::move(dead_endpoints), std::move(tr_state));
+        h = ::make_shared<datacenter_sync_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), std::move(pending_endpoints), std::move(dead_endpoints), std::move(tr_state));
     } else {
-        h = std::make_unique<write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), std::move(pending_endpoints), std::move(dead_endpoints), std::move(tr_state));
+        h = ::make_shared<write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), std::move(pending_endpoints), std::move(dead_endpoints), std::move(tr_state));
     }
     return register_response_handler(std::move(h));
 }
@@ -560,7 +560,7 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
     }));
 }
 
-storage_proxy::rh_entry::rh_entry(std::unique_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb) : handler(std::move(h)), expire_timer(std::move(cb)) {}
+storage_proxy::rh_entry::rh_entry(shared_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb) : handler(std::move(h)), expire_timer(std::move(cb)) {}
 
 storage_proxy::unique_response_handler::unique_response_handler(storage_proxy& p_, response_id_type id_) : id(id_), p(p_) {}
 storage_proxy::unique_response_handler::unique_response_handler(unique_response_handler&& x) : id(x.id), p(x.p) { x.id = 0; };
@@ -1061,7 +1061,7 @@ storage_proxy::create_write_response_handler(const std::unordered_map<gms::inet_
 
 void
 storage_proxy::hint_to_dead_endpoints(response_id_type id, db::consistency_level cl) {
-    auto& h = get_write_response_handler(id);
+    auto& h = *get_write_response_handler(id);
 
     size_t hints = hint_to_dead_endpoints(h._mutation_holder, h.get_dead_endpoints());
 
@@ -1330,7 +1330,8 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     std::vector<std::pair<const sstring, std::vector<gms::inet_address>>> local;
     local.reserve(3);
 
-    auto&& handler = get_write_response_handler(response_id);
+    auto handler_ptr = get_write_response_handler(response_id);
+    auto& handler = *handler_ptr;
 
     for(auto dest: handler.get_targets()) {
         sstring dc = get_dc(dest);
