@@ -268,23 +268,21 @@ ring_position_range_sharder::next(const schema& s) {
     if (_done) {
         return {};
     }
-    auto start = _range.start();
-    auto end = _range.end();
-    auto shard = start ? shard_of(start->value().token()) : global_partitioner().shard_of_minimum_token();
-    auto shard_boundary_token = _partitioner.token_for_next_shard(start ? start->value().token() : minimum_token());
+    auto shard = _range.start() ? shard_of(_range.start()->value().token()) : global_partitioner().shard_of_minimum_token();
+    auto shard_boundary_token = _partitioner.token_for_next_shard(_range.start() ? _range.start()->value().token() : minimum_token());
     auto shard_boundary = ring_position::starting_at(shard_boundary_token);
     if ((!_range.end() || shard_boundary.less_compare(s, _range.end()->value()))
             && shard_boundary_token != maximum_token()) {
         // split the range at end_of_shard
-        end = range_bound<ring_position>(shard_boundary, false);
+        auto start = _range.start();
+        auto end = range_bound<ring_position>(shard_boundary, false);
         _range = nonwrapping_range<ring_position>(
-                range_bound<ring_position>(shard_boundary, true),
+                range_bound<ring_position>(std::move(shard_boundary), true),
                 std::move(_range.end()));
-    } else {
-        _done = true;
+        return ring_position_range_and_shard{nonwrapping_range<ring_position>(std::move(start), std::move(end)), shard};
     }
-    auto ret = ring_position_range_and_shard{nonwrapping_range<ring_position>(std::move(start), std::move(end)), shard};
-    return std::move(ret);
+    _done = true;
+    return ring_position_range_and_shard{std::move(_range), shard};
 }
 
 ring_position_range_vector_sharder::ring_position_range_vector_sharder(std::vector<nonwrapping_range<ring_position>> ranges)
