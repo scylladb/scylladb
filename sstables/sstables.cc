@@ -2456,11 +2456,12 @@ using shards_agreeing_to_delete_sstable_type = std::unordered_set<shard_id>;
 using sstables_to_delete_atomically_type = std::set<sstring>;
 struct pending_deletion {
     sstables_to_delete_atomically_type names;
-    std::vector<lw_shared_ptr<promise<>>> completions;
+    std::unordered_set<lw_shared_ptr<promise<>>> completions;
 };
 
 static thread_local bool g_atomic_deletions_cancelled = false;
-static thread_local std::list<lw_shared_ptr<pending_deletion>> g_atomic_deletion_sets;
+// map from sstable name to a set of sstables that must be deleted atomically, including itself
+static thread_local std::unordered_map<sstring, lw_shared_ptr<pending_deletion>> g_atomic_deletion_sets;
 static thread_local std::unordered_map<sstring, shards_agreeing_to_delete_sstable_type> g_shards_agreeing_to_delete_sstable;
 
 static logging::logger deletion_logger("sstable-deletion");
@@ -2480,7 +2481,7 @@ do_delete_atomically(std::vector<sstable_to_delete> atomic_deletion_set, unsigne
 
     // Insert atomic_deletion_set into the list of sets pending deletion.  If the new set
     // overlaps with an existing set, merge them (the merged set will be deleted atomically).
-    std::list<lw_shared_ptr<pending_deletion>> new_atomic_deletion_sets;
+    std::unordered_map<sstring, lw_shared_ptr<pending_deletion>> new_atomic_deletion_sets;
     auto merged_set = make_lw_shared(pending_deletion());
     for (auto&& sst_to_delete : atomic_deletion_set) {
         merged_set->names.insert(sst_to_delete.name);
@@ -2489,26 +2490,32 @@ do_delete_atomically(std::vector<sstable_to_delete> atomic_deletion_set, unsigne
                 g_shards_agreeing_to_delete_sstable[sst_to_delete.name].insert(shard);
             }
         }
+        new_atomic_deletion_sets.emplace(sst_to_delete.name, merged_set);
     }
-    merged_set->completions.push_back(make_lw_shared<promise<>>());
-    auto ret = merged_set->completions.back()->get_future();
-    for (auto&& old_set : g_atomic_deletion_sets) {
-         auto intersection = sstables_to_delete_atomically_type();
-         boost::set_intersection(merged_set->names, old_set->names, std::inserter(intersection, intersection.end()));
-         if (intersection.empty()) {
-             // We copy old_set to avoid corrupting g_atomic_deletion_sets if we fail
-             // further on.
-             new_atomic_deletion_sets.push_back(old_set);
-         } else {
-             deletion_logger.debug("merging with {}", old_set->names);
-             merged_set->names.insert(old_set->names.begin(), old_set->names.end());
-             boost::push_back(merged_set->completions, old_set->completions);
-         }
+    auto pr = make_lw_shared<promise<>>();
+    merged_set->completions.insert(pr);
+    auto ret = pr->get_future();
+    for (auto&& sst_to_delete : atomic_deletion_set) {
+        auto i = g_atomic_deletion_sets.find(sst_to_delete.name);
+        // merge from old deletion set to new deletion set
+        // i->second can be nullptr, see below why
+        if (i != g_atomic_deletion_sets.end() && i->second) {
+            boost::copy(i->second->names, std::inserter(merged_set->names, merged_set->names.end()));
+            boost::copy(i->second->completions, std::inserter(merged_set->completions, merged_set->completions.end()));
+        }
     }
     deletion_logger.debug("new atomic set: {}", merged_set->names);
-    new_atomic_deletion_sets.push_back(merged_set);
-    // can now exception-safely commit:
-    g_atomic_deletion_sets = std::move(new_atomic_deletion_sets);
+    // we need to merge new_atomic_deletion_sets into g_atomic_deletion_sets,
+    // but beware of exceptions.  We do that with a first pass that inserts
+    // nullptr as the value, so the second pass only replaces, and does not allocate
+    for (auto&& sst_to_delete : atomic_deletion_set) {
+        g_atomic_deletion_sets.emplace(sst_to_delete.name, nullptr);
+    }
+    // now, no allocations are involved, so this commits the operation atomically
+    for (auto&& n : merged_set->names) {
+        auto i = g_atomic_deletion_sets.find(n);
+        i->second = merged_set;
+    }
 
     // Mark each sstable as being deleted from deleting_shard.  We have to do
     // this in a separate pass, so the consideration whether we can delete or not
@@ -2527,8 +2534,8 @@ do_delete_atomically(std::vector<sstable_to_delete> atomic_deletion_set, unsigne
     }
 
     // Cannot recover from a failed deletion
-    g_atomic_deletion_sets.pop_back();
     for (auto&& name : merged_set->names) {
+        g_atomic_deletion_sets.erase(name);
         g_shards_agreeing_to_delete_sstable.erase(name);
     }
 
@@ -2569,9 +2576,15 @@ void
 cancel_atomic_deletions() {
     g_atomic_deletions_cancelled = true;
     for (auto&& pd : g_atomic_deletion_sets) {
-        for (auto&& c : pd->completions) {
-            c->set_exception(atomic_deletion_cancelled(pd->names));
+        if (!pd.second) {
+            // Could happen if a delete_atomically() failed
+            continue;
         }
+        for (auto&& c : pd.second->completions) {
+            c->set_exception(atomic_deletion_cancelled(pd.second->names));
+        }
+        // since sets are shared, make sure we don't hit the same one again
+        pd.second->completions.clear();
     }
     g_atomic_deletion_sets.clear();
     g_shards_agreeing_to_delete_sstable.clear();
