@@ -2464,12 +2464,30 @@ class atomic_deletion_manager {
     // map from sstable name to a set of sstables that must be deleted atomically, including itself
     std::unordered_map<sstring, lw_shared_ptr<pending_deletion>> _atomic_deletion_sets;
     std::unordered_map<sstring, shards_agreeing_to_delete_sstable_type> _shards_agreeing_to_delete_sstable;
+    unsigned _shard_count;
+    std::function<future<> (std::vector<sstring> sstables)> _delete_sstables;
 public:
+    atomic_deletion_manager(unsigned shard_count,
+            std::function<future<> (std::vector<sstring> sstables)> delete_sstables);
     future<> delete_atomically(std::vector<sstable_to_delete> atomic_deletion_set, unsigned deleting_shard);
     void cancel_atomic_deletions();
 };
 
-static thread_local atomic_deletion_manager g_atomic_deletion_manager;
+future<>
+delete_sstables(std::vector<sstring> tocs) {
+    // FIXME: this needs to be done atomically (using a log file of sstables we intend to delete)
+    return parallel_for_each(tocs, [] (sstring name) {
+        return remove_by_toc_name(name);
+    });
+}
+
+static thread_local atomic_deletion_manager g_atomic_deletion_manager(smp::count, delete_sstables);
+
+atomic_deletion_manager::atomic_deletion_manager(unsigned shard_count,
+        std::function<future<> (std::vector<sstring> sstables)> delete_sstables)
+        : _shard_count(shard_count)
+        , _delete_sstables(std::move(delete_sstables)) {
+}
 
 future<>
 atomic_deletion_manager::delete_atomically(std::vector<sstable_to_delete> atomic_deletion_set, unsigned deleting_shard) {
@@ -2490,7 +2508,7 @@ atomic_deletion_manager::delete_atomically(std::vector<sstable_to_delete> atomic
     for (auto&& sst_to_delete : atomic_deletion_set) {
         merged_set->names.insert(sst_to_delete.name);
         if (!sst_to_delete.shared) {
-            for (auto shard : boost::irange<shard_id>(0, smp::count)) {
+            for (auto shard : boost::irange<shard_id>(0, _shard_count)) {
                 _shards_agreeing_to_delete_sstable[sst_to_delete.name].insert(shard);
             }
         }
@@ -2530,7 +2548,7 @@ atomic_deletion_manager::delete_atomically(std::vector<sstable_to_delete> atomic
 
     // Figure out if the (possibly merged) set can be deleted
     for (auto&& sst : merged_set->names) {
-        if (_shards_agreeing_to_delete_sstable[sst].size() != smp::count) {
+        if (_shards_agreeing_to_delete_sstable[sst].size() != _shard_count) {
             // Not everyone agrees, leave the set pending
             _deletion_logger.debug("deferring deletion until all shards agree");
             return ret;
@@ -2544,11 +2562,9 @@ atomic_deletion_manager::delete_atomically(std::vector<sstable_to_delete> atomic
     }
 
     // Everyone agrees, let's delete
-    // FIXME: this needs to be done atomically (using a log file of sstables we intend to delete)
-    parallel_for_each(merged_set->names, [this] (sstring name) {
-        _deletion_logger.debug("deleting {}", name);
-        return remove_by_toc_name(name);
-    }).then_wrapped([this, merged_set] (future<> result) {
+    auto names = boost::copy_range<std::vector<sstring>>(merged_set->names);
+    _deletion_logger.debug("deleting {}", names);
+    return _delete_sstables(names).then_wrapped([this, merged_set] (future<> result) {
         _deletion_logger.debug("atomic deletion completed: {}", merged_set->names);
         shared_future<> sf(std::move(result));
         for (auto&& comp : merged_set->completions) {
