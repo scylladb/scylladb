@@ -1253,7 +1253,8 @@ static future<std::vector<unsigned long>> compact_sstables(std::vector<unsigned 
             auto candidates = get_candidates_for_leveled_strategy(*cf);
             leveled_manifest manifest = leveled_manifest::create(*cf, candidates, 1);
             std::vector<stdx::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
-            auto candidate = manifest.get_compaction_candidates(last_compacted_keys);
+            std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
+            auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
             BOOST_REQUIRE(candidate.sstables.size() == sstables->size());
             BOOST_REQUIRE(candidate.level == 1);
             BOOST_REQUIRE(candidate.max_sstable_bytes == 1024*1024);
@@ -1732,7 +1733,8 @@ SEASTAR_TEST_CASE(leveled_01) {
     leveled_manifest manifest = leveled_manifest::create(*cf, candidates, max_sstable_size_in_mb);
     BOOST_REQUIRE(manifest.get_level_size(0) == 2);
     std::vector<stdx::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
-    auto candidate = manifest.get_compaction_candidates(last_compacted_keys);
+    std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
+    auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.sstables.size() == 2);
     BOOST_REQUIRE(candidate.level == 0);
 
@@ -1788,7 +1790,8 @@ SEASTAR_TEST_CASE(leveled_02) {
     leveled_manifest manifest = leveled_manifest::create(*cf, candidates, max_sstable_size_in_mb);
     BOOST_REQUIRE(manifest.get_level_size(0) == 3);
     std::vector<stdx::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
-    auto candidate = manifest.get_compaction_candidates(last_compacted_keys);
+    std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
+    auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.sstables.size() == 3);
     BOOST_REQUIRE(candidate.level == 0);
 
@@ -1847,7 +1850,8 @@ SEASTAR_TEST_CASE(leveled_03) {
     BOOST_REQUIRE(manifest.get_level_size(0) == 2);
     BOOST_REQUIRE(manifest.get_level_size(1) == 2);
     std::vector<stdx::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
-    auto candidate = manifest.get_compaction_candidates(last_compacted_keys);
+    std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
+    auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.sstables.size() == 3);
     BOOST_REQUIRE(candidate.level == 1);
 
@@ -1918,7 +1922,8 @@ SEASTAR_TEST_CASE(leveled_04) {
     BOOST_REQUIRE(level2_score < 1.001);
 
     std::vector<stdx::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
-    auto candidate = manifest.get_compaction_candidates(last_compacted_keys);
+    std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
+    auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.sstables.size() == 2);
     BOOST_REQUIRE(candidate.level == 2);
 
@@ -1981,7 +1986,8 @@ SEASTAR_TEST_CASE(leveled_06) {
     BOOST_REQUIRE(manifest.get_level_size(2) == 0);
 
     std::vector<stdx::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
-    auto candidate = manifest.get_compaction_candidates(last_compacted_keys);
+    std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
+    auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.level == 2);
     BOOST_REQUIRE(candidate.sstables.size() == 1);
     auto& sst = (candidate.sstables)[0];
