@@ -3068,3 +3068,23 @@ SEASTAR_TEST_CASE(test_unknown_component) {
         BOOST_REQUIRE(!file_exists(tmp->path + "/la-2-big-UNKNOWN.txt").get0());
     });
 }
+
+SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_test) {
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
+    auto cm = make_lw_shared<compaction_manager>();
+    auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm);
+    auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
+
+    std::vector<sstables::shared_sstable> candidates;
+    int max_threshold = cf->schema()->max_compaction_threshold();
+    candidates.reserve(max_threshold+1);
+    for (auto i = 0; i < (max_threshold+1); i++) { // (max_threshold+1) sstables of similar size
+        auto sst = make_lw_shared<sstable>(s, "", i, la, big);
+        sstables::test(sst).set_data_file_size(1);
+        candidates.push_back(std::move(sst));
+    }
+    auto desc = cs.get_sstables_for_compaction(*cf, std::move(candidates));
+    BOOST_REQUIRE(desc.sstables.size() == size_t(max_threshold));
+    return make_ready_future<>();
+}

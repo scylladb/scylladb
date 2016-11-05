@@ -107,6 +107,10 @@ public:
         _sst->_dir = dir;
     }
 
+    void set_data_file_size(uint64_t size) {
+        _sst->_data_file_size = size;
+    }
+
     future<> store() {
         _sst->_components.erase(sstable::component_type::Index);
         _sst->_components.erase(sstable::component_type::Data);
