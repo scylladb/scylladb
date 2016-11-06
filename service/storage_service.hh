@@ -657,10 +657,12 @@ public:
         auto right_inf = boost::find_if(ranges, [] (const token_range& tr) {
             return tr._end_token.empty();
         });
+        using set = std::unordered_set<sstring>;
         if (left_inf != right_inf
                 && left_inf != ranges.end()
                 && right_inf != ranges.end()
-                && left_inf->_endpoints == right_inf->_endpoints) {
+                && (boost::copy_range<set>(left_inf->_endpoints)
+                     == boost::copy_range<set>(right_inf->_endpoints))) {
             left_inf->_start_token = std::move(right_inf->_start_token);
             ranges.erase(right_inf);
         }
