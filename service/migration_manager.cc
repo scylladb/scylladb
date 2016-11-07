@@ -273,6 +273,20 @@ future<> migration_manager::notify_create_user_type(const user_type& type) {
     });
 }
 
+future<> migration_manager::notify_create_view(const view_ptr& view) {
+    return seastar::async([this, view] {
+        auto&& ks_name = view->ks_name();
+        auto&& view_name = view->cf_name();
+        for (auto&& listener : _listeners) {
+            try {
+                listener->on_create_view(ks_name, view_name);
+            } catch (...) {
+                logger.warn("Create view notification failed {}.{}: {}", ks_name, view_name, std::current_exception());
+            }
+        }
+    });
+}
+
 #if 0
 public void notifyCreateFunction(UDFunction udf)
 {
@@ -328,6 +342,20 @@ future<> migration_manager::notify_update_user_type(const user_type& type) {
     });
 }
 
+future<> migration_manager::notify_update_view(const view_ptr& view, bool columns_changed) {
+    return seastar::async([this, view, columns_changed] {
+        auto&& ks_name = view->ks_name();
+        auto&& view_name = view->cf_name();
+        for (auto&& listener : _listeners) {
+            try {
+                listener->on_update_view(ks_name, view_name, columns_changed);
+            } catch (...) {
+                logger.warn("Update view notification failed {}.{}: {}", ks_name, view_name, std::current_exception());
+            }
+        }
+    });
+}
+
 #if 0
 public void notifyUpdateFunction(UDFunction udf)
 {
@@ -377,6 +405,20 @@ future<> migration_manager::notify_drop_user_type(const user_type& type) {
                 listener->on_drop_user_type(ks_name, type_name);
             } catch (...) {
                 logger.warn("Drop user type notification failed {}.{}: {}", ks_name, type_name, std::current_exception());
+            }
+        }
+    });
+}
+
+future<> migration_manager::notify_drop_view(const view_ptr& view) {
+    return seastar::async([this, view] {
+        auto&& ks_name = view->ks_name();
+        auto&& view_name = view->cf_name();
+        for (auto&& listener : _listeners) {
+            try {
+                listener->on_drop_view(ks_name, view_name);
+            } catch (...) {
+                logger.warn("Drop view notification failed {}.{}: {}", ks_name, view_name, std::current_exception());
             }
         }
     });
