@@ -1551,6 +1551,7 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
         size_t corrupt_size = 0;
         bool eof = false;
         bool header = true;
+        bool failed = false;
 
         work(file f, position_type o = 0)
                 : f(f), fin(make_file_input_stream(f)), start_off(o) {
@@ -1583,6 +1584,10 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
         future<> stop() {
             eof = true;
             return make_ready_future<>();
+        }
+        future<> fail() {
+            failed = true;
+            return stop();
         }
         future<> read_header() {
             return fin.read_exactly(segment::descriptor_header_size).then([this](temporary_buffer<char> buf) {
@@ -1720,7 +1725,9 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
                         return make_ready_future<>();
                     }
 
-                    return s.produce(buf.share(0, data_size), rp);
+                    return s.produce(buf.share(0, data_size), rp).handle_exception([this](auto ep) {
+                        return this->fail();
+                    });
                 });
             });
         }
@@ -1744,7 +1751,9 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
     auto ret = w->s.listen(std::move(next));
 
     w->s.started().then(std::bind(&work::read_file, w.get())).then([w] {
-        w->s.close();
+        if (!w->failed) {
+            w->s.close();
+        }
     }).handle_exception([w](auto ep) {
         w->s.set_exception(ep);
     });
