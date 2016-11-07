@@ -338,6 +338,40 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const column_mapping& cm);
 };
 
+/**
+ * Augments a schema with fields related to materialized views.
+ * Effectively immutable.
+ */
+class view_info final {
+    utils::UUID _base_id;
+    sstring _base_name;
+    bool _include_all_columns;
+    sstring _where_clause;
+public:
+    view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause);
+
+    const utils::UUID& base_id() const {
+        return _base_id;
+    }
+
+    const sstring& base_name() const {
+        return _base_name;
+    }
+
+    bool include_all_columns() const {
+        return _include_all_columns;
+    }
+
+    const sstring& where_clause() const {
+        return _where_clause;
+    }
+
+    friend bool operator==(const view_info&, const view_info&);
+    friend std::ostream& operator<<(std::ostream& os, const view_info& view);
+};
+
+bool operator==(const view_info&, const view_info&);
+std::ostream& operator<<(std::ostream& os, const view_info& view);
 /*
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
