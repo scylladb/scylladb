@@ -616,6 +616,25 @@ future<> migration_manager::announce_type_drop(user_type dropped_type, bool anno
     return announce(std::move(mutations), announce_locally);
 }
 
+future<> migration_manager::announce_new_view(view_ptr view, bool announce_locally)
+{
+#if 0
+    view.metadata.validate();
+#endif
+    auto& db = get_local_storage_proxy().get_db().local();
+    try {
+        auto&& keyspace = db.find_keyspace(view->ks_name()).metadata();
+        if (keyspace->cf_meta_data().find(view->cf_name()) != keyspace->cf_meta_data().end()) {
+            throw exceptions::already_exists_exception(view->ks_name(), view->cf_name());
+        }
+        logger.info("Create new view: {}", view);
+        auto mutations = db::schema_tables::make_create_view_mutations(keyspace, std::move(view), api::new_timestamp());
+        return announce(std::move(mutations), announce_locally);
+    } catch (const no_such_keyspace& e) {
+        throw exceptions::configuration_exception(sprint("Cannot add view '%s' to non existing keyspace '%s'.", view->cf_name(), view->ks_name()));
+    }
+}
+
 #if 0
 public static void announceFunctionDrop(UDFunction udf, boolean announceLocally)
 {

@@ -117,6 +117,8 @@ public:
 
     future<> announce_type_drop(user_type dropped_type, bool announce_locally = false);
 
+    future<> announce_new_view(view_ptr view, bool announce_locally = false);
+
     /**
      * actively announce a new version to active hosts via rpc
      * @param schema The schema mutation to be applied
