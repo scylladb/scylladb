@@ -44,6 +44,7 @@
 
 #include "transport/messages/result_message.hh"
 #include "cql3/selection/selection.hh"
+#include "cql3/util.hh"
 #include "core/shared_ptr.hh"
 #include "query-result-reader.hh"
 #include "query_result_merger.hh"
@@ -643,6 +644,25 @@ bool select_statement::contains_alias(::shared_ptr<column_identifier> name) {
         int32_type);
 }
 
+}
+
+}
+
+namespace util {
+
+shared_ptr<cql3::statements::raw::select_statement> build_select_statement(
+            const sstring_view& cf_name,
+            const sstring_view& where_clause,
+            std::vector<sstring_view> included_columns) {
+    std::ostringstream out;
+    out << "SELECT ";
+    if (included_columns.empty()) {
+        out << "*";
+    } else {
+        out << join(", ", included_columns);
+    }
+    out << " FROM " << cf_name << " WHERE " << where_clause << " ALLOW FILTERING";
+    return do_with_parser(out.str(), std::mem_fn(&cql3_parser::CqlParser::selectStatement));
 }
 
 }
