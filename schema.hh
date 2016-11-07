@@ -399,7 +399,6 @@ public:
 
     static constexpr int32_t NAME_LENGTH = 48;
 
-    static const std::experimental::optional<sstring> DEFAULT_COMPRESSOR;
 
     struct column {
         bytes name;

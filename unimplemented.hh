@@ -56,6 +56,7 @@ enum class cause {
     STORAGE_SERVICE,
     SCHEMA_CHANGE,
     MIXED_CF,
+    VIEWS,
 };
 
 void fail(cause what) __attribute__((noreturn));

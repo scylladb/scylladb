@@ -718,7 +718,7 @@ createTableStatement returns [shared_ptr<cql3::statements::create_table_statemen
 
 cfamDefinition[shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
     : '(' cfamColumns[expr] ( ',' cfamColumns[expr]? )* ')'
-      ( K_WITH cfamProperty[expr] ( K_AND cfamProperty[expr] )*)?
+      ( K_WITH cfamProperty[$expr->properties()] ( K_AND cfamProperty[$expr->properties()] )*)?
     ;
 
 cfamColumns[shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
@@ -734,15 +734,15 @@ pkDef[shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
     | '(' k1=ident { l.push_back(k1); } ( ',' kn=ident { l.push_back(kn); } )* ')' { $expr->add_key_aliases(l); }
     ;
 
-cfamProperty[shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
-    : property[expr->properties]
-    | K_COMPACT K_STORAGE { $expr->set_compact_storage(); }
+cfamProperty[cql3::statements::cf_properties& expr]
+    : property[$expr.properties()]
+    | K_COMPACT K_STORAGE { $expr.set_compact_storage(); }
     | K_CLUSTERING K_ORDER K_BY '(' cfamOrdering[expr] (',' cfamOrdering[expr])* ')'
     ;
 
-cfamOrdering[shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
+cfamOrdering[cql3::statements::cf_properties& expr]
     @init{ bool reversed=false; }
-    : k=ident (K_ASC | K_DESC { reversed=true;} ) { $expr->set_ordering(k, reversed); }
+    : k=ident (K_ASC | K_DESC { reversed=true;} ) { $expr.set_ordering(k, reversed); }
     ;
 
 
@@ -802,7 +802,6 @@ createViewStatement returns [::shared_ptr<create_view_statement> expr]
         bool if_not_exists = false;
         std::vector<::shared_ptr<cql3::column_identifier::raw>> partition_keys;
         std::vector<::shared_ptr<cql3::column_identifier::raw>> composite_keys;
-        auto props = make_shared<cf_prop_defs>();
     }
     : K_CREATE K_MATERIALIZED K_VIEW (K_IF K_NOT K_EXISTS { if_not_exists = true; })? cf=columnFamilyName K_AS
         K_SELECT sclause=selectClause K_FROM basecf=columnFamilyName
@@ -811,7 +810,6 @@ createViewStatement returns [::shared_ptr<create_view_statement> expr]
         '(' '(' k1=cident { partition_keys.push_back(k1); } ( ',' kn=cident { partition_keys.push_back(kn); } )* ')' ( ',' c1=cident { composite_keys.push_back(c1); } )* ')'
     |   '(' k1=cident { partition_keys.push_back(k1); } ( ',' cn=cident { composite_keys.push_back(cn); } )* ')'
         )
-        (K_WITH properties[props])?
         {
              $expr = ::make_shared<create_view_statement>(
                 std::move(cf),
@@ -820,9 +818,9 @@ createViewStatement returns [::shared_ptr<create_view_statement> expr]
                 std::move(wclause),
                 std::move(partition_keys),
                 std::move(composite_keys),
-                std::move(props),
                 if_not_exists);
         }
+        ( K_WITH cfamProperty[{ $expr->properties() }] ( K_AND cfamProperty[{ $expr->properties() }] )*)?
     ;
 
 #if 0

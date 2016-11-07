@@ -43,6 +43,7 @@
 
 #include "cql3/statements/schema_altering_statement.hh"
 #include "cql3/statements/cf_prop_defs.hh"
+#include "cql3/statements/cf_properties.hh"
 #include "cql3/statements/raw/cf_statement.hh"
 #include "cql3/cql3_type.hh"
 
@@ -125,30 +126,22 @@ private:
                                          shared_ptr_value_hash<column_identifier>,
                                          shared_ptr_equal_by_value<column_identifier>>;
     defs_type _definitions;
-public:
-    const ::shared_ptr<cf_prop_defs> properties = ::make_shared<cf_prop_defs>();
-private:
     std::vector<std::vector<::shared_ptr<column_identifier>>> _key_aliases;
     std::vector<::shared_ptr<column_identifier>> _column_aliases;
-    std::vector<std::pair<::shared_ptr<column_identifier>, bool>> _defined_ordering; // Insertion ordering is important
-    std::experimental::optional<bool> find_ordering_info(::shared_ptr<column_identifier> type) {
-        for (auto& t: _defined_ordering) {
-            if (*(t.first) == *type) {
-                return t.second;
-            }
-        }
-        return {};
-    }
     create_table_statement::column_set_type _static_columns;
 
-    bool _use_compact_storage = false;
     std::multiset<::shared_ptr<column_identifier>,
             indirect_less<::shared_ptr<column_identifier>, column_identifier::text_comparator>> _defined_names;
     bool _if_not_exists;
+    cf_properties _properties;
 public:
     raw_statement(::shared_ptr<cf_name> name, bool if_not_exists);
 
     virtual ::shared_ptr<prepared> prepare(database& db, cql_stats& stats) override;
+
+    cf_properties& properties() {
+        return _properties;
+    }
 
     data_type get_type_and_remove(column_map_type& columns, ::shared_ptr<column_identifier> t);
 
@@ -157,10 +150,6 @@ public:
     void add_key_aliases(const std::vector<::shared_ptr<column_identifier>> aliases);
 
     void add_column_alias(::shared_ptr<column_identifier> alias);
-
-    void set_ordering(::shared_ptr<column_identifier> alias, bool reversed);
-
-    void set_compact_storage();
 };
 
 }
