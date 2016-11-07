@@ -101,7 +101,7 @@ struct qualified_name {
     }
 };
 
-static future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy, const qualified_name& table);
+static future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy, const qualified_name& table, schema_ptr s);
 
 static void merge_tables(distributed<service::storage_proxy>& proxy,
     std::map<qualified_name, schema_mutations>&& before,
@@ -531,9 +531,8 @@ read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, c
 }
 
 future<mutation>
-read_schema_partition_for_table(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const sstring& keyspace_name, const sstring& table_name)
+read_schema_partition_for_table(distributed<service::storage_proxy>& proxy, schema_ptr schema, const sstring& keyspace_name, const sstring& table_name)
 {
-    auto schema = proxy.local().get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
     auto keyspace_key = partition_key::from_singular(*schema, keyspace_name);
     auto clustering_range = query::clustering_range(clustering_key_prefix::from_clustering_prefix(
             *schema, exploded_clustering_prefix({utf8_type->decompose(table_name)})));
@@ -632,7 +631,7 @@ read_tables_for_keyspaces(distributed<service::storage_proxy>& proxy, const std:
     for (auto&& keyspace_name : keyspace_names) {
         for (auto&& table_name : read_table_names_of_keyspace(proxy, keyspace_name).get0()) {
             auto qn = qualified_name(keyspace_name, table_name);
-            result.emplace(qn, read_table_mutations(proxy, qn).get0());
+            result.emplace(qn, read_table_mutations(proxy, qn, columnfamilies()).get0());
         }
     }
     return result;
@@ -1376,11 +1375,11 @@ std::vector<mutation> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata>
     return mutations;
 }
 
-static future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy, const qualified_name& table)
+static future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy, const qualified_name& table, schema_ptr s)
 {
-    return read_schema_partition_for_table(proxy, COLUMNFAMILIES, table.keyspace_name, table.table_name)
+    return read_schema_partition_for_table(proxy, s, table.keyspace_name, table.table_name)
         .then([&proxy, table] (mutation cf_m) {
-            return read_schema_partition_for_table(proxy, COLUMNS, table.keyspace_name, table.table_name)
+            return read_schema_partition_for_table(proxy, columns(), table.keyspace_name, table.table_name)
                 .then([cf_m = std::move(cf_m)] (mutation col_m) {
                     return schema_mutations{std::move(cf_m), std::move(col_m)};
                 });
@@ -1403,7 +1402,7 @@ static future<schema_mutations> read_table_mutations(distributed<service::storag
 future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table)
 {
     return do_with(qualified_name(keyspace, table), [&proxy] (auto&& qn) {
-        return read_table_mutations(proxy, qn).then([qn] (schema_mutations sm) {
+        return read_table_mutations(proxy, qn, columnfamilies()).then([qn] (schema_mutations sm) {
             if (!sm.live()) {
                throw std::runtime_error(sprint("%s:%s not found in the schema definitions keyspace.", qn.keyspace_name, qn.table_name));
             }
