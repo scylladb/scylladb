@@ -183,8 +183,8 @@ public:
                         throw;
                     }
                 });
-            } catch (std::system_error& e) {
-                startlog.error("Directory '{}' not found. Tried to created it but failed: {}", path, e.what());
+            } catch (...) {
+                startlog.error("Directory '{}' cannot be initialized. Tried to do it but failed with: {}", path, std::current_exception());
                 throw;
             }
         });
