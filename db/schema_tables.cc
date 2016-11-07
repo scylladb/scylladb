@@ -1448,63 +1448,13 @@ future<schema_ptr> create_table_from_table_row(distributed<service::storage_prox
     return create_table_from_name(proxy, ks_name, cf_name);
 }
 
-schema_ptr create_table_from_mutations(schema_mutations sm, std::experimental::optional<table_schema_version> version)
+void prepare_builder_from_table_row(schema_builder& builder, const query::result_set_row& table_row)
 {
-    auto table_rs = query::result_set(sm.columnfamilies_mutation());
-    query::result_set_row table_row = table_rs.row(0);
-
-    auto ks_name = table_row.get_nonnull<sstring>("keyspace_name");
-    auto cf_name = table_row.get_nonnull<sstring>("columnfamily_name");
-    auto id = table_row.get_nonnull<utils::UUID>("cf_id");
-    schema_builder builder{ks_name, cf_name, id};
-
-#if 0
-    AbstractType<?> rawComparator = TypeParser.parse(result.getString("comparator"));
-    AbstractType<?> subComparator = result.has("subcomparator") ? TypeParser.parse(result.getString("subcomparator")) : null;
-#endif
-
-    cf_type cf = cf_type::standard;
-    if (table_row.has("type")) {
-        cf = sstring_to_cf_type(table_row.get_nonnull<sstring>("type"));
-        if (cf == cf_type::super) {
-            fail(unimplemented::cause::SUPER);
-        }
-    }
-#if 0
-    AbstractType<?> fullRawComparator = CFMetaData.makeRawAbstractType(rawComparator, subComparator);
-#endif
-
-    std::vector<column_definition> column_defs = create_columns_from_column_rows(
-            query::result_set(sm.columns_mutation()),
-            ks_name,
-            cf_name,/*,
-            fullRawComparator, */
-            cf == cf_type::super);
-
-    bool is_dense;
-    if (table_row.has("is_dense")) {
-        is_dense = table_row.get_nonnull<bool>("is_dense");
-    } else {
-        // FIXME:
-        // is_dense = CFMetaData.calculateIsDense(fullRawComparator, columnDefs);
-        throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
-    }
 
     auto comparator = table_row.get_nonnull<sstring>("comparator");
     bool is_compound = cell_comparator::check_compound(comparator);
     builder.set_is_compound(is_compound);
     cell_comparator::read_collections(builder, comparator);
-#if 0
-    CellNameType comparator = CellNames.fromAbstractType(fullRawComparator, isDense);
-
-    // if we are upgrading, we use id generated from names initially
-    UUID cfId = result.has("cf_id")
-              ? result.getUUID("cf_id")
-              : CFMetaData.generateLegacyCfId(ksName, cfName);
-
-    CFMetaData cfm = new CFMetaData(ksName, cfName, cfType, comparator, cfId);
-#endif
-    builder.set_is_dense(is_dense);
 
     if (table_row.has("read_repair_chance")) {
         builder.set_read_repair_chance(table_row.get_nonnull<double>("read_repair_chance"));
@@ -1591,6 +1541,63 @@ schema_ptr create_table_from_mutations(schema_mutations sm, std::experimental::o
             builder.without_column(value_cast<sstring>(entry.first), value_cast<api::timestamp_type>(entry.second));
         };
     }
+}
+
+schema_ptr create_table_from_mutations(schema_mutations sm, std::experimental::optional<table_schema_version> version)
+{
+    auto table_rs = query::result_set(sm.columnfamilies_mutation());
+    query::result_set_row table_row = table_rs.row(0);
+
+    auto ks_name = table_row.get_nonnull<sstring>("keyspace_name");
+    auto cf_name = table_row.get_nonnull<sstring>("columnfamily_name");
+    auto id = table_row.get_nonnull<utils::UUID>("cf_id");
+    schema_builder builder{ks_name, cf_name, id};
+
+#if 0
+    AbstractType<?> rawComparator = TypeParser.parse(result.getString("comparator"));
+    AbstractType<?> subComparator = result.has("subcomparator") ? TypeParser.parse(result.getString("subcomparator")) : null;
+#endif
+
+    cf_type cf = cf_type::standard;
+    if (table_row.has("type")) {
+        cf = sstring_to_cf_type(table_row.get_nonnull<sstring>("type"));
+        if (cf == cf_type::super) {
+            fail(unimplemented::cause::SUPER);
+        }
+    }
+#if 0
+    AbstractType<?> fullRawComparator = CFMetaData.makeRawAbstractType(rawComparator, subComparator);
+#endif
+
+    std::vector<column_definition> column_defs = create_columns_from_column_rows(
+            query::result_set(sm.columns_mutation()),
+            ks_name,
+            cf_name,/*,
+            fullRawComparator, */
+            cf == cf_type::super);
+
+    bool is_dense;
+    if (table_row.has("is_dense")) {
+        is_dense = table_row.get_nonnull<bool>("is_dense");
+    } else {
+        // FIXME:
+        // is_dense = CFMetaData.calculateIsDense(fullRawComparator, columnDefs);
+        throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
+    }
+
+#if 0
+    CellNameType comparator = CellNames.fromAbstractType(fullRawComparator, isDense);
+
+    // if we are upgrading, we use id generated from names initially
+    UUID cfId = result.has("cf_id")
+              ? result.getUUID("cf_id")
+              : CFMetaData.generateLegacyCfId(ksName, cfName);
+
+    CFMetaData cfm = new CFMetaData(ksName, cfName, cfType, comparator, cfId);
+#endif
+    builder.set_is_dense(is_dense);
+
+    prepare_builder_from_table_row(builder, table_row);
 
     for (auto&& cdef : column_defs) {
         builder.with_column(cdef);
@@ -1731,6 +1738,70 @@ column_definition create_column_from_column_row(const query::result_set_row& row
 #endif
     auto c = column_definition{utf8_type->decompose(name), validator, kind, component_index};
     return c;
+}
+
+/*
+ * View metadata serialization/deserialization.
+ */
+
+view_ptr create_view_from_mutations(schema_mutations sm, std::experimental::optional<table_schema_version> version)  {
+    auto table_rs = query::result_set(sm.columnfamilies_mutation());
+    query::result_set_row row = table_rs.row(0);
+
+    auto ks_name = row.get_nonnull<sstring>("keyspace_name");
+    auto cf_name = row.get_nonnull<sstring>("view_name");
+    auto id = row.get_nonnull<utils::UUID>("id");
+
+    schema_builder builder{ks_name, cf_name, id};
+    prepare_builder_from_table_row(builder, row);
+
+    auto column_defs = create_columns_from_column_rows(query::result_set(sm.columns_mutation()), ks_name, cf_name, false);
+    for (auto&& cdef : column_defs) {
+        builder.with_column(cdef);
+    }
+
+    if (version) {
+        builder.with_version(*version);
+    } else {
+        builder.with_version(sm.digest());
+    }
+
+    auto base_id = row.get_nonnull<utils::UUID>("base_table_id");
+    auto base_name = row.get_nonnull<sstring>("base_table_name");
+    auto include_all_columns = row.get_nonnull<bool>("include_all_columns");
+    auto where_clause = row.get_nonnull<sstring>("where_clause");
+
+    builder.with_view_info(std::move(base_id), std::move(base_name), include_all_columns, std::move(where_clause));
+    return view_ptr(builder.build());
+}
+
+static future<view_ptr> create_view_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row) {
+    qualified_name qn(row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("view_name"));
+    return do_with(std::move(qn), [&proxy] (auto&& qn) {
+        return read_table_mutations(proxy, qn, views()).then([&proxy, &qn] (schema_mutations sm) {
+            if (!sm.live()) {
+                throw std::runtime_error(sprint("%s:%s not found in the view definitions keyspace.", qn.keyspace_name, qn.table_name));
+            }
+            return create_view_from_mutations(std::move(sm));
+        });
+    });
+}
+
+/**
+ * Deserialize views from low-level schema representation, all of them belong to the same keyspace
+ *
+ * @return vector containing the view definitions
+ */
+future<std::vector<view_ptr>> create_views_from_schema_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result)
+{
+    auto views = make_lw_shared<std::vector<view_ptr>>();
+    return parallel_for_each(result->rows().begin(), result->rows().end(), [&proxy, views = std::move(views)] (auto&& row) {
+        return create_view_from_table_row(proxy, row).then([views] (auto&& v) {
+            views->push_back(std::move(v));
+        });
+    }).then([views] {
+        return std::move(*views);
+    });
 }
 
 #if 0

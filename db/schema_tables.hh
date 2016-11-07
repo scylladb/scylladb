@@ -124,6 +124,8 @@ future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& p
 
 future<schema_ptr> create_table_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row);
 
+void prepare_builder_from_table_row(schema_builder& builder, const query::result_set_row& table_row);
+
 schema_ptr create_table_from_mutations(schema_mutations, std::experimental::optional<table_schema_version> version = {});
 
 void drop_column_from_schema_mutation(schema_ptr table, const column_definition& column, long timestamp, std::vector<mutation>& mutations);
@@ -142,6 +144,10 @@ column_definition create_column_from_column_row(const query::result_set_row& row
 
 
 void add_column_to_schema_mutation(schema_ptr table, const column_definition& column, api::timestamp_type timestamp, mutation& mutation);
+
+view_ptr create_view_from_mutations(schema_mutations sm, std::experimental::optional<table_schema_version> version = {});
+
+future<std::vector<view_ptr>> create_views_from_schema_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result);
 
 sstring serialize_kind(column_kind kind);
 column_kind deserialize_kind(sstring kind);
