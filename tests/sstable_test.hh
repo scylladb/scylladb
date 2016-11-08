@@ -269,6 +269,7 @@ inline schema_ptr uncompressed_schema() {
         // comment
         "Uncompressed data"
        )));
+       builder.set_compressor_params(compression_parameters({ }));
        return builder.build(schema_builder::compact_storage::no);
     }();
     return uncompressed;
