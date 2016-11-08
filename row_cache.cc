@@ -682,7 +682,9 @@ row_cache::make_reader(schema_ptr s,
 row_cache::~row_cache() {
     with_allocator(_tracker.allocator(), [this] {
         _partitions.clear_and_dispose([this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
-            _tracker.on_erase();
+            if (!p->is_dummy_entry()) {
+                _tracker.on_erase();
+            }
             deleter(p);
         });
     });
