@@ -39,6 +39,7 @@
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_exception.hh"
 #include "log.hh"
+#include <cfloat>
 
 namespace streaming {
 
@@ -118,8 +119,16 @@ void stream_result_future::maybe_complete() {
         if (sslog.is_enabled(logging::log_level::debug)) {
             sm.show_streams();
         }
-        sm.get_progress_on_all_shards(plan_id).then([plan_id] (auto sbytes) {
-            sslog.info("[Stream #{}] bytes_sent = {}, bytes_received = {}", plan_id, sbytes.bytes_sent, sbytes.bytes_received);
+        auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(lowres_clock::now() - _start_time).count();
+        sm.get_progress_on_all_shards(plan_id).then([plan_id, duration] (auto sbytes) {
+            auto tx_bw = sstring("+inf");
+            auto rx_bw = sstring("+inf");
+            if (std::fabs(duration) > FLT_EPSILON) {
+                tx_bw = sprint("%.3f", sbytes.bytes_sent / duration / (1024 * 1024));
+                rx_bw = sprint("%.3f", sbytes.bytes_received  / duration / (1024 * 1024));
+            }
+            sslog.info("[Stream #{}] bytes_sent = {}, bytes_received = {}, tx_bandwidth = {} MiB/s, rx_bandwidth = {} MiB/s",
+                    plan_id, sbytes.bytes_sent, sbytes.bytes_received, tx_bw, rx_bw);
         }).handle_exception([plan_id] (auto ep) {
             sslog.warn("[Stream #{}] Fail to get progess on all shards: {}", plan_id, ep);
         }).finally([this, plan_id, &sm] {
