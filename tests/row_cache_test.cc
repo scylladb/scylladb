@@ -192,12 +192,14 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_for_wide_partitio
             return make_counting_reader(make_reader_returning(m), secondary_calls_count);
         }), tracker, 0);
 
-        assert_that(cache.make_reader(s, query::partition_range::make_singular(query::ring_position(m.decorated_key()))))
+        auto singular_range = query::partition_range::make_singular(query::ring_position(m.decorated_key()));
+
+        assert_that(cache.make_reader(s, singular_range))
             .produces(m)
             .produces_end_of_stream();
         BOOST_REQUIRE_EQUAL(secondary_calls_count, 3);
         BOOST_REQUIRE_EQUAL(tracker.uncached_wide_partitions(), 1);
-        assert_that(cache.make_reader(s, query::partition_range::make_singular(query::ring_position(m.decorated_key()))))
+        assert_that(cache.make_reader(s, singular_range))
             .produces(m)
             .produces_end_of_stream();
         BOOST_REQUIRE_EQUAL(secondary_calls_count, 5);
@@ -501,22 +503,25 @@ SEASTAR_TEST_CASE(test_query_of_incomplete_range_goes_to_underlying) {
             return query::partition_range::make_singular(query::ring_position(m.decorated_key()));
         };
 
+        auto key0_range = get_partition_range(mutations[0]);
+        auto key2_range = get_partition_range(mutations[2]);
+
         // Populate cache for first key
-        assert_that(cache.make_reader(s, get_partition_range(mutations[0])))
+        assert_that(cache.make_reader(s, key0_range))
             .produces(mutations[0])
             .produces_end_of_stream();
 
         // Populate cache for last key
-        assert_that(cache.make_reader(s, get_partition_range(mutations[2])))
+        assert_that(cache.make_reader(s, key2_range))
             .produces(mutations[2])
             .produces_end_of_stream();
 
         // Test single-key queries
-        assert_that(cache.make_reader(s, get_partition_range(mutations[0])))
+        assert_that(cache.make_reader(s, key0_range))
             .produces(mutations[0])
             .produces_end_of_stream();
 
-        assert_that(cache.make_reader(s, get_partition_range(mutations[2])))
+        assert_that(cache.make_reader(s, key2_range))
             .produces(mutations[2])
             .produces_end_of_stream();
 
@@ -548,16 +553,20 @@ SEASTAR_TEST_CASE(test_single_key_queries_after_population_in_reverse_order) {
             return query::partition_range::make_singular(query::ring_position(m.decorated_key()));
         };
 
+        auto key0_range = get_partition_range(mutations[0]);
+        auto key1_range = get_partition_range(mutations[1]);
+        auto key2_range = get_partition_range(mutations[2]);
+
         for (int i = 0; i < 2; ++i) {
-            assert_that(cache.make_reader(s, get_partition_range(mutations[2])))
+            assert_that(cache.make_reader(s, key2_range))
                 .produces(mutations[2])
                 .produces_end_of_stream();
 
-            assert_that(cache.make_reader(s, get_partition_range(mutations[1])))
+            assert_that(cache.make_reader(s, key1_range))
                 .produces(mutations[1])
                 .produces_end_of_stream();
 
-            assert_that(cache.make_reader(s, get_partition_range(mutations[0])))
+            assert_that(cache.make_reader(s, key0_range))
                 .produces(mutations[0])
                 .produces_end_of_stream();
         }
@@ -767,7 +776,7 @@ SEASTAR_TEST_CASE(test_update_failure) {
         memory_hog.clear();
 
         // verify that there are no stale partitions
-        auto reader = cache.make_reader(s, query::partition_range::make_open_ended_both_sides());
+        auto reader = cache.make_reader(s, query::full_partition_range);
         for (int i = 0; i < partition_count; i++) {
             auto mopt = mutation_from_streamed_mutation(reader().get0()).get0();
             if (!mopt) {
@@ -907,7 +916,8 @@ SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
         }
 
         // Bring ring[2]and ring[3] to cache.
-        assert_that(cache.make_reader(s, query::partition_range::make_starting_with({ ring[2].ring_position(), true })))
+        auto range = query::partition_range::make_starting_with({ ring[2].ring_position(), true });
+        assert_that(cache.make_reader(s, range))
                 .produces(ring[2])
                 .produces(ring[3])
                 .produces_end_of_stream();
@@ -1277,13 +1287,14 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
             test_sliced_read_row_presence(std::move(reader), s, ps, expected);
 
             auto dk = dht::global_partitioner().decorate_key(*s, pk);
+            auto singular_range = query::partition_range::make_singular(dk);
 
-            reader = cache.make_reader(s, query::partition_range::make_singular(dk), ps);
+            reader = cache.make_reader(s, singular_range, ps);
             test_sliced_read_row_presence(std::move(reader), s, ps, expected);
 
             cache.clear().get0();
 
-            reader = cache.make_reader(s, query::partition_range::make_singular(dk), ps);
+            reader = cache.make_reader(s, singular_range, ps);
             test_sliced_read_row_presence(std::move(reader), s, ps, expected);
         };
 
