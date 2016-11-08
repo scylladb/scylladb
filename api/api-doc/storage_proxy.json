@@ -777,7 +777,7 @@
       ]
     },
     {
-      "path": "/storage_proxy/metrics/read/moving_avrage_histogram",
+      "path": "/storage_proxy/metrics/read/moving_average_histogram",
       "operations": [
         {
           "method": "GET",
@@ -792,7 +792,7 @@
       ]
     },
     {
-      "path": "/storage_proxy/metrics/range/moving_avrage_histogram",
+      "path": "/storage_proxy/metrics/range/moving_average_histogram",
       "operations": [
         {
           "method": "GET",
@@ -942,7 +942,7 @@
       ]
     },
     {
-      "path": "/storage_proxy/metrics/write/moving_avrage_histogram",
+      "path": "/storage_proxy/metrics/write/moving_average_histogram",
       "operations": [
         {
           "method": "GET",
