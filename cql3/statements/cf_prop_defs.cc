@@ -100,12 +100,12 @@ void cf_prop_defs::validate() {
     }
 
     auto compression_options = get_compression_options();
-    if (!compression_options.empty()) {
-        auto sstable_compression_class = compression_options.find(sstring(compression_parameters::SSTABLE_COMPRESSION));
-        if (sstable_compression_class == compression_options.end()) {
+    if (compression_options && !compression_options->empty()) {
+        auto sstable_compression_class = compression_options->find(sstring(compression_parameters::SSTABLE_COMPRESSION));
+        if (sstable_compression_class == compression_options->end()) {
             throw exceptions::configuration_exception(sstring("Missing sub-option '") + compression_parameters::SSTABLE_COMPRESSION + "' for the '" + KW_COMPRESSION + "' option.");
         }
-        compression_parameters cp(compression_options);
+        compression_parameters cp(*compression_options);
         cp.validate();
     }
 
@@ -131,12 +131,12 @@ std::map<sstring, sstring> cf_prop_defs::get_compaction_options() const {
     return std::map<sstring, sstring>{};
 }
 
-std::map<sstring, sstring> cf_prop_defs::get_compression_options() const {
+stdx::optional<std::map<sstring, sstring>> cf_prop_defs::get_compression_options() const {
     auto compression_options = get_map(KW_COMPRESSION);
     if (compression_options) {
-        return compression_options.value();
+        return { compression_options.value() };
     }
-    return std::map<sstring, sstring>{};
+    return { };
 }
 
 int32_t cf_prop_defs::get_default_time_to_live() const
@@ -206,8 +206,9 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder) {
     }
 
     builder.set_bloom_filter_fp_chance(get_double(KW_BF_FP_CHANCE, builder.get_bloom_filter_fp_chance()));
-    if (!get_compression_options().empty()) {
-        builder.set_compressor_params(compression_parameters(get_compression_options()));
+    auto compression_options = get_compression_options();
+    if (compression_options) {
+        builder.set_compressor_params(compression_parameters(*compression_options));
     }
 #if 0
     CachingOptions cachingOptions = getCachingOptions();

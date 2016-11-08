@@ -82,7 +82,7 @@ private:
 public:
     void validate();
     std::map<sstring, sstring> get_compaction_options() const;
-    std::map<sstring, sstring> get_compression_options() const;
+    stdx::optional<std::map<sstring, sstring>> get_compression_options() const;
 #if 0
     public CachingOptions getCachingOptions() throws SyntaxException, ConfigurationException
     {
