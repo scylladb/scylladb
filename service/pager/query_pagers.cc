@@ -54,7 +54,7 @@ public:
                     const cql3::query_options& options,
                     lw_shared_ptr<query::read_command> cmd,
                     std::vector<query::partition_range> ranges)
-                    : _has_clustering_keys(s->clustering_key_size() > 0)
+                    : _has_clustering_keys(has_clustering_keys(*s, *cmd))
                     , _max(cmd->row_limit)
                     , _schema(std::move(s))
                     , _selection(selection)
@@ -65,6 +65,11 @@ public:
     {}
 
 private:   
+    static bool has_clustering_keys(const schema& s, const query::read_command& cmd) {
+        return s.clustering_key_size() > 0
+               && !cmd.slice.options.contains<query::partition_slice::option::distinct>();
+    }
+
     future<> fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, db_clock::time_point now) override {
         auto state = _options.get_paging_state();
 
