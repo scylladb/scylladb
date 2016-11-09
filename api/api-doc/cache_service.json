@@ -398,6 +398,36 @@
       ]
     },
     {
+      "path": "/cache_service/metrics/key/hits_moving_avrage",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get key hits moving avrage",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_key_hits_moving_avrage",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/key/requests_moving_avrage",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get key requests moving avrage",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_key_requests_moving_avrage",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
       "path": "/cache_service/metrics/key/size",
       "operations": [
         {
@@ -600,6 +630,36 @@
           "summary": "Get counter hit rate",
           "type": "double",
           "nickname": "get_counter_hit_rate",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/counter/hits_moving_avrage",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get counter hits moving avrage",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_counter_hits_moving_avrage",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/counter/requests_moving_avrage",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get counter requests moving avrage",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_counter_requests_moving_avrage",
           "produces": [
             "application/json"
           ],

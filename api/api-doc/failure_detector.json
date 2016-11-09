@@ -43,6 +43,25 @@
          ]
       },
       {
+         "path":"/failure_detector/endpoint_phi_values",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get end point phi values",
+               "type":"array",
+               "items":{
+                  "type":"endpoint_phi_values"
+               },
+               "nickname":"get_endpoint_phi_values",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
          "path":"/failure_detector/endpoints/",
          "operations":[
             {
@@ -200,6 +219,20 @@
                 "version": {
                     "type": "int",
                     "description": "The application state version"
+                }
+            }
+        },
+        "endpoint_phi_value": {
+            "id" : "endpoint_phi_value",
+            "description": "Holds phi value for a single end point",
+            "properties": {
+                "phi": {
+                    "type": "double",
+                    "description": "Phi value"
+                },
+                "endpoint": {
+                    "type": "string",
+                    "description": "end point address"
                 }
             }
         }

@@ -1201,11 +1201,12 @@
                ],
                "parameters":[
                   {
-                     "name":"non_system",
-                     "description":"When set to true limit to non system",
+                     "name":"type",
+                     "description":"Which keyspaces to return",
                      "required":false,
                      "allowMultiple":false,
-                     "type":"boolean",
+                     "type":"string",
+                     "enum": [ "all", "user", "non_local_strategy" ],
                      "paramType":"query"
                   }
                ]

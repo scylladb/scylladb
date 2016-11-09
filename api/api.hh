@@ -166,33 +166,36 @@ inline int64_t max_int64(int64_t a, int64_t b) {
  * It combine total and the sub set for the ratio and its
  * to_json method return the ration sub/total
  */
-struct ratio_holder : public json::jsonable {
-    double total = 0;
-    double sub = 0;
+template<typename T>
+struct basic_ratio_holder : public json::jsonable {
+    T total = 0;
+    T sub = 0;
     virtual std::string to_json() const {
         if (total == 0) {
             return "0";
         }
         return std::to_string(sub/total);
     }
-    ratio_holder() = default;
-    ratio_holder& add(double _total, double _sub) {
+    basic_ratio_holder() = default;
+    basic_ratio_holder& add(T _total, T _sub) {
         total += _total;
         sub += _sub;
         return *this;
     }
-    ratio_holder(double _total, double _sub) {
+    basic_ratio_holder(T _total, T _sub) {
         total = _total;
         sub = _sub;
     }
-    ratio_holder& operator+=(const ratio_holder& a) {
+    basic_ratio_holder<T>& operator+=(const basic_ratio_holder<T>& a) {
         return add(a.total, a.sub);
     }
-    friend ratio_holder operator+(ratio_holder a, const ratio_holder& b) {
+    friend basic_ratio_holder<T> operator+(basic_ratio_holder a, const basic_ratio_holder<T>& b) {
         return a += b;
     }
 };
 
+typedef basic_ratio_holder<double>  ratio_holder;
+typedef basic_ratio_holder<int64_t> integral_ratio_holder;
 
 class unimplemented_exception : public base_exception {
 public:

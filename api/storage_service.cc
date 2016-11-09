@@ -22,6 +22,8 @@
 #include "storage_service.hh"
 #include "api/api-doc/storage_service.json.hh"
 #include "db/config.hh"
+#include <boost/range/adaptor/map.hpp>
+#include <boost/range/adaptor/filtered.hpp>
 #include <service/storage_service.hh>
 #include <db/commitlog/commitlog.hh>
 #include <gms/gossiper.hh>
@@ -457,8 +459,15 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_keyspaces.set(r, [&ctx](const_req req) {
-        auto non_system = req.get_query_param("non_system");
-        return map_keys(ctx.db.local().keyspaces());
+        auto type = req.get_query_param("type");
+        if (type == "user") {
+            return ctx.db.local().get_non_system_keyspaces();
+        } else if (type == "non_local_strategy") {
+            return map_keys(ctx.db.local().get_keyspaces() | boost::adaptors::filtered([](const auto& p) {
+                return p.second.get_replication_strategy().get_type() != locator::replication_strategy_type::local;
+            }));
+        }
+        return map_keys(ctx.db.local().get_keyspaces());
     });
 
     ss::update_snitch.set(r, [](std::unique_ptr<request> req) {

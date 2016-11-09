@@ -149,6 +149,10 @@ public:
 
     sstring get_endpoint_state(sstring address);
 
+    std::map<inet_address, arrival_window> arrival_samples() const {
+        return _arrival_samples;
+    }
+
 private:
     void append_endpoint_state(std::stringstream& ss, endpoint_state& state);
 
@@ -247,6 +251,12 @@ inline future<int> get_down_endpoint_count() {
 inline future<int> get_up_endpoint_count() {
     return smp::submit_to(0, [] {
         return get_local_failure_detector().get_up_endpoint_count();
+    });
+}
+
+inline future<std::map<inet_address, arrival_window>> get_arrival_samples() {
+    return smp::submit_to(0, [] {
+        return get_local_failure_detector().arrival_samples();
     });
 }
 
