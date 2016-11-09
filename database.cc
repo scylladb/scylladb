@@ -2681,7 +2681,7 @@ std::ostream& operator<<(std::ostream& os, db::consistency_level cl) {
     case db::consistency_level::EACH_QUORUM: return os << "EACH_QUORUM";
     case db::consistency_level::SERIAL: return os << "SERIAL";
     case db::consistency_level::LOCAL_SERIAL: return os << "LOCAL_SERIAL";
-    case db::consistency_level::LOCAL_ONE: return os << "LOCAL";
+    case db::consistency_level::LOCAL_ONE: return os << "LOCAL_ONE";
     default: abort();
     }
 }
