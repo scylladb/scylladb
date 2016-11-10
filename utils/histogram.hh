@@ -39,8 +39,8 @@ class moving_average {
 public:
     moving_average(latency_counter::duration interval, latency_counter::duration tick_interval) :
         _tick_interval(tick_interval) {
-        _alpha = 1 - std::exp(-std::chrono::duration_cast<std::chrono::seconds>(interval).count()/
-                static_cast<double>(std::chrono::duration_cast<std::chrono::seconds>(tick_interval).count()));
+        _alpha = 1 - std::exp(-std::chrono::duration_cast<std::chrono::seconds>(tick_interval).count()/
+                static_cast<double>(std::chrono::duration_cast<std::chrono::seconds>(interval).count()));
     }
 
     void add(uint64_t val = 1) {
