@@ -39,8 +39,8 @@ class moving_average {
 public:
     moving_average(latency_counter::duration interval, latency_counter::duration tick_interval) :
         _tick_interval(tick_interval) {
-        _alpha = 1 - std::exp(-std::chrono::duration_cast<std::chrono::nanoseconds>(interval).count()/
-                static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(tick_interval).count()));
+        _alpha = 1 - std::exp(-std::chrono::duration_cast<std::chrono::seconds>(interval).count()/
+                static_cast<double>(std::chrono::duration_cast<std::chrono::seconds>(tick_interval).count()));
     }
 
     void add(uint64_t val = 1) {
@@ -48,7 +48,7 @@ public:
     }
 
     void update() {
-        double instant_rate = _count / static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(_tick_interval).count());
+        double instant_rate = _count / static_cast<double>(std::chrono::duration_cast<std::chrono::seconds>(_tick_interval).count());
         if (_initialized) {
             _rate += (_alpha * (instant_rate - _rate));
         } else {
@@ -246,7 +246,7 @@ public:
     rate_moving_average rate() const {
         rate_moving_average res;
         if (_count > 0) {
-            double elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(latency_counter::now() - start_time).count();
+            double elapsed = std::chrono::duration_cast<std::chrono::seconds>(latency_counter::now() - start_time).count();
             res.mean_rate = (_count / elapsed);
         }
         res.count = _count;
