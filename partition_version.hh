@@ -491,9 +491,9 @@ public:
                 try {
                     _read_section(_lsa_region, [this] {
                         _snapshot->merge_partition_versions();
-                        _snapshot = {};
                     });
                 } catch (...) { }
+                _snapshot = {};
             });
         });
     }
