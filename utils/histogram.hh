@@ -218,7 +218,7 @@ class timed_rate_moving_average {
     static constexpr latency_counter::duration tick_interval() {
         return std::chrono::seconds(10);
     }
-    moving_average rates[3] = {{tick_interval(), std::chrono::minutes(1)}, {tick_interval(), std::chrono::minutes(5)}, {tick_interval(), std::chrono::minutes(15)}};
+    moving_average rates[3] = {{std::chrono::minutes(1), tick_interval()}, {std::chrono::minutes(5), tick_interval()}, {std::chrono::minutes(15), tick_interval()}};
     latency_counter::time_point start_time;
     timer<> _timer;
 
