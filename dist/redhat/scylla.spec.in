@@ -179,6 +179,9 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/dpdk_nic_bind.py
 %{_prefix}/lib/scylla/dpdk_nic_bind.pyc
 %{_prefix}/lib/scylla/dpdk_nic_bind.pyo
+%{_prefix}/lib/scylla/hex2list.py
+%{_prefix}/lib/scylla/hex2list.pyc
+%{_prefix}/lib/scylla/hex2list.pyo
 %{_prefix}/lib/scylla/swagger-ui/dist/*
 %{_prefix}/lib/scylla/api/api-doc/*
 %{_prefix}/lib/scylla/scyllatop/*
