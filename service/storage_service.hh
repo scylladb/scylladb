@@ -128,19 +128,9 @@ private:
     bool _ms_stopped = false;
     bool _stream_manager_stopped = false;
 public:
-    storage_service(distributed<database>& db)
-        : _db(db) {
-        sstable_read_error.connect([this] { isolate_on_error(); });
-        sstable_write_error.connect([this] { isolate_on_error(); });
-        general_disk_error.connect([this] { isolate_on_error(); });
-        commit_error.connect([this] { isolate_on_commit_error(); });
-    }
-    void isolate_on_error() {
-        do_isolate_on_error(disk_error::regular);
-    };
-    void isolate_on_commit_error() {
-        do_isolate_on_error(disk_error::commit);
-    };
+    storage_service(distributed<database>& db);
+    void isolate_on_error();
+    void isolate_on_commit_error();
 
     // Needed by distributed<>
     future<> stop();
@@ -500,16 +490,7 @@ public:
      * @param endpoint The endpoint to get rpc address for
      * @return the rpc address
      */
-    sstring get_rpc_address(const inet_address& endpoint) const {
-        if (endpoint != get_broadcast_address()) {
-            auto v = gms::get_local_gossiper().get_endpoint_state_for_endpoint(endpoint)->get_application_state(gms::application_state::RPC_ADDRESS);
-            if (v) {
-                return v.value().value;
-            }
-        }
-        return boost::lexical_cast<std::string>(endpoint);
-    }
-
+    sstring get_rpc_address(const inet_address& endpoint) const;
 #if 0
     /**
      * for a keyspace, return the ranges and corresponding RPC addresses for a given keyspace.
@@ -548,53 +529,17 @@ public:
         return map;
     }
 #endif
-    std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> get_range_to_address_map(const sstring& keyspace) const {
-        return get_range_to_address_map(keyspace, _token_metadata.sorted_tokens());
-    }
+    std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> get_range_to_address_map(const sstring& keyspace) const;
 
     std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> get_range_to_address_map_in_local_dc(
-            const sstring& keyspace) const {
-        std::function<bool(const inet_address&)> filter =  [this](const inet_address& address) {
-            return is_local_dc(address);
-        };
+            const sstring& keyspace) const;
 
-        auto orig_map = get_range_to_address_map(keyspace, get_tokens_in_local_dc());
-        std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> filtered_map;
-        for (auto entry : orig_map) {
-            auto& addresses = filtered_map[entry.first];
-            addresses.reserve(entry.second.size());
-            std::copy_if(entry.second.begin(), entry.second.end(), std::back_inserter(addresses), filter);
-        }
+    std::vector<token> get_tokens_in_local_dc() const;
 
-        return filtered_map;
-    }
-
-    std::vector<token> get_tokens_in_local_dc() const {
-        std::vector<token> filtered_tokens;
-        for (auto token : _token_metadata.sorted_tokens()) {
-            auto endpoint = _token_metadata.get_endpoint(token);
-            if (is_local_dc(*endpoint))
-                filtered_tokens.push_back(token);
-        }
-        return filtered_tokens;
-    }
-
-    bool is_local_dc(const inet_address& targetHost) const {
-        auto remote_dc = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(targetHost);
-        auto local_dc = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(get_broadcast_address());
-        return remote_dc == local_dc;
-    }
+    bool is_local_dc(const inet_address& targetHost) const;
 
     std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> get_range_to_address_map(const sstring& keyspace,
-            const std::vector<token>& sorted_tokens) const {
-        // some people just want to get a visual representation of things. Allow null and set it to the first
-        // non-system keyspace.
-        if (keyspace == "" && _db.local().get_non_system_keyspaces().empty()) {
-            throw std::runtime_error("No keyspace provided and no non system kespace exist");
-        }
-        const sstring& ks = (keyspace == "") ? _db.local().get_non_system_keyspaces()[0] : keyspace;
-        return construct_range_to_endpoint_map(ks, get_all_ranges(sorted_tokens));
-    }
+            const std::vector<token>& sorted_tokens) const;
 
     /**
      * The same as {@code describeRing(String)} but converts TokenRange to the String for JMX compatibility
@@ -621,53 +566,7 @@ public:
         return describeRing(keyspace, true);
     }
 #endif
-    std::vector<token_range> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const {
-        std::vector<token_range> ranges;
-        //Token.TokenFactory tf = getPartitioner().getTokenFactory();
-
-        std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> range_to_address_map =
-                include_only_local_dc
-                        ? get_range_to_address_map_in_local_dc(keyspace)
-                        : get_range_to_address_map(keyspace);
-        for (auto entry : range_to_address_map) {
-            auto range = entry.first;
-            auto addresses = entry.second;
-            token_range tr;
-            if (range.start()) {
-                tr._start_token = dht::global_partitioner().to_sstring(range.start()->value());
-            }
-            if (range.end()) {
-                tr._end_token = dht::global_partitioner().to_sstring(range.end()->value());
-            }
-            for (auto endpoint : addresses) {
-                endpoint_details details;
-                details._host = boost::lexical_cast<std::string>(endpoint);
-                details._datacenter = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(endpoint);
-                details._rack = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_rack(endpoint);
-                tr._rpc_endpoints.push_back(get_rpc_address(endpoint));
-                tr._endpoints.push_back(details._host);
-                tr._endpoint_details.push_back(details);
-            }
-            ranges.push_back(tr);
-        }
-        // Convert to wrapping ranges
-        auto left_inf = boost::find_if(ranges, [] (const token_range& tr) {
-            return tr._start_token.empty();
-        });
-        auto right_inf = boost::find_if(ranges, [] (const token_range& tr) {
-            return tr._end_token.empty();
-        });
-        using set = std::unordered_set<sstring>;
-        if (left_inf != right_inf
-                && left_inf != ranges.end()
-                && right_inf != ranges.end()
-                && (boost::copy_range<set>(left_inf->_endpoints)
-                     == boost::copy_range<set>(right_inf->_endpoints))) {
-            left_inf->_start_token = std::move(right_inf->_start_token);
-            ranges.erase(right_inf);
-        }
-        return ranges;
-    }
+    std::vector<token_range> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const;
 
     /**
      * Retrieve a map of tokens to endpoints, including the bootstrapping ones.
@@ -699,14 +598,7 @@ public:
     */
     std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> construct_range_to_endpoint_map(
             const sstring& keyspace,
-            const std::vector<nonwrapping_range<token>>& ranges) const {
-        std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> res;
-        for (auto r : ranges) {
-            res[r] = _db.local().find_keyspace(keyspace).get_replication_strategy().get_natural_endpoints(r.end()->value());
-        }
-        return res;
-    }
-
+            const std::vector<nonwrapping_range<token>>& ranges) const;
 public:
     virtual void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
     virtual void before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, const gms::versioned_value& new_value) override;
@@ -1708,9 +1600,7 @@ public:
      * @param ep endpoint we are interested in.
      * @return ranges for the specified endpoint.
      */
-    std::vector<nonwrapping_range<token>> get_ranges_for_endpoint(const sstring& name, const gms::inet_address& ep) const {
-        return _db.local().find_keyspace(name).get_replication_strategy().get_ranges(ep);
-    }
+    std::vector<nonwrapping_range<token>> get_ranges_for_endpoint(const sstring& name, const gms::inet_address& ep) const;
 
     /**
      * Get all ranges that span the ring given a set
@@ -1718,22 +1608,7 @@ public:
      * ranges.
      * @return ranges in sorted order
     */
-    std::vector<nonwrapping_range<token>> get_all_ranges(const std::vector<token>& sorted_tokens) const{
-
-        if (sorted_tokens.empty())
-            return std::vector<nonwrapping_range<token>>();
-        int size = sorted_tokens.size();
-        std::vector<nonwrapping_range<token>> ranges;
-        ranges.push_back(nonwrapping_range<token>::make_ending_with(range_bound<token>(sorted_tokens[0], true)));
-        for (int i = 1; i < size; ++i) {
-            nonwrapping_range<token> r(range<token>::bound(sorted_tokens[i - 1], false), range<token>::bound(sorted_tokens[i], true));
-            ranges.push_back(r);
-        }
-        ranges.push_back(nonwrapping_range<token>::make_starting_with(range_bound<token>(sorted_tokens[size-1], false)));
-
-        return ranges;
-    }
-
+    std::vector<nonwrapping_range<token>> get_all_ranges(const std::vector<token>& sorted_tokens) const;
     /**
      * This method returns the N endpoints that are responsible for storing the
      * specified key i.e for replication.
@@ -1744,11 +1619,7 @@ public:
      * @return the endpoint responsible for this key
      */
     std::vector<gms::inet_address> get_natural_endpoints(const sstring& keyspace,
-            const sstring& cf, const sstring& key) const {
-        sstables::key_view key_view = sstables::key_view(bytes_view(reinterpret_cast<const signed char*>(key.c_str()), key.size()));
-        dht::token token = dht::global_partitioner().get_token(key_view);
-        return get_natural_endpoints(keyspace, token);
-    }
+            const sstring& cf, const sstring& key) const;
 #if 0
     public List<InetAddress> getNaturalEndpoints(String keyspaceName, ByteBuffer key)
     {
@@ -1763,9 +1634,7 @@ public:
      * @param pos position for which we need to find the endpoint
      * @return the endpoint responsible for this token
      */
-    std::vector<gms::inet_address>  get_natural_endpoints(const sstring& keyspace, const token& pos) const {
-        return _db.local().find_keyspace(keyspace).get_replication_strategy().get_natural_endpoints(pos);
-    }
+    std::vector<gms::inet_address>  get_natural_endpoints(const sstring& keyspace, const token& pos) const;
 #if 0
     /**
      * This method attempts to return N endpoints that are responsible for storing the
@@ -2307,7 +2176,7 @@ public:
 #endif
 
     template <typename Func>
-    inline auto run_with_api_lock(sstring operation, Func&& func) {
+    auto run_with_api_lock(sstring operation, Func&& func) {
         return get_storage_service().invoke_on(0, [operation = std::move(operation),
                 func = std::forward<Func>(func)] (storage_service& ss) mutable {
             if (!ss._operation_in_progress.empty()) {
@@ -2321,7 +2190,7 @@ public:
     }
 
     template <typename Func>
-    inline auto run_with_no_api_lock(Func&& func) {
+    auto run_with_no_api_lock(Func&& func) {
         return get_storage_service().invoke_on(0, [func = std::forward<Func>(func)] (storage_service& ss) mutable {
             return func(ss);
         });
