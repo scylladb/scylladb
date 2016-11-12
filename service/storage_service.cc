@@ -3185,7 +3185,8 @@ storage_service::construct_range_to_endpoint_map(
         const std::vector<nonwrapping_range<token>>& ranges) const {
     std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> res;
     for (auto r : ranges) {
-        res[r] = _db.local().find_keyspace(keyspace).get_replication_strategy().get_natural_endpoints(r.end()->value());
+        res[r] = _db.local().find_keyspace(keyspace).get_replication_strategy().get_natural_endpoints(
+                r.end() ? r.end()->value() : dht::maximum_token());
     }
     return res;
 }
