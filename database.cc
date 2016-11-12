@@ -2537,11 +2537,7 @@ void dirty_memory_manager::maybe_do_active_flush() {
     // But during pressure condition, we'll just pick the CF that holds the largest
     // memtable. The advantage of doing this is that this is objectively the one that will
     // release the biggest amount of memory and is less likely to be generating tiny
-    // SSTables. The disadvantage is that right now, because we only release memory when the
-    // SSTable is fully written, that may take a bit of time to happen.
-    //
-    // However, since we'll very soon have a mechanism in place to account for the memory
-    // that was already written in one form or another, that disadvantage is mitigated.
+    // SSTables.
     memtable& biggest_memtable = memtable::from_region(*_region_group.get_largest_region());
     auto& biggest_cf = _db->find_column_family(biggest_memtable.schema());
     memtable_list& mtlist = get_memtable_list(biggest_cf);
