@@ -1642,7 +1642,7 @@ database::database(const db::config& cfg)
     // Note that even if we didn't allow extra memory, we would still want to keep system requests
     // in a different region group. This is because throttled requests are serviced in FIFO order,
     // and we don't want system requests to be waiting for a long time behind user requests.
-    , _system_dirty_memory_manager(*this, _memtable_total_space + (10 << 20))
+    , _system_dirty_memory_manager(*this, _memtable_total_space / 2 + (10 << 20))
     // The total space that can be used by memtables is _memtable_total_space, but we will only
     // allow the region_group to grow to half of that. This is because of virtual_dirty: memtables
     // can take a long time to flush, and if we are using the maximum amount of memory possible,
