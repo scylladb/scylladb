@@ -111,6 +111,10 @@ static void merge_types(distributed<service::storage_proxy>& proxy,
     schema_result&& before,
     schema_result&& after);
 
+static void merge_views(distributed<service::storage_proxy>& proxy,
+    std::map<qualified_name, schema_mutations>&& before,
+    std::map<qualified_name, schema_mutations>&& after);
+
 std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USERTYPES, VIEWS, /* not present in 2.1.8: FUNCTIONS, AGGREGATES */ };
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
@@ -610,28 +614,26 @@ future<> merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mu
 
 // Returns names of live table definitions of given keyspace
 future<std::vector<sstring>>
-static read_table_names_of_keyspace(distributed<service::storage_proxy>& proxy, const sstring& keyspace_name) {
-    auto s = columnfamilies();
-    auto pkey = dht::global_partitioner().decorate_key(*s, partition_key::from_singular(*s, keyspace_name));
-    return db::system_keyspace::query(proxy, COLUMNFAMILIES, pkey).then([] (auto&& rs) {
-        std::vector<sstring> result;
-        for (const query::result_set_row& row : rs->rows()) {
-            result.emplace_back(row.get_nonnull<sstring>("columnfamily_name"));
-        }
-        return result;
+static read_table_names_of_keyspace(distributed<service::storage_proxy>& proxy, const sstring& keyspace_name, schema_ptr schema_table) {
+    auto pkey = dht::global_partitioner().decorate_key(*schema_table, partition_key::from_singular(*schema_table, keyspace_name));
+    return db::system_keyspace::query(proxy, schema_table->cf_name(), pkey).then([schema_table] (auto&& rs) {
+        return boost::copy_range<std::vector<sstring>>(rs->rows() | boost::adaptors::transformed([schema_table] (const query::result_set_row& row) {
+            const sstring name = schema_table->clustering_key_columns().begin()->name_as_text();
+            return row.get_nonnull<sstring>(name);
+        }));
     });
 }
 
 // Call inside a seastar thread
 static
 std::map<qualified_name, schema_mutations>
-read_tables_for_keyspaces(distributed<service::storage_proxy>& proxy, const std::set<sstring>& keyspace_names)
+read_tables_for_keyspaces(distributed<service::storage_proxy>& proxy, const std::set<sstring>& keyspace_names, schema_ptr s)
 {
     std::map<qualified_name, schema_mutations> result;
     for (auto&& keyspace_name : keyspace_names) {
-        for (auto&& table_name : read_table_names_of_keyspace(proxy, keyspace_name).get0()) {
+        for (auto&& table_name : read_table_names_of_keyspace(proxy, keyspace_name, s).get0()) {
             auto qn = qualified_name(keyspace_name, table_name);
-            result.emplace(qn, read_table_mutations(proxy, qn, columnfamilies()).get0());
+            result.emplace(qn, read_table_mutations(proxy, qn, s).get0());
         }
     }
     return result;
@@ -651,8 +653,9 @@ future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector
 
        // current state of the schema
        auto&& old_keyspaces = read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces).get0();
-       auto&& old_column_families = read_tables_for_keyspaces(proxy, keyspaces);
+       auto&& old_column_families = read_tables_for_keyspaces(proxy, keyspaces, columnfamilies());
        auto&& old_types = read_schema_for_keyspaces(proxy, USERTYPES, keyspaces).get0();
+       auto&& old_views = read_tables_for_keyspaces(proxy, keyspaces, views());
 #if 0 // not in 2.1.8
        /*auto& old_functions = */read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces).get0();
        /*auto& old_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
@@ -671,8 +674,9 @@ future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector
 
        // with new data applied
        auto&& new_keyspaces = read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces).get0();
-       auto&& new_column_families = read_tables_for_keyspaces(proxy, keyspaces);
+       auto&& new_column_families = read_tables_for_keyspaces(proxy, keyspaces, columnfamilies());
        auto&& new_types = read_schema_for_keyspaces(proxy, USERTYPES, keyspaces).get0();
+       auto&& new_views = read_tables_for_keyspaces(proxy, keyspaces, views());
 #if 0 // not in 2.1.8
        /*auto& new_functions = */read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces).get0();
        /*auto& new_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
@@ -681,6 +685,7 @@ future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector
        std::set<sstring> keyspaces_to_drop = merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces)).get0();
        merge_tables(proxy, std::move(old_column_families), std::move(new_column_families));
        merge_types(proxy, std::move(old_types), std::move(new_types));
+       merge_views(proxy, std::move(old_views), std::move(new_views));
 #if 0
        mergeFunctions(oldFunctions, newFunctions);
        mergeAggregates(oldAggregates, newAggregates);
@@ -746,26 +751,27 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
     });
 }
 
+struct dropped_schema {
+    global_schema_ptr schema;
+    utils::joinpoint<db_clock::time_point> jp{[] {
+        return make_ready_future<db_clock::time_point>(db_clock::now());
+    }};
+};
+
 // see the comments for merge_keyspaces()
 static void merge_tables(distributed<service::storage_proxy>& proxy,
     std::map<qualified_name, schema_mutations>&& before,
     std::map<qualified_name, schema_mutations>&& after)
 {
-    struct dropped_table {
-        global_schema_ptr schema;
-        utils::joinpoint<db_clock::time_point> jp{[] {
-            return make_ready_future<db_clock::time_point>(db_clock::now());
-        }};
-    };
     std::vector<global_schema_ptr> created;
     std::vector<global_schema_ptr> altered;
-    std::vector<dropped_table> dropped;
+    std::vector<dropped_schema> dropped;
 
     auto diff = difference(before, after);
     for (auto&& key : diff.entries_only_on_left) {
         auto&& s = proxy.local().get_db().local().find_schema(key.keyspace_name, key.table_name);
         logger.info("Dropping {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
-        dropped.emplace_back(dropped_table{s});
+        dropped.emplace_back(dropped_schema{s});
     }
     for (auto&& key : diff.entries_only_on_right) {
         auto s = create_table_from_mutations(after.at(key));
@@ -789,7 +795,7 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
                     bool columns_changed = db.update_column_family(gs);
                     service::get_local_migration_manager().notify_update_column_family(gs, columns_changed).get();
                 }
-                parallel_for_each(dropped.begin(), dropped.end(), [&db](dropped_table& dt) {
+                parallel_for_each(dropped.begin(), dropped.end(), [&db](dropped_schema& dt) {
                     schema_ptr s = dt.schema.get();
                     return db.drop_column_family(s->ks_name(), s->cf_name(), [&dt] { return dt.jp.value(); }).then([s] {
                         return service::get_local_migration_manager().notify_drop_column_family(s);
@@ -896,6 +902,53 @@ static void merge_types(distributed<service::storage_proxy>& proxy, schema_resul
                 service::get_local_migration_manager().notify_update_user_type(user_type).get();
             }
         });
+    }).get();
+}
+
+// see the comments for merge_keyspaces()
+static void merge_views(distributed<service::storage_proxy>& proxy,
+    std::map<qualified_name, schema_mutations>&& before,
+    std::map<qualified_name, schema_mutations>&& after)
+{
+    std::vector<global_schema_ptr> created;
+    std::vector<global_schema_ptr> altered;
+    std::vector<dropped_schema> dropped;
+
+    auto diff = difference(before, after);
+    for (auto&& key : diff.entries_only_on_left) {
+        auto&& s = proxy.local().get_db().local().find_schema(key.keyspace_name, key.table_name);
+        logger.info("Dropping {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
+        dropped.emplace_back(dropped_schema{s});
+    }
+    for (auto&& key : diff.entries_only_on_right) {
+        auto s = create_view_from_mutations(after.at(key));
+        logger.info("Creating {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
+        created.emplace_back(s);
+    }
+    for (auto&& key : diff.entries_differing) {
+        auto s = create_view_from_mutations(after.at(key));
+        logger.info("Altering {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
+        altered.emplace_back(s);
+    }
+
+    proxy.local().get_db().invoke_on_all([&created, &dropped, &altered] (database& db) {
+            return seastar::async([&] {
+                for (auto&& gs : created) {
+                    db.add_column_family_and_make_directory(gs).get();
+                    db.find_column_family(gs).mark_ready_for_writes();
+                    service::get_local_migration_manager().notify_create_view(view_ptr(gs)).get();
+                }
+                for (auto&& gs : altered) {
+                    bool columns_changed = db.update_column_family(gs);
+                    service::get_local_migration_manager().notify_update_view(view_ptr(gs), columns_changed).get();
+                }
+                parallel_for_each(dropped.begin(), dropped.end(), [&db](dropped_schema& dt) {
+                    schema_ptr s = dt.schema.get();
+                    return db.drop_column_family(s->ks_name(), s->cf_name(), [&dt] { return dt.jp.value(); }).then([s] {
+                        return service::get_local_migration_manager().notify_drop_view(view_ptr(s));
+                    });
+                }).get();
+            });
     }).get();
 }
 

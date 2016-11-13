@@ -2113,6 +2113,13 @@ bool database::update_column_family(schema_ptr new_schema) {
     s->registry_entry()->mark_synced();
     cfm.set_schema(s);
     find_keyspace(s->ks_name()).metadata()->add_or_update_column_family(s);
+    if (s->is_view()) {
+        try {
+            find_column_family(s->view_info()->base_id()).add_or_update_view(view_ptr(s));
+        } catch (no_such_column_family&) {
+            // Update view mutations received after base table drop.
+        }
+    }
     return columns_changed;
 }
 
@@ -2125,7 +2132,11 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     ks.metadata()->remove_column_family(s);
     _ks_cf_to_uuid.erase(std::make_pair(ks_name, cf_name));
     if (s->is_view()) {
-        find_column_family(s->view_info()->base_id()).remove_view(view_ptr(s));
+        try {
+            find_column_family(s->view_info()->base_id()).remove_view(view_ptr(s));
+        } catch (no_such_column_family&) {
+            // Drop view mutations received after base table drop.
+        }
     }
     return truncate(ks, *cf, std::move(tsf)).then([this, cf] {
         return cf->stop();
