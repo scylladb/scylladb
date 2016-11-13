@@ -461,6 +461,10 @@ void query_processor::migration_subscriber::on_create_aggregate(const sstring& k
     log.warn("{} event ignored", __func__);
 }
 
+void query_processor::migration_subscriber::on_create_view(const sstring& ks_name, const sstring& view_name)
+{
+}
+
 void query_processor::migration_subscriber::on_update_keyspace(const sstring& ks_name)
 {
 }
@@ -481,6 +485,10 @@ void query_processor::migration_subscriber::on_update_function(const sstring& ks
 }
 
 void query_processor::migration_subscriber::on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name)
+{
+}
+
+void query_processor::migration_subscriber::on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed)
 {
 }
 
@@ -506,6 +514,10 @@ void query_processor::migration_subscriber::on_drop_function(const sstring& ks_n
 void query_processor::migration_subscriber::on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name)
 {
     log.warn("{} event ignored", __func__);
+}
+
+void query_processor::migration_subscriber::on_drop_view(const sstring& ks_name, const sstring& view_name)
+{
 }
 
 void query_processor::migration_subscriber::remove_invalid_prepared_statements(sstring ks_name, std::experimental::optional<sstring> cf_name)

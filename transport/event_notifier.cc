@@ -96,6 +96,11 @@ void cql_server::event_notifier::on_create_user_type(const sstring& ks_name, con
     }
 }
 
+void cql_server::event_notifier::on_create_view(const sstring& ks_name, const sstring& view_name)
+{
+    on_create_column_family(ks_name, view_name);
+}
+
 void cql_server::event_notifier::on_create_function(const sstring& ks_name, const sstring& function_name)
 {
     logger.warn("{} event ignored", __func__);
@@ -149,6 +154,11 @@ void cql_server::event_notifier::on_update_user_type(const sstring& ks_name, con
     }
 }
 
+void cql_server::event_notifier::on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed)
+{
+    on_update_column_family(ks_name, view_name, columns_changed);
+}
+
 void cql_server::event_notifier::on_update_function(const sstring& ks_name, const sstring& function_name)
 {
     logger.warn("%s event ignored", __func__);
@@ -200,6 +210,11 @@ void cql_server::event_notifier::on_drop_user_type(const sstring& ks_name, const
             }));
         });
     }
+}
+
+void cql_server::event_notifier::on_drop_view(const sstring& ks_name, const sstring& view_name)
+{
+    on_drop_column_family(ks_name, view_name);
 }
 
 void cql_server::event_notifier::on_drop_function(const sstring& ks_name, const sstring& function_name)
