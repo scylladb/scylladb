@@ -1885,6 +1885,17 @@ schema_mutations make_schema_mutations(schema_ptr s, api::timestamp_type timesta
     return s->is_view() ? make_view_mutations(view_ptr(s), timestamp, with_columns) : make_table_mutations(s, timestamp, with_columns);
 }
 
+std::vector<mutation> make_create_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace, view_ptr view, api::timestamp_type timestamp)
+{
+    // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
+    auto mutations = make_create_keyspace_mutations(keyspace, timestamp, false);
+    // And also the serialized base table.
+    auto base = keyspace->cf_meta_data().at(view->view_info()->base_name());
+    add_table_or_view_to_schema_mutation(base, timestamp, true, mutations);
+    add_table_or_view_to_schema_mutation(view, timestamp, true, mutations);
+    return mutations;
+}
+
 #if 0
     private static AbstractType<?> getComponentComparator(AbstractType<?> rawComparator, Integer componentIndex)
     {
