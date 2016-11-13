@@ -39,8 +39,8 @@ class moving_average {
 public:
     moving_average(latency_counter::duration interval, latency_counter::duration tick_interval) :
         _tick_interval(tick_interval) {
-        _alpha = 1 - std::exp(-std::chrono::duration_cast<std::chrono::nanoseconds>(interval).count()/
-                static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(tick_interval).count()));
+        _alpha = 1 - std::exp(-std::chrono::duration_cast<std::chrono::seconds>(tick_interval).count()/
+                static_cast<double>(std::chrono::duration_cast<std::chrono::seconds>(interval).count()));
     }
 
     void add(uint64_t val = 1) {
@@ -48,7 +48,7 @@ public:
     }
 
     void update() {
-        double instant_rate = _count / static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(_tick_interval).count());
+        double instant_rate = _count / static_cast<double>(std::chrono::duration_cast<std::chrono::seconds>(_tick_interval).count());
         if (_initialized) {
             _rate += (_alpha * (instant_rate - _rate));
         } else {
@@ -70,7 +70,8 @@ public:
     }
 };
 
-class ihistogram {
+template <typename Unit>
+class basic_ihistogram {
 public:
     // count holds all the events
     int64_t count;
@@ -84,12 +85,13 @@ public:
     double variance;
     int64_t sample_mask;
     boost::circular_buffer<int64_t> sample;
-    ihistogram(size_t size = 1024, int64_t _sample_mask = 0x80)
+    basic_ihistogram(size_t size = 1024, int64_t _sample_mask = 0x80)
             : count(0), total(0), min(0), max(0), sum(0), started(0), mean(0), variance(0),
               sample_mask(_sample_mask), sample(
                     size) {
     }
-    void mark(int64_t value) {
+    void mark(int64_t ns_value) {
+        auto value = std::chrono::duration_cast<Unit>(std::chrono::nanoseconds(ns_value)).count();
         if (total == 0 || value < min) {
             min = value;
         }
@@ -131,7 +133,7 @@ public:
     /**
      * Set the latency according to the sample rate.
      */
-    ihistogram& set_latency(latency_counter& lc) {
+    basic_ihistogram& set_latency(latency_counter& lc) {
         if (should_sample()) {
             lc.start();
         }
@@ -144,7 +146,7 @@ public:
      * Increment the total number of events without
      * sampling the value.
      */
-    ihistogram& inc() {
+    basic_ihistogram& inc() {
         count++;
         return *this;
     }
@@ -157,7 +159,7 @@ public:
         return a * a;
     }
 
-    ihistogram& operator +=(const ihistogram& o) {
+    basic_ihistogram& operator +=(const basic_ihistogram& o) {
         if (count == 0) {
             *this = o;
         } else if (o.count > 0) {
@@ -190,13 +192,17 @@ public:
         return mean * count;
     }
 
-    friend ihistogram operator +(ihistogram a, const ihistogram& b);
+    template <typename U>
+    friend basic_ihistogram<U> operator +(basic_ihistogram<U> a, const basic_ihistogram<U>& b);
 };
 
-inline ihistogram operator +(ihistogram a, const ihistogram& b) {
+template <typename Unit>
+inline basic_ihistogram<Unit> operator +(basic_ihistogram<Unit> a, const basic_ihistogram<Unit>& b) {
     a += b;
     return a;
 }
+
+using ihistogram = basic_ihistogram<std::chrono::microseconds>;
 
 struct rate_moving_average {
     uint64_t count = 0;
@@ -246,7 +252,7 @@ public:
     rate_moving_average rate() const {
         rate_moving_average res;
         if (_count > 0) {
-            double elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(latency_counter::now() - start_time).count();
+            double elapsed = std::chrono::duration_cast<std::chrono::seconds>(latency_counter::now() - start_time).count();
             res.mean_rate = (_count / elapsed);
         }
         res.count = _count;
