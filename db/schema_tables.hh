@@ -149,6 +149,10 @@ view_ptr create_view_from_mutations(schema_mutations sm, std::experimental::opti
 
 future<std::vector<view_ptr>> create_views_from_schema_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result);
 
+schema_mutations make_schema_mutations(schema_ptr s, api::timestamp_type timestamp, bool with_columns);
+
+void add_table_or_view_to_schema_mutation(schema_ptr view, api::timestamp_type timestamp, bool with_columns, std::vector<mutation>& mutations);
+
 sstring serialize_kind(column_kind kind);
 column_kind deserialize_kind(sstring kind);
 data_type parse_type(sstring str);

@@ -1065,8 +1065,8 @@ std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_meta
         for (auto&& kv : keyspace->user_types()->get_all_types()) {
             add_type_to_schema_mutation(kv.second, timestamp, mutations);
         }
-        for (auto&& kv : keyspace->cf_meta_data()) {
-            add_table_to_schema_mutation(kv.second, timestamp, true, mutations);
+        for (auto&& s : keyspace->cf_meta_data() | boost::adaptors::map_values) {
+            add_table_or_view_to_schema_mutation(s, timestamp, true, mutations);
         }
     }
     return mutations;
@@ -1310,6 +1310,11 @@ schema_mutations make_table_mutations(schema_ptr table, api::timestamp_type time
 #endif
     }
     return schema_mutations{std::move(m), std::move(columns_mutation)};
+}
+
+void add_table_or_view_to_schema_mutation(schema_ptr s, api::timestamp_type timestamp, bool with_columns, std::vector<mutation>& mutations)
+{
+    make_schema_mutations(s, timestamp, with_columns).copy_to(mutations);
 }
 
 void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, std::vector<mutation>& mutations)
@@ -1821,6 +1826,68 @@ future<std::vector<view_ptr>> create_views_from_schema_partition(distributed<ser
     }).then([views] {
         return std::move(*views);
     });
+}
+
+static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type timestamp, bool with_columns)
+{
+    // When adding new schema properties, don't set cells for default values so that
+    // both old and new nodes will see the same version during rolling upgrades.
+
+    // For properties that can be null (and can be changed), we insert tombstones, to make sure
+    // we don't keep a property the user has removed
+    schema_ptr s = views();
+    auto pkey = partition_key::from_singular(*s, view->ks_name());
+    mutation m{pkey, s};
+    auto ckey = clustering_key::from_singular(*s, view->cf_name());
+
+    m.set_clustered_cell(ckey, "base_table_id", view->view_info()->base_id(), timestamp);
+    m.set_clustered_cell(ckey, "base_table_name", view->view_info()->base_name(), timestamp);
+    m.set_clustered_cell(ckey, "where_clause", view->view_info()->where_clause(), timestamp);
+    m.set_clustered_cell(ckey, "bloom_filter_fp_chance", view->bloom_filter_fp_chance(), timestamp);
+    m.set_clustered_cell(ckey, "caching", view->caching_options().to_sstring(), timestamp);
+    m.set_clustered_cell(ckey, "comment", view->comment(), timestamp);
+    m.set_clustered_cell(ckey, "compaction_strategy_class", sstables::compaction_strategy::name(view->compaction_strategy()), timestamp);
+    m.set_clustered_cell(ckey, "compaction_strategy_options", json::to_json(view->compaction_strategy_options()), timestamp);
+    m.set_clustered_cell(ckey, "comparator", cell_comparator::to_sstring(*view), timestamp);
+    const auto& compression_options = view->get_compressor_params();
+    m.set_clustered_cell(ckey, "compression_parameters", json::to_json(compression_options.get_options()), timestamp);
+    m.set_clustered_cell(ckey, "local_read_repair_chance", view->dc_local_read_repair_chance(), timestamp);
+    m.set_clustered_cell(ckey, "default_time_to_live", view->default_time_to_live().count(), timestamp);
+    m.set_clustered_cell(ckey, "gc_grace_seconds", view->gc_grace_seconds().count(), timestamp);
+    m.set_clustered_cell(ckey, "key_validator", view->thrift_key_validator(), timestamp);
+    m.set_clustered_cell(ckey, "id", view->id(), timestamp);
+    m.set_clustered_cell(ckey, "include_all_columns", view->view_info()->include_all_columns(), timestamp);
+    m.set_clustered_cell(ckey, "max_compaction_threshold", view->max_compaction_threshold(), timestamp);
+    m.set_clustered_cell(ckey, "max_index_interval", view->max_index_interval(), timestamp);
+    m.set_clustered_cell(ckey, "memtable_flush_period_in_ms", view->memtable_flush_period(), timestamp);
+    m.set_clustered_cell(ckey, "min_compaction_threshold", view->min_compaction_threshold(), timestamp);
+    m.set_clustered_cell(ckey, "min_index_interval", view->min_index_interval(), timestamp);
+    m.set_clustered_cell(ckey, "read_repair_chance", view->read_repair_chance(), timestamp);
+    m.set_clustered_cell(ckey, "speculative_retry", view->speculative_retry().to_sstring(), timestamp);
+
+    map_type_impl::mutation dropped_columns;
+    auto dropped_columns_column = s->get_column_definition("dropped_columns");
+    assert(dropped_columns_column);
+    auto dropped_columns_type = static_pointer_cast<const map_type_impl>(dropped_columns_column->type);
+    for (auto&& entry : view->dropped_columns()) {
+        dropped_columns.cells.emplace_back(dropped_columns_type->get_keys_type()->decompose(data_value(entry.first)),
+                                           atomic_cell::make_live(timestamp, dropped_columns_type->get_values_type()->decompose(entry.second)));
+    }
+    m.set_clustered_cell(ckey, *dropped_columns_column,
+                         atomic_cell_or_collection::from_collection_mutation(dropped_columns_type->serialize_mutation_form(std::move(dropped_columns))));
+
+    mutation columns_mutation(pkey, columns());
+    if (with_columns) {
+        for (auto&& column : view->all_columns_in_select_order()) {
+            add_column_to_schema_mutation(view, column, timestamp, columns_mutation);
+        }
+    }
+    return schema_mutations{std::move(m), std::move(columns_mutation)};
+}
+
+schema_mutations make_schema_mutations(schema_ptr s, api::timestamp_type timestamp, bool with_columns)
+{
+    return s->is_view() ? make_view_mutations(view_ptr(s), timestamp, with_columns) : make_table_mutations(s, timestamp, with_columns);
 }
 
 #if 0
