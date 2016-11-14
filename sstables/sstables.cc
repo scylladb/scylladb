@@ -741,10 +741,10 @@ future<> sstable::read_toc() {
                     continue;
                 }
                 try {
-                   _components.insert(reverse_map(c, _component_map));
+                    _components.insert(reverse_map(c, _component_map));
                 } catch (std::out_of_range& oor) {
-                    _components.clear(); // so subsequent read_toc will be forced to fail again
-                    throw malformed_sstable_exception("Unrecognized TOC component: " + c, file_path);
+                    _unrecognized_components.push_back(c);
+                    sstlog.info("Unrecognized TOC component was found: {} in sstable {}", c, file_path);
                 }
             }
             if (!_components.size()) {
@@ -1957,6 +1957,28 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
     return dir + "/" + strmap[version](entry_descriptor(ks, cf, version, generation, format, component));
 }
 
+const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
+                                format_types format, sstring component) {
+    static std::unordered_map<version_types, const char*, enum_hash<version_types>> fmtmap = {
+        { sstable::version_types::ka, "{0}-{1}-{2}-{3}-{5}" },
+        { sstable::version_types::la, "{2}-{3}-{4}-{5}" }
+    };
+
+    return dir + "/" + seastar::format(fmtmap[version], ks, cf, _version_string.at(version), to_sstring(generation), _format_string.at(format), component);
+}
+
+std::vector<std::pair<sstable::component_type, sstring>> sstable::all_components() const {
+    std::vector<std::pair<component_type, sstring>> all;
+    all.reserve(_components.size() + _unrecognized_components.size());
+    for (auto& c : _components) {
+        all.push_back(std::make_pair(c, _component_map.at(c)));
+    }
+    for (auto& c : _unrecognized_components) {
+        all.push_back(std::make_pair(component_type::Unknown, c));
+    }
+    return all;
+}
+
 future<> sstable::create_links(sstring dir, int64_t generation) const {
     // TemporaryTOC is always first, TOC is always last
     auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, component_type::TemporaryTOC);
@@ -1964,12 +1986,13 @@ future<> sstable::create_links(sstring dir, int64_t generation) const {
         return sstable_write_io_check(sync_directory, dir);
     }).then([this, dir, generation] {
         // FIXME: Should clean already-created links if we failed midway.
-        return parallel_for_each(_components, [this, dir, generation] (auto comp) {
-            if (comp == component_type::TOC) {
+        return parallel_for_each(all_components(), [this, dir, generation] (auto p) {
+            if (p.first == component_type::TOC) {
                 return make_ready_future<>();
             }
-            auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, comp);
-            return sstable_write_io_check(::link_file, this->filename(comp), dst);
+            auto src = sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, p.second);
+            auto dst = sstable::filename(dir, _schema->ks_name(), _schema->cf_name(), _version, generation, _format, p.second);
+            return sstable_write_io_check(::link_file, std::move(src), std::move(dst));
         });
     }).then([dir] {
         return sstable_write_io_check(sync_directory, dir);
@@ -1989,11 +2012,11 @@ future<> sstable::set_generation(int64_t new_generation) {
         return remove_file(filename(component_type::TOC)).then([this] {
             return sstable_write_io_check(sync_directory, _dir);
         }).then([this] {
-            return parallel_for_each(_components, [this] (auto comp) {
-                if (comp == component_type::TOC) {
+            return parallel_for_each(all_components(), [this] (auto p) {
+                if (p.first == component_type::TOC) {
                     return make_ready_future<>();
                 }
-                return remove_file(this->filename(comp));
+                return remove_file(sstable::filename(_dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, p.second));
             });
         });
     }).then([this, new_generation] {
