@@ -725,7 +725,7 @@ struct repair_options {
         string_opt(start_token, options, START_TOKEN);
         string_opt(end_token, options, END_TOKEN);
 
-        bool trace;
+        bool trace = false;
         bool_opt(trace, options, TRACE_KEY);
         if (trace) {
             throw std::runtime_error("unsupported trace");
