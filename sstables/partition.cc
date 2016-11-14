@@ -992,7 +992,6 @@ sstables::sstable::find_disk_ranges(
 
 class mutation_reader::impl {
 private:
-    sstable* _sst;
     const io_priority_class& _pc;
     schema_ptr _schema;
     lw_shared_ptr<sstable_data_source> _ds;
@@ -1005,7 +1004,7 @@ private:
 public:
     impl(shared_sstable sst, schema_ptr schema, sstable::disk_read_range toread,
          const io_priority_class &pc)
-        : _sst(&*sst), _pc(pc), _schema(schema)
+        : _pc(pc), _schema(schema)
         , _consumer(schema, query::full_slice, pc)
         , _get_data_source([this, sst = std::move(sst), toread] {
             auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), std::move(toread), std::unique_ptr<index_reader>());
@@ -1013,7 +1012,7 @@ public:
         }) { }
     impl(shared_sstable sst, schema_ptr schema,
          const io_priority_class &pc)
-        : _sst(&*sst), _pc(pc), _schema(schema)
+        : _pc(pc), _schema(schema)
         , _consumer(schema, query::full_slice, pc)
         , _get_data_source([this, sst = std::move(sst)] {
             auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer));
@@ -1024,10 +1023,10 @@ public:
          const query::partition_range& pr,
          const query::partition_slice& slice,
          const io_priority_class& pc)
-        : _sst(&*sst), _pc(pc), _schema(schema)
+        : _pc(pc), _schema(schema)
         , _consumer(schema, slice, pc)
         , _get_data_source([this, &pr, sst = std::move(sst)] () mutable {
-            auto index = std::make_unique<index_reader>(_sst->get_index_reader(_pc));
+            auto index = std::make_unique<index_reader>(sst->get_index_reader(_pc));
             auto f = index->get_disk_read_range(*_schema, pr);
             return f.then([this, index = std::move(index), sst = std::move(sst)] (sstable::disk_read_range drr) mutable {
                 return make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), std::move(drr), std::move(index));
