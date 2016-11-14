@@ -73,6 +73,7 @@ public:
 template <typename Unit>
 class basic_ihistogram {
 public:
+    using duration_unit = Unit;
     // count holds all the events
     int64_t count;
     // total holds only the events we sample
@@ -90,8 +91,10 @@ public:
               sample_mask(_sample_mask), sample(
                     size) {
     }
-    void mark(int64_t ns_value) {
-        auto value = std::chrono::duration_cast<Unit>(std::chrono::nanoseconds(ns_value)).count();
+
+    template <typename Rep, typename Ratio>
+    void mark(std::chrono::duration<Rep, Ratio> dur) {
+        auto value = std::chrono::duration_cast<Unit>(dur).count();
         if (total == 0 || value < min) {
             min = value;
         }
@@ -116,7 +119,7 @@ public:
 
     void mark(latency_counter& lc) {
         if (lc.is_start()) {
-            mark(lc.stop().latency_in_nano());
+            mark(lc.stop().latency());
         } else {
             count++;
         }
@@ -304,9 +307,11 @@ public:
     timed_rate_moving_average_and_histogram(const timed_rate_moving_average_and_histogram&) = default;
     timed_rate_moving_average_and_histogram(size_t size, int64_t _sample_mask = 0x80) : hist(size, _sample_mask) {}
     timed_rate_moving_average_and_histogram& operator=(const timed_rate_moving_average_and_histogram&) = default;
-    void mark(int duration) {
-        if (duration >= 0) {
-            hist.mark(duration);
+
+    template <typename Rep, typename Ratio>
+    void mark(std::chrono::duration<Rep, Ratio> dur) {
+        if (std::chrono::duration_cast<ihistogram::duration_unit>(dur).count() >= 0) {
+            hist.mark(dur);
             met.mark();
         }
     }

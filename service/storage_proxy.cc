@@ -1099,7 +1099,7 @@ future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, d
 // future returned by mutate_begin()). The future should be ready when function is called.
 future<> storage_proxy::mutate_end(future<> mutate_result, utils::latency_counter lc, tracing::trace_state_ptr trace_state) {
     assert(mutate_result.available());
-    _stats.write.mark(lc.stop().latency_in_nano());
+    _stats.write.mark(lc.stop().latency());
     if (lc.is_start()) {
         _stats.estimated_write.add(lc.latency(), _stats.write.hist.count);
     }
@@ -2728,19 +2728,19 @@ storage_proxy::do_query(schema_ptr s,
     if (query::is_single_partition(partition_ranges[0])) { // do not support mixed partitions (yet?)
         try {
             return query_singular(cmd, std::move(partition_ranges), cl, std::move(trace_state)).finally([lc, p] () mutable {
-                    p->_stats.read.mark(lc.stop().latency_in_nano());
+                    p->_stats.read.mark(lc.stop().latency());
                     if (lc.is_start()) {
                         p->_stats.estimated_read.add(lc.latency(), p->_stats.read.hist.count);
                     }
             });
         } catch (const no_such_column_family&) {
-            _stats.read.mark(lc.stop().latency_in_nano());
+            _stats.read.mark(lc.stop().latency());
             return make_empty();
         }
     }
 
     return query_partition_key_range(cmd, std::move(partition_ranges), cl, std::move(trace_state)).finally([lc, p] () mutable {
-        p->_stats.read.mark(lc.stop().latency_in_nano());
+        p->_stats.read.mark(lc.stop().latency());
     });
 }
 
