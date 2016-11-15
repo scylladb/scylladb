@@ -69,17 +69,27 @@ cache_tracker::cache_tracker() {
           // the rbtree, so linearize anything we read
           return with_linearized_managed_bytes([&] {
            try {
-            if (_lru.empty()) {
-                return memory::reclaiming_result::reclaimed_nothing;
+            auto evict_last = [this](lru_type& lru) {
+                cache_entry& ce = lru.back();
+                auto it = row_cache::partitions_type::s_iterator_to(ce);
+                clear_continuity(*std::next(it));
+                lru.pop_back_and_dispose(current_deleter<cache_entry>());
+            };
+            if (!_wide_partition_lru.empty() && (_normal_eviction_count == 0 || _lru.empty())) {
+                evict_last(_wide_partition_lru);
+                _normal_eviction_count = _normal_large_eviction_ratio;
+                ++_wide_partition_evictions;
+            } else {
+                if (_lru.empty()) {
+                    return memory::reclaiming_result::reclaimed_nothing;
+                }
+                evict_last(_lru);
+                if (_normal_eviction_count > 0) {
+                    --_normal_eviction_count;
+                }
             }
-            cache_entry& ce = _lru.back();
-            bool is_wide = ce.wide_partition();
-            auto it = row_cache::partitions_type::s_iterator_to(ce);
-            clear_continuity(*std::next(it));
-            _lru.pop_back_and_dispose(current_deleter<cache_entry>());
             --_partitions;
             ++_evictions;
-            _wide_partition_evictions += is_wide;
             ++_modification_count;
             return memory::reclaiming_result::reclaimed_something;
            } catch (std::bad_alloc&) {
@@ -165,17 +175,21 @@ cache_tracker::setup_collectd() {
 
 void cache_tracker::clear() {
     with_allocator(_region.allocator(), [this] {
-        while (!_lru.empty()) {
-            cache_entry& ce = _lru.back();
-            auto it = row_cache::partitions_type::s_iterator_to(ce);
-            while (it->is_evictable()) {
-                cache_entry& to_remove = *it;
-                ++it;
-                _lru.erase(_lru.iterator_to(to_remove));
-                current_deleter<cache_entry>()(&to_remove);
+        auto clear = [this] (lru_type& lru) {
+            while (!lru.empty()) {
+                cache_entry& ce = lru.back();
+                auto it = row_cache::partitions_type::s_iterator_to(ce);
+                while (it->is_evictable()) {
+                    cache_entry& to_remove = *it;
+                    ++it;
+                    to_remove._lru_link.unlink();
+                    current_deleter<cache_entry>()(&to_remove);
+                }
+                clear_continuity(*it);
             }
-            clear_continuity(*it);
-        }
+        };
+        clear(_lru);
+        clear(_wide_partition_lru);
     });
     _removals += _partitions;
     _partitions = 0;
@@ -183,15 +197,30 @@ void cache_tracker::clear() {
 }
 
 void cache_tracker::touch(cache_entry& e) {
-    _lru.erase(_lru.iterator_to(e));
-    _lru.push_front(e);
+    auto move_to_front = [this] (lru_type& lru, cache_entry& e) {
+        lru.erase(lru.iterator_to(e));
+        lru.push_front(e);
+    };
+    move_to_front(e.wide_partition() ? _wide_partition_lru : _lru, e);
 }
 
 void cache_tracker::insert(cache_entry& entry) {
     ++_insertions;
     ++_partitions;
     ++_modification_count;
-    _lru.push_front(entry);
+    if (entry.wide_partition()) {
+        _wide_partition_lru.push_front(entry);
+    } else {
+        _lru.push_front(entry);
+    }
+}
+
+void cache_tracker::mark_wide(cache_entry& entry) {
+    if (entry._lru_link.is_linked()) {
+        entry._lru_link.unlink();
+    }
+    entry.set_wide_partition();
+    _wide_partition_lru.push_front(entry);
 }
 
 void cache_tracker::on_erase() {
@@ -741,7 +770,7 @@ void row_cache::mark_partition_as_wide(const dht::decorated_key& key, const prev
         _tracker.insert(*entry);
         return _partitions.insert(i, *entry);
     }, [&] (auto i) {
-        i->set_wide_partition();
+        _tracker.mark_wide(*i);
     });
 }
 
