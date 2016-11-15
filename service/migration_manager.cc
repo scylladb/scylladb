@@ -597,10 +597,19 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
 {
     try {
         auto& db = get_local_storage_proxy().get_db().local();
-        auto&& old_cfm = db.find_schema(ks_name, cf_name);
-        auto&& keyspace = db.find_keyspace(ks_name);
-        logger.info("Drop table '{}.{}'", old_cfm->ks_name(), old_cfm->cf_name());
-        auto mutations = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), old_cfm, api::new_timestamp());
+        auto& old_cfm = db.find_column_family(ks_name, cf_name);
+        auto& schema = old_cfm.schema();
+        if (schema->is_view()) {
+            throw exceptions::invalid_request_exception("Cannot use DROP TABLE on Materialized View");
+        }
+        auto&& views = old_cfm.views();
+        if (!views.empty()) {
+            throw exceptions::invalid_request_exception(sprint(
+                        "Cannot drop table when materialized views still depend on it (%s.{%s})",
+                        ks_name, ::join(", ", views | boost::adaptors::transformed([](auto&& v) { return v->cf_name(); }))));
+        }
+        logger.info("Drop table '{}.{}'", schema->ks_name(), schema->cf_name());
+        auto mutations = db::schema_tables::make_drop_table_mutations(db.find_keyspace(ks_name).metadata(), schema, api::new_timestamp());
         return announce(std::move(mutations), announce_locally);
     } catch (const no_such_column_family& e) {
         throw exceptions::configuration_exception(sprint("Cannot drop non existing table '%s' in keyspace '%s'.", cf_name, ks_name));
