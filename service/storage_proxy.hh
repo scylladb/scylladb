@@ -65,7 +65,9 @@ class abstract_read_executor;
 class mutation_holder;
 
 class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*implements StorageProxyMBean*/ {
+public:
     using clock_type = std::chrono::steady_clock;
+private:
     struct rh_entry {
         ::shared_ptr<abstract_write_response_handler> handler;
         timer<> expire_timer;
@@ -262,9 +264,15 @@ public:
 
     void init_messaging_service();
 
-    future<> mutate_locally(const mutation& m);
-    future<> mutate_locally(const schema_ptr&, const frozen_mutation& m);
-    future<> mutate_locally(std::vector<mutation> mutations);
+    // Applies mutation on this node.
+    // Resolves with timed_out_error when timeout is reached.
+    future<> mutate_locally(const mutation& m, clock_type::time_point timeout = clock_type::time_point::max());
+    // Applies mutation on this node.
+    // Resolves with timed_out_error when timeout is reached.
+    future<> mutate_locally(const schema_ptr&, const frozen_mutation& m, clock_type::time_point timeout = clock_type::time_point::max());
+    // Applies mutations on this node.
+    // Resolves with timed_out_error when timeout is reached.
+    future<> mutate_locally(std::vector<mutation> mutation, clock_type::time_point timeout = clock_type::time_point::max());
 
     future<> mutate_streaming_mutation(const schema_ptr&, utils::UUID plan_id, const frozen_mutation& m, bool fragmented);
 
