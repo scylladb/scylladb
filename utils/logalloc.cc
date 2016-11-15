@@ -2207,4 +2207,8 @@ void allocating_section::on_alloc_failure() {
 
 #endif
 
+void region_group::on_request_expiry::operator()(std::unique_ptr<allocating_function>& func) noexcept {
+    func->fail(std::make_exception_ptr(timed_out_error()));
+}
+
 }
