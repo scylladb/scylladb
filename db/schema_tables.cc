@@ -1376,19 +1376,25 @@ std::vector<mutation> make_update_table_mutations(lw_shared_ptr<keyspace_metadat
     return mutations;
 }
 
+static void make_drop_table_or_view_mutations(schema_ptr schema_table,
+            schema_ptr table_or_view,
+            api::timestamp_type timestamp,
+            std::vector<mutation>& mutations) {
+    auto pkey = partition_key::from_singular(*schema_table, table_or_view->ks_name());
+    mutation m{std::move(pkey), schema_table};
+    auto ckey = clustering_key::from_singular(*schema_table, table_or_view->cf_name());
+    m.partition().apply_delete(*schema_table, std::move(ckey), tombstone(timestamp, gc_clock::now()));
+    mutations.emplace_back(m);
+    for (auto &column : table_or_view->all_columns_in_select_order()) {
+        drop_column_from_schema_mutation(table_or_view, column, timestamp, mutations);
+    }
+}
+
 std::vector<mutation> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp)
 {
     // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
     auto mutations = make_create_keyspace_mutations(keyspace, timestamp, false);
-    schema_ptr s = columnfamilies();
-    auto pkey = partition_key::from_singular(*s, table->ks_name());
-    auto ckey = clustering_key::from_singular(*s, table->cf_name());
-    mutation m{pkey, s};
-    m.partition().apply_delete(*s, ckey, tombstone(timestamp, gc_clock::now()));
-    mutations.emplace_back(m);
-    for (auto& column : table->all_columns_in_select_order()) {
-        drop_column_from_schema_mutation(table, column, timestamp, mutations);
-    }
+    make_drop_table_or_view_mutations(columnfamilies(), std::move(table), timestamp, mutations);
 
 #if 0
     for (TriggerDefinition trigger : table.getTriggers().values())
@@ -1916,6 +1922,13 @@ std::vector<mutation> make_update_view_mutations(lw_shared_ptr<keyspace_metadata
     add_table_or_view_to_schema_mutation(base, timestamp, true, mutations);
     add_table_or_view_to_schema_mutation(new_view, timestamp, false, mutations);
     make_update_columns_mutations(old_view, new_view, timestamp, false, mutations);
+    return mutations;
+}
+
+std::vector<mutation> make_drop_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace, view_ptr view, api::timestamp_type timestamp) {
+    // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
+    auto mutations = make_create_keyspace_mutations(keyspace, timestamp, false);
+    make_drop_table_or_view_mutations(views(), view, timestamp, mutations);
     return mutations;
 }
 

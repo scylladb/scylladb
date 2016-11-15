@@ -153,6 +153,8 @@ std::vector<mutation> make_create_view_mutations(lw_shared_ptr<keyspace_metadata
 
 std::vector<mutation> make_update_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace, view_ptr old_view, view_ptr new_view, api::timestamp_type timestamp);
 
+std::vector<mutation> make_drop_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace, view_ptr view, api::timestamp_type timestamp);
+
 sstring serialize_kind(column_kind kind);
 column_kind deserialize_kind(sstring kind);
 data_type parse_type(sstring str);
