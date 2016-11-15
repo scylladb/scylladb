@@ -536,12 +536,8 @@ static future<> repair_cf_range(repair_info& ri,
     auto sstables = ri.db.local().find_column_family(ri.keyspace, cf).get_sstables();
     uint64_t estimated_partitions = 0;
     for (auto sst : *sstables) {
-        estimated_partitions += sst->get_estimated_key_count();
+        estimated_partitions += sst->estimated_keys_for_range(range);
     }
-    // This node contains replicas of rf * vnodes ranges like this one, so
-    // estimate the number of partitions in just this range:
-    estimated_partitions /= db.local().get_config().num_tokens();
-    estimated_partitions /= db.local().find_keyspace(keyspace).get_replication_strategy().get_replication_factor();
 
     // FIXME: we should have an on-the-fly iterator generator here, not
     // fill a vector in advance.
