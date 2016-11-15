@@ -1317,17 +1317,11 @@ void add_table_or_view_to_schema_mutation(schema_ptr s, api::timestamp_type time
     make_schema_mutations(s, timestamp, with_columns).copy_to(mutations);
 }
 
-std::vector<mutation> make_update_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace,
-    schema_ptr old_table,
-    schema_ptr new_table,
-    api::timestamp_type timestamp,
-    bool from_thrift)
-{
-    // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
-    auto mutations = make_create_keyspace_mutations(keyspace, timestamp, false);
-
-    add_table_or_view_to_schema_mutation(new_table, timestamp, false, mutations);
-
+static void make_update_columns_mutations(schema_ptr old_table,
+        schema_ptr new_table,
+        api::timestamp_type timestamp,
+        bool from_thrift,
+        std::vector<mutation>& mutations) {
     mutation columns_mutation(partition_key::from_singular(*columns(), old_table->ks_name()), columns());
 
     auto diff = difference(old_table->all_columns(), new_table->all_columns());
@@ -1351,6 +1345,20 @@ std::vector<mutation> make_update_table_mutations(lw_shared_ptr<keyspace_metadat
     }
 
     mutations.emplace_back(std::move(columns_mutation));
+}
+
+std::vector<mutation> make_update_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace,
+    schema_ptr old_table,
+    schema_ptr new_table,
+    api::timestamp_type timestamp,
+    bool from_thrift)
+{
+    // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
+    auto mutations = make_create_keyspace_mutations(keyspace, timestamp, false);
+
+    add_table_or_view_to_schema_mutation(new_table, timestamp, false, mutations);
+
+    make_update_columns_mutations(std::move(old_table), std::move(new_table), timestamp, from_thrift, mutations);
 
     warn(unimplemented::cause::TRIGGERS);
 #if 0
@@ -1893,6 +1901,21 @@ std::vector<mutation> make_create_view_mutations(lw_shared_ptr<keyspace_metadata
     auto base = keyspace->cf_meta_data().at(view->view_info()->base_name());
     add_table_or_view_to_schema_mutation(base, timestamp, true, mutations);
     add_table_or_view_to_schema_mutation(view, timestamp, true, mutations);
+    return mutations;
+}
+
+std::vector<mutation> make_update_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace,
+                                                 view_ptr old_view,
+                                                 view_ptr new_view,
+                                                 api::timestamp_type timestamp)
+{
+    // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
+    auto mutations = make_create_keyspace_mutations(keyspace, timestamp, false);
+    // And also the serialized base table.
+    auto base = keyspace->cf_meta_data().at(new_view->view_info()->base_name());
+    add_table_or_view_to_schema_mutation(base, timestamp, true, mutations);
+    add_table_or_view_to_schema_mutation(new_view, timestamp, false, mutations);
+    make_update_columns_mutations(old_view, new_view, timestamp, false, mutations);
     return mutations;
 }
 
