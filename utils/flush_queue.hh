@@ -37,11 +37,15 @@ namespace utils {
  */
 template<typename T, typename Comp = std::less<T>>
 class flush_queue {
+public:
+    using timeout_clock = steady_clock_type;
+    using time_point = typename timeout_clock::time_point;
+    using promise_type = shared_promise<with_clock<timeout_clock>>;
 private:
     // Lifting the restriction of a single "post"
     // per key; Use a "ref count" for each execution
     struct notifier {
-        shared_promise<> pr;
+        promise_type pr;
         size_t count = 0;
     };
 
@@ -65,7 +69,7 @@ private:
         }
     }
     template<typename... Types>
-    static future<Types...> handle_failed_future(future<Types...> f, shared_promise<>& pr) {
+    static future<Types...> handle_failed_future(future<Types...> f, promise_type& pr) {
         assert(f.failed());
         auto ep = std::move(f).get_exception();
         pr.set_exception(ep);
@@ -146,22 +150,22 @@ public:
     }
 private:
     // waits for the entry at "i" to complete (and thus all before it)
-    future<> wait_for_pending(reverse_iterator i) {
+    future<> wait_for_pending(reverse_iterator i, time_point timeout = time_point::max()) {
         if (i == _map.rend()) {
             return make_ready_future<>();
         }
-        return i->second.pr.get_shared_future();
+        return i->second.pr.get_shared_future(timeout);
     }
 public:
     // Waits for all operations currently active to finish
-    future<> wait_for_pending() {
-        return wait_for_pending(_map.rbegin());
+    future<> wait_for_pending(time_point timeout = time_point::max()) {
+        return wait_for_pending(_map.rbegin(), timeout);
     }
     // Waits for all operations whose key is less than or equal to "rp"
     // to complete
-    future<> wait_for_pending(T rp) {
+    future<> wait_for_pending(T rp, time_point timeout = time_point::max()) {
         auto i = _map.upper_bound(rp);
-        return wait_for_pending(reverse_iterator(i));
+        return wait_for_pending(reverse_iterator(i), timeout);
     }
     bool empty() const {
         return _map.empty();
