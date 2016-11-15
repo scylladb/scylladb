@@ -659,6 +659,26 @@ future<> migration_manager::announce_view_update(view_ptr view, bool announce_lo
     }
 }
 
+future<> migration_manager::announce_view_drop(const sstring& ks_name,
+                                               const sstring& cf_name,
+                                               bool announce_locally)
+{
+    auto& db = get_local_storage_proxy().get_db().local();
+    try {
+        auto& view = db.find_column_family(ks_name, cf_name).schema();
+        if (!view->is_view()) {
+            throw exceptions::invalid_request_exception("Cannot use DROP MATERIALIZED VIEW on Table");
+        }
+        auto keyspace = db.find_keyspace(ks_name).metadata();
+        logger.info("Drop view '{}.{}'", view->ks_name(), view->cf_name());
+        auto mutations = db::schema_tables::make_drop_view_mutations(std::move(keyspace), view_ptr(std::move(view)), api::new_timestamp());
+        return announce(std::move(mutations), announce_locally);
+    } catch (const no_such_column_family& e) {
+        throw exceptions::configuration_exception(sprint("Cannot drop non existing materialized view '%s' in keyspace '%s'.",
+                                                         cf_name, ks_name));
+    }
+}
+
 #if 0
 public static void announceFunctionDrop(UDFunction udf, boolean announceLocally)
 {
