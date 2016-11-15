@@ -364,6 +364,7 @@ public:
             ++_it;
             _last = ce.key();
             _cache.upgrade_entry(ce);
+            _cache._tracker.touch(ce);
             _cache.on_hit();
             cache_data cd { { }, ce.continuous() };
             if (ce.wide_partition()) {
