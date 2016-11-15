@@ -187,6 +187,10 @@ public:
         bi::member_hook<cache_entry, cache_entry::lru_link_type, &cache_entry::_lru_link>,
         bi::constant_time_size<false>>; // we need this to have bi::auto_unlink on hooks.
 private:
+    // We will try to evict large partition after that many normal evictions
+    const uint32_t _normal_large_eviction_ratio = 1000;
+    // Number of normal evictions to perform before we try to evict large partition
+    uint32_t _normal_eviction_count = _normal_large_eviction_ratio;
     uint64_t _hits = 0;
     uint64_t _misses = 0;
     uint64_t _uncached_wide_partitions = 0;
@@ -194,12 +198,14 @@ private:
     uint64_t _concurrent_misses_same_key = 0;
     uint64_t _merges = 0;
     uint64_t _evictions = 0;
+    uint64_t _wide_partition_evictions = 0;
     uint64_t _removals = 0;
     uint64_t _partitions = 0;
     uint64_t _modification_count = 0;
     std::unique_ptr<scollectd::registrations> _collectd_registrations;
     logalloc::region _region;
     lru_type _lru;
+    lru_type _wide_partition_lru;
 private:
     void setup_collectd();
 public:
@@ -208,6 +214,7 @@ public:
     void clear();
     void touch(cache_entry&);
     void insert(cache_entry&);
+    void mark_wide(cache_entry&);
     void clear_continuity(cache_entry& ce);
     void on_erase();
     void on_merge();
