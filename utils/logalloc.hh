@@ -584,6 +584,9 @@ public:
     // Invalidates references to allocated objects.
     void full_compaction();
 
+    // Runs eviction function once. Mainly for testing.
+    memory::reclaiming_result evict_some();
+
     // Changes the reclaimability state of this region. When region is not
     // reclaimable, it won't be considered by tracker::reclaim(). By default region is
     // reclaimable after construction.

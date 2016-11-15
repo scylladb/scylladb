@@ -1648,6 +1648,13 @@ void region::full_compaction() {
     _impl->full_compaction();
 }
 
+memory::reclaiming_result region::evict_some() {
+    if (_impl->is_evictable()) {
+        return _impl->evict_some();
+    }
+    return memory::reclaiming_result::reclaimed_nothing;
+}
+
 void region::make_evictable(eviction_fn fn) {
     _impl->make_evictable(std::move(fn));
 }

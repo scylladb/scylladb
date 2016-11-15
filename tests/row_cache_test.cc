@@ -1343,3 +1343,61 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_lru) {
+    return seastar::async([] {
+        auto s = make_schema();
+        auto cache_mt = make_lw_shared<memtable>(s);
+
+        cache_tracker tracker;
+        row_cache cache(s, cache_mt->as_data_source(), tracker);
+
+        int partition_count = 10;
+
+        std::vector<mutation> partitions = make_ring(s, partition_count);
+        for (auto&& m : partitions) {
+            cache.populate(m);
+        }
+
+        auto pr = query::partition_range::make_ending_with(dht::ring_position(partitions[2].decorated_key()));
+        auto rd = cache.make_reader(s, pr);
+        assert_that(std::move(rd))
+                .produces(partitions[0])
+                .produces(partitions[1])
+                .produces(partitions[2])
+                .produces_end_of_stream();
+
+        auto ret = tracker.region().evict_some();
+        BOOST_REQUIRE(ret == memory::reclaiming_result::reclaimed_something);
+
+        pr = query::partition_range::make_ending_with(dht::ring_position(partitions[4].decorated_key()));
+        rd = cache.make_reader(s, pr);
+        assert_that(std::move(rd))
+                .produces(partitions[0])
+                .produces(partitions[1])
+                .produces(partitions[2])
+                .produces(partitions[4])
+                .produces_end_of_stream();
+
+        pr = query::partition_range::make_singular(dht::ring_position(partitions[5].decorated_key()));
+        rd = cache.make_reader(s, pr);
+        assert_that(std::move(rd))
+                .produces(partitions[5])
+                .produces_end_of_stream();
+
+        ret = tracker.region().evict_some();
+        BOOST_REQUIRE(ret == memory::reclaiming_result::reclaimed_something);
+
+        rd = cache.make_reader(s);
+        assert_that(std::move(rd))
+                .produces(partitions[0])
+                .produces(partitions[1])
+                .produces(partitions[2])
+                .produces(partitions[4])
+                .produces(partitions[5])
+                .produces(partitions[7])
+                .produces(partitions[8])
+                .produces(partitions[9])
+                .produces_end_of_stream();
+    });
+}
