@@ -364,6 +364,7 @@ public:
             ++_it;
             _last = ce.key();
             _cache.upgrade_entry(ce);
+            _cache._tracker.touch(ce);
             cache_data cd { { }, _cache._tracker.continuity_flags_cleared(), ce.continuous() };
             if (ce.wide_partition()) {
                 return ce.read_wide(_cache, _schema, _ck_filtering, _pc).then([this, cd = std::move(cd)] (auto smopt) mutable {
