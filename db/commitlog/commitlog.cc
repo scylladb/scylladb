@@ -165,8 +165,10 @@ public:
 
     bool _shutdown = false;
 
-    semaphore _new_segment_semaphore {1};
-    semaphore _flush_semaphore;
+    // Allocation must throw timed_out_error by contract.
+    using timeout_exception_factory = default_timeout_exception_factory;
+
+    basic_semaphore<timeout_exception_factory> _flush_semaphore;
 
     scollectd::registrations _regs;
 
@@ -175,7 +177,11 @@ public:
     using time_point = clock_type::time_point;
     using sseg_ptr = lw_shared_ptr<segment>;
 
-    semaphore _request_controller;
+    using request_controller_type = basic_semaphore<timeout_exception_factory>;
+    using request_controller_units = semaphore_units<timeout_exception_factory>;
+    request_controller_type _request_controller;
+
+    stdx::optional<shared_future<with_clock<commitlog::timeout_clock>>> _segment_allocating;
 
     void account_memory_usage(size_t size) {
         _request_controller.consume(size);
@@ -186,7 +192,7 @@ public:
     }
 
     future<db::replay_position>
-    allocate_when_possible(const cf_id_type& id, shared_ptr<entry_writer> writer);
+    allocate_when_possible(const cf_id_type& id, shared_ptr<entry_writer> writer, commitlog::timeout_clock::time_point timeout);
 
     struct stats {
         uint64_t cycle_count = 0;
@@ -243,7 +249,7 @@ public:
 
     future<> init();
     future<sseg_ptr> new_segment();
-    future<sseg_ptr> active_segment();
+    future<sseg_ptr> active_segment(commitlog::timeout_clock::time_point timeout);
     future<sseg_ptr> allocate_segment(bool active);
 
     future<> clear();
@@ -462,10 +468,10 @@ public:
     /**
      * Finalize this segment and get a new one
      */
-    future<sseg_ptr> finish_and_get_new() {
+    future<sseg_ptr> finish_and_get_new(commitlog::timeout_clock::time_point timeout) {
         _closed = true;
         sync();
-        return _segment_manager->active_segment();
+        return _segment_manager->active_segment(timeout);
     }
     void reset_sync_time() {
         _sync_time = clock_type::now();
@@ -678,7 +684,7 @@ public:
         });
     }
 
-    future<sseg_ptr> batch_cycle() {
+    future<sseg_ptr> batch_cycle(timeout_clock::time_point timeout) {
         /**
          * For batch mode we force a write "immediately".
          * However, we first wait for all previous writes/flushes
@@ -689,7 +695,7 @@ public:
          */
         auto me = shared_from_this();
         auto fp = _file_pos;
-        return _pending_ops.wait_for_pending().then([me = std::move(me), fp] {
+        return _pending_ops.wait_for_pending(timeout).then([me = std::move(me), fp, timeout] {
             if (fp != me->_file_pos) {
                 // some other request already wrote this buffer.
                 // If so, wait for the operation at our intended file offset
@@ -697,12 +703,14 @@ public:
                 // are in accord.
                 // (Note: wait_for_pending(pos) waits for operation _at_ pos (and before),
                 replay_position rp(me->_desc.id, position_type(fp));
-                return me->_pending_ops.wait_for_pending(rp).then([me, fp] {
+                return me->_pending_ops.wait_for_pending(rp, timeout).then([me, fp] {
                     assert(me->_flush_pos > fp);
                     return make_ready_future<sseg_ptr>(me);
                 });
             }
-            return me->sync();
+            // It is ok to leave the sync behind on timeout because there will be at most one
+            // such sync, all later allocations will block on _pending_ops until it is done.
+            return with_timeout(timeout, me->sync());
         }).handle_exception([me, fp](auto p) {
             // If we get an IO exception (which we assume this is)
             // we should close the segment.
@@ -716,10 +724,10 @@ public:
     /**
      * Add a "mutation" to the segment.
      */
-    future<replay_position> allocate(const cf_id_type& id, shared_ptr<entry_writer> writer, semaphore_units<> permit) {
+    future<replay_position> allocate(const cf_id_type& id, shared_ptr<entry_writer> writer, segment_manager::request_controller_units permit, commitlog::timeout_clock::time_point timeout) {
         if (must_sync()) {
-            return sync().then([this, id, writer = std::move(writer), permit = std::move(permit)] (auto s) mutable {
-                return s->allocate(id, std::move(writer), std::move(permit));
+            return with_timeout(timeout, sync()).then([this, id, writer = std::move(writer), permit = std::move(permit), timeout] (auto s) mutable {
+                return s->allocate(id, std::move(writer), std::move(permit), timeout);
             });
         }
 
@@ -732,8 +740,8 @@ public:
 
 
         if (!is_still_allocating() || position() + s > _segment_manager->max_size) { // would we make the file too big?
-            return finish_and_get_new().then([id, writer = std::move(writer), permit = std::move(permit)] (auto new_seg) mutable {
-                return new_seg->allocate(id, std::move(writer), std::move(permit));
+            return finish_and_get_new(timeout).then([id, writer = std::move(writer), permit = std::move(permit), timeout] (auto new_seg) mutable {
+                return new_seg->allocate(id, std::move(writer), std::move(permit), timeout);
             });
         } else if (!_buffer.empty() && (s > (_buffer.size() - _buf_pos))) {  // enough data?
             if (_segment_manager->cfg.mode == sync_mode::BATCH) {
@@ -741,8 +749,8 @@ public:
                 // If we run batch mode and find ourselves not fit in a non-empty
                 // buffer, we must force a cycle and wait for it (to keep flush order)
                 // This will most likely cause parallel writes, and consecutive flushes.
-                return cycle(true).then([this, id, writer = std::move(writer), permit = std::move(permit)] (auto new_seg) mutable {
-                    return new_seg->allocate(id, std::move(writer), std::move(permit));
+                return with_timeout(timeout, cycle(true)).then([this, id, writer = std::move(writer), permit = std::move(permit), timeout] (auto new_seg) mutable {
+                    return new_seg->allocate(id, std::move(writer), std::move(permit), timeout);
                 });
             } else {
                 cycle();
@@ -788,7 +796,7 @@ public:
         _gate.leave();
 
         if (_segment_manager->cfg.mode == sync_mode::BATCH) {
-            return batch_cycle().then([rp](auto s) {
+            return batch_cycle(timeout).then([rp](auto s) {
                 return make_ready_future<replay_position>(rp);
             });
         } else {
@@ -860,7 +868,7 @@ public:
 };
 
 future<db::replay_position>
-db::commitlog::segment_manager::allocate_when_possible(const cf_id_type& id, shared_ptr<entry_writer> writer) {
+db::commitlog::segment_manager::allocate_when_possible(const cf_id_type& id, shared_ptr<entry_writer> writer, commitlog::timeout_clock::time_point timeout) {
     auto size = writer->size();
     // If this is already too big now, we should throw early. It's also a correctness issue, since
     // if we are too big at this moment we'll never reach allocate() to actually throw at that
@@ -870,13 +878,13 @@ db::commitlog::segment_manager::allocate_when_possible(const cf_id_type& id, sha
         return make_exception_future<replay_position>(std::move(ep));
     }
 
-    auto fut = get_units(_request_controller, size);
+    auto fut = get_units(_request_controller, size, timeout);
     if (!fut.available()) {
         totals.requests_blocked_memory++;
     }
-    return fut.then([this, id, writer = std::move(writer)] (auto permit) mutable {
-        return this->active_segment().then([this, id, writer = std::move(writer), permit = std::move(permit)] (auto s) mutable {
-            return s->allocate(id, std::move(writer), std::move(permit));
+    return fut.then([this, id, writer = std::move(writer), timeout] (auto permit) mutable {
+        return this->active_segment(timeout).then([this, timeout, id, writer = std::move(writer), permit = std::move(permit)] (auto s) mutable {
+            return s->allocate(id, std::move(writer), std::move(permit), timeout);
         });
     });
 }
@@ -1162,18 +1170,31 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     return make_ready_future<sseg_ptr>(_segments.back());
 }
 
-future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::active_segment() {
-    if (_segments.empty() || !_segments.back()->is_still_allocating()) {
-        return _new_segment_semaphore.wait().then([this]() {
-            if (_segments.empty() || !_segments.back()->is_still_allocating()) {
-                return new_segment();
+future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::active_segment(commitlog::timeout_clock::time_point timeout) {
+    // If there is no active segment, try to allocate one using new_segment(). If we time out,
+    // make sure later invocations can still pick that segment up once it's ready.
+    return repeat_until_value([this, timeout] () -> future<stdx::optional<sseg_ptr>> {
+        if (!_segments.empty() && _segments.back()->is_still_allocating()) {
+            return make_ready_future<stdx::optional<sseg_ptr>>(_segments.back());
+        }
+        return [this, timeout] {
+            if (!_segment_allocating) {
+                promise<> p;
+                _segment_allocating.emplace(p.get_future());
+                auto f = _segment_allocating->get_future(timeout);
+                with_gate(_gate, [this] {
+                    return new_segment().discard_result().finally([this]() {
+                        _segment_allocating = stdx::nullopt;
+                    });
+                }).forward_to(std::move(p));
+                return f;
+            } else {
+                return _segment_allocating->get_future(timeout);
             }
-            return make_ready_future<sseg_ptr>(_segments.back());
-        }).finally([this]() {
-            _new_segment_semaphore.signal();
+        }().then([] () -> stdx::optional<sseg_ptr> {
+            return stdx::nullopt;
         });
-    }
-    return make_ready_future<sseg_ptr>(_segments.back());
+    });
 }
 
 /**
@@ -1403,7 +1424,7 @@ void db::commitlog::segment_manager::release_buffer(buffer_type&& b) {
  * Add mutation.
  */
 future<db::replay_position> db::commitlog::add(const cf_id_type& id,
-        size_t size, serializer_func func) {
+        size_t size, commitlog::timeout_clock::time_point timeout, serializer_func func) {
     class serializer_func_entry_writer final : public entry_writer {
         serializer_func _func;
         size_t _size;
@@ -1418,10 +1439,10 @@ future<db::replay_position> db::commitlog::add(const cf_id_type& id,
         }
     };
     auto writer = ::make_shared<serializer_func_entry_writer>(size, std::move(func));
-    return _segment_manager->allocate_when_possible(id, writer);
+    return _segment_manager->allocate_when_possible(id, writer, timeout);
 }
 
-future<db::replay_position> db::commitlog::add_entry(const cf_id_type& id, const commitlog_entry_writer& cew)
+future<db::replay_position> db::commitlog::add_entry(const cf_id_type& id, const commitlog_entry_writer& cew, timeout_clock::time_point timeout)
 {
     class cl_entry_writer final : public entry_writer {
         commitlog_entry_writer _writer;
@@ -1442,7 +1463,7 @@ future<db::replay_position> db::commitlog::add_entry(const cf_id_type& id, const
         }
     };
     auto writer = ::make_shared<cl_entry_writer>(cew);
-    return _segment_manager->allocate_when_possible(id, writer);
+    return _segment_manager->allocate_when_possible(id, writer, timeout);
 }
 
 db::commitlog::commitlog(config cfg)
