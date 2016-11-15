@@ -1565,9 +1565,12 @@ future<> gossiper::do_stop_gossiping() {
     });
 }
 
-future<> gossiper::stop_gossiping() {
-    return get_gossiper().invoke_on(0, [] (gossiper& g) {
-        return g.do_stop_gossiping();
+future<> stop_gossiping() {
+    return smp::submit_to(0, [] {
+        if (get_gossiper().local_is_initialized()) {
+            return get_local_gossiper().do_stop_gossiping();
+        }
+        return make_ready_future<>();
     });
 }
 

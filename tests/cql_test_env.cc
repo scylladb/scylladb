@@ -329,7 +329,7 @@ public:
 
             service::get_local_storage_service().init_server().get();
             auto deinit_storage_service_server = defer([] {
-                gms::get_local_gossiper().stop_gossiping().get();
+                gms::stop_gossiping().get();
                 auth::auth::shutdown().get();
             });
 

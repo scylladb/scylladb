@@ -481,8 +481,6 @@ public:
 
     // Needed by seastar::sharded
     future<> stop();
-    future<> stop_gossiping();
-private:
     future<> do_stop_gossiping();
 
 public:
@@ -542,11 +540,15 @@ private:
 };
 
 extern distributed<gossiper> _the_gossiper;
+
 inline gossiper& get_local_gossiper() {
     return _the_gossiper.local();
 }
+
 inline distributed<gossiper>& get_gossiper() {
     return _the_gossiper;
 }
+
+future<> stop_gossiping();
 
 } // namespace gms

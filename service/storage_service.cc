@@ -1126,7 +1126,7 @@ future<> storage_service::stop_transport() {
         return seastar::async([&ss] {
             logger.info("Stop transport: starts");
 
-            gms::get_local_gossiper().stop_gossiping().get();
+            gms::stop_gossiping().get();
             logger.info("Stop transport: stop_gossiping done");
 
             ss.shutdown_client_servers().get();
@@ -1730,7 +1730,7 @@ future<> storage_service::stop_gossiping() {
     return run_with_api_lock(sstring("stop_gossiping"), [] (storage_service& ss) {
         if (ss._initialized) {
             logger.warn("Stopping gossip by operator request");
-            return gms::get_local_gossiper().stop_gossiping().then([&ss] {
+            return gms::stop_gossiping().then([&ss] {
                 ss._initialized = false;
             });
         }
@@ -2087,7 +2087,7 @@ future<> storage_service::decommission() {
             }).get();
             logger.info("DECOMMISSIONING: stop batchlog_manager done");
 
-            gms::get_local_gossiper().stop_gossiping().get();
+            gms::stop_gossiping().get();
             logger.info("DECOMMISSIONING: stop_gossiping done");
             ss.do_stop_ms().get();
             logger.info("DECOMMISSIONING: stop messaging_service done");
@@ -2252,7 +2252,7 @@ future<> storage_service::drain() {
 
             ss.set_mode(mode::DRAINING, "starting drain process", true);
             ss.shutdown_client_servers().get();
-            gms::get_local_gossiper().stop_gossiping().get();
+            gms::stop_gossiping().get();
 
             ss.set_mode(mode::DRAINING, "shutting down messaging_service", false);
             ss.do_stop_ms().get();
