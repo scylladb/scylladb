@@ -73,11 +73,13 @@ cache_tracker::cache_tracker() {
                 return memory::reclaiming_result::reclaimed_nothing;
             }
             cache_entry& ce = _lru.back();
+            bool is_wide = ce.wide_partition();
             auto it = row_cache::partitions_type::s_iterator_to(ce);
             clear_continuity(*std::next(it));
             _lru.pop_back_and_dispose(current_deleter<cache_entry>());
             --_partitions;
             ++_evictions;
+            _wide_partition_evictions += is_wide;
             ++_modification_count;
             return memory::reclaiming_result::reclaimed_something;
            } catch (std::bad_alloc&) {
@@ -142,6 +144,11 @@ cache_tracker::setup_collectd() {
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "evictions")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _evictions)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "wide_partition_evictions")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _wide_partition_evictions)
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("cache"
                 , scollectd::per_cpu_plugin_instance

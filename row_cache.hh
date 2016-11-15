@@ -194,6 +194,7 @@ private:
     uint64_t _concurrent_misses_same_key = 0;
     uint64_t _merges = 0;
     uint64_t _evictions = 0;
+    uint64_t _wide_partition_evictions = 0;
     uint64_t _removals = 0;
     uint64_t _partitions = 0;
     uint64_t _modification_count = 0;
