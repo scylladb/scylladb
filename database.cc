@@ -1775,8 +1775,22 @@ database::setup_collectd() {
     _collectd.push_back(
         scollectd::add_polled_metric(scollectd::type_instance_id("database"
                 , scollectd::per_cpu_plugin_instance
+                , "total_operations", "total_writes_failed")
+                , scollectd::make_typed(scollectd::data_type::COUNTER, _stats->total_writes_failed)
+    ));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
                 , "total_operations", "total_reads")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats->total_reads)
+    ));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "total_reads_failed")
+                , scollectd::make_typed(scollectd::data_type::COUNTER, _stats->total_reads_failed)
     ));
 
     _collectd.push_back(
@@ -2400,9 +2414,13 @@ column_family::as_mutation_source(tracing::trace_state_ptr trace_state) const {
 future<lw_shared_ptr<query::result>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges, tracing::trace_state_ptr trace_state) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return cf.query(std::move(s), cmd, request, ranges, std::move(trace_state)).then([this, s = _stats] (auto&& res) {
-        ++s->total_reads;
-        return std::move(res);
+    return cf.query(std::move(s), cmd, request, ranges, std::move(trace_state)).then_wrapped([this, s = _stats] (auto f) {
+        if (f.failed()) {
+            ++s->total_reads_failed;
+        } else {
+            ++s->total_reads;
+        }
+        return f;
     });
 }
 
@@ -2410,9 +2428,13 @@ future<reconcilable_result>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const query::partition_range& range, tracing::trace_state_ptr trace_state) {
     column_family& cf = find_column_family(cmd.cf_id);
     return mutation_query(std::move(s), cf.as_mutation_source(std::move(trace_state)), range, cmd.slice, cmd.row_limit, cmd.partition_limit,
-            cmd.timestamp).then([this, s = _stats] (auto&& res) {
-        ++s->total_reads;
-        return std::move(res);
+            cmd.timestamp).then_wrapped([this, s = _stats] (auto f) {
+        if (f.failed()) {
+            ++s->total_reads_failed;
+        } else {
+            ++s->total_reads;
+        }
+        return f;
     });
 }
 
@@ -2683,8 +2705,13 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m) {
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
     }
-    return do_apply(std::move(s), m).then([this, s = _stats] {
-        ++s->total_writes;
+    return do_apply(std::move(s), m).then_wrapped([this, s = _stats] (autof) {
+        if (f.failed()) {
+            ++s->total_writes_failed;
+        } else {
+            ++s->total_writes;
+        }
+        return f;
     });
 }
 

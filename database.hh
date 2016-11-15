@@ -1024,7 +1024,9 @@ class database {
     static constexpr size_t max_system_concurrent_reads() { return 10; }
     struct db_stats {
         uint64_t total_writes = 0;
+        uint64_t total_writes_failed = 0;
         uint64_t total_reads = 0;
+        uint64_t total_reads_failed = 0;
         uint64_t sstable_read_queue_overloaded = 0;
     };
 
