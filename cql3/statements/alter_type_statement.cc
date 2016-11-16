@@ -123,7 +123,11 @@ void alter_type_statement::do_announce_migration(database& db, ::keyspace& ks, b
             }
         }
         if (modified) {
-            service::get_local_migration_manager().announce_column_family_update(cfm.build(), false, is_local_only).get();
+            if (schema->is_view()) {
+                service::get_local_migration_manager().announce_view_update(view_ptr(cfm.build()), is_local_only).get();
+            } else {
+                service::get_local_migration_manager().announce_column_family_update(cfm.build(), false, is_local_only).get();
+            }
         }
     }
 
