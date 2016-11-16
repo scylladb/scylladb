@@ -74,6 +74,14 @@ public:
         , sp_out(streaming::stream_plan(sprint("repair-out-%d", id))) {
 
     }
+    future<> do_streaming() {
+        return sp_in.execute().discard_result().then([this] {
+                return sp_out.execute().discard_result();
+        }).handle_exception([] (auto ep) {
+            logger.warn("repair's stream failed: {}", ep);
+            return make_exception_future(ep);
+        });
+    }
 };
 
 template <typename T1, typename T2>
@@ -880,12 +888,7 @@ static future<> repair_ranges(repair_info ri) {
             check_in_shutdown();
             return repair_range(ri, range);
         }).then([&ri] {
-            return ri.sp_in.execute().discard_result().then([&ri] {
-                    return ri.sp_out.execute().discard_result();
-            }).handle_exception([] (auto ep) {
-                logger.warn("repair's stream failed: {}", ep);
-                return make_exception_future(ep);
-            });
+            return ri.do_streaming();
         }).then([&ri] {
             if (ri.failed_ranges.empty()) {
                 logger.info("repair {} completed sucessfully", ri.id);
