@@ -94,6 +94,17 @@ public:
             return false;
         }
     }
+    void request_transfer_ranges(const sstring& cf,
+        const ::nonwrapping_range<dht::token>& range,
+        const std::vector<gms::inet_address>& neighbors_in,
+        const std::vector<gms::inet_address>& neighbors_out) {
+        for (const auto& peer : neighbors_in) {
+            sp_in.request_ranges(peer, keyspace, {range}, {cf});
+        }
+        for (const auto& peer : neighbors_out) {
+            sp_out.transfer_ranges(peer, keyspace, {range}, {cf});
+        }
+    }
 };
 
 template <typename T1, typename T2>
@@ -468,21 +479,6 @@ future<partition_checksum> checksum_range(seastar::sharded<database> &db,
     });
 }
 
-static void request_transfer_ranges(seastar::sharded<database>& db,
-        const sstring& keyspace, const sstring& cf,
-        const ::nonwrapping_range<dht::token>& range,
-        const std::vector<gms::inet_address>& neighbors_in,
-        const std::vector<gms::inet_address>& neighbors_out,
-        streaming::stream_plan& sp_in,
-        streaming::stream_plan& sp_out) {
-        for (const auto& peer : neighbors_in) {
-            sp_in.request_ranges(peer, keyspace, {range}, {cf});
-        }
-        for (const auto& peer : neighbors_out) {
-            sp_out.transfer_ranges(peer, keyspace, {range}, {cf});
-        }
-}
-
 static void split_and_add(std::vector<::nonwrapping_range<dht::token>>& ranges,
         const nonwrapping_range<dht::token>& range,
         uint64_t estimated_partitions, uint64_t target_partitions) {
@@ -640,7 +636,7 @@ static future<> repair_cf_range(repair_info& ri,
                         if (checksum0 != checksum) {
                             logger.info("Found differing range {} on nodes {}, in = {}, out = {}", range,
                                     live_neighbors, live_neighbors_in, live_neighbors_out);
-                            request_transfer_ranges(ri.db, ri.keyspace, cf, range, live_neighbors_in, live_neighbors_out, ri.sp_in, ri.sp_out);
+                            ri.request_transfer_ranges(cf, range, live_neighbors_in, live_neighbors_out);
                             return make_ready_future<>();
                         }
                     }
