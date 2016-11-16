@@ -45,6 +45,7 @@
 #include "types.hh"
 #include "keys.hh"
 #include "utils/managed_bytes.hh"
+#include "stdx.hh"
 #include <memory>
 #include <random>
 #include <utility>
@@ -222,6 +223,11 @@ public:
     virtual dht::token from_sstring(const sstring& t) const = 0;
 
     /**
+     * @return a token from its partitioner-specific byte representation
+     */
+    virtual dht::token from_bytes(bytes_view bytes) const = 0;
+
+    /**
      * @return a randomly generated token
      */
     virtual token get_random_token() = 0;
@@ -257,26 +263,38 @@ public:
     virtual unsigned shard_of(const token& t) const = 0;
 
     /**
+     * Gets the first token greater than `t` that is not in the same shard as `t`.
+     */
+    virtual token token_for_next_shard(const token& t) const = 0;
+
+    /**
+     * Gets the first shard of the minimum token.
+     */
+    unsigned shard_of_minimum_token() const {
+        return 0;  // hardcoded for now; unlikely to change
+    }
+
+    /**
      * @return bytes that represent the token as required by get_token_validator().
      */
     virtual bytes token_to_bytes(const token& t) const {
         return bytes(t._data.begin(), t._data.end());
     }
-protected:
+
     /**
      * @return < 0 if if t1's _data array is less, t2's. 0 if they are equal, and > 0 otherwise. _kind comparison should be done separately.
      */
-    virtual int tri_compare(const token& t1, const token& t2);
+    virtual int tri_compare(const token& t1, const token& t2) const;
     /**
      * @return true if t1's _data array is equal t2's. _kind comparison should be done separately.
      */
-    bool is_equal(const token& t1, const token& t2) {
+    bool is_equal(const token& t1, const token& t2) const {
         return tri_compare(t1, t2) == 0;
     }
     /**
      * @return true if t1's _data array is less then t2's. _kind comparison should be done separately.
      */
-    bool is_less(const token& t1, const token& t2) {
+    bool is_less(const token& t1, const token& t2) const {
         return tri_compare(t1, t2) < 0;
     }
 
@@ -417,7 +435,40 @@ i_partitioner& global_partitioner();
 
 unsigned shard_of(const token&);
 
-range<ring_position> to_partition_range(range<dht::token>);
+struct ring_position_range_and_shard {
+    nonwrapping_range<ring_position> ring_range;
+    unsigned shard;
+};
+
+class ring_position_range_sharder {
+    const i_partitioner& _partitioner;
+    nonwrapping_range<ring_position> _range;
+    bool _done = false;
+public:
+    explicit ring_position_range_sharder(range<ring_position> rrp)
+            : ring_position_range_sharder(global_partitioner(), std::move(rrp)) {}
+    ring_position_range_sharder(const i_partitioner& partitioner, range<ring_position> rrp)
+            : _partitioner(partitioner), _range(std::move(rrp)) {}
+    stdx::optional<ring_position_range_and_shard> next(const schema& s);
+};
+
+class ring_position_range_vector_sharder {
+    using vec_type = std::vector<nonwrapping_range<ring_position>>;
+    vec_type _ranges;
+    vec_type::iterator _current_range;
+    stdx::optional<ring_position_range_sharder> _current_sharder;
+private:
+    void next_range() {
+        if (_current_range != _ranges.end()) {
+            _current_sharder.emplace(std::move(*_current_range++));
+        }
+    }
+public:
+    explicit ring_position_range_vector_sharder(std::vector<nonwrapping_range<ring_position>> ranges);
+    stdx::optional<ring_position_range_and_shard> next(const schema& s);
+};
+
+nonwrapping_range<ring_position> to_partition_range(nonwrapping_range<dht::token>);
 
 } // dht
 

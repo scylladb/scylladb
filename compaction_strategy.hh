@@ -54,8 +54,15 @@ public:
     // Return a list of sstables to be compacted after applying the strategy.
     compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<lw_shared_ptr<sstable>> candidates);
 
+    // Some strategies may look at the compacted and resulting sstables to
+    // get some useful information for subsequent compactions.
+    void notify_completion(const std::vector<lw_shared_ptr<sstable>>& removed, const std::vector<lw_shared_ptr<sstable>>& added);
+
     // Return if parallel compaction is allowed by strategy.
     bool parallel_compaction() const;
+
+    // Return if optimization to rule out sstables based on clustering key filter should be applied.
+    bool use_clustering_key_filter() const;
 
     // An estimation of number of compaction for strategy to be satisfied.
     int64_t estimated_pending_compactions(column_family& cf) const;

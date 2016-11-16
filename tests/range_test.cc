@@ -19,7 +19,6 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#define BOOST_TEST_DYN_LINK
 #define BOOST_TEST_MODULE core
 
 #include <boost/test/unit_test.hpp>
@@ -33,18 +32,22 @@
 #include "disk-error-handler.hh"
 #include "locator/token_metadata.hh"
 
+// yuck, but what can one do?  needed for BOOST_REQUIRE_EQUAL
+namespace std {
+
+ostream&
+operator<<(ostream& os, const stdx::nullopt_t&) {
+    return os << "{}";
+}
+
+}
+
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
 
 static
 bool includes_token(const schema& s, const query::partition_range& r, const dht::token& tok) {
     dht::ring_position_comparator cmp(s);
-
-    if (r.is_wrap_around(cmp)) {
-        auto sub = r.unwrap();
-        return includes_token(s, sub.first, tok)
-            || includes_token(s, sub.second, tok);
-    }
 
     return !r.before(dht::ring_position(tok, dht::ring_position::token_bound::end), cmp)
         && !r.after(dht::ring_position(tok, dht::ring_position::token_bound::start), cmp);
@@ -66,35 +69,12 @@ BOOST_AUTO_TEST_CASE(test_range_with_positions_within_the_same_token) {
 
     {
         auto r = query::partition_range::make(
-            dht::ring_position(key2),
-            dht::ring_position(key1));
-
-        BOOST_REQUIRE(includes_token(*s, r, tok));
-        BOOST_REQUIRE(r.contains(key1, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key2, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.is_wrap_around(dht::ring_position_comparator(*s)));
-    }
-
-    {
-        auto r = query::partition_range::make(
             dht::ring_position(key1),
             dht::ring_position(key2));
 
         BOOST_REQUIRE(includes_token(*s, r, tok));
         BOOST_REQUIRE(r.contains(key1, dht::ring_position_comparator(*s)));
         BOOST_REQUIRE(r.contains(key2, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(!r.is_wrap_around(dht::ring_position_comparator(*s)));
-    }
-
-    {
-        auto r = query::partition_range::make(
-            {dht::ring_position(key2), false},
-            {dht::ring_position(key1), false});
-
-        BOOST_REQUIRE(includes_token(*s, r, tok));
-        BOOST_REQUIRE(!r.contains(key1, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(!r.contains(key2, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.is_wrap_around(dht::ring_position_comparator(*s)));
     }
 
     {
@@ -105,7 +85,6 @@ BOOST_AUTO_TEST_CASE(test_range_with_positions_within_the_same_token) {
         BOOST_REQUIRE(includes_token(*s, r, tok));
         BOOST_REQUIRE(!r.contains(key1, dht::ring_position_comparator(*s)));
         BOOST_REQUIRE(!r.contains(key2, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(!r.is_wrap_around(dht::ring_position_comparator(*s)));
     }
 
     {
@@ -116,40 +95,6 @@ BOOST_AUTO_TEST_CASE(test_range_with_positions_within_the_same_token) {
         BOOST_REQUIRE(includes_token(*s, r, tok));
         BOOST_REQUIRE(r.contains(key1, dht::ring_position_comparator(*s)));
         BOOST_REQUIRE(r.contains(key2, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(!r.is_wrap_around(dht::ring_position_comparator(*s)));
-    }
-
-    {
-        auto r = query::partition_range::make(
-            {dht::ring_position::ending_at(tok), false},
-            {dht::ring_position(key2), true});
-
-        BOOST_REQUIRE(includes_token(*s, r, tok));
-        BOOST_REQUIRE(r.is_wrap_around(dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key1, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key2, dht::ring_position_comparator(*s)));
-    }
-
-    {
-        auto r = query::partition_range::make(
-            {dht::ring_position::ending_at(tok), false},
-            {dht::ring_position(key1), true});
-
-        BOOST_REQUIRE(includes_token(*s, r, tok));
-        BOOST_REQUIRE(r.is_wrap_around(dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key1, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(!r.contains(key2, dht::ring_position_comparator(*s)));
-    }
-
-    {
-        auto r = query::partition_range::make(
-            {dht::ring_position(key1), false},
-            {dht::ring_position::starting_at(tok), true});
-
-        BOOST_REQUIRE(includes_token(*s, r, tok));
-        BOOST_REQUIRE(r.is_wrap_around(dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(!r.contains(key1, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key2, dht::ring_position_comparator(*s)));
     }
 
     {
@@ -158,124 +103,10 @@ BOOST_AUTO_TEST_CASE(test_range_with_positions_within_the_same_token) {
             {dht::ring_position::ending_at(tok), true});
 
         BOOST_REQUIRE(includes_token(*s, r, tok));
-        BOOST_REQUIRE(!r.is_wrap_around(dht::ring_position_comparator(*s)));
         BOOST_REQUIRE(r.contains(key1, dht::ring_position_comparator(*s)));
         BOOST_REQUIRE(r.contains(key2, dht::ring_position_comparator(*s)));
     }
 
-    {
-        auto r = query::partition_range::make(
-            {dht::ring_position::ending_at(tok), true},
-            {dht::ring_position::starting_at(tok), true});
-
-        BOOST_REQUIRE(includes_token(*s, r, tok));
-        BOOST_REQUIRE(r.is_wrap_around(dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(!r.contains(key1, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(!r.contains(key2, dht::ring_position_comparator(*s)));
-    }
-}
-
-BOOST_AUTO_TEST_CASE(test_range_with_equal_value_but_opposite_inclusiveness_is_a_full_wrap_around) {
-    auto s = schema_builder("ks", "cf")
-        .with_column("key", bytes_type, column_kind::partition_key)
-        .with_column("v", bytes_type)
-        .build();
-
-    dht::token tok = dht::global_partitioner().get_random_token();
-
-    auto key1 = dht::decorated_key{
-        tok, partition_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("key1"))))};
-
-    auto key2 = dht::decorated_key{
-        tok, partition_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("key2"))))};
-
-    {
-        auto r = query::partition_range::make(
-            {dht::ring_position::starting_at(tok), true},
-            {dht::ring_position::starting_at(tok), false});
-
-        BOOST_REQUIRE(includes_token(*s, r, tok));
-        BOOST_REQUIRE(r.is_wrap_around(dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key1, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key2, dht::ring_position_comparator(*s)));
-    }
-
-    {
-        auto r = query::partition_range::make(
-            {dht::ring_position::starting_at(tok), false},
-            {dht::ring_position::starting_at(tok), true});
-
-        BOOST_REQUIRE(includes_token(*s, r, tok));
-        BOOST_REQUIRE(r.is_wrap_around(dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key1, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key2, dht::ring_position_comparator(*s)));
-    }
-
-    {
-        auto r = query::partition_range::make(
-            {dht::ring_position::ending_at(tok), false},
-            {dht::ring_position::ending_at(tok), true});
-
-        BOOST_REQUIRE(includes_token(*s, r, tok));
-        BOOST_REQUIRE(r.is_wrap_around(dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key1, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key2, dht::ring_position_comparator(*s)));
-    }
-
-    {
-        auto r = query::partition_range::make(
-            {dht::ring_position::ending_at(tok), true},
-            {dht::ring_position::ending_at(tok), false});
-
-        BOOST_REQUIRE(includes_token(*s, r, tok));
-        BOOST_REQUIRE(r.is_wrap_around(dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key1, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key2, dht::ring_position_comparator(*s)));
-    }
-
-    {
-        auto r = query::partition_range::make(
-            {dht::ring_position(key1), true},
-            {dht::ring_position(key1), false});
-
-        BOOST_REQUIRE(includes_token(*s, r, tok));
-        BOOST_REQUIRE(r.is_wrap_around(dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key1, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key2, dht::ring_position_comparator(*s)));
-    }
-
-    {
-        auto r = query::partition_range::make(
-            {dht::ring_position(key1), false},
-            {dht::ring_position(key1), true});
-
-        BOOST_REQUIRE(includes_token(*s, r, tok));
-        BOOST_REQUIRE(r.is_wrap_around(dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key1, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key2, dht::ring_position_comparator(*s)));
-    }
-
-    {
-        auto r = query::partition_range::make(
-            {dht::ring_position(key1), false},
-            {dht::ring_position(key1), false});
-
-        BOOST_REQUIRE(includes_token(*s, r, tok));
-        BOOST_REQUIRE(r.is_wrap_around(dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(!r.contains(key1, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key2, dht::ring_position_comparator(*s)));
-    }
-
-    {
-        auto r = query::partition_range::make(
-            {dht::ring_position(key2), false},
-            {dht::ring_position(key2), false});
-
-        BOOST_REQUIRE(includes_token(*s, r, tok));
-        BOOST_REQUIRE(r.is_wrap_around(dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(r.contains(key1, dht::ring_position_comparator(*s)));
-        BOOST_REQUIRE(!r.contains(key2, dht::ring_position_comparator(*s)));
-    }
 }
 
 BOOST_AUTO_TEST_CASE(test_range_contains) {
@@ -506,95 +337,62 @@ BOOST_AUTO_TEST_CASE(test_range_interval_map) {
     BOOST_REQUIRE(search_item("9") == false);
 }
 
-BOOST_AUTO_TEST_CASE(range_deoverlap_tests) {
-    using ranges = std::vector<range<unsigned>>;
+BOOST_AUTO_TEST_CASE(test_split_after) {
+    using b = range_bound<unsigned>;
+    using wr = wrapping_range<unsigned>;
+    using nwr = nonwrapping_range<unsigned>;
+    auto cmp = unsigned_comparator();
 
-    {
-        ranges rs = { range<unsigned>::make(1, 4), range<unsigned>::make(2, 5) };
-        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
-        BOOST_REQUIRE_EQUAL(range<unsigned>::make(1, 5), deoverlapped[0]);
-        BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
-    }
+    auto nwr1 = nwr(b(5), b(8));
+    BOOST_REQUIRE_EQUAL(nwr1.split_after(2, cmp), nwr1);
+    BOOST_REQUIRE_EQUAL(nwr1.split_after(5, cmp), nwr(b(5, false), b(8)));
+    BOOST_REQUIRE_EQUAL(nwr1.split_after(6, cmp), nwr(b(6, false), b(8)));
+    BOOST_REQUIRE_EQUAL(nwr1.split_after(8, cmp), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(nwr1.split_after(9, cmp), stdx::nullopt);
+    auto nwr2 = nwr(b(5, false), b(8, false));
+    BOOST_REQUIRE_EQUAL(nwr2.split_after(2, cmp), nwr2);
+    BOOST_REQUIRE_EQUAL(nwr2.split_after(5, cmp), nwr(b(5, false), b(8, false)));
+    BOOST_REQUIRE_EQUAL(nwr2.split_after(6, cmp), nwr(b(6, false), b(8, false)));
+    BOOST_REQUIRE_EQUAL(nwr2.split_after(8, cmp), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(nwr2.split_after(9, cmp), stdx::nullopt);
+    auto nwr3 = nwr(b(5, false), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(nwr3.split_after(2, cmp), nwr3);
+    BOOST_REQUIRE_EQUAL(nwr3.split_after(5, cmp), nwr3);
+    BOOST_REQUIRE_EQUAL(nwr3.split_after(6, cmp), nwr(b(6, false), stdx::nullopt));
+    auto nwr4 = nwr(stdx::nullopt, b(5, false));
+    BOOST_REQUIRE_EQUAL(nwr4.split_after(2, cmp), nwr(b(2, false), b(5, false)));
+    BOOST_REQUIRE_EQUAL(nwr4.split_after(5, cmp), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(nwr4.split_after(6, cmp), stdx::nullopt);
+    auto nwr5 = nwr(stdx::nullopt, stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(nwr5.split_after(2, cmp), nwr(b(2, false), stdx::nullopt));
 
-    {
-        ranges rs = { range<unsigned>::make(1, 4), range<unsigned>::make(4, 5) };
-        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
-        BOOST_REQUIRE_EQUAL(range<unsigned>::make(1, 5), deoverlapped[0]);
-        BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
-    }
+    auto wr1 = wr(b(5), b(8));
+    BOOST_REQUIRE_EQUAL(wr1.split_after(2, cmp), wr1);
+    BOOST_REQUIRE_EQUAL(wr1.split_after(5, cmp), wr(b(5, false), b(8)));
+    BOOST_REQUIRE_EQUAL(wr1.split_after(6, cmp), wr(b(6, false), b(8)));
+    BOOST_REQUIRE_EQUAL(wr1.split_after(8, cmp), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(wr1.split_after(9, cmp), stdx::nullopt);
+    auto wr2 = wr(b(5, false), b(8, false));
+    BOOST_REQUIRE_EQUAL(wr2.split_after(2, cmp), wr2);
+    BOOST_REQUIRE_EQUAL(wr2.split_after(5, cmp), wr(b(5, false), b(8, false)));
+    BOOST_REQUIRE_EQUAL(wr2.split_after(6, cmp), wr(b(6, false), b(8, false)));
+    BOOST_REQUIRE_EQUAL(wr2.split_after(8, cmp), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(wr2.split_after(9, cmp), stdx::nullopt);
+    auto wr3 = wr(b(5, false), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(wr3.split_after(2, cmp), wr3);
+    BOOST_REQUIRE_EQUAL(wr3.split_after(5, cmp), wr3);
+    BOOST_REQUIRE_EQUAL(wr3.split_after(6, cmp), wr(b(6, false), stdx::nullopt));
+    auto wr4 = wr(stdx::nullopt, b(5, false));
+    BOOST_REQUIRE_EQUAL(wr4.split_after(2, cmp), wr(b(2, false), b(5, false)));
+    BOOST_REQUIRE_EQUAL(wr4.split_after(5, cmp), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(wr4.split_after(6, cmp), stdx::nullopt);
+    auto wr5 = wr(stdx::nullopt, stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(wr5.split_after(2, cmp), wr(b(2, false), stdx::nullopt));
+    auto wr6 = wr(b(8), b(5));
+    BOOST_REQUIRE_EQUAL(wr6.split_after(2, cmp), wr(b(2, false), b(5)));
+    BOOST_REQUIRE_EQUAL(wr6.split_after(5, cmp), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(wr6.split_after(6, cmp), stdx::nullopt);
+    BOOST_REQUIRE_EQUAL(wr6.split_after(8, cmp), wr(b(8, false), b(5)));
+    BOOST_REQUIRE_EQUAL(wr6.split_after(9, cmp), wr(b(9, false), b(5)));
 
-    {
-        ranges rs = { range<unsigned>::make(2, 4), range<unsigned>::make(1, 3) };
-        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
-        BOOST_REQUIRE_EQUAL(range<unsigned>::make(1, 4), deoverlapped[0]);
-        BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
-    }
-
-    {
-        ranges rs = { range<unsigned>::make(1, 4), range<unsigned>::make(0, 5), range<unsigned>::make(7, 12), range<unsigned>::make(8, 10) };
-        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
-        BOOST_REQUIRE_EQUAL(range<unsigned>::make(0, 5), deoverlapped[0]);
-        BOOST_REQUIRE_EQUAL(range<unsigned>::make(7, 12), deoverlapped[1]);
-        BOOST_REQUIRE_EQUAL(2, deoverlapped.size());
-    }
-
-    {
-        ranges rs = { range<unsigned>::make(1, 4), range<unsigned>({2}, { }) };
-        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
-        BOOST_REQUIRE_EQUAL(range<unsigned>({1}, { }), deoverlapped[0]);
-        BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
-    }
-
-    {
-        ranges rs = { range<unsigned>({ }, {4}), range<unsigned>::make(3, 5) };
-        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
-        BOOST_REQUIRE_EQUAL(range<unsigned>({ }, {5}), deoverlapped[0]);
-        BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
-    }
-
-    {
-        ranges rs = { range<unsigned>({14}, { }), range<unsigned>({2}, { }) };
-        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
-        BOOST_REQUIRE_EQUAL(range<unsigned>({2}, { }), deoverlapped[0]);
-        BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
-    }
-
-    {
-        ranges rs = { range<unsigned>({2}, { }), range<unsigned>({12}, { }) };
-        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
-        BOOST_REQUIRE_EQUAL(range<unsigned>({2}, { }), deoverlapped[0]);
-        BOOST_REQUIRE_EQUAL(1, deoverlapped.size());
-    }
-
-    {
-        ranges rs = { range<unsigned>::make(14, 4), range<unsigned>::make(2, 4) };
-        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
-        BOOST_REQUIRE_EQUAL(range<unsigned>({ }, {4}), deoverlapped[0]);
-        BOOST_REQUIRE_EQUAL(range<unsigned>({14}, { }), deoverlapped[1]);
-        BOOST_REQUIRE_EQUAL(2, deoverlapped.size());
-    }
-
-    {
-        ranges rs = { range<unsigned>({3}, {{4, false}}), range<unsigned>({{4, false}}, {5}) };
-        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
-        BOOST_REQUIRE_EQUAL(range<unsigned>({3}, {{4, false}}), deoverlapped[0]);
-        BOOST_REQUIRE_EQUAL(range<unsigned>({{4, false}}, {5}), deoverlapped[1]);
-        BOOST_REQUIRE_EQUAL(2, deoverlapped.size());
-    }
-
-    {
-        ranges rs = { range<unsigned>({3}, {{4, false}}), range<unsigned>::make(4, 5) };
-        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
-        BOOST_REQUIRE_EQUAL(range<unsigned>({3}, {{4, false}}), deoverlapped[0]);
-        BOOST_REQUIRE_EQUAL(range<unsigned>::make(4, 5), deoverlapped[1]);
-        BOOST_REQUIRE_EQUAL(2, deoverlapped.size());
-    }
-
-    {
-        ranges rs = { range<unsigned>::make(3, 4), range<unsigned>({{4, false}}, {5}) };
-        auto deoverlapped = range<unsigned>::deoverlap(std::move(rs), unsigned_comparator());
-        BOOST_REQUIRE_EQUAL(range<unsigned>::make(3, 4), deoverlapped[0]);
-        BOOST_REQUIRE_EQUAL(range<unsigned>({{4, false}}, {5}), deoverlapped[1]);
-        BOOST_REQUIRE_EQUAL(2, deoverlapped.size());
-    }
 }

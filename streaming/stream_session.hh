@@ -41,7 +41,7 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "core/distributed.hh"
 #include "cql3/query_processor.hh"
-#include "message/messaging_service.hh"
+#include "message/messaging_service_fwd.hh"
 #include "utils/UUID.hh"
 #include "streaming/stream_session_state.hh"
 #include "streaming/stream_transfer_task.hh"
@@ -130,7 +130,7 @@ class stream_session : public enable_shared_from_this<stream_session> {
 private:
     using messaging_verb = net::messaging_verb;
     using messaging_service = net::messaging_service;
-    using msg_addr = net::messaging_service::msg_addr;
+    using msg_addr = net::msg_addr;
     using inet_address = gms::inet_address;
     using UUID = utils::UUID;
     using token = dht::token;
@@ -238,7 +238,7 @@ public:
      * @param ranges Ranges to retrieve data
      * @param columnFamilies ColumnFamily names. Can be empty if requesting all CF under the keyspace.
      */
-    void add_stream_request(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families) {
+    void add_stream_request(sstring keyspace, std::vector<nonwrapping_range<token>> ranges, std::vector<sstring> column_families) {
         _requests.emplace_back(std::move(keyspace), std::move(ranges), std::move(column_families));
     }
 
@@ -253,7 +253,7 @@ public:
      * @param flushTables flush tables?
      * @param repairedAt the time the repair started.
      */
-    void add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families);
+    void add_transfer_ranges(sstring keyspace, std::vector<nonwrapping_range<token>> ranges, std::vector<sstring> column_families);
 
     std::vector<column_family*> get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families);
 

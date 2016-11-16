@@ -58,7 +58,7 @@ private:
 public:
     use_statement(sstring keyspace);
 
-    virtual ::shared_ptr<prepared> prepare(database& db) override;
+    virtual ::shared_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 };
 
 }

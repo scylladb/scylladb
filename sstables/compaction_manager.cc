@@ -384,7 +384,7 @@ void compaction_manager::submit(column_family* cf) {
             _stats.active_tasks--;
 
             if (!can_proceed(task)) {
-                f.ignore_ready_future();
+                check_for_error(std::move(f));
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
             if (check_for_error(std::move(f))) {
@@ -439,7 +439,7 @@ future<> compaction_manager::perform_cleanup(column_family* cf) {
                 .then_wrapped([this, task, compacting = std::move(compacting)] (future<> f) mutable {
             _stats.active_tasks--;
             if (!can_proceed(task)) {
-                f.ignore_ready_future();
+                check_for_error(std::move(f));
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
             if (check_for_error(std::move(f))) {

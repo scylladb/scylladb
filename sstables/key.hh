@@ -39,6 +39,10 @@ public:
         return composite_view(_bytes, s.partition_key_size() > 1).explode();
     }
 
+    partition_key to_partition_key(const schema& s) const {
+        return partition_key::from_exploded(s, explode(s));
+    }
+
     bool operator==(const key_view& k) const { return k._bytes == _bytes; }
     bool operator!=(const key_view& k) const { return !(k == *this); }
 
@@ -64,14 +68,16 @@ public:
 // In order to be able to achieve read and write compatibility for sstables - so they can
 // be imported and exported - we need to always convert a key to this representation.
 class key {
+public:
     enum class kind {
         before_all_keys,
         regular,
         after_all_keys,
     };
+private:
     kind _kind;
     bytes _bytes;
-private:
+
     static bool is_compound(const schema& s) {
         return s.partition_key_size() > 1;
     }

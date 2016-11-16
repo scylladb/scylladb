@@ -19,7 +19,6 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#define BOOST_TEST_DYN_LINK
 #define BOOST_TEST_MODULE core
 
 #include "bytes_ostream.hh"
@@ -55,7 +54,6 @@ BOOST_AUTO_TEST_CASE(test_copy_constructor) {
 
     BOOST_REQUIRE(buf.size() == 1024 * sizeof(int));
     BOOST_REQUIRE(buf2.size() == 1024 * sizeof(int));
-    BOOST_REQUIRE(buf2.is_linearized());
 
     assert_sequence(buf, 1024);
     assert_sequence(buf2, 1024);
@@ -72,7 +70,6 @@ BOOST_AUTO_TEST_CASE(test_copy_assignment) {
 
     BOOST_REQUIRE(buf.size() == 512 * sizeof(int));
     BOOST_REQUIRE(buf2.size() == 512 * sizeof(int));
-    BOOST_REQUIRE(buf2.is_linearized());
 
     assert_sequence(buf, 512);
     assert_sequence(buf2, 512);

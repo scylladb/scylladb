@@ -19,7 +19,6 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#define BOOST_TEST_DYN_LINK
 
 #include <boost/test/unit_test.hpp>
 
@@ -424,6 +423,50 @@ SEASTAR_TEST_CASE(test_commitlog_chunk_corruption){
                                     BOOST_REQUIRE(e.bytes() > 0);
                                 }
                             });
+                        });
+                    });
+        });
+}
+
+SEASTAR_TEST_CASE(test_commitlog_reader_produce_exception){
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(cfg, [](commitlog& log) {
+        auto count = make_lw_shared<size_t>(0);
+        auto rps = make_lw_shared<std::vector<db::replay_position>>();
+        return do_until([count]() {return *count  > 1;},
+                    [&log, count, rps]() {
+                        auto uuid = utils::UUID_gen::get_time_UUID();
+                        sstring tmp = "hej bubba cow";
+                        return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                                    dst.write(tmp.begin(), tmp.end());
+                                }).then([&log, rps, count](replay_position rp) {
+                                    BOOST_CHECK_NE(rp, db::replay_position());
+                                    rps->push_back(rp);
+                                    ++(*count);
+                                });
+                    }).then([&log, rps]() {
+                        return log.sync_all_segments();
+                    }).then([&log, rps] {
+                        auto segments = log.get_active_segment_names();
+                        BOOST_REQUIRE(!segments.empty());
+                        auto seg = segments[0];
+                        return db::commitlog::read_log_file(seg, [rps](temporary_buffer<char> buf, db::replay_position rp) {
+                            return make_exception_future(std::runtime_error("I am in a throwing mode"));
+                        }).then([](auto s) {
+                            return do_with(std::move(s), [](auto& s) {
+                                return s->done();
+                            });
+                        }).then_wrapped([](auto&& f) {
+                            try {
+                                f.get();
+                                BOOST_FAIL("Expected exception");
+                            } catch (std::runtime_error&) {
+                                // Ok
+                            } catch (...) {
+                                // ok.
+                                BOOST_FAIL("Wrong exception");
+                            }
                         });
                     });
         });

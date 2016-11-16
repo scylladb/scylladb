@@ -113,7 +113,7 @@ public:
     }
 
     future<> load_sstables(unsigned iterations) {
-        _sst.push_back(make_lw_shared<sstable>("ks", "cf", this->dir(), 0, sstable::version_types::ka, sstable::format_types::big));
+        _sst.push_back(make_lw_shared<sstable>(s, this->dir(), 0, sstable::version_types::ka, sstable::format_types::big));
         return _sst.back()->load();
     }
 
@@ -128,7 +128,7 @@ public:
         auto start = test_env::now();
         size_t partitions = _mt->partition_count();
         return test_setup::create_empty_test_dir(dir()).then([this, idx] {
-            auto sst = sstables::test::make_test_sstable(_cfg.buffer_size, "ks", "cf", dir(), idx, sstable::version_types::ka, sstable::format_types::big);
+            auto sst = sstables::test::make_test_sstable(_cfg.buffer_size, s, dir(), idx, sstable::version_types::ka, sstable::format_types::big);
             return sst->write_components(*_mt).then([sst] {});
         }).then([start, partitions] {
             auto end = test_env::now();

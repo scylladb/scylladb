@@ -25,6 +25,8 @@
 #include "locator/snitch_base.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "log.hh"
+#include "stdx.hh"
+#include "partition_range_compat.hh"
 #include <unordered_map>
 #include <algorithm>
 #include <boost/icl/interval.hpp>
@@ -327,18 +329,21 @@ token token_metadata::get_predecessor(token t) {
     }
 }
 
-std::vector<range<token>> token_metadata::get_primary_ranges_for(std::unordered_set<token> tokens) {
-    std::vector<range<token>> ranges;
-    ranges.reserve(tokens.size());
+std::vector<nonwrapping_range<token>> token_metadata::get_primary_ranges_for(std::unordered_set<token> tokens) {
+    std::vector<nonwrapping_range<token>> ranges;
+    ranges.reserve(tokens.size() + 1); // one of the ranges will wrap
     for (auto right : tokens) {
-        ranges.emplace_back(range<token>::bound(get_predecessor(right), false),
-                            range<token>::bound(right, true));
+        auto left = get_predecessor(right);
+        compat::unwrap_into(
+                wrapping_range<token>(range_bound<token>(left, false), range_bound<token>(right)),
+                dht::token_comparator(),
+                [&] (auto&& rng) { ranges.push_back(std::move(rng)); });
     }
     return ranges;
 }
 
-range<token> token_metadata::get_primary_range_for(token right) {
-    return get_primary_ranges_for({right}).front();
+std::vector<nonwrapping_range<token>> token_metadata::get_primary_ranges_for(token right) {
+    return get_primary_ranges_for(std::unordered_set<token>{right});
 }
 
 boost::icl::interval<token>::interval_type
@@ -424,7 +429,7 @@ void token_metadata::calculate_pending_ranges(abstract_replication_strategy& str
         return;
     }
 
-    std::unordered_multimap<inet_address, range<token>> address_ranges = strategy.get_address_ranges(*this);
+    std::unordered_multimap<inet_address, nonwrapping_range<token>> address_ranges = strategy.get_address_ranges(*this);
 
     // FIMXE
     // Copy of metadata reflecting the situation after all leave operations are finished.

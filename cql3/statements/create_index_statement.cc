@@ -207,7 +207,7 @@ cql3::statements::create_index_statement::announce_migration(distributed<service
 }
 
 shared_ptr<cql3::statements::prepared_statement>
-cql3::statements::create_index_statement::prepare(database& db) {
+cql3::statements::create_index_statement::prepare(database& db, cql_stats& stats) {
     return make_shared<prepared_statement>(make_shared<create_index_statement>(*this));
 }
 

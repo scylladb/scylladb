@@ -168,7 +168,7 @@ public:
 
     template<typename RangeOfSerializedComponents>
     static TopLevel from_exploded(RangeOfSerializedComponents&& v) {
-        return TopLevel(std::forward<RangeOfSerializedComponents>(v));
+        return TopLevel::from_range(std::forward<RangeOfSerializedComponents>(v));
     }
 
     static TopLevel from_exploded(const schema& s, const std::vector<bytes>& v) {
@@ -615,8 +615,12 @@ public:
     using c_type = compound_type<allow_prefixes::no>;
 
     template<typename RangeOfSerializedComponents>
-    partition_key(RangeOfSerializedComponents&& v)
-        : compound_wrapper(managed_bytes(c_type::serialize_value(std::forward<RangeOfSerializedComponents>(v))))
+    static partition_key from_range(RangeOfSerializedComponents&& v) {
+        return partition_key(managed_bytes(c_type::serialize_value(std::forward<RangeOfSerializedComponents>(v))));
+    }
+
+    partition_key(std::vector<bytes> v)
+        : compound_wrapper(managed_bytes(c_type::serialize_value(std::move(v))))
     { }
 
     partition_key(partition_key&& v) = default;
@@ -705,8 +709,12 @@ class clustering_key_prefix : public prefix_compound_wrapper<clustering_key_pref
     { }
 public:
     template<typename RangeOfSerializedComponents>
-    clustering_key_prefix(RangeOfSerializedComponents&& v)
-        : prefix_compound_wrapper(compound::element_type::serialize_value(std::forward<RangeOfSerializedComponents>(v)))
+    static clustering_key_prefix from_range(RangeOfSerializedComponents&& v) {
+        return clustering_key_prefix(compound::element_type::serialize_value(std::forward<RangeOfSerializedComponents>(v)));
+    }
+
+    clustering_key_prefix(std::vector<bytes> v)
+        : prefix_compound_wrapper(compound::element_type::serialize_value(std::move(v)))
     { }
 
     clustering_key_prefix(clustering_key_prefix&& v) = default;

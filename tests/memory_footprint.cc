@@ -175,7 +175,7 @@ static sizes calculate_sizes(const mutation& m) {
     auto s = m.schema();
     auto mt = make_lw_shared<memtable>(s);
     cache_tracker tracker;
-    row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
+    row_cache cache(s, mt->as_data_source(), tracker);
 
     auto cache_initial_occupancy = tracker.region().occupancy().used_space();
 
@@ -191,7 +191,7 @@ static sizes calculate_sizes(const mutation& m) {
     result.query_result = m.query(partition_slice_builder(*s).build(), query::result_request::only_result).buf().size();
 
     tmpdir sstable_dir;
-    auto sst = make_lw_shared<sstables::sstable>(s->ks_name(), s->cf_name(),
+    auto sst = make_lw_shared<sstables::sstable>(s,
         sstable_dir.path,
         1 /* generation */,
         sstables::sstable::version_types::la,

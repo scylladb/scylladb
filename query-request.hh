@@ -28,24 +28,18 @@
 #include "dht/i_partitioner.hh"
 #include "enum_set.hh"
 #include "range.hh"
-#include "clustering_key_filter.hh"
 #include "tracing/tracing.hh"
 
 namespace query {
 
 template <typename T>
-using range = ::range<T>;
+using range = wrapping_range<T>;
 
 using ring_position = dht::ring_position;
-using partition_range = range<ring_position>;
-using clustering_range = range<clustering_key_prefix>;
+using partition_range = nonwrapping_range<ring_position>;
+using clustering_range = nonwrapping_range<clustering_key_prefix>;
 
 extern const partition_range full_partition_range;
-
-inline
-bool is_wrap_around(const query::partition_range& range, const schema& s) {
-    return range.is_wrap_around(dht::ring_position_comparator(s));
-}
 
 inline
 bool is_single_partition(const query::partition_range& range) {
@@ -132,6 +126,8 @@ public:
     const clustering_row_ranges& row_ranges(const schema&, const partition_key&) const;
     void set_range(const schema&, const partition_key&, clustering_row_ranges);
     void clear_range(const schema&, const partition_key&);
+    // FIXME: possibly make this function return a const ref instead.
+    clustering_row_ranges get_all_ranges() const;
 
     const clustering_row_ranges& default_row_ranges() const {
         return _row_ranges;

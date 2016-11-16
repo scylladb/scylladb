@@ -118,7 +118,7 @@ future<bool> drop_type_statement::announce_migration(distributed<service::storag
 }
 
 shared_ptr<cql3::statements::prepared_statement>
-drop_type_statement::prepare(database& db) {
+drop_type_statement::prepare(database& db, cql_stats& stats) {
     return make_shared<prepared_statement>(make_shared<drop_type_statement>(*this));
 }
 

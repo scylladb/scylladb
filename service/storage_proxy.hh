@@ -49,8 +49,14 @@
 #include "db/consistency_level.hh"
 #include "db/write_type.hh"
 #include "utils/histogram.hh"
-#include "sstables/estimated_histogram.hh"
+#include "utils/estimated_histogram.hh"
 #include "tracing/trace_state.hh"
+
+namespace compat {
+
+class one_or_two_partition_ranges;
+
+}
 
 namespace service {
 
@@ -142,15 +148,16 @@ public:
         utils::timed_rate_moving_average_and_histogram read;
         utils::timed_rate_moving_average_and_histogram write;
         utils::timed_rate_moving_average_and_histogram range;
-        sstables::estimated_histogram estimated_read;
-        sstables::estimated_histogram estimated_write;
-        sstables::estimated_histogram estimated_range;
+        utils::estimated_histogram estimated_read;
+        utils::estimated_histogram estimated_write;
+        utils::estimated_histogram estimated_range;
         uint64_t background_writes = 0; // client no longer waits for the write
         uint64_t background_write_bytes = 0;
         uint64_t queued_write_bytes = 0;
         uint64_t reads = 0;
         uint64_t background_reads = 0; // client no longer waits for the read
         uint64_t read_retries = 0; // read is retried with new limit
+        uint64_t throttled_writes = 0; // total number of writes ever delayed due to throttling
 
         // Data read attempts
         split_stats data_read_attempts;
@@ -215,9 +222,10 @@ private:
     db::read_repair_decision new_read_repair_decision(const schema& s);
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl, tracing::trace_state_ptr trace_state);
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr,
-                                                                           query::result_request request = query::result_request::result_and_digest);
-    future<query::result_digest, api::timestamp_type> query_singular_local_digest(schema_ptr, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr);
-    future<foreign_ptr<lw_shared_ptr<query::result>>> query_partition_key_range(lw_shared_ptr<query::read_command> cmd, query::partition_range&& range, db::consistency_level cl, tracing::trace_state_ptr trace_state);
+                                                                           query::result_request request,
+                                                                           tracing::trace_state_ptr trace_state);
+    future<query::result_digest, api::timestamp_type> query_singular_local_digest(schema_ptr, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr, tracing::trace_state_ptr trace_state);
+    future<foreign_ptr<lw_shared_ptr<query::result>>> query_partition_key_range(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range> partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state);
     std::vector<query::partition_range> get_restricted_ranges(keyspace& ks, const schema& s, query::partition_range range);
     float estimate_result_rows_per_range(lw_shared_ptr<query::read_command> cmd, keyspace& ks);
     static std::vector<gms::inet_address> intersection(const std::vector<gms::inet_address>& l1, const std::vector<gms::inet_address>& l2);
@@ -241,6 +249,8 @@ private:
     void handle_read_error(std::exception_ptr eptr);
     template<typename Range>
     future<> mutate_internal(Range mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state);
+    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_nonsingular_mutations_locally(
+            schema_ptr s, lw_shared_ptr<query::read_command> cmd, const std::vector<query::partition_range>& pr, tracing::trace_state_ptr trace_state);
 
 public:
     storage_proxy(distributed<database>& db);
@@ -297,15 +307,29 @@ public:
      *
      * Partitions for each range will be ordered according to decorated_key ordering. Results for
      * each range from "partition_ranges" may appear in any order.
+     *
+     * IMPORTANT: Not all fibers started by this method have to be done by the time it returns so no
+     * parameter can be changed after being passed to this method.
      */
     future<foreign_ptr<lw_shared_ptr<query::result>>> query(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,
         std::vector<query::partition_range>&& partition_ranges,
         db::consistency_level cl,
+        tracing::trace_state_ptr trace_state);
+
+    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations_locally(
+        schema_ptr, lw_shared_ptr<query::read_command> cmd, const query::partition_range&,
+        tracing::trace_state_ptr trace_state = nullptr);
+
+
+    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations_locally(
+        schema_ptr, lw_shared_ptr<query::read_command> cmd, const compat::one_or_two_partition_ranges&,
         tracing::trace_state_ptr trace_state = nullptr);
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations_locally(
-        schema_ptr, lw_shared_ptr<query::read_command> cmd, const query::partition_range&);
+            schema_ptr s, lw_shared_ptr<query::read_command> cmd, const std::vector<query::partition_range>& pr,
+            tracing::trace_state_ptr trace_state = nullptr);
+
 
     future<> stop();
 

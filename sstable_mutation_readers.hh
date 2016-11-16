@@ -30,12 +30,15 @@ class sstable_range_wrapping_reader final : public mutation_reader::impl {
     sstables::mutation_reader _smr;
 public:
     sstable_range_wrapping_reader(lw_shared_ptr<sstables::sstable> sst,
-        schema_ptr s, const query::partition_range& pr, query::clustering_key_filtering_context ck_filtering,
+        schema_ptr s, const query::partition_range& pr, const query::partition_slice& slice,
         const io_priority_class& pc)
         : _sst(sst)
-        , _smr(sst->read_range_rows(std::move(s), pr, ck_filtering, pc)) {
+        , _smr(sst->read_range_rows(std::move(s), pr, slice, pc)) {
     }
     virtual future<streamed_mutation_opt> operator()() override {
         return _smr.read();
+    }
+    virtual future<> fast_forward_to(const query::partition_range& pr) override {
+        return _smr.fast_forward_to(pr);
     }
 };

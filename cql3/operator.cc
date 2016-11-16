@@ -52,5 +52,6 @@ const operator_type operator_type::IN(7, operator_type::IN, "IN");
 const operator_type operator_type::CONTAINS(5, operator_type::CONTAINS, "CONTAINS");
 const operator_type operator_type::CONTAINS_KEY(6, operator_type::CONTAINS_KEY, "CONTAINS_KEY");
 const operator_type operator_type::NEQ(8, operator_type::NEQ, "!=");
+const operator_type operator_type::IS_NOT(9, operator_type::IS_NOT, "IS NOT");
 
 }

@@ -36,7 +36,8 @@ static void remove_or_mark_as_unique_owner(partition_version* current)
 }
 
 partition_version::partition_version(partition_version&& pv) noexcept
-    : _backref(pv._backref)
+    : anchorless_list_base_hook(std::move(pv))
+    , _backref(pv._backref)
     , _partition(std::move(pv._partition))
 {
     if (_backref) {
@@ -62,29 +63,37 @@ partition_version::~partition_version()
 }
 
 partition_snapshot::~partition_snapshot() {
-    if (_version) {
+    if (_version && _version.is_unique_owner()) {
         auto v = &*_version;
-        if (_version.is_unique_owner()) {
-            _version = { };
-            remove_or_mark_as_unique_owner(v);
-        } else {
-            _version = { };
-            auto first_used = v;
-            while (first_used->prev() && !first_used->is_referenced()) {
-                first_used = first_used->prev();
-            }
+        _version = {};
+        remove_or_mark_as_unique_owner(v);
+    } else if (_entry) {
+        _entry->_snapshot = nullptr;
+    }
+}
 
-            auto current = first_used->next();
-            while (current && !current->is_referenced()) {
-                auto next = current->next();
+void partition_snapshot::merge_partition_versions() {
+    if (_version && !_version.is_unique_owner()) {
+        auto v = &*_version;
+        _version = { };
+        auto first_used = v;
+        while (first_used->prev() && !first_used->is_referenced()) {
+            first_used = first_used->prev();
+        }
+
+        auto current = first_used->next();
+        while (current && !current->is_referenced()) {
+            auto next = current->next();
+            try {
                 first_used->partition().apply(*_schema, std::move(current->partition()));
                 current_allocator().destroy(current);
-                current = next;
+            } catch (...) {
+                // Set _version so that the merge can be retried.
+                _version = partition_version_ref(*current);
+                throw;
             }
+            current = next;
         }
-    } else {
-        assert(_entry);
-        _entry->_snapshot = nullptr;
     }
 }
 
@@ -282,171 +291,4 @@ lw_shared_ptr<partition_snapshot> partition_entry::read(schema_ptr entry_schema)
         _snapshot = snp.get();
         return snp;
     }
-}
-
-partition_snapshot_reader::partition_snapshot_reader(schema_ptr s, dht::decorated_key dk,
-    lw_shared_ptr<partition_snapshot> snp, query::clustering_key_filtering_context fc,
-    const query::clustering_row_ranges& crr, logalloc::region& region,
-    logalloc::allocating_section& read_section, boost::any pointer_to_container)
-    : streamed_mutation::impl(s, std::move(dk), tomb(*snp))
-    , _container_guard(std::move(pointer_to_container))
-    , _filtering_context(fc)
-    , _current_ck_range(crr.begin())
-    , _ck_range_end(crr.end())
-    , _cmp(*s)
-    , _eq(*s)
-    , _snapshot(snp)
-    , _range_tombstones(*s)
-    , _lsa_region(region)
-    , _read_section(read_section)
-{
-    for (auto&& v : _snapshot->versions()) {
-        _range_tombstones.apply(v.partition().row_tombstones());
-    }
-    do_fill_buffer();
-}
-
-partition_snapshot_reader::~partition_snapshot_reader()
-{
-    with_allocator(_lsa_region.allocator(), [this] {
-        logalloc::reclaim_lock _(_lsa_region);
-        _snapshot = { };
-    });
-}
-
-tombstone partition_snapshot_reader::tomb(partition_snapshot& snp)
-{
-    tombstone t;
-    for (auto& v : snp.versions()) {
-        t.apply(v.partition().partition_tombstone());
-    }
-    return t;
-}
-
-mutation_fragment_opt partition_snapshot_reader::read_static_row()
-{
-    _last_entry = position_in_partition(position_in_partition::static_row_tag_t());
-    mutation_fragment_opt sr;
-    for (auto&& v : _snapshot->versions()) {
-        if (!v.partition().static_row().empty()) {
-            if (!sr) {
-                sr = mutation_fragment(static_row(v.partition().static_row()));
-            } else {
-                sr->as_static_row().apply(*_schema, v.partition().static_row());
-            }
-        }
-    }
-    return sr;
-}
-
-void partition_snapshot_reader::refresh_iterators()
-{
-    _clustering_rows.clear();
-
-    if (!_in_ck_range && _current_ck_range == _ck_range_end) {
-        return;
-    }
-
-    for (auto&& v : _snapshot->versions()) {
-        auto cr_end = v.partition().upper_bound(*_schema, *_current_ck_range);
-        auto cr = [&] () -> mutation_partition::rows_type::const_iterator {
-            if (_in_ck_range) {
-                return v.partition().clustered_rows().upper_bound(*_last_entry, _cmp);
-            } else {
-                return v.partition().lower_bound(*_schema, *_current_ck_range);
-            }
-        }();
-
-        if (cr != cr_end) {
-            _clustering_rows.emplace_back(rows_position { cr, cr_end });
-        }
-    }
-
-    _in_ck_range = true;
-    boost::range::make_heap(_clustering_rows, heap_compare(_cmp));
-}
-
-void partition_snapshot_reader::pop_clustering_row()
-{
-    auto& current = _clustering_rows.back();
-    current._position = std::next(current._position);
-    if (current._position == current._end) {
-        _clustering_rows.pop_back();
-    } else {
-        boost::range::push_heap(_clustering_rows, heap_compare(_cmp));
-    }
-}
-
-mutation_fragment_opt partition_snapshot_reader::read_next()
-{
-    if (!_clustering_rows.empty()) {
-        auto mf = _range_tombstones.get_next(*_clustering_rows.front()._position);
-        if (mf) {
-            return mf;
-        }
-
-        boost::range::pop_heap(_clustering_rows, heap_compare(_cmp));
-        clustering_row result = *_clustering_rows.back()._position;
-        pop_clustering_row();
-        while (!_clustering_rows.empty() && _eq(*_clustering_rows.front()._position, result)) {
-            boost::range::pop_heap(_clustering_rows, heap_compare(_cmp));
-            auto& current = _clustering_rows.back();
-            result.apply(*_schema, *current._position);
-            pop_clustering_row();
-        }
-        _last_entry = result.position();
-        return mutation_fragment(std::move(result));
-    }
-    return _range_tombstones.get_next();
-}
-
-void partition_snapshot_reader::do_fill_buffer()
-{
-    if (!_last_entry) {
-        auto mfopt = read_static_row();
-        if (mfopt) {
-            _buffer.emplace_back(std::move(*mfopt));
-        }
-    }
-
-    if (!_in_ck_range || _lsa_region.reclaim_counter() != _reclaim_counter || _snapshot->version_count() != _version_count) {
-        refresh_iterators();
-        _reclaim_counter = _lsa_region.reclaim_counter();
-        _version_count = _snapshot->version_count();
-    }
-
-    while (!is_end_of_stream() && !is_buffer_full()) {
-        if (_in_ck_range && _clustering_rows.empty()) {
-            _in_ck_range = false;
-            _current_ck_range = std::next(_current_ck_range);
-            refresh_iterators();
-            continue;
-        }
-
-        auto mfopt = read_next();
-        if (mfopt) {
-            _buffer.emplace_back(std::move(*mfopt));
-        } else {
-            _end_of_stream = true;
-        }
-    }
-}
-
-future<> partition_snapshot_reader::fill_buffer()
-{
-    return _read_section(_lsa_region, [&] {
-        return with_linearized_managed_bytes([&] {
-            do_fill_buffer();
-            return make_ready_future<>();
-        });
-    });
-}
-
-streamed_mutation make_partition_snapshot_reader(schema_ptr s, dht::decorated_key dk,
-    query::clustering_key_filtering_context fc, const query::clustering_row_ranges& crr,
-    lw_shared_ptr<partition_snapshot> snp, logalloc::region& region,
-    logalloc::allocating_section& read_section, boost::any pointer_to_container)
-{
-    return make_streamed_mutation<partition_snapshot_reader>(s, std::move(dk), 
-        snp, fc, crr, region, read_section, std::move(pointer_to_container));
 }

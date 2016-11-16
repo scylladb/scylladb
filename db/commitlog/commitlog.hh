@@ -245,10 +245,8 @@ public:
     uint64_t get_completed_tasks() const;
     uint64_t get_flush_count() const;
     uint64_t get_pending_tasks() const;
-    uint64_t get_pending_writes() const;
     uint64_t get_pending_flushes() const;
     uint64_t get_pending_allocations() const;
-    uint64_t get_write_limit_exceeded_count() const;
     uint64_t get_flush_limit_exceeded_count() const;
     uint64_t get_num_segments_created() const;
     uint64_t get_num_segments_destroyed() const;
@@ -321,6 +319,8 @@ private:
 
     struct entry_writer {
         virtual size_t size(segment&) = 0;
+        // Returns segment-independent size of the entry. Must be <= than segment-dependant size.
+        virtual size_t size() = 0;
         virtual void write(segment&, output&) = 0;
     };
 };

@@ -27,6 +27,7 @@
 #include "db/config.hh"
 #include "service/storage_service.hh"
 #include "service/priority_manager.hh"
+#include "message/messaging_service.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -186,6 +187,10 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
 #endif
 }
 
+struct failed_range {
+    sstring cf;
+    ::range<dht::token> range;
+};
 
 // The repair_tracker tracks ongoing repair operations and their progress.
 // A repair which has already finished successfully is dropped from this
@@ -353,13 +358,10 @@ std::ostream& operator<<(std::ostream& out, const partition_checksum& c) {
 // data is coming in).
 static future<partition_checksum> checksum_range_shard(database &db,
         const sstring& keyspace_name, const sstring& cf_name,
-        const ::range<dht::token>& range, repair_checksum hash_version) {
+        const ::nonwrapping_range<dht::token>& range, repair_checksum hash_version) {
     auto& cf = db.find_column_family(keyspace_name, cf_name);
     return do_with(dht::to_partition_range(range), [&cf, hash_version] (const auto& partition_range) {
-        auto reader = cf.make_reader(cf.schema(),
-                                     partition_range,
-                                     query::no_clustering_key_filtering,
-                                     service::get_local_streaming_read_priority());
+        auto reader = cf.make_streaming_reader(cf.schema(), partition_range);
         return do_with(std::move(reader), partition_checksum(),
             [hash_version] (auto& reader, auto& checksum) {
             return repeat([&reader, &checksum, hash_version] () {
@@ -393,7 +395,7 @@ static future<partition_checksum> checksum_range_shard(database &db,
 // function is not resolved.
 future<partition_checksum> checksum_range(seastar::sharded<database> &db,
         const sstring& keyspace, const sstring& cf,
-        const ::range<dht::token>& range, repair_checksum hash_version) {
+        const ::nonwrapping_range<dht::token>& range, repair_checksum hash_version) {
     unsigned shard_begin = range.start() ?
             dht::shard_of(range.start()->value()) : 0;
     unsigned shard_end = range.end() ?
@@ -413,28 +415,23 @@ future<partition_checksum> checksum_range(seastar::sharded<database> &db,
     });
 }
 
-static future<> sync_range(seastar::sharded<database>& db,
+static void request_transfer_ranges(seastar::sharded<database>& db,
         const sstring& keyspace, const sstring& cf,
-        const ::range<dht::token>& range,
-        std::vector<gms::inet_address>& neighbors) {
-    return do_with(streaming::stream_plan("repair-in"),
-                   streaming::stream_plan("repair-out"),
-            [&db, &keyspace, &cf, &range, &neighbors]
-            (auto& sp_in, auto& sp_out) {
-        for (const auto& peer : neighbors) {
+        const ::nonwrapping_range<dht::token>& range,
+        const std::vector<gms::inet_address>& neighbors_in,
+        const std::vector<gms::inet_address>& neighbors_out,
+        streaming::stream_plan& sp_in,
+        streaming::stream_plan& sp_out) {
+        for (const auto& peer : neighbors_in) {
             sp_in.request_ranges(peer, keyspace, {range}, {cf});
+        }
+        for (const auto& peer : neighbors_out) {
             sp_out.transfer_ranges(peer, keyspace, {range}, {cf});
         }
-        return sp_in.execute().discard_result().then([&sp_out] {
-                return sp_out.execute().discard_result();
-        }).handle_exception([] (auto ep) {
-            logger.warn("repair's stream failed: {}", ep);
-            return make_exception_future(ep);
-        });
-    });
 }
-static void split_and_add(std::vector<::range<dht::token>>& ranges,
-        const range<dht::token>& range,
+
+static void split_and_add(std::vector<::nonwrapping_range<dht::token>>& ranges,
+        const nonwrapping_range<dht::token>& range,
         uint64_t estimated_partitions, uint64_t target_partitions) {
     if (estimated_partitions < target_partitions) {
         // We're done, the range is small enough to not be split further
@@ -470,24 +467,19 @@ static thread_local semaphore parallelism_semaphore(parallelism);
 // Repair a single cf in a single local range.
 // Comparable to RepairJob in Origin.
 static future<> repair_cf_range(seastar::sharded<database>& db,
-        sstring keyspace, sstring cf, ::range<dht::token> range,
-        std::vector<gms::inet_address>& neighbors) {
+        sstring keyspace, sstring cf, ::nonwrapping_range<dht::token> range,
+        std::vector<gms::inet_address>& neighbors,
+        streaming::stream_plan& sp_in,
+        streaming::stream_plan& sp_out,
+        std::vector<failed_range>& failed_ranges) {
     if (neighbors.empty()) {
         // Nothing to do in this case...
         return make_ready_future<>();
     }
 
-    // The partition iterating code inside checksum_range_shard does not
-    // support wrap-around ranges, so we need to break at least wrap-
-    // around ranges.
-    std::vector<::range<dht::token>> ranges;
-    if (range.is_wrap_around(dht::token_comparator())) {
-        auto unwrapped = range.unwrap();
-        ranges.push_back(unwrapped.first);
-        ranges.push_back(unwrapped.second);
-    } else {
-        ranges.push_back(range);
-    }
+    std::vector<::nonwrapping_range<dht::token>> ranges;
+    ranges.push_back(range);
+
     // Additionally, we want to break up large ranges so they will have
     // (approximately) a desired number of rows each.
     // FIXME: column_family should have a method to estimate the number of
@@ -505,20 +497,27 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
 
     // FIXME: we should have an on-the-fly iterator generator here, not
     // fill a vector in advance.
-    std::vector<::range<dht::token>> tosplit;
-    ranges.swap(tosplit);
-    for (const auto& range : tosplit) {
-        // FIXME: this "100" needs to be a parameter.
-        split_and_add(ranges, range, estimated_partitions, 100);
+    // FIXME: this "100" needs to be a parameter.
+    uint64_t target_partitions = 100;
+    std::vector<::nonwrapping_range<dht::token>> tosplit;
+    while (estimated_partitions > target_partitions) {
+        tosplit.clear();
+        ranges.swap(tosplit);
+        for (const auto& range : tosplit) {
+            split_and_add(ranges, range, estimated_partitions, target_partitions);
+        }
+        estimated_partitions /= 2;
     }
+    logger.debug("target_partitions={}, estimated_partitions={}, ranges.size={}, range={} -> ranges={}",
+                  target_partitions, estimated_partitions, ranges.size(), range, ranges);
 
     return do_with(seastar::gate(), true, std::move(keyspace), std::move(cf), std::move(ranges),
-        [&db, &neighbors] (auto& completion, auto& success, const auto& keyspace, const auto& cf, const auto& ranges) {
-        return do_for_each(ranges, [&completion, &success, &db, &neighbors, &keyspace, &cf]
+        [&db, &neighbors, &sp_in, &sp_out, &failed_ranges] (auto& completion, auto& success, const auto& keyspace, const auto& cf, const auto& ranges) {
+        return do_for_each(ranges, [&completion, &success, &db, &neighbors, &keyspace, &cf, &sp_in, &sp_out, &failed_ranges]
                            (const auto& range) {
 
             check_in_shutdown();
-            return parallelism_semaphore.wait(1).then([&completion, &success, &db, &neighbors, &keyspace, &cf, &range] {
+            return parallelism_semaphore.wait(1).then([&completion, &success, &db, &neighbors, &keyspace, &cf, &range, &sp_in, &sp_out, &failed_ranges] {
                 auto checksum_type = service::get_local_storage_service().cluster_supports_large_partitions()
                                      ? repair_checksum::streamed : repair_checksum::legacy;
 
@@ -536,12 +535,13 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
 
                 completion.enter();
                 when_all(checksums.begin(), checksums.end()).then(
-                        [&db, &keyspace, &cf, &range, &neighbors, &success]
+                        [&db, &keyspace, &cf, &range, &neighbors, &success, &sp_in, &sp_out, &failed_ranges]
                         (std::vector<future<partition_checksum>> checksums) {
                     // If only some of the replicas of this range are alive,
                     // we set success=false so repair will fail, but we can
                     // still do our best to repair available replicas.
                     std::vector<gms::inet_address> live_neighbors;
+                    std::vector<partition_checksum> live_neighbors_checksum;
                     for (unsigned i = 0; i < checksums.size(); i++) {
                         if (checksums[i].failed()) {
                             logger.warn(
@@ -551,34 +551,60 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
                                  utils::fb_utilities::get_broadcast_address()),
                                 checksums[i].get_exception());
                             success = false;
+                            failed_ranges.push_back(failed_range{cf, range});
                             // Do not break out of the loop here, so we can log
                             // (and discard) all the exceptions.
                         } else if (i > 0) {
                             live_neighbors.push_back(neighbors[i - 1]);
+                            live_neighbors_checksum.push_back(checksums[i].get0());
                         }
                     }
-                    if (!checksums[0].available() || live_neighbors.empty()) {
+                    if (!checksums[0].available() || live_neighbors.empty() || live_neighbors_checksum.empty()) {
                         return make_ready_future<>();
                     }
                     // If one of the available checksums is different, repair
                     // all the neighbors which returned a checksum.
-                    auto checksum0 = checksums[0].get();
-                    for (unsigned i = 1; i < checksums.size(); i++) {
-                        if (checksums[i].available() && checksum0 != checksums[i].get()) {
-                            logger.info("Found differing range {} on nodes {}", range, live_neighbors);
-                            return do_with(std::move(live_neighbors), [&db, &keyspace, &cf, &range] (auto& live_neighbors) {
-                                return sync_range(db, keyspace, cf, range, live_neighbors);
-                            });
+                    auto checksum0 = checksums[0].get0();
+                    auto all_live_neighbors_have_same_checksum = std::all_of(live_neighbors_checksum.begin() + 1,
+                            live_neighbors_checksum.end(), [&live_neighbors_checksum] (const auto& checksum) {
+                            return checksum == live_neighbors_checksum.front();
+                    });
+                    std::vector<gms::inet_address> live_neighbors_in(live_neighbors);
+                    std::vector<gms::inet_address> live_neighbors_out(live_neighbors);
+                    if (all_live_neighbors_have_same_checksum) {
+                        // Since all the live neighbors have the same checksum,
+                        // we can fetch data from one of the them instead all of them.
+                        // TODO: Choose a best node from live_neighbors, not the first one
+                        logger.debug("Reduce live_neighbors_in {} to one node, range = {}", live_neighbors_in, range);
+                        live_neighbors_in.resize(1);
+                        // - If local node has zero data and all peer nodes have
+                        // the same data we can skip sending data to peer node.
+                        // - If local node has data and all peer nodes have the
+                        // same data, we need to fetch data from one of the
+                        // peer node and merge the data with local data and
+                        // send back to *all* the peer node.
+                        if (checksum0 == partition_checksum()) {
+                            logger.debug("Reduce live_neighbors_out {} to zero node, range = {}", live_neighbors_out, range);
+                            live_neighbors_out.clear();
+                        }
+                    }
+                    for (const auto& checksum : live_neighbors_checksum) {
+                        if (checksum0 != checksum) {
+                            logger.info("Found differing range {} on nodes {}, in = {}, out = {}", range,
+                                    live_neighbors, live_neighbors_in, live_neighbors_out);
+                            request_transfer_ranges(db, keyspace, cf, range, live_neighbors_in, live_neighbors_out, sp_in, sp_out);
+                            return make_ready_future<>();
                         }
                     }
                     return make_ready_future<>();
-                }).handle_exception([&success, &range] (std::exception_ptr eptr) {
-                    // Something above (e.g., sync_range) failed. We could
+                }).handle_exception([&success, &cf, &range, &failed_ranges] (std::exception_ptr eptr) {
+                    // Something above (e.g., request_transfer_ranges) failed. We could
                     // stop the repair immediately, or let it continue with
                     // other ranges (at the moment, we do the latter). But in
                     // any case, we need to remember that the repair failed to
                     // tell the caller.
                     success = false;
+                    failed_ranges.push_back(failed_range{cf, range});
                     logger.warn("Failed sync of range {}: {}", range, eptr);
                 }).finally([&completion] {
                     parallelism_semaphore.signal(1);
@@ -587,8 +613,14 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
             });
         }).finally([&success, &completion] {
             return completion.close().then([&success] {
-                return success ? make_ready_future<>() :
-                        make_exception_future<>(std::runtime_error("Checksum or sync of partial range failed"));
+                if (!success) {
+                    logger.warn("Checksum or sync of partial range failed");
+                }
+                // We probably want the repair contiunes even if some
+                // ranges fail to do the checksum. We need to set the
+                // per-repair success flag to false and report after the
+                // streaming is done.
+                return make_ready_future<>();
             });
         });
     });
@@ -597,37 +629,41 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
 // Repair a single local range, multiple column families.
 // Comparable to RepairSession in Origin
 static future<> repair_range(seastar::sharded<database>& db, sstring keyspace,
-        ::range<dht::token> range, std::vector<sstring>& cfs,
+        ::nonwrapping_range<dht::token> range, std::vector<sstring>& cfs,
         const std::vector<sstring>& data_centers,
-        const std::vector<sstring>& hosts) {
+        const std::vector<sstring>& hosts,
+        streaming::stream_plan& sp_in,
+        streaming::stream_plan& sp_out,
+        std::vector<failed_range>& failed_ranges) {
     auto id = utils::UUID_gen::get_time_UUID();
-    return do_with(get_neighbors(db.local(), keyspace, range, data_centers, hosts), [&db, &cfs, keyspace, id, range] (auto& neighbors) {
-        logger.info("[repair #{}] new session: will sync {} on range {} for {}.{}", id, neighbors, range, keyspace, cfs);
+    return do_with(get_neighbors(db.local(), keyspace, range, data_centers, hosts),
+                   [&sp_in, &sp_out, &failed_ranges, &db, &cfs, keyspace, id, range] (auto& neighbors) {
+        logger.debug("[repair #{}] new session: will sync {} on range {} for {}.{}", id, neighbors, range, keyspace, cfs);
         return do_for_each(cfs.begin(), cfs.end(),
-                [&db, keyspace, &neighbors, id, range] (auto&& cf) {
-            return repair_cf_range(db, keyspace, cf, range, neighbors);
+                [&db, keyspace, &neighbors, id, range, &sp_in, &sp_out, &failed_ranges] (auto&& cf) {
+            return repair_cf_range(db, keyspace, cf, range, neighbors, sp_in, sp_out, failed_ranges);
         });
     });
 }
 
-static std::vector<query::range<dht::token>> get_ranges_for_endpoint(
+static std::vector<nonwrapping_range<dht::token>> get_ranges_for_endpoint(
         database& db, sstring keyspace, gms::inet_address ep) {
     auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
     return rs.get_ranges(ep);
 }
 
-static std::vector<query::range<dht::token>> get_local_ranges(
+static std::vector<nonwrapping_range<dht::token>> get_local_ranges(
         database& db, sstring keyspace) {
     return get_ranges_for_endpoint(db, keyspace, utils::fb_utilities::get_broadcast_address());
 }
 
-static std::vector<query::range<dht::token>> get_primary_ranges_for_endpoint(
+static std::vector<nonwrapping_range<dht::token>> get_primary_ranges_for_endpoint(
         database& db, sstring keyspace, gms::inet_address ep) {
     auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
     return rs.get_primary_ranges(ep);
 }
 
-static std::vector<query::range<dht::token>> get_primary_ranges(
+static std::vector<nonwrapping_range<dht::token>> get_primary_ranges(
         database& db, sstring keyspace) {
     return get_primary_ranges_for_endpoint(db, keyspace,
             utils::fb_utilities::get_broadcast_address());
@@ -643,7 +679,7 @@ struct repair_options {
     // If ranges is not empty, it overrides the repair's default heuristics
     // for determining the list of ranges to repair. In particular, "ranges"
     // overrides the setting of "primary_range".
-    std::vector<query::range<dht::token>> ranges;
+    std::vector<nonwrapping_range<dht::token>> ranges;
     // If start_token and end_token are set, they define a range which is
     // intersected with the ranges actually held by this node to decide what
     // to repair.
@@ -688,6 +724,16 @@ struct repair_options {
         }
         string_opt(start_token, options, START_TOKEN);
         string_opt(end_token, options, END_TOKEN);
+
+        bool trace = false;
+        bool_opt(trace, options, TRACE_KEY);
+        if (trace) {
+            throw std::runtime_error("unsupported trace");
+        }
+        // Consume, ignore.
+        int job_threads;
+        int_opt(job_threads, options, JOB_THREADS_KEY);
+
         // The parsing code above removed from the map options we have parsed.
         // If anything is left there in the end, it's an unsupported option.
         if (!options.empty()) {
@@ -756,7 +802,7 @@ private:
 
     // A range is expressed as start_token:end token and multiple ranges can
     // be given as comma separated ranges(e.g. aaa:bbb,ccc:ddd).
-    static void ranges_opt(std::vector<query::range<dht::token>>& var,
+    static void ranges_opt(std::vector<nonwrapping_range<dht::token>>& var,
             std::unordered_map<sstring, sstring>& options,
                         const sstring& key) {
         auto it = options.find(key);
@@ -774,9 +820,12 @@ private:
             }
             auto tok_start = dht::global_partitioner().from_sstring(token_strings[0]);
             auto tok_end = dht::global_partitioner().from_sstring(token_strings[1]);
-            var.emplace_back(
+            auto rng = wrapping_range<dht::token>(
                     ::range<dht::token>::bound(tok_start, false),
                     ::range<dht::token>::bound(tok_end, true));
+            compat::unwrap_into(std::move(rng), dht::token_comparator(), [&] (nonwrapping_range<dht::token>&& x) {
+                var.push_back(std::move(x));
+            });
         }
         options.erase(it);
     }
@@ -800,24 +849,42 @@ private:
 // is assumed to be a indivisible in the sense that all the tokens in has the
 // same nodes as replicas.
 static future<> repair_ranges(seastar::sharded<database>& db, sstring keyspace,
-        std::vector<query::range<dht::token>> ranges,
+        std::vector<nonwrapping_range<dht::token>> ranges,
         std::vector<sstring> cfs, int id,
         std::vector<sstring> data_centers, std::vector<sstring> hosts) {
-    return do_with(std::move(ranges), std::move(keyspace), std::move(cfs),
+    return do_with(streaming::stream_plan("repair-in"),
+            streaming::stream_plan("repair-out"),
+            std::vector<failed_range>(),
+            std::move(ranges), std::move(keyspace), std::move(cfs),
             std::move(data_centers), std::move(hosts),
-            [&db, id] (auto& ranges, auto& keyspace, auto& cfs, auto& data_centers, auto& hosts) {
+            [&db, id] (auto& sp_in, auto& sp_out, auto& failed_ranges, auto& ranges, auto& keyspace, auto& cfs, auto& data_centers, auto& hosts) {
 #if 1
         // repair all the ranges in parallel
-        return parallel_for_each(ranges.begin(), ranges.end(), [&db, keyspace, &cfs, &data_centers, &hosts, id] (auto&& range) {
+        return parallel_for_each(ranges.begin(), ranges.end(), [&sp_in, &sp_out, &failed_ranges, &db, keyspace, &cfs, &data_centers, &hosts, id] (auto&& range) {
 #else
         // repair all the ranges in sequence
-        return do_for_each(ranges.begin(), ranges.end(), [&db, keyspace, &cfs, &data_centers, &hosts, id] (auto&& range) {
+        return do_for_each(ranges.begin(), ranges.end(), [&sp_in, &sp_out, &failed_ranges, &db, keyspace, &cfs, &data_centers, &hosts, id] (auto&& range) {
 #endif
             check_in_shutdown();
-            return repair_range(db, keyspace, range, cfs, data_centers, hosts);
-        }).then([id] {
-            logger.info("repair {} completed sucessfully", id);
-            repair_tracker.done(id, true);
+            return repair_range(db, keyspace, range, cfs, data_centers, hosts, sp_in, sp_out, failed_ranges);
+        }).then([&sp_in, &sp_out, &failed_ranges] {
+            return sp_in.execute().discard_result().then([&sp_out] {
+                    return sp_out.execute().discard_result();
+            }).handle_exception([] (auto ep) {
+                logger.warn("repair's stream failed: {}", ep);
+                return make_exception_future(ep);
+            });
+        }).then([id, &failed_ranges] {
+            if (failed_ranges.empty()) {
+                logger.info("repair {} completed sucessfully", id);
+                repair_tracker.done(id, true);
+            } else {
+                for (auto& frange: failed_ranges) {
+                    logger.debug("repair cf {} range {} failed", frange.cf, frange.range);
+                }
+                logger.info("repair {} failed - {} ranges failed", id, failed_ranges.size());
+                repair_tracker.done(id, false);
+            }
         }).handle_exception([id] (std::exception_ptr eptr) {
             logger.info("repair {} failed - {}", id, eptr);
             repair_tracker.done(id, false);
@@ -849,7 +916,7 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     // local ranges (the token ranges for which this node holds a replica of).
     // Each of these ranges may have a different set of replicas, so the
     // repair of each range is performed separately with repair_range().
-    std::vector<query::range<dht::token>> ranges;
+    std::vector<nonwrapping_range<dht::token>> ranges;
     if (options.ranges.size()) {
         ranges = options.ranges;
     } else if (options.primary_range) {
@@ -892,8 +959,8 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
                 dht::global_partitioner().from_sstring(options.end_token),
                 false);
         }
-        ::range<dht::token> given_range_complement(tok_end, tok_start);
-        std::vector<query::range<dht::token>> intersections;
+        nonwrapping_range<dht::token> given_range_complement(tok_end, tok_start);
+        std::vector<nonwrapping_range<dht::token>> intersections;
         for (const auto& range : ranges) {
             auto rs = range.subtract(given_range_complement,
                     dht::token_comparator());

@@ -29,6 +29,7 @@
 #include "utils/move.hh"
 #include "dht/i_partitioner.hh"
 #include <seastar/core/byteorder.hh>
+#include "index_reader.hh"
 
 namespace sstables {
 
@@ -107,8 +108,11 @@ private:
     schema_ptr _schema;
     key_view _key;
     const io_priority_class* _pc = nullptr;
-    query::clustering_key_filtering_context _ck_filtering;
-    query::clustering_key_filter _filter;
+    const query::partition_slice& _slice;
+    bool _in_current_ck_range = false;
+    stdx::optional<query::clustering_key_filter_ranges> _ck_ranges;
+    query::clustering_row_ranges::const_iterator _current_ck_range;
+    query::clustering_row_ranges::const_iterator _ck_range_end;
 
     bool _skip_partition = false;
     bool _skip_clustering_row = false;
@@ -271,38 +275,78 @@ private:
         }
     }
 
+    // We rely on the fact that the first 'S' in SSTables stands for 'sorted'
+    // and the clustering row keys are always in an ascending order.
+    bool is_in_range(const clustering_key_prefix& ck) {
+        // This is a wrong comparator to use here, but at the moment the correct
+        // one has a very serious disadvantage of not existing (see #1446).
+        clustering_key_prefix::prefix_equality_less_compare cmp(*_schema);
+
+        while (_current_ck_range != _ck_range_end) {
+            if (!_in_current_ck_range && _current_ck_range->start()) {
+                auto& start = *_current_ck_range->start();
+                if ((start.is_inclusive() && cmp(ck, start.value())) || (!start.is_inclusive() && !cmp(start.value(), ck))) {
+                    return false;
+                }
+            }
+            // All subsequent clustering keys are larger than the start of this
+            // range so there is no need to check that again.
+            _in_current_ck_range = true;
+
+            if (!_current_ck_range->end()) {
+                return true;
+            }
+
+            auto& end = *_current_ck_range->end();
+            if ((!end.is_inclusive() && cmp(ck, end.value())) || (end.is_inclusive() && !cmp(end.value(), ck))) {
+                return true;
+            }
+
+            ++_current_ck_range;
+            _in_current_ck_range = false;
+        }
+        return false;
+    }
+
+    void set_up_ck_ranges(const partition_key& pk) {
+        _ck_ranges = query::clustering_key_filter_ranges::get_ranges(*_schema, _slice, pk);
+        _current_ck_range = _ck_ranges->begin();
+        _ck_range_end = _ck_ranges->end();
+        _in_current_ck_range = false;
+    }
 public:
     mutation_opt mut;
 
     mp_row_consumer(const key& key,
                     const schema_ptr schema,
-                    query::clustering_key_filtering_context ck_filtering,
+                    const query::partition_slice& slice,
                     const io_priority_class& pc)
             : _schema(schema)
             , _key(key_view(key))
             , _pc(&pc)
-            , _ck_filtering(ck_filtering)
-            , _filter(_ck_filtering.get_filter_for_sorted(partition_key::from_exploded(*_schema, key.explode(*_schema))))
-    { }
+            , _slice(slice)
+    {
+        set_up_ck_ranges(partition_key::from_exploded(*_schema, key.explode(*_schema)));
+    }
 
     mp_row_consumer(const key& key,
                     const schema_ptr schema,
                     const io_priority_class& pc)
-            : mp_row_consumer(key, schema, query::no_clustering_key_filtering, pc) { }
+            : mp_row_consumer(key, schema, query::full_slice, pc) { }
 
     mp_row_consumer(const schema_ptr schema,
-                    query::clustering_key_filtering_context ck_filtering,
+                    const query::partition_slice& slice,
                     const io_priority_class& pc)
             : _schema(schema)
             , _pc(&pc)
-            , _ck_filtering(ck_filtering)
+            , _slice(slice)
     { }
 
     mp_row_consumer(const schema_ptr schema,
                     const io_priority_class& pc)
-            : mp_row_consumer(schema, query::no_clustering_key_filtering, pc) { }
+            : mp_row_consumer(schema, query::full_slice, pc) { }
 
-    mp_row_consumer() : _ck_filtering(query::no_clustering_key_filtering) {}
+    mp_row_consumer() : _slice(query::full_slice) {}
 
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         if (_key.empty() || key == _key) {
@@ -310,7 +354,7 @@ public:
             _is_mutation_end = false;
             _skip_partition = false;
             _skip_clustering_row = false;
-            _filter = _ck_filtering.get_filter_for_sorted(_mutation->key);
+            set_up_ck_ranges(_mutation->key);
             return proceed::no;
         } else {
             throw malformed_sstable_exception(sprint("Key mismatch. Got %s while processing %s", to_hex(bytes_view(key)).c_str(), to_hex(bytes_view(_key)).c_str()));
@@ -344,12 +388,12 @@ public:
     proceed flush_if_needed(bool is_static, position_in_partition&& pos) {
         position_in_partition::equal_compare eq(*_schema);
         proceed ret = proceed::yes;
-        if (_in_progress && !eq(*_in_progress, pos)) {
+        if (_in_progress && !eq(_in_progress->position(), pos)) {
             ret = _skip_clustering_row ? proceed::yes : proceed::no;
             flush();
         }
         if (!_in_progress) {
-            _skip_clustering_row = !is_static && !_filter(pos.key());
+            _skip_clustering_row = !is_static && !is_in_range(pos.key());
             if (is_static) {
                 _in_progress = mutation_fragment(static_row());
             } else {
@@ -580,12 +624,19 @@ public:
 
         _skip_partition = true;
     }
+
+    virtual void reset() override {
+        _pending_collection = { };
+        _in_progress = { };
+        _ready = { };
+    }
 };
 
 struct sstable_data_source {
     shared_sstable _sst;
     mp_row_consumer _consumer;
     data_consume_context _context;
+    std::unique_ptr<index_reader> _index;
 
     sstable_data_source(shared_sstable sst, mp_row_consumer&& consumer)
         : _sst(std::move(sst))
@@ -593,18 +644,26 @@ struct sstable_data_source {
         , _context(_sst->data_consume_rows(_consumer))
     { }
 
-    sstable_data_source(shared_sstable sst, mp_row_consumer&& consumer, sstable::disk_read_range toread)
+    sstable_data_source(shared_sstable sst, mp_row_consumer&& consumer, sstable::disk_read_range toread, std::unique_ptr<index_reader> index)
         : _sst(std::move(sst))
         , _consumer(std::move(consumer))
         , _context(_sst->data_consume_rows(_consumer, std::move(toread)))
+        , _index(std::move(index))
     { }
 
     sstable_data_source(schema_ptr s, shared_sstable sst, const sstables::key& k, const io_priority_class& pc,
-            query::clustering_key_filtering_context ck_filtering, sstable::disk_read_range toread)
+            const query::partition_slice& slice, sstable::disk_read_range toread)
         : _sst(std::move(sst))
-        , _consumer(k, s, ck_filtering, pc)
-        , _context(_sst->data_consume_rows(_consumer, std::move(toread)))
+        , _consumer(k, s, slice, pc)
+        , _context(_sst->data_consume_single_partition(_consumer, std::move(toread)))
     { }
+
+    ~sstable_data_source() {
+        if (_index) {
+            auto f = _index->close();
+            f.handle_exception([index = std::move(_index)] (auto&&) { });
+        }
+    }
 };
 
 class sstable_streamed_mutation : public streamed_mutation::impl {
@@ -642,18 +701,18 @@ private:
                     // If sstable uses promoted index it will repeat relevant range tombstones in
                     // each block. Do not emit these duplicates as they will break the guarantee
                     // that mutation fragment are produced in ascending order.
-                    if (!_last_position || !_cmp(*mf, *_last_position)) {
-                        _last_position = mf->position();
+                    if (!_last_position || !_cmp(mf->position(), *_last_position)) {
+                        _last_position = position_in_partition(mf->position());
                         _range_tombstones.apply(std::move(mf->as_range_tombstone()));
                     }
                 } else {
                     // mp_row_consumer may produce mutation_fragments in parts if they are
                     // interrupted by range tombstone duplicate. Make sure they are merged
                     // before emitting them.
-                    _last_position = mf->position();
+                    _last_position = position_in_partition(mf->position());
                     if (!_current_candidate) {
                         _current_candidate = std::move(mf);
-                    } else if (_current_candidate && _eq(*_current_candidate, *mf)) {
+                    } else if (_current_candidate && _eq(_current_candidate->position(), mf->position())) {
                         _current_candidate->apply(*_schema, std::move(*mf));
                     } else {
                         _next_candidate = std::move(mf);
@@ -682,10 +741,10 @@ public:
     }
 
     static future<streamed_mutation> create(schema_ptr s, shared_sstable sst, const sstables::key& k,
-                                            query::clustering_key_filtering_context ck_filtering,
+                                            const query::partition_slice& slice,
                                             const io_priority_class& pc, sstable::disk_read_range toread)
     {
-        auto ds = make_lw_shared<sstable_data_source>(s, sst, k, pc, ck_filtering, std::move(toread));
+        auto ds = make_lw_shared<sstable_data_source>(s, sst, k, pc, slice, std::move(toread));
         return ds->_context.read().then([s, ds] {
             auto mut = ds->_consumer.get_mutation();
             assert(mut);
@@ -730,15 +789,12 @@ future<uint64_t> sstables::sstable::data_end_position(uint64_t summary_idx, cons
 future<streamed_mutation_opt>
 sstables::sstable::read_row(schema_ptr schema,
                             const sstables::key& key,
-                            query::clustering_key_filtering_context ck_filtering,
+                            const query::partition_slice& slice,
                             const io_priority_class& pc) {
 
     assert(schema);
 
-    if (!filter_has_key(key)) {
-        return make_ready_future<streamed_mutation_opt>();
-    }
-    return find_disk_ranges(schema, key, ck_filtering, pc).then([this, &key, ck_filtering, &pc, schema] (disk_read_range toread) {
+    return find_disk_ranges(schema, key, slice, pc).then([this, &key, &slice, &pc, schema] (disk_read_range toread) {
         if (!toread.found_row()) {
             _filter_tracker.add_false_positive();
         }
@@ -746,7 +802,7 @@ sstables::sstable::read_row(schema_ptr schema,
             return make_ready_future<streamed_mutation_opt>();
         }
         _filter_tracker.add_true_positive();
-        return sstable_streamed_mutation::create(schema, this->shared_from_this(), key, ck_filtering, pc, std::move(toread)).then([] (auto sm) {
+        return sstable_streamed_mutation::create(schema, this->shared_from_this(), key, slice, pc, std::move(toread)).then([] (auto sm) {
             return streamed_mutation_opt(std::move(sm));
         });
     });
@@ -776,10 +832,25 @@ static inline clustering_key_prefix get_clustering_key(
     return std::move(col.clustering);
 }
 
+static bool has_static_columns(const schema& schema, index_entry &ie) {
+    // We can easily check if there are any static columns in this partition,
+    // because the static columns always come first, so the first promoted
+    // index block will start with one, if there are any. The name of a static
+    // column is a  composite beginning with a special marker (0xffff).
+    // But we can only assume the column name is composite if the schema is
+    // compound - if it isn't, we cannot have any static columns anyway.
+    //
+    // The first 18 bytes are deletion times (4+8), num blocks (4), and
+    // length of start column (2). Then come the actual column name bytes.
+    // See also composite::is_static().
+    auto data = ie.get_promoted_index_bytes();
+    return schema.is_compound() && data.size() >= 20 && data[18] == -1 && data[19] == -1;
+}
+
 future<sstable::disk_read_range>
 sstables::sstable::find_disk_ranges(
         schema_ptr schema, const sstables::key& key,
-        query::clustering_key_filtering_context ck_filtering,
+        const query::partition_slice& slice,
         const io_priority_class& pc) {
     auto& partitioner = dht::global_partitioner();
     auto token = partitioner.get_token(key_view(key));
@@ -793,21 +864,29 @@ sstables::sstable::find_disk_ranges(
         return make_ready_future<disk_read_range>();
     }
 
-    return read_indexes(summary_idx, pc).then([this, schema, ck_filtering, &key, token, summary_idx, &pc] (auto index_list) {
+    return read_indexes(summary_idx, pc).then([this, schema, &slice, &key, token, summary_idx, &pc] (auto index_list) {
         auto index_idx = this->binary_search(index_list, key, token);
         if (index_idx < 0) {
             return make_ready_future<disk_read_range>();
         }
         index_entry& ie = index_list[index_idx];
         if (ie.get_promoted_index_bytes().size() >= 16) {
-            auto& ck_ranges = ck_filtering.get_ranges(
-                partition_key::from_exploded(*schema, key.explode(*schema)));
-            if (ck_ranges.size() == 1 && ck_ranges[0].is_full()) {
+            auto&& pkey = partition_key::from_exploded(*schema, key.explode(*schema));
+            auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*schema, slice, pkey);
+            if (ck_ranges.size() == 1 && ck_ranges.begin()->is_full()) {
                 // When no clustering filter is given to sstable::read_row(),
                 // we get here one range unbounded on both sides. This is fine
                 // (the code below will work with an unbounded range), but
                 // let's drop this range to revert to the classic behavior of
                 // reading entire sstable row without using the promoted index
+            } else if (has_static_columns(*schema, ie)) {
+                // FIXME: If we need to read the static columns and also a
+                // non-full clustering key range, we need to return two byte
+                // ranges in the returned disk_read_range. We don't support
+                // this yet so for now let's fall back to reading the entire
+                // partition which is wasteful but at least correct.
+                // This case should be replaced by correctly adding the static
+                // column's blocks to the return.
             } else if (ck_ranges.size() == 1) {
                 auto data = ie.get_promoted_index_bytes();
                 // note we already verified above that data.size >= 16
@@ -819,10 +898,10 @@ sstables::sstable::find_disk_ranges(
                 // look in the same promoted index several times it might have
                 // made sense to build an array of key starts so we can do a
                 // binary search. We could do this once we have a key cache.
-                auto& range_start = ck_ranges[0].start();
+                auto& range_start = ck_ranges.begin()->start();
                 bool found_range_start = false;
                 uint64_t range_start_pos;
-                auto& range_end = ck_ranges[0].end();
+                auto& range_end = ck_ranges.begin()->end();
 
                 auto cmp = clustering_key_prefix::tri_compare(*schema);
                 while (num_blocks--) {
@@ -913,6 +992,7 @@ sstables::sstable::find_disk_ranges(
 
 class mutation_reader::impl {
 private:
+    const io_priority_class& _pc;
     schema_ptr _schema;
     lw_shared_ptr<sstable_data_source> _ds;
     // For some reason std::function requires functors to be copyable and that's
@@ -924,36 +1004,35 @@ private:
 public:
     impl(shared_sstable sst, schema_ptr schema, sstable::disk_read_range toread,
          const io_priority_class &pc)
-        : _schema(schema)
-        , _consumer(schema, query::no_clustering_key_filtering, pc)
+        : _pc(pc), _schema(schema)
+        , _consumer(schema, query::full_slice, pc)
         , _get_data_source([this, sst = std::move(sst), toread] {
-            auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), std::move(toread));
+            auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), std::move(toread), std::unique_ptr<index_reader>());
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
     impl(shared_sstable sst, schema_ptr schema,
          const io_priority_class &pc)
-        : _schema(schema)
-        , _consumer(schema, query::no_clustering_key_filtering, pc)
+        : _pc(pc), _schema(schema)
+        , _consumer(schema, query::full_slice, pc)
         , _get_data_source([this, sst = std::move(sst)] {
             auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer));
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
     impl(shared_sstable sst,
          schema_ptr schema,
-         std::function<future<uint64_t>()> start,
-         std::function<future<uint64_t>()> end,
-         query::clustering_key_filtering_context ck_filtering,
+         const query::partition_range& pr,
+         const query::partition_slice& slice,
          const io_priority_class& pc)
-        : _schema(schema)
-        , _consumer(schema, ck_filtering, pc)
-        , _get_data_source([this, sst = std::move(sst), start = std::move(start), end = std::move(end)] () mutable {
-            return start().then([this, sst = std::move(sst), end = std::move(end)] (uint64_t start) mutable {
-                return end().then([this, sst = std::move(sst), start] (uint64_t end) mutable {
-                    return make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), sstable::disk_read_range{start, end});
-                });
+        : _pc(pc), _schema(schema)
+        , _consumer(schema, slice, pc)
+        , _get_data_source([this, &pr, sst = std::move(sst)] () mutable {
+            auto index = std::make_unique<index_reader>(sst->get_index_reader(_pc));
+            auto f = index->get_disk_read_range(*_schema, pr);
+            return f.then([this, index = std::move(index), sst = std::move(sst)] (sstable::disk_read_range drr) mutable {
+                return make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), std::move(drr), std::move(index));
             });
         }) { }
-    impl() : _get_data_source() { }
+    impl() : _pc(default_priority_class()), _get_data_source() { }
 
     // Reference to _consumer is passed to data_consume_rows() in the constructor so we must not allow move/copy
     impl(impl&&) = delete;
@@ -971,6 +1050,12 @@ public:
         return (_get_data_source)().then([this] (lw_shared_ptr<sstable_data_source> ds) {
             _ds = std::move(ds);
             return do_read();
+        });
+    }
+    future<> fast_forward_to(const query::partition_range& pr) {
+        assert(_ds->_index);
+        return _ds->_index->get_disk_read_range(*_schema, pr).then([this] (sstable::disk_read_range drr) {
+            return _ds->_context.fast_forward_to(drr.start, drr.end);
         });
     }
 private:
@@ -1002,228 +1087,21 @@ mutation_reader::mutation_reader(std::unique_ptr<impl> p)
 future<streamed_mutation_opt> mutation_reader::read() {
     return _pimpl->read();
 }
+future<> mutation_reader::fast_forward_to(const query::partition_range& pr) {
+    return _pimpl->fast_forward_to(pr);
+}
 
 mutation_reader sstable::read_rows(schema_ptr schema, const io_priority_class& pc) {
     return std::make_unique<mutation_reader::impl>(shared_from_this(), schema, pc);
 }
 
-// Less-comparator for lookups in the partition index.
-class index_comparator {
-    const schema& _s;
-public:
-    index_comparator(const schema& s) : _s(s) {}
-
-    int tri_cmp(key_view k2, const dht::ring_position& pos) const {
-        auto k2_token = dht::global_partitioner().get_token(k2);
-
-        if (k2_token == pos.token()) {
-            if (pos.has_key()) {
-                return k2.tri_compare(_s, *pos.key());
-            } else {
-                return -pos.relation_to_keys();
-            }
-        } else {
-            return k2_token < pos.token() ? -1 : 1;
-        }
-    }
-
-    bool operator()(const summary_entry& e, const dht::ring_position& rp) const {
-        return tri_cmp(e.get_key(), rp) < 0;
-    }
-
-    bool operator()(const index_entry& e, const dht::ring_position& rp) const {
-        return tri_cmp(e.get_key(), rp) < 0;
-    }
-
-    bool operator()(const dht::ring_position& rp, const summary_entry& e) const {
-        return tri_cmp(e.get_key(), rp) > 0;
-    }
-
-    bool operator()(const dht::ring_position& rp, const index_entry& e) const {
-        return tri_cmp(e.get_key(), rp) > 0;
-    }
-};
-
-future<uint64_t> sstable::lower_bound(schema_ptr s, const dht::ring_position& pos, const io_priority_class& pc) {
-    uint64_t summary_idx = std::distance(std::begin(_summary.entries),
-        std::lower_bound(_summary.entries.begin(), _summary.entries.end(), pos, index_comparator(*s)));
-
-    if (summary_idx == 0) {
-        return make_ready_future<uint64_t>(0);
-    }
-
-    --summary_idx;
-
-    return read_indexes(summary_idx, pc).then([this, s, pos, summary_idx, &pc] (index_list il) {
-        auto i = std::lower_bound(il.begin(), il.end(), pos, index_comparator(*s));
-        if (i == il.end()) {
-            return this->data_end_position(summary_idx, pc);
-        }
-        return make_ready_future<uint64_t>(i->position());
-    });
-}
-
-future<uint64_t> sstable::upper_bound(schema_ptr s, const dht::ring_position& pos, const io_priority_class& pc) {
-    uint64_t summary_idx = std::distance(std::begin(_summary.entries),
-        std::upper_bound(_summary.entries.begin(), _summary.entries.end(), pos, index_comparator(*s)));
-
-    if (summary_idx == 0) {
-        return make_ready_future<uint64_t>(0);
-    }
-
-    --summary_idx;
-
-    return read_indexes(summary_idx, pc).then([this, s, pos, summary_idx, &pc] (index_list il) {
-        auto i = std::upper_bound(il.begin(), il.end(), pos, index_comparator(*s));
-        if (i == il.end()) {
-            return this->data_end_position(summary_idx, pc);
-        }
-        return make_ready_future<uint64_t>(i->position());
-    });
-}
-
-mutation_reader sstable::read_range_rows(schema_ptr schema,
-        const dht::token& min_token, const dht::token& max_token, const io_priority_class& pc) {
-    if (max_token < min_token) {
-        return std::make_unique<mutation_reader::impl>();
-    }
-    return read_range_rows(std::move(schema),
-        query::range<dht::ring_position>::make(
-            dht::ring_position::starting_at(min_token),
-            dht::ring_position::ending_at(max_token)), query::no_clustering_key_filtering, pc);
-}
-
 mutation_reader
 sstable::read_range_rows(schema_ptr schema,
                          const query::partition_range& range,
-                         query::clustering_key_filtering_context ck_filtering,
+                         const query::partition_slice& slice,
                          const io_priority_class& pc) {
-    if (query::is_wrap_around(range, *schema)) {
-        fail(unimplemented::cause::WRAP_AROUND);
-    }
-
-    auto start = [this, range, schema, &pc] {
-        return range.start() ? (range.start()->is_inclusive()
-                 ? lower_bound(schema, range.start()->value(), pc)
-                 : upper_bound(schema, range.start()->value(), pc))
-        : make_ready_future<uint64_t>(0);
-    };
-
-    auto end = [this, range, schema, &pc] {
-        return range.end() ? (range.end()->is_inclusive()
-                 ? upper_bound(schema, range.end()->value(), pc)
-                 : lower_bound(schema, range.end()->value(), pc))
-        : make_ready_future<uint64_t>(data_size());
-    };
-
     return std::make_unique<mutation_reader::impl>(
-        shared_from_this(), std::move(schema), std::move(start), std::move(end), ck_filtering, pc);
-}
-
-
-class key_reader final : public ::key_reader::impl {
-    schema_ptr _s;
-    shared_sstable _sst;
-    index_list _bucket;
-    int64_t _current_bucket_id;
-    int64_t _end_bucket_id;
-    int64_t _begin_bucket_id;
-    int64_t _position_in_bucket = 0;
-    int64_t _end_of_bucket = 0;
-    query::partition_range _range;
-    const io_priority_class& _pc;
-private:
-    dht::decorated_key decorate(const index_entry& ie) {
-        auto pk = partition_key::from_exploded(*_s, ie.get_key().explode(*_s));
-        return dht::global_partitioner().decorate_key(*_s, std::move(pk));
-    }
-public:
-    key_reader(schema_ptr s, shared_sstable sst, const query::partition_range& range, const io_priority_class& pc)
-        : _s(s), _sst(std::move(sst)), _range(range), _pc(pc)
-    {
-        auto& summary = _sst->_summary;
-        using summary_entries_type = std::decay_t<decltype(summary.entries)>;
-
-        _begin_bucket_id = 0;
-        if (range.start()) {
-            summary_entries_type::iterator pos;
-            if (range.start()->is_inclusive()) {
-                pos = std::lower_bound(summary.entries.begin(), summary.entries.end(),
-                    range.start()->value(), index_comparator(*s));
-
-            } else {
-                pos = std::upper_bound(summary.entries.begin(), summary.entries.end(),
-                    range.start()->value(), index_comparator(*s));
-            }
-            _begin_bucket_id = std::distance(summary.entries.begin(), pos);
-            if (_begin_bucket_id) {
-                _begin_bucket_id--;
-            }
-        }
-        _current_bucket_id = _begin_bucket_id - 1;
-
-        _end_bucket_id = summary.header.size;
-        if (range.end()) {
-            summary_entries_type::iterator pos;
-            if (range.end()->is_inclusive()) {
-                pos = std::upper_bound(summary.entries.begin(), summary.entries.end(),
-                    range.end()->value(), index_comparator(*s));
-            } else {
-                pos = std::lower_bound(summary.entries.begin(), summary.entries.end(),
-                    range.end()->value(), index_comparator(*s));
-            }
-            _end_bucket_id = std::distance(summary.entries.begin(), pos);
-            if (_end_bucket_id) {
-                _end_bucket_id--;
-            }
-        }
-    }
-    virtual future<dht::decorated_key_opt> operator()() override;
-};
-
-future<dht::decorated_key_opt> key_reader::operator()()
-{
-    if (_position_in_bucket < _end_of_bucket) {
-        auto& ie = _bucket[_position_in_bucket++];
-        return make_ready_future<dht::decorated_key_opt>(decorate(ie));
-    }
-    if (_current_bucket_id == _end_bucket_id) {
-        return make_ready_future<dht::decorated_key_opt>();
-    }
-    return _sst->read_indexes(++_current_bucket_id, _pc).then([this] (index_list il) mutable {
-        _bucket = std::move(il);
-
-        if (_range.start() && _current_bucket_id == _begin_bucket_id) {
-            index_list::const_iterator pos;
-            if (_range.start()->is_inclusive()) {
-                pos = std::lower_bound(_bucket.begin(), _bucket.end(), _range.start()->value(), index_comparator(*_s));
-            } else {
-                pos = std::upper_bound(_bucket.begin(), _bucket.end(), _range.start()->value(), index_comparator(*_s));
-            }
-            _position_in_bucket = std::distance(_bucket.cbegin(), pos);
-        } else {
-            _position_in_bucket = 0;
-        }
-
-        if (_range.end() && _current_bucket_id == _end_bucket_id) {
-            index_list::const_iterator pos;
-            if (_range.end()->is_inclusive()) {
-                pos = std::upper_bound(_bucket.begin(), _bucket.end(), _range.end()->value(), index_comparator(*_s));
-            } else {
-                pos = std::lower_bound(_bucket.begin(), _bucket.end(), _range.end()->value(), index_comparator(*_s));
-            }
-            _end_of_bucket = std::distance(_bucket.cbegin(), pos);
-        } else {
-            _end_of_bucket = _bucket.size();
-        }
-
-        return operator()();
-    });
-}
-
-::key_reader make_key_reader(schema_ptr s, shared_sstable sst, const query::partition_range& range, const io_priority_class& pc)
-{
-    return ::make_key_reader<key_reader>(std::move(s), std::move(sst), range, pc);
+        shared_from_this(), std::move(schema), range, slice, pc);
 }
 
 }

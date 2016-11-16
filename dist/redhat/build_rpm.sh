@@ -50,6 +50,9 @@ fi
 if [ ! -f /usr/bin/git ]; then
     sudo yum -y install git
 fi
+if [ ! -f /usr/bin/rpmbuild ]; then
+    sudo yum -y install rpm-build
+fi
 mkdir -p $RPMBUILD/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 if [ "$ID" = "centos" ]; then
     sudo yum install -y epel-release

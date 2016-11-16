@@ -47,7 +47,7 @@ uint32_t cql3::statements::authentication_statement::get_bound_terms() {
 }
 
 ::shared_ptr<cql3::statements::prepared_statement> cql3::statements::authentication_statement::prepare(
-                database& db) {
+                database& db, cql_stats& stats) {
     return ::make_shared<prepared>(this->shared_from_this());
 }
 

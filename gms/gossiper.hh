@@ -49,13 +49,14 @@
 #include "gms/application_state.hh"
 #include "gms/endpoint_state.hh"
 #include "gms/feature.hh"
-#include "message/messaging_service.hh"
+#include "message/messaging_service_fwd.hh"
 #include <boost/algorithm/string.hpp>
 #include <experimental/optional>
 #include <algorithm>
 #include <chrono>
 #include <set>
 #include <seastar/core/condition-variable.hh>
+#include <seastar/core/scollectd.hh>
 
 namespace gms {
 
@@ -81,11 +82,11 @@ class i_failure_detector;
  */
 class gossiper : public i_failure_detection_event_listener, public seastar::async_sharded_service<gossiper> {
 public:
-    using clk = std::chrono::steady_clock;
+    using clk = std::chrono::system_clock;
 private:
     using messaging_verb = net::messaging_verb;
     using messaging_service = net::messaging_service;
-    using msg_addr = net::messaging_service::msg_addr;
+    using msg_addr = net::msg_addr;
     net::messaging_service& ms() {
         return net::get_local_messaging_service();
     }
@@ -97,11 +98,9 @@ private:
     future<> handle_echo_msg();
     future<> handle_shutdown_msg(inet_address from);
     static constexpr uint32_t _default_cpuid = 0;
-    msg_addr get_msg_addr(inet_address to) {
-        return msg_addr{to, _default_cpuid};
-    }
+    msg_addr get_msg_addr(inet_address to);
     void do_sort(std::vector<gossip_digest>& g_digest_list);
-    timer<clk> _scheduled_gossip_task;
+    timer<lowres_clock> _scheduled_gossip_task;
     bool _enabled = false;
     std::set<inet_address> _seeds_from_config;
     sstring _cluster_name;
@@ -537,6 +536,9 @@ private:
     void register_feature(feature* f);
     void unregister_feature(feature* f);
     void maybe_enable_features();
+private:
+    std::unique_ptr<scollectd::registrations> _collectd_registrations;
+    scollectd::registrations setup_collectd();
 };
 
 extern distributed<gossiper> _the_gossiper;

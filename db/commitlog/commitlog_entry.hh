@@ -74,6 +74,10 @@ public:
         return _size;
     }
 
+    size_t mutation_size() const {
+        return _mutation.representation().size();
+    }
+
     void write(data_output& out) const;
 };
 

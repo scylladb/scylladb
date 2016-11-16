@@ -145,22 +145,13 @@ class result_view {
     ser::query_result_view _v;
     friend class result_merger;
 public:
-    result_view(bytes_view v) : _v(ser::query_result_view{ser::as_input_stream(v)}) {}
+    result_view(const bytes_ostream& v) : _v(ser::query_result_view{ser::as_input_stream(v)}) {}
     result_view(ser::query_result_view v) : _v(v) {}
 
     template <typename Func>
     static auto do_with(const query::result& res, Func&& func) {
-        const bytes_ostream& buf = res.buf();
-        // FIXME: This special casing saves us the cost of copying an already
-        // linearized response. When we switch views to scattered_reader this will go away.
-        if (buf.is_linearized()) {
-            result_view view(buf.view());
-            return func(view);
-        } else {
-            bytes_ostream w(buf);
-            result_view view(w.linearize());
-            return func(view);
-        }
+        result_view view(res.buf());
+        return func(view);
     }
 
     template <typename ResultVisitor>

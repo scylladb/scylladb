@@ -28,10 +28,23 @@
 // Intended to be called in a seastar thread
 class reader_assertions {
     mutation_reader _reader;
+    query::partition_range _pr;
 public:
     reader_assertions(mutation_reader reader)
         : _reader(std::move(reader))
     { }
+
+    reader_assertions& produces(const dht::decorated_key& dk) {
+        _reader().then([&] (auto sm) {
+            if (!sm) {
+                BOOST_FAIL(sprint("Expected: %s, got end of stream", dk));
+            }
+            if (!sm->decorated_key().equal(*sm->schema(), dk)) {
+                BOOST_FAIL(sprint("Expected: %s, got: %s", dk, sm->decorated_key()));
+            }
+        }).get0();
+        return *this;
+    }
 
     reader_assertions& produces(mutation m) {
         _reader().then([] (auto sm) {
@@ -68,6 +81,12 @@ public:
                 BOOST_FAIL(sprint("Expected end of stream, got %s", *mo));
             }
         }).get0();
+        return *this;
+    }
+
+    reader_assertions& fast_forward_to(const query::partition_range& pr) {
+        _pr = pr;
+        _reader.fast_forward_to(_pr).get0();
         return *this;
     }
 };

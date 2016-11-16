@@ -43,7 +43,6 @@
 #include <cstdint>
 #include <experimental/optional>
 #include "gms/inet_address.hh"
-#include "message/messaging_service.hh"
 
 namespace utils {
 

@@ -57,6 +57,14 @@ struct reversal_traits<false> {
         return c.erase_and_dispose(begin, end, std::move(disposer));
     }
 
+    template<typename Container, typename Disposer>
+    static typename Container::iterator erase_dispose_and_update_end(Container& c,
+         typename Container::iterator it, Disposer&& disposer,
+         typename Container::iterator&)
+    {
+        return c.erase_and_dispose(it, std::forward<Disposer>(disposer));
+    }
+
     template <typename Container>
     static boost::iterator_range<typename Container::iterator> maybe_reverse(
         Container& c, boost::iterator_range<typename Container::iterator> r)
@@ -91,6 +99,24 @@ struct reversal_traits<true> {
         return typename Container::reverse_iterator(
             c.erase_and_dispose(end.base(), begin.base(), disposer)
         );
+    }
+
+    // Erases element pointed to by it and makes sure than iterator end is not
+    // invalidated.
+    template<typename Container, typename Disposer>
+    static typename Container::reverse_iterator erase_dispose_and_update_end(Container& c,
+        typename Container::reverse_iterator it, Disposer&& disposer,
+        typename Container::reverse_iterator& end)
+    {
+        auto to_erase = std::next(it).base();
+        bool update_end = end.base() == to_erase;
+        auto ret = typename Container::reverse_iterator(
+            c.erase_and_dispose(to_erase, std::forward<Disposer>(disposer))
+        );
+        if (update_end) {
+            end = ret;
+        }
+        return ret;
     }
 
     template <typename Container>
@@ -222,7 +248,7 @@ mutation_partition::mutation_partition(const mutation_partition& x)
 }
 
 mutation_partition::mutation_partition(const mutation_partition& x, const schema& schema,
-        const query::clustering_row_ranges& ck_ranges)
+        query::clustering_key_filter_ranges ck_ranges)
         : _tombstone(x._tombstone)
         , _static_row(x._static_row)
         , _rows(x._rows.value_comp())
@@ -242,7 +268,7 @@ mutation_partition::mutation_partition(const mutation_partition& x, const schema
 }
 
 mutation_partition::mutation_partition(mutation_partition&& x, const schema& schema,
-    const query::clustering_row_ranges& ck_ranges)
+    query::clustering_key_filter_ranges ck_ranges)
     : _tombstone(x._tombstone)
     , _static_row(std::move(x._static_row))
     , _rows(std::move(x._rows))
@@ -484,7 +510,7 @@ mutation_partition::clustered_row(const schema& s, const clustering_key_view& ke
 }
 
 mutation_partition::rows_type::const_iterator
-mutation_partition::lower_bound(const schema& schema, const query::range<clustering_key_prefix>& r) const {
+mutation_partition::lower_bound(const schema& schema, const query::clustering_range& r) const {
     auto cmp = rows_entry::key_comparator(clustering_key_prefix::prefix_equality_less_compare(schema));
     return r.start() ? (r.start()->is_inclusive()
             ? _rows.lower_bound(r.start()->value(), cmp)
@@ -492,7 +518,7 @@ mutation_partition::lower_bound(const schema& schema, const query::range<cluster
 }
 
 mutation_partition::rows_type::const_iterator
-mutation_partition::upper_bound(const schema& schema, const query::range<clustering_key_prefix>& r) const {
+mutation_partition::upper_bound(const schema& schema, const query::clustering_range& r) const {
     auto cmp = rows_entry::key_comparator(clustering_key_prefix::prefix_equality_less_compare(schema));
     return r.end() ? (r.end()->is_inclusive()
                          ? _rows.upper_bound(r.end()->value(), cmp)
@@ -500,7 +526,7 @@ mutation_partition::upper_bound(const schema& schema, const query::range<cluster
 }
 
 boost::iterator_range<mutation_partition::rows_type::const_iterator>
-mutation_partition::range(const schema& schema, const query::range<clustering_key_prefix>& r) const {
+mutation_partition::range(const schema& schema, const query::clustering_range& r) const {
     return boost::make_iterator_range(lower_bound(schema, r), upper_bound(schema, r));
 }
 
@@ -520,22 +546,22 @@ unconst(Container& c, typename Container::const_iterator i) {
 }
 
 boost::iterator_range<mutation_partition::rows_type::iterator>
-mutation_partition::range(const schema& schema, const query::range<clustering_key_prefix>& r) {
+mutation_partition::range(const schema& schema, const query::clustering_range& r) {
     return unconst(_rows, static_cast<const mutation_partition*>(this)->range(schema, r));
 }
 
 mutation_partition::rows_type::iterator
-mutation_partition::lower_bound(const schema& schema, const query::range<clustering_key_prefix>& r) {
+mutation_partition::lower_bound(const schema& schema, const query::clustering_range& r) {
     return unconst(_rows, static_cast<const mutation_partition*>(this)->lower_bound(schema, r));
 }
 
 mutation_partition::rows_type::iterator
-mutation_partition::upper_bound(const schema& schema, const query::range<clustering_key_prefix>& r) {
+mutation_partition::upper_bound(const schema& schema, const query::clustering_range& r) {
     return unconst(_rows, static_cast<const mutation_partition*>(this)->upper_bound(schema, r));
 }
 
 template<typename Func>
-void mutation_partition::for_each_row(const schema& schema, const query::range<clustering_key_prefix>& row_range, bool reversed, Func&& func) const
+void mutation_partition::for_each_row(const schema& schema, const query::clustering_range& row_range, bool reversed, Func&& func) const
 {
     auto r = range(schema, row_range);
     if (!reversed) {
@@ -1136,7 +1162,7 @@ void mutation_partition::trim_rows(const schema& s,
             }
 
             if (e.empty()) {
-                last = reversal_traits<reversed>::erase_and_dispose(_rows, last, std::next(last, 1), deleter);
+                last = reversal_traits<reversed>::erase_dispose_and_update_end(_rows, last, deleter, end);
             } else {
                 ++last;
             }
@@ -1804,7 +1830,7 @@ future<data_query_result> data_query(schema_ptr s, const mutation_source& source
     auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::yes, query_result_builder>>(
             *s, query_time, slice, row_limit, partition_limit, std::move(qrb));
 
-    auto reader = source(s, range, query::clustering_key_filtering_context::create(s, slice), service::get_local_sstable_query_read_priority());
+    auto reader = source(s, range, slice, service::get_local_sstable_query_read_priority());
     return consume_flattened(std::move(reader), std::move(cfq), is_reversed);
 }
 
@@ -1878,6 +1904,6 @@ mutation_query(schema_ptr s,
     auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::no, reconcilable_result_builder>>(
             *s, query_time, slice, row_limit, partition_limit, std::move(rrb));
 
-    auto reader = source(s, range, query::clustering_key_filtering_context::create(s, slice), service::get_local_sstable_query_read_priority());
+    auto reader = source(s, range, slice, service::get_local_sstable_query_read_priority());
     return consume_flattened(std::move(reader), std::move(cfq), is_reversed);
 }

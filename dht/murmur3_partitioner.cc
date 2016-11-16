@@ -101,7 +101,22 @@ dht::token murmur3_partitioner::from_sstring(const sstring& t) const {
     }
 }
 
-int murmur3_partitioner::tri_compare(const token& t1, const token& t2) {
+dht::token murmur3_partitioner::from_bytes(bytes_view bytes) const {
+    if (bytes.size() != sizeof(int64_t)) {
+        throw runtime_exception(sprint("Invalid token. Should have size %ld, has size %ld\n", sizeof(int64_t), bytes.size()));
+    }
+
+    int64_t v;
+    std::copy_n(bytes.begin(), sizeof(v), reinterpret_cast<int8_t *>(&v));
+    auto tok = net::ntoh(v);
+    if (tok == std::numeric_limits<int64_t>::min()) {
+        return minimum_token();
+    } else {
+        return dht::token(dht::token::kind::key, bytes);
+    }
+}
+
+int murmur3_partitioner::tri_compare(const token& t1, const token& t2) const {
     auto l1 = long_token(t1);
     auto l2 = long_token(t2);
 
@@ -193,16 +208,43 @@ murmur3_partitioner::shard_of(const token& t) const {
         case token::kind::before_all_keys:
             return 0;
         case token::kind::after_all_keys:
-            return smp::count - 1;
+            return _shard_count - 1;
         case token::kind::key:
             int64_t l = long_token(t);
             // treat l as a fraction between 0 and 1 and use 128-bit arithmetic to
             // divide that range evenly among shards:
             uint64_t adjusted = uint64_t(l) + uint64_t(std::numeric_limits<int64_t>::min());
-            return (__int128(adjusted) * smp::count) >> 64;
+            return (__int128(adjusted) * _shard_count) >> 64;
     }
     assert(0);
 }
+
+token
+murmur3_partitioner::token_for_next_shard(const token& t) const {
+    switch (t._kind) {
+        case token::kind::before_all_keys:
+            return token_for_next_shard(get_token(std::numeric_limits<int64_t>::min() + 1));
+        case token::kind::after_all_keys:
+            return maximum_token();
+        case token::kind::key:
+            if (long_token(t) == std::numeric_limits<int64_t>::min()) {
+                return token_for_next_shard(get_token(std::numeric_limits<int64_t>::min() + 1));
+            }
+            using uint128 = unsigned __int128;
+            auto s = shard_of(t) + 1;
+            if (s == _shard_count) {
+                return maximum_token();
+            }
+            uint64_t e = (uint128(s) << 64) / _shard_count;
+            while (((uint128(e) * _shard_count) >> 64) != s) {
+                // division will round down, so correct for it
+                ++e;
+            }
+            return get_token(e + uint64_t(std::numeric_limits<int64_t>::min()));
+    }
+    assert(0);
+}
+
 
 using registry = class_registrator<i_partitioner, murmur3_partitioner>;
 static registry registrator("org.apache.cassandra.dht.Murmur3Partitioner");

@@ -732,16 +732,19 @@ def add_variant_read_size(hout, typ):
             add_variant_read_size(hout, p)
     read_sizes.add(t)
     fprintln(hout, Template("""
-template<>
-inline void skip(seastar::simple_input_stream& v, boost::type<${type}>) {
+template<typename Input>
+inline void skip(Input& v, boost::type<${type}>) {
+  return seastar::with_serialized_stream(v, [] (auto& v) {
     size_type ln = deserialize(v, boost::type<size_type>());
     v.skip(ln - sizeof(size_type));
+  });
 }""").substitute ({'type' : t}))
 
 
     fprintln(hout, Template("""
 template<typename Input>
 $type deserialize(Input& v, boost::type<${type}>) {
+  return seastar::with_serialized_stream(v, [] (auto& v) {
     auto in = v;
     deserialize(in, boost::type<size_type>());
     size_type o = deserialize(in, boost::type<size_type>());
@@ -752,7 +755,7 @@ $type deserialize(Input& v, boost::type<${type}>) {
         v.skip(sizeof(size_type)*2);
         return $full_type(deserialize(v, boost::type<$type>()));
     }""").substitute({'ind' : index, 'type' : param_view_type(param), 'full_type' : t}))
-    fprintln(hout, '    return ' + t + '(deserialize(v, boost::type<unknown_variant_type>()));\n}')
+    fprintln(hout, '    return ' + t + '(deserialize(v, boost::type<unknown_variant_type>()));\n  });\n}')
 
 def add_view(hout, info):
     [cls, namespaces, parent_template_param] = info
@@ -761,7 +764,7 @@ def add_view(hout, info):
         add_variant_read_size(hout, m["type"])
 
     fprintln(hout, Template("""struct ${name}_view {
-    seastar::simple_input_stream v;
+    utils::input_stream v;
     """).substitute({'name' : cls["name"]}))
 
     if not is_stub(cls["name"]) and is_local_type(cls["name"]):
@@ -776,17 +779,19 @@ def add_view(hout, info):
     for m in members:
         full_type = param_view_type(m["type"])
         fprintln(hout, Template(reindent(4, """
-            $type $name() const {
+            auto $name() const {
+              return seastar::with_serialized_stream(v, [] (auto& v) {
                auto in = v;
                $skip
                return deserialize(in, boost::type<$type>());
+              });
             }
         """)).substitute({'name' : m["name"], 'type' : full_type, 'skip' : skip}))
 
         skip = skip + Template("\n       ser::skip(in, boost::type<${type}>());").substitute({'type': full_type})
 
     fprintln(hout, "};")
-    skip_impl = "seastar::simple_input_stream& in = v;\n       " + skip if is_final(cls) else "v.skip(read_frame_size(v));"
+    skip_impl = "auto& in = v;\n       " + skip if is_final(cls) else "v.skip(read_frame_size(v));"
     if skip == "":
         skip_impl = ""
 
@@ -795,18 +800,22 @@ template<>
 struct serializer<${type}_view> {
     template<typename Input>
     static ${type}_view read(Input& v) {
+      return seastar::with_serialized_stream(v, [] (auto& v) {
         auto v_start = v;
         auto start_size = v.size();
         skip(v);
         return ${type}_view{v_start.read_substream(start_size - v.size())};
+      });
     }
     template<typename Output>
     static void write(Output& out, ${type}_view v) {
-        out.write(v.v.begin(), v.v.size());
+        v.v.copy_to(out);
     }
     template<typename Input>
     static void skip(Input& v) {
+      return seastar::with_serialized_stream(v, [] (auto& v) {
         $skip_impl
+      });
     }
 };
 """).substitute({'type' : param_type(cls["name"]), 'skip' : skip, 'skip_impl' : skip_impl}))
@@ -867,12 +876,13 @@ void serializer<$name>::write(Output& buf, const $name& obj) {""").substitute({'
     fprintln(cout, Template("""
 $template
 template <typename Input>
-$name$temp_param serializer<$name$temp_param>::read(Input& buf) {""").substitute({'func' : DESERIALIZER, 'name' : name, 'template': template, 'temp_param' : template_class_param}))
+$name$temp_param serializer<$name$temp_param>::read(Input& buf) {
+ return seastar::with_serialized_stream(buf, [] (auto& buf) {""").substitute({'func' : DESERIALIZER, 'name' : name, 'template': template, 'temp_param' : template_class_param}))
     if not is_final:
         fprintln(cout, Template("""  $size_type size = $func(buf, boost::type<$size_type>());
-  Input in = buf.read_substream(size - sizeof($size_type));""").substitute({'func' : DESERIALIZER, 'size_type' : SIZETYPE}))
+  auto in = buf.read_substream(size - sizeof($size_type));""").substitute({'func' : DESERIALIZER, 'size_type' : SIZETYPE}))
     else:
-        fprintln(cout, """  Input& in = buf;""")
+        fprintln(cout, """  auto& in = buf;""")
     params = []
     local_names = {}
     for index, param in enumerate(cls["members"]):
@@ -884,20 +894,22 @@ $name$temp_param serializer<$name$temp_param>::read(Input& buf) {""").substitute
             deflt = param["default"][0] if "default" in param else param_type(param["type"]) + "()"
             if deflt in local_names:
                 deflt = local_names[deflt]
-            fprintln(cout, Template("""  $typ $local = (in.size()>0) ?
+            fprintln(cout, Template("""  auto $local = (in.size()>0) ?
     $func(in, boost::type<$typ>()) : $default;""").substitute({'func' : DESERIALIZER, 'typ': param_type(param["type"]), 'local' : local_param, 'default': deflt}))
         else:
-            fprintln(cout, Template("""  $typ $local = $func(in, boost::type<$typ>());""").substitute({'func' : DESERIALIZER, 'typ': param_type(param["type"]), 'local' : local_param}))
+            fprintln(cout, Template("""  auto $local = $func(in, boost::type<$typ>());""").substitute({'func' : DESERIALIZER, 'typ': param_type(param["type"]), 'local' : local_param}))
         params.append("std::move(" + local_param + ")")
     fprintln(cout, Template("""
   $name$temp_param res {$params};
   return res;
+ });
 }""").substitute({'name' : name, 'params': ", ".join(params), 'temp_param' : template_class_param}))
 
     fprintln(cout, Template("""
 $template
 template <typename Input>
-void serializer<$name$temp_param>::skip(Input& buf) {""").substitute({'func' : DESERIALIZER, 'name' : name, 'template': template, 'temp_param' : template_class_param}))
+void serializer<$name$temp_param>::skip(Input& buf) {
+ seastar::with_serialized_stream(buf, [] (auto& buf) {""").substitute({'func' : DESERIALIZER, 'name' : name, 'template': template, 'temp_param' : template_class_param}))
     if not is_final:
         fprintln(cout, Template("""  $size_type size = $func(buf, boost::type<$size_type>());
   buf.skip(size - sizeof($size_type));""").substitute({'func' : DESERIALIZER, 'size_type' : SIZETYPE}))
@@ -905,7 +917,7 @@ void serializer<$name$temp_param>::skip(Input& buf) {""").substitute({'func' : D
         for m in get_members(cls):
             full_type = param_view_type(m["type"])
             fprintln(cout, "  ser::skip(buf, boost::type<%s>());" % full_type)
-    fprintln(cout, """}""")
+    fprintln(cout, """ });\n}""")
 
 
 def handle_objects(tree, hout, cout, namespaces=[]):

@@ -73,7 +73,7 @@ int main(int argc, char** argv) {
             auto mt0 = make_lw_shared<memtable>(s);
 
             cache_tracker tracker;
-            row_cache cache(s, mt0->as_data_source(), mt0->as_key_source(), tracker);
+            row_cache cache(s, mt0->as_data_source(), tracker);
 
             auto mt = make_lw_shared<memtable>(s);
             std::vector<dht::decorated_key> keys;

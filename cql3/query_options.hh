@@ -93,12 +93,6 @@ public:
                            specific_options options,
                            cql_serialization_format sf);
 
-    explicit query_options(db::consistency_level consistency,
-                           std::vector<std::vector<bytes_view_opt>> value_views,
-                           bool skip_metadata,
-                           specific_options options,
-                           cql_serialization_format sf);
-
     // Batch query_options constructor
     explicit query_options(query_options&&, std::vector<std::vector<bytes_view_opt>> value_views);
 

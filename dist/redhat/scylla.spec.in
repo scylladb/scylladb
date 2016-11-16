@@ -27,10 +27,11 @@ Group:          Applications/Databases
 Summary:        The Scylla database server
 License:        AGPLv3
 URL:            http://www.scylladb.com/
-BuildRequires:  libaio-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel openssl-devel libcap-devel libselinux-devel libgcrypt-devel libgpg-error-devel elfutils-devel krb5-devel libcom_err-devel libattr-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel xfsprogs-devel make gnutls-devel systemd-devel lksctp-tools-devel protobuf-devel protobuf-compiler
+BuildRequires:  libaio-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel xfsprogs-devel make gnutls-devel systemd-devel lksctp-tools-devel protobuf-devel protobuf-compiler libunwind-devel
 %{?fedora:BuildRequires: boost-devel ninja-build ragel antlr3-tool antlr3-C++-devel python3 gcc-c++ libasan libubsan python3-pyparsing dnf-yum}
-%{?rhel:BuildRequires: scylla-libstdc++-static scylla-boost-devel scylla-ninja-build scylla-ragel scylla-antlr3-tool scylla-antlr3-C++-devel python34 scylla-gcc-c++ >= 5.1.1, python34-pyparsing}
-Requires:       scylla-conf systemd-libs hwloc collectd PyYAML python-urwid pciutils pyparsing python-requests
+%{?rhel:BuildRequires: scylla-libstdc++-static scylla-boost-devel scylla-boost-static scylla-ninja-build scylla-ragel scylla-antlr3-tool scylla-antlr3-C++-devel python34 scylla-gcc-c++ >= 5.1.1, python34-pyparsing}
+Requires:       scylla-conf systemd-libs hwloc collectd PyYAML python-urwid pciutils pyparsing python-requests curl bc util-linux
+%{?rhel:Requires: python34 python34-PyYAML}
 Conflicts:      abrt
 
 %description server
@@ -42,16 +43,15 @@ This package contains ScyllaDB server.
     %{nil}
 
 %build
+%define is_housekeeping_conf %( if @@HOUSEKEEPING_CONF@@; then echo "1" ; else echo "0"; fi )
 %if 0%{?fedora}
 ./configure.py --disable-xen --enable-dpdk --mode=release
 %endif
 %if 0%{?rhel}
-python3.4 ./configure.py --disable-xen --enable-dpdk --mode=release --static-stdc++ --compiler=/opt/scylladb/bin/g++ --python python3.4
+python3.4 ./configure.py --disable-xen --enable-dpdk --mode=release --static-stdc++ --static-boost --compiler=/opt/scylladb/bin/g++ --python python3.4
 %endif
 ninja-build %{?_smp_mflags} build/release/scylla build/release/iotune
 cp dist/common/systemd/scylla-server.service.in build/scylla-server.service
-cp dist/common/systemd/scylla-housekeeping.service.in build/scylla-housekeeping.service
-cp dist/common/systemd/scylla-housekeeping.timer.in build/scylla-housekeeping.timer
 sed -i -e "s#@@SYSCONFDIR@@#/etc/sysconfig#g" build/scylla-server.service
 
 %install
@@ -77,16 +77,18 @@ install -d -m755 $RPM_BUILD_ROOT%{_sysconfdir}/scylla
 install -m644 conf/scylla.yaml $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
 install -m644 conf/cassandra-rackdc.properties $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
 install -m644 build/*.service $RPM_BUILD_ROOT%{_unitdir}/
-install -m644 build/*.timer $RPM_BUILD_ROOT%{_unitdir}/
+install -m644 dist/common/systemd/*.service  $RPM_BUILD_ROOT%{_unitdir}/
+install -m644 dist/common/systemd/*.timer $RPM_BUILD_ROOT%{_unitdir}/
 install -m755 dist/common/scripts/* $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 seastar/scripts/posix_net_conf.sh  $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 seastar/dpdk/tools/dpdk_nic_bind.py $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 build/release/scylla $RPM_BUILD_ROOT%{_bindir}
 install -m755 build/release/iotune $RPM_BUILD_ROOT%{_bindir}
 install -m755 dist/common/bin/scyllatop $RPM_BUILD_ROOT%{_bindir}
+install -m755 scylla-blocktune $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 scylla-housekeeping $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 if @@HOUSEKEEPING_CONF@@; then
-    install -m644 conf/housekeeping.conf $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
+    install -m644 conf/housekeeping.cfg $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
 fi
 install -d -m755 $RPM_BUILD_ROOT%{_docdir}/scylla
 install -m644 README.md $RPM_BUILD_ROOT%{_docdir}/scylla/
@@ -151,14 +153,18 @@ rm -rf $RPM_BUILD_ROOT
 %{_unitdir}/scylla-server.service
 %{_unitdir}/scylla-housekeeping.service
 %{_unitdir}/scylla-housekeeping.timer
+%{_unitdir}/node-exporter.service
 %{_bindir}/scylla
 %{_bindir}/iotune
 %{_bindir}/scyllatop
 %{_sbindir}/scylla*
+%{_prefix}/lib/scylla/scylla-blocktune
 %{_prefix}/lib/scylla/scylla-housekeeping
 %{_prefix}/lib/scylla/scylla_prepare
 %{_prefix}/lib/scylla/scylla_stop
 %{_prefix}/lib/scylla/scylla_setup
+%{_prefix}/lib/scylla/node_exporter_install
+%{_sbindir}/node_exporter_install
 %{_prefix}/lib/scylla/scylla_coredump_setup
 %{_prefix}/lib/scylla/scylla_raid_setup
 %{_prefix}/lib/scylla/scylla_sysconfig_setup
@@ -173,6 +179,9 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/dpdk_nic_bind.py
 %{_prefix}/lib/scylla/dpdk_nic_bind.pyc
 %{_prefix}/lib/scylla/dpdk_nic_bind.pyo
+%{_prefix}/lib/scylla/hex2list.py
+%{_prefix}/lib/scylla/hex2list.pyc
+%{_prefix}/lib/scylla/hex2list.pyo
 %{_prefix}/lib/scylla/swagger-ui/dist/*
 %{_prefix}/lib/scylla/api/api-doc/*
 %{_prefix}/lib/scylla/scyllatop/*
@@ -205,6 +214,10 @@ mv /tmp/scylla.yaml /etc/scylla/scylla.yaml
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla
 %config(noreplace) %{_sysconfdir}/scylla/scylla.yaml
 %config(noreplace) %{_sysconfdir}/scylla/cassandra-rackdc.properties
+%if %is_housekeeping_conf
+%config(noreplace) %{_sysconfdir}/scylla/housekeeping.cfg
+%endif
+
 
 %package kernel-conf
 Group:          Applications/Databases

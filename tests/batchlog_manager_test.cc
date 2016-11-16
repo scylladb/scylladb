@@ -19,7 +19,6 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#define BOOST_TEST_DYN_LINK
 
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptors.hpp>
@@ -38,6 +37,7 @@
 #include "db/batchlog_manager.hh"
 
 #include "disk-error-handler.hh"
+#include "message/messaging_service.hh"
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;

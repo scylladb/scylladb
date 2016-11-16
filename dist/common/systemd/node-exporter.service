@@ -1,0 +1,9 @@
+[Unit]
+Description=Node Exporter
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node_exporter
+
+[Install]
+WantedBy=multi-user.target

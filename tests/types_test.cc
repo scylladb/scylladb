@@ -94,6 +94,14 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_type_string_conversions) {
     test_parsing_fails(timeuuid_type, utils::make_random_uuid().to_sstring());
 }
 
+BOOST_AUTO_TEST_CASE(test_uuid_type_comparison) {
+    auto uuid1 = uuid_type->decompose(utils::UUID(sstring("ad4d3770-7a50-11e6-ac4d-000000000003")));
+    auto uuid2 = uuid_type->decompose(utils::UUID(sstring("c512ba10-7a50-11e6-ac4d-000000000003")));
+    
+    BOOST_REQUIRE_EQUAL(true, uuid_type->less(uuid1, uuid2));
+    BOOST_REQUIRE_EQUAL(false, uuid_type->less(uuid2, uuid1));
+}
+
 BOOST_AUTO_TEST_CASE(test_uuid_type_string_conversions) {
     auto now = utils::UUID_gen::get_time_UUID();
     BOOST_REQUIRE(uuid_type->equal(uuid_type->from_string(now.to_sstring()), uuid_type->decompose(now)));

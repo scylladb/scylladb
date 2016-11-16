@@ -176,6 +176,8 @@ class region_group {
     // complication in release_requests and keep the main request execution path simpler.
     circular_buffer<std::unique_ptr<allocating_function>> _blocked_requests;
 
+    uint64_t _blocked_requests_counter = 0;
+
     // All requests waiting for execution are kept in _blocked_requests (explained above) in the
     // region_group they were executed against. However, it could be that they are blocked not due
     // to their region group but to an ancestor. To handle these cases we will keep a list of
@@ -287,6 +289,7 @@ public:
         auto fn = std::make_unique<concrete_allocating_function<Func>>(std::forward<Func>(func));
         auto fut = fn->get_future();
         _blocked_requests.push_back(std::move(fn));
+        ++_blocked_requests_counter;
 
         // This is called here, and not at update(), for two reasons: the first, is that things that
         // are done during the free() path should be done carefuly, in the sense that they can
@@ -317,6 +320,14 @@ public:
     future<> shutdown() {
         _shutdown_requested = true;
         return _asynchronous_gate.close();
+    }
+
+    size_t blocked_requests() {
+        return _blocked_requests.size();
+    }
+
+    uint64_t blocked_requests_counter() const {
+        return _blocked_requests_counter;
     }
 private:
     // Make sure we get a notification and can call release_requests when one of our ancestors that
@@ -444,6 +455,7 @@ public:
     reactor::idle_cpu_handler_result compact_on_idle(reactor::work_waiting_on_reactor);
 
     // Compacts as much as possible. Very expensive, mainly for testing.
+    // Guarantees that every live object from reclaimable regions will be moved.
     // Invalidates references to objects in all compactible and evictable regions.
     void full_compaction();
 
@@ -562,6 +574,8 @@ public:
 
     allocation_strategy& allocator();
 
+    region_group* group();
+
     // Merges another region into this region. The other region is left empty.
     // Doesn't invalidate references to allocated objects.
     void merge(region& other);
@@ -569,6 +583,9 @@ public:
     // Compacts everything. Mainly for testing.
     // Invalidates references to allocated objects.
     void full_compaction();
+
+    // Runs eviction function once. Mainly for testing.
+    memory::reclaiming_result evict_some();
 
     // Changes the reclaimability state of this region. When region is not
     // reclaimable, it won't be considered by tracker::reclaim(). By default region is

@@ -54,7 +54,7 @@ public:
                     const cql3::query_options& options,
                     lw_shared_ptr<query::read_command> cmd,
                     std::vector<query::partition_range> ranges)
-                    : _has_clustering_keys(s->clustering_key_size() > 0)
+                    : _has_clustering_keys(has_clustering_keys(*s, *cmd))
                     , _max(cmd->row_limit)
                     , _schema(std::move(s))
                     , _selection(selection)
@@ -65,6 +65,11 @@ public:
     {}
 
 private:   
+    static bool has_clustering_keys(const schema& s, const query::read_command& cmd) {
+        return s.clustering_key_size() > 0
+               && !cmd.slice.options.contains<query::partition_slice::option::distinct>();
+    }
+
     future<> fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, db_clock::time_point now) override {
         auto state = _options.get_paging_state();
 
@@ -103,7 +108,9 @@ private:
                     }
 
                     bool remove = !found
-                            || (contains && (i->is_singular() && !inclusive))
+                            || (contains && !inclusive && (i->is_singular()
+                                || (reversed && i->start() && !cmp(i->start()->value(), lo))
+                                || (!reversed && i->end() && !cmp(i->end()->value(), lo))))
                             ;
 
                     if (remove) {
@@ -124,6 +131,43 @@ private:
                 logger.trace("Result ranges {}", ranges);
             };
 
+            // Because of #1446 we don't have a comparator to use with
+            // range<clustering_key_prefix> which would produce correct results.
+            // This means we cannot reuse the same logic for dealing with
+            // partition and clustering keys.
+            auto modify_ck_ranges = [reversed] (const schema& s, auto& ranges, auto& lo) {
+                typedef typename std::remove_reference_t<decltype(ranges)>::value_type range_type;
+                typedef typename range_type::bound bound_type;
+
+                auto cmp = [reversed, bv_cmp = bound_view::compare(s)] (const auto& a, const auto& b) {
+                    return reversed ? bv_cmp(b, a) : bv_cmp(a, b);
+                };
+                auto start_bound = [reversed] (const auto& range) -> const bound_view& {
+                    return reversed ? range.second : range.first;
+                };
+                auto end_bound = [reversed] (const auto& range) -> const bound_view& {
+                    return reversed ? range.first : range.second;
+                };
+                clustering_key_prefix::equality eq(s);
+
+                auto it = ranges.begin();
+                while (it != ranges.end()) {
+                    auto range = bound_view::from_range(*it);
+                    if (cmp(end_bound(range), lo) || eq(end_bound(range).prefix, lo)) {
+                        logger.trace("Remove ck range {}", *it);
+                        it = ranges.erase(it);
+                        continue;
+                    } else if (cmp(start_bound(range), lo)) {
+                        assert(cmp(lo, end_bound(range)));
+                        auto r = reversed ? range_type(it->start(), bound_type { lo, false })
+                                          : range_type(bound_type { lo, false }, it->end());
+                        logger.trace("Modify ck range {} -> {}", *it, r);
+                        *it = std::move(r);
+                    }
+                    ++it;
+                }
+            };
+
             // last ck can be empty depending on whether we
             // deserialized state or not. This case means "last page ended on
             // something-not-bound-by-clustering" (i.e. a static row, alone)
@@ -136,15 +180,7 @@ private:
             if (has_ck) {
                 query::clustering_row_ranges row_ranges = _cmd->slice.default_row_ranges();
                 clustering_key_prefix ckp = clustering_key_prefix::from_exploded(*_schema, _last_ckey->explode(*_schema));
-                clustering_key_prefix::less_compare cmp_rt(*_schema);
-                modify_ranges(row_ranges, ckp, false, [&cmp_rt](auto& c1, auto c2) {
-                    if (cmp_rt(c1, c2)) {
-                        return -1;
-                    } else if (cmp_rt(c2, c1)) {
-                        return 1;
-                    }
-                    return 0;
-                });
+                modify_ck_ranges(*_schema, row_ranges, ckp);
 
                 _cmd->slice.set_range(*_schema, *_last_pkey, row_ranges);
             }
@@ -166,7 +202,8 @@ private:
                 );
 
         auto ranges = _ranges;
-        return get_local_storage_proxy().query(_schema, _cmd, std::move(ranges),
+        auto command = ::make_lw_shared<query::read_command>(*_cmd);
+        return get_local_storage_proxy().query(_schema, std::move(command), std::move(ranges),
                 _options.get_consistency(), _state.get_trace_state()).then(
                 [this, &builder, page_size, now](foreign_ptr<lw_shared_ptr<query::result>> results) {
                     handle_result(builder, std::move(results), page_size, now);

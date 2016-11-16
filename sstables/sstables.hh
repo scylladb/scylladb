@@ -32,6 +32,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include "types.hh"
+#include "clustering_key_filter.hh"
 #include "core/enum.hh"
 #include "compress.hh"
 #include "row.hh"
@@ -46,8 +47,9 @@
 #include "exceptions.hh"
 #include "mutation_reader.hh"
 #include "query-request.hh"
-#include "key_reader.hh"
 #include "compound_compat.hh"
+#include "disk-error-handler.hh"
+#include "atomic_deletion.hh"
 
 namespace sstables {
 
@@ -74,6 +76,7 @@ class data_consume_context {
     friend class sstable;
 public:
     future<> read();
+    void fast_forward_to(uint64_t begin, uint64_t end);
     // Define (as defaults) the destructor and move operations in the source
     // file, so here we don't need to know the incomplete impl type.
     ~data_consume_context();
@@ -101,6 +104,7 @@ class mutation_reader {
     friend class sstable;
 public:
     future<streamed_mutation_opt> read();
+    future<> fast_forward_to(const query::partition_range&);
     // Define (as defaults) the destructor and move operations in the source
     // file, so here we don't need to know the incomplete impl type.
     ~mutation_reader();
@@ -112,6 +116,7 @@ class key;
 class sstable_writer;
 
 using index_list = std::vector<index_entry>;
+class index_reader;
 
 class sstable : public enable_lw_shared_from_this<sstable> {
 public:
@@ -127,18 +132,21 @@ public:
         Statistics,
         TemporaryTOC,
         TemporaryStatistics,
+        Unknown,
     };
     enum class version_types { ka, la };
     enum class format_types { big };
 public:
-    sstable(sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now())
-        : _ks(std::move(ks))
-        , _cf(std::move(cf))
+    sstable(schema_ptr schema, sstring dir, int64_t generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now(),
+            io_error_handler_gen error_handler_gen = default_io_error_handler_gen())
+        : _schema(std::move(schema))
         , _dir(std::move(dir))
         , _generation(generation)
         , _version(v)
         , _format(f)
         , _now(now)
+        , _read_error_handler(error_handler_gen(sstable_read_error))
+        , _write_error_handler(error_handler_gen(sstable_write_error))
     { }
     sstable& operator=(const sstable&) = delete;
     sstable(const sstable&) = delete;
@@ -209,6 +217,8 @@ public:
     // progress (i.e., returned a future which hasn't completed yet).
     data_consume_context data_consume_rows(row_consumer& consumer, disk_read_range toread);
 
+    data_consume_context data_consume_single_partition(row_consumer& consumer, disk_read_range toread);
+
     // Like data_consume_rows() with bounds, but iterates over whole range
     data_consume_context data_consume_rows(row_consumer& consumer);
 
@@ -217,6 +227,8 @@ public:
     static format_types format_from_sstring(sstring& s);
     static const sstring filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
                                   format_types format, component_type component);
+    static const sstring filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
+                                  format_types format, sstring component);
     // WARNING: it should only be called to remove components of a sstable with
     // a temporary TOC file.
     static future<> remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64_t generation,
@@ -231,27 +243,22 @@ public:
         return _generation;
     }
 
+    // read_row() reads the entire sstable row (partition) at a given
+    // partition key k, or a subset of this row. The subset is defined by
+    // a filter on the clustering keys which we want to read, which
+    // additionally determines also if all the static columns will also be
+    // returned in the result.
     future<streamed_mutation_opt> read_row(
         schema_ptr schema,
         const key& k,
-        query::clustering_key_filtering_context ck_filtering = query::no_clustering_key_filtering,
+        const query::partition_slice& slice = query::full_slice,
         const io_priority_class& pc = default_priority_class());
-    /**
-     * @param schema a schema_ptr object describing this table
-     * @param min the minimum token we want to search for (inclusive)
-     * @param max the maximum token we want to search for (inclusive)
-     * @return a mutation_reader object that can be used to iterate over
-     * mutations.
-     */
-    mutation_reader read_range_rows(schema_ptr schema,
-            const dht::token& min, const dht::token& max,
-            const io_priority_class& pc = default_priority_class());
 
     // Returns a mutation_reader for given range of partitions
     mutation_reader read_range_rows(
         schema_ptr schema,
         const query::partition_range& range,
-        query::clustering_key_filtering_context ck_filtering = query::no_clustering_key_filtering,
+        const query::partition_slice& slice = query::full_slice,
         const io_priority_class& pc = default_priority_class());
 
     // read_rows() returns each of the rows in the sstable, in sequence,
@@ -285,6 +292,10 @@ public:
         return ((uint64_t)_summary.header.size_at_full_sampling + 1) *
                 _summary.header.min_index_interval;
     }
+
+    uint64_t estimated_keys_for_range(const nonwrapping_range<dht::token>& range);
+
+    std::vector<dht::decorated_key> get_key_samples(const schema& s, const nonwrapping_range<dht::token>& range);
 
     // mark_for_deletion() specifies that a sstable isn't relevant to the
     // current shard, and thus can be deleted by the deletion manager, if
@@ -329,15 +340,15 @@ public:
     // Returns the total bytes of all components.
     uint64_t bytes_on_disk();
 
-    partition_key get_first_partition_key(const schema& s) const;
-    partition_key get_last_partition_key(const schema& s) const;
+    const partition_key& get_first_partition_key() const;
+    const partition_key& get_last_partition_key() const;
 
-    dht::decorated_key get_first_decorated_key(const schema& s) const;
-    dht::decorated_key get_last_decorated_key(const schema& s) const;
+    const dht::decorated_key& get_first_decorated_key() const;
+    const dht::decorated_key& get_last_decorated_key() const;
 
     // SSTable comparator using the first key (decorated key).
     // Return values are those of a trichotomic comparison.
-    int compare_by_first_key(const schema& s, const sstable& other) const;
+    int compare_by_first_key(const sstable& other) const;
 
     // SSTable comparator using the max timestamp.
     // Return values are those of a trichotomic comparison.
@@ -355,6 +366,8 @@ public:
         return _collector;
     }
 
+    std::vector<std::pair<component_type, sstring>> all_components() const;
+
     future<> create_links(sstring dir, int64_t generation) const;
 
     future<> create_links(sstring dir) const {
@@ -371,16 +384,24 @@ public:
     }
     std::vector<sstring> component_filenames() const;
 
+    template<typename Func, typename... Args>
+    auto sstable_write_io_check(Func&& func, Args&&... args) const {
+        return do_io_check(_write_error_handler, func, std::forward<Args>(args)...);
+    }
 private:
-    sstable(size_t wbuffer_size, sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now())
+    sstable(size_t wbuffer_size, schema_ptr schema, sstring dir, int64_t generation, version_types v, format_types f,
+            gc_clock::time_point now = gc_clock::now(), io_error_handler_gen error_handler_gen = default_io_error_handler_gen())
         : sstable_buffer_size(wbuffer_size)
-        , _ks(std::move(ks))
-        , _cf(std::move(cf))
+        , _single_partition_history(make_lw_shared<file_input_stream_history>())
+        , _partition_range_history(make_lw_shared<file_input_stream_history>())
+        , _schema(std::move(schema))
         , _dir(std::move(dir))
         , _generation(generation)
         , _version(v)
         , _format(f)
         , _now(now)
+        , _read_error_handler(error_handler_gen(sstable_read_error))
+        , _write_error_handler(error_handler_gen(sstable_write_error))
     { }
 
     size_t sstable_buffer_size = 128*1024;
@@ -390,6 +411,7 @@ private:
     static std::unordered_map<component_type, sstring, enum_hash<component_type>> _component_map;
 
     std::unordered_set<component_type, enum_hash<component_type>> _components;
+    std::vector<sstring> _unrecognized_components;
 
     bool _shared = true;  // across shards; safe default
     compression _compression;
@@ -406,6 +428,12 @@ private:
     uint64_t _index_file_size;
     uint64_t _filter_file_size = 0;
     uint64_t _bytes_on_disk = 0;
+    std::vector<nonwrapping_range<bytes_view>> _clustering_components_ranges;
+    stdx::optional<dht::decorated_key> _first;
+    stdx::optional<dht::decorated_key> _last;
+
+    lw_shared_ptr<file_input_stream_history> _single_partition_history;
+    lw_shared_ptr<file_input_stream_history> _partition_range_history;
 
     // _pi_write is used temporarily for building the promoted
     // index (column sample) of one partition when writing a new sstable.
@@ -428,8 +456,7 @@ private:
             const composite& clustering_key,
             const std::vector<bytes_view>& column_names);
 
-    sstring _ks;
-    sstring _cf;
+    schema_ptr _schema;
     sstring _dir;
     unsigned long _generation = 0;
     version_types _version;
@@ -440,6 +467,9 @@ private:
     bool _marked_for_deletion = false;
 
     gc_clock::time_point _now;
+
+    io_error_handler _read_error_handler;
+    io_error_handler _write_error_handler;
 
     const bool has_component(component_type f) const;
 
@@ -477,10 +507,24 @@ private:
     // Rewrite statistics component by creating a temporary Statistics and
     // renaming it into place of existing one.
     void rewrite_statistics(const io_priority_class& pc);
+    // Validate metadata that's used to optimize reads when user specifies
+    // a clustering key range. If this specific metadata is incorrect, then
+    // it should be cleared. Otherwise, it could lead to bad decisions.
+    // Metadata is probably incorrect if generated by previous Scylla versions.
+    void validate_min_max_metadata();
+
+    void set_first_and_last_keys();
+
+    // Create one range for each clustering component of this sstable.
+    // Each range stores min and max value for that specific component.
+    // It does nothing if schema defines no clustering key, and it's supposed
+    // to be called when loading an existing sstable or after writing a new one.
+    void set_clustering_components_ranges();
 
     future<> create_data();
 
     future<index_list> read_indexes(uint64_t summary_idx, const io_priority_class& pc);
+    index_reader get_index_reader(const io_priority_class& pc);
 
     // Return an input_stream which reads exactly the specified byte range
     // from the data file (after uncompression, if the file is compressed).
@@ -490,7 +534,8 @@ private:
     // of bytes to be read using this stream, we can make better choices
     // about the buffer size to read, and where exactly to stop reading
     // (even when a large buffer size is used).
-    input_stream<char> data_stream(uint64_t pos, size_t len, const io_priority_class& pc);
+    input_stream<char> data_stream(uint64_t pos, size_t len, const io_priority_class& pc,
+                                   lw_shared_ptr<file_input_stream_history> history);
 
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read
@@ -513,37 +558,22 @@ private:
         return binary_search(entries, sk, dht::global_partitioner().get_token(key_view(sk)));
     }
 
-    // Returns position in the data file of the first entry which is not
-    // smaller than the supplied ring_position. If no such entry exists, a
-    // position right after all entries is returned.
-    //
-    // The ring_position doesn't have to survive deferring.
-    future<uint64_t> lower_bound(schema_ptr, const dht::ring_position&, const io_priority_class& pc);
-
-    // Returns position in the data file of the first partition which is
-    // greater than the supplied ring_position. If no such entry exists, a
-    // position right after all entries is returned.
-    //
-    // The ring_position doesn't have to survive deferring.
-    future<uint64_t> upper_bound(schema_ptr, const dht::ring_position&, const io_priority_class& pc);
-
     // find_disk_ranges finds the ranges of bytes we need to read from the
     // sstable to read the desired columns out of the given key. This range
     // may be the entire byte range of the given partition - as found using
     // the summary and index files - but if the index contains a "promoted
     // index" (a sample of column positions for each key) it may be a smaller
     // range. The returned range may contain columns beyond those requested
-    // in ck_filtering, so it is the reader's duty to use ck_filtering again
+    // in slice, so it is the reader's duty to use slice again
     // when parsing the data read from the returned range.
     future<disk_read_range> find_disk_ranges(schema_ptr schema,
             const sstables::key& key,
-            query::clustering_key_filtering_context ck_filtering,
+            const query::partition_slice& slice,
             const io_priority_class& pc);
 
     future<summary_entry&> read_summary_entry(size_t i);
 
     // FIXME: pending on Bloom filter implementation
-    bool filter_has_key(const key& key) { return _filter->is_present(bytes_view(key)); }
     bool filter_has_key(const schema& s, const dht::decorated_key& dk) { return filter_has_key(key::from_partition_key(s, dk._key)); }
 
     // NOTE: functions used to generate sstable components.
@@ -558,8 +588,14 @@ private:
         write_range_tombstone(out, start, bound_kind::incl_start, end, bound_kind::incl_end, std::move(suffix), std::move(t));
     }
     void write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation_view collection);
+
+    stdx::optional<std::pair<uint64_t, uint64_t>> get_sample_indexes_for_range(const nonwrapping_range<dht::token>& range);
 public:
     future<> read_toc();
+
+    bool filter_has_key(const key& key) {
+        return _filter->is_present(bytes_view(key));
+    }
 
     bool filter_has_key(const schema& s, partition_key_view key) {
         return filter_has_key(key::from_partition_key(s, key));
@@ -626,26 +662,26 @@ public:
     future<range<partition_key>>
     get_sstable_key_range(const schema& s);
 
+    const std::vector<nonwrapping_range<bytes_view>>& clustering_components_ranges() const;
+
     // Used to mark a sstable for deletion that is not relevant to the current shard.
     // It doesn't mean that the sstable will be deleted, but that the sstable is not
     // relevant to the current shard, thus can be deleted by the deletion manager.
-    static void mark_sstable_for_deletion(sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f);
+    static void mark_sstable_for_deletion(const schema_ptr& schema, sstring dir, int64_t generation, version_types v, format_types f);
 
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
     // will then re-export as public every method it needs.
     friend class test;
 
-    friend class key_reader;
     friend class components_writer;
     friend class sstable_writer;
+    friend class index_reader;
+    friend class mutation_reader::impl;
 };
 
 using shared_sstable = lw_shared_ptr<sstable>;
 using sstable_list = std::unordered_set<shared_sstable>;
-
-::key_reader make_key_reader(schema_ptr s, shared_sstable sst, const query::partition_range& range,
-                             const io_priority_class& pc = default_priority_class());
 
 struct entry_descriptor {
     sstring ks;
@@ -673,14 +709,6 @@ future<> await_background_jobs();
 // Invokes await_background_jobs() on all shards
 future<> await_background_jobs_on_all_shards();
 
-struct sstable_to_delete {
-    sstable_to_delete(sstring name, bool shared) : name(std::move(name)), shared(shared) {}
-    sstring name;
-    bool shared = false;
-    friend std::ostream& operator<<(std::ostream& os, const sstable_to_delete& std);
-};
-
-
 // When we compact sstables, we have to atomically instantiate the new
 // sstable and delete the old ones.  Otherwise, if we compact A+B into C,
 // and if A contained some data that was tombstoned by B, and if B was
@@ -699,23 +727,9 @@ struct sstable_to_delete {
 future<> delete_atomically(std::vector<shared_sstable> ssts);
 future<> delete_atomically(std::vector<sstable_to_delete> ssts);
 
-class atomic_deletion_cancelled : public std::exception {
-    std::string _msg;
-public:
-    explicit atomic_deletion_cancelled(std::vector<sstring> names);
-    template <typename StringRange>
-    explicit atomic_deletion_cancelled(StringRange range)
-            : atomic_deletion_cancelled(std::vector<sstring>{range.begin(), range.end()}) {
-    }
-    const char* what() const noexcept override;
-};
-
 // Cancel any deletions scheduled by delete_atomically() and make their
 // futures complete (with an atomic_deletion_cancelled exception).
 void cancel_atomic_deletions();
-
-// Read toc content and delete all components found in it.
-future<> remove_by_toc_name(sstring sstable_toc_name);
 
 class components_writer {
     sstable& _sst;

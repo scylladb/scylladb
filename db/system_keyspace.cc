@@ -68,6 +68,8 @@
 #include "serializer.hh"
 #include <core/enum.hh>
 #include "service/storage_proxy.hh"
+#include "message/messaging_service.hh"
+#include "mutation_query.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 

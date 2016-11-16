@@ -25,17 +25,12 @@
 namespace ser {
 
 template<typename T>
-void set_size(seastar::simple_output_stream& os, const T& obj) {
-    serialize(os, get_sizeof(obj));
-}
-
-template<typename T>
 void set_size(seastar::measuring_output_stream& os, const T& obj) {
     serialize(os, uint32_t(0));
 }
 
-template<typename T>
-void set_size(bytes_ostream& os, const T& obj) {
+template<typename Stream, typename T>
+void set_size(Stream& os, const T& obj) {
     serialize(os, get_sizeof(obj));
 }
 
@@ -258,14 +253,41 @@ struct serializer<std::map<K, V>> {
     }
 };
 
+template<typename Iterator>
+class deserialized_bytes_proxy {
+    seastar::memory_input_stream<Iterator> _stream;
+public:
+    explicit deserialized_bytes_proxy(seastar::memory_input_stream<Iterator> stream)
+        : _stream(std::move(stream)) { }
+
+    [[gnu::always_inline]]
+    operator bytes() && {
+        bytes v(bytes::initialized_later(), _stream.size());
+        _stream.read(reinterpret_cast<char*>(v.begin()), _stream.size());
+        return v;
+    }
+
+    [[gnu::always_inline]]
+    operator managed_bytes() && {
+        managed_bytes v(managed_bytes::initialized_later(), _stream.size());
+        _stream.read(reinterpret_cast<char*>(v.begin()), _stream.size());
+        return v;
+    }
+
+    [[gnu::always_inline]]
+    operator bytes_ostream() && {
+        bytes_ostream v;
+        _stream.copy_to(v);
+        return v;
+    }
+};
+
 template<>
 struct serializer<bytes> {
     template<typename Input>
-    static bytes read(Input& in) {
+    static deserialized_bytes_proxy<typename Input::iterator_type> read(Input& in) {
         auto sz = deserialize(in, boost::type<uint32_t>());
-        bytes v(bytes::initialized_later(), sz);
-        in.read(reinterpret_cast<char*>(v.begin()), sz);
-        return v;
+        return deserialized_bytes_proxy<typename Input::iterator_type>(in.read_substream(sz));
     }
     template<typename Output>
     static void write(Output& out, bytes_view v) {
@@ -279,6 +301,13 @@ struct serializer<bytes> {
     template<typename Output>
     static void write(Output& out, const managed_bytes& v) {
         write(out, static_cast<bytes_view>(v));
+    }
+    template<typename Output>
+    static void write(Output& out, const bytes_ostream& v) {
+        safe_serialize_as_uint32(out, uint32_t(v.size()));
+        for (bytes_view frag : v.fragments()) {
+            out.write(reinterpret_cast<const char*>(frag.begin()), frag.size());
+        }
     }
     template<typename Input>
     static void skip(Input& in) {
@@ -295,29 +324,10 @@ template<typename Output>
 void serialize(Output& out, const managed_bytes& v) {
     serializer<bytes>::write(out, v);
 }
-
-template<>
-struct serializer<bytes_ostream> {
-    template<typename Input>
-    static bytes_ostream read(Input& in) {
-        auto sz = deserialize(in, boost::type<uint32_t>());
-        bytes_ostream v;
-        auto dst = v.write_place_holder(sz);
-        in.read(reinterpret_cast<char*>(dst), sz);
-        return v;
-    }
-    template<typename Output>
-    static void write(Output& out, const bytes_ostream& v) {
-        safe_serialize_as_uint32(out, uint32_t(v.size()));
-        for (bytes_view frag : v.fragments()) {
-            out.write(reinterpret_cast<const char*>(frag.begin()), frag.size());
-        }
-    }
-    template<typename Input>
-    static void skip(Input& in) {
-        serializer<bytes>::skip(in);
-    }
-};
+template<typename Output>
+void serialize(Output& out, const bytes_ostream& v) {
+    serializer<bytes>::write(out, v);
+}
 
 template<typename T>
 struct serializer<std::experimental::optional<T>> {
@@ -425,7 +435,7 @@ Buffer serialize_to_buffer(const T& v, size_t head_space) {
     seastar::measuring_output_stream measure;
     ser::serialize(measure, v);
     Buffer ret(typename Buffer::initialized_later(), measure.size() + head_space);
-    seastar::simple_output_stream out(reinterpret_cast<char*>(ret.begin()), head_space);
+    seastar::simple_output_stream out(reinterpret_cast<char*>(ret.begin()), ret.size(), head_space);
     ser::serialize(out, v);
     return ret;
 }
@@ -437,8 +447,16 @@ T deserialize_from_buffer(const Buffer& buf, boost::type<T> type, size_t head_sp
 }
 
 inline
-seastar::simple_input_stream as_input_stream(bytes_view b) {
-    return seastar::simple_input_stream(reinterpret_cast<const char*>(b.begin()), b.size());
+utils::input_stream as_input_stream(bytes_view b) {
+    return utils::input_stream::simple(reinterpret_cast<const char*>(b.begin()), b.size());
+}
+
+inline
+utils::input_stream as_input_stream(const bytes_ostream& b) {
+    if (b.is_linearized()) {
+        return as_input_stream(b.view());
+    }
+    return utils::input_stream::fragmented(b.fragments().begin(), b.size());
 }
 
 template<typename Output, typename ...T>
@@ -456,11 +474,13 @@ void serialize(Output& out, const unknown_variant_type& v) {
 }
 template<typename Input>
 unknown_variant_type deserialize(Input& in, boost::type<unknown_variant_type>) {
-    auto size = deserialize(in, boost::type<size_type>());
-    auto index = deserialize(in, boost::type<size_type>());
-    auto sz = size - sizeof(size_type) * 2;
-    sstring v(sstring::initialized_later(), sz);
-    in.read(v.begin(), sz);
-    return unknown_variant_type{index, std::move(v)};
+    return seastar::with_serialized_stream(in, [] (auto& in) {
+        auto size = deserialize(in, boost::type<size_type>());
+        auto index = deserialize(in, boost::type<size_type>());
+        auto sz = size - sizeof(size_type) * 2;
+        sstring v(sstring::initialized_later(), sz);
+        in.read(v.begin(), sz);
+        return unknown_variant_type{ index, std::move(v) };
+    });
 }
 }

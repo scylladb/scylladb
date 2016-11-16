@@ -54,7 +54,7 @@ future<> boot_strapper::bootstrap() {
     for (const auto& keyspace_name : _db.local().get_non_system_keyspaces()) {
         auto& ks = _db.local().find_keyspace(keyspace_name);
         auto& strategy = ks.get_replication_strategy();
-        std::vector<range<token>> ranges = strategy.get_pending_address_ranges(_token_metadata, _tokens, _address);
+        std::vector<nonwrapping_range<token>> ranges = strategy.get_pending_address_ranges(_token_metadata, _tokens, _address);
         logger.debug("Will stream keyspace={}, ranges={}", keyspace_name, ranges);
         streamer->add_ranges(keyspace_name, ranges);
     }

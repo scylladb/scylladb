@@ -43,6 +43,7 @@
 #include "database.hh"
 #include "db/system_keyspace.hh"
 #include "service/storage_service.hh"
+#include <boost/range/algorithm/sort.hpp>
 
 static seastar::logger _logger("size_estimates_recorder");
 
@@ -71,24 +72,16 @@ static std::vector<db::system_keyspace::range_estimates> estimates_for(const col
     std::vector<db::system_keyspace::range_estimates> estimates;
     estimates.reserve(local_ranges.size());
 
-    std::vector<query::partition_range> unwrapped;
-    // Each range defines both bounds.
-    for (auto& range : local_ranges) {
+    // Each range defines both bounds (with the call to compat::wrap)
+    for (auto& range : compat::wrap(local_ranges)) {
         int64_t count{0};
-        sstables::estimated_histogram hist{0};
-        unwrapped.clear();
-        if (range.is_wrap_around(dht::ring_position_comparator(*cf.schema()))) {
-            auto uw = range.unwrap();
-            unwrapped.push_back(std::move(uw.first));
-            unwrapped.push_back(std::move(uw.second));
-        } else {
-            unwrapped.push_back(range);
-        }
-        for (auto&& uwr : unwrapped) {
-            for (auto&& sstable : cf.select_sstables(uwr)) {
-                count += sstable->get_estimated_key_count();
-                hist.merge(sstable->get_stats_metadata().estimated_row_size);
-            }
+        utils::estimated_histogram hist{0};
+        for (auto uwr : std::vector<query::partition_range>(compat::unwrap(range, *cf.schema()))) {
+          for (auto&& sstable : cf.select_sstables(uwr)) {
+            nonwrapping_range<dht::token> r(std::move(uwr).transform([](auto&& rp) { return rp.token(); }));
+            count += sstable->estimated_keys_for_range(r);
+            hist.merge(sstable->get_stats_metadata().estimated_row_size);
+          }
         }
         estimates.emplace_back(db::system_keyspace::range_estimates{
                 range.start()->value().token(),
@@ -96,7 +89,6 @@ static std::vector<db::system_keyspace::range_estimates> estimates_for(const col
                 count,
                 count > 0 ? hist.mean() : 0});
     }
-
     return estimates;
 }
 
@@ -126,6 +118,20 @@ future<> size_estimates_recorder::record_size_estimates() {
                     return dht::ring_position::starting_at(std::move(t));
                 }));
             }
+
+            // compat::wrap(vector<ring_position>) expects ranges to be sorted, so sort them:
+            using rng_type = nonwrapping_range<dht::ring_position>;
+            boost::sort(local_ranges, [&] (const rng_type& r1, const rng_type& r2) {
+                auto&& s1 = r1.start();
+                auto&& s2 = r2.start();
+                if (bool(s1) != bool(s2)) {
+                    return !s1;
+                }
+                if (!s1) {
+                    return false;
+                }
+                return s1->value().token() < s2->value().token();
+            });
 
             _logger.debug("Recording size estimates");
 

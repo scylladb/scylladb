@@ -29,6 +29,10 @@
 class mutation;
 class streamed_mutation;
 
+namespace ser {
+class mutation_view;
+}
+
 // Immutable, compact form of mutation.
 //
 // This form is primarily destined to be sent over the network channel.
@@ -41,20 +45,20 @@ class streamed_mutation;
 //
 class frozen_mutation final {
 private:
-    bytes _bytes;
+    bytes_ostream _bytes;
     partition_key _pk;
 private:
     partition_key deserialize_key() const;
+    ser::mutation_view mutation_view() const;
 public:
     frozen_mutation(const mutation& m);
-    explicit frozen_mutation(bytes&& b);
-    frozen_mutation(bytes_view bv, partition_key key);
+    explicit frozen_mutation(bytes_ostream&& b);
+    frozen_mutation(bytes_ostream&& b, partition_key key);
     frozen_mutation(frozen_mutation&& m) = default;
     frozen_mutation(const frozen_mutation& m) = default;
     frozen_mutation& operator=(frozen_mutation&&) = default;
     frozen_mutation& operator=(const frozen_mutation&) = default;
-
-    bytes_view representation() const { return _bytes; }
+    const bytes_ostream& representation() const { return _bytes; }
     utils::UUID column_family_id() const;
     utils::UUID schema_version() const; // FIXME: Should replace column_family_id()
     partition_key_view key(const schema& s) const;

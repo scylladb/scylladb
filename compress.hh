@@ -39,17 +39,17 @@ public:
     static constexpr auto CHUNK_LENGTH_KB = "chunk_length_kb";
     static constexpr auto CRC_CHECK_CHANCE = "crc_check_chance";
 private:
-    compressor _compressor = compressor::none;
+    compressor _compressor;
     std::experimental::optional<int> _chunk_length;
     std::experimental::optional<double> _crc_check_chance;
 public:
-    compression_parameters() = default;
-    compression_parameters(compressor c) : _compressor(c) { }
+    compression_parameters(compressor c = compressor::lz4) : _compressor(c) { }
     compression_parameters(const std::map<sstring, sstring>& options) {
         validate_options(options);
 
         auto it = options.find(SSTABLE_COMPRESSION);
         if (it == options.end() || it->second.empty()) {
+            _compressor = compressor::none;
             return;
         }
         const auto& compressor_class = it->second;

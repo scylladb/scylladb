@@ -46,18 +46,19 @@
 
 using namespace db;
 
+ser::mutation_view frozen_mutation::mutation_view() const {
+    auto in = ser::as_input_stream(_bytes);
+    return ser::deserialize(in, boost::type<ser::mutation_view>());
+}
+
 utils::UUID
 frozen_mutation::column_family_id() const {
-    auto in = ser::as_input_stream(_bytes);
-    auto mv = ser::deserialize(in, boost::type<ser::mutation_view>());
-    return mv.table_id();
+    return mutation_view().table_id();
 }
 
 utils::UUID
 frozen_mutation::schema_version() const {
-    auto in = ser::as_input_stream(_bytes);
-    auto mv = ser::deserialize(in, boost::type<ser::mutation_view>());
-    return mv.schema_version();
+    return mutation_view().schema_version();
 }
 
 partition_key_view
@@ -71,37 +72,36 @@ frozen_mutation::decorated_key(const schema& s) const {
 }
 
 partition_key frozen_mutation::deserialize_key() const {
-    auto in = ser::as_input_stream(_bytes);
-    auto mv = ser::deserialize(in, boost::type<ser::mutation_view>());
-    return mv.key();
+    return mutation_view().key();
 }
 
-frozen_mutation::frozen_mutation(bytes&& b)
+frozen_mutation::frozen_mutation(bytes_ostream&& b)
     : _bytes(std::move(b))
     , _pk(deserialize_key())
-{ }
+{
+    _bytes.reduce_chunk_count();
+}
 
-frozen_mutation::frozen_mutation(bytes_view bv, partition_key pk)
-    : _bytes(bytes(bv.begin(), bv.end()))
+frozen_mutation::frozen_mutation(bytes_ostream&& b, partition_key pk)
+    : _bytes(std::move(b))
     , _pk(std::move(pk))
-{ }
+{
+    _bytes.reduce_chunk_count();
+}
 
 frozen_mutation::frozen_mutation(const mutation& m)
     : _pk(m.key())
 {
     mutation_partition_serializer part_ser(*m.schema(), m.partition());
 
-    bytes_ostream out;
-    ser::writer_of_mutation wom(out);
+    ser::writer_of_mutation wom(_bytes);
     std::move(wom).write_table_id(m.schema()->id())
                   .write_schema_version(m.schema()->version())
                   .write_key(m.key())
                   .partition([&] (auto wr) {
                       part_ser.write(std::move(wr));
                   }).end_mutation();
-
-    auto bv = out.linearize();
-    _bytes = bytes(bv.begin(), bv.end()); // FIXME: avoid copy
+    _bytes.reduce_chunk_count();
 }
 
 mutation
@@ -117,9 +117,7 @@ frozen_mutation freeze(const mutation& m) {
 }
 
 mutation_partition_view frozen_mutation::partition() const {
-    auto in = ser::as_input_stream(_bytes);
-    auto mv = ser::deserialize(in, boost::type<ser::mutation_view>());
-    return mutation_partition_view::from_view(mv.partition());
+    return mutation_partition_view::from_view(mutation_view().partition());
 }
 
 std::ostream& operator<<(std::ostream& out, const frozen_mutation::printer& pr) {
@@ -168,7 +166,7 @@ frozen_mutation streamed_mutation_freezer::consume_end_of_stream() {
                                                    std::move(_sr), std::move(_rts),
                                                    std::move(_crs), std::move(wr));
                   }).end_mutation();
-    return frozen_mutation(out.linearize(), std::move(_key));
+    return frozen_mutation(std::move(out), std::move(_key));
 }
 
 future<frozen_mutation> freeze(streamed_mutation sm) {
@@ -208,7 +206,7 @@ private:
         _rts.clear();
         _crs.clear();
         _dirty_size = 0;
-        return _consumer(frozen_mutation(out.linearize(), _key), _fragmented);
+        return _consumer(frozen_mutation(std::move(out), _key), _fragmented);
     }
 
     future<stop_iteration> maybe_flush() {

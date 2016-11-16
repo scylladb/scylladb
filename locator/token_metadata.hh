@@ -609,9 +609,9 @@ public:
     }
 #endif
 public:
-    std::vector<range<token>> get_primary_ranges_for(std::unordered_set<token> tokens);
+    std::vector<nonwrapping_range<token>> get_primary_ranges_for(std::unordered_set<token> tokens);
 
-    range<token> get_primary_range_for(token right);
+    std::vector<nonwrapping_range<token>> get_primary_ranges_for(token right);
     static boost::icl::interval<token>::interval_type range_to_interval(range<dht::token> r);
 
 private:

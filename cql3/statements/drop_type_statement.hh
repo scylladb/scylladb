@@ -65,7 +65,7 @@ public:
 
     virtual future<bool> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) override;
 
-    virtual shared_ptr<prepared> prepare(database& db) override;
+    virtual shared_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 };
 
 }

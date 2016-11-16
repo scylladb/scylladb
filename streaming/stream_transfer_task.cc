@@ -55,7 +55,7 @@ namespace streaming {
 
 extern logging::logger sslog;
 
-stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, std::vector<range<dht::token>> ranges, long total_size)
+stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, std::vector<nonwrapping_range<dht::token>> ranges, long total_size)
     : stream_task(session, cf_id)
     , _ranges(std::move(ranges))
     , _total_size(total_size) {
@@ -109,8 +109,7 @@ future<> do_send_mutations(auto si, auto fm, bool fragmented) {
 
 future<> send_mutations(auto si) {
     auto& cf = si->db.find_column_family(si->cf_id);
-    auto& priority = service::get_local_streaming_read_priority();
-    return do_with(cf.make_reader(cf.schema(), si->pr, query::no_clustering_key_filtering, priority), [si] (auto& reader) {
+    return do_with(cf.make_streaming_reader(cf.schema(), si->pr), [si] (auto& reader) {
         return repeat([si, &reader] () {
             return reader().then([si] (auto smopt) {
                 if (smopt && si->db.column_family_exists(si->cf_id)) {
@@ -170,6 +169,10 @@ void stream_transfer_task::start() {
         sslog.warn("[Stream #{}] stream_transfer_task: Fail to send to {}: {}", plan_id, id, ep);
         this->session->on_error();
     });
+}
+
+void stream_transfer_task::append_ranges(const std::vector<nonwrapping_range<dht::token>>& ranges) {
+    _ranges.insert(_ranges.end(), ranges.begin(), ranges.end());
 }
 
 } // namespace streaming

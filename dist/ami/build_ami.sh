@@ -33,7 +33,7 @@ done
 . /etc/os-release
 case "$ID" in
     "centos")
-        AMI=ami-f3102499
+        AMI=ami-4e1d5b59
         REGION=us-east-1
         SSH_USERNAME=centos
         ;;
@@ -117,7 +117,7 @@ if [ ! -f variables.json ]; then
 fi
 
 if [ ! -d packer ]; then
-    wget https://releases.hashicorp.com/packer/0.8.6/packer_0.8.6_linux_amd64.zip
+    wget -nv https://releases.hashicorp.com/packer/0.8.6/packer_0.8.6_linux_amd64.zip
     mkdir packer
     cd packer
     unzip -x ../packer_0.8.6_linux_amd64.zip

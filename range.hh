@@ -21,10 +21,13 @@
 
 #pragma once
 
+#include "stdx.hh"
+#include <list>
 #include <experimental/optional>
 #include <iostream>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/adaptor/sliced.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 
 template<typename T>
 class range_bound {
@@ -47,9 +50,13 @@ public:
     }
 };
 
-// A range which can have inclusive, exclusive or open-ended bounds on each end.
 template<typename T>
-class range {
+class nonwrapping_range;
+
+// A range which can have inclusive, exclusive or open-ended bounds on each end.
+// The end bound can be smaller than the start bound.
+template<typename T>
+class wrapping_range {
     template <typename U>
     using optional = std::experimental::optional<U>;
 public:
@@ -59,17 +66,17 @@ private:
     optional<bound> _end;
     bool _singular;
 public:
-    range(optional<bound> start, optional<bound> end, bool singular = false)
+    wrapping_range(optional<bound> start, optional<bound> end, bool singular = false)
         : _start(std::move(start))
         , _end(std::move(end))
         , _singular(singular)
     { }
-    range(T value)
+    wrapping_range(T value)
         : _start(bound(std::move(value), true))
         , _end()
         , _singular(true)
     { }
-    range() : range({}, {}) {}
+    wrapping_range() : wrapping_range({}, {}) { }
 private:
     // Bound wrappers for compile-time dispatch and safety.
     struct start_bound_ref { const optional<bound>& b; };
@@ -144,7 +151,7 @@ public:
     // check if two ranges overlap.
     // Comparator must define a total ordering on T.
     template<typename Comparator>
-    bool overlaps(const range& other, Comparator&& cmp) const {
+    bool overlaps(const wrapping_range& other, Comparator&& cmp) const {
         bool this_wraps = is_wrap_around(cmp);
         bool other_wraps = other.is_wrap_around(cmp);
 
@@ -170,19 +177,19 @@ public:
         return greater_than_or_equal(end_bound(), other.start_bound(), cmp)
             && greater_than_or_equal(other.end_bound(), start_bound(), cmp);
     }
-    static range make(bound start, bound end) {
-        return range({std::move(start)}, {std::move(end)});
+    static wrapping_range make(bound start, bound end) {
+        return wrapping_range({std::move(start)}, {std::move(end)});
     }
-    static range make_open_ended_both_sides() {
+    static wrapping_range make_open_ended_both_sides() {
         return {{}, {}};
     }
-    static range make_singular(T value) {
+    static wrapping_range make_singular(T value) {
         return {std::move(value)};
     }
-    static range make_starting_with(bound b) {
+    static wrapping_range make_starting_with(bound b) {
         return {{std::move(b)}, {}};
     }
-    static range make_ending_with(bound b) {
+    static wrapping_range make_ending_with(bound b) {
         return {{}, {std::move(b)}};
     }
     bool is_singular() const {
@@ -218,7 +225,7 @@ public:
     // Converts a wrap-around range to two non-wrap-around ranges.
     // The returned ranges are not overlapping and ordered.
     // Call only when is_wrap_around().
-    std::pair<range, range> unwrap() const {
+    std::pair<wrapping_range, wrapping_range> unwrap() const {
         return {
             { {}, end() },
             { start(), {} }
@@ -239,7 +246,7 @@ public:
     // Returns true iff all values contained by other are also contained by this.
     // Comparator must define a total ordering on T.
     template<typename Comparator>
-    bool contains(const range& other, Comparator&& cmp) const {
+    bool contains(const wrapping_range& other, Comparator&& cmp) const {
         bool this_wraps = is_wrap_around(cmp);
         bool other_wraps = other.is_wrap_around(cmp);
 
@@ -269,10 +276,10 @@ public:
     // Ranges are not overlapping and ordered.
     // Comparator must define a total ordering on T.
     template<typename Comparator>
-    std::vector<range> subtract(const range& other, Comparator&& cmp) const {
-        std::vector<range> result;
-        std::list<range> left;
-        std::list<range> right;
+    std::vector<wrapping_range> subtract(const wrapping_range& other, Comparator&& cmp) const {
+        std::vector<wrapping_range> result;
+        std::list<wrapping_range> left;
+        std::list<wrapping_range> right;
 
         if (is_wrap_around(cmp)) {
             auto u = unwrap();
@@ -321,96 +328,63 @@ public:
     // split_point will belong to first range
     // Comparator must define a total ordering on T.
     template<typename Comparator>
-    std::pair<range<T>, range<T>> split(const T& split_point, Comparator&& cmp) const {
+    std::pair<wrapping_range<T>, wrapping_range<T>> split(const T& split_point, Comparator&& cmp) const {
         assert(contains(split_point, std::forward<Comparator>(cmp)));
-        range left(start(), bound(split_point));
-        range right(bound(split_point, false), end());
+        wrapping_range left(start(), bound(split_point));
+        wrapping_range right(bound(split_point, false), end());
         return std::make_pair(std::move(left), std::move(right));
     }
-    // Create a sub-range including values greater than the split_point. split_point has to be inside the range
+    // Create a sub-range including values greater than the split_point. Returns stdx::nullopt if
+    // split_point is after the end (but not included in the range, in case of wraparound ranges)
     // Comparator must define a total ordering on T.
     template<typename Comparator>
-    range<T> split_after(const T& split_point, Comparator&& cmp) const {
-        assert(contains(split_point, std::forward<Comparator>(cmp)));
-        return range(bound(split_point, false), end());
+    stdx::optional<wrapping_range<T>> split_after(const T& split_point, Comparator&& cmp) const {
+        if (contains(split_point, std::forward<Comparator>(cmp))
+                && (!end() || cmp(split_point, end()->value()) != 0)) {
+            return wrapping_range(bound(split_point, false), end());
+        } else if (end() && cmp(split_point, end()->value()) >= 0) {
+            // whether to return stdx::nullopt or the full range is not
+            // well-defined for wraparound ranges; we return nullopt
+            // if split_point is after the end.
+            return stdx::nullopt;
+        } else {
+            return *this;
+        }
     }
     // Transforms this range into a new range of a different value type
     // Supplied transformer should transform value of type T (the old type) into value of type U (the new type).
     template<typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
-    range<U> transform(Transformer&& transformer) && {
+    wrapping_range<U> transform(Transformer&& transformer) && {
         auto t = [&transformer] (std::experimental::optional<bound>&& b)
-            -> std::experimental::optional<typename range<U>::bound>
+            -> std::experimental::optional<typename wrapping_range<U>::bound>
         {
             if (!b) {
                 return {};
             }
             return { { transformer(std::move(*b).value()), b->is_inclusive() } };
         };
-        return range<U>(t(std::move(_start)), t(std::move(_end)), _singular);
+        return wrapping_range<U>(t(std::move(_start)), t(std::move(_end)), _singular);
     }
     template<typename Comparator>
-    bool equal(const range& other, Comparator&& cmp) const {
+    bool equal(const wrapping_range& other, Comparator&& cmp) const {
         return bool(_start) == bool(other._start)
                && bool(_end) == bool(other._end)
                && (!_start || _start->equal(*other._start, cmp))
                && (!_end || _end->equal(*other._end, cmp))
                && _singular == other._singular;
     }
-    bool operator==(const range& other) const {
+    bool operator==(const wrapping_range& other) const {
         return (_start == other._start) && (_end == other._end) && (_singular == other._singular);
     }
 
-    // Takes a vector of possibly overlapping ranges and returns a vector containing
-    // a set of non-overlapping ranges covering the same values.
-    template<typename Comparator>
-    static std::vector<range<T>> deoverlap(std::vector<range<T>> ranges, Comparator&& cmp) {
-        auto size = ranges.size();
-        if (size <= 1) {
-            return ranges;
-        }
-
-        for (auto it = ranges.begin(); it != ranges.end(); ++it) {
-            if ((*it).is_wrap_around(cmp)) {
-                auto&& unwrapped = it->unwrap();
-                it = ranges.erase(it);
-                it = ranges.emplace(it, std::move(unwrapped.first));
-                it = ranges.emplace(it, std::move(unwrapped.second));
-            }
-        }
-
-        std::sort(ranges.begin(), ranges.end(), [&](auto&& r1, auto&& r2) {
-            return range<T>::less_than(r1.start_bound(), r2.start_bound(), cmp);
-        });
-
-        std::vector<range<T>> deoverlapped_ranges;
-        deoverlapped_ranges.reserve(size);
-
-        auto&& current = ranges[0];
-        for (auto&& r : ranges | boost::adaptors::sliced(1, ranges.size())) {
-            bool includes_end = greater_than_or_equal(r.end_bound(), current.start_bound(), cmp)
-                                && greater_than_or_equal(current.end_bound(), r.end_bound(), cmp);
-            if (includes_end) {
-                continue; // last.start <= r.start <= r.end <= last.end
-            }
-            bool includes_start = greater_than_or_equal(current.end_bound(), r.start_bound(), cmp);
-            if (includes_start) {
-                current = range<T>(std::move(current.start()), std::move(r.end()));
-            } else {
-                deoverlapped_ranges.emplace_back(std::move(current));
-                current = std::move(r);
-            }
-        }
-
-        deoverlapped_ranges.emplace_back(std::move(current));
-        return deoverlapped_ranges;
-    }
-
     template<typename U>
-    friend std::ostream& operator<<(std::ostream& out, const range<U>& r);
+    friend std::ostream& operator<<(std::ostream& out, const wrapping_range<U>& r);
+private:
+    friend class nonwrapping_range<T>;
 };
 
 template<typename U>
-std::ostream& operator<<(std::ostream& out, const range<U>& r) {
+std::ostream& operator<<(std::ostream& out, const wrapping_range<U>& r) {
     if (r.is_singular()) {
         return out << "==" << r.start()->value();
     }
@@ -440,19 +414,218 @@ std::ostream& operator<<(std::ostream& out, const range<U>& r) {
     return out;
 }
 
+// A range which can have inclusive, exclusive or open-ended bounds on each end.
+// The end bound can never be smaller than the start bound.
+template<typename T>
+class nonwrapping_range {
+    template <typename U>
+    using optional = std::experimental::optional<U>;
+public:
+    using bound = range_bound<T>;
+private:
+    wrapping_range<T> _range;
+public:
+    nonwrapping_range(T value)
+        : _range(std::move(value))
+    { }
+    nonwrapping_range() : nonwrapping_range({}, {}) { }
+    // Can only be called if start <= end. IDL ctor.
+    nonwrapping_range(optional<bound> start, optional<bound> end, bool singular = false)
+        : _range(std::move(start), std::move(end), singular)
+    { }
+    // Can only be called if !r.is_wrap_around().
+    explicit nonwrapping_range(wrapping_range<T>&& r)
+        : _range(std::move(r))
+    { }
+    // Can only be called if !r.is_wrap_around().
+    explicit nonwrapping_range(const wrapping_range<T>& r)
+        : _range(r)
+    { }
+    operator wrapping_range<T>() const & {
+        return _range;
+    }
+    operator wrapping_range<T>() && {
+        return std::move(_range);
+    }
+
+    // the point is before the range.
+    // Comparator must define a total ordering on T.
+    template<typename Comparator>
+    bool before(const T& point, Comparator&& cmp) const {
+        return _range.before(point, std::forward<Comparator>(cmp));
+    }
+    // the point is after the range.
+    // Comparator must define a total ordering on T.
+    template<typename Comparator>
+    bool after(const T& point, Comparator&& cmp) const {
+        return _range.after(point, std::forward<Comparator>(cmp));
+    }
+    // check if two ranges overlap.
+    // Comparator must define a total ordering on T.
+    template<typename Comparator>
+    bool overlaps(const nonwrapping_range& other, Comparator&& cmp) const {
+        // if both this and other have an open start, the two ranges will overlap.
+        if (!start() && !other.start()) {
+            return true;
+        }
+
+        return wrapping_range<T>::greater_than_or_equal(_range.end_bound(), other._range.start_bound(), cmp)
+            && wrapping_range<T>::greater_than_or_equal(other._range.end_bound(), _range.start_bound(), cmp);
+    }
+    static nonwrapping_range make(bound start, bound end) {
+        return nonwrapping_range({std::move(start)}, {std::move(end)});
+    }
+    static nonwrapping_range make_open_ended_both_sides() {
+        return {{}, {}};
+    }
+    static nonwrapping_range make_singular(T value) {
+        return {std::move(value)};
+    }
+    static nonwrapping_range make_starting_with(bound b) {
+        return {{std::move(b)}, {}};
+    }
+    static nonwrapping_range make_ending_with(bound b) {
+        return {{}, {std::move(b)}};
+    }
+    bool is_singular() const {
+        return _range.is_singular();
+    }
+    bool is_full() const {
+        return _range.is_full();
+    }
+    const optional<bound>& start() const {
+        return _range.start();
+    }
+    const optional<bound>& end() const {
+        return _range.end();
+    }
+    // the point is inside the range
+    // Comparator must define a total ordering on T.
+    template<typename Comparator>
+    bool contains(const T& point, Comparator&& cmp) const {
+        return !before(point, cmp) && !after(point, cmp);
+    }
+    // Returns true iff all values contained by other are also contained by this.
+    // Comparator must define a total ordering on T.
+    template<typename Comparator>
+    bool contains(const nonwrapping_range& other, Comparator&& cmp) const {
+        return wrapping_range<T>::less_than_or_equal(_range.start_bound(), other._range.start_bound(), cmp)
+                && wrapping_range<T>::greater_than_or_equal(_range.end_bound(), other._range.end_bound(), cmp);
+    }
+    // Returns ranges which cover all values covered by this range but not covered by the other range.
+    // Ranges are not overlapping and ordered.
+    // Comparator must define a total ordering on T.
+    template<typename Comparator>
+    std::vector<nonwrapping_range> subtract(const nonwrapping_range& other, Comparator&& cmp) const {
+        auto subtracted = _range.subtract(other._range, std::forward<Comparator>(cmp));
+        return boost::copy_range<std::vector<nonwrapping_range>>(subtracted | boost::adaptors::transformed([](auto&& r) {
+            return nonwrapping_range(std::move(r));
+        }));
+    }
+    // split range in two around a split_point. split_point has to be inside the range
+    // split_point will belong to first range
+    // Comparator must define a total ordering on T.
+    template<typename Comparator>
+    std::pair<nonwrapping_range<T>, nonwrapping_range<T>> split(const T& split_point, Comparator&& cmp) const {
+        assert(contains(split_point, std::forward<Comparator>(cmp)));
+        nonwrapping_range left(start(), bound(split_point));
+        nonwrapping_range right(bound(split_point, false), end());
+        return std::make_pair(std::move(left), std::move(right));
+    }
+    // Create a sub-range including values greater than the split_point. If split_point is after
+    // the end, returns stdx::nullopt.
+    template<typename Comparator>
+    stdx::optional<nonwrapping_range> split_after(const T& split_point, Comparator&& cmp) const {
+        if (end() && cmp(split_point, end()->value()) >= 0) {
+            return stdx::nullopt;
+        } else if (start() && cmp(split_point, start()->value()) < 0) {
+            return *this;
+        } else {
+            return nonwrapping_range(range_bound<T>(split_point, false), end());
+        }
+    }
+    // Transforms this range into a new range of a different value type
+    // Supplied transformer should transform value of type T (the old type) into value of type U (the new type).
+    template<typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
+    nonwrapping_range<U> transform(Transformer&& transformer) && {
+        return nonwrapping_range<U>(std::move(_range).transform(std::forward<Transformer>(transformer)));
+    }
+    template<typename Comparator>
+    bool equal(const nonwrapping_range& other, Comparator&& cmp) const {
+        return _range.equal(other._range, std::forward<Comparator>(cmp));
+    }
+    bool operator==(const nonwrapping_range& other) const {
+        return _range == other._range;
+    }
+    // Takes a vector of possibly overlapping ranges and returns a vector containing
+    // a set of non-overlapping ranges covering the same values.
+    template<typename Comparator>
+    static std::vector<nonwrapping_range> deoverlap(std::vector<nonwrapping_range> ranges, Comparator&& cmp) {
+        auto size = ranges.size();
+        if (size <= 1) {
+            return ranges;
+        }
+
+        std::sort(ranges.begin(), ranges.end(), [&](auto&& r1, auto&& r2) {
+            return wrapping_range<T>::less_than(r1._range.start_bound(), r2._range.start_bound(), cmp);
+        });
+
+        std::vector<nonwrapping_range> deoverlapped_ranges;
+        deoverlapped_ranges.reserve(size);
+
+        auto&& current = ranges[0];
+        for (auto&& r : ranges | boost::adaptors::sliced(1, ranges.size())) {
+            bool includes_end = wrapping_range<T>::greater_than_or_equal(r._range.end_bound(), current._range.start_bound(), cmp)
+                                && wrapping_range<T>::greater_than_or_equal(current._range.end_bound(), r._range.end_bound(), cmp);
+            if (includes_end) {
+                continue; // last.start <= r.start <= r.end <= last.end
+            }
+            bool includes_start = wrapping_range<T>::greater_than_or_equal(current._range.end_bound(), r._range.start_bound(), cmp);
+            if (includes_start) {
+                current = nonwrapping_range(std::move(current.start()), std::move(r.end()));
+            } else {
+                deoverlapped_ranges.emplace_back(std::move(current));
+                current = std::move(r);
+            }
+        }
+
+        deoverlapped_ranges.emplace_back(std::move(current));
+        return deoverlapped_ranges;
+    }
+    template<typename U>
+    friend std::ostream& operator<<(std::ostream& out, const nonwrapping_range<U>& r);
+};
+
+template<typename U>
+std::ostream& operator<<(std::ostream& out, const nonwrapping_range<U>& r) {
+    return out << r._range;
+}
+
+template<typename T>
+using range = wrapping_range<T>;
+
 // Allow using range<T> in a hash table. The hash function 31 * left +
 // right is the same one used by Cassandra's AbstractBounds.hashCode().
 namespace std {
 
 template<typename T>
-struct hash<range<T>> {
-    using argument_type =  range<T>;
+struct hash<wrapping_range<T>> {
+    using argument_type = wrapping_range<T>;
     using result_type = decltype(std::hash<T>()(std::declval<T>()));
     result_type operator()(argument_type const& s) const {
         auto hash = std::hash<T>();
         auto left = s.start() ? hash(s.start()->value()) : 0;
         auto right = s.end() ? hash(s.end()->value()) : 0;
         return 31 * left + right;
+    }
+};
+
+template<typename T>
+struct hash<nonwrapping_range<T>> {
+    using argument_type = nonwrapping_range<T>;
+    using result_type = decltype(std::hash<T>()(std::declval<T>()));
+    result_type operator()(argument_type const& s) const {
+        return hash<wrapping_range<T>>()(s);
     }
 };
 

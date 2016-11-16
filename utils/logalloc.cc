@@ -350,7 +350,10 @@ private:
     bool migrate_segment(size_t from, size_t to);
     size_t shrink_by(size_t delta);
 public:
-    segment_zone();
+    segment_zone(segment* base, size_t size) : _base(base) {
+        _segments.resize(size, true);
+    }
+    static std::unique_ptr<segment_zone> try_creating_zone();
     ~segment_zone() {
         assert(empty());
         if (_segments.size()) {
@@ -404,8 +407,9 @@ public:
 thread_local size_t segment_zone::next_attempt_size = segment_zone::initial_size;
 constexpr size_t segment_zone::minimum_size;
 
-segment_zone::segment_zone()
+std::unique_ptr<segment_zone> segment_zone::try_creating_zone()
 {
+    std::unique_ptr<segment_zone> zone;
     auto next_size = next_attempt_size;
     while (next_size) {
         auto size = next_size;
@@ -414,27 +418,27 @@ segment_zone::segment_zone()
         if (!can_allocate_more_memory(size << segment::size_shift)) {
             continue;
         }
+        memory::disable_abort_on_alloc_failure_temporarily no_abort_guard;
         auto ptr = aligned_alloc(segment::size, size << segment::size_shift);
         if (!ptr) {
             continue;
         }
-        _base = static_cast<segment*>(ptr);
         try {
-            _segments.resize(size, true);
-            logger.debug("Creating new zone @{}, size: {}", this, size);
+            zone = std::make_unique<segment_zone>(static_cast<segment*>(ptr), size);
+            logger.debug("Creating new zone @{}, size: {}", zone.get(), size);
             next_attempt_size = std::max(size << 1, minimum_size);
             while (size--) {
-                auto seg = segment_from_position(size);
-                _free_segments.push_front(*new (seg) free_segment);
+                auto seg = zone->segment_from_position(size);
+                zone->_free_segments.push_front(*new (seg) free_segment);
             }
-            return;
+            return zone;
         } catch (const std::bad_alloc&) {
-            free(_base);
+            free(ptr);
         }
     }
-    logger.trace("Failed to create zone @{}", this);
+    logger.trace("Failed to create zone");
     next_attempt_size = minimum_size;
-    throw std::bad_alloc();
+    return zone;
 }
 
 struct segment_zone_base_address_compare {
@@ -517,7 +521,7 @@ public:
     segment* new_segment(region::impl* r);
     segment_descriptor& descriptor(const segment*);
     // Returns segment containing given object or nullptr.
-    segment* containing_segment(void* obj) const;
+    segment* containing_segment(const void* obj) const;
     void free_segment(segment*) noexcept;
     void free_segment(segment*, segment_descriptor&) noexcept;
     size_t segments_in_use() const;
@@ -660,7 +664,10 @@ segment* segment_pool::allocate_segment()
         if (can_allocate_more_memory(segment::size)) {
             segment_zone* zone;
             try {
-                zone = new segment_zone;
+                zone = segment_zone::try_creating_zone().release();
+                if (!zone) {
+                    continue;
+                }
             } catch (const std::bad_alloc&) {
                 continue;
             }
@@ -720,7 +727,7 @@ segment_pool::descriptor(const segment* seg) {
 }
 
 segment*
-segment_pool::containing_segment(void* obj) const {
+segment_pool::containing_segment(const void* obj) const {
     auto addr = reinterpret_cast<uintptr_t>(obj);
     auto offset = addr & (segment::size - 1);
     auto index = (addr - _segments_base) >> segment::size_shift;
@@ -830,7 +837,7 @@ public:
         _segments.erase(i);
         ::free(seg);
     }
-    segment* containing_segment(void* obj) const {
+    segment* containing_segment(const void* obj) const {
         uintptr_t addr = reinterpret_cast<uintptr_t>(obj);
         auto seg = reinterpret_cast<segment*>(align_down(addr, static_cast<uintptr_t>(segment::size)));
         auto i = _segments.find(seg);
@@ -1156,6 +1163,8 @@ private:
 
     template<typename Func>
     void for_each_live(segment* seg, Func&& func) {
+        // scylla-gdb.py:scylla_lsa_segment is coupled with this implementation.
+
         static_assert(std::is_same<void, std::result_of_t<Func(object_descriptor*, void*)>>::value, "bad Func signature");
 
         size_t offset = 0;
@@ -1293,6 +1302,10 @@ public:
         return total;
     }
 
+    region_group* group() {
+        return _group;
+    }
+
     occupancy_stats compactible_occupancy() const {
         return _closed_occupancy;
     }
@@ -1375,6 +1388,17 @@ public:
             } else {
                 _closed_occupancy += seg_desc.occupancy();
             }
+        }
+    }
+
+    virtual size_t object_memory_size_in_allocator(const void* obj) const noexcept override {
+        segment* seg = shard_segment_pool.containing_segment(obj);
+
+        if (!seg) {
+            return standard_allocator().object_memory_size_in_allocator(obj);
+        } else {
+            auto desc = reinterpret_cast<object_descriptor*>(reinterpret_cast<uintptr_t>(obj) - sizeof(object_descriptor));
+            return sizeof(object_descriptor) + desc->size();
         }
     }
 
@@ -1609,6 +1633,10 @@ occupancy_stats region::occupancy() const {
     return _impl->occupancy();
 }
 
+region_group* region::group() {
+    return _impl->group();
+}
+
 void region::merge(region& other) {
     if (_impl != other._impl) {
         _impl->merge(*other._impl);
@@ -1618,6 +1646,13 @@ void region::merge(region& other) {
 
 void region::full_compaction() {
     _impl->full_compaction();
+}
+
+memory::reclaiming_result region::evict_some() {
+    if (_impl->is_evictable()) {
+        return _impl->evict_some();
+    }
+    return memory::reclaiming_result::reclaimed_nothing;
 }
 
 void region::make_evictable(eviction_fn fn) {
@@ -1678,7 +1713,7 @@ void tracker::impl::full_compaction() {
     logger.debug("Full compaction on all regions, {}", region_occupancy());
 
     for (region_impl* r : _regions) {
-        if (r->is_compactible()) {
+        if (r->reclaiming_enabled()) {
             r->full_compaction();
         }
     }

@@ -57,12 +57,12 @@ private:
     int32_t sequence_number = 0;
     bool aborted = false;
     // A stream_transfer_task always contains the same range to stream
-    std::vector<range<dht::token>> _ranges;
+    std::vector<nonwrapping_range<dht::token>> _ranges;
     long _total_size;
 public:
     using UUID = utils::UUID;
     stream_transfer_task(stream_transfer_task&&) = default;
-    stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, std::vector<range<dht::token>> ranges, long total_size = 0);
+    stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, std::vector<nonwrapping_range<dht::token>> ranges, long total_size = 0);
     ~stream_transfer_task();
 public:
     virtual void abort() override {
@@ -77,6 +77,8 @@ public:
     }
 
     void start();
+
+    void append_ranges(const std::vector<nonwrapping_range<dht::token>>& ranges);
 };
 
 } // namespace streaming

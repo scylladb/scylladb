@@ -211,15 +211,15 @@ batch_size_warn_threshold_in_kb: 5
 #   increase system_auth keyspace replication factor if you use this authorizer.
 # authorizer: AllowAllAuthorizer
 
-###################################################
-## Not currently supported, reserved for future use
-###################################################
-
 # initial_token allows you to specify tokens manually.  While you can use # it with
 # vnodes (num_tokens > 1, above) -- in which case you should provide a 
 # comma-separated list -- it's primarily used when adding nodes # to legacy clusters 
 # that do not have vnodes enabled.
 # initial_token:
+
+###################################################
+## Not currently supported, reserved for future use
+###################################################
 
 # See http://wiki.apache.org/cassandra/HintedHandoff
 # May either be "true" or "false" to enable globally, or contain a list

@@ -157,7 +157,7 @@ future<bool> create_type_statement::announce_migration(distributed<service::stor
 }
 
 shared_ptr<cql3::statements::prepared_statement>
-create_type_statement::prepare(database& db) {
+create_type_statement::prepare(database& db, cql_stats& stats) {
     return make_shared<prepared_statement>(make_shared<create_type_statement>(*this));
 }
 

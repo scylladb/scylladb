@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import argparse
+import sys
 import threading
 import pprint
 import logging
@@ -10,7 +11,7 @@ import livedata
 import views.simple
 import views.aggregate
 import userinput
-import signal
+import dumptostdout
 import urwid
 
 
@@ -22,7 +23,7 @@ def shell():
         logging.error('shell mode requires IPython to be installed')
 
 
-def main(metricPatterns, interval, collectd):
+def fancyUserInterface(metricPatterns, interval, collectd):
     aggregateView = views.aggregate.Aggregate()
     simpleView = views.simple.Simple()
     userInput = userinput.UserInput()
@@ -65,6 +66,8 @@ if __name__ == '__main__':
                         help="specify path for log file")
     parser.add_argument('-S', '--shell', action='store_true', help="uses IPython to enter a debug shell, usefull for development")
     parser.add_argument('-F', '--fake', action='store_true', help="fake metric updates - this is for developers only")
+    parser.add_argument('-n', '--iterations', type=int, default=None, help="Exit after a given number of iterations. This is only relevant if output is redirected")
+    parser.add_argument('-b', '--batch', action='store_true', help="batch mode - dump metrics to stdout instead of using an interactive user session")
     arguments = parser.parse_args()
     stream_log = logging.StreamHandler()
     stream_log.setLevel(logging.ERROR)
@@ -92,4 +95,10 @@ if __name__ == '__main__':
         pprint.pprint([m.symbol for m in metric.Metric.discover(collectd)])
         quit()
 
-    main(arguments.metricPattern, arguments.interval, collectd)
+    try:
+        if not sys.stdout.isatty() or arguments.batch:
+            dumptostdout.dumpToStdout(arguments.metricPattern, arguments.interval, collectd, arguments.iterations)
+        else:
+            fancyUserInterface(arguments.metricPattern, arguments.interval, collectd)
+    except KeyboardInterrupt:
+        pass

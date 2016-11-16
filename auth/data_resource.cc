@@ -47,11 +47,8 @@
 const sstring auth::data_resource::ROOT_NAME("data");
 
 auth::data_resource::data_resource(level l, const sstring& ks, const sstring& cf)
-    : _ks(ks), _cf(cf)
+    : _level(l), _ks(ks), _cf(cf)
 {
-    if (l != get_level()) {
-        throw std::invalid_argument("level/keyspace/column mismatch");
-    }
 }
 
 auth::data_resource::data_resource()
@@ -67,14 +64,7 @@ auth::data_resource::data_resource(const sstring& ks, const sstring& cf)
 {}
 
 auth::data_resource::level auth::data_resource::get_level() const {
-    if (!_cf.empty()) {
-        assert(!_ks.empty());
-        return level::COLUMN_FAMILY;
-    }
-    if (!_ks.empty()) {
-        return level::KEYSPACE;
-    }
-    return level::ROOT;
+    return _level;
 }
 
 auth::data_resource auth::data_resource::from_name(

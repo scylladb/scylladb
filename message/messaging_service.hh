@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "messaging_service_fwd.hh"
 #include "core/reactor.hh"
 #include "core/distributed.hh"
 #include "core/sstring.hh"
@@ -63,9 +64,15 @@ namespace dht {
 }
 
 namespace query {
-    using partition_range = range<ring_position>;
+    using partition_range = nonwrapping_range<ring_position>;
     class read_command;
     class result;
+}
+
+namespace compat {
+
+using wrapping_partition_range = wrapping_range<dht::ring_position>;
+
 }
 
 namespace net {
@@ -181,12 +188,13 @@ private:
     uint16_t _ssl_port;
     encrypt_what _encrypt_what;
     compress_what _compress_what;
+    bool _should_listen_to_broadcast_address;
     // map: Node broadcast address -> Node internal IP for communication within the same data center
     std::unordered_map<gms::inet_address, gms::inet_address> _preferred_ip_cache;
     std::unique_ptr<rpc_protocol_wrapper> _rpc;
-    std::unique_ptr<rpc_protocol_server_wrapper> _server;
+    std::array<std::unique_ptr<rpc_protocol_server_wrapper>, 2> _server;
     ::shared_ptr<seastar::tls::server_credentials> _credentials;
-    std::unique_ptr<rpc_protocol_server_wrapper> _server_tls;
+    std::array<std::unique_ptr<rpc_protocol_server_wrapper>, 2> _server_tls;
     std::array<clients_map, 3> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
     bool _stopping = false;
@@ -197,7 +205,7 @@ public:
             uint16_t port = 7000, bool listen_now = true);
     messaging_service(gms::inet_address ip, uint16_t port, encrypt_what, compress_what,
             uint16_t ssl_port, std::shared_ptr<seastar::tls::credentials_builder>,
-            bool listen_now = true);
+            bool sltba = false, bool listen_now = true);
     ~messaging_service();
 public:
     void start_listen();
@@ -228,16 +236,16 @@ public:
     void register_stream_mutation(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id, rpc::optional<bool>)>&& func);
     future<> send_stream_mutation(msg_addr id, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id, bool fragmented);
 
-    void register_stream_mutation_done(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id)>&& func);
-    future<> send_stream_mutation_done(msg_addr id, UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id);
+    void register_stream_mutation_done(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, std::vector<nonwrapping_range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id)>&& func);
+    future<> send_stream_mutation_done(msg_addr id, UUID plan_id, std::vector<nonwrapping_range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id);
 
     void register_complete_message(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id)>&& func);
     future<> send_complete_message(msg_addr id, UUID plan_id, unsigned dst_cpu_id);
 
     // Wrapper for REPAIR_CHECKSUM_RANGE verb
-    void register_repair_checksum_range(std::function<future<partition_checksum> (sstring keyspace, sstring cf, range<dht::token> range, rpc::optional<repair_checksum> hash_version)>&& func);
+    void register_repair_checksum_range(std::function<future<partition_checksum> (sstring keyspace, sstring cf, nonwrapping_range<dht::token> range, rpc::optional<repair_checksum> hash_version)>&& func);
     void unregister_repair_checksum_range();
-    future<partition_checksum> send_repair_checksum_range(msg_addr id, sstring keyspace, sstring cf, range<dht::token> range, repair_checksum hash_version);
+    future<partition_checksum> send_repair_checksum_range(msg_addr id, sstring keyspace, sstring cf, nonwrapping_range<dht::token> range, repair_checksum hash_version);
 
     // Wrapper for GOSSIP_ECHO verb
     void register_gossip_echo(std::function<future<> ()>&& func);
@@ -277,7 +285,7 @@ public:
     // FIXME: response_id_type is an alias in service::storage_proxy::response_id_type
     using response_id_type = uint64_t;
     // Wrapper for MUTATION
-    void register_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, frozen_mutation fm, std::vector<inet_address> forward,
+    void register_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::experimental::optional<tracing::trace_info>> trace_info)>&& func);
     void unregister_mutation();
     future<> send_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
@@ -290,7 +298,7 @@ public:
 
     // Wrapper for READ_DATA
     // Note: WTH is future<foreign_ptr<lw_shared_ptr<query::result>>
-    void register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (const rpc::client_info&, query::read_command cmd, query::partition_range pr)>&& func);
+    void register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (const rpc::client_info&, query::read_command cmd, compat::wrapping_partition_range pr)>&& func);
     void unregister_read_data();
     future<query::result> send_read_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const query::partition_range& pr);
 
@@ -305,12 +313,12 @@ public:
     future<utils::UUID> send_schema_check(msg_addr);
 
     // Wrapper for READ_MUTATION_DATA
-    void register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (const rpc::client_info&, query::read_command cmd, query::partition_range pr)>&& func);
+    void register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (const rpc::client_info&, query::read_command cmd, compat::wrapping_partition_range pr)>&& func);
     void unregister_read_mutation_data();
     future<reconcilable_result> send_read_mutation_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const query::partition_range& pr);
 
     // Wrapper for READ_DIGEST
-    void register_read_digest(std::function<future<query::result_digest, api::timestamp_type> (const rpc::client_info&, query::read_command cmd, query::partition_range pr)>&& func);
+    void register_read_digest(std::function<future<query::result_digest, api::timestamp_type> (const rpc::client_info&, query::read_command cmd, compat::wrapping_partition_range pr)>&& func);
     void unregister_read_digest();
     future<query::result_digest, rpc::optional<api::timestamp_type>> send_read_digest(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const query::partition_range& pr);
 

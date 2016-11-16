@@ -30,10 +30,11 @@
 #include "mutation_reader.hh"
 #include "mutation_partition.hh"
 #include "utils/logalloc.hh"
-#include "key_reader.hh"
 #include "utils/phased_barrier.hh"
 #include "utils/histogram.hh"
 #include "partition_version.hh"
+#include "utils/estimated_histogram.hh"
+#include "tracing/trace_state.hh"
 
 namespace scollectd {
 
@@ -59,11 +60,14 @@ class cache_entry {
     using cache_link_type = bi::set_member_hook<bi::link_mode<bi::auto_unlink>>;
 
     schema_ptr _schema;
-    dht::ring_position _key;
+    dht::decorated_key _key;
     partition_entry _pe;
     // True when we know that there is nothing between this entry and the next one in cache
-    bool _continuous : 1;
-    bool _wide_partition : 1;
+    struct {
+        bool _continuous : 1;
+        bool _wide_partition : 1;
+        bool _dummy_entry : 1;
+    } _flags{};
     lru_link_type _lru_link;
     cache_link_type _cache_link;
     friend class size_calculator;
@@ -71,50 +75,44 @@ public:
     friend class row_cache;
     friend class cache_tracker;
 
-    cache_entry(schema_ptr s)
-        : _schema(std::move(s))
-        , _key(dht::ring_position::starting_at(dht::minimum_token()))
-        , _continuous(false)
-        , _wide_partition(false)
-    { }
+    struct dummy_entry_tag{};
+    cache_entry(dummy_entry_tag)
+        : _key{dht::token(), partition_key::make_empty()}
+    {
+        _flags._dummy_entry = true;
+    }
 
     struct wide_partition_tag{};
 
     cache_entry(schema_ptr s, const dht::decorated_key& key, wide_partition_tag)
         : _schema(std::move(s))
         , _key(key)
-        , _continuous(false)
-        , _wide_partition(true)
-    { }
+    {
+        _flags._wide_partition = true;
+    }
 
-    cache_entry(schema_ptr s, const dht::decorated_key& key, const mutation_partition& p, bool continuous = false)
+    cache_entry(schema_ptr s, const dht::decorated_key& key, const mutation_partition& p)
         : _schema(std::move(s))
         , _key(key)
         , _pe(p)
-        , _continuous(continuous)
-        , _wide_partition(false)
     { }
 
-    cache_entry(schema_ptr s, dht::decorated_key&& key, mutation_partition&& p, bool continuous = false) noexcept
+    cache_entry(schema_ptr s, dht::decorated_key&& key, mutation_partition&& p) noexcept
         : _schema(std::move(s))
         , _key(std::move(key))
         , _pe(std::move(p))
-        , _continuous(continuous)
-        , _wide_partition(false)
     { }
 
-    cache_entry(schema_ptr s, dht::decorated_key&& key, partition_entry&& pe, bool continuous = false) noexcept
+    cache_entry(schema_ptr s, dht::decorated_key&& key, partition_entry&& pe) noexcept
         : _schema(std::move(s))
         , _key(std::move(key))
         , _pe(std::move(pe))
-        , _continuous(continuous)
-        , _wide_partition(false)
     { }
 
     cache_entry(cache_entry&&) noexcept;
 
     bool is_evictable() { return _lru_link.is_linked(); }
-    const dht::ring_position& key() const { return _key; }
+    const dht::decorated_key& key() const { return _key; }
     const partition_entry& partition() const { return _pe; }
     partition_entry& partition() { return _pe; }
     const schema_ptr& schema() const { return _schema; }
@@ -122,41 +120,61 @@ public:
     // Requires: !wide_partition()
     streamed_mutation read(row_cache&, const schema_ptr&);
     // Requires: !wide_partition()
-    streamed_mutation read(row_cache&, const schema_ptr&, query::clustering_key_filtering_context);
+    streamed_mutation read(row_cache&, const schema_ptr&, const query::partition_slice&);
     // May return disengaged optional if the partition is empty.
-    future<streamed_mutation_opt> read_wide(row_cache&, schema_ptr, query::clustering_key_filtering_context, const io_priority_class&);
-    bool continuous() const { return _continuous; }
-    void set_continuous(bool value) { _continuous = value; }
-    bool wide_partition() const { return _wide_partition; }
+    future<streamed_mutation_opt> read_wide(row_cache&, schema_ptr, const query::partition_slice&, const io_priority_class&);
+    bool continuous() const { return _flags._continuous; }
+    void set_continuous(bool value) { _flags._continuous = value; }
+    bool wide_partition() const { return _flags._wide_partition; }
     void set_wide_partition() {
-        _wide_partition = true;
+        _flags._wide_partition = true;
         _pe = {};
     }
 
+    bool is_dummy_entry() const { return _flags._dummy_entry; }
+
     struct compare {
-        dht::ring_position_less_comparator _c;
+        dht::decorated_key::less_comparator _c;
 
         compare(schema_ptr s)
-            : _c(*s)
+            : _c(std::move(s))
         {}
 
         bool operator()(const dht::decorated_key& k1, const cache_entry& k2) const {
+            if (k2.is_dummy_entry()) {
+                return true;
+            }
             return _c(k1, k2._key);
         }
 
         bool operator()(const dht::ring_position& k1, const cache_entry& k2) const {
+            if (k2.is_dummy_entry()) {
+                return true;
+            }
             return _c(k1, k2._key);
         }
 
         bool operator()(const cache_entry& k1, const cache_entry& k2) const {
+            if (k1.is_dummy_entry()) {
+                return false;
+            }
+            if (k2.is_dummy_entry()) {
+                return true;
+            }
             return _c(k1._key, k2._key);
         }
 
         bool operator()(const cache_entry& k1, const dht::decorated_key& k2) const {
+            if (k1.is_dummy_entry()) {
+                return false;
+            }
             return _c(k1._key, k2);
         }
 
         bool operator()(const cache_entry& k1, const dht::ring_position& k2) const {
+            if (k1.is_dummy_entry()) {
+                return false;
+            }
             return _c(k1._key, k2);
         }
     };
@@ -169,6 +187,10 @@ public:
         bi::member_hook<cache_entry, cache_entry::lru_link_type, &cache_entry::_lru_link>,
         bi::constant_time_size<false>>; // we need this to have bi::auto_unlink on hooks.
 private:
+    // We will try to evict large partition after that many normal evictions
+    const uint32_t _normal_large_eviction_ratio = 1000;
+    // Number of normal evictions to perform before we try to evict large partition
+    uint32_t _normal_eviction_count = _normal_large_eviction_ratio;
     uint64_t _hits = 0;
     uint64_t _misses = 0;
     uint64_t _uncached_wide_partitions = 0;
@@ -176,13 +198,14 @@ private:
     uint64_t _concurrent_misses_same_key = 0;
     uint64_t _merges = 0;
     uint64_t _evictions = 0;
+    uint64_t _wide_partition_evictions = 0;
     uint64_t _removals = 0;
     uint64_t _partitions = 0;
     uint64_t _modification_count = 0;
-    uint64_t _continuity_flags_cleared = 0;
     std::unique_ptr<scollectd::registrations> _collectd_registrations;
     logalloc::region _region;
     lru_type _lru;
+    lru_type _wide_partition_lru;
 private:
     void setup_collectd();
 public:
@@ -191,6 +214,7 @@ public:
     void clear();
     void touch(cache_entry&);
     void insert(cache_entry&);
+    void mark_wide(cache_entry&);
     void clear_continuity(cache_entry& ce);
     void on_erase();
     void on_merge();
@@ -198,14 +222,12 @@ public:
     void on_miss();
     void on_miss_already_populated();
     void on_uncached_wide_partition();
-    void on_continuity_flag_cleared();
     allocation_strategy& allocator();
     logalloc::region& region();
     const logalloc::region& region() const;
     uint64_t modification_count() const { return _modification_count; }
     uint64_t partitions() const { return _partitions; }
     uint64_t uncached_wide_partitions() const { return _uncached_wide_partitions; }
-    uint64_t continuity_flags_cleared() const { return _continuity_flags_cleared; }
 };
 
 // Returns a reference to shard-wide cache_tracker.
@@ -241,7 +263,6 @@ private:
     schema_ptr _schema;
     partitions_type _partitions; // Cached partitions are complete.
     mutation_source _underlying;
-    key_source _underlying_keys;
     uint64_t _max_cached_partition_size_in_bytes;
 
     // Synchronizes populating reads with updates of underlying data source to ensure that cache
@@ -260,7 +281,8 @@ private:
     mutation_reader make_scanning_reader(schema_ptr,
                                          const query::partition_range&,
                                          const io_priority_class& pc,
-                                         query::clustering_key_filtering_context ck_filtering);
+                                         const query::partition_slice& slice,
+                                         tracing::trace_state_ptr trace_state);
     void on_hit();
     void on_miss();
     void on_uncached_wide_partition();
@@ -269,9 +291,36 @@ private:
     void invalidate_unwrapped(const query::partition_range&);
     void clear_now() noexcept;
     static thread_local seastar::thread_scheduling_group _update_thread_scheduling_group;
+
+    struct previous_entry_pointer {
+        utils::phased_barrier::phase_type _populate_phase;
+        stdx::optional<dht::decorated_key> _key;
+
+        void reset(stdx::optional<dht::decorated_key> key, utils::phased_barrier::phase_type populate_phase) {
+            _populate_phase = populate_phase;
+            _key = std::move(key);
+        }
+
+        // TODO: Currently inserting an entry to the cache increases
+        // modification counter. That doesn't seem to be necessary and if we
+        // didn't do that we could store iterator here to avoid key comparison
+        // (not to mention avoiding lookups in just_cache_scanning_reader.
+    };
+
+    template<typename CreateEntry, typename VisitEntry>
+    //requires requires(CreateEntry create, VisitEntry visit, partitions_type::iterator it) {
+    //        { create(it) } -> partitions_type::iterator;
+    //        { visit(it) } -> void;
+    //    }
+    void do_find_or_create_entry(const dht::decorated_key& key, const previous_entry_pointer* previous,
+                                 CreateEntry&& create_entry, VisitEntry&& visit_entry);
+
+    partitions_type::iterator partitions_end() {
+        return std::prev(_partitions.end());
+    }
 public:
     ~row_cache();
-    row_cache(schema_ptr, mutation_source underlying, key_source, cache_tracker&, uint64_t _max_cached_partition_size_in_bytes = 10 * 1024 * 1024);
+    row_cache(schema_ptr, mutation_source underlying, cache_tracker&, uint64_t _max_cached_partition_size_in_bytes = 10 * 1024 * 1024);
     row_cache(row_cache&&) = default;
     row_cache(const row_cache&) = delete;
     row_cache& operator=(row_cache&&) = default;
@@ -282,17 +331,18 @@ public:
     // The range must not wrap around.
     mutation_reader make_reader(schema_ptr,
                                 const query::partition_range& = query::full_partition_range,
-                                query::clustering_key_filtering_context = query::no_clustering_key_filtering,
-                                const io_priority_class& = default_priority_class());
+                                const query::partition_slice& slice = query::full_slice,
+                                const io_priority_class& = default_priority_class(),
+                                tracing::trace_state_ptr trace_state = nullptr);
 
     const stats& stats() const { return _stats; }
 public:
     // Populate cache from given mutation. The mutation must contain all
     // information there is for its partition in the underlying data sources.
-    void populate(const mutation& m);
+    void populate(const mutation& m, const previous_entry_pointer* previous = nullptr);
 
     // Caches an information that a partition with a given key is wide.
-    void mark_partition_as_wide(const dht::decorated_key& key);
+    void mark_partition_as_wide(const dht::decorated_key& key, const previous_entry_pointer* previous = nullptr);
 
     // Clears the cache.
     // Guarantees that cache will not be populated using readers created
@@ -324,8 +374,6 @@ public:
     //
     // The range must be kept alive until method resolves.
     future<> invalidate(const query::partition_range&);
-
-    bool has_continuous_entry(const dht::ring_position& key) const;
 
     auto num_entries() const {
         return _partitions.size();

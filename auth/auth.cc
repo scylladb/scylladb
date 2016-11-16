@@ -353,7 +353,7 @@ future<> auth::auth::setup_table(const sstring& name, const sstring& cql) {
     parsed->prepare_keyspace(AUTH_KS);
     ::shared_ptr<cql3::statements::create_table_statement> statement =
                     static_pointer_cast<cql3::statements::create_table_statement>(
-                                    parsed->prepare(db)->statement);
+                                    parsed->prepare(db, qp.get_cql_stats())->statement);
     auto schema = statement->get_cf_meta_data();
     auto uuid = generate_legacy_id(schema->ks_name(), schema->cf_name());
 

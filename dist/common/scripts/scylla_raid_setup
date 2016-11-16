@@ -60,8 +60,7 @@ if [ "$NAME" = "Ubuntu" ]; then
 else
     yum -y install mdadm xfsprogs
 fi
-mdadm --create --verbose --force --run $RAID --level=0 -c256 --raid-devices=$NR_DISK $DISKS
-blockdev --setra 65536 $RAID
+mdadm --create --verbose --force --run $RAID --level=0 -c1024 --raid-devices=$NR_DISK $DISKS
 mkfs.xfs $RAID -f
 echo "DEVICE $DISKS" > /etc/mdadm.conf
 mdadm --detail --scan >> /etc/mdadm.conf

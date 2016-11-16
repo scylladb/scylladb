@@ -123,6 +123,15 @@ void partition_slice::clear_range(const schema& s, const partition_key& k) {
     }
 }
 
+clustering_row_ranges partition_slice::get_all_ranges() const {
+    auto all_ranges = default_row_ranges();
+    const auto& specific_ranges = get_specific_ranges();
+    if (specific_ranges) {
+        all_ranges.insert(all_ranges.end(), specific_ranges->ranges().begin(), specific_ranges->ranges().end());
+    }
+    return all_ranges;
+}
+
 sstring
 result::pretty_print(schema_ptr s, const query::partition_slice& slice) const {
     std::ostringstream out;
@@ -170,18 +179,7 @@ uint32_t result::calculate_row_count(const query::partition_slice& slice) {
         }
     } counter;
 
-    bytes_view v;
-
-    if (buf().is_linearized()) {
-        v = buf().view();
-    } else {
-        // FIXME: make result_view::consume() work on fragments to avoid linearization.
-        bytes_ostream w(buf());
-        v = w.linearize();
-    }
-
-    query::result_view view(v);
-    view.consume(slice, counter);
+    result_view::consume(*this, slice, counter);
     return counter.total_count;
 }
 

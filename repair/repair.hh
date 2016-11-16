@@ -107,4 +107,4 @@ public:
 // not resolved.
 future<partition_checksum> checksum_range(seastar::sharded<database> &db,
         const sstring& keyspace, const sstring& cf,
-        const ::range<dht::token>& range, repair_checksum rt);
+        const ::nonwrapping_range<dht::token>& range, repair_checksum rt);

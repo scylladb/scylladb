@@ -22,6 +22,8 @@
 #include "storage_service.hh"
 #include "api/api-doc/storage_service.json.hh"
 #include "db/config.hh"
+#include <boost/range/adaptor/map.hpp>
+#include <boost/range/adaptor/filtered.hpp>
 #include <service/storage_service.hh>
 #include <db/commitlog/commitlog.hh>
 #include <gms/gossiper.hh>
@@ -457,8 +459,15 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_keyspaces.set(r, [&ctx](const_req req) {
-        auto non_system = req.get_query_param("non_system");
-        return map_keys(ctx.db.local().keyspaces());
+        auto type = req.get_query_param("type");
+        if (type == "user") {
+            return ctx.db.local().get_non_system_keyspaces();
+        } else if (type == "non_local_strategy") {
+            return map_keys(ctx.db.local().get_keyspaces() | boost::adaptors::filtered([](const auto& p) {
+                return p.second.get_replication_strategy().get_type() != locator::replication_strategy_type::local;
+            }));
+        }
+        return map_keys(ctx.db.local().get_keyspaces());
     });
 
     ss::update_snitch.set(r, [](std::unique_ptr<request> req) {
@@ -679,6 +688,37 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::get_trace_probability.set(r, [](std::unique_ptr<request> req) {
         return make_ready_future<json::json_return_type>(tracing::tracing::get_local_tracing_instance().get_trace_probability());
+    });
+
+    ss::get_slow_query_info.set(r, [](const_req req) {
+        ss::slow_query_info res;
+        res.enable = tracing::tracing::get_local_tracing_instance().slow_query_tracing_enabled();
+        res.ttl = tracing::tracing::get_local_tracing_instance().slow_query_record_ttl().count() ;
+        res.threshold = tracing::tracing::get_local_tracing_instance().slow_query_threshold().count();
+        return res;
+    });
+
+    ss::set_slow_query.set(r, [](std::unique_ptr<request> req) {
+        auto enable = req->get_query_param("enable");
+        auto ttl = req->get_query_param("ttl");
+        auto threshold = req->get_query_param("threshold");
+        try {
+            return tracing::tracing::tracing_instance().invoke_on_all([enable, ttl, threshold] (auto& local_tracing) {
+                if (threshold != "") {
+                    local_tracing.set_slow_query_threshold(std::chrono::microseconds(std::stol(threshold.c_str())));
+                }
+                if (ttl != "") {
+                    local_tracing.set_slow_query_record_ttl(std::chrono::seconds(std::stol(ttl.c_str())));
+                }
+                if (enable != "") {
+                    local_tracing.set_slow_query_enabled(strcasecmp(enable.c_str(), "true") == 0);
+                }
+            }).then([] {
+                return make_ready_future<json::json_return_type>(json_void());
+            });
+        } catch (...) {
+            throw httpd::bad_param_exception(sprint("Bad format value: "));
+        }
     });
 
     ss::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<request> req) {

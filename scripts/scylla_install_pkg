@@ -79,6 +79,6 @@ else
     if [ "$LOCAL_PKG" = "" ]; then
         yum install -y scylla
     else
-        yum install -y $LOCAL_PKG/scylla-*.*.rpm
+        yum install -y $LOCAL_PKG/scylla*.*.rpm
     fi
 fi

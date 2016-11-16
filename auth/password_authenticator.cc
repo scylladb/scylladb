@@ -218,12 +218,12 @@ future<::shared_ptr<auth::authenticated_user> > auth::password_authenticator::au
     // obsolete prepared statements pretty quickly.
     // Rely on query processing caching statements instead, and lets assume
     // that a map lookup string->statement is not gonna kill us much.
-    auto& qp = cql3::get_local_query_processor();
-    return qp.process(
-                    sprint("SELECT %s FROM %s.%s WHERE %s = ?", SALTED_HASH,
-                                    auth::AUTH_KS, CREDENTIALS_CF, USER_NAME),
-                    consistency_for_user(username), { username }, true).then_wrapped(
-                    [=](future<::shared_ptr<cql3::untyped_result_set>> f) {
+    return futurize_apply([this, username, password] {
+        auto& qp = cql3::get_local_query_processor();
+        return qp.process(sprint("SELECT %s FROM %s.%s WHERE %s = ?", SALTED_HASH,
+                                        auth::AUTH_KS, CREDENTIALS_CF, USER_NAME),
+                        consistency_for_user(username), {username}, true);
+    }).then_wrapped([=](future<::shared_ptr<cql3::untyped_result_set>> f) {
         try {
             auto res = f.get0();
             if (res->empty() || !checkpw(password, res->one().get_as<sstring>(SALTED_HASH))) {
@@ -234,6 +234,8 @@ future<::shared_ptr<auth::authenticated_user> > auth::password_authenticator::au
             std::throw_with_nested(exceptions::authentication_exception("Could not verify password"));
         } catch (exceptions::request_execution_exception& e) {
             std::throw_with_nested(exceptions::authentication_exception(e.what()));
+        } catch (...) {
+            std::throw_with_nested(exceptions::authentication_exception("authentication failed"));
         }
     });
 }

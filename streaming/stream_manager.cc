@@ -48,6 +48,28 @@ extern logging::logger sslog;
 
 distributed<stream_manager> _the_stream_manager;
 
+stream_manager::stream_manager() {
+    _collectd_registrations = std::make_unique<scollectd::registrations>(setup_collectd());
+}
+
+scollectd::registrations
+stream_manager::setup_collectd() {
+    return {
+        scollectd::add_polled_metric(
+            scollectd::type_instance_id("streaming", scollectd::per_cpu_plugin_instance,
+                    "derive", "total_incoming_bytes"),
+            scollectd::make_typed(scollectd::data_type::DERIVE, [this] {
+                return this->get_progress_on_local_shard().bytes_received;
+            })),
+        scollectd::add_polled_metric(
+            scollectd::type_instance_id("streaming", scollectd::per_cpu_plugin_instance,
+                    "derive", "total_outgoing_bytes"),
+            scollectd::make_typed(scollectd::data_type::DERIVE, [this] {
+                return this->get_progress_on_local_shard().bytes_sent;
+            })),
+    };
+}
+
 void stream_manager::register_sending(shared_ptr<stream_result_future> result) {
 #if 0
     result.addEventListener(notifier);
@@ -216,6 +238,27 @@ future<stream_bytes> stream_manager::get_progress_on_all_shards() {
     );
 }
 
+stream_bytes stream_manager::get_progress_on_local_shard() {
+    stream_bytes ret;
+    for (auto& sbytes : _stream_bytes) {
+        for (auto& sb : sbytes.second) {
+            ret += sb.second;
+        }
+    }
+    return ret;
+}
+
+bool stream_manager::has_peer(inet_address endpoint) {
+    for (auto sr : get_all_streams()) {
+        for (auto session : sr->get_coordinator()->get_all_stream_sessions()) {
+            if (session->peer == endpoint) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void stream_manager::fail_sessions(inet_address endpoint) {
     for (auto sr : get_all_streams()) {
         for (auto session : sr->get_coordinator()->get_all_stream_sessions()) {
@@ -226,22 +269,34 @@ void stream_manager::fail_sessions(inet_address endpoint) {
     }
 }
 
+void stream_manager::fail_all_sessions() {
+    for (auto sr : get_all_streams()) {
+        for (auto session : sr->get_coordinator()->get_all_stream_sessions()) {
+            session->close_session(stream_session_state::FAILED);
+        }
+    }
+}
+
 void stream_manager::on_remove(inet_address endpoint) {
-    sslog.info("stream_manager: Close all stream_session with peer = {} in on_remove", endpoint);
-    get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
-        sm.fail_sessions(endpoint);
-    }).handle_exception([endpoint] (auto ep) {
-        sslog.warn("stream_manager: Fail to close sessions peer = {} in on_remove", endpoint);
-    });
+    if (has_peer(endpoint)) {
+        sslog.info("stream_manager: Close all stream_session with peer = {} in on_remove", endpoint);
+        get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
+            sm.fail_sessions(endpoint);
+        }).handle_exception([endpoint] (auto ep) {
+            sslog.warn("stream_manager: Fail to close sessions peer = {} in on_remove", endpoint);
+        });
+    }
 }
 
 void stream_manager::on_restart(inet_address endpoint, endpoint_state ep_state) {
-    sslog.info("stream_manager: Close all stream_session with peer = {} in on_restart", endpoint);
-    get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
-        sm.fail_sessions(endpoint);
-    }).handle_exception([endpoint] (auto ep) {
-        sslog.warn("stream_manager: Fail to close sessions peer = {} in on_restart", endpoint);
-    });
+    if (has_peer(endpoint)) {
+        sslog.info("stream_manager: Close all stream_session with peer = {} in on_restart", endpoint);
+        get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
+            sm.fail_sessions(endpoint);
+        }).handle_exception([endpoint] (auto ep) {
+            sslog.warn("stream_manager: Fail to close sessions peer = {} in on_restart", endpoint);
+        });
+    }
 }
 
 } // namespace streaming

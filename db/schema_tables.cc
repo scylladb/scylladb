@@ -56,6 +56,7 @@
 #include "log.hh"
 #include "frozen_schema.hh"
 #include "schema_registry.hh"
+#include "mutation_query.hh"
 
 #include "db/marshal/type_parser.hh"
 #include "db/config.hh"
@@ -494,7 +495,7 @@ read_schema_partition_for_table(distributed<service::storage_proxy>& proxy, cons
     return query_partition_mutation(proxy.local(), std::move(schema), std::move(cmd), std::move(keyspace_key));
 }
 
-static semaphore the_merge_lock;
+static semaphore the_merge_lock {1};
 
 future<> merge_lock() {
     // ref:  #1088

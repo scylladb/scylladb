@@ -317,11 +317,11 @@ public:
                 cmd->row_limit = range.count;
             }
             auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
-            return f.then([schema, cmd, prange = std::move(prange), consistency_level] {
+            return f.then([schema, cmd, prange = std::move(prange), consistency_level] () mutable {
                 return service::get_local_storage_proxy().query(
                         schema,
                         cmd,
-                        {std::move(prange)},
+                        std::move(prange),
                         cl_from_thrift(consistency_level),
                         nullptr).then([schema, cmd](auto result) {
                     return query::result_view::do_with(*result, [schema, cmd](query::result_view v) {
@@ -332,7 +332,7 @@ public:
         });
     }
 
-    static lw_shared_ptr<query::read_command> make_paged_read_cmd(const schema& s, uint32_t column_limit, const std::string* start_column, const query::partition_range& range) {
+    static lw_shared_ptr<query::read_command> make_paged_read_cmd(const schema& s, uint32_t column_limit, const std::string* start_column, const std::vector<query::partition_range>& range) {
         auto opts = query_opts(s);
         std::vector<query::clustering_range> clustering_ranges;
         std::vector<column_id> regular_columns;
@@ -346,7 +346,7 @@ public:
             row_limit = column_limit;
             partition_limit = query::max_partitions;
             if (start_column) {
-                auto sr = query::specific_ranges(*range.start()->value().key(), {make_clustering_range(s, *start_column, std::string())});
+                auto sr = query::specific_ranges(*range[0].start()->value().key(), {make_clustering_range_and_validate(s, *start_column, std::string())});
                 specific_ranges = std::make_unique<query::specific_ranges>(std::move(sr));
             }
             regular_columns.emplace_back(s.regular_begin()->id);
@@ -370,30 +370,35 @@ public:
     static future<> do_get_paged_slice(
             schema_ptr schema,
             uint32_t column_limit,
-            query::partition_range range,
+            std::vector<query::partition_range> range,
             const std::string* start_column,
             db::consistency_level consistency_level,
             std::vector<KeySlice>& output) {
         auto cmd = make_paged_read_cmd(*schema, column_limit, start_column, range);
         stdx::optional<partition_key> start_key;
-        auto end = range.end();
+        auto end = range[0].end();
         if (start_column && !schema->thrift().is_dynamic()) {
             // For static CFs, we must first query for a specific key so as to consume the remainder
             // of columns in that partition.
-            start_key = range.start()->value().key();
-            range = query::partition_range::make_singular(std::move(range.start()->value()));
+            start_key = range[0].start()->value().key();
+            range = {query::partition_range::make_singular(std::move(range[0].start()->value()))};
         }
-        return service::get_local_storage_proxy().query(schema, cmd, {std::move(range)}, consistency_level, nullptr).then([schema, cmd, column_limit](auto result) {
+        auto range1 = range; // query() below accepts an rvalue, so need a copy to reuse later
+        return service::get_local_storage_proxy().query(schema, cmd, std::move(range), consistency_level, nullptr).then([schema, cmd, column_limit](auto result) {
             return query::result_view::do_with(*result, [schema, cmd, column_limit](query::result_view v) {
                 return to_key_slices(*schema, cmd->slice, v, column_limit);
             });
-        }).then([schema, cmd, column_limit, consistency_level, start_key = std::move(start_key), end = std::move(end), &output](auto&& slices) mutable {
+        }).then([schema, cmd, column_limit, range = std::move(range1), consistency_level, start_key = std::move(start_key), end = std::move(end), &output](auto&& slices) mutable {
             auto columns = std::accumulate(slices.begin(), slices.end(), 0u, [](auto&& acc, auto&& ks) {
                 return acc + ks.columns.size();
             });
             std::move(slices.begin(), slices.end(), std::back_inserter(output));
             if (columns == 0 || columns == column_limit || (slices.size() < cmd->partition_limit && columns < cmd->row_limit)) {
                 if (!output.empty() || !start_key) {
+                    if (range.size() > 1 && columns < column_limit) {
+                        range.erase(range.begin());
+                        return do_get_paged_slice(std::move(schema), column_limit - columns, std::move(range), nullptr, consistency_level, output);
+                    }
                     return make_ready_future();
                 }
                 // The single, first partition we queried was empty, so retry with no start column.
@@ -401,8 +406,8 @@ public:
                 start_key = key_from_thrift(*schema, to_bytes_view(output.back().key));
             }
             auto start = dht::global_partitioner().decorate_key(*schema, std::move(*start_key));
-            auto new_range = query::partition_range(query::partition_range::bound(std::move(start), false), std::move(end));
-            return do_get_paged_slice(schema, column_limit - columns, std::move(new_range), nullptr, consistency_level, output);
+            range[0] = query::partition_range(query::partition_range::bound(std::move(start), false), std::move(end));
+            return do_get_paged_slice(schema, column_limit - columns, std::move(range), nullptr, consistency_level, output);
         });
     }
 
@@ -417,14 +422,14 @@ public:
                 }
                 auto&& prange = make_partition_range(*schema, range);
                 if (!start_column.empty()) {
-                    auto&& start_bound = prange.start();
+                    auto&& start_bound = prange[0].start();
                     if (!(start_bound && start_bound->is_inclusive() && start_bound->value().has_key())) {
                         // According to Orign's DataRange#Paging#slicesForKey.
                         throw make_exception<InvalidRequestException>("If start column is provided, so must the start key");
                     }
                 }
                 auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
-                return f.then([schema, count = range.count, start_column, prange = std::move(prange), consistency_level, &output] {
+                return f.then([schema, count = range.count, start_column, prange = std::move(prange), consistency_level, &output] () mutable {
                     return do_get_paged_slice(std::move(schema), count, std::move(prange), &start_column,
                             cl_from_thrift(consistency_level), output).then([&output] {
                         return std::move(output);
@@ -551,9 +556,13 @@ public:
             uint32_t row_limit;
             if (s.thrift().is_dynamic()) {
                 row_limit = request.count;
+                auto cmp = bound_view::compare(s);
                 clustering_ranges = make_non_overlapping_ranges<clustering_key_prefix>(std::move(request.column_slices), [&s](auto&& cslice) {
                     return make_clustering_range(s, cslice.start, cslice.finish);
-                }, clustering_key_prefix::prefix_equal_tri_compare(s), request.reversed);
+                }, clustering_key_prefix::prefix_equal_tri_compare(s), [cmp = std::move(cmp)](auto& range) {
+                    auto bounds = bound_view::from_range(range);
+                    return cmp(bounds.second, bounds.first);
+                }, request.reversed);
                 regular_columns.emplace_back(s.regular_begin()->id);
                 if (request.reversed) {
                     opts.set(query::partition_slice::option::reversed);
@@ -561,9 +570,10 @@ public:
             } else {
                 row_limit = query::max_rows;
                 clustering_ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
+                auto cmp = [&s](auto&& s1, auto&& s2) { return s.regular_column_name_type()->compare(s1, s2); };
                 auto ranges = make_non_overlapping_ranges<bytes>(std::move(request.column_slices), [](auto&& cslice) {
                     return make_range(cslice.start, cslice.finish);
-                }, [&s](auto&& s1, auto&& s2) { return s.regular_column_name_type()->compare(s1, s2); }, request.reversed);
+                }, cmp, [&](auto& range) { return range.is_wrap_around(cmp); }, request.reversed);
                 auto on_range = [&](auto&& range) {
                     auto start = range.start() ? s.regular_lower_bound(range.start()->value()) : s.regular_begin();
                     auto end  = range.end() ? s.regular_upper_bound(range.end()->value()) : s.regular_end();
@@ -713,38 +723,24 @@ public:
 
     void describe_splits_ex(tcxx::function<void(std::vector<CfSplit>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& cfName, const std::string& start_token, const std::string& end_token, const int32_t keys_per_split) {
         with_cob(std::move(cob), std::move(exn_cob), [&]{
+            std::vector<nonwrapping_range<dht::token>> ranges;
             auto tstart = start_token.empty() ? dht::minimum_token() : dht::global_partitioner().from_sstring(sstring(start_token));
             auto tend = end_token.empty() ? dht::maximum_token() : dht::global_partitioner().from_sstring(sstring(end_token));
-            return db::get_local_size_estimates_recorder().record_size_estimates()
-                    .then([this, keys_per_split, cf = sstring(cfName), tstart = std::move(tstart), tend = std::move(tend)] {
-                return db::system_keyspace::query_size_estimates(current_keyspace(), std::move(cf), std::move(tstart), std::move(tend))
-                        .then([keys_per_split](auto&& estimates) {
-                    std::vector<CfSplit> splits;
-                    if (estimates.empty()) {
-                        return splits;
-                    }
-                    auto&& acc = estimates[0];
-                    auto emplace_acc = [&] {
-                        splits.emplace_back();
-                        auto start_token = dht::global_partitioner().to_sstring(acc.range_start_token);
-                        auto end_token = dht::global_partitioner().to_sstring(acc.range_end_token);
-                        splits.back().__set_start_token(bytes_to_string(to_bytes_view(start_token)));
-                        splits.back().__set_end_token(bytes_to_string(to_bytes_view(end_token)));
-                        splits.back().__set_row_count(acc.partitions_count);
-                    };
-                    for (auto&& e : estimates | boost::adaptors::sliced(1, estimates.size())) {
-                        if (acc.partitions_count + e.partitions_count > keys_per_split) {
-                            emplace_acc();
-                            acc = std::move(e);
-                        } else {
-                            acc.range_end_token = std::move(e.range_end_token);
-                            acc.partitions_count += e.partitions_count;
-                        }
-                    }
-                    emplace_acc();
-                    return splits;
-                });
-            });
+            range<dht::token> r({{ std::move(tstart), false }}, {{ std::move(tend), true }});
+            auto cf = sstring(cfName);
+            auto splits = service::get_local_storage_service().get_splits(current_keyspace(), cf, std::move(r), keys_per_split);
+
+            std::vector<CfSplit> res;
+            for (auto&& s : splits) {
+                res.emplace_back();
+                assert(s.first.start() && s.first.end());
+                auto start_token = dht::global_partitioner().to_sstring(s.first.start()->value());
+                auto end_token = dht::global_partitioner().to_sstring(s.first.end()->value());
+                res.back().__set_start_token(bytes_to_string(to_bytes_view(start_token)));
+                res.back().__set_end_token(bytes_to_string(to_bytes_view(end_token)));
+                res.back().__set_row_count(s.second);
+            }
+            return res;
         });
     }
 
@@ -1289,8 +1285,8 @@ private:
         }));
         return query::clustering_range::bound(std::move(ck), last != exclusiveness_marker);
     }
-    static query::clustering_range make_clustering_range(const schema& s, const std::string& start, const std::string& end) {
-        using bound = query::clustering_range::bound;
+    static range<clustering_key_prefix> make_clustering_range(const schema& s, const std::string& start, const std::string& end) {
+        using bound = range<clustering_key_prefix>::bound;
         stdx::optional<bound> start_bound;
         if (!start.empty()) {
             start_bound = make_clustering_bound(s, to_bytes_view(start), composite::eoc::end);
@@ -1299,11 +1295,15 @@ private:
         if (!end.empty()) {
             end_bound = make_clustering_bound(s, to_bytes_view(end), composite::eoc::start);
         }
-        query::clustering_range range = { std::move(start_bound), std::move(end_bound) };
-        if (range.is_wrap_around(clustering_key_prefix::prefix_equal_tri_compare(s))) {
+        return { std::move(start_bound), std::move(end_bound) };
+    }
+    static query::clustering_range make_clustering_range_and_validate(const schema& s, const std::string& start, const std::string& end) {
+        auto range = make_clustering_range(s, start, end);
+        auto bounds = bound_view::from_range(range);
+        if (bound_view::compare(s)(bounds.second, bounds.first)) {
             throw make_exception<InvalidRequestException>("Range finish must come after start in the order of traversal");
         }
-        return range;
+        return query::clustering_range(std::move(range));
     }
     static range<bytes> make_range(const std::string& start, const std::string& end) {
         using bound = range<bytes>::bound;
@@ -1377,7 +1377,7 @@ private:
             }
             per_partition_row_limit = static_cast<uint32_t>(range.count);
             if (s.thrift().is_dynamic()) {
-                clustering_ranges.emplace_back(make_clustering_range(s, range.start, range.finish));
+                clustering_ranges.emplace_back(make_clustering_range_and_validate(s, range.start, range.finish));
                 regular_columns.emplace_back(s.regular_begin()->id);
             } else {
                 clustering_ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
@@ -1509,7 +1509,7 @@ private:
         }
     };
     using column_counter = column_visitor<counter>;
-    static query::partition_range make_partition_range(const schema& s, const KeyRange& range) {
+    static std::vector<query::partition_range> make_partition_range(const schema& s, const KeyRange& range) {
         if (range.__isset.row_filter) {
             fail(unimplemented::cause::INDEXES);
         }
@@ -1540,8 +1540,8 @@ private:
                             "Start key's token sorts after end key's token. This is not allowed; you probably should not specify end key at all except with an ordered partitioner");
                 }
             }
-            return {query::partition_range::bound(std::move(start), true),
-                    query::partition_range::bound(std::move(end), true)};
+            return {{query::partition_range::bound(std::move(start), true),
+                     query::partition_range::bound(std::move(end), true)}};
         }
 
         if (range.__isset.start_key && range.__isset.end_token) {
@@ -1555,8 +1555,8 @@ private:
             } else if (end.less_compare(s, start)) {
                 throw make_exception<InvalidRequestException>("Start key's token sorts after end token");
             }
-            return {query::partition_range::bound(std::move(start), true),
-                    query::partition_range::bound(std::move(end), true)};
+            return {{query::partition_range::bound(std::move(start), true),
+                     query::partition_range::bound(std::move(end), true)}};
         }
 
         // Token range can wrap; the start token is exclusive.
@@ -1565,11 +1565,13 @@ private:
         if (end.token().is_minimum()) {
             end = dht::ring_position::ending_at(dht::maximum_token());
         }
-        if (start.token() == end.token()) {
-            return query::partition_range::make_open_ended_both_sides();
+        // Special case of start == end also generates wrap-around range
+        if (start.token() >= end.token()) {
+            return {query::partition_range(query::partition_range::bound(std::move(start), false), {}),
+                    query::partition_range({}, query::partition_range::bound(std::move(end), true))};
         }
-        return {query::partition_range::bound(std::move(start), false),
-                query::partition_range::bound(std::move(end), true)};
+        return {{query::partition_range::bound(std::move(start), false),
+                 query::partition_range::bound(std::move(end), true)}};
     }
     static std::vector<KeySlice> to_key_slices(const schema& s, const query::partition_slice& slice, query::result_view v, uint32_t cell_limit) {
         column_aggregator aggregator(s, slice, cell_limit);
@@ -1588,25 +1590,31 @@ private:
         });
         return ret;
     }
-    template<typename RangeType, typename Comparator>
-    static std::vector<range<RangeType>> make_non_overlapping_ranges(
+    template<typename RangeType, typename Comparator, typename RangeComparator>
+    static std::vector<nonwrapping_range<RangeType>> make_non_overlapping_ranges(
             std::vector<ColumnSlice> column_slices,
-            const std::function<range<RangeType>(ColumnSlice&&)> mapper,
-            const Comparator&& cmp,
+            const std::function<wrapping_range<RangeType>(ColumnSlice&&)> mapper,
+            Comparator&& cmp,
+            RangeComparator&& is_wrap_around,
             bool reversed) {
-        std::vector<range<RangeType>> ranges;
+        std::vector<nonwrapping_range<RangeType>> ranges;
         std::transform(column_slices.begin(), column_slices.end(), std::back_inserter(ranges), [&](auto&& cslice) {
             auto range = mapper(std::move(cslice));
-            if (!reversed && range.is_wrap_around(cmp)) {
+            if (!reversed && is_wrap_around(range)) {
                 throw make_exception<InvalidRequestException>("Column slice had start %s greater than finish %s", cslice.start, cslice.finish);
-            } else if (reversed && !range.is_wrap_around(cmp)) {
+            } else if (reversed && !is_wrap_around(range)) {
                 throw make_exception<InvalidRequestException>("Reversed column slice had start %s less than finish %s", cslice.start, cslice.finish);
             } else if (reversed) {
                 range.reverse();
+                if (is_wrap_around(range)) {
+                    // If a wrap around range is still wrapping after reverse, then it's (a, a). This is equivalent
+                    // to an open ended range.
+                    range = wrapping_range<RangeType>::make_open_ended_both_sides();
+                }
             }
-            return range;
+            return nonwrapping_range<RangeType>(std::move(range));
         });
-        return range<RangeType>::deoverlap(std::move(ranges), cmp);
+        return nonwrapping_range<RangeType>::deoverlap(std::move(ranges), std::forward<Comparator>(cmp));
     }
     static range_tombstone make_range_tombstone(const schema& s, const SliceRange& range, tombstone tomb) {
         using bound = query::clustering_range::bound;

@@ -100,7 +100,7 @@ public:
             std::vector<::shared_ptr<relation>> where_clause,
             ::shared_ptr<term::raw> limit);
 
-    virtual ::shared_ptr<prepared> prepare(database& db) override;
+    virtual ::shared_ptr<prepared> prepare(database& db,cql_stats& stats) override;
 private:
     ::shared_ptr<restrictions::statement_restrictions> prepare_restrictions(
         database& db,

@@ -12,11 +12,11 @@ if [ "$SCYLLA_VERSION" = "666.development" ]; then
         if [ "$CODENAME" = "trusty" ]; then
             CODENAME=ubuntu
         fi
-        echo https://downloads.scylladb.com/deb/unstable/$CODENAME/master/latest/scylla.list
+        echo http://downloads.scylladb.com/deb/unstable/$CODENAME/master/latest/scylla.list
     elif [ "$ID" = "centos" ]; then
-        echo https://downloads.scylladb.com/rpm/unstable/centos/master/latest/scylla.repo
+        echo http://downloads.scylladb.com/rpm/unstable/centos/master/latest/scylla.repo
     elif [ "$ID" = "fedora" ]; then
-        echo https://downloads.scylladb.com/rpm/unstable/fedora/master/latest/scylla.repo
+        echo http://downloads.scylladb.com/rpm/unstable/fedora/master/latest/scylla.repo
     else
         echo "Unsupported distribution."
         exit 1

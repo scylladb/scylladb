@@ -66,6 +66,7 @@
 #include "serialization_visitors.hh"
 #include "idl/uuid.dist.impl.hh"
 #include "idl/frozen_schema.dist.impl.hh"
+#include "message/messaging_service.hh"
 
 static logging::logger logger("batchlog_manager");
 

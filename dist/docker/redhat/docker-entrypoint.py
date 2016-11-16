@@ -14,6 +14,7 @@ try:
     setup.io()
     setup.scyllaYAML()
     setup.cqlshrc()
+    setup.arguments()
     os.system("/usr/bin/supervisord -c /etc/supervisord.conf")
 except:
     logging.exception('failed!')

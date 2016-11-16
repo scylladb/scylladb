@@ -19,7 +19,6 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#define BOOST_TEST_DYN_LINK
 
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptors.hpp>
@@ -621,6 +620,17 @@ SEASTAR_TEST_CASE(test_partition_range_queries_with_bounds) {
             }).then([keys, tokens, &e] {
                 return e.execute_cql(sprint("select k from cf where token(k) >= %ld and token(k) <= %ld;", tokens[4], tokens[2])).then([keys](auto msg) {
                     assert_that(msg).is_rows().is_empty();
+                });
+            }).then([keys, tokens, &e] {
+                auto min_token = std::numeric_limits<int64_t>::min();
+                return e.execute_cql(sprint("select k from cf where token(k) > %ld and token (k) < %ld;", min_token, min_token)).then([keys](auto msg) {
+                    assert_that(msg).is_rows().with_rows({
+                        {keys[0]},
+                        {keys[1]},
+                        {keys[2]},
+                        {keys[3]},
+                        {keys[4]}
+                    });
                 });
             });
         });

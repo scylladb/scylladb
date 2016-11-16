@@ -65,10 +65,6 @@ public:
         return *this;
     }
 
-    int64_t latency_in_nano() const {
-        return std::chrono::duration_cast<std::chrono::nanoseconds>(latency()).count();
-    }
-
     static time_point now() {
         return clock::now();
     }

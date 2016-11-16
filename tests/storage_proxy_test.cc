@@ -19,7 +19,6 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#define BOOST_TEST_DYN_LINK
 
 #include <seastar/core/thread.hh>
 #include <seastar/tests/test-utils.hh>
@@ -81,12 +80,6 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
                 check(tm, query::partition_range({ring[2]}, {ring[3]}), {
                         query::partition_range({ring[2]}, {ring[3]})
                 });
-
-                check(tm, query::partition_range({ring[4]}, {ring[2]}), {
-                    query::partition_range({ring[4]}, {}),
-                    query::partition_range({}, {dht::ring_position::ending_at(dht::minimum_token())}),
-                    query::partition_range({{dht::ring_position::ending_at(dht::minimum_token()), false}}, {ring[2]})
-                });
             }
 
             {
@@ -118,13 +111,6 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
                 check(tm, query::partition_range({{ring[2], false}}, {ring[3]}), {
                     query::partition_range({{ring[2], false}}, {dht::ring_position::ending_at(ring[2].token())}),
                     query::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]})
-                });
-
-                check(tm, query::partition_range({ring[4]}, {ring[3]}), {
-                    query::partition_range({ring[4]}, {dht::ring_position::ending_at(ring[5].token())}),
-                    query::partition_range({{dht::ring_position::ending_at(ring[5].token()), false}}, {}),
-                    query::partition_range({}, {dht::ring_position::ending_at(ring[2].token())}),
-                    query::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]}),
                 });
             }
         });

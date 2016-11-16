@@ -1,4 +1,5 @@
-import gdb, gdb.printing, uuid
+import gdb, gdb.printing, uuid, argparse
+from operator import attrgetter
 
 def template_arguments(gdb_type):
     n = 0
@@ -67,6 +68,26 @@ class std_array:
         i = 0
         while i < count:
             yield elems[i]
+            i += 1
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__nonzero__()
+
+class std_vector:
+    def __init__(self, ref):
+        self.ref = ref
+
+    def __len__(self):
+        return self.ref['_M_impl']['_M_finish'] - self.ref['_M_impl']['_M_start']
+
+    def __iter__(self):
+        i = self.ref['_M_impl']['_M_start']
+        end = self.ref['_M_impl']['_M_finish']
+        while i != end:
+            yield i.dereference()
             i += 1
 
     def __nonzero__(self):
@@ -215,6 +236,194 @@ class scylla_memory(gdb.Command):
                 front = int(span['link']['_next'])
             gdb.write('{index:5} {size:13} {total}\n'.format(index=index, size=(1<<index)*page_size, total=total*page_size))
 
+
+
+class TreeNode(object):
+    def __init__(self, key):
+        self.key = key
+        self.children_by_key = {}
+
+    def get_or_add(self, key):
+        node = self.children_by_key.get(key, None)
+        if not node:
+            node = self.__class__(key)
+            self.add(node)
+        return node
+
+    def add(self, node):
+        self.children_by_key[node.key] = node
+
+    def squash_child(self):
+        assert self.has_only_one_child()
+        self.children_by_key = next(iter(self.children)).children_by_key
+
+    @property
+    def children(self):
+        return self.children_by_key.values()
+
+    def has_only_one_child(self):
+        return len(self.children_by_key) == 1
+
+    def has_children(self):
+        return bool(self.children_by_key)
+
+    def remove_all(self):
+        self.children_by_key.clear()
+
+class ProfNode(TreeNode):
+    def __init__(self, key):
+        super(ProfNode, self).__init__(key)
+        self.size = 0
+        self.count = 0
+        self.tail = []
+
+    @property
+    def attributes(self):
+        return {
+            'size': self.size,
+            'count': self.count
+        }
+
+def collapse_similar(node):
+    while node.has_only_one_child():
+        child = next(iter(node.children))
+        if node.attributes == child.attributes:
+            node.squash_child()
+            node.tail.append(child.key)
+        else:
+            break
+
+    for child in node.children:
+        collapse_similar(child)
+
+def strip_level(node, level):
+    if level <= 0:
+        node.remove_all()
+    else:
+        for child in node.children:
+            strip_level(child, level - 1)
+
+def print_tree(root_node,
+        formatter=attrgetter('key'),
+        order_by=attrgetter('key'),
+        printer=sys.stdout.write,
+        node_filter=None):
+
+    def print_node(node, is_last_history):
+        stems = (" |   ", "     ")
+        branches = (" |-- ", " \-- ")
+
+        label_lines = formatter(node).rstrip('\n').split('\n')
+        prefix_without_branch = ''.join(map(stems.__getitem__, is_last_history[:-1]))
+
+        if is_last_history:
+            printer(prefix_without_branch)
+            printer(branches[is_last_history[-1]])
+        printer("%s\n" % label_lines[0])
+
+        for line in label_lines[1:]:
+            printer(''.join(map(stems.__getitem__, is_last_history)))
+            printer("%s\n" % line)
+
+        children = sorted(filter(node_filter, node.children), key=order_by)
+        if children:
+            for child in children[:-1]:
+                print_node(child, is_last_history + [False])
+            print_node(children[-1], is_last_history + [True])
+
+        is_last = not is_last_history or is_last_history[-1]
+        if not is_last:
+           printer("%s%s\n" % (prefix_without_branch, stems[False]))
+
+    if not node_filter or node_filter(root_node):
+        print_node(root_node, [])
+
+
+class scylla_heapprof(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla heapprof', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    def invoke(self, arg, from_tty):
+        parser = argparse.ArgumentParser(description="scylla heapprof")
+        parser.add_argument("-G", "--inverted", action="store_true",
+            help="Compute caller-first profile instead of callee-first")
+        parser.add_argument("-a", "--addresses", action="store_true",
+            help="Show raw addresses before resolved symbol names")
+        parser.add_argument("--no-symbols", action="store_true",
+            help="Show only raw addresses")
+        parser.add_argument("--flame", action="store_true",
+            help="Write flamegraph data to heapprof.stacks instead of showing the profile")
+        parser.add_argument("--min", action="store", type=int, default=0,
+            help="Drop branches allocating less than given amount")
+        try:
+            args = parser.parse_args(arg.split())
+        except SystemExit:
+            return
+
+        root = ProfNode(None)
+        cpu_mem = gdb.parse_and_eval('\'memory::cpu_mem\'')
+        site = cpu_mem['alloc_site_list_head']
+
+        while site:
+            size = int(site['size'])
+            count = int(site['count'])
+            if size:
+                n = root
+                n.size += size
+                n.count += count
+                addresses = list(map(int, std_vector(site['backtrace'])))
+                addresses.pop(0) # drop memory::get_backtrace()
+                if args.inverted:
+                    seq = reversed(addresses)
+                else:
+                    seq = addresses
+                for addr in seq:
+                    n = n.get_or_add(addr)
+                    n.size += size
+                    n.count += count
+            site = site['next']
+
+        def resolver(addr):
+            if args.no_symbols:
+                return '0x%x' % addr
+            if args.addresses:
+                return '0x%x %s' % (addr, resolve(addr) or '')
+            return resolve(addr) or ('0x%x' % addr)
+
+        if args.flame:
+            file_name = 'heapprof.stacks'
+            with open(file_name, 'w') as out:
+                trace = list()
+                def print_node(n):
+                    if n.key:
+                        trace.append(n.key)
+                        trace.extend(n.tail)
+                    for c in n.children:
+                        print_node(c)
+                    if not n.has_children():
+                        out.write("%s %d\n" % (';'.join(map(lambda x: '%s (#%d)' % (x, n.count), map(resolver, trace))), n.size))
+                    if n.key:
+                        del trace[-1 - len(n.tail):]
+                print_node(root)
+            gdb.write('Wrote %s\n' % (file_name))
+        else:
+            def node_formatter(n):
+                if n.key is None:
+                    name = "All"
+                else:
+                    name = resolver(n.key)
+                return "%s (%d, #%d)\n%s" % (name, n.size, n.count, '\n'.join(map(resolver, n.tail)))
+
+            def node_filter(n):
+                return n.size >= args.min
+
+            collapse_similar(root)
+            print_tree(root,
+                formatter=node_formatter,
+                order_by=lambda n: -n.size,
+                node_filter=node_filter,
+                printer=gdb.write)
+
 def get_seastar_memory_start_and_size():
     cpu_mem = gdb.parse_and_eval('\'memory::cpu_mem\'')
     page_size = int(gdb.parse_and_eval('\'memory::page_size\''))
@@ -296,8 +505,30 @@ class scylla_ptr(gdb.Command):
                 msg += ', live (0x%x +%d)' % (ptr - offset_in_object, offset_in_object)
         else:
             msg += ', large'
+
+        # FIXME: handle debug-mode build
+        segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
+        index = gdb.parse_and_eval('(%d - \'logalloc\'::shard_segment_pool._segments_base) / \'logalloc\'::segment::size' % (ptr))
+        desc = gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments[%d]' % (index))
+        if desc['_lsa_managed']:
+            msg += ', LSA-managed'
+
         gdb.write(msg + '\n')
-        return
+
+class scylla_segment_descs(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla segment-descs', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+    def invoke(self, arg, from_tty):
+        # FIXME: handle debug-mode build
+        base = int(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments_base'))
+        segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
+        addr = base
+        for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
+            if desc['_lsa_managed']:
+                gdb.write('0x%x: lsa free=%d region=0x%x zone=0x%x\n' % (addr, desc['_free_space'], desc['_region'], desc['_zone']))
+            else:
+                gdb.write('0x%x: std\n' % (addr))
+            addr += segment_size
 
 class scylla_lsa(gdb.Command):
     def __init__(self):
@@ -358,6 +589,47 @@ class scylla_lsa_zones(gdb.Command):
                 '      - used: {z_used:>12}\n'
                 .format(z_base=int(zone['_base']), z_size=int(zone['_segments']['_bits_count']),
                     z_used=int(zone['_used_segment_count'])));
+
+names = {} # addr (int) -> name (str)
+def resolve(addr):
+    if addr in names:
+        return names[addr]
+
+    infosym = gdb.execute('info symbol 0x%x' % (addr), False, True)
+    if infosym.startswith('No symbol'):
+        name = None
+    else:
+        name = infosym[:infosym.find('in section')]
+    names[addr] = name
+    return name
+
+class scylla_lsa_segment(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla lsa-segment', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+
+    def invoke(self, arg, from_tty):
+        # See logalloc::region_impl::for_each_live()
+        ptr = int(arg, 0)
+        seg = gdb.parse_and_eval('(char*)(%d & ~(\'logalloc\'::segment::size - 1))' % (ptr))
+        segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
+        obj_desc_size = int(gdb.parse_and_eval('sizeof(\'logalloc\'::region_impl::object_descriptor)'))
+        obj_desc_ptr = gdb.lookup_type('logalloc::region_impl::object_descriptor').pointer()
+        offset = 0
+        while offset < segment_size:
+            padding = seg[offset] >> 2
+            offset += padding
+            if seg[offset] & 2:
+                break;
+            flags = seg[offset]
+            desc = (seg + offset).reinterpret_cast(obj_desc_ptr)
+            offset += obj_desc_size;
+            addr = seg + offset
+            if flags & 1:
+                migrator_name = resolve(int(desc['_migrator'])) or ('0x%x' % (addr))
+                gdb.write('0x%x: live size=%d migrator=%s\n' % (addr, desc['_size'], migrator_name))
+            else:
+                gdb.write('0x%x: free size=%d\n' % (addr, desc['_size']))
+            offset += desc['_size'];
 
 class scylla_timers(gdb.Command):
     def __init__(self):
@@ -603,8 +875,11 @@ scylla_memory()
 scylla_ptr()
 scylla_mem_ranges()
 scylla_mem_range()
+scylla_heapprof()
 scylla_lsa()
 scylla_lsa_zones()
+scylla_lsa_segment()
+scylla_segment_descs()
 scylla_timers()
 scylla_apply()
 scylla_shard()

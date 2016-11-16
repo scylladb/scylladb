@@ -31,3 +31,10 @@ class range {
     std::experimental::optional<range_bound<T>> end();
     bool is_singular();
 };
+
+template<typename T>
+class nonwrapping_range {
+    std::experimental::optional<range_bound<T>> start();
+    std::experimental::optional<range_bound<T>> end();
+    bool is_singular();
+};

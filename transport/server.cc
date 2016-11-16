@@ -52,6 +52,7 @@
 #include <cassert>
 #include <string>
 
+#include <snappy-c.h>
 #include <lz4.h>
 
 namespace transport {
@@ -218,13 +219,15 @@ public:
     void write_value(bytes_opt value);
     void write(const cql3::metadata& m);
     void write(const cql3::prepared_metadata& m, uint8_t version);
-    future<> output(output_stream<char>& out, uint8_t version, bool compression);
+    future<> output(output_stream<char>& out, uint8_t version, cql_compression compression);
 
     cql_binary_opcode opcode() const {
         return _opcode;
     }
 private:
-    std::vector<char> compress(const std::vector<char>& body);
+    std::vector<char> compress(const std::vector<char>& body, cql_compression compression);
+    std::vector<char> compress_lz4(const std::vector<char>& body);
+    std::vector<char> compress_snappy(const std::vector<char>& body);
 
     template <typename CqlFrameHeaderType>
     sstring make_frame_one(uint8_t version, uint8_t flags, size_t length) {
@@ -463,13 +466,18 @@ cql_server::connection::read_frame() {
 future<response_type>
     cql_server::connection::process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request) {
     auto cqlop = static_cast<cql_binary_opcode>(op);
+    tracing::trace_state_props_set trace_props;
 
-    if (tracing_request != tracing_request_type::not_requested) {
+    trace_props.set_if<tracing::trace_state_props::log_slow_query>(tracing::tracing::get_local_tracing_instance().slow_query_tracing_enabled());
+    trace_props.set_if<tracing::trace_state_props::full_tracing>(tracing_request != tracing_request_type::not_requested);
+
+    if (trace_props) {
         if (cqlop == cql_binary_opcode::QUERY ||
             cqlop == cql_binary_opcode::PREPARE ||
             cqlop == cql_binary_opcode::EXECUTE ||
             cqlop == cql_binary_opcode::BATCH) {
-            client_state.create_tracing_session(tracing::trace_type::QUERY, tracing_request == tracing_request_type::write_on_close);
+            trace_props.set_if<tracing::trace_state_props::write_on_close>(tracing_request == tracing_request_type::write_on_close);
+            client_state.create_tracing_session(tracing::trace_type::QUERY, trace_props);
         }
     }
 
@@ -494,6 +502,9 @@ future<response_type>
                 }
                 break;
         }
+
+        tracing::set_username(client_state.get_trace_state(), client_state.user());
+
         switch (cqlop) {
         case cql_binary_opcode::STARTUP:       return process_startup(stream, std::move(buf), std::move(client_state));
         case cql_binary_opcode::AUTH_RESPONSE: return process_auth_response(stream, std::move(buf), std::move(client_state));
@@ -552,6 +563,8 @@ future<response_type>
         } catch (...) {
             return make_ready_future<response_type>(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error"), client_state));
         }
+    }).finally([tracing_state = client_state.get_trace_state()] {
+        tracing::stop_foreground(tracing_state);
     });
 }
 
@@ -639,13 +652,13 @@ future<> cql_server::connection::process_request() {
                     f.length, mem_estimate, _server._max_request_size));
         }
 
-        return with_semaphore(_server._memory_available, mem_estimate, [this, length = f.length, flags = f.flags, op, stream, tracing_requested] {
-          return read_and_decompress_frame(length, flags).then([this, flags, op, stream, tracing_requested] (temporary_buffer<char> buf) {
+        return get_units(_server._memory_available, mem_estimate).then([this, length = f.length, flags = f.flags, op, stream, tracing_requested] (semaphore_units<> mem_permit) {
+          return this->read_and_decompress_frame(length, flags).then([this, flags, op, stream, tracing_requested, mem_permit = std::move(mem_permit)] (temporary_buffer<char> buf) mutable {
 
             ++_server._requests_served;
             ++_server._requests_serving;
 
-            with_gate(_pending_requests_gate, [this, flags, op, stream, buf = std::move(buf), tracing_requested] () mutable {
+            with_gate(_pending_requests_gate, [this, flags, op, stream, buf = std::move(buf), tracing_requested, mem_permit = std::move(mem_permit)] () mutable {
                 auto bv = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
                 auto cpu = pick_request_cpu();
                 return smp::submit_to(cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state, tracing_requested] () mutable {
@@ -658,9 +671,8 @@ future<> cql_server::connection::process_request() {
                     });
                 }).then([this, flags] (auto&& response) {
                     _client_state.merge(response.second);
-                    bool compression = flags & cql_frame_flags::compression;
-                    return this->write_response(std::move(response.first), compression);
-                }).then([buf = std::move(buf)] {
+                    return this->write_response(std::move(response.first), _compression);
+                }).then([buf = std::move(buf), mem_permit = std::move(mem_permit)] {
                     // Keep buf alive.
                 });
             }).handle_exception([] (std::exception_ptr ex) {
@@ -682,27 +694,47 @@ static inline bytes_view to_bytes_view(temporary_buffer<char>& b)
 future<temporary_buffer<char>> cql_server::connection::read_and_decompress_frame(size_t length, uint8_t flags)
 {
     if (flags & cql_frame_flags::compression) {
-        if (length < 4) {
-            throw std::runtime_error("Truncated frame");
+        if (_compression == cql_compression::lz4) {
+            if (length < 4) {
+                throw std::runtime_error("Truncated frame");
+            }
+            return _read_buf.read_exactly(length).then([this] (temporary_buffer<char> buf) {
+                auto view = to_bytes_view(buf);
+                int32_t uncomp_len = read_int(view);
+                if (uncomp_len < 0) {
+                    throw std::runtime_error("CQL frame uncompressed length is negative: " + std::to_string(uncomp_len));
+                }
+                buf.trim_front(4);
+                temporary_buffer<char> uncomp{size_t(uncomp_len)};
+                const char* input = buf.get();
+                size_t input_len = buf.size();
+                char *output = uncomp.get_write();
+                size_t output_len = uncomp_len;
+                auto ret = LZ4_decompress_safe(input, output, input_len, output_len);
+                if (ret < 0) {
+                    throw std::runtime_error("CQL frame LZ4 uncompression failure");
+                }
+                return make_ready_future<temporary_buffer<char>>(std::move(uncomp));
+            });
+        } else if (_compression == cql_compression::snappy) {
+            return _read_buf.read_exactly(length).then([this] (temporary_buffer<char> buf) {
+                const char* input = buf.get();
+                size_t input_len = buf.size();
+                size_t uncomp_len;
+                if (snappy_uncompressed_length(input, input_len, &uncomp_len) != SNAPPY_OK) {
+                    throw std::runtime_error("CQL frame Snappy uncompressed size is unknown");
+                }
+                temporary_buffer<char> uncomp{uncomp_len};
+                char *output = uncomp.get_write();
+                size_t output_len = uncomp_len;
+                if (snappy_uncompress(input, input_len, output, &output_len) != SNAPPY_OK) {
+                    throw std::runtime_error("CQL frame Snappy uncompression failure");
+                }
+                return make_ready_future<temporary_buffer<char>>(std::move(uncomp));
+            });
+        } else {
+            throw exceptions::protocol_exception(sprint("Unknown compression algorithm"));
         }
-        return _read_buf.read_exactly(length).then([this] (temporary_buffer<char> buf) {
-            auto view = to_bytes_view(buf);
-            int32_t uncomp_len = read_int(view);
-            if (uncomp_len < 0) {
-                throw std::runtime_error("CQL frame uncompressed length is negative: " + std::to_string(uncomp_len));
-            }
-            buf.trim_front(4);
-            temporary_buffer<char> uncomp{size_t(uncomp_len)};
-            const char* input = buf.get();
-            size_t input_len = buf.size();
-            char *output = uncomp.get_write();
-            size_t output_len = uncomp_len;
-            auto ret = LZ4_decompress_safe(input, output, input_len, output_len);
-            if (ret < 0) {
-                throw std::runtime_error("CQL frame LZ4 uncompression failure");
-            }
-            return make_ready_future<temporary_buffer<char>>(std::move(uncomp));
-        });
     }
     return _read_buf.read_exactly(length);
 }
@@ -717,7 +749,19 @@ unsigned cql_server::connection::pick_request_cpu()
 
 future<response_type> cql_server::connection::process_startup(uint16_t stream, bytes_view buf, service::client_state client_state)
 {
-    /*auto string_map =*/ read_string_map(buf);
+    auto options = read_string_map(buf);
+    auto compression_opt = options.find("COMPRESSION");
+    if (compression_opt != options.end()) {
+         auto compression = compression_opt->second;
+         std::transform(compression.begin(), compression.end(), compression.begin(), ::tolower);
+         if (compression == "lz4") {
+             _compression = cql_compression::lz4;
+         } else if (compression == "snappy") {
+             _compression = cql_compression::snappy;
+         } else {
+             throw exceptions::protocol_exception(sprint("Unknown compression algorithm: %s", compression));
+         }
+    }
     auto& a = auth::authenticator::get();
     if (a.require_authentication()) {
         return make_ready_future<response_type>(std::make_pair(make_autheticate(stream, a.class_name()), client_state));
@@ -823,7 +867,15 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
 
     auto q_state = std::make_unique<cql_query_state>(client_state);
     auto& query_state = q_state->query_state;
-    q_state->options = read_options(buf);
+    if (_version == 1) {
+        std::vector<bytes_view_opt> values;
+        read_value_view_list(buf, values);
+        auto consistency = read_consistency(buf);
+        q_state->options = std::make_unique<cql3::query_options>(consistency, std::experimental::nullopt, values, false,
+                                                                 cql3::query_options::specific_options::DEFAULT, _cql_serialization_format);
+    } else {
+        q_state->options = read_options(buf);
+    }
     auto& options = *q_state->options;
     options.prepare(prepared->bound_names);
 
@@ -898,7 +950,10 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
             throw exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed.");
         }
 
-        modifications.emplace_back(static_pointer_cast<cql3::statements::modification_statement>(ps->statement));
+        ::shared_ptr<cql3::statements::modification_statement> modif_statement_ptr = static_pointer_cast<cql3::statements::modification_statement>(ps->statement);
+        tracing::add_table_name(client_state.get_trace_state(), modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
+
+        modifications.emplace_back(std::move(modif_statement_ptr));
 
         std::vector<bytes_view_opt> tmp;
         read_value_view_list(buf, tmp);
@@ -921,7 +976,7 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
     tracing::set_optional_serial_consistency_level(client_state.get_trace_state(), options.get_serial_consistency());
     tracing::trace(client_state.get_trace_state(), "Creating a batch statement");
 
-    auto batch = ::make_shared<cql3::statements::batch_statement>(-1, cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none());
+    auto batch = ::make_shared<cql3::statements::batch_statement>(-1, cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none(), _server._query_processor.local().get_cql_stats());
     return _server._query_processor.local().process_batch(batch, query_state, options).then([this, stream, batch] (auto msg) {
         return this->make_result(stream, msg);
     }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
@@ -1033,6 +1088,7 @@ shared_ptr<cql_server::response> cql_server::connection::make_supported(int16_t 
     std::multimap<sstring, sstring> opts;
     opts.insert({"CQL_VERSION", cql3::query_processor::CQL_VERSION});
     opts.insert({"COMPRESSION", "lz4"});
+    opts.insert({"COMPRESSION", "snappy"});
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::SUPPORTED);
     response->write_string_multimap(opts);
     return response;
@@ -1132,7 +1188,7 @@ cql_server::connection::make_schema_change_event(const event::schema_change& eve
     return response;
 }
 
-future<> cql_server::connection::write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response, bool compression)
+future<> cql_server::connection::write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response, cql_compression compression)
 {
     _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response)] () mutable {
         return do_with(std::move(response), [this, compression] (auto& response) {
@@ -1413,11 +1469,11 @@ scattered_message<char> cql_server::response::make_message(uint8_t version) {
 }
 
 future<>
-cql_server::response::output(output_stream<char>& out, uint8_t version, bool compression) {
+cql_server::response::output(output_stream<char>& out, uint8_t version, cql_compression compression) {
     uint8_t flags = 0;
-    if (compression) {
+    if (compression != cql_compression::none) {
         flags |= cql_frame_flags::compression;
-        _body = compress(_body);
+        _body = compress(_body, compression);
     }
     auto frame = make_frame(version, flags, _body.size());
     auto tmp = temporary_buffer<char>(frame.size());
@@ -1428,7 +1484,16 @@ cql_server::response::output(output_stream<char>& out, uint8_t version, bool com
     });
 }
 
-std::vector<char> cql_server::response::compress(const std::vector<char>& body)
+std::vector<char> cql_server::response::compress(const std::vector<char>& body, cql_compression compression)
+{
+    switch (compression) {
+    case cql_compression::lz4:    return compress_lz4(body);
+    case cql_compression::snappy: return compress_snappy(body);
+    default:                      throw std::invalid_argument("Invalid CQL compression algorithm");
+    }
+}
+
+std::vector<char> cql_server::response::compress_lz4(const std::vector<char>& body)
 {
     const char* input = body.data();
     size_t input_len = body.size();
@@ -1444,6 +1509,21 @@ std::vector<char> cql_server::response::compress(const std::vector<char>& body)
         throw std::runtime_error("CQL frame LZ4 compression failure");
     }
     size_t output_len = ret + 4;
+    comp.resize(output_len);
+    return comp;
+}
+
+std::vector<char> cql_server::response::compress_snappy(const std::vector<char>& body)
+{
+    const char* input = body.data();
+    size_t input_len = body.size();
+    std::vector<char> comp;
+    size_t output_len = snappy_max_compressed_length(input_len);
+    comp.resize(output_len);
+    char *output = comp.data();
+    if (snappy_compress(input, input_len, output, &output_len) != SNAPPY_OK) {
+        throw std::runtime_error("CQL frame Snappy compression failure");
+    }
     comp.resize(output_len);
     return comp;
 }
@@ -1624,27 +1704,27 @@ void cql_server::response::write_value(bytes_opt value)
 class type_codec {
 private:
     enum class type_id : int16_t {
-        CUSTOM = 0,
-        ASCII,
-        BIGINT,
-        BLOB,
-        BOOLEAN,
-        COUNTER,
-        DECIMAL,
-        DOUBLE,
-        FLOAT,
-        INT,
-        TIMESTAMP = 11,
-        UUID,
-        VARCHAR,
-        VARINT,
-        TIMEUUID,
-        INET,
-        LIST = 32,
-        MAP,
-        SET,
-        UDT = 48,
-        TUPLE
+        CUSTOM    = 0x0000,
+        ASCII     = 0x0001,
+        BIGINT    = 0x0002,
+        BLOB      = 0x0003,
+        BOOLEAN   = 0x0004,
+        COUNTER   = 0x0005,
+        DECIMAL   = 0x0006,
+        DOUBLE    = 0x0007,
+        FLOAT     = 0x0008,
+        INT       = 0x0009,
+        TIMESTAMP = 0x000B,
+        UUID      = 0x000C,
+        VARCHAR   = 0x000D,
+        VARINT    = 0x000E,
+        TIMEUUID  = 0x000F,
+        INET      = 0x0010,
+        LIST      = 0x0020,
+        MAP       = 0x0021,
+        SET       = 0x0022,
+        UDT       = 0x0030,
+        TUPLE     = 0x0031,
     };
 
     using type_id_to_type_type = boost::bimap<

@@ -87,13 +87,13 @@ else
 			tput bold
 			echo "    $TYPE is not supported instance type!"
 			tput sgr0
-			echo -n "To continue startup ScyllaDB on this instance, run 'scylla_io_setup' "
+			echo -n "To continue startup ScyllaDB on this instance, run 'sudo scylla_io_setup' "
 			if [ "$ID" = "ubuntu" ]; then
 				echo "then 'initctl start scylla-server'."
 			else
 				echo "then 'systemctl start scylla-server'."
 			fi
-			echo "To run ScyllaDB on supported instance type, run AMI in m3/c3/i2 types."
+			echo "For a list of optimized instance types and more EC2 instructions see http://www.scylladb.com/doc/getting-started-amazon/"
 		else
 			tput setaf 1
 			tput bold

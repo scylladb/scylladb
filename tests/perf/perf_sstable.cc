@@ -19,11 +19,16 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <boost/test/unit_test.hpp>
 #include <core/distributed.hh>
 #include <core/app-template.hh>
 #include <core/sstring.hh>
 #include <random>
+
+// hack: perf_sstable falsely depends on Boost.Test, but we can't include it with
+// with statically linked boost
+#define BOOST_REQUIRE(x) (void)(x)
+#define BOOST_CHECK_NO_THROW(x) (void)(x)
+
 #include "perf_sstable.hh"
 
 #include "disk-error-handler.hh"

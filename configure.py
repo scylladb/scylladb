@@ -108,6 +108,11 @@ def debug_flag(compiler):
         print('Note: debug information disabled; upgrade your compiler')
         return ''
 
+def maybe_static(flag, libs):
+    if flag and not args.static:
+        libs = '-Wl,-Bstatic {} -Wl,-Bdynamic'.format(libs)
+    return libs
+
 class Thrift(object):
     def __init__(self, source, service):
         self.source = source
@@ -184,7 +189,6 @@ scylla_tests = [
     'tests/storage_proxy_test',
     'tests/schema_change_test',
     'tests/mutation_reader_test',
-    'tests/key_reader_test',
     'tests/mutation_query_test',
     'tests/row_cache_test',
     'tests/test-serialization',
@@ -220,6 +224,9 @@ scylla_tests = [
     'tests/range_tombstone_list_test',
     'tests/anchorless_list_test',
     'tests/database_test',
+    'tests/nonwrapping_range_test',
+    'tests/input_stream_test',
+    'tests/sstable_atomic_deletion_test',
 ]
 
 apps = [
@@ -261,7 +268,9 @@ arg_parser.add_argument('--debuginfo', action = 'store', dest = 'debuginfo', typ
 arg_parser.add_argument('--static-stdc++', dest = 'staticcxx', action = 'store_true',
 			help = 'Link libgcc and libstdc++ statically')
 arg_parser.add_argument('--static-thrift', dest = 'staticthrift', action = 'store_true',
-			help = 'Link libthrift statically')
+            help = 'Link libthrift statically')
+arg_parser.add_argument('--static-boost', dest = 'staticboost', action = 'store_true',
+            help = 'Link boost statically')
 arg_parser.add_argument('--tests-debuginfo', action = 'store', dest = 'tests_debuginfo', type = int, default = 0,
                         help = 'Enable(1)/disable(0)compiler debug information generation for tests')
 arg_parser.add_argument('--python', action = 'store', dest = 'python', default = 'python3',
@@ -297,9 +306,7 @@ scylla_core = (['database.cc',
                  'mutation_partition_serializer.cc',
                  'mutation_reader.cc',
                  'mutation_query.cc',
-                 'key_reader.cc',
                  'keys.cc',
-                 'clustering_key_filter.cc',
                  'sstables/sstables.cc',
                  'sstables/compress.cc',
                  'sstables/row.cc',
@@ -308,6 +315,7 @@ scylla_core = (['database.cc',
                  'sstables/compaction.cc',
                  'sstables/compaction_strategy.cc',
                  'sstables/compaction_manager.cc',
+                 'sstables/atomic_deletion.cc',
                  'transport/event.cc',
                  'transport/event_notifier.cc',
                  'transport/server.cc',
@@ -327,6 +335,7 @@ scylla_core = (['database.cc',
                  'cql3/statements/authentication_statement.cc',
                  'cql3/statements/create_keyspace_statement.cc',
                  'cql3/statements/create_table_statement.cc',
+                 'cql3/statements/create_view_statement.cc',
                  'cql3/statements/create_type_statement.cc',
                  'cql3/statements/create_user_statement.cc',
                  'cql3/statements/drop_keyspace_statement.cc',
@@ -484,7 +493,8 @@ scylla_core = (['database.cc',
                  'tracing/trace_state.cc',
                  'range_tombstone.cc',
                  'range_tombstone_list.cc',
-                 'db/size_estimates_recorder.cc'
+                 'db/size_estimates_recorder.cc',
+                 'disk-error-handler.cc'
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
@@ -563,46 +573,54 @@ deps = {
     'scylla': idls + ['main.cc'] + scylla_core + api,
 }
 
-tests_not_using_seastar_test_framework = set([
-    'tests/keys_test',
+pure_boost_tests = set([
     'tests/partitioner_test',
     'tests/map_difference_test',
+    'tests/keys_test',
+    'tests/compound_test',
+    'tests/range_tombstone_list_test',
+    'tests/anchorless_list_test',
+    'tests/nonwrapping_range_test',
+    'tests/test-serialization',
+    'tests/range_test',
+    'tests/crc_test',
+    'tests/managed_vector_test',
+    'tests/dynamic_bitset_test',
+    'tests/idl_test',
+    'tests/cartesian_product_test',
+])
+
+tests_not_using_seastar_test_framework = set([
     'tests/perf/perf_mutation',
     'tests/lsa_async_eviction_test',
     'tests/lsa_sync_eviction_test',
     'tests/row_cache_alloc_stress',
     'tests/perf_row_cache_update',
-    'tests/cartesian_product_test',
     'tests/perf/perf_hash',
     'tests/perf/perf_cql_parser',
     'tests/message',
     'tests/perf/perf_simple_query',
     'tests/memory_footprint',
-    'tests/test-serialization',
     'tests/gossip',
-    'tests/compound_test',
-    'tests/range_test',
-    'tests/crc_test',
     'tests/perf/perf_sstable',
-    'tests/managed_vector_test',
-    'tests/dynamic_bitset_test',
-    'tests/idl_test',
-    'tests/range_tombstone_list_test',
-    'tests/anchorless_list_test',
-])
+]) | pure_boost_tests
 
 for t in tests_not_using_seastar_test_framework:
     if not t in scylla_tests:
         raise Exception("Test %s not found in scylla_tests" % (t))
 
 for t in scylla_tests:
-    deps[t] = scylla_tests_dependencies + [t + '.cc']
+    deps[t] = [t + '.cc']
     if t not in tests_not_using_seastar_test_framework:
+        deps[t] += scylla_tests_dependencies 
         deps[t] += scylla_tests_seastar_deps
+    else:
+        deps[t] += scylla_core + api + idls + ['tests/cql_test_env.cc']
 
 deps['tests/sstable_test'] += ['tests/sstable_datafile_test.cc']
 
 deps['tests/bytes_ostream_test'] = ['tests/bytes_ostream_test.cc']
+deps['tests/input_stream_test'] = ['tests/input_stream_test.cc']
 deps['tests/UUID_test'] = ['utils/UUID_gen.cc', 'tests/UUID_test.cc']
 deps['tests/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'tests/murmur_hash_test.cc']
 deps['tests/allocation_strategy_test'] = ['tests/allocation_strategy_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
@@ -701,6 +719,8 @@ elif args.dpdk_target:
     seastar_flags += ['--dpdk-target', args.dpdk_target]
 if args.staticcxx:
     seastar_flags += ['--static-stdc++']
+if args.staticboost:
+    seastar_flags += ['--static-boost']
 
 seastar_cflags = args.user_cflags + " -march=nehalem"
 seastar_flags += ['--compiler', args.cxx, '--cflags=%s' % (seastar_cflags)]
@@ -734,7 +754,14 @@ for mode in build_modes:
 seastar_deps = 'practically_anything_can_change_so_lets_run_it_every_time_and_restat.'
 
 args.user_cflags += " " + pkg_config("--cflags", "jsoncpp")
-libs = "-lyaml-cpp -llz4 -lz -lsnappy " + pkg_config("--libs", "jsoncpp") + ' -lboost_filesystem' + ' -lcrypt' + ' -lboost_date_time'
+libs = ' '.join(['-lyaml-cpp', '-llz4', '-lz', '-lsnappy', pkg_config("--libs", "jsoncpp"),
+                 maybe_static(args.staticboost, '-lboost_filesystem'), ' -lcrypt',
+                 maybe_static(args.staticboost, '-lboost_date_time'),
+                ])
+
+if not args.staticboost:
+    args.user_cflags += ' -DBOOST_TEST_DYN_LINK'
+
 for pkg in pkgs:
     args.user_cflags += ' ' + pkg_config('--cflags', pkg)
     libs += ' ' + pkg_config('--libs', pkg)
@@ -848,6 +875,11 @@ with open(buildfile, 'w') as f:
                 f.write('build $builddir/{}/{}: ar.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
             else:
                 if binary.startswith('tests/'):
+                    local_libs = '$libs'
+                    if binary not in tests_not_using_seastar_test_framework or binary in pure_boost_tests:
+                        local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework') 
+                    if has_thrift:
+                        local_libs += ' ' + thrift_libs + ' ' + maybe_static(args.staticboost, '-lboost_system')
                     # Our code's debugging information is huge, and multiplied
                     # by many tests yields ridiculous amounts of disk space.
                     # So we strip the tests by default; The user can very
@@ -855,15 +887,15 @@ with open(buildfile, 'w') as f:
                     # to the test name, e.g., "ninja build/release/testname_g"
                     f.write('build $builddir/{}/{}: {}.{} {} {}\n'.format(mode, binary, tests_link_rule, mode, str.join(' ', objs),
                                                                                      'seastar/build/{}/libseastar.a'.format(mode)))
-                    if has_thrift:
-                        f.write('   libs =  {} -lboost_system $libs\n'.format(thrift_libs))
+                    f.write('   libs = {}\n'.format(local_libs))
                     f.write('build $builddir/{}/{}_g: link.{} {} {}\n'.format(mode, binary, mode, str.join(' ', objs),
                                                                               'seastar/build/{}/libseastar.a'.format(mode)))
+                    f.write('   libs = {}\n'.format(local_libs))
                 else:
                     f.write('build $builddir/{}/{}: link.{} {} {}\n'.format(mode, binary, mode, str.join(' ', objs),
                                                                             'seastar/build/{}/libseastar.a'.format(mode)))
                 if has_thrift:
-                    f.write('   libs =  {} -lboost_system $libs\n'.format(thrift_libs))
+                    f.write('   libs =  {} {} $libs\n'.format(thrift_libs, maybe_static(args.staticboost, '-lboost_system')))
             for src in srcs:
                 if src.endswith('.cc'):
                     obj = '$builddir/' + mode + '/' + src.replace('.cc', '.o')

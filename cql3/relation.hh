@@ -156,6 +156,10 @@ public:
             return new_contains_restriction(db, schema, bound_names, false);
         } else if (_relation_type == operator_type::CONTAINS_KEY) {
             return new_contains_restriction(db, schema, bound_names, true);
+        } else if (_relation_type == operator_type::IS_NOT) {
+            // This case is not supposed to happen: statement_restrictions
+            // constructor does not call this function for views' IS_NOT.
+            throw exceptions::invalid_request_exception(sprint("Unsupported \"IS NOT\" relation: %s", to_string()));
         } else {
             throw exceptions::invalid_request_exception(sprint("Unsupported \"!=\" relation: %s", to_string()));
         }

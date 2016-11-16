@@ -43,6 +43,12 @@ class database;
 
 namespace transport {
 
+enum class cql_compression {
+    none,
+    lz4,
+    snappy,
+};
+
 enum cql_frame_flags {
     compression = 0x01,
     tracing     = 0x02,
@@ -128,6 +134,7 @@ private:
         seastar::gate _pending_requests_gate;
         future<> _ready_to_respond = make_ready_future<>();
         cql_protocol_version_type _version = 0;
+        cql_compression _compression = cql_compression::none;
         cql_serialization_format _cql_serialization_format = cql_serialization_format::latest();
         service::client_state _client_state;
         std::unordered_map<uint16_t, cql_query_state> _query_states;
@@ -183,7 +190,7 @@ private:
         shared_ptr<cql_server::response> make_auth_success(int16_t, bytes);
         shared_ptr<cql_server::response> make_auth_challenge(int16_t, bytes);
 
-        future<> write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response, bool compression = false);
+        future<> write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response, cql_compression compression = cql_compression::none);
 
         void check_room(bytes_view& buf, size_t n);
         void validate_utf8(sstring_view s);

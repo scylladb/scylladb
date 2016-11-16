@@ -22,54 +22,46 @@
  */
 
 #pragma once
-#include <functional>
-#include <vector>
 
-#include "core/shared_ptr.hh"
-#include "database_fwd.hh"
 #include "schema.hh"
-
-template<typename T> class range;
+#include "query-request.hh"
 
 namespace query {
 
-class partition_slice;
-
-// A predicate that tells if a clustering key should be accepted.
-using clustering_key_filter = std::function<bool(const clustering_key&)>;
-
-// A factory for clustering key filter which can be reused for multiple clustering keys.
-class clustering_key_filter_factory {
+class clustering_key_filter_ranges {
+    clustering_row_ranges _storage;
+    const clustering_row_ranges& _ref;
 public:
-    // Create a clustering key filter that can be used for multiple clustering keys with no restrictions.
-    virtual clustering_key_filter get_filter(const partition_key&) = 0;
-    // Create a clustering key filter that can be used for multiple clustering keys but they have to be sorted.
-    virtual clustering_key_filter get_filter_for_sorted(const partition_key&) = 0;
-    virtual const std::vector<range<clustering_key_prefix>>& get_ranges(const partition_key&) = 0;
-    virtual ~clustering_key_filter_factory() = default;
-};
+    clustering_key_filter_ranges(const clustering_row_ranges& ranges) : _ref(ranges) { }
+    struct reversed { };
+    clustering_key_filter_ranges(reversed, const clustering_row_ranges& ranges)
+        : _storage(ranges.rbegin(), ranges.rend()), _ref(_storage) { }
 
-class clustering_key_filtering_context {
-private:
-    shared_ptr<clustering_key_filter_factory> _factory;
-    clustering_key_filtering_context() {};
-    clustering_key_filtering_context(shared_ptr<clustering_key_filter_factory> factory) : _factory(factory) {}
-public:
-    // Create a clustering key filter that can be used for multiple clustering keys with no restrictions.
-    clustering_key_filter get_filter(const partition_key& key) const {
-        return _factory ? _factory->get_filter(key) : [] (const clustering_key&) { return true; };
+    clustering_key_filter_ranges(clustering_key_filter_ranges&& other) noexcept
+        : _storage(std::move(other._storage))
+        , _ref(&other._ref == &other._storage ? _storage : other._ref)
+    { }
+
+    clustering_key_filter_ranges& operator=(clustering_key_filter_ranges&& other) noexcept {
+        if (this != &other) {
+            this->~clustering_key_filter_ranges();
+            new (this) clustering_key_filter_ranges(std::move(other));
+        }
+        return *this;
     }
-    // Create a clustering key filter that can be used for multiple clustering keys but they have to be sorted.
-    clustering_key_filter get_filter_for_sorted(const partition_key& key) const {
-        return _factory ? _factory->get_filter_for_sorted(key) : [] (const clustering_key&) { return true; };
+
+    auto begin() const { return _ref.begin(); }
+    auto end() const { return _ref.end(); }
+    bool empty() const { return _ref.empty(); }
+    size_t size() const { return _ref.size(); }
+
+    static clustering_key_filter_ranges get_ranges(const schema& schema, const query::partition_slice& slice, const partition_key& key) {
+        const query::clustering_row_ranges& ranges = slice.row_ranges(schema, key);
+        if (slice.options.contains(query::partition_slice::option::reversed)) {
+            return clustering_key_filter_ranges(clustering_key_filter_ranges::reversed{}, ranges);
+        }
+        return clustering_key_filter_ranges(ranges);
     }
-    const std::vector<range<clustering_key_prefix>>& get_ranges(const partition_key& key) const;
-
-    static const clustering_key_filtering_context create(schema_ptr, const partition_slice&);
-
-    static clustering_key_filtering_context create_no_filtering();
 };
-
-extern const clustering_key_filtering_context no_clustering_key_filtering;
 
 }

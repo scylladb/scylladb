@@ -44,6 +44,7 @@ class continuous_data_consumer {
     };
 protected:
     input_stream<char> _input;
+    uint64_t _stream_position;
     // remaining length of input to read (if <0, continue until end of file).
     int64_t _remain;
 
@@ -217,8 +218,8 @@ private:
         state_processor().verify_end_state();
     }
 public:
-    continuous_data_consumer(input_stream<char>&& input, uint64_t maxlen)
-            : _input(std::move(input)), _remain(maxlen) {}
+    continuous_data_consumer(input_stream<char>&& input, uint64_t start, uint64_t maxlen)
+            : _input(std::move(input)), _stream_position(start), _remain(maxlen) {}
 
     template<typename Consumer>
     future<> consume_input(Consumer& c) {
@@ -262,10 +263,12 @@ public:
             // We received more data than we actually care about, so process
             // the beginning of the buffer, and return the rest to the stream
             auto segment = data.share(0, _remain);
-            process(segment);
+            auto ret = process(segment);
             data.trim_front(_remain - segment.size());
-            _remain -= (_remain - segment.size());
-            if (_remain == 0) {
+            auto len = _remain - segment.size();
+            _remain -= len;
+            _stream_position += len;
+            if (_remain == 0 && ret == proceed::yes) {
                 verify_end_state();
             }
             return make_ready_future<unconsumed_remainder>(std::move(data));
@@ -276,6 +279,7 @@ public:
         } else {
             // We can process the entire buffer (if the consumer wants to).
             auto orig_data_size = data.size();
+            _stream_position += data.size();
             if (process(data) == proceed::yes) {
                 assert(data.size() == 0);
                 if (_remain >= 0) {
@@ -286,9 +290,23 @@ public:
                 if (_remain >= 0) {
                     _remain -= orig_data_size - data.size();
                 }
+                _stream_position -= data.size();
                 return make_ready_future<unconsumed_remainder>(std::move(data));
             }
         }
+    }
+
+    future<> fast_forward_to(size_t begin, size_t end) {
+        assert(begin >= _stream_position);
+        auto n = begin - _stream_position;
+        _stream_position = begin;
+
+        assert(end >= _stream_position);
+        _remain = end - _stream_position;
+
+        _prestate = prestate::NONE;
+        state_processor().reset();
+        return _input.skip(n);
     }
 
     future<> close() {

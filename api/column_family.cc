@@ -24,7 +24,7 @@
 #include <vector>
 #include "http/exception.hh"
 #include "sstables/sstables.hh"
-#include "sstables/estimated_histogram.hh"
+#include "utils/estimated_histogram.hh"
 #include <algorithm>
 
 namespace api {
@@ -191,8 +191,8 @@ static double update_ratio(double acc, double f, double total) {
     return acc;
 }
 
-static ratio_holder mean_row_size(column_family& cf) {
-    ratio_holder res;
+static integral_ratio_holder mean_row_size(column_family& cf) {
+    integral_ratio_holder res;
     for (auto i: *cf.get_sstables() ) {
         auto c = i->get_stats_metadata().estimated_row_size.count();
         res.sub += i->get_stats_metadata().estimated_row_size.mean() * c;
@@ -273,6 +273,14 @@ static double get_compression_ratio(column_family& cf) {
         }
     }
     return std::move(result).get();
+}
+
+static std::vector<uint64_t> concat_sstable_count_per_level(std::vector<uint64_t> a, std::vector<uint64_t>&& b) {
+    a.resize(std::max(a.size(), b.size()), 0UL);
+    for (auto i = 0U; i < b.size(); i++) {
+        a[i] += b[i];
+    }
+    return a;
 }
 
 void set_column_family(http_context& ctx, routes& r) {
@@ -395,14 +403,14 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_estimated_row_size_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], sstables::estimated_histogram(0), [](column_family& cf) {
-            sstables::estimated_histogram res(0);
+        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
+            utils::estimated_histogram res(0);
             for (auto i: *cf.get_sstables() ) {
                 res.merge(i->get_stats_metadata().estimated_row_size);
             }
             return res;
         },
-        sstables::merge, utils_json::estimated_histogram());
+        utils::estimated_histogram_merge, utils_json::estimated_histogram());
     });
 
     cf::get_estimated_row_count.set(r, [&ctx] (std::unique_ptr<request> req) {
@@ -417,14 +425,14 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_estimated_column_count_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], sstables::estimated_histogram(0), [](column_family& cf) {
-            sstables::estimated_histogram res(0);
+        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
+            utils::estimated_histogram res(0);
             for (auto i: *cf.get_sstables() ) {
                 res.merge(i->get_stats_metadata().estimated_column_count);
             }
             return res;
         },
-        sstables::merge, utils_json::estimated_histogram());
+        utils::estimated_histogram_merge, utils_json::estimated_histogram());
     });
 
     cf::get_all_compression_ratio.set(r, [] (std::unique_ptr<request> req) {
@@ -554,11 +562,13 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_mean_row_size.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], ratio_holder(), mean_row_size, std::plus<ratio_holder>());
+        // Cassandra 3.x mean values are truncated as integrals.
+        return map_reduce_cf(ctx, req->param["name"], integral_ratio_holder(), mean_row_size, std::plus<integral_ratio_holder>());
     });
 
     cf::get_all_mean_row_size.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, ratio_holder(), mean_row_size, std::plus<ratio_holder>());
+        // Cassandra 3.x mean values are truncated as integrals.
+        return map_reduce_cf(ctx, integral_ratio_holder(), mean_row_size, std::plus<integral_ratio_holder>());
     });
 
     cf::get_bloom_filter_false_positives.set(r, [&ctx] (std::unique_ptr<request> req) {
@@ -799,10 +809,10 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_sstables_per_read_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], sstables::estimated_histogram(0), [](column_family& cf) {
+        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
             return cf.get_stats().estimated_sstable_per_read;
         },
-        sstables::merge, utils_json::estimated_histogram());
+        utils::estimated_histogram_merge, utils_json::estimated_histogram());
     });
 
     cf::get_tombstone_scanned_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
@@ -861,17 +871,17 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_read_latency_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], sstables::estimated_histogram(0), [](column_family& cf) {
+        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
             return cf.get_stats().estimated_read;
         },
-        sstables::merge, utils_json::estimated_histogram());
+        utils::estimated_histogram_merge, utils_json::estimated_histogram());
     });
 
     cf::get_write_latency_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], sstables::estimated_histogram(0), [](column_family& cf) {
+        return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
             return cf.get_stats().estimated_write;
         },
-        sstables::merge, utils_json::estimated_histogram());
+        utils::estimated_histogram_merge, utils_json::estimated_histogram());
     });
 
     cf::set_compaction_strategy_class.set(r, [&ctx](std::unique_ptr<request> req) {
@@ -900,12 +910,11 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_sstable_count_per_level.set(r, [&ctx](std::unique_ptr<request> req) {
-        // TBD
-        // FIXME
-        // This is a workaround, until there will be an API to return the count
-        // per level, we return an empty array
-        vector<uint64_t> res;
-        return make_ready_future<json::json_return_type>(res);
+        return map_reduce_cf_raw(ctx, req->param["name"], std::vector<uint64_t>(), [](const column_family& cf) {
+            return cf.sstable_count_per_level();
+        }, concat_sstable_count_per_level).then([](const std::vector<uint64_t>& res) {
+            return make_ready_future<json::json_return_type>(res);
+        });
     });
 }
 }

@@ -1,15 +1,22 @@
 #!/bin/bash -e
 
+. /etc/os-release
 print_usage() {
     echo "build_deb.sh --rebuild-dep"
+    echo "  --dist  create a public distribution package"
     echo "  --rebuild-dep  rebuild dependency packages"
     exit 1
 }
 REBUILD=0
+DIST=0
 while [ $# -gt 0 ]; do
     case "$1" in
         "--rebuild-dep")
             REBUILD=1
+            shift 1
+            ;;
+        "--dist")
+            DIST=1
             shift 1
             ;;
         *)
@@ -46,10 +53,9 @@ if [ ! -f /usr/bin/wget ]; then
 fi
 
 DISTRIBUTION=`lsb_release -i|awk '{print $3}'`
-RELEASE=`lsb_release -r|awk '{print $2}'`
 CODENAME=`lsb_release -c|awk '{print $2}'`
-if [ `grep -c $RELEASE dist/ubuntu/supported_release` -lt 1 ]; then
-    echo "Unsupported release: $RELEASE"
+if [ `grep -c $VERSION_ID dist/ubuntu/supported_release` -lt 1 ]; then
+    echo "Unsupported release: $VERSION_ID"
     echo "Pless any key to continue..."
     read input
 fi
@@ -69,18 +75,30 @@ sed -i -e "s/@@CODENAME@@/$CODENAME/g" debian/changelog
 cp dist/ubuntu/rules.in debian/rules
 cp dist/ubuntu/control.in debian/control
 cp dist/ubuntu/scylla-server.install.in debian/scylla-server.install
-if [ "$RELEASE" = "14.04" ]; then
+if [ "$DISTRIBUTION" = "Debian" ]; then
+    sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
+    sed -i -e "s/@@COMPILER@@/g++-5/g" debian/rules
+    sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++-5, libunwind-dev/g" debian/control
+    sed -i -e "s#@@INSTALL@@##g" debian/scylla-server.install
+    sed -i -e "s#@@HKDOTTIMER@@#dist/common/systemd/scylla-housekeeping.timer /lib/systemd/system#g" debian/scylla-server.install
+elif [ "$VERSION_ID" = "14.04" ]; then
     sed -i -e "s/@@DH_INSTALLINIT@@/--upstart-only/g" debian/rules
     sed -i -e "s/@@COMPILER@@/g++-5/g" debian/rules
-    sed -i -e "s/@@BUILD_DEPENDS@@/g++-5/g" debian/control
+    sed -i -e "s/@@BUILD_DEPENDS@@/g++-5, libunwind8-dev/g" debian/control
     sed -i -e "s#@@INSTALL@@#dist/ubuntu/sudoers.d/scylla etc/sudoers.d#g" debian/scylla-server.install
+    sed -i -e "s#@@HKDOTTIMER@@##g" debian/scylla-server.install
 else
     sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
     sed -i -e "s/@@COMPILER@@/g++/g" debian/rules
-    sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++/g" debian/control
+    sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++, libunwind-dev/g" debian/control
     sed -i -e "s#@@INSTALL@@##g" debian/scylla-server.install
+    sed -i -e "s#@@HKDOTTIMER@@#dist/common/systemd/scylla-housekeeping.timer /lib/systemd/system#g" debian/scylla-server.install
 fi
-
+if [ $DIST -gt 0 ]; then
+    sed -i -e "s#@@ADDHKCFG@@#conf/housekeeping.cfg etc/scylla.d/#g" debian/scylla-server.install
+else
+    sed -i -e "s#@@ADDHKCFG@@##g" debian/scylla-server.install
+fi
 if [ "$DISTRIBUTION" = "Ubuntu" ]; then
     sed -i -e "s/@@DEPENDS@@/hugepages, /g" debian/control
 else
@@ -89,11 +107,13 @@ fi
 
 cp dist/common/systemd/scylla-server.service.in debian/scylla-server.service
 sed -i -e "s#@@SYSCONFDIR@@#/etc/default#g" debian/scylla-server.service
+cp dist/common/systemd/scylla-housekeeping.service debian/scylla-server.scylla-housekeeping.service
+cp dist/common/systemd/node-exporter.service debian/scylla-server.node-exporter.service
 
-if [ "$RELEASE" = "14.04" ] && [ $REBUILD -eq 0 ]; then
+if [ "$VERSION_ID" = "14.04" ] && [ $REBUILD -eq 0 ]; then
     if [ ! -f /etc/apt/sources.list.d/scylla-3rdparty-trusty.list ]; then
         cd /etc/apt/sources.list.d
-        sudo wget https://s3.amazonaws.com/downloads.scylladb.com/deb/3rdparty/ubuntu/scylla-3rdparty-trusty.list
+        sudo wget -nv https://s3.amazonaws.com/downloads.scylladb.com/deb/3rdparty/ubuntu/scylla-3rdparty-trusty.list
         cd -
     fi
     sudo apt-get -y update
@@ -102,7 +122,7 @@ else
     ./dist/ubuntu/dep/build_dependency.sh
 fi
 
-if [ "$RELEASE" = "14.04" ]; then
+if [ "$VERSION_ID" = "14.04" ]; then
     sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
     sudo apt-get -y update
 elif [ "$DISTRIBUTION" = "Ubuntu" ]; then

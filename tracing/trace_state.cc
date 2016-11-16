@@ -47,14 +47,14 @@
 
 namespace tracing {
 
-static logging::logger logger("trace_state");
+logging::logger trace_state_logger("trace_state");
 
-std::unordered_map<sstring, sstring> trace_state::get_params() {
+void trace_state::build_parameters_map() {
     if (!_params_ptr) {
-        return {};
+        return;
     }
 
-    std::unordered_map<sstring, sstring> params_map;
+    auto& params_map = _records->session_rec.parameters;
     params_values& vals = *_params_ptr;
 
     if (vals.batchlog_endpoints) {
@@ -80,44 +80,69 @@ std::unordered_map<sstring, sstring> trace_state::get_params() {
     if (vals.user_timestamp) {
         params_map.emplace("user_timestamp", seastar::format("{:d}", *vals.user_timestamp));
     }
-
-    return params_map;
 }
 
 trace_state::~trace_state() {
-    if (_tracing_began) {
-        if (_primary) {
+    if (!is_primary() && is_in_state(state::background)) {
+        trace_state_logger.error("Secondary session is in a background state! session_id: {}", session_id());
+    }
+
+    stop_foreground_and_write();
+    _local_tracing_ptr->end_session();
+
+    trace_state_logger.trace("{}: destructing", session_id());
+}
+
+void trace_state::stop_foreground_and_write() {
+    // Do nothing if state hasn't been initiated
+    if (is_in_state(state::inactive)) {
+        return;
+    }
+
+    if (is_in_state(state::foreground)) {
+        auto e = elapsed();
+        _records->do_log_slow_query = should_log_slow_query(e);
+
+        if (is_primary()) {
             // We don't account the session_record event when checking a limit
             // of maximum events per session because there may be only one such
             // event and we don't want to cripple the primary session by
             // "stealing" one trace() event from it.
             //
-            // We do want to report it in statistics however. If for instance
-            // there are a lot of tracing sessions that only open itself and
-            // then do nothing - they will create a lot of session_record events
-            // and we do want to know about it.
-            ++_pending_trace_events;
-            _local_backend.write_session_record(_session_id, _client, get_params(), std::move(_request), _started_at, _type, elapsed(), _ttl);
-        }
+            // We do want to account them however. If for instance there are a
+            // lot of tracing sessions that only open itself and then do nothing
+            // - they will create a lot of session_record events and we do want
+            // to handle this case properly.
+            _records->consume_from_budget();
 
-        _local_tracing_ptr->end_session();
+            _records->session_rec.elapsed = e;
 
-        if (_write_on_close) {
-            _local_tracing_ptr->write_pending_records();
-        }
-
-        // update some stats and get out...
-        auto& tracing_stats = _local_tracing_ptr->stats;
-
-        tracing_stats.trace_events_count += _pending_trace_events;
-
-        if (_pending_trace_events >= tracing::max_trace_events_per_session) {
-            logger.trace("{}: Maximum number of traces is reached. Some traces are going to be dropped", _session_id);
-
-            if (++tracing_stats.max_traces_threshold_hits % tracing::max_threshold_hits_warning_period == 1) {
-                logger.warn("Maximum traces per session limit is hit {} times", tracing_stats.max_traces_threshold_hits);
+            // build_parameters_map() may throw. We don't want to record the
+            // session's record in this case since its data may be incomplete.
+            // These events should be really rare however, therefore we don't
+            // want to optimize this flow (e.g. rollback the corresponding
+            // events' records that have already been sent to I/O).
+            if (should_write_records()) {
+                try {
+                    build_parameters_map();
+                } catch (...) {
+                    // Bump up an error counter, drop any pending records and
+                    // continue
+                    ++_local_tracing_ptr->stats.trace_errors;
+                    _records->drop_records();
+                }
             }
         }
+
+        set_state(state::background);
+    }
+
+    trace_state_logger.trace("{}: Current records count is {}",  session_id(), _records->size());
+
+    if (should_write_records()) {
+        _local_tracing_ptr->write_session_records(_records, write_on_close());
+    } else {
+        _records->drop_records();
     }
 }
 }

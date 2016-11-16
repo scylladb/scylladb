@@ -120,8 +120,9 @@ public:
         });
     }
 
-    static sstable_ptr make_test_sstable(size_t buffer_size, sstring ks, sstring cf, sstring dir, unsigned long generation, sstable::version_types v, sstable::format_types f, gc_clock::time_point now = gc_clock::now()) {
-        auto sst = sstable(buffer_size, ks, cf, dir, generation, v, f, now);
+    static sstable_ptr make_test_sstable(size_t buffer_size, schema_ptr schema, sstring dir, unsigned long generation, sstable::version_types v,
+            sstable::format_types f, gc_clock::time_point now = gc_clock::now()) {
+        auto sst = sstable(buffer_size, std::move(schema), dir, generation, v, f, now);
         return make_lw_shared<sstable>(std::move(sst));
     }
 
@@ -136,25 +137,27 @@ public:
         _sst->_statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
         _sst->_summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
         _sst->_summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
+        _sst->set_first_and_last_keys();
     }
 
     void set_values(sstring first_key, sstring last_key, stats_metadata stats) {
         _sst->_statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
         _sst->_summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
         _sst->_summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
+        _sst->set_first_and_last_keys();
     }
 };
 
-inline future<sstable_ptr> reusable_sst(sstring dir, unsigned long generation) {
-    auto sst = make_lw_shared<sstable>("ks", "cf", dir, generation, la, big);
+inline future<sstable_ptr> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation) {
+    auto sst = make_lw_shared<sstable>(std::move(schema), dir, generation, la, big);
     auto fut = sst->load();
     return std::move(fut).then([sst = std::move(sst)] {
         return make_ready_future<sstable_ptr>(std::move(sst));
     });
 }
 
-inline future<> working_sst(sstring dir, unsigned long generation) {
-    return reusable_sst(dir, generation).then([] (auto ptr) { return make_ready_future<>(); });
+inline future<> working_sst(schema_ptr schema, sstring dir, unsigned long generation) {
+    return reusable_sst(std::move(schema), dir, generation).then([] (auto ptr) { return make_ready_future<>(); });
 }
 
 inline schema_ptr composite_schema() {
@@ -266,6 +269,7 @@ inline schema_ptr uncompressed_schema() {
         // comment
         "Uncompressed data"
        )));
+       builder.set_compressor_params(compression_parameters({ }));
        return builder.build(schema_builder::compact_storage::no);
     }();
     return uncompressed;
@@ -596,6 +600,9 @@ public:
             : _sst(std::move(sst)), _rd(std::move(rd)) {}
     virtual future<streamed_mutation_opt> operator()() override {
         return _rd.read();
+    }
+    virtual future<> fast_forward_to(const query::partition_range& pr) override {
+        return _rd.fast_forward_to(pr);
     }
 };
 

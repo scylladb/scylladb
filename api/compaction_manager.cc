@@ -22,6 +22,7 @@
 #include "compaction_manager.hh"
 #include "api/api-doc/compaction_manager.json.hh"
 #include "db/system_keyspace.hh"
+#include "column_family.hh"
 
 namespace api {
 
@@ -78,7 +79,9 @@ void set_compaction_manager(http_context& ctx, routes& r) {
     });
 
     cm::get_pending_tasks.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return get_cm_stats(ctx, &compaction_manager::stats::pending_tasks);
+        return map_reduce_cf(ctx, int64_t(0), [](column_family& cf) {
+            return cf.get_compaction_strategy().estimated_pending_compactions(cf);
+        }, std::plus<int64_t>());
     });
 
     cm::get_completed_tasks.set(r, [&ctx] (std::unique_ptr<request> req) {

@@ -29,6 +29,7 @@ print_usage() {
     echo "  --no-sysconfig-setup		skip sysconfig setup"
     echo "  --no-io-setup		skip IO configuration setup"
     echo "  --no-version-check		skip daily version check"
+    echo "  --no-node-exporter        do not install the node exporter"
     exit 1
 }
 
@@ -75,6 +76,21 @@ verify_package() {
     fi
 }
 
+get_unused_disks() {
+    blkid -c /dev/null|cut -f 1 -d ' '|sed s/://g|grep -v loop|while read dev
+    do
+        count_raw=$(grep $dev /proc/mounts|wc -l)
+        count_pvs=0
+        if [ -f /usr/sbin/pvs ]; then
+            count_pvs=$(pvs|grep $dev|wc -l)
+        fi
+        count_swap=$(swapon -s |grep `realpath $dev`|wc -l)
+        if [ $count_raw -eq 0 -a $count_pvs -eq 0 -a $count_swap -eq 0 ]; then
+            echo -n "$dev "
+        fi
+    done
+}
+
 AMI=0
 SET_NIC=0
 DEV_MODE=0
@@ -89,6 +105,7 @@ RAID_SETUP=1
 COREDUMP_SETUP=1
 SYSCONFIG_SETUP=1
 IO_SETUP=1
+NODE_EXPORTER=1
 
 if [ $# -ne 0 ]; then
     INTERACTIVE=0
@@ -166,6 +183,10 @@ while [ $# -gt 0 ]; do
             IO_SETUP=0
             shift 1
             ;;
+        "--no-node-exporter")
+            NODE_EXPORTER=0
+            shift 1
+            ;;
         "-h" | "--help")
             print_usage
             shift 1
@@ -205,34 +226,47 @@ fi
 if [ $INTERACTIVE -eq 1 ]; then
     interactive_ask_service "Do you want to enable ScyllaDB services?" "Answer yes to automatically start Scylla when the node boots; answer no to skip this step." "yes" &&:
     ENABLE_SERVICE=$?
-    if [ $ENABLE_SERVICE -eq 1 ] && [ ! -f /etc/scylla.d/housekeeping.conf ]; then
-        interactive_ask_service "Do you want to enable ScyllaDB version check?" "Answer yes to automatically start Scylla-housekeeping that check for newer version, when the node boots; answer no to skip this step." "yes" &&:
-        ENABLE_CHECK_VERSION=$?
-    fi
 fi
 
 if [ $ENABLE_SERVICE -eq 1 ]; then
-    if [ "$ID" = "fedora" ] || [ "$ID" = "centos" ]; then
+    if [ "$ID" = "fedora" ] || [ "$ID" = "centos" ] || [ "$ID" = "ubuntu" -a "$VERSION_ID" != "14.04" ]; then
         systemctl enable scylla-server.service
         systemctl enable collectd.service
-        if [ $ENABLE_CHECK_VERSION -eq 1 ]; then
+    fi
+    if [ $INTERACTIVE -eq 1 ] && [ ! -f /etc/scylla.d/housekeeping.cfg ]; then
+        interactive_ask_service "Do you want to enable ScyllaDB version check?" "Answer yes to automatically start Scylla-housekeeping that check for newer version, when the node boots; answer no to skip this step." "yes" &&:
+        ENABLE_CHECK_VERSION=$?
+    fi
+    if [ $ENABLE_CHECK_VERSION -eq 1 ]; then
+        if [ ! -f /etc/scylla.d/housekeeping.cfg ]; then
+           printf "[housekeeping]\ncheck-version: True\n" > /etc/scylla.d/housekeeping.cfg
+        fi
+        if [ "$ID" = "fedora" ] || [ "$ID" = "centos" ] || [ "$ID" = "ubuntu" -a "$VERSION_ID" != "14.04" ]; then
             systemctl unmask scylla-housekeeping.timer
-        else
+        fi
+    else
+        if [ ! -f /etc/scylla.d/housekeeping.cfg ]; then
+           printf "[housekeeping]\ncheck-version: False\n" > /etc/scylla.d/housekeeping.cfg
+        fi
+        if [ "$ID" = "fedora" ] || [ "$ID" = "centos" ] || [ "$ID" = "ubuntu" -a "$VERSION_ID" != "14.04" ]; then
             systemctl mask scylla-housekeeping.timer
             systemctl stop scylla-housekeeping.timer || true
         fi
     fi
-    if [ $ENABLE_CHECK_VERSION -eq 1 ]; then
-        if [ ! -f /etc/scylla.d/housekeeping.conf ]; then
-           printf "[housekeeping]\ncheck-version: True\n" > /etc/scylla.d/housekeeping.conf
-        fi
-    else
-        if [ ! -f /etc/scylla.d/housekeeping.conf ]; then
-           printf "[housekeeping]\ncheck-version: False\n" > /etc/scylla.d/housekeeping.conf
-        fi
-    fi
 fi
 
+if [ ! -f /etc/scylla.d/housekeeping.uuid ]; then
+   uuidgen > /etc/scylla.d/housekeeping.uuid
+fi
+
+UUID=`cat /etc/scylla.d/housekeeping.uuid` || true
+CUR_VERSION=`scylla --version` || true
+if [ "$CUR_VERSION" != "" ] && [ "$UUID" != "" ]; then
+    NEW_VERSION=`/usr/lib/scylla/scylla-housekeeping --uuid $UUID version --version $CUR_VERSION --mode i` || true
+    if [ "$NEW_VERSION" != "" ]; then
+       echo $NEW_VERSION
+    fi
+fi
 if [ $INTERACTIVE -eq 1 ]; then
     interactive_ask_service "Do you want to disable SELinux?" "Answer yes to disable SELinux; this improves performance; answer no to keep it activated." "yes" &&:
     SELINUX_SETUP=$?
@@ -265,21 +299,15 @@ if [ $INTERACTIVE -eq 1 ]; then
     interactive_ask_service "Do you want to setup RAID and XFS?" "It is recommended to use RAID0 and XFS for Scylla data. If you select yes, you will be prompt to choose which disks to use for Scylla data. Selected disks will be formatted in the process." "yes" &&:
     RAID_SETUP=$?
     if [ $RAID_SETUP -eq 1 ]; then
-        echo "Please select disks from following list: "
-        while true; do
-            blkid -c /dev/null|cut -f 1 -d ' '|sed s/://g|grep -v loop|while read dev
-            do
-                count_raw=$(grep $dev /proc/mounts|wc -l)
-                count_pvs=0
-                if [ -f /usr/sbin/pvs ]; then
-                    count_pvs=$(pvs|grep $dev|wc -l)
-                fi
-                count_swap=$(swapon --show |grep `realpath $dev`|wc -l)
-                if [ $count_raw -eq 0 -a $count_pvs -eq 0 -a $count_swap -eq 0 ]; then
-                    echo -n "$dev "
-                fi
-            done
-
+        DEVS=`get_unused_disks`
+        if [ "$DEVS" = "" ]; then
+            echo "No free disks detected, abort RAID/XFS setup."
+            echo
+            RAID_SETUP=0
+        else
+            echo "Please select disks from the following list: $DEVS"
+        fi
+        while [ "$DEVS" != "" ]; do
             echo "type 'done' to finish selection. selected: $DISKS"
             echo -n "> "
             read dsk
@@ -358,8 +386,18 @@ if [ $INTERACTIVE -eq 1 ]; then
     interactive_ask_service "Do you want to setup IO configuration?" "Answer yes to let iotune study what are your disks IO profile and adapt Scylla to it. Answer no to skip this action." "yes" &&:
     IO_SETUP=$?
 fi
+
 if [ $IO_SETUP -eq 1 ]; then
     /usr/lib/scylla/scylla_io_setup
+fi
+
+if [ $INTERACTIVE -eq 1 ]; then
+    interactive_ask_service "Do you want to install node exporter, that exports prometheus data from the node?" "Answer yes to install it; answer no to skip this installation." "yes" &&:
+    NODE_EXPORTER=$?
+fi
+
+if [ $NODE_EXPORTER -eq 1 ]; then
+    /usr/lib/scylla/node_exporter_install
 fi
 
 if [ $DEV_MODE -eq 1 ]; then

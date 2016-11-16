@@ -69,6 +69,7 @@
 #include "idl/partition_checksum.dist.impl.hh"
 #include "rpc/lz4_compressor.hh"
 #include "rpc/multi_algo_compressor_factory.hh"
+#include "partition_range_compat.hh"
 
 namespace net {
 
@@ -181,10 +182,12 @@ void messaging_service::foreach_client(std::function<void(const msg_addr& id, co
 }
 
 void messaging_service::foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const {
-    if (_server) {
-        _server->foreach_connection([f](const rpc_protocol::server::connection& c) {
-            f(c.info(), c.get_stats());
-        });
+    for (auto&& s : _server) {
+        if (s) {
+            s->foreach_connection([f](const rpc_protocol::server::connection& c) {
+                f(c.info(), c.get_stats());
+            });
+        }
     }
 }
 
@@ -217,7 +220,7 @@ void register_handler(messaging_service* ms, messaging_verb verb, Func&& func) {
 }
 
 messaging_service::messaging_service(gms::inet_address ip, uint16_t port, bool listen_now)
-    : messaging_service(std::move(ip), port, encrypt_what::none, compress_what::none, 0, nullptr, listen_now)
+    : messaging_service(std::move(ip), port, encrypt_what::none, compress_what::none, 0, nullptr, false, listen_now)
 {}
 
 static
@@ -231,28 +234,42 @@ rpc_resource_limits() {
 }
 
 void messaging_service::start_listen() {
+    bool listen_to_bc = _should_listen_to_broadcast_address && _listen_address != utils::fb_utilities::get_broadcast_address();
     rpc::server_options so;
     if (_compress_what != compress_what::none) {
         so.compressor_factory = &compressor_factory;
     }
-    if (!_server) {
-        auto addr = ipv4_addr{_listen_address.raw_addr(), _port};
-        _server = std::unique_ptr<rpc_protocol_server_wrapper>(new rpc_protocol_server_wrapper(*_rpc,
-                so, addr, rpc_resource_limits()));
+    if (!_server[0]) {
+        auto listen = [&] (const gms::inet_address& a) {
+            auto addr = ipv4_addr{a.raw_addr(), _port};
+            return std::unique_ptr<rpc_protocol_server_wrapper>(new rpc_protocol_server_wrapper(*_rpc,
+                    so, addr, rpc_resource_limits()));
+        };
+        _server[0] = listen(_listen_address);
+        if (listen_to_bc) {
+            _server[1] = listen(utils::fb_utilities::get_broadcast_address());
+        }
     }
 
-    if (!_server_tls) {
-        _server_tls = std::unique_ptr<rpc_protocol_server_wrapper>(
-            [this, &so] () -> std::unique_ptr<rpc_protocol_server_wrapper>{
+    if (!_server_tls[0]) {
+        auto listen = [&] (const gms::inet_address& a) {
+            return std::unique_ptr<rpc_protocol_server_wrapper>(
+                    [this, &so, &a] () -> std::unique_ptr<rpc_protocol_server_wrapper>{
                 if (_encrypt_what == encrypt_what::none) {
                     return nullptr;
                 }
                 listen_options lo;
                 lo.reuse_address = true;
-                auto addr = make_ipv4_address(ipv4_addr{_listen_address.raw_addr(), _ssl_port});
+                auto addr = make_ipv4_address(ipv4_addr{a.raw_addr(), _ssl_port});
                 return std::make_unique<rpc_protocol_server_wrapper>(*_rpc,
                         so, seastar::tls::listen(_credentials, addr, lo));
-        }());
+            }());
+        };
+        _server_tls[0] = listen(_listen_address);
+        if (listen_to_bc) {
+            _server_tls[1] = listen(utils::fb_utilities::get_broadcast_address());
+        }
+
     }
 }
 
@@ -262,12 +279,14 @@ messaging_service::messaging_service(gms::inet_address ip
         , compress_what cw
         , uint16_t ssl_port
         , std::shared_ptr<seastar::tls::credentials_builder> credentials
+        , bool sltba
         , bool listen_now)
     : _listen_address(ip)
     , _port(port)
     , _ssl_port(ssl_port)
     , _encrypt_what(ew)
     , _compress_what(cw)
+    , _should_listen_to_broadcast_address(sltba)
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _credentials(credentials ? credentials->build_server_credentials() : nullptr)
 {
@@ -286,7 +305,7 @@ messaging_service::messaging_service(gms::inet_address ip
 
     // Do this on just cpu 0, to avoid duplicate logs.
     if (engine().cpu_id() == 0) {
-        if (_server_tls) {
+        if (_server_tls[0]) {
             logger.info("Starting Encrypted Messaging Service on SSL port {}", _ssl_port);
         }
         logger.info("Starting Messaging Service on port {}", _port);
@@ -311,15 +330,19 @@ gms::inet_address messaging_service::listen_address() {
 }
 
 future<> messaging_service::stop_tls_server() {
-    if (_server_tls) {
-        return _server_tls->stop();
+    for (auto&& s : _server_tls) {
+        if (s) {
+            return s->stop();
+        }
     }
     return make_ready_future<>();
 }
 
 future<> messaging_service::stop_nontls_server() {
-    if (_server) {
-        return _server->stop();
+    for (auto&& s : _server) {
+        if (s) {
+            return s->stop();
+        }
     }
     return make_ready_future<>();
 }
@@ -682,10 +705,15 @@ future<> messaging_service::send_stream_mutation(msg_addr id, UUID plan_id, froz
 
 // STREAM_MUTATION_DONE
 void messaging_service::register_stream_mutation_done(std::function<future<> (const rpc::client_info& cinfo,
-        UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id)>&& func) {
-    register_handler(this, messaging_verb::STREAM_MUTATION_DONE, std::move(func));
+        UUID plan_id, std::vector<nonwrapping_range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id)>&& func) {
+    register_handler(this, messaging_verb::STREAM_MUTATION_DONE,
+            [func = std::move(func)] (const rpc::client_info& cinfo,
+                    UUID plan_id, std::vector<wrapping_range<dht::token>> ranges,
+                    UUID cf_id, unsigned dst_cpu_id) mutable {
+        return func(cinfo, plan_id, compat::unwrap(std::move(ranges)), cf_id, dst_cpu_id);
+    });
 }
-future<> messaging_service::send_stream_mutation_done(msg_addr id, UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id) {
+future<> messaging_service::send_stream_mutation_done(msg_addr id, UUID plan_id, std::vector<nonwrapping_range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id) {
     return send_message_timeout_and_retry<void>(this, messaging_verb::STREAM_MUTATION_DONE, id,
         streaming_timeout, streaming_nr_retry, streaming_wait_before_retry,
         plan_id, std::move(ranges), cf_id, dst_cpu_id);
@@ -774,7 +802,7 @@ future<std::vector<frozen_mutation>> messaging_service::send_migration_request(m
     return send_message<std::vector<frozen_mutation>>(this, messaging_verb::MIGRATION_REQUEST, std::move(id));
 }
 
-void messaging_service::register_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, frozen_mutation fm, std::vector<inet_address> forward,
+void messaging_service::register_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, std::vector<inet_address> forward,
     inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::experimental::optional<tracing::trace_info>> trace_info)>&& func) {
     register_handler(this, net::messaging_verb::MUTATION, std::move(func));
 }
@@ -797,7 +825,7 @@ future<> messaging_service::send_mutation_done(msg_addr id, unsigned shard, resp
     return send_message_oneway(this, messaging_verb::MUTATION_DONE, std::move(id), std::move(shard), std::move(response_id));
 }
 
-void messaging_service::register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (const rpc::client_info&, query::read_command cmd, query::partition_range pr)>&& func) {
+void messaging_service::register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (const rpc::client_info&, query::read_command cmd, compat::wrapping_partition_range pr)>&& func) {
     register_handler(this, net::messaging_verb::READ_DATA, std::move(func));
 }
 void messaging_service::unregister_read_data() {
@@ -827,7 +855,7 @@ future<utils::UUID> messaging_service::send_schema_check(msg_addr dst) {
     return send_message<utils::UUID>(this, net::messaging_verb::SCHEMA_CHECK, dst);
 }
 
-void messaging_service::register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (const rpc::client_info&, query::read_command cmd, query::partition_range pr)>&& func) {
+void messaging_service::register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (const rpc::client_info&, query::read_command cmd, compat::wrapping_partition_range pr)>&& func) {
     register_handler(this, net::messaging_verb::READ_MUTATION_DATA, std::move(func));
 }
 void messaging_service::unregister_read_mutation_data() {
@@ -837,7 +865,7 @@ future<reconcilable_result> messaging_service::send_read_mutation_data(msg_addr 
     return send_message_timeout<reconcilable_result>(this, messaging_verb::READ_MUTATION_DATA, std::move(id), timeout, cmd, pr);
 }
 
-void messaging_service::register_read_digest(std::function<future<query::result_digest, api::timestamp_type> (const rpc::client_info&, query::read_command cmd, query::partition_range pr)>&& func) {
+void messaging_service::register_read_digest(std::function<future<query::result_digest, api::timestamp_type> (const rpc::client_info&, query::read_command cmd, compat::wrapping_partition_range pr)>&& func) {
     register_handler(this, net::messaging_verb::READ_DIGEST, std::move(func));
 }
 void messaging_service::unregister_read_digest() {
@@ -875,14 +903,14 @@ future<> messaging_service::send_replication_finished(msg_addr id, inet_address 
 // Wrapper for REPAIR_CHECKSUM_RANGE
 void messaging_service::register_repair_checksum_range(
         std::function<future<partition_checksum> (sstring keyspace,
-                sstring cf, query::range<dht::token> range, rpc::optional<repair_checksum> hash_version)>&& f) {
+                sstring cf, nonwrapping_range<dht::token> range, rpc::optional<repair_checksum> hash_version)>&& f) {
     register_handler(this, messaging_verb::REPAIR_CHECKSUM_RANGE, std::move(f));
 }
 void messaging_service::unregister_repair_checksum_range() {
     _rpc->unregister_handler(messaging_verb::REPAIR_CHECKSUM_RANGE);
 }
 future<partition_checksum> messaging_service::send_repair_checksum_range(
-        msg_addr id, sstring keyspace, sstring cf, ::range<dht::token> range, repair_checksum hash_version)
+        msg_addr id, sstring keyspace, sstring cf, ::nonwrapping_range<dht::token> range, repair_checksum hash_version)
 {
     return send_message<partition_checksum>(this,
             messaging_verb::REPAIR_CHECKSUM_RANGE, std::move(id),

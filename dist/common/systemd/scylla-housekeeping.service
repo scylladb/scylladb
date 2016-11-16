@@ -1,0 +1,12 @@
+[Unit]
+Description=Scylla Housekeeping
+After=network.target
+
+[Service]
+Type=simple
+User=scylla
+Group=scylla
+ExecStart=/usr/lib/scylla/scylla-housekeeping -q -c /etc/scylla.d/housekeeping.cfg version
+
+[Install]
+WantedBy=multi-user.target

@@ -67,12 +67,13 @@
 #include "sstables/compaction_manager.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/histogram.hh"
-#include "sstables/estimated_histogram.hh"
+#include "utils/estimated_histogram.hh"
 #include "sstables/compaction.hh"
 #include "sstables/sstable_set.hh"
-#include "key_reader.hh"
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/shared_future.hh>
+#include "tracing/trace_state.hh"
+#include <boost/intrusive/parent_from_member.hpp>
 
 class frozen_mutation;
 class reconcilable_result;
@@ -117,21 +118,8 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
     // memtable is totally gone. That means that if we have throttled requests, they will stay
     // throttled for a long time. Even when we have virtual dirty, that only provides a rough
     // estimate, and we can't release requests that early.
-    //
-    // Ideally, we'd allow one memtable flush per shard (or per database object), and write-behind
-    // would take care of the rest. But that still has issues, so we'll limit parallelism to some
-    // number (4), that we will hopefully reduce to 1 when write behind works.
-    //
-    // When streaming is going on, we'll separate half of that for the streaming code, which
-    // effectively increases the total to 6. That is a bit ugly and a bit redundant with the I/O
-    // Scheduler, but it's the easiest way not to hurt the common case (no streaming) and will have
-    // to do for the moment. Hopefully we can set both to 1 soon (with write behind)
-    //
-    // FIXME: enable write behind and set both to 1. Right now we will take advantage of the fact
-    // that memtables and streaming will use different specialized classes here and set them as
-    // default values here.
-    size_t _concurrency;
     semaphore _flush_serializer;
+    int64_t _dirty_bytes_released_pre_accounted = 0;
 
     seastar::gate _waiting_flush_gate;
     std::vector<shared_memtable> _pending_flushes;
@@ -142,25 +130,46 @@ protected:
 public:
     future<> shutdown();
 
-    dirty_memory_manager(database* db, size_t threshold, size_t concurrency)
+    dirty_memory_manager(database* db, size_t threshold)
                                            : logalloc::region_group_reclaimer(threshold)
                                            , _db(db)
                                            , _region_group(*this)
-                                           , _concurrency(concurrency)
-                                           , _flush_serializer(concurrency) {}
+                                           , _flush_serializer(1) {}
 
-    dirty_memory_manager(database* db, dirty_memory_manager *parent, size_t threshold, size_t concurrency)
+    dirty_memory_manager(database* db, dirty_memory_manager *parent, size_t threshold)
                                                                          : logalloc::region_group_reclaimer(threshold)
                                                                          , _db(db)
                                                                          , _region_group(&parent->_region_group, *this)
-                                                                         , _concurrency(concurrency)
-                                                                         , _flush_serializer(concurrency) {}
+                                                                         , _flush_serializer(1) {}
+
+    static dirty_memory_manager& from_region_group(logalloc::region_group *rg) {
+        return *(boost::intrusive::get_parent_from_member(rg, &dirty_memory_manager::_region_group));
+    }
+
     logalloc::region_group& region_group() {
         return _region_group;
     }
 
     const logalloc::region_group& region_group() const {
         return _region_group;
+    }
+
+    void revert_potentially_cleaned_up_memory(int64_t delta) {
+        _region_group.update(delta);
+        _dirty_bytes_released_pre_accounted -= delta;
+    }
+
+    void account_potentially_cleaned_up_memory(int64_t delta) {
+        _region_group.update(-delta);
+        _dirty_bytes_released_pre_accounted += delta;
+    }
+
+    size_t real_dirty_memory() const {
+        return _region_group.memory_used() + _dirty_bytes_released_pre_accounted;
+    }
+
+    size_t virtual_dirty_memory() const {
+        return _region_group.memory_used();
     }
 
     template <typename Func>
@@ -176,17 +185,17 @@ public:
 class streaming_dirty_memory_manager: public dirty_memory_manager {
     virtual memtable_list& get_memtable_list(column_family& cf) override;
 public:
-    streaming_dirty_memory_manager(database& db, dirty_memory_manager *parent, size_t threshold) : dirty_memory_manager(&db, parent, threshold, 2) {}
+    streaming_dirty_memory_manager(database& db, dirty_memory_manager *parent, size_t threshold) : dirty_memory_manager(&db, parent, threshold) {}
 };
 
 class memtable_dirty_memory_manager: public dirty_memory_manager {
     virtual memtable_list& get_memtable_list(column_family& cf) override;
 public:
-    memtable_dirty_memory_manager(database& db, dirty_memory_manager* parent, size_t threshold) : dirty_memory_manager(&db, parent, threshold, 4) {}
+    memtable_dirty_memory_manager(database& db, dirty_memory_manager* parent, size_t threshold) : dirty_memory_manager(&db, parent, threshold) {}
     // This constructor will be called for the system tables (no parent). Its flushes are usually drive by us
     // and not the user, and tend to be small in size. So we'll allow only two slots.
-    memtable_dirty_memory_manager(database& db, size_t threshold) : dirty_memory_manager(&db, threshold, 2) {}
-    memtable_dirty_memory_manager() : dirty_memory_manager(nullptr, std::numeric_limits<size_t>::max(), 4) {}
+    memtable_dirty_memory_manager(database& db, size_t threshold) : dirty_memory_manager(&db, threshold) {}
+    memtable_dirty_memory_manager() : dirty_memory_manager(nullptr, std::numeric_limits<size_t>::max()) {}
 };
 
 extern thread_local memtable_dirty_memory_manager default_dirty_memory_manager;
@@ -299,6 +308,15 @@ using sstable_list = sstables::sstable_list;
 struct cf_stats {
     int64_t pending_memtables_flushes_count = 0;
     int64_t pending_memtables_flushes_bytes = 0;
+
+    // number of time the clustering filter was executed
+    int64_t clustering_filter_count = 0;
+    // sstables considered by the filter (so dividing this by the previous one we get average sstables per read)
+    int64_t sstables_checked_by_clustering_filter = 0;
+    // number of times the filter passed the fast-path checks
+    int64_t clustering_filter_fast_path_count = 0;
+    // how many sstables survived the clustering key checks
+    int64_t surviving_sstables_after_clustering_filter = 0;
 };
 
 class column_family {
@@ -315,6 +333,7 @@ public:
         ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
         restricted_mutation_reader_config read_concurrency_config;
+        restricted_mutation_reader_config streaming_read_concurrency_config;
         ::cf_stats* cf_stats = nullptr;
         uint64_t max_cached_partition_size_in_bytes;
     };
@@ -331,9 +350,9 @@ public:
         int64_t pending_compactions = 0;
         utils::timed_rate_moving_average_and_histogram reads{256};
         utils::timed_rate_moving_average_and_histogram writes{256};
-        sstables::estimated_histogram estimated_read;
-        sstables::estimated_histogram estimated_write;
-        sstables::estimated_histogram estimated_sstable_per_read;
+        utils::estimated_histogram estimated_read;
+        utils::estimated_histogram estimated_write;
+        utils::estimated_histogram estimated_sstable_per_read{35};
         utils::timed_rate_moving_average_and_histogram tombstone_scanned;
         utils::timed_rate_moving_average_and_histogram live_scanned;
     };
@@ -345,7 +364,7 @@ public:
 private:
     schema_ptr _schema;
     config _config;
-    stats _stats;
+    mutable stats _stats;
 
     lw_shared_ptr<memtable_list> _memtables;
 
@@ -467,11 +486,11 @@ private:
     // Mutations returned by the reader will all have given schema.
     mutation_reader make_sstable_reader(schema_ptr schema,
                                         const query::partition_range& range,
-                                        query::clustering_key_filtering_context ck_filtering,
-                                        const io_priority_class& pc) const;
+                                        const query::partition_slice& slice,
+                                        const io_priority_class& pc,
+                                        tracing::trace_state_ptr trace_state) const;
 
     mutation_source sstables_as_mutation_source();
-    key_source sstables_as_key_source() const;
     partition_presence_checker make_partition_presence_checker(sstables::shared_sstable exclude_sstable);
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
     void do_trigger_compaction();
@@ -506,10 +525,18 @@ public:
     // will be scheduled under the priority class given by pc.
     mutation_reader make_reader(schema_ptr schema,
             const query::partition_range& range = query::full_partition_range,
-            const query::clustering_key_filtering_context& ck_filtering = query::no_clustering_key_filtering,
-            const io_priority_class& pc = default_priority_class()) const;
+            const query::partition_slice& slice = query::full_slice,
+            const io_priority_class& pc = default_priority_class(),
+            tracing::trace_state_ptr trace_state = nullptr) const;
 
-    mutation_source as_mutation_source() const;
+    // The streaming mutation reader differs from the regular mutation reader in that:
+    //  - Reflects all writes accepted by replica prior to creation of the
+    //    reader and a _bounded_ amount of writes which arrive later.
+    //  - Does not populate the cache
+    mutation_reader make_streaming_reader(schema_ptr schema,
+            const query::partition_range& range = query::full_partition_range) const;
+
+    mutation_source as_mutation_source(tracing::trace_state_ptr trace_state) const;
 
     // Queries can be satisfied from multiple data sources, so they are returned
     // as temporaries.
@@ -551,7 +578,8 @@ public:
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(schema_ptr,
         const query::read_command& cmd, query::result_request request,
-        const std::vector<query::partition_range>& ranges);
+        const std::vector<query::partition_range>& ranges,
+        tracing::trace_state_ptr trace_state);
 
     future<> populate(sstring datadir);
 
@@ -653,6 +681,7 @@ public:
     lw_shared_ptr<sstable_list> get_sstables_including_compacted_undeleted() const;
     std::vector<sstables::shared_sstable> select_sstables(const query::partition_range& range) const;
     size_t sstables_count() const;
+    std::vector<uint64_t> sstable_count_per_level() const;
     int64_t get_unleveled_sstables() const;
 
     void start_compaction();
@@ -669,6 +698,10 @@ public:
 
     const stats& get_stats() const {
         return _stats;
+    }
+
+    ::cf_stats* cf_stats() {
+        return _config.cf_stats;
     }
 
     compaction_manager& get_compaction_manager() const {
@@ -854,6 +887,7 @@ public:
         ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
         restricted_mutation_reader_config read_concurrency_config;
+        restricted_mutation_reader_config streaming_read_concurrency_config;
         ::cf_stats* cf_stats = nullptr;
     };
 private:
@@ -1042,8 +1076,8 @@ public:
     unsigned shard_of(const dht::token& t);
     unsigned shard_of(const mutation& m);
     unsigned shard_of(const frozen_mutation& m);
-    future<lw_shared_ptr<query::result>> query(schema_ptr, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges);
-    future<reconcilable_result> query_mutations(schema_ptr, const query::read_command& cmd, const query::partition_range& range);
+    future<lw_shared_ptr<query::result>> query(schema_ptr, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges, tracing::trace_state_ptr trace_state);
+    future<reconcilable_result> query_mutations(schema_ptr, const query::read_command& cmd, const query::partition_range& range, tracing::trace_state_ptr trace_state);
     future<> apply(schema_ptr, const frozen_mutation&);
     future<> apply_streaming_mutation(schema_ptr, utils::UUID plan_id, const frozen_mutation&, bool fragmented);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
