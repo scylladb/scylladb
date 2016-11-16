@@ -82,6 +82,18 @@ public:
             return make_exception_future(ep);
         });
     }
+    bool check_failed_ranges() {
+        if (failed_ranges.empty()) {
+            logger.info("repair {} completed sucessfully", id);
+            return true;
+        } else {
+            for (auto& frange: failed_ranges) {
+                logger.debug("repair cf {} range {} failed", frange.cf, frange.range);
+            }
+            logger.info("repair {} failed - {} ranges failed", id, failed_ranges.size());
+            return false;
+        }
+    }
 };
 
 template <typename T1, typename T2>
@@ -890,16 +902,7 @@ static future<> repair_ranges(repair_info ri) {
         }).then([&ri] {
             return ri.do_streaming();
         }).then([&ri] {
-            if (ri.failed_ranges.empty()) {
-                logger.info("repair {} completed sucessfully", ri.id);
-                repair_tracker.done(ri.id, true);
-            } else {
-                for (auto& frange: ri.failed_ranges) {
-                    logger.debug("repair cf {} range {} failed", frange.cf, frange.range);
-                }
-                logger.info("repair {} failed - {} ranges failed", ri.id, ri.failed_ranges.size());
-                repair_tracker.done(ri.id, false);
-            }
+            repair_tracker.done(ri.id, ri.check_failed_ranges());
         }).handle_exception([&ri] (std::exception_ptr eptr) {
             logger.info("repair {} failed - {}", ri.id, eptr);
             repair_tracker.done(ri.id, false);
