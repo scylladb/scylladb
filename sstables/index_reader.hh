@@ -37,7 +37,7 @@ public:
     bool should_continue() {
         return indexes.size() < max_quantity;
     }
-    void consume_entry(index_entry&& ie) {
+    void consume_entry(index_entry&& ie, uint64_t offset) {
         indexes.push_back(std::move(ie));
     }
 };
@@ -45,13 +45,14 @@ public:
 // IndexConsumer is a concept that implements:
 //
 // bool should_continue();
-// void consume_entry(index_entry&& ie);
+// void consume_entry(index_entry&& ie, uintt64_t offset);
 template <class IndexConsumer>
 class index_consume_entry_context: public data_consumer::continuous_data_consumer<index_consume_entry_context<IndexConsumer>> {
     using proceed = data_consumer::proceed;
     using continuous_data_consumer = data_consumer::continuous_data_consumer<index_consume_entry_context<IndexConsumer>>;
 private:
     IndexConsumer& _consumer;
+    uint64_t _entry_offset;
 
     enum class state {
         START,
@@ -109,9 +110,12 @@ public:
                 _state = state::CONSUME_ENTRY;
                 break;
             }
-        case state::CONSUME_ENTRY:
-            _consumer.consume_entry(index_entry(std::move(_key), this->_u64, std::move(_promoted)));
+        case state::CONSUME_ENTRY: {
+            auto len = (_key.size() + _promoted.size() + 14);
+            _consumer.consume_entry(index_entry(std::move(_key), this->_u64, std::move(_promoted)), _entry_offset);
+            _entry_offset += len;
             _state = state::START;
+        }
             break;
         default:
             throw malformed_sstable_exception("unknown state");
@@ -120,10 +124,9 @@ public:
     }
 
     index_consume_entry_context(IndexConsumer& consumer,
-            input_stream<char>&& input, uint64_t maxlen)
+            input_stream<char>&& input, uint64_t start, uint64_t maxlen)
         : continuous_data_consumer(std::move(input), maxlen)
-        , _consumer(consumer)
+        , _consumer(consumer), _entry_offset(start)
     {}
-
 };
 }

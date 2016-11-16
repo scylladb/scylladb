@@ -1887,8 +1887,8 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
         bool should_continue() {
             return true;
         }
-        void consume_entry(index_entry&& ie) {
-            maybe_add_summary_entry(_summary, ie.get_key_bytes(), ie.position());
+        void consume_entry(index_entry&& ie, uint64_t offset) {
+            maybe_add_summary_entry(_summary, ie.get_key_bytes(), offset);
             if (!first_key) {
                 first_key = key(to_bytes(ie.get_key_bytes()));
             } else {
