@@ -305,7 +305,7 @@ public:
         _remain = end - _stream_position;
 
         _prestate = prestate::NONE;
-        state_processor().reset();
+        state_processor().reset(begin);
         return _input.skip(n);
     }
 

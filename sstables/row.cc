@@ -374,7 +374,7 @@ public:
         }
     }
 
-    void reset() {
+    void reset(uint64_t offset) {
         _state = state::ROW_START;
         _consumer.reset();
     }
