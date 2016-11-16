@@ -194,7 +194,7 @@ void set_cache_service(http_context& ctx, routes& r) {
     });
 
     cs::get_row_capacity.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, 0, [](const column_family& cf) {
+        return map_reduce_cf(ctx, uint64_t(0), [](const column_family& cf) {
             return cf.get_row_cache().get_cache_tracker().region().occupancy().used_space();
         }, std::plus<uint64_t>());
     });
