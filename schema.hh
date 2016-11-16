@@ -281,6 +281,7 @@ bool operator==(const column_definition&, const column_definition&);
 static constexpr int DEFAULT_MIN_COMPACTION_THRESHOLD = 4;
 static constexpr int DEFAULT_MAX_COMPACTION_THRESHOLD = 32;
 static constexpr int DEFAULT_MIN_INDEX_INTERVAL = 128;
+static constexpr int DEFAULT_GC_GRACE_SECONDS = 864000;
 
 // Unsafe to access across shards.
 // Safe to copy across shards.
@@ -399,7 +400,7 @@ private:
         bool _is_dense = false;
         bool _is_compound = true;
         cf_type _type = cf_type::standard;
-        int32_t _gc_grace_seconds = 864000;
+        int32_t _gc_grace_seconds = DEFAULT_GC_GRACE_SECONDS;
         double _dc_local_read_repair_chance = 0.1;
         double _read_repair_chance = 0.0;
         int32_t _min_compaction_threshold = DEFAULT_MIN_COMPACTION_THRESHOLD;

@@ -44,6 +44,9 @@
 #include "service/migration_manager.hh"
 #include "validation.hh"
 #include "db/config.hh"
+#include <boost/range/adaptor/filtered.hpp>
+#include <boost/range/adaptor/transformed.hpp>
+#include "cql3/util.hh"
 
 namespace cql3 {
 
@@ -75,12 +78,92 @@ void alter_table_statement::validate(distributed<service::storage_proxy>& proxy,
     // validated in announce_migration()
 }
 
-static const sstring ALTER_TABLE_FEATURE = "ALTER TABLE";
+static data_type validate_alter(schema_ptr schema, const column_definition& def, const cql3_type& validator)
+{
+    auto type = def.type->is_reversed() && !validator.get_type()->is_reversed()
+              ? reversed_type_impl::get_instance(validator.get_type())
+              : validator.get_type();
+    switch (def.kind) {
+    case column_kind::partition_key:
+        if (type->is_counter()) {
+            throw exceptions::invalid_request_exception(
+                    sprint("counter type is not supported for PRIMARY KEY part %s", def.name_as_text()));
+        }
+
+        if (!type->is_value_compatible_with(*def.type)) {
+            throw exceptions::configuration_exception(
+                    sprint("Cannot change %s from type %s to type %s: types are incompatible.",
+                           def.name_as_text(),
+                           def.type->as_cql3_type(),
+                           validator));
+        }
+        break;
+
+    case column_kind::clustering_key:
+        if (!schema->is_cql3_table()) {
+            throw exceptions::invalid_request_exception(
+                    sprint("Cannot alter clustering column %s in a non-CQL3 table", def.name_as_text()));
+        }
+
+        // Note that CFMetaData.validateCompatibility already validate the change we're about to do. However, the error message it
+        // sends is a bit cryptic for a CQL3 user, so validating here for a sake of returning a better error message
+        // Do note that we need isCompatibleWith here, not just isValueCompatibleWith.
+        if (!type->is_compatible_with(*def.type)) {
+            throw exceptions::configuration_exception(
+                    sprint("Cannot change %s from type %s to type %s: types are not order-compatible.",
+                           def.name_as_text(),
+                           def.type->as_cql3_type(),
+                           validator));
+        }
+        break;
+
+    case column_kind::regular_column:
+    case column_kind::static_column:
+        // Thrift allows to change a column validator so CFMetaData.validateCompatibility will let it slide
+        // if we change to an incompatible type (contrarily to the comparator case). But we don't want to
+        // allow it for CQL3 (see #5882) so validating it explicitly here. We only care about value compatibility
+        // though since we won't compare values (except when there is an index, but that is validated by
+        // ColumnDefinition already).
+        if (!type->is_value_compatible_with(*def.type)) {
+            throw exceptions::configuration_exception(
+                    sprint("Cannot change %s from type %s to type %s: types are incompatible.",
+                           def.name_as_text(),
+                           def.type->as_cql3_type(),
+                           validator));
+        }
+        break;
+    }
+    return type;
+}
+
+static void validate_column_rename(const schema& schema, const column_identifier& from, const column_identifier& to)
+{
+    auto def = schema.get_column_definition(from.name());
+    if (!def) {
+        throw exceptions::invalid_request_exception(sprint("Cannot rename unknown column %s in table %s", from, schema.cf_name()));
+    }
+
+    if (schema.get_column_definition(to.name())) {
+        throw exceptions::invalid_request_exception(sprint("Cannot rename column %s to %s in table %s; another column of that name already exist", from, to, schema.cf_name()));
+    }
+
+    if (def->is_part_of_cell_name()) {
+        throw exceptions::invalid_request_exception(sprint("Cannot rename non PRIMARY KEY part %s", from));
+    }
+
+    if (def->is_indexed()) {
+        throw exceptions::invalid_request_exception(sprint("Cannot rename column %s because it is secondary indexed", from));
+    }
+}
 
 future<bool> alter_table_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
 {
     auto& db = proxy.local().get_db().local();
     auto schema = validation::validate_column_family(db, keyspace(), column_family());
+    if (schema->is_view()) {
+        throw exceptions::invalid_request_exception("Cannot use ALTER TABLE on Materialized View");
+    }
+
     auto cfm = schema_builder(schema);
 
     shared_ptr<cql3_type> validator;
@@ -93,6 +176,9 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
         column_name = _raw_column_name->prepare_column_identifier(schema);
         def = get_column_definition(schema, *column_name);
     }
+
+    auto& cf = db.find_column_family(schema);
+    std::vector<schema_ptr> view_updates;
 
     switch (_type) {
     case alter_table_statement::type::add:
@@ -141,6 +227,19 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
         }
 
         cfm.with_column(column_name->name(), type, _is_static ? column_kind::static_column : column_kind::regular_column);
+
+        // Adding a column to a table which has an include all view requires the column to be added to the view
+        // as well
+        if (!_is_static) {
+            for (auto&& view : cf.views()) {
+                if (view->view_info()->include_all_columns()) {
+                    schema_builder builder(view);
+                    builder.with_column(column_name->name(), type);
+                    view_updates.push_back(builder.build());
+                }
+            }
+        }
+
         break;
     }
     case alter_table_statement::type::alter:
@@ -150,57 +249,25 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
             throw exceptions::invalid_request_exception(sprint("Column %s was not found in table %s", column_name, column_family()));
         }
 
-        auto type = validator->get_type();
-        switch (def->kind) {
-        case column_kind::partition_key:
-            if (type->is_counter()) {
-                throw exceptions::invalid_request_exception(sprint("counter type is not supported for PRIMARY KEY part %s", column_name));
-            }
-
-            if (!type->is_value_compatible_with(*def->type)) {
-                throw exceptions::configuration_exception(sprint("Cannot change %s from type %s to type %s: types are incompatible.",
-                    column_name,
-                    def->type->as_cql3_type(),
-                    validator));
-            }
-            break;
-
-        case column_kind::clustering_key:
-            if (!schema->is_cql3_table()) {
-                throw exceptions::invalid_request_exception(sprint("Cannot alter clustering column %s in a non-CQL3 table", column_name));
-            }
-
-            // Note that CFMetaData.validateCompatibility already validate the change we're about to do. However, the error message it
-            // sends is a bit cryptic for a CQL3 user, so validating here for a sake of returning a better error message
-            // Do note that we need isCompatibleWith here, not just isValueCompatibleWith.
-            if (!type->is_compatible_with(*def->type)) {
-                throw exceptions::configuration_exception(sprint("Cannot change %s from type %s to type %s: types are not order-compatible.",
-                    column_name,
-                    def->type->as_cql3_type(),
-                    validator));
-            }
-            break;
-
-        case column_kind::regular_column:
-        case column_kind::static_column:
-            // Thrift allows to change a column validator so CFMetaData.validateCompatibility will let it slide
-            // if we change to an incompatible type (contrarily to the comparator case). But we don't want to
-            // allow it for CQL3 (see #5882) so validating it explicitly here. We only care about value compatibility
-            // though since we won't compare values (except when there is an index, but that is validated by
-            // ColumnDefinition already).
-            if (!type->is_value_compatible_with(*def->type)) {
-                throw exceptions::configuration_exception(sprint("Cannot change %s from type %s to type %s: types are incompatible.",
-                    column_name,
-                    def->type->as_cql3_type(),
-                    validator));
-            }
-            break;
-        }
+        auto type = validate_alter(schema, *def, *validator);
         // In any case, we update the column definition
         cfm.with_altered_column_type(column_name->name(), type);
+
+        // We also have to validate the view types here. If we have a view which includes a column as part of
+        // the clustering key, we need to make sure that it is indeed compatible.
+        for (auto&& view : cf.views()) {
+            auto* view_def = view->get_column_definition(column_name->name());
+            if (view_def) {
+                schema_builder builder(view);
+                auto view_type = validate_alter(view, *view_def, *validator);
+                builder.with_altered_column_type(column_name->name(), std::move(view_type));
+                view_updates.push_back(builder.build());
+            }
+        }
         break;
     }
     case alter_table_statement::type::drop:
+    {
         assert(column_name);
         if (!schema->is_cql3_table()) {
             throw exceptions::invalid_request_exception("Cannot drop columns from a non-CQL3 table");
@@ -219,7 +286,18 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
                 }
             }
         }
+
+        // If a column is dropped which is included in a view, we don't allow the drop to take place.
+        auto view_names = ::join(", ", cf.views()
+                   | boost::adaptors::filtered([&] (auto&& v) { return bool(v->get_column_definition(column_name->name())); })
+                   | boost::adaptors::transformed([] (auto&& v) { return v->cf_name(); }));
+        if (!view_names.empty()) {
+            throw exceptions::invalid_request_exception(sprint(
+                    "Cannot drop column %s, depended on by materialized views (%s.{%s})",
+                    column_name, keyspace(), view_names));
+        }
         break;
+    }
 
     case alter_table_statement::type::opts:
         if (!_properties) {
@@ -227,6 +305,15 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
         }
 
         _properties->validate();
+
+        if (!cf.views().empty() && _properties->get_gc_grace_seconds() == 0) {
+            throw exceptions::invalid_request_exception(
+                    "Cannot alter gc_grace_seconds of the base table of a "
+                    "materialized view to 0, since this value is used to TTL "
+                    "undelivered updates. Setting gc_grace_seconds too low might "
+                    "cause undelivered updates to expire "
+                    "before being replayed.");
+        }
 
         if (schema->is_counter() && _properties->get_default_time_to_live() > 0) {
             throw exceptions::invalid_request_exception("Cannot set default_time_to_live on a table with counters");
@@ -240,29 +327,39 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
             auto from = entry.first->prepare_column_identifier(schema);
             auto to = entry.second->prepare_column_identifier(schema);
 
-            auto def = schema->get_column_definition(from->name());
-            if (!def) {
-                throw exceptions::invalid_request_exception(sprint("Cannot rename unknown column %s in table %s", from, column_family()));
-            }
-
-            if (schema->get_column_definition(to->name())) {
-                throw exceptions::invalid_request_exception(sprint("Cannot rename column %s to %s in table %s; another column of that name already exist", from, to, column_family()));
-            }
-
-            if (def->is_part_of_cell_name()) {
-                throw exceptions::invalid_request_exception(sprint("Cannot rename non PRIMARY KEY part %s", from));
-            }
-
-            if (def->is_indexed()) {
-                throw exceptions::invalid_request_exception(sprint("Cannot rename column %s because it is secondary indexed", from));
-            }
-
+            validate_column_rename(*schema, *from, *to);
             cfm.with_column_rename(from->name(), to->name());
+
+            // If the view includes a renamed column, it must be renamed in the view table and the definition.
+            for (auto&& view : cf.views()) {
+                if (view->get_column_definition(from->name())) {
+                    schema_builder builder(view);
+
+                    auto view_from = entry.first->prepare_column_identifier(view);
+                    auto view_to = entry.second->prepare_column_identifier(view);
+                    validate_column_rename(*view, *view_from, *view_to);
+                    builder.with_column_rename(view_from->name(), view_to->name());
+
+                    auto new_where = util::rename_column_in_where_clause(
+                            view->view_info()->where_clause(),
+                            column_identifier::raw(view_from->text(), true),
+                            column_identifier::raw(view_to->text(), true));
+                    builder.with_view_info(view->view_info()->base_id(), view->view_info()->base_name(),
+                            view->view_info()->include_all_columns(), std::move(new_where));
+
+                    view_updates.push_back(builder.build());
+                }
+            }
         }
         break;
     }
 
-    return service::get_local_migration_manager().announce_column_family_update(cfm.build(), false, is_local_only).then([] {
+    auto f = service::get_local_migration_manager().announce_column_family_update(cfm.build(), false, is_local_only);
+    return f.then([is_local_only, view_updates = std::move(view_updates)] {
+        return parallel_for_each(view_updates, [is_local_only] (auto&& view) {
+            return service::get_local_migration_manager().announce_view_update(view_ptr(std::move(view)), is_local_only);
+        });
+    }).then([] {
         return true;
     });
 }
