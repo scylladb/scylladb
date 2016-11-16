@@ -501,7 +501,7 @@ static thread_local semaphore parallelism_semaphore(parallelism);
 // Comparable to RepairJob in Origin.
 static future<> repair_cf_range(repair_info& ri,
         sstring cf, ::nonwrapping_range<dht::token> range,
-        std::vector<gms::inet_address>& neighbors) {
+        const std::vector<gms::inet_address>& neighbors) {
     if (neighbors.empty()) {
         // Nothing to do in this case...
         return make_ready_future<>();
@@ -658,7 +658,7 @@ static future<> repair_cf_range(repair_info& ri,
 // Comparable to RepairSession in Origin
 static future<> repair_range(repair_info& ri, auto& range) {
     auto id = utils::UUID_gen::get_time_UUID();
-    return do_with(get_neighbors(ri.db.local(), ri.keyspace, range, ri.data_centers, ri.hosts), [&ri, range, id] (auto& neighbors) {
+    return do_with(get_neighbors(ri.db.local(), ri.keyspace, range, ri.data_centers, ri.hosts), [&ri, range, id] (const auto& neighbors) {
         logger.debug("[repair #{}] new session: will sync {} on range {} for {}.{}", id, neighbors, range, ri.keyspace, ri.cfs);
         return do_for_each(ri.cfs.begin(), ri.cfs.end(), [&ri, &neighbors, range] (auto&& cf) {
             return repair_cf_range(ri, cf, range, neighbors);
