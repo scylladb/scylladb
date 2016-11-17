@@ -125,7 +125,8 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
     // This semaphore will cap the amount of background work that we have. Note that we're not
     // overly concerned about memtable memory, because dirty memory will put a limit to that. This
     // is mostly about dangling continuations. So that doesn't have to be a small number.
-    semaphore _background_work_flush_serializer = { 20 };
+    static constexpr unsigned _max_background_work = 20;
+    semaphore _background_work_flush_serializer = { _max_background_work };
     condition_variable _should_flush;
     int64_t _dirty_bytes_released_pre_accounted = 0;
 
@@ -145,7 +146,6 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
         auto it = _flush_manager.find(region);
         if (it != _flush_manager.end()) {
             _flush_manager.erase(it);
-            _should_flush.signal();
         }
     }
     future<> _waiting_flush;
