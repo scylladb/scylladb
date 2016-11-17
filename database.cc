@@ -1115,15 +1115,15 @@ column_family::start() {
 
 future<>
 column_family::stop() {
-    _memtables->request_flush();
-    _streaming_memtables->request_flush();
-    return _compaction_manager.remove(this).then([this] {
-        // Nest, instead of using when_all, so we don't lose any exceptions.
-        return _flush_queue->close().then([this] {
-            return _streaming_flush_gate.close();
+    return when_all(_memtables->request_flush(), _streaming_memtables->request_flush()).discard_result().finally([this] {
+        return _compaction_manager.remove(this).then([this] {
+            // Nest, instead of using when_all, so we don't lose any exceptions.
+            return _flush_queue->close().then([this] {
+                return _streaming_flush_gate.close();
+            });
+        }).then([this] {
+            return _sstable_deletion_gate.close();
         });
-    }).then([this] {
-        return _sstable_deletion_gate.close();
     });
 }
 
@@ -2558,11 +2558,11 @@ future<> dirty_memory_manager::flush_one(memtable_list& mtlist, semaphore_units<
     // that we're picking from this region_group, we can simplify this.
     dirty_memory_manager::from_region_group(region_group)._flush_manager.emplace(region, std::move(permit));
     auto fut = mtlist.seal_active_memtable(memtable_list::flush_behavior::immediate);
-    return get_units(_background_work_flush_serializer, 1).then([this, fut = std::move(fut), region, schema] (auto permit) mutable {
-        return std::move(fut).handle_exception([this, region, schema] (auto exp) {
+    return get_units(_background_work_flush_serializer, 1).then([this, fut = std::move(fut), region, region_group, schema] (auto permit) mutable {
+        return std::move(fut).handle_exception([this, region, region_group, schema] (auto exp) {
             // Some exception happenend, and we can't know at which point. It could be that because
             // of that the permits are still dangling. We have to remove it.
-            this->remove_from_flush_manager(region);
+            dirty_memory_manager::from_region_group(region_group).remove_from_flush_manager(region);
             dblog.error("Failed to flush memtable, {}:{}", schema->ks_name(), schema->cf_name());
             return make_exception_future<>(std::move(exp));
         });
@@ -2605,6 +2605,13 @@ future<> dirty_memory_manager::flush_when_needed() {
                 return make_ready_future<>();
             });
         });
+    }).finally([this] {
+        // We'll try to acquire the permit here to make sure we only really stop when there are no
+        // in-flight flushes. Our stop condition checks for the presence of waiters, but it could be
+        // that we have no waiters, but a flush still in flight. We wait for all background work to
+        // stop. When that stops, we know that the foreground work in the _flush_serializer has
+        // stopped as well.
+        return get_units(_background_work_flush_serializer, _max_background_work);
     });
 }
 
