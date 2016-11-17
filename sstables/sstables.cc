@@ -2262,8 +2262,11 @@ remove_by_toc_name(sstring sstable_toc_name, const io_error_handler& error_handl
             dir = dirname(sstable_toc_name);
             sstable_io_check(error_handler, rename_file, sstable_toc_name, new_toc_name).get();
             fsync_directory(error_handler, dir).get();
-        } else {
+        } else if (sstable_io_check(error_handler, file_exists, new_toc_name).get0()) {
             dir = dirname(new_toc_name);
+        } else {
+            sstlog.warn("Unable to delete {} because it doesn't exist.", sstable_toc_name);
+            return;
         }
 
         auto toc_file = open_checked_file_dma(error_handler, new_toc_name, open_flags::ro).get0();
