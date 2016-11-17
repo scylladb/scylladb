@@ -57,6 +57,8 @@ public:
     streaming::stream_plan sp_out;
     // FIXME: this "100" needs to be a parameter.
     uint64_t target_partitions = 100;
+    // FIXME: this "10 * 1024 * 1024" needs to be a parameter.
+    size_t sub_ranges_max = 10 * 1024 * 1024;
 public:
     repair_info(seastar::sharded<database>& db_,
             const sstring& keyspace_,
@@ -549,6 +551,9 @@ static future<> repair_cf_range(repair_info& ri,
             split_and_add(ranges, range, estimated_partitions, ri.target_partitions);
         }
         estimated_partitions /= 2;
+        if (ranges.size() >= ri.sub_ranges_max) {
+            break;
+        }
     }
     logger.debug("target_partitions={}, estimated_partitions={}, ranges.size={}, range={} -> ranges={}",
                   ri.target_partitions, estimated_partitions, ranges.size(), range, ranges);
