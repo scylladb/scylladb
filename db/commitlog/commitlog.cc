@@ -1583,7 +1583,7 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
         }
         future<> stop() {
             eof = true;
-            return make_ready_future<>();
+            return fin.close();
         }
         future<> fail() {
             failed = true;
