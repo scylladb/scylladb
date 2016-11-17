@@ -98,28 +98,28 @@ lw_shared_ptr<memtable_list>
 column_family::make_memory_only_memtable_list() {
     auto seal = [this] (memtable_list::flush_behavior ignored) { return make_ready_future<>(); };
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_memtable_size, _config.dirty_memory_manager);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager);
 }
 
 lw_shared_ptr<memtable_list>
 column_family::make_memtable_list() {
     auto seal = [this] (memtable_list::flush_behavior behavior) { return seal_active_memtable(behavior); };
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_memtable_size, _config.dirty_memory_manager);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager);
 }
 
 lw_shared_ptr<memtable_list>
 column_family::make_streaming_memtable_list() {
     auto seal = [this] (memtable_list::flush_behavior behavior) { return seal_active_streaming_memtable(behavior); };
     auto get_schema =  [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_streaming_memtable_size, _config.streaming_dirty_memory_manager);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager);
 }
 
 lw_shared_ptr<memtable_list>
 column_family::make_streaming_memtable_big_list(streaming_memtable_big& smb) {
     auto seal = [this, &smb] (memtable_list::flush_behavior) { return seal_active_streaming_memtable_big(smb); };
     auto get_schema =  [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_streaming_memtable_size, _config.streaming_dirty_memory_manager);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager);
 }
 
 column_family::column_family(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager)
@@ -904,10 +904,6 @@ column_family::seal_active_streaming_memtable_delayed() {
         return make_ready_future<>();
     }
 
-    if (_streaming_memtables->should_flush()) {
-        return seal_active_streaming_memtable_immediate();
-    }
-
     if (!_delayed_streaming_flush.armed()) {
             // We don't want to wait for too long, because the incoming mutations will not be available
             // until we flush them to SSTables. On top of that, if the sender ran out of messages, it won't
@@ -938,8 +934,7 @@ column_family::seal_active_streaming_memtable_immediate() {
         auto current_waiters = std::exchange(_waiting_streaming_flushes, shared_promise<>());
         auto f = current_waiters.get_shared_future(); // for this seal
 
-        _config.streaming_dirty_memory_manager->serialize_flush([this, old] {
-          return with_lock(_sstables_lock.for_read(), [this, old] {
+        with_lock(_sstables_lock.for_read(), [this, old] {
             auto newtab = make_lw_shared<sstables::sstable>(_schema,
                 _config.datadir, calculate_generation_for_new_table(),
                 sstables::sstable::version_types::ka,
@@ -972,7 +967,6 @@ column_family::seal_active_streaming_memtable_immediate() {
             });
             // We will also not have any retry logic. If we fail here, we'll fail the streaming and let
             // the upper layers know. They can then apply any logic they want here.
-          });
         }).then_wrapped([this, current_waiters = std::move(current_waiters)] (future <> f) mutable {
             if (f.failed()) {
                 current_waiters.set_exception(f.get_exception());
@@ -1036,12 +1030,10 @@ column_family::seal_active_memtable(memtable_list::flush_behavior ignored) {
       _config.cf_stats->pending_memtables_flushes_count++;
       _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
 
-      return _config.dirty_memory_manager->serialize_flush([this, old] {
-        return repeat([this, old] {
-            return with_lock(_sstables_lock.for_read(), [this, old] {
-                _flush_queue->check_open_gate();
-                return try_flush_memtable_to_sstable(old);
-            });
+      return repeat([this, old] {
+        return with_lock(_sstables_lock.for_read(), [this, old] {
+            _flush_queue->check_open_gate();
+            return try_flush_memtable_to_sstable(old);
         });
       }).then([this, memtable_size] {
         _config.cf_stats->pending_memtables_flushes_count--;
@@ -1123,8 +1115,8 @@ column_family::start() {
 
 future<>
 column_family::stop() {
-    _memtables->seal_active_memtable(memtable_list::flush_behavior::immediate);
-    _streaming_memtables->seal_active_memtable(memtable_list::flush_behavior::immediate);
+    _memtables->request_flush();
+    _streaming_memtables->request_flush();
     return _compaction_manager.remove(this).then([this] {
         // Nest, instead of using when_all, so we don't lose any exceptions.
         return _flush_queue->close().then([this] {
@@ -1642,7 +1634,7 @@ database::database(const db::config& cfg)
     // Note that even if we didn't allow extra memory, we would still want to keep system requests
     // in a different region group. This is because throttled requests are serviced in FIFO order,
     // and we don't want system requests to be waiting for a long time behind user requests.
-    , _system_dirty_memory_manager(*this, _memtable_total_space + (10 << 20))
+    , _system_dirty_memory_manager(*this, _memtable_total_space / 2 + (10 << 20))
     // The total space that can be used by memtables is _memtable_total_space, but we will only
     // allow the region_group to grow to half of that. This is because of virtual_dirty: memtables
     // can take a long time to flush, and if we are using the maximum amount of memory possible,
@@ -2165,8 +2157,6 @@ keyspace::make_column_family_config(const schema& s, const db::config& db_config
     cfg.enable_disk_writes = _config.enable_disk_writes;
     cfg.enable_commitlog = _config.enable_commitlog;
     cfg.enable_cache = _config.enable_cache;
-    cfg.max_memtable_size = _config.max_memtable_size;
-    cfg.max_streaming_memtable_size = _config.max_streaming_memtable_size;
     cfg.dirty_memory_manager = _config.dirty_memory_manager;
     cfg.streaming_dirty_memory_manager = _config.streaming_dirty_memory_manager;
     cfg.read_concurrency_config = _config.read_concurrency_config;
@@ -2466,7 +2456,6 @@ column_family::apply(const mutation& m, const db::replay_position& rp) {
     utils::latency_counter lc;
     _stats.writes.set_latency(lc);
     _memtables->active_memtable().apply(m, rp);
-    _memtables->seal_on_overflow();
     _stats.writes.mark(lc);
     if (lc.is_start()) {
         _stats.estimated_write.add(lc.latency(), _stats.writes.hist.count);
@@ -2479,7 +2468,6 @@ column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const
     _stats.writes.set_latency(lc);
     check_valid_rp(rp);
     _memtables->active_memtable().apply(m, m_schema, rp);
-    _memtables->seal_on_overflow();
     _stats.writes.mark(lc);
     if (lc.is_start()) {
         _stats.estimated_write.add(lc.latency(), _stats.writes.hist.count);
@@ -2492,7 +2480,6 @@ void column_family::apply_streaming_mutation(schema_ptr m_schema, utils::UUID pl
         return;
     }
     _streaming_memtables->active_memtable().apply(m, m_schema);
-    _streaming_memtables->seal_on_overflow();
 }
 
 void column_family::apply_streaming_big_mutation(schema_ptr m_schema, utils::UUID plan_id, const frozen_mutation& m) {
@@ -2503,7 +2490,6 @@ void column_family::apply_streaming_big_mutation(schema_ptr m_schema, utils::UUI
     }
     auto entry = it->second;
     entry->memtables->active_memtable().apply(m, m_schema);
-    entry->memtables->seal_on_overflow();
 }
 
 void
@@ -2515,39 +2501,96 @@ column_family::check_valid_rp(const db::replay_position& rp) const {
 
 future<> dirty_memory_manager::shutdown() {
     _db_shutdown_requested = true;
-    return _waiting_flush_gate.close().then([this] {
+    _should_flush.signal();
+    return std::move(_waiting_flush).then([this] {
         return _region_group.shutdown();
     });
 }
 
-void dirty_memory_manager::maybe_do_active_flush() {
-    if (!_db || !under_pressure() || _db_shutdown_requested) {
-        return;
+future<> memtable_list::request_flush() {
+    if (!_flush_coalescing) {
+        _flush_coalescing = shared_promise<>();
+        return _dirty_memory_manager->get_flush_permit().then([this] (auto permit) {
+            auto current_flush = std::move(*_flush_coalescing);
+            _flush_coalescing = {};
+            return _dirty_memory_manager->flush_one(*this, std::move(permit)).then_wrapped([this, current_flush = std::move(current_flush)] (auto f) mutable {
+                if (f.failed()) {
+                    current_flush.set_exception(f.get_exception());
+                } else {
+                    current_flush.set_value();
+                }
+            });
+        });
+    } else {
+        return _flush_coalescing->get_shared_future();
+    }
+}
+
+future<> dirty_memory_manager::flush_one(memtable_list& mtlist, semaphore_units<> permit) {
+    if (mtlist.back()->empty()) {
+        return make_ready_future<>();
     }
 
-    // Flush already ongoing. We don't need to initiate an active flush at this moment.
-    if (_flush_serializer.current() == 0) {
-        return;
-    }
+    auto* region = &(mtlist.back()->region());
+    auto* region_group = mtlist.back()->region_group();
+    auto schema = mtlist.back()->schema();
+    // Because the region groups are hierarchical, when we pick the biggest region creating pressure
+    // (in the memory-driven flush case) we may be picking a memtable that is placed in a region
+    // group below ours. That's totally fine and we can certainly use our semaphore to account for
+    // it, but we need to destroy the semaphore units from the right flush manager.
+    //
+    // If we abandon size-driven flush and go with another flushing scheme that always guarantees
+    // that we're picking from this region_group, we can simplify this.
+    dirty_memory_manager::from_region_group(region_group)._flush_manager.emplace(region, std::move(permit));
+    auto fut = mtlist.seal_active_memtable(memtable_list::flush_behavior::immediate);
+    return get_units(_background_work_flush_serializer, 1).then([this, fut = std::move(fut), region, schema] (auto permit) mutable {
+        return std::move(fut).handle_exception([this, region, schema] (auto exp) {
+            // Some exception happenend, and we can't know at which point. It could be that because
+            // of that the permits are still dangling. We have to remove it.
+            this->remove_from_flush_manager(region);
+            dblog.error("Failed to flush memtable, {}:{}", schema->ks_name(), schema->cf_name());
+            return make_exception_future<>(std::move(exp));
+        });
+    });
+}
 
-    // There are many criteria that can be used to select what is the best memtable to
-    // flush. Most of the time we want some coordination with the commitlog to allow us to
-    // release commitlog segments as early as we can.
-    //
-    // But during pressure condition, we'll just pick the CF that holds the largest
-    // memtable. The advantage of doing this is that this is objectively the one that will
-    // release the biggest amount of memory and is less likely to be generating tiny
-    // SSTables. The disadvantage is that right now, because we only release memory when the
-    // SSTable is fully written, that may take a bit of time to happen.
-    //
-    // However, since we'll very soon have a mechanism in place to account for the memory
-    // that was already written in one form or another, that disadvantage is mitigated.
-    memtable& biggest_memtable = memtable::from_region(*_region_group.get_largest_region());
-    auto& biggest_cf = _db->find_column_family(biggest_memtable.schema());
-    memtable_list& mtlist = get_memtable_list(biggest_cf);
-    // Please note that this will eventually take the semaphore and prevent two concurrent flushes.
-    // We don't need any other extra protection.
-    mtlist.seal_active_memtable(memtable_list::flush_behavior::immediate);
+future<> dirty_memory_manager::flush_when_needed() {
+    if (!_db) {
+        return make_ready_future<>();
+    }
+    // If there are explicit flushes requested, we must wait for them to finish before we stop.
+    return do_until([this] { return _db_shutdown_requested && !_flush_serializer.waiters(); }, [this] {
+        auto has_work = [this] { return _flush_serializer.waiters() || over_soft_limit() || _db_shutdown_requested; };
+        return _should_flush.wait(std::move(has_work)).then([this] {
+            return get_flush_permit().then([this] (auto permit) {
+                // We give priority to explicit flushes. They are mainly user-initiated flushes,
+                // flushes coming from a DROP statement, or commitlog flushes.
+                if (_flush_serializer.waiters()) {
+                    return make_ready_future<>();
+                }
+                // condition abated while we waited for the semaphore
+                if (!this->over_soft_limit() || _db_shutdown_requested) {
+                    return make_ready_future<>();
+                }
+                // There are many criteria that can be used to select what is the best memtable to
+                // flush. Most of the time we want some coordination with the commitlog to allow us to
+                // release commitlog segments as early as we can.
+                //
+                // But during pressure condition, we'll just pick the CF that holds the largest
+                // memtable. The advantage of doing this is that this is objectively the one that will
+                // release the biggest amount of memory and is less likely to be generating tiny
+                // SSTables.
+                memtable& biggest_memtable = memtable::from_region(*(this->_region_group.get_largest_region()));
+                auto& cf = _db->find_column_family(biggest_memtable.schema()->id());
+                memtable_list& mtlist = this->get_memtable_list(cf);
+                // Do not wait. The semaphore will protect us against a concurrent flush. But we
+                // want to start a new one as soon as the permits are destroyed and the semaphore is
+                // made ready again, not when we are done with the current one.
+                this->flush_one(mtlist, std::move(permit));
+                return make_ready_future<>();
+            });
+        });
+    });
 }
 
 memtable_list& memtable_dirty_memory_manager::get_memtable_list(column_family& cf) {
@@ -2559,7 +2602,7 @@ memtable_list& streaming_dirty_memory_manager::get_memtable_list(column_family& 
 }
 
 void dirty_memory_manager::start_reclaiming() {
-    maybe_do_active_flush();
+    _should_flush.signal();
 }
 
 future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position rp) {
@@ -2635,10 +2678,6 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
         cfg.enable_disk_reads = true; // we allways read from disk
         cfg.enable_commitlog = ksm.durable_writes() && _cfg->enable_commitlog() && !_cfg->enable_in_memory_data_store();
         cfg.enable_cache = _cfg->enable_cache();
-        cfg.max_memtable_size = _memtable_total_space * _cfg->memtable_cleanup_threshold();
-        // We should guarantee that at least two memtable are available, otherwise after flush, adding another memtable would
-        // easily take us into throttling until the first one is flushed.
-        cfg.max_streaming_memtable_size = std::min(cfg.max_memtable_size, _streaming_memtable_total_space / 2);
 
     } else {
         cfg.datadir = "";
@@ -2646,9 +2685,6 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
         cfg.enable_disk_reads = false;
         cfg.enable_commitlog = false;
         cfg.enable_cache = false;
-        cfg.max_memtable_size = std::numeric_limits<size_t>::max();
-        // All writes should go to the main memtable list if we're not durable
-        cfg.max_streaming_memtable_size = 0;
     }
     cfg.dirty_memory_manager = &_dirty_memory_manager;
     cfg.streaming_dirty_memory_manager = &_streaming_dirty_memory_manager;
@@ -3095,21 +3131,17 @@ future<std::unordered_map<sstring, column_family::snapshot_details>> column_fami
 future<> column_family::flush() {
     _stats.pending_flushes++;
 
-    auto fut = _memtables->seal_active_memtable(memtable_list::flush_behavior::immediate);
-    // this rp is either:
-    // a.) Done - no-op
-    // b.) Ours
-    // c.) The last active flush not finished. If our latest memtable is
-    //     empty it still makes sense for this api call to wait for this.
-    auto high_rp = _highest_flushed_rp;
-
-    return fut.finally([this, high_rp] {
+    // highest_flushed_rp is only updated when we flush. If the memtable is currently alive, then
+    // the most up2date replay position is the one that's in there now. Otherwise, if the memtable
+    // hasn't received any writes yet, that's the one from the last flush we made.
+    auto desired_rp = _memtables->back()->empty() ? _highest_flushed_rp : _memtables->back()->replay_position();
+    return _memtables->request_flush().finally([this, desired_rp] {
         _stats.pending_flushes--;
         // In origin memtable_switch_count is incremented inside
         // ColumnFamilyMeetrics Flush.run
         _stats.memtable_switch_count++;
         // wait for all up until us.
-        return _flush_queue->wait_for_pending(high_rp);
+        return _flush_queue->wait_for_pending(desired_rp);
     });
 }
 
@@ -3126,7 +3158,7 @@ future<> column_family::flush(const db::replay_position& pos) {
     // We ignore this for now and just say that if we're asked for
     // a CF and it exists, we pretty much have to have data that needs
     // flushing. Let's do it.
-    return _memtables->seal_active_memtable(memtable_list::flush_behavior::immediate);
+    return _memtables->request_flush();
 }
 
 // FIXME: We can do much better than this in terms of cache management. Right
@@ -3167,7 +3199,7 @@ future<> column_family::flush_streaming_big_mutations(utils::UUID plan_id) {
     }
     auto entry = it->second;
     _streaming_memtables_big.erase(it);
-    return entry->memtables->seal_active_memtable(memtable_list::flush_behavior::immediate).then([entry] {
+    return entry->memtables->request_flush().then([entry] {
         return entry->flush_in_progress.close();
     }).then([this, entry] {
         return parallel_for_each(entry->sstables, [this] (auto& sst) {

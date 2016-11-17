@@ -409,29 +409,6 @@ partitioner: org.apache.cassandra.dht.Murmur3Partitioner
 # the smaller of 1/4 of heap or 512MB.
 # file_cache_size_in_mb: 512
 
-# Total permitted memory to use for memtables. Scylla will stop 
-# accepting writes when the limit is exceeded until a flush completes,
-# and will trigger a flush based on memtable_cleanup_threshold
-# If omitted, Scylla will set both to 1/4 the size of the heap.
-# memtable_heap_space_in_mb: 2048
-# memtable_offheap_space_in_mb: 2048
-
-# Ratio of occupied non-flushing memtable size to total permitted size
-# that will trigger a flush of the largest memtable.  Lager mct will
-# mean larger flushes and hence less compaction, but also less concurrent
-# flush activity which can make it difficult to keep your disks fed
-# under heavy write load.
-#
-# memtable_cleanup_threshold defaults to 1 / (memtable_flush_writers + 1)
-# memtable_cleanup_threshold: 0.11
-
-# Specify the way Scylla allocates and manages memtable memory.
-# Options are:
-#   heap_buffers:    on heap nio buffers
-#   offheap_buffers: off heap (direct) nio buffers
-#   offheap_objects: native memory, eliminating nio buffer heap overhead
-# memtable_allocation_type: heap_buffers
-
 # Total space to use for commitlogs.
 #
 # If space gets above this value (it will round up to the next nearest
@@ -442,17 +419,6 @@ partitioner: org.apache.cassandra.dht.Murmur3Partitioner
 # A value of -1 (default) will automatically equate it to the total amount of memory
 # available for Scylla.
 commitlog_total_space_in_mb: -1
-
-# This sets the amount of memtable flush writer threads.  These will
-# be blocked by disk io, and each one will hold a memtable in memory
-# while blocked. 
-#
-# memtable_flush_writers defaults to the smaller of (number of disks,
-# number of cores), with a minimum of 2 and a maximum of 8.
-# 
-# If your data directories are backed by SSD, you should increase this
-# to the number of cores.
-#memtable_flush_writers: 8
 
 # A fixed memory pool size in MB for for SSTable index summaries. If left
 # empty, this will default to 5% of the heap size. If the memory usage of
