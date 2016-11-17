@@ -799,7 +799,7 @@ public:
     }
 #endif
 public:
-    std::unordered_set<dht::token> get_local_tokens();
+    future<std::unordered_set<dht::token>> get_local_tokens();
 
 #if 0
     /* These methods belong to the MBean interface */
