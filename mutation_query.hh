@@ -68,13 +68,15 @@ struct partition {
 class reconcilable_result {
     uint32_t _row_count;
     query::short_read _short_read;
+    query::result_memory_tracker _memory_tracker;
     std::vector<partition> _partitions;
 public:
     ~reconcilable_result();
     reconcilable_result();
     reconcilable_result(reconcilable_result&&) = default;
     reconcilable_result& operator=(reconcilable_result&&) = default;
-    reconcilable_result(uint32_t row_count, std::vector<partition> partitions, query::short_read short_read);
+    reconcilable_result(uint32_t row_count, std::vector<partition> partitions, query::short_read short_read,
+                        query::result_memory_tracker memory_tracker = { });
 
     const std::vector<partition>& partitions() const;
     std::vector<partition>& partitions();

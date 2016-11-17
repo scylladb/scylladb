@@ -258,25 +258,30 @@ class result {
     stdx::optional<uint32_t> _row_count;
     api::timestamp_type _last_modified = api::missing_timestamp;
     short_read _short_read;
+    query::result_memory_tracker _memory_tracker;
 public:
     class builder;
     class partition_writer;
     friend class result_merger;
 
     result();
-    result(bytes_ostream&& w, short_read sr, stdx::optional<uint32_t> c = { })
+    result(bytes_ostream&& w, short_read sr, stdx::optional<uint32_t> c = { },
+           result_memory_tracker memory_tracker = { })
         : _w(std::move(w))
         , _row_count(c)
         , _short_read(sr)
+        , _memory_tracker(std::move(_memory_tracker))
     {
         w.reduce_chunk_count();
     }
-    result(bytes_ostream&& w, stdx::optional<result_digest> d, api::timestamp_type last_modified, short_read sr, stdx::optional<uint32_t> c = { })
+    result(bytes_ostream&& w, stdx::optional<result_digest> d, api::timestamp_type last_modified,
+           short_read sr, stdx::optional<uint32_t> c = { }, result_memory_tracker memory_tracker = { })
         : _w(std::move(w))
         , _digest(d)
         , _row_count(c)
         , _last_modified(last_modified)
         , _short_read(sr)
+        , _memory_tracker(std::move(memory_tracker))
     {
         w.reduce_chunk_count();
     }

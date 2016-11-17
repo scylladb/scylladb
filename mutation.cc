@@ -145,7 +145,7 @@ mutation::query(const query::partition_slice& slice,
     query::result_request request,
     gc_clock::time_point now, uint32_t row_limit) &&
 {
-    query::result::builder builder(slice, request);
+    query::result::builder builder(slice, request, { });
     std::move(*this).query(builder, slice, now, row_limit);
     return builder.build();
 }

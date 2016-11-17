@@ -2344,7 +2344,7 @@ struct query_state {
                          const std::vector<query::partition_range>& ranges)
             : schema(std::move(s))
             , cmd(cmd)
-            , builder(cmd.slice, request)
+            , builder(cmd.slice, request, { })
             , limit(cmd.row_limit)
             , partition_limit(cmd.partition_limit)
             , current_partition_range(ranges.begin())
