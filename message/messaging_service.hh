@@ -33,6 +33,7 @@
 #include "range.hh"
 #include "repair/repair.hh"
 #include "tracing/tracing.hh"
+#include "digest_algorithm.hh"
 
 #include <seastar/net/tls.hh>
 
@@ -298,9 +299,9 @@ public:
 
     // Wrapper for READ_DATA
     // Note: WTH is future<foreign_ptr<lw_shared_ptr<query::result>>
-    void register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (const rpc::client_info&, query::read_command cmd, compat::wrapping_partition_range pr)>&& func);
+    void register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (const rpc::client_info&, query::read_command cmd, compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> digest)>&& func);
     void unregister_read_data();
-    future<query::result> send_read_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const query::partition_range& pr);
+    future<query::result> send_read_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const query::partition_range& pr, query::digest_algorithm da);
 
     // Wrapper for GET_SCHEMA_VERSION
     void register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func);

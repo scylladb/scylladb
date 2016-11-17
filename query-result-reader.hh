@@ -24,6 +24,7 @@
 #include "query-request.hh"
 #include "query-result.hh"
 #include "utils/data_input.hh"
+#include "digest_algorithm.hh"
 
 #include "idl/uuid.dist.hh"
 #include "idl/keys.dist.hh"

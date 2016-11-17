@@ -37,6 +37,7 @@
 #include "range.hh"
 #include "frozen_schema.hh"
 #include "repair/repair.hh"
+#include "digest_algorithm.hh"
 #include "idl/tracing.dist.hh"
 #include "idl/result.dist.hh"
 #include "idl/reconcilable_result.dist.hh"
@@ -51,6 +52,7 @@
 #include "idl/read_command.dist.hh"
 #include "idl/range.dist.hh"
 #include "idl/partition_checksum.dist.hh"
+#include "idl/query.dist.hh"
 #include "serializer_impl.hh"
 #include "serialization_visitors.hh"
 #include "idl/tracing.dist.impl.hh"
@@ -67,6 +69,7 @@
 #include "idl/read_command.dist.impl.hh"
 #include "idl/range.dist.impl.hh"
 #include "idl/partition_checksum.dist.impl.hh"
+#include "idl/query.dist.impl.hh"
 #include "rpc/lz4_compressor.hh"
 #include "rpc/multi_algo_compressor_factory.hh"
 #include "partition_range_compat.hh"
@@ -825,14 +828,14 @@ future<> messaging_service::send_mutation_done(msg_addr id, unsigned shard, resp
     return send_message_oneway(this, messaging_verb::MUTATION_DONE, std::move(id), std::move(shard), std::move(response_id));
 }
 
-void messaging_service::register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (const rpc::client_info&, query::read_command cmd, compat::wrapping_partition_range pr)>&& func) {
+void messaging_service::register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (const rpc::client_info&, query::read_command cmd, compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda)>&& func) {
     register_handler(this, net::messaging_verb::READ_DATA, std::move(func));
 }
 void messaging_service::unregister_read_data() {
     _rpc->unregister_handler(net::messaging_verb::READ_DATA);
 }
-future<query::result> messaging_service::send_read_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const query::partition_range& pr) {
-    return send_message_timeout<query::result>(this, messaging_verb::READ_DATA, std::move(id), timeout, cmd, pr);
+future<query::result> messaging_service::send_read_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const query::partition_range& pr, query::digest_algorithm da) {
+    return send_message_timeout<query::result>(this, messaging_verb::READ_DATA, std::move(id), timeout, cmd, pr, da);
 }
 
 void messaging_service::register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func) {

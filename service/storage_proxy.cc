@@ -2151,15 +2151,17 @@ protected:
             });
         }
     }
-    future<foreign_ptr<lw_shared_ptr<query::result>>> make_data_request(gms::inet_address ep, clock_type::time_point timeout) {
+    future<foreign_ptr<lw_shared_ptr<query::result>>> make_data_request(gms::inet_address ep, clock_type::time_point timeout, bool want_digest) {
         ++_proxy->_stats.data_read_attempts.get_ep_stat(ep);
         if (is_me(ep)) {
             tracing::trace(_trace_state, "read_data: querying locally");
-            return _proxy->query_singular_local(_schema, _cmd, _partition_range, query::result_request::result_and_digest, _trace_state);
+            auto qrr = want_digest ? query::result_request::result_and_digest : query::result_request::only_result;
+            return _proxy->query_singular_local(_schema, _cmd, _partition_range, qrr, _trace_state);
         } else {
             auto& ms = net::get_local_messaging_service();
             tracing::trace(_trace_state, "read_data: sending a message to /{}", ep);
-            return ms.send_read_data(net::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range).then([this, ep](query::result&& result) {
+            auto da = want_digest ? query::digest_algorithm::MD5 : query::digest_algorithm::none;
+            return ms.send_read_data(net::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, da).then([this, ep](query::result&& result) {
                 tracing::trace(_trace_state, "read_data: got response from /{}", ep);
                 return make_foreign(::make_lw_shared<query::result>(std::move(result)));
             });
@@ -2192,9 +2194,9 @@ protected:
             });
         });
     }
-    future<> make_data_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
-        return parallel_for_each(begin, end, [this, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
-            return make_data_request(ep, timeout).then_wrapped([this, resolver, ep] (future<foreign_ptr<lw_shared_ptr<query::result>>> f) {
+    future<> make_data_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout, bool want_digest) {
+        return parallel_for_each(begin, end, [this, resolver = std::move(resolver), timeout, want_digest] (gms::inet_address ep) {
+            return make_data_request(ep, timeout, want_digest).then_wrapped([this, resolver, ep] (future<foreign_ptr<lw_shared_ptr<query::result>>> f) {
                 try {
                     resolver->add_data(ep, f.get0());
                     ++_proxy->_stats.data_read_completed.get_ep_stat(ep);
@@ -2221,7 +2223,8 @@ protected:
     }
     virtual future<> make_requests(digest_resolver_ptr resolver, clock_type::time_point timeout) {
         resolver->add_wait_targets(_targets.size());
-        return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 1, timeout),
+        auto want_digest = _targets.size() > 1;
+        return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 1, timeout, want_digest),
                         make_digest_requests(resolver, _targets.begin() + 1, _targets.end(), timeout)).discard_result();
     }
     virtual void got_cl() {}
@@ -2368,7 +2371,9 @@ public:
     using abstract_read_executor::abstract_read_executor;
     virtual future<> make_requests(digest_resolver_ptr resolver, std::chrono::steady_clock::time_point timeout) {
         resolver->add_wait_targets(_targets.size());
-        return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 2, timeout),
+        // FIXME: consider disabling for CL=*ONE
+        bool want_digest = true;
+        return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 2, timeout, want_digest),
                         make_digest_requests(resolver, _targets.begin() + 2, _targets.end(), timeout)).discard_result();
     }
 };
@@ -2382,9 +2387,11 @@ public:
         _speculate_timer.set_callback([this, resolver, timeout] {
             if (!resolver->is_completed()) { // at the time the callback runs request may be completed already
                 resolver->add_wait_targets(1); // we send one more request so wait for it too
+                // FIXME: consider disabling for CL=*ONE
+                bool want_digest = true;
                 future<> f = resolver->has_data() ?
                         make_digest_requests(resolver, _targets.end() - 1, _targets.end(), timeout) :
-                        make_data_requests(resolver, _targets.end() - 1, _targets.end(), timeout);
+                        make_data_requests(resolver, _targets.end() - 1, _targets.end(), timeout, want_digest);
                 f.finally([exec = shared_from_this()]{});
             }
         });
@@ -2398,16 +2405,18 @@ public:
         // if CL + RR result in covering all replicas, getReadExecutor forces AlwaysSpeculating.  So we know
         // that the last replica in our list is "extra."
         resolver->add_wait_targets(_targets.size() - 1);
+        // FIXME: consider disabling for CL=*ONE
+        bool want_digest = true;
         if (_block_for < _targets.size() - 1) {
             // We're hitting additional targets for read repair.  Since our "extra" replica is the least-
             // preferred by the snitch, we do an extra data read to start with against a replica more
             // likely to reply; better to let RR fail than the entire query.
-            return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 2, timeout),
+            return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 2, timeout, want_digest),
                             make_digest_requests(resolver, _targets.begin() + 2, _targets.end(), timeout)).discard_result();
         } else {
             // not doing read repair; all replies are important, so it doesn't matter which nodes we
             // perform data reads against vs digest.
-            return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 1, timeout),
+            return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 1, timeout, want_digest),
                             make_digest_requests(resolver, _targets.begin() + 1, _targets.end() - 1, timeout)).discard_result();
         }
     }
@@ -3286,7 +3295,7 @@ void storage_proxy::init_messaging_service() {
             return net::messaging_service::no_wait();
         });
     });
-    ms.register_read_data([] (const rpc::client_info& cinfo, query::read_command cmd, compat::wrapping_partition_range pr) {
+    ms.register_read_data([] (const rpc::client_info& cinfo, query::read_command cmd, compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = net::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
@@ -3294,16 +3303,25 @@ void storage_proxy::init_messaging_service() {
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "read_data: message received from /{}", src_addr.addr);
         }
-
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr)] (compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+        auto da = oda.value_or(query::digest_algorithm::MD5);
+        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da] (compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
             auto src_ip = src_addr.addr;
-            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr] (schema_ptr s) {
+            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, da, &pr, &p, &trace_state_ptr] (schema_ptr s) {
                 auto pr2 = compat::unwrap(std::move(pr), *s);
                 if (pr2.second) {
                     // this function assumes singular queries but doesn't validate
                     throw std::runtime_error("READ_DATA called with wrapping range");
                 }
-                return p->query_singular_local(std::move(s), cmd, std::move(pr2.first), query::result_request::result_and_digest, trace_state_ptr);
+                query::result_request qrr;
+                switch (da) {
+                case query::digest_algorithm::none:
+                    qrr = query::result_request::only_result;
+                    break;
+                case query::digest_algorithm::MD5:
+                    qrr = query::result_request::result_and_digest;
+                    break;
+                }
+                return p->query_singular_local(std::move(s), cmd, std::move(pr2.first), qrr, trace_state_ptr);
             }).finally([&trace_state_ptr, src_ip] () mutable {
                 tracing::trace(trace_state_ptr, "read_data handling is done, sending a response to /{}", src_ip);
             });

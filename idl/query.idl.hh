@@ -29,4 +29,9 @@ class query_result stub [[writable]] {
     std::vector<qr_partition> partitions; // in ring order
 };
 
+enum class digest_algorithm : uint8_t {
+    none = 0,  // digest not required
+    MD5 = 1,   // default algorithm
+};
+
 }

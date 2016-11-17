@@ -25,6 +25,7 @@
 #include "atomic_cell.hh"
 #include "query-request.hh"
 #include "query-result.hh"
+#include "digest_algorithm.hh"
 
 #include "idl/uuid.dist.hh"
 #include "idl/keys.dist.hh"
