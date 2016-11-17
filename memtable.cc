@@ -254,7 +254,7 @@ class flush_memory_accounter {
 public:
     void update_bytes_read(uint64_t delta) {
         _bytes_read += delta;
-        dirty_memory_manager::from_region_group(_region.group()).account_potentially_cleaned_up_memory(delta);
+        dirty_memory_manager::from_region_group(_region.group()).account_potentially_cleaned_up_memory(&_region, delta);
     }
 
     explicit flush_memory_accounter(logalloc::region& region)
@@ -263,7 +263,7 @@ public:
 
     ~flush_memory_accounter() {
         assert(_bytes_read <= _region.occupancy().used_space());
-        dirty_memory_manager::from_region_group(_region.group()).revert_potentially_cleaned_up_memory(_bytes_read);
+        dirty_memory_manager::from_region_group(_region.group()).revert_potentially_cleaned_up_memory(&_region, _bytes_read);
     }
     void account_component(memtable_entry& e) {
         auto delta = _region.allocator().object_memory_size_in_allocator(&e)

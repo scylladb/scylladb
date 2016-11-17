@@ -134,6 +134,10 @@ public:
     const logalloc::region& region() const {
         return *this;
     }
+
+    logalloc::region_group* region_group() {
+        return group();
+    }
 public:
     size_t partition_count() const;
     logalloc::occupancy_stats occupancy() const;

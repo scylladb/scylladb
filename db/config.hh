@@ -334,7 +334,7 @@ public:
             "\toffheap_buffers  Off heap (direct) NIO buffers.\n"   \
             "\toffheap_objects  Native memory, eliminating NIO buffer heap overhead."   \
     )                                                   \
-    val(memtable_cleanup_threshold, double, .11, Used, \
+    val(memtable_cleanup_threshold, double, .11, Invalid, \
             "Ratio of occupied non-flushing memtable size to total permitted size for triggering a flush of the largest memtable. Larger values mean larger flushes and less compaction, but also less concurrent flush activity, which can make it difficult to keep your disks saturated under heavy write load." \
     )   \
     val(file_cache_size_in_mb, uint32_t, 512, Unused,  \
