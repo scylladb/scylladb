@@ -32,6 +32,8 @@
 
 namespace query {
 
+thread_local semaphore result_memory_tracker::_dummy { 0 };
+
 const partition_range full_partition_range = partition_range::make_open_ended_both_sides();
 
 const query::partition_slice full_slice = query::partition_slice({ query::clustering_range::make_open_ended_both_sides() }, { }, { }, { });
