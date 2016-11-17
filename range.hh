@@ -642,6 +642,12 @@ public:
                 ? do_upper_bound(start()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_())
                 : std::cend(r));
     }
+    // Returns a subset of the range that is within these bounds.
+    template<typename Range, typename LessComparator>
+    boost::iterator_range<typename std::remove_reference<Range>::type::const_iterator>
+    slice(Range&& range, LessComparator&& cmp) const {
+        return boost::make_iterator_range(lower_bound(range, cmp), upper_bound(range, cmp));
+    }
 
     template<typename U>
     friend std::ostream& operator<<(std::ostream& out, const nonwrapping_range<U>& r);
