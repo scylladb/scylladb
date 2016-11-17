@@ -1791,20 +1791,21 @@ public:
     void consume(tombstone t) {
         _mutation_consumer->consume(t);
     }
-    void consume(static_row&& sr, tombstone t, bool) {
-        _mutation_consumer->consume(std::move(sr), t);
+    stop_iteration consume(static_row&& sr, tombstone t, bool) {
+        return _mutation_consumer->consume(std::move(sr), t);
     }
-    void consume(clustering_row&& cr, tombstone t,  bool) {
-        _mutation_consumer->consume(std::move(cr), t);
+    stop_iteration consume(clustering_row&& cr, tombstone t,  bool) {
+        return _mutation_consumer->consume(std::move(cr), t);
     }
-    void consume(range_tombstone&& rt) {
-        _mutation_consumer->consume(std::move(rt));
+    stop_iteration consume(range_tombstone&& rt) {
+        return _mutation_consumer->consume(std::move(rt));
     }
 
-    void consume_end_of_partition() {
+    stop_iteration consume_end_of_partition() {
         auto live_rows_in_partition = _mutation_consumer->consume_end_of_stream();
         _live_rows += live_rows_in_partition;
         _partitions += live_rows_in_partition > 0;
+        return stop_iteration::no;
     }
 
     data_query_result consume_end_of_stream() {
@@ -1856,24 +1857,25 @@ public:
     void consume(tombstone t) {
         _mutation_consumer->consume(t);
     }
-    void consume(static_row&& sr, tombstone, bool is_alive) {
+    stop_iteration consume(static_row&& sr, tombstone, bool is_alive) {
         _static_row_is_alive = is_alive;
-        _mutation_consumer->consume(std::move(sr));
+        return _mutation_consumer->consume(std::move(sr));
     }
-    void consume(clustering_row&& cr, tombstone, bool is_alive) {
+    stop_iteration consume(clustering_row&& cr, tombstone, bool is_alive) {
         _live_rows += is_alive;
-        _mutation_consumer->consume(std::move(cr));
+        return _mutation_consumer->consume(std::move(cr));
     }
-    void consume(range_tombstone&& rt) {
-        _mutation_consumer->consume(std::move(rt));
+    stop_iteration consume(range_tombstone&& rt) {
+        return _mutation_consumer->consume(std::move(rt));
     }
 
-    void consume_end_of_partition() {
+    stop_iteration consume_end_of_partition() {
         if (_live_rows == 0 && _static_row_is_alive && !_has_ck_selector) {
             ++_live_rows;
         }
         _total_live_rows += _live_rows;
         _result.emplace_back(partition { _live_rows, _mutation_consumer->consume_end_of_stream() });
+        return stop_iteration::no;
     }
 
     reconcilable_result consume_end_of_stream() {
