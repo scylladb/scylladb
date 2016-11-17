@@ -1542,7 +1542,7 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
         file_input_stream_options make_file_input_stream_options() {
             file_input_stream_options fo;
             fo.buffer_size = db::commitlog::segment::default_size;
-            fo.read_ahead = 0;
+            fo.read_ahead = 10;
             fo.io_priority_class = service::get_local_commitlog_priority();
             return fo;
         }
