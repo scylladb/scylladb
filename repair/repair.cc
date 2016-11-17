@@ -55,6 +55,8 @@ public:
     std::vector<failed_range> failed_ranges;
     streaming::stream_plan sp_in;
     streaming::stream_plan sp_out;
+    // FIXME: this "100" needs to be a parameter.
+    uint64_t target_partitions = 100;
 public:
     repair_info(seastar::sharded<database>& db_,
             const sstring& keyspace_,
@@ -543,19 +545,17 @@ static future<> repair_cf_range(repair_info& ri,
 
     // FIXME: we should have an on-the-fly iterator generator here, not
     // fill a vector in advance.
-    // FIXME: this "100" needs to be a parameter.
-    uint64_t target_partitions = 100;
     std::vector<::nonwrapping_range<dht::token>> tosplit;
-    while (estimated_partitions > target_partitions) {
+    while (estimated_partitions > ri.target_partitions) {
         tosplit.clear();
         ranges.swap(tosplit);
         for (const auto& range : tosplit) {
-            split_and_add(ranges, range, estimated_partitions, target_partitions);
+            split_and_add(ranges, range, estimated_partitions, ri.target_partitions);
         }
         estimated_partitions /= 2;
     }
     logger.debug("target_partitions={}, estimated_partitions={}, ranges.size={}, range={} -> ranges={}",
-                  target_partitions, estimated_partitions, ranges.size(), range, ranges);
+                  ri.target_partitions, estimated_partitions, ranges.size(), range, ranges);
 
     return do_with(seastar::gate(), true, std::move(cf), std::move(ranges),
         [&ri, &neighbors] (auto& completion, auto& success, const auto& cf, auto& ranges) {
