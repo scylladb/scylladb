@@ -48,6 +48,7 @@
 namespace streaming {
 
 class stream_session;
+class send_info;
 
 /**
  * StreamTransferTask sends sections of SSTable files in certain ColumnFamily.
@@ -59,6 +60,7 @@ private:
     // A stream_transfer_task always contains the same range to stream
     std::vector<nonwrapping_range<dht::token>> _ranges;
     long _total_size;
+    std::unordered_multimap<unsigned, foreign_ptr<shared_ptr<send_info>>> _send_infos;
 public:
     using UUID = utils::UUID;
     stream_transfer_task(stream_transfer_task&&) = default;
