@@ -902,7 +902,7 @@ future<index_list> sstable::read_indexes(uint64_t summary_idx, const io_priority
         auto stream = make_file_input_stream(this->_index_file, position, end - position, std::move(options));
         // TODO: it's redundant to constrain the consumer here to stop at
         // index_size()-position, the input stream is already constrained.
-        auto ctx = make_lw_shared<index_consume_entry_context<index_consumer>>(ic, std::move(stream), this->index_size() - position);
+        auto ctx = make_lw_shared<index_consume_entry_context<index_consumer>>(ic, std::move(stream), position, this->index_size() - position);
         return ctx->consume_input(*ctx).finally([ctx] {
             return ctx->close();
         }).then([ctx, &ic] {
@@ -1911,7 +1911,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                 options.io_priority_class = pc;
                 auto stream = make_file_input_stream(index_file, 0, size, std::move(options));
                 return do_with(summary_generator(_summary), [this, &pc, stream = std::move(stream), size] (summary_generator& s) mutable {
-                    auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(s, std::move(stream), size);
+                    auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(s, std::move(stream), 0, size);
                     return ctx->consume_input(*ctx).finally([ctx] {
                         return ctx->close();
                     }).then([this, ctx, &s] {
