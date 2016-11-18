@@ -93,6 +93,10 @@ public:
     size_t external_memory_usage() const {
         return _ck.external_memory_usage() + _cells.external_memory_usage();
     }
+
+    size_t memory_usage() const {
+        return sizeof(clustering_row) + external_memory_usage();
+    }
 };
 
 class static_row {
@@ -123,6 +127,10 @@ public:
 
     size_t external_memory_usage() const {
         return _cells.external_memory_usage();
+    }
+
+    size_t memory_usage() const {
+        return sizeof(static_row) + external_memory_usage();
     }
 };
 

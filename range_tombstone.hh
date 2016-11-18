@@ -151,6 +151,10 @@ public:
         return start.external_memory_usage() + end.external_memory_usage();
     }
 
+    size_t memory_usage() const {
+        return sizeof(range_tombstone) + external_memory_usage();
+    }
+
     // Flips start and end bound so that range tombstone can be used in reversed
     // streams.
     void flip() {
