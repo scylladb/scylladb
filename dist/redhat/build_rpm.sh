@@ -38,13 +38,13 @@ if [ ! -e dist/redhat/build_rpm.sh ]; then
     exit 1
 fi
 
-if [ "$ID" != "fedora" ] && [ "$ID" != "centos" ]; then
+if [ "$ID" != "fedora" ] && [ "$ID" != "centos" ] && [ "$ID" != "rhel" ]; then
     echo "Unsupported distribution"
     exit 1
 fi
 if [ "$ID" = "fedora" ] && [ ! -f /usr/bin/mock ]; then
     sudo yum -y install mock
-elif [ "$ID" = "centos" ] && [ ! -f /usr/bin/yum-builddep ]; then
+elif [ ! -f /usr/bin/yum-builddep ]; then
     sudo yum -y install yum-utils
 fi
 if [ ! -f /usr/bin/git ]; then
@@ -54,12 +54,31 @@ if [ ! -f /usr/bin/rpmbuild ]; then
     sudo yum -y install rpm-build
 fi
 mkdir -p $RPMBUILD/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
-if [ "$ID" = "centos" ]; then
-    sudo yum install -y epel-release
+if [ "$ID" = "centos" ] || [ "$ID" = "rhel" ]; then
+    if [ "$ID" = "centos" ]; then
+        if [ ! -f /etc/yum.repos.d/epel.repo ]; then
+            sudo yum install -y epel-release
+        fi
+    else
+        if [ ! -f /etc/yum.repos.d/epel.repo ]; then
+            sudo rpm -Uvh https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+        fi
+        for repo in rhui-REGION-rhel-server-optional rhel-7-server-optional-rpms; do
+            repo_avail=$(sudo yum repolist all|grep $repo)
+            if [ "$repo_avail" != "" ]; then
+                sudo yum-config-manager --enable $repo
+            fi
+        done
+    fi
     if [ $REBUILD = 1 ]; then
         ./dist/redhat/centos_dep/build_dependency.sh
     else
-        sudo curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/unstable/centos/master/latest/scylla.repo -o /etc/yum.repos.d/scylla.repo
+        if [ "$ID" = "centos" ]; then
+            sudo curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/unstable/centos/master/latest/scylla.repo -o /etc/yum.repos.d/scylla.repo
+        else
+            echo "RHEL requires --rebuild-deps option."
+            exit 1
+        fi
     fi
 fi
 VERSION=$(./SCYLLA-VERSION-GEN)

@@ -2,7 +2,7 @@
 +++ pyparsing.spec	2016-01-25 19:12:49.853875369 +0900
 @@ -1,4 +1,4 @@
 -%if 0%{?fedora}
-+%if 0%{?centos}
++%if 0%{?rhel}
  %global with_python3 1
  %endif
  
