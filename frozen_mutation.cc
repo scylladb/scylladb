@@ -227,18 +227,18 @@ public:
 
     future<stop_iteration> consume(static_row&& sr) {
         _sr = std::move(sr);
-        _dirty_size += _sr->external_memory_usage() + sizeof(sr);
+        _dirty_size += _sr->memory_usage();
         return maybe_flush();
     }
 
     future<stop_iteration> consume(clustering_row&& cr) {
-        _dirty_size += cr.external_memory_usage() + sizeof(cr);
+        _dirty_size += cr.memory_usage();
         _crs.emplace_back(std::move(cr));
         return maybe_flush();
     }
 
     future<stop_iteration> consume(range_tombstone&& rt) {
-        _dirty_size += rt.external_memory_usage() + sizeof(range_tombstone);
+        _dirty_size += rt.memory_usage();
         _rts.apply(_schema, std::move(rt));
         return maybe_flush();
     }
