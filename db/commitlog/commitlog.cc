@@ -1590,7 +1590,7 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
         }
         future<> stop() {
             eof = true;
-            return fin.close();
+            return make_ready_future<>();
         }
         future<> read_header() {
             return fin.read_exactly(segment::descriptor_header_size).then([this](temporary_buffer<char> buf) {
@@ -1744,6 +1744,8 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
                       throw segment_data_corruption_error("Data corruption", corrupt_size);
                   }
                 });
+            }).finally([this] {
+                return fin.close();
             });
         }
     };
