@@ -326,6 +326,10 @@ public:
     size_t external_memory_usage() const {
         return _bytes.external_memory_usage();
     }
+
+    size_t memory_usage() const {
+        return sizeof(*this) + external_memory_usage();
+    }
 };
 
 template <typename TopLevel, typename PrefixTopLevel>
