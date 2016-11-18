@@ -138,6 +138,8 @@ public:
 
     result_memory_accounter& memory_accounter() { return _memory_accounter; }
 
+    const partition_slice& slice() const { return _slice; }
+
     // Starts new partition and returns a builder for its contents.
     // Invalidates all previously obtained builders
     partition_writer add_partition(const schema& s, const partition_key& key) {
