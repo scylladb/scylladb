@@ -1111,16 +1111,16 @@ row::find_cell(column_id id) const {
     }
 }
 
-size_t row::memory_usage() const {
+size_t row::external_memory_usage() const {
     size_t mem = 0;
     if (_type == storage_type::vector) {
-        mem += _storage.vector.v.memory_usage();
+        mem += _storage.vector.v.external_memory_usage();
         for (auto&& ac_o_c : _storage.vector.v) {
-            mem += ac_o_c.memory_usage();
+            mem += ac_o_c.external_memory_usage();
         }
     } else {
         for (auto&& ce : _storage.set) {
-            mem += sizeof(cell_entry) + ce.cell().memory_usage();
+            mem += sizeof(cell_entry) + ce.cell().external_memory_usage();
         }
     }
     return mem;

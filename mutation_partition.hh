@@ -266,7 +266,7 @@ public:
 
     bool equal(column_kind kind, const schema& this_schema, const row& other, const schema& other_schema) const;
 
-    size_t memory_usage() const;
+    size_t external_memory_usage() const;
 
     friend std::ostream& operator<<(std::ostream& os, const row& r);
 };

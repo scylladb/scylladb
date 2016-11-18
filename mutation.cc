@@ -241,7 +241,7 @@ class mutation_rebuilder {
         if (with_limit == limit_mutation_size::no) {
             return true;
         }
-        size_t size = sizeof(e) + e.memory_usage();
+        size_t size = sizeof(e) + e.external_memory_usage();
         if (_remaining_limit <= size) {
             _remaining_limit = 0;
         } else {

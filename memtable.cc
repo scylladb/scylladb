@@ -267,7 +267,7 @@ public:
     }
     void account_component(memtable_entry& e) {
         auto delta = _region.allocator().object_memory_size_in_allocator(&e)
-                     + e.memory_usage_without_rows();
+                     + e.external_memory_usage_without_rows();
         update_bytes_read(delta);
     }
     void account_component(partition_snapshot& snp) {
@@ -287,11 +287,11 @@ public:
     // allocation. As long as our size read here is lesser or equal to the size in the memtables, we
     // are safe, and worst case we will allow a bit fewer requests in.
     void operator()(const range_tombstone& rt) {
-        _accounter.update_bytes_read(sizeof(range_tombstone) + rt.memory_usage());
+        _accounter.update_bytes_read(sizeof(range_tombstone) + rt.external_memory_usage());
     }
 
     void operator()(const static_row& sr) {
-        _accounter.update_bytes_read(sr.memory_usage());
+        _accounter.update_bytes_read(sr.external_memory_usage());
     }
 
     void operator()(const clustering_row& cr) {
@@ -301,7 +301,7 @@ public:
         // and we don't know which one(s) contributed to the generation of this mutation fragment.
         //
         // We will add the size of the struct here, and that should be good enough.
-        _accounter.update_bytes_read(sizeof(rows_entry) + cr.memory_usage());
+        _accounter.update_bytes_read(sizeof(rows_entry) + cr.external_memory_usage());
     }
 };
 
