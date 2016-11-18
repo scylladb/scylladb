@@ -1247,10 +1247,17 @@ column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>&
     // Second, delete the old sstables.  This is done in the background, so we can
     // consider this compaction completed.
     seastar::with_gate(_sstable_deletion_gate, [this, sstables_to_remove] {
-        return sstables::delete_atomically(sstables_to_remove).then([this, sstables_to_remove] {
-            auto current_sstables = _sstables;
-            auto new_sstable_list = make_lw_shared<sstable_list>();
+        return sstables::delete_atomically(sstables_to_remove).then_wrapped([this, sstables_to_remove] (future<> f) {
+            std::exception_ptr eptr;
+            try {
+                f.get();
+            } catch(...) {
+                eptr = std::current_exception();
+            }
 
+            // unconditionally remove compacted sstables from _sstables_compacted_but_not_deleted,
+            // or they could stay forever in the set, resulting in deleted files remaining
+            // opened and disk space not being released until shutdown.
             std::unordered_set<sstables::shared_sstable> s(
                    sstables_to_remove.begin(), sstables_to_remove.end());
             auto e = boost::range::remove_if(_sstables_compacted_but_not_deleted, [&] (sstables::shared_sstable sst) -> bool {
@@ -1258,6 +1265,11 @@ column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>&
             });
             _sstables_compacted_but_not_deleted.erase(e, _sstables_compacted_but_not_deleted.end());
             rebuild_statistics();
+
+            if (eptr) {
+                return make_exception_future<>(eptr);
+            }
+            return make_ready_future<>();
         }).handle_exception([] (std::exception_ptr e) {
             try {
                 std::rethrow_exception(e);
