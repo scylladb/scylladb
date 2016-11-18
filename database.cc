@@ -2581,8 +2581,8 @@ future<> dirty_memory_manager::flush_when_needed() {
         return make_ready_future<>();
     }
     // If there are explicit flushes requested, we must wait for them to finish before we stop.
-    return do_until([this] { return _db_shutdown_requested && !_flush_serializer.waiters(); }, [this] {
-        auto has_work = [this] { return _flush_serializer.waiters() || over_soft_limit() || _db_shutdown_requested; };
+    return do_until([this] { return _db_shutdown_requested; }, [this] {
+        auto has_work = [this] { return over_soft_limit() || _db_shutdown_requested; };
         return _should_flush.wait(std::move(has_work)).then([this] {
             return get_flush_permit().then([this] (auto permit) {
                 // We give priority to explicit flushes. They are mainly user-initiated flushes,
