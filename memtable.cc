@@ -287,7 +287,7 @@ public:
     // allocation. As long as our size read here is lesser or equal to the size in the memtables, we
     // are safe, and worst case we will allow a bit fewer requests in.
     void operator()(const range_tombstone& rt) {
-        _accounter.update_bytes_read(sizeof(range_tombstone) + rt.external_memory_usage());
+        _accounter.update_bytes_read(rt.memory_usage());
     }
 
     void operator()(const static_row& sr) {
