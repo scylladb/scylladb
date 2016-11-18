@@ -33,7 +33,7 @@ done
 . /etc/os-release
 case "$ID" in
     "centos")
-        AMI=ami-4e1d5b59
+        AMI=ami-46bf8a51
         REGION=us-east-1
         SSH_USERNAME=centos
         ;;
