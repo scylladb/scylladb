@@ -2559,12 +2559,19 @@ future<> dirty_memory_manager::flush_one(memtable_list& mtlist, semaphore_units<
     dirty_memory_manager::from_region_group(region_group)._flush_manager.emplace(region, std::move(permit));
     auto fut = mtlist.seal_active_memtable(memtable_list::flush_behavior::immediate);
     return get_units(_background_work_flush_serializer, 1).then([this, fut = std::move(fut), region, region_group, schema] (auto permit) mutable {
-        return std::move(fut).handle_exception([this, region, region_group, schema] (auto exp) {
-            // Some exception happenend, and we can't know at which point. It could be that because
-            // of that the permits are still dangling. We have to remove it.
+        return std::move(fut).then_wrapped([this, region, region_group, schema] (auto f) {
+            // There are two cases in which we may still need to remove the permits from here.
+            //
+            // 1) Some exception happenend, and we can't know at which point. It could be that because
+            //    of that, the permits are still dangling. We have to remove it.
+            // 2) If we are using a memory-only Column Family. That will never create a memtable
+            //    flush object, and we'll never get rid of the permits. So we have to remove it
+            //    here.
             dirty_memory_manager::from_region_group(region_group).remove_from_flush_manager(region);
-            dblog.error("Failed to flush memtable, {}:{}", schema->ks_name(), schema->cf_name());
-            return make_exception_future<>(std::move(exp));
+            if (f.failed()) {
+                dblog.error("Failed to flush memtable, {}:{}", schema->ks_name(), schema->cf_name());
+            }
+            return std::move(f);
         });
     });
 }
