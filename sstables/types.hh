@@ -241,6 +241,34 @@ struct ka_stats_metadata : public metadata_base<ka_stats_metadata> {
 };
 using stats_metadata = ka_stats_metadata;
 
+struct disk_token_bound {
+    uint8_t exclusive; // really a boolean
+    disk_string<uint16_t> token;
+
+    template <typename Describer>
+    auto describe_type(Describer f) { return f(exclusive, token); }
+};
+
+struct disk_token_range {
+    disk_token_bound left;
+    disk_token_bound right;
+
+    template <typename Describer>
+    auto describe_type(Describer f) { return f(left, right); }
+};
+
+// Scylla-specific sharding information.  This is a set of token
+// ranges that are spanned by this sstable.  When loading the
+// sstable, we can see which shards own data in the sstable by
+// checking each such range.
+struct sharding_metadata : metadata_base<sharding_metadata> {
+    disk_array<uint32_t, disk_token_range> token_ranges;
+
+    template <typename Describer>
+    auto describe_type(Describer f) { return f(token_ranges); }
+};
+
+
 // Numbers are found on disk, so they do matter. Also, setting their sizes of
 // that of an uint32_t is a bit wasteful, but it simplifies the code a lot
 // since we can now still use a strongly typed enum without introducing a
@@ -249,6 +277,7 @@ enum class metadata_type : uint32_t {
     Validation = 0,
     Compaction = 1,
     Stats = 2,
+    Sharding = 5001,
 };
 
 
