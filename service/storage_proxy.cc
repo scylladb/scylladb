@@ -2643,12 +2643,19 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
         }
     }
 
+    // estimate_result_rows_per_range() is currently broken, and this is not needed
+    // when paging is available in any case
+#if 0
     // our estimate of how many result rows there will be per-range
     float result_rows_per_range = estimate_result_rows_per_range(cmd, ks);
     // underestimate how many rows we will get per-range in order to increase the likelihood that we'll
     // fetch enough rows in the first round
     result_rows_per_range -= result_rows_per_range * CONCURRENT_SUBREQUESTS_MARGIN;
     int concurrency_factor = result_rows_per_range == 0.0 ? 1 : std::max(1, std::min(int(ranges.size()), int(std::ceil(cmd->row_limit / result_rows_per_range))));
+#else
+    int result_rows_per_range = 0;
+    int concurrency_factor = 1;
+#endif
 
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results;
     results.reserve(ranges.size()/concurrency_factor + 1);
