@@ -471,21 +471,21 @@ BOOST_AUTO_TEST_CASE(test_rp_describe_ownership) {
 }
 
 void test_partitioner_sharding(const dht::i_partitioner& part, unsigned shards, std::vector<dht::token> shard_limits,
-        std::function<dht::token (const dht::i_partitioner&, dht::token)> prev_token) {
+        std::function<dht::token (const dht::i_partitioner&, dht::token)> prev_token, unsigned ignorebits = 0) {
     auto s = schema_builder("ks", "cf")
         .with_column("c1", int32_type, column_kind::partition_key)
         .with_column("c2", int32_type, column_kind::partition_key)
         .with_column("v", int32_type)
         .build();
-    for (unsigned i = 0; i < shards; ++i) {
+    for (unsigned i = 0; i < (shards << ignorebits); ++i) {
         auto lim = shard_limits[i];
-        BOOST_REQUIRE_EQUAL(part.shard_of(lim), i);
+        BOOST_REQUIRE_EQUAL(part.shard_of(lim), i % shards);
         if (i != 0) {
-            BOOST_REQUIRE_EQUAL(part.shard_of(prev_token(part, lim)), i - 1);
+            BOOST_REQUIRE_EQUAL(part.shard_of(prev_token(part, lim)), (i - 1) % shards);
             BOOST_REQUIRE(part.is_equal(lim, part.token_for_next_shard(prev_token(part, lim))));
         }
-        if (i != shards - 1) {
-            BOOST_REQUIRE_EQUAL(part.shard_of(part.token_for_next_shard(lim)), i + 1);
+        if (i != (shards << ignorebits) - 1) {
+            BOOST_REQUIRE_EQUAL(part.shard_of(part.token_for_next_shard(lim)), (i + 1) % shards);
         }
     }
 }
@@ -515,6 +515,41 @@ BOOST_AUTO_TEST_CASE(test_murmur3_sharding) {
         -9223372036854775807,
     });
     test_partitioner_sharding(mm3p1s, 1, mm3p1s_shard_limits, prev_token);
+}
+
+BOOST_AUTO_TEST_CASE(test_murmur3_sharding_with_ignorebits) {
+    auto prev_token = [] (const dht::i_partitioner&, dht::token token) {
+        return token_from_long(long_from_token(token) - 1);
+    };
+    auto make_token_vector = [] (std::vector<int64_t> v) {
+        return boost::copy_range<std::vector<dht::token>>(
+                v | boost::adaptors::transformed(token_from_long));
+    };
+    dht::murmur3_partitioner mm3p7s2i(7, 2);
+    auto mm3p7s2i_shard_limits = make_token_vector({
+        -9223372036854775807,
+        -8564559748508006107, -7905747460161236406, -7246935171814466706, -6588122883467697005,
+        -5929310595120927305, -5270498306774157604, -4611686018427387904, -3952873730080618203,
+        -3294061441733848502, -2635249153387078802, -1976436865040309101, -1317624576693539401,
+        -658812288346769700, 0, 658812288346769701, 1317624576693539402, 1976436865040309102,
+        2635249153387078803, 3294061441733848503, 3952873730080618204, 4611686018427387904,
+        5270498306774157605, 5929310595120927306, 6588122883467697006, 7246935171814466707,
+        7905747460161236407, 8564559748508006108,
+    });
+    test_partitioner_sharding(mm3p7s2i, 7, mm3p7s2i_shard_limits, prev_token, 2);
+    dht::murmur3_partitioner mm3p2s4i(2, 4);
+    auto mm3p2s_shard_limits = make_token_vector({
+        -9223372036854775807,
+        -8646911284551352320, -8070450532247928832, -7493989779944505344, -6917529027641081856,
+        -6341068275337658368, -5764607523034234880, -5188146770730811392, -4611686018427387904,
+        -4035225266123964416, -3458764513820540928, -2882303761517117440, -2305843009213693952,
+        -1729382256910270464, -1152921504606846976, -576460752303423488, 0, 576460752303423488,
+        1152921504606846976, 1729382256910270464, 2305843009213693952, 2882303761517117440,
+        3458764513820540928, 4035225266123964416, 4611686018427387904, 5188146770730811392,
+        5764607523034234880, 6341068275337658368, 6917529027641081856, 7493989779944505344,
+        8070450532247928832, 8646911284551352320,
+    });
+    test_partitioner_sharding(mm3p2s4i, 2, mm3p2s_shard_limits, prev_token, 4);
 }
 
 BOOST_AUTO_TEST_CASE(test_random_partitioner) {

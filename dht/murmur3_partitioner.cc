@@ -214,6 +214,7 @@ murmur3_partitioner::shard_of(const token& t) const {
             // treat l as a fraction between 0 and 1 and use 128-bit arithmetic to
             // divide that range evenly among shards:
             uint64_t adjusted = uint64_t(l) + uint64_t(std::numeric_limits<int64_t>::min());
+            adjusted <<= _sharding_ignore_msb_bits;
             return (__int128(adjusted) * _shard_count) >> 64;
     }
     assert(0);
@@ -232,11 +233,17 @@ murmur3_partitioner::token_for_next_shard(const token& t) const {
             }
             using uint128 = unsigned __int128;
             auto s = shard_of(t) + 1;
-            if (s == _shard_count) {
+            s = s < _shard_count ? s : 0;
+            int64_t l = long_token(t);
+            // treat l as a fraction between 0 and 1 and use 128-bit arithmetic to
+            // divide that range evenly among shards:
+            uint64_t adjusted = uint64_t(l) + uint64_t(std::numeric_limits<int64_t>::min());
+            auto mul = align_up(uint128(adjusted) * _shard_count + 1, uint128(1) << (64 - _sharding_ignore_msb_bits));
+            if (mul >> 64 == _shard_count) {
                 return maximum_token();
             }
-            uint64_t e = (uint128(s) << 64) / _shard_count;
-            while (((uint128(e) * _shard_count) >> 64) != s) {
+            uint64_t e = mul / _shard_count;
+            while (((uint128(e << _sharding_ignore_msb_bits) * _shard_count) >> 64) != s) {
                 // division will round down, so correct for it
                 ++e;
             }
