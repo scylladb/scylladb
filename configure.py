@@ -894,8 +894,8 @@ with open(buildfile, 'w') as f:
                 else:
                     f.write('build $builddir/{}/{}: link.{} {} {}\n'.format(mode, binary, mode, str.join(' ', objs),
                                                                             'seastar/build/{}/libseastar.a'.format(mode)))
-                if has_thrift:
-                    f.write('   libs =  {} {} $libs\n'.format(thrift_libs, maybe_static(args.staticboost, '-lboost_system')))
+                    if has_thrift:
+                        f.write('   libs =  {} {} $libs\n'.format(thrift_libs, maybe_static(args.staticboost, '-lboost_system')))
             for src in srcs:
                 if src.endswith('.cc'):
                     obj = '$builddir/' + mode + '/' + src.replace('.cc', '.o')
