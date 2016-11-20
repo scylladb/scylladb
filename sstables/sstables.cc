@@ -2405,6 +2405,17 @@ sstable::get_sstable_key_range(const schema& s) {
     });
 }
 
+future<std::vector<shard_id>>
+sstable::get_owning_shards_from_unloaded() {
+    return when_all(read_summary(default_priority_class()), read_statistics(default_priority_class())).then(
+            [this] (std::tuple<future<>, future<>> rets) {
+        std::get<0>(rets).get();
+        std::get<1>(rets).get();
+        set_first_and_last_keys();
+        return get_shards_for_this_sstable();
+    });
+}
+
 void sstable::mark_sstable_for_deletion(const schema_ptr& schema, sstring dir, int64_t generation, version_types v, format_types f) {
     auto sst = sstable(schema, dir, generation, v, f);
     sst.mark_for_deletion();
