@@ -430,7 +430,7 @@ std::ostream& operator<<(std::ostream& out, const token& t);
 
 std::ostream& operator<<(std::ostream& out, const decorated_key& t);
 
-void set_global_partitioner(const sstring& class_name);
+void set_global_partitioner(const sstring& class_name, unsigned ignore_msb = 0);
 i_partitioner& global_partitioner();
 
 unsigned shard_of(const token&);

@@ -184,7 +184,7 @@ byte_ordered_partitioner::token_for_next_shard(const token& t) const {
 }
 
 
-using registry = class_registrator<i_partitioner, byte_ordered_partitioner>;
+using registry = class_registrator<i_partitioner, byte_ordered_partitioner, const unsigned&, const unsigned&>;
 static registry registrator("org.apache.cassandra.dht.ByteOrderedPartitioner");
 static registry registrator_short_name("ByteOrderedPartitioner");
 

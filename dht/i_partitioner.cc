@@ -174,10 +174,10 @@ std::ostream& operator<<(std::ostream& out, const decorated_key& dk) {
 // FIXME: make it per-keyspace
 std::unique_ptr<i_partitioner> default_partitioner { new murmur3_partitioner };
 
-void set_global_partitioner(const sstring& class_name)
+void set_global_partitioner(const sstring& class_name, unsigned ignore_msb)
 {
     try {
-        default_partitioner = create_object<i_partitioner>(class_name);
+        default_partitioner = create_object<i_partitioner, const unsigned&, const unsigned&>(class_name, smp::count, ignore_msb);
     } catch (std::exception& e) {
         auto supported_partitioners = ::join(", ", class_registry<i_partitioner>::classes() |
                 boost::adaptors::map_keys);

@@ -253,7 +253,7 @@ murmur3_partitioner::token_for_next_shard(const token& t) const {
 }
 
 
-using registry = class_registrator<i_partitioner, murmur3_partitioner>;
+using registry = class_registrator<i_partitioner, murmur3_partitioner, const unsigned&, const unsigned&>;
 static registry registrator("org.apache.cassandra.dht.Murmur3Partitioner");
 static registry registrator_short_name("Murmur3Partitioner");
 
