@@ -63,8 +63,8 @@ public:
             ::feed_hash(as_collection_mutation(), h, def.type);
         }
     }
-    size_t memory_usage() const {
-        return _data.memory_usage();
+    size_t external_memory_usage() const {
+        return _data.external_memory_usage();
     }
     friend std::ostream& operator<<(std::ostream&, const atomic_cell_or_collection&);
 };

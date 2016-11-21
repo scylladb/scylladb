@@ -370,7 +370,7 @@ public:
     }
 
     // Returns the amount of external memory used.
-    size_t memory_usage() const {
+    size_t external_memory_usage() const {
         if (external()) {
             size_t mem = 0;
             blob_storage* blob = _u.ptr;

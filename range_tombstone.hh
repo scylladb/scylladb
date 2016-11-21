@@ -147,7 +147,13 @@ public:
     // is larger than the end bound of this.
     stdx::optional<range_tombstone> apply(const schema& s, range_tombstone&& src);
 
-    size_t memory_usage() const { return start.memory_usage() + end.memory_usage(); }
+    size_t external_memory_usage() const {
+        return start.external_memory_usage() + end.external_memory_usage();
+    }
+
+    size_t memory_usage() const {
+        return sizeof(range_tombstone) + external_memory_usage();
+    }
 
     // Flips start and end bound so that range tombstone can be used in reversed
     // streams.

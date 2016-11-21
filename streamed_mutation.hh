@@ -90,8 +90,12 @@ public:
 
     position_in_partition_view position() const;
 
+    size_t external_memory_usage() const {
+        return _ck.external_memory_usage() + _cells.external_memory_usage();
+    }
+
     size_t memory_usage() const {
-        return _ck.memory_usage() + _cells.memory_usage();
+        return sizeof(clustering_row) + external_memory_usage();
     }
 };
 
@@ -121,8 +125,12 @@ public:
 
     position_in_partition_view position() const;
 
+    size_t external_memory_usage() const {
+        return _cells.external_memory_usage();
+    }
+
     size_t memory_usage() const {
-        return _cells.memory_usage();
+        return sizeof(static_row) + external_memory_usage();
     }
 };
 
@@ -243,7 +251,7 @@ public:
     }
 
     size_t memory_usage() const {
-        return sizeof(data) + visit([] (auto& mf) { return mf.memory_usage(); });
+        return sizeof(data) + visit([] (auto& mf) { return mf.external_memory_usage(); });
     }
 };
 

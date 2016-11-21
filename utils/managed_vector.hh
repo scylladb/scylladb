@@ -234,7 +234,7 @@ public:
     }
 
     // Returns the amount of external memory used.
-    size_t memory_usage() const {
+    size_t external_memory_usage() const {
         if (is_external()) {
             return sizeof(external) + _capacity * sizeof(T);
         }

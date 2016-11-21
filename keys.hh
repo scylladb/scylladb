@@ -323,8 +323,12 @@ public:
         return std::distance(begin(s), end(s));
     }
 
+    size_t external_memory_usage() const {
+        return _bytes.external_memory_usage();
+    }
+
     size_t memory_usage() const {
-        return _bytes.memory_usage();
+        return sizeof(*this) + external_memory_usage();
     }
 };
 
