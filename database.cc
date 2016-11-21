@@ -2603,12 +2603,11 @@ future<> dirty_memory_manager::flush_when_needed() {
                 // release the biggest amount of memory and is less likely to be generating tiny
                 // SSTables.
                 memtable& biggest_memtable = memtable::from_region(*(this->_region_group.get_largest_region()));
-                auto& cf = _db->find_column_family(biggest_memtable.schema()->id());
-                memtable_list& mtlist = this->get_memtable_list(cf);
+                auto mtlist = biggest_memtable.get_memtable_list();
                 // Do not wait. The semaphore will protect us against a concurrent flush. But we
                 // want to start a new one as soon as the permits are destroyed and the semaphore is
                 // made ready again, not when we are done with the current one.
-                this->flush_one(mtlist, std::move(permit));
+                this->flush_one(*mtlist, std::move(permit));
                 return make_ready_future<>();
             });
         });
@@ -2620,14 +2619,6 @@ future<> dirty_memory_manager::flush_when_needed() {
         // stopped as well.
         return get_units(_background_work_flush_serializer, _max_background_work);
     });
-}
-
-memtable_list& memtable_dirty_memory_manager::get_memtable_list(column_family& cf) {
-    return *(cf._memtables);
-}
-
-memtable_list& streaming_dirty_memory_manager::get_memtable_list(column_family& cf) {
-    return *(cf._streaming_memtables);
 }
 
 void dirty_memory_manager::start_reclaiming() {

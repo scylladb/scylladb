@@ -150,7 +150,6 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
     }
     future<> _waiting_flush;
 protected:
-    virtual memtable_list& get_memtable_list(column_family& cf) = 0;
     virtual void start_reclaiming() override;
 public:
     future<> shutdown();
@@ -213,15 +212,11 @@ public:
     }
 };
 
-class streaming_dirty_memory_manager: public dirty_memory_manager {
-    virtual memtable_list& get_memtable_list(column_family& cf) override;
-public:
+struct streaming_dirty_memory_manager: public dirty_memory_manager {
     streaming_dirty_memory_manager(database& db, dirty_memory_manager *parent, size_t threshold) : dirty_memory_manager(&db, parent, threshold) {}
 };
 
-class memtable_dirty_memory_manager: public dirty_memory_manager {
-    virtual memtable_list& get_memtable_list(column_family& cf) override;
-public:
+struct memtable_dirty_memory_manager: public dirty_memory_manager {
     memtable_dirty_memory_manager(database& db, dirty_memory_manager* parent, size_t threshold) : dirty_memory_manager(&db, parent, threshold) {}
     // This constructor will be called for the system tables (no parent). Its flushes are usually drive by us
     // and not the user, and tend to be small in size. So we'll allow only two slots.
@@ -311,6 +306,9 @@ public:
         _memtables.emplace_back(new_memtable());
     }
 
+    logalloc::region_group& region_group() {
+        return _dirty_memory_manager->region_group();
+    }
     // This is used for explicit flushes. Will queue the memtable for flushing and proceed when the
     // dirty_memory_manager allows us to. We will not seal at this time since the flush itself
     // wouldn't happen anyway. Keeping the memtable in memory will potentially increase the time it
@@ -318,7 +316,7 @@ public:
     future<> request_flush();
 private:
     lw_shared_ptr<memtable> new_memtable() {
-        return make_lw_shared<memtable>(_current_schema(), &(_dirty_memory_manager->region_group()));
+        return make_lw_shared<memtable>(_current_schema(), this);
     }
 };
 
