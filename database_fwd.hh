@@ -23,6 +23,7 @@
 
 // database.hh
 class database;
+class memtable_list;
 
 // mutation.hh
 class mutation;

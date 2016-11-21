@@ -26,8 +26,16 @@
 
 namespace stdx = std::experimental;
 
-memtable::memtable(schema_ptr schema, logalloc::region_group* dirty_memory_region_group)
+memtable::memtable(schema_ptr schema, memtable_list* memtable_list)
+        : logalloc::region(memtable_list ? logalloc::region(memtable_list->region_group()) : logalloc::region())
+        , _memtable_list(memtable_list)
+        , _schema(std::move(schema))
+        , partitions(memtable_entry::compare(_schema)) {
+}
+
+memtable::memtable(schema_ptr schema, logalloc::region_group *dirty_memory_region_group)
         : logalloc::region(dirty_memory_region_group ? logalloc::region(*dirty_memory_region_group) : logalloc::region())
+        , _memtable_list(nullptr)
         , _schema(std::move(schema))
         , partitions(memtable_entry::compare(_schema)) {
 }
