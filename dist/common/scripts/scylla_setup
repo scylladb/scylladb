@@ -316,7 +316,7 @@ if [ $INTERACTIVE -eq 1 ]; then
             echo
             RAID_SETUP=0
         else
-            echo "Please select disks from the following list: $DEVS"
+            echo "Please select unmounted disks from the following list: $DEVS"
         fi
         while [ "$DEVS" != "" ]; do
             echo "type 'done' to finish selection. selected: $DISKS"
