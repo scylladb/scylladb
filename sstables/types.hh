@@ -164,34 +164,38 @@ using summary = summary_ka;
 
 struct metadata {
     virtual ~metadata() {}
+    virtual uint64_t serialized_size() const = 0;
 };
 
-struct validation_metadata : public metadata {
+template <typename T>
+uint64_t serialized_size(const T& object);
+
+// serialized_size() implementation for metadata class
+template <typename Component>
+class metadata_base : public metadata {
+public:
+    virtual uint64_t serialized_size() const override {
+        return sstables::serialized_size(static_cast<const Component&>(*this));
+    }
+};
+
+struct validation_metadata : public metadata_base<validation_metadata> {
     disk_string<uint16_t> partitioner;
     double filter_chance;
-
-    size_t serialized_size() {
-        return sizeof(uint16_t) + partitioner.value.size() + sizeof(filter_chance);
-    }
 
     template <typename Describer>
     auto describe_type(Describer f) { return f(partitioner, filter_chance); }
 };
 
-struct compaction_metadata : public metadata {
+struct compaction_metadata : public metadata_base<compaction_metadata> {
     disk_array<uint32_t, uint32_t> ancestors;
     disk_array<uint32_t, uint8_t> cardinality;
-
-    size_t serialized_size() {
-        return sizeof(uint32_t) + (ancestors.elements.size() * sizeof(uint32_t)) +
-            sizeof(uint32_t) + (cardinality.elements.size() * sizeof(uint8_t));
-    }
 
     template <typename Describer>
     auto describe_type(Describer f) { return f(ancestors, cardinality); }
 };
 
-struct ka_stats_metadata : public metadata {
+struct ka_stats_metadata : public metadata_base<ka_stats_metadata> {
     utils::estimated_histogram estimated_row_size;
     utils::estimated_histogram estimated_column_count;
     db::replay_position position;
