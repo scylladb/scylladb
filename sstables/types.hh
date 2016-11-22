@@ -162,13 +162,20 @@ struct summary_ka {
 };
 using summary = summary_ka;
 
+class file_writer;
+
 struct metadata {
     virtual ~metadata() {}
     virtual uint64_t serialized_size() const = 0;
+    virtual void write(file_writer& write) const = 0;
 };
 
 template <typename T>
 uint64_t serialized_size(const T& object);
+
+template <class T>
+typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, void>
+write(file_writer& out, const T& t);
 
 // serialized_size() implementation for metadata class
 template <typename Component>
@@ -176,6 +183,9 @@ class metadata_base : public metadata {
 public:
     virtual uint64_t serialized_size() const override {
         return sstables::serialized_size(static_cast<const Component&>(*this));
+    }
+    virtual void write(file_writer& writer) const override {
+        return sstables::write(writer, static_cast<const Component&>(*this));
     }
 };
 

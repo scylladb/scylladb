@@ -624,34 +624,11 @@ future<> parse(random_access_reader& in, statistics& s) {
 
 inline void write(file_writer& out, const statistics& s) {
     write(out, s.hash);
-    struct kv {
-        metadata_type key;
-        uint32_t value;
-    };
-    // sort map by file offset value and store the result into a vector.
-    // this is indeed needed because output stream cannot afford random writes.
-    auto v = make_shared<std::vector<kv>>();
-    v->reserve(s.hash.map.size());
-    for (auto val : s.hash.map) {
-        kv tmp = { val.first, val.second };
-        v->push_back(tmp);
-    }
-    std::sort(v->begin(), v->end(), [] (kv i, kv j) { return i.value < j.value; });
-    for (auto& val: *v) {
-        switch (val.key) {
-            case metadata_type::Validation:
-                write<validation_metadata>(out, s.contents.at(val.key));
-                break;
-            case metadata_type::Compaction:
-                write<compaction_metadata>(out, s.contents.at(val.key));
-                break;
-            case metadata_type::Stats:
-                write<stats_metadata>(out, s.contents.at(val.key));
-                break;
-            default:
-                sstlog.warn("Invalid metadata type at Statistics file: {} ", int(val.key));
-                return; // FIXME: should throw
-            }
+    auto types = boost::copy_range<std::vector<metadata_type>>(s.hash.map | boost::adaptors::map_keys);
+    // use same sort order as seal_statistics
+    boost::sort(types);
+    for (auto t : types) {
+        s.contents.at(t)->write(out);
     }
 }
 
