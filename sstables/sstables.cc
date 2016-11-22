@@ -1549,40 +1549,44 @@ static void maybe_add_summary_entry(summary& s, bytes_view key, uint64_t offset)
     }
 }
 
+static
+void
+populate_statistics_offsets(statistics& s) {
+    // copy into a sorted vector to guarantee consistent order
+    auto types = boost::copy_range<std::vector<metadata_type>>(s.contents | boost::adaptors::map_keys);
+    boost::sort(types);
+
+    // populate the hash with garbage so we can calculate its size
+    for (auto t : types) {
+        s.hash.map[t] = -1;
+    }
+
+    auto offset = serialized_size(s.hash);
+    for (auto t : types) {
+        s.hash.map[t] = offset;
+        offset += s.contents[t]->serialized_size();
+    }
+}
+
 // In the beginning of the statistics file, there is a disk_hash used to
 // map each metadata type to its correspondent position in the file.
 static void seal_statistics(statistics& s, metadata_collector& collector,
         const sstring partitioner, double bloom_filter_fp_chance) {
-    static constexpr int METADATA_TYPE_COUNT = 3;
-
-    size_t old_offset, offset = 0;
-    // account disk_hash size.
-    offset += sizeof(uint32_t);
-    // account disk_hash members.
-    offset += (METADATA_TYPE_COUNT * (sizeof(metadata_type) + sizeof(uint32_t)));
-
     validation_metadata validation;
     compaction_metadata compaction;
     stats_metadata stats;
 
-    old_offset = offset;
     validation.partitioner.value = to_bytes(partitioner);
     validation.filter_chance = bloom_filter_fp_chance;
-    offset += validation.serialized_size();
     s.contents[metadata_type::Validation] = std::make_unique<validation_metadata>(std::move(validation));
-    s.hash.map[metadata_type::Validation] = old_offset;
 
-    old_offset = offset;
     collector.construct_compaction(compaction);
-    offset += compaction.serialized_size();
     s.contents[metadata_type::Compaction] = std::make_unique<compaction_metadata>(std::move(compaction));
-    s.hash.map[metadata_type::Compaction] = old_offset;
 
     collector.construct_stats(stats);
-    // NOTE: method serialized_size of stats_metadata must be implemented for
-    // a new type of stats to get supported.
     s.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
-    s.hash.map[metadata_type::Stats] = offset;
+
+    populate_statistics_offsets(s);
 }
 
 // Returns offset into data component.
