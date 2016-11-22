@@ -1028,6 +1028,7 @@ private:
     struct db_stats {
         uint64_t total_writes = 0;
         uint64_t total_writes_failed = 0;
+        uint64_t total_writes_timedout = 0;
         uint64_t total_reads = 0;
         uint64_t total_reads_failed = 0;
         uint64_t sstable_read_queue_overloaded = 0;

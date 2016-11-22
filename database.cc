@@ -1782,6 +1782,13 @@ database::setup_collectd() {
     _collectd.push_back(
         scollectd::add_polled_metric(scollectd::type_instance_id("database"
                 , scollectd::per_cpu_plugin_instance
+                , "total_operations", "total_writes_timedout")
+                , scollectd::make_typed(scollectd::data_type::COUNTER, _stats->total_writes_timedout)
+    ));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
                 , "total_operations", "total_reads")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats->total_reads)
     ));
@@ -2708,9 +2715,15 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m, timeout_clock::
     return do_apply(std::move(s), m, timeout).then_wrapped([this, s = _stats] (auto f) {
         if (f.failed()) {
             ++s->total_writes_failed;
-        } else {
-            ++s->total_writes;
+            try {
+                f.get();
+            } catch (const timed_out_error&) {
+                ++s->total_writes_timedout;
+                throw;
+            }
+            assert(0 && "should not reach");
         }
+        ++s->total_writes;
         return f;
     });
 }
