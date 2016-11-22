@@ -290,7 +290,7 @@ future<> parse(random_access_reader& in, T& len, bytes& s) {
     });
 }
 
-inline void write(file_writer& out, bytes& s) {
+inline void write(file_writer& out, const bytes& s) {
     out.write(s).get();
 }
 
@@ -313,7 +313,7 @@ future<> parse(random_access_reader& in, First& first, Rest&&... rest) {
 }
 
 template<typename First, typename... Rest>
-inline void write(file_writer& out, First& first, Rest&&... rest) {
+inline void write(file_writer& out, const First& first, Rest&&... rest) {
     write(out, first);
     write(out, std::forward<Rest>(rest)...);
 }
@@ -329,8 +329,9 @@ parse(random_access_reader& in, T& t) {
 
 template <class T>
 inline typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, void>
-write(file_writer& out, T& t) {
-    t.describe_type([&out] (auto&&... what) -> void {
+write(file_writer& out, const T& t) {
+    // describe_type() is not const correct, so cheat here:
+    const_cast<T&>(t).describe_type([&out] (auto&&... what) -> void {
         write(out, std::forward<decltype(what)>(what)...);
     });
 }
@@ -350,7 +351,7 @@ future<> parse(random_access_reader& in, disk_string<Size>& s) {
 }
 
 template <typename Size>
-inline void write(file_writer& out, disk_string<Size>& s) {
+inline void write(file_writer& out, const disk_string<Size>& s) {
     Size len = 0;
     check_truncate_and_assign(len, s.value.size());
     write(out, len);
@@ -358,7 +359,7 @@ inline void write(file_writer& out, disk_string<Size>& s) {
 }
 
 template <typename Size>
-inline void write(file_writer& out, disk_string_view<Size>& s) {
+inline void write(file_writer& out, const disk_string_view<Size>& s) {
     Size len;
     check_truncate_and_assign(len, s.value.size());
     write(out, len, s.value);
@@ -417,7 +418,7 @@ future<> parse(random_access_reader& in, disk_array<Size, Members>& arr) {
 
 template <typename Members>
 inline typename std::enable_if_t<!std::is_integral<Members>::value, void>
-write(file_writer& out, std::deque<Members>& arr) {
+write(file_writer& out, const std::deque<Members>& arr) {
     for (auto& a : arr) {
         write(out, a);
     }
@@ -425,7 +426,7 @@ write(file_writer& out, std::deque<Members>& arr) {
 
 template <typename Members>
 inline typename std::enable_if_t<std::is_integral<Members>::value, void>
-write(file_writer& out, std::deque<Members>& arr) {
+write(file_writer& out, const std::deque<Members>& arr) {
     std::vector<Members> tmp;
     size_t per_loop = 100000 / sizeof(Members);
     tmp.resize(per_loop);
@@ -445,7 +446,7 @@ write(file_writer& out, std::deque<Members>& arr) {
 }
 
 template <typename Size, typename Members>
-inline void write(file_writer& out, disk_array<Size, Members>& arr) {
+inline void write(file_writer& out, const disk_array<Size, Members>& arr) {
     Size len = 0;
     check_truncate_and_assign(len, arr.elements.size());
     write(out, len);
@@ -481,14 +482,14 @@ future<> parse(random_access_reader& in, disk_hash<Size, Key, Value>& h) {
 }
 
 template <typename Key, typename Value>
-inline void write(file_writer& out, std::unordered_map<Key, Value>& map) {
+inline void write(file_writer& out, const std::unordered_map<Key, Value>& map) {
     for (auto& val: map) {
         write(out, val.first, val.second);
     };
 }
 
 template <typename Size, typename Key, typename Value>
-inline void write(file_writer& out, disk_hash<Size, Key, Value>& h) {
+inline void write(file_writer& out, const disk_hash<Size, Key, Value>& h) {
     Size len = 0;
     check_truncate_and_assign(len, h.map.size());
     write(out, len);
@@ -554,7 +555,7 @@ future<> parse(random_access_reader& in, summary& s) {
     });
 }
 
-inline void write(file_writer& out, summary_entry& entry) {
+inline void write(file_writer& out, const summary_entry& entry) {
     // FIXME: summary entry is supposedly written in memory order, but that
     // would prevent portability of summary file between machines of different
     // endianness. We can treat it as little endian to preserve portability.
@@ -563,7 +564,7 @@ inline void write(file_writer& out, summary_entry& entry) {
     out.write(p, sizeof(uint64_t)).get();
 }
 
-inline void write(file_writer& out, summary& s) {
+inline void write(file_writer& out, const summary& s) {
     // NOTE: positions and entries must be stored in NATIVE BYTE ORDER, not BIG-ENDIAN.
     write(out, s.header.min_index_interval,
                   s.header.size,
@@ -597,7 +598,7 @@ future<> parse(random_access_reader& in, std::unique_ptr<metadata>& p) {
 }
 
 template <typename Child>
-inline void write(file_writer& out, std::unique_ptr<metadata>& p) {
+inline void write(file_writer& out, const std::unique_ptr<metadata>& p) {
     write(out, *static_cast<Child *>(p.get()));
 }
 
@@ -621,7 +622,7 @@ future<> parse(random_access_reader& in, statistics& s) {
     });
 }
 
-inline void write(file_writer& out, statistics& s) {
+inline void write(file_writer& out, const statistics& s) {
     write(out, s.hash);
     struct kv {
         metadata_type key;
@@ -639,13 +640,13 @@ inline void write(file_writer& out, statistics& s) {
     for (auto& val: *v) {
         switch (val.key) {
             case metadata_type::Validation:
-                write<validation_metadata>(out, s.contents[val.key]);
+                write<validation_metadata>(out, s.contents.at(val.key));
                 break;
             case metadata_type::Compaction:
-                write<compaction_metadata>(out, s.contents[val.key]);
+                write<compaction_metadata>(out, s.contents.at(val.key));
                 break;
             case metadata_type::Stats:
-                write<stats_metadata>(out, s.contents[val.key]);
+                write<stats_metadata>(out, s.contents.at(val.key));
                 break;
             default:
                 sstlog.warn("Invalid metadata type at Statistics file: {} ", int(val.key));
@@ -682,7 +683,7 @@ future<> parse(random_access_reader& in, utils::estimated_histogram& eh) {
     });
 }
 
-inline void write(file_writer& out, utils::estimated_histogram& eh) {
+inline void write(file_writer& out, const utils::estimated_histogram& eh) {
     uint32_t len = 0;
     check_truncate_and_assign(len, eh.buckets.size());
 
@@ -848,7 +849,7 @@ future<> sstable::seal_sstable() {
     });
 }
 
-void write_crc(io_error_handler& error_handler, const sstring file_path, checksum& c) {
+void write_crc(io_error_handler& error_handler, const sstring file_path, const checksum& c) {
     sstlog.debug("Writing CRC file {} ", file_path);
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
@@ -916,7 +917,7 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
 }
 
 template <sstable::component_type Type, typename T>
-void sstable::write_simple(T& component, const io_priority_class& pc) {
+void sstable::write_simple(const T& component, const io_priority_class& pc) {
     auto file_path = filename(Type);
     sstlog.debug(("Writing " + _component_map[Type] + " file {} ").c_str(), file_path);
     file f = new_sstable_component_file(_write_error_handler, file_path, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
@@ -931,7 +932,7 @@ void sstable::write_simple(T& component, const io_priority_class& pc) {
 }
 
 template future<> sstable::read_simple<sstable::component_type::Filter>(sstables::filter& f, const io_priority_class& pc);
-template void sstable::write_simple<sstable::component_type::Filter>(sstables::filter& f, const io_priority_class& pc);
+template void sstable::write_simple<sstable::component_type::Filter>(const sstables::filter& f, const io_priority_class& pc);
 
 future<> sstable::read_compression(const io_priority_class& pc) {
      // FIXME: If there is no compression, we should expect a CRC file to be present.

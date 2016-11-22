@@ -479,7 +479,7 @@ private:
     future<> read_simple(T& comp, const io_priority_class& pc);
 
     template <sstable::component_type Type, typename T>
-    void write_simple(T& comp, const io_priority_class& pc);
+    void write_simple(const T& comp, const io_priority_class& pc);
 
     void generate_toc(compressor c, double filter_fp_chance);
     void write_toc(const io_priority_class& pc);
