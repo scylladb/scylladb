@@ -1412,6 +1412,9 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
                 // ignore, disconnect will be logged by gossiper
             } catch(seastar::gate_closed_exception&) {
                 // may happen during shutdown, ignore it
+            } catch(timed_out_error&) {
+                // from lmutate(). Ignore so that logs are not flooded
+                // database total_writes_timedout counter was incremented.
             } catch(...) {
                 logger.error("exception during mutation write to {}: {}", coordinator, std::current_exception());
             }
@@ -3290,8 +3293,18 @@ void storage_proxy::init_messaging_service() {
                     return ms.send_mutation_done(net::messaging_service::msg_addr{reply_to, shard}, shard, response_id).then_wrapped([] (future<> f) {
                         f.ignore_ready_future();
                     });
-                }).handle_exception([reply_to, shard] (std::exception_ptr eptr) {
-                    logger.warn("Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
+                }).handle_exception([reply_to, shard, &p] (std::exception_ptr eptr) {
+                    seastar::log_level l = seastar::log_level::warn;
+                    try {
+                        std::rethrow_exception(eptr);
+                    } catch (timed_out_error&) {
+                        // ignore timeouts so that logs are not flooded.
+                        // database total_writes_timedout counter was incremented.
+                        l = seastar::log_level::debug;
+                    } catch (...) {
+                        // ignore
+                    }
+                    logger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
                 }),
                 parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p, trace_state_ptr, timeout] (gms::inet_address forward) {
                     auto& ms = net::get_local_messaging_service();
