@@ -452,9 +452,9 @@ class ring_position_range_sharder {
     dht::partition_range _range;
     bool _done = false;
 public:
-    explicit ring_position_range_sharder(range<ring_position> rrp)
+    explicit ring_position_range_sharder(nonwrapping_range<ring_position> rrp)
             : ring_position_range_sharder(global_partitioner(), std::move(rrp)) {}
-    ring_position_range_sharder(const i_partitioner& partitioner, range<ring_position> rrp)
+    ring_position_range_sharder(const i_partitioner& partitioner, nonwrapping_range<ring_position> rrp)
             : _partitioner(partitioner), _range(std::move(rrp)) {}
     stdx::optional<ring_position_range_and_shard> next(const schema& s);
 };
