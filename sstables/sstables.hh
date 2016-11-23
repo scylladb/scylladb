@@ -479,7 +479,7 @@ private:
     future<> read_simple(T& comp, const io_priority_class& pc);
 
     template <sstable::component_type Type, typename T>
-    void write_simple(T& comp, const io_priority_class& pc);
+    void write_simple(const T& comp, const io_priority_class& pc);
 
     void generate_toc(compressor c, double filter_fp_chance);
     void write_toc(const io_priority_class& pc);
@@ -642,6 +642,7 @@ public:
         const compaction_metadata& s = *static_cast<compaction_metadata *>(p.get());
         return s;
     }
+    std::vector<unsigned> get_shards_for_this_sstable() const;
 
     uint32_t get_sstable_level() const {
         return get_stats_metadata().sstable_level;
@@ -661,6 +662,8 @@ public:
     // Return sstable key range as range<partition_key> reading only the summary component.
     future<range<partition_key>>
     get_sstable_key_range(const schema& s);
+
+    future<std::vector<shard_id>> get_owning_shards_from_unloaded();
 
     const std::vector<nonwrapping_range<bytes_view>>& clustering_components_ranges() const;
 

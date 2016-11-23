@@ -28,8 +28,14 @@ namespace dht {
 
 class murmur3_partitioner final : public i_partitioner {
     unsigned _shard_count;
+    unsigned _sharding_ignore_msb_bits;
 public:
-    murmur3_partitioner(unsigned shard_count = smp::count) : _shard_count(shard_count) {}
+    murmur3_partitioner(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0)
+            : _shard_count(shard_count)
+            // if one shard, ignore sharding_ignore_msb_bits as they will just cause needless
+            // range breaks
+            , _sharding_ignore_msb_bits(shard_count > 1 ? sharding_ignore_msb_bits : 0) {
+    }
     virtual const sstring name() { return "org.apache.cassandra.dht.Murmur3Partitioner"; }
     virtual token get_token(const schema& s, partition_key_view key) override;
     virtual token get_token(const sstables::key_view& key) override;

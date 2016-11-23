@@ -737,6 +737,7 @@ public:
     val(prometheus_port, uint16_t, 9180, Used, "Prometheus port, set to zero to disable") \
     val(prometheus_address, sstring, "0.0.0.0", Used, "Prometheus listening address") \
     val(abort_on_lsa_bad_alloc, bool, false, Used, "Abort when allocation in LSA region fails") \
+    val(murmur3_partitioner_ignore_msb_bits, unsigned, 12, Used, "Number of most siginificant token bits to ignore in murmur3 partitioner; increase for very large clusters") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \

@@ -257,7 +257,7 @@ bytes random_partitioner::token_to_bytes(const token& t) const {
     return data;
 }
 
-using registry = class_registrator<i_partitioner, random_partitioner>;
+using registry = class_registrator<i_partitioner, random_partitioner, const unsigned&, const unsigned&>;
 static registry registrator("org.apache.cassandra.dht.RandomPartitioner");
 static registry registrator_short_name("RandomPartitioner");
 

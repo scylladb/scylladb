@@ -345,7 +345,7 @@ int main(int ac, char** av) {
             apply_logger_settings(cfg->default_log_level(), cfg->logger_log_level(),
                     cfg->log_to_stdout(), cfg->log_to_syslog());
             verify_rlimit(cfg->developer_mode());
-            dht::set_global_partitioner(cfg->partitioner());
+            dht::set_global_partitioner(cfg->partitioner(), cfg->murmur3_partitioner_ignore_msb_bits());
             auto start_thrift = cfg->start_rpc();
             uint16_t api_port = cfg->api_port();
             ctx.api_dir = cfg->api_ui_dir();

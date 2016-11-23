@@ -764,28 +764,24 @@ static bool belongs_to_other_shard(const schema& s, const partition_key& first, 
     return (s1 != me) || (me != s2);
 }
 
-static bool belongs_to_current_shard(const schema& s, range<partition_key> r) {
-    assert(r.start());
-    assert(r.end());
-    return belongs_to_current_shard(s, r.start()->value(), r.end()->value());
+static bool belongs_to_current_shard(const std::vector<shard_id>& shards) {
+    return boost::find(shards, engine().cpu_id()) != shards.end();
 }
 
-static bool belongs_to_other_shard(const schema& s, range<partition_key> r) {
-    assert(r.start());
-    assert(r.end());
-    return belongs_to_other_shard(s, r.start()->value(), r.end()->value());
+static bool belongs_to_other_shard(const std::vector<shard_id>& shards) {
+    return shards.size() != size_t(belongs_to_current_shard(shards));
 }
 
 future<> column_family::load_sstable(sstables::sstable&& sstab, bool reset_level) {
     auto sst = make_lw_shared<sstables::sstable>(std::move(sstab));
-    return sst->get_sstable_key_range(*_schema).then([this, sst, reset_level] (range<partition_key> r) mutable {
+    return sst->get_owning_shards_from_unloaded().then([this, sst, reset_level] (std::vector<shard_id> shards) mutable {
         // Checks whether or not sstable belongs to current shard.
-        if (!belongs_to_current_shard(*_schema, r)) {
+        if (!belongs_to_current_shard(shards)) {
             dblog.debug("sstable {} not relevant for this shard, ignoring", sst->get_filename());
             sst->mark_for_deletion();
             return make_ready_future<>();
         }
-        bool in_other_shard = belongs_to_other_shard(*_schema, std::move(r));
+        bool in_other_shard = belongs_to_other_shard(shards);
         return sst->load().then([this, sst, in_other_shard, reset_level] () mutable {
             if (in_other_shard) {
                 // If we're here, this sstable is shared by this and other

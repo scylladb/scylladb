@@ -290,7 +290,7 @@ future<> parse(random_access_reader& in, T& len, bytes& s) {
     });
 }
 
-inline void write(file_writer& out, bytes& s) {
+inline void write(file_writer& out, const bytes& s) {
     out.write(s).get();
 }
 
@@ -313,7 +313,7 @@ future<> parse(random_access_reader& in, First& first, Rest&&... rest) {
 }
 
 template<typename First, typename... Rest>
-inline void write(file_writer& out, First& first, Rest&&... rest) {
+inline void write(file_writer& out, const First& first, Rest&&... rest) {
     write(out, first);
     write(out, std::forward<Rest>(rest)...);
 }
@@ -329,8 +329,9 @@ parse(random_access_reader& in, T& t) {
 
 template <class T>
 inline typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, void>
-write(file_writer& out, T& t) {
-    t.describe_type([&out] (auto&&... what) -> void {
+write(file_writer& out, const T& t) {
+    // describe_type() is not const correct, so cheat here:
+    const_cast<T&>(t).describe_type([&out] (auto&&... what) -> void {
         write(out, std::forward<decltype(what)>(what)...);
     });
 }
@@ -350,7 +351,7 @@ future<> parse(random_access_reader& in, disk_string<Size>& s) {
 }
 
 template <typename Size>
-inline void write(file_writer& out, disk_string<Size>& s) {
+inline void write(file_writer& out, const disk_string<Size>& s) {
     Size len = 0;
     check_truncate_and_assign(len, s.value.size());
     write(out, len);
@@ -358,7 +359,7 @@ inline void write(file_writer& out, disk_string<Size>& s) {
 }
 
 template <typename Size>
-inline void write(file_writer& out, disk_string_view<Size>& s) {
+inline void write(file_writer& out, const disk_string_view<Size>& s) {
     Size len;
     check_truncate_and_assign(len, s.value.size());
     write(out, len, s.value);
@@ -417,7 +418,7 @@ future<> parse(random_access_reader& in, disk_array<Size, Members>& arr) {
 
 template <typename Members>
 inline typename std::enable_if_t<!std::is_integral<Members>::value, void>
-write(file_writer& out, std::deque<Members>& arr) {
+write(file_writer& out, const std::deque<Members>& arr) {
     for (auto& a : arr) {
         write(out, a);
     }
@@ -425,7 +426,7 @@ write(file_writer& out, std::deque<Members>& arr) {
 
 template <typename Members>
 inline typename std::enable_if_t<std::is_integral<Members>::value, void>
-write(file_writer& out, std::deque<Members>& arr) {
+write(file_writer& out, const std::deque<Members>& arr) {
     std::vector<Members> tmp;
     size_t per_loop = 100000 / sizeof(Members);
     tmp.resize(per_loop);
@@ -445,7 +446,7 @@ write(file_writer& out, std::deque<Members>& arr) {
 }
 
 template <typename Size, typename Members>
-inline void write(file_writer& out, disk_array<Size, Members>& arr) {
+inline void write(file_writer& out, const disk_array<Size, Members>& arr) {
     Size len = 0;
     check_truncate_and_assign(len, arr.elements.size());
     write(out, len);
@@ -481,14 +482,14 @@ future<> parse(random_access_reader& in, disk_hash<Size, Key, Value>& h) {
 }
 
 template <typename Key, typename Value>
-inline void write(file_writer& out, std::unordered_map<Key, Value>& map) {
+inline void write(file_writer& out, const std::unordered_map<Key, Value>& map) {
     for (auto& val: map) {
         write(out, val.first, val.second);
     };
 }
 
 template <typename Size, typename Key, typename Value>
-inline void write(file_writer& out, disk_hash<Size, Key, Value>& h) {
+inline void write(file_writer& out, const disk_hash<Size, Key, Value>& h) {
     Size len = 0;
     check_truncate_and_assign(len, h.map.size());
     write(out, len);
@@ -554,7 +555,7 @@ future<> parse(random_access_reader& in, summary& s) {
     });
 }
 
-inline void write(file_writer& out, summary_entry& entry) {
+inline void write(file_writer& out, const summary_entry& entry) {
     // FIXME: summary entry is supposedly written in memory order, but that
     // would prevent portability of summary file between machines of different
     // endianness. We can treat it as little endian to preserve portability.
@@ -563,7 +564,7 @@ inline void write(file_writer& out, summary_entry& entry) {
     out.write(p, sizeof(uint64_t)).get();
 }
 
-inline void write(file_writer& out, summary& s) {
+inline void write(file_writer& out, const summary& s) {
     // NOTE: positions and entries must be stored in NATIVE BYTE ORDER, not BIG-ENDIAN.
     write(out, s.header.min_index_interval,
                   s.header.size,
@@ -597,7 +598,7 @@ future<> parse(random_access_reader& in, std::unique_ptr<metadata>& p) {
 }
 
 template <typename Child>
-inline void write(file_writer& out, std::unique_ptr<metadata>& p) {
+inline void write(file_writer& out, const std::unique_ptr<metadata>& p) {
     write(out, *static_cast<Child *>(p.get()));
 }
 
@@ -613,6 +614,8 @@ future<> parse(random_access_reader& in, statistics& s) {
                     return parse<compaction_metadata>(in, s.contents[val.first]);
                 case metadata_type::Stats:
                     return parse<stats_metadata>(in, s.contents[val.first]);
+                case metadata_type::Sharding:
+                    return parse<sharding_metadata>(in, s.contents[val.first]);
                 default:
                     sstlog.warn("Invalid metadata type at Statistics file: {} ", int(val.first));
                     return make_ready_future<>();
@@ -621,36 +624,13 @@ future<> parse(random_access_reader& in, statistics& s) {
     });
 }
 
-inline void write(file_writer& out, statistics& s) {
+inline void write(file_writer& out, const statistics& s) {
     write(out, s.hash);
-    struct kv {
-        metadata_type key;
-        uint32_t value;
-    };
-    // sort map by file offset value and store the result into a vector.
-    // this is indeed needed because output stream cannot afford random writes.
-    auto v = make_shared<std::vector<kv>>();
-    v->reserve(s.hash.map.size());
-    for (auto val : s.hash.map) {
-        kv tmp = { val.first, val.second };
-        v->push_back(tmp);
-    }
-    std::sort(v->begin(), v->end(), [] (kv i, kv j) { return i.value < j.value; });
-    for (auto& val: *v) {
-        switch (val.key) {
-            case metadata_type::Validation:
-                write<validation_metadata>(out, s.contents[val.key]);
-                break;
-            case metadata_type::Compaction:
-                write<compaction_metadata>(out, s.contents[val.key]);
-                break;
-            case metadata_type::Stats:
-                write<stats_metadata>(out, s.contents[val.key]);
-                break;
-            default:
-                sstlog.warn("Invalid metadata type at Statistics file: {} ", int(val.key));
-                return; // FIXME: should throw
-            }
+    auto types = boost::copy_range<std::vector<metadata_type>>(s.hash.map | boost::adaptors::map_keys);
+    // use same sort order as seal_statistics
+    boost::sort(types);
+    for (auto t : types) {
+        s.contents.at(t)->write(out);
     }
 }
 
@@ -682,7 +662,7 @@ future<> parse(random_access_reader& in, utils::estimated_histogram& eh) {
     });
 }
 
-inline void write(file_writer& out, utils::estimated_histogram& eh) {
+inline void write(file_writer& out, const utils::estimated_histogram& eh) {
     uint32_t len = 0;
     check_truncate_and_assign(len, eh.buckets.size());
 
@@ -848,7 +828,7 @@ future<> sstable::seal_sstable() {
     });
 }
 
-void write_crc(io_error_handler& error_handler, const sstring file_path, checksum& c) {
+void write_crc(io_error_handler& error_handler, const sstring file_path, const checksum& c) {
     sstlog.debug("Writing CRC file {} ", file_path);
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
@@ -916,7 +896,7 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
 }
 
 template <sstable::component_type Type, typename T>
-void sstable::write_simple(T& component, const io_priority_class& pc) {
+void sstable::write_simple(const T& component, const io_priority_class& pc) {
     auto file_path = filename(Type);
     sstlog.debug(("Writing " + _component_map[Type] + " file {} ").c_str(), file_path);
     file f = new_sstable_component_file(_write_error_handler, file_path, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
@@ -931,7 +911,7 @@ void sstable::write_simple(T& component, const io_priority_class& pc) {
 }
 
 template future<> sstable::read_simple<sstable::component_type::Filter>(sstables::filter& f, const io_priority_class& pc);
-template void sstable::write_simple<sstable::component_type::Filter>(sstables::filter& f, const io_priority_class& pc);
+template void sstable::write_simple<sstable::component_type::Filter>(const sstables::filter& f, const io_priority_class& pc);
 
 future<> sstable::read_compression(const io_priority_class& pc) {
      // FIXME: If there is no compression, we should expect a CRC file to be present.
@@ -1548,40 +1528,74 @@ static void maybe_add_summary_entry(summary& s, bytes_view key, uint64_t offset)
     }
 }
 
+static
+void
+populate_statistics_offsets(statistics& s) {
+    // copy into a sorted vector to guarantee consistent order
+    auto types = boost::copy_range<std::vector<metadata_type>>(s.contents | boost::adaptors::map_keys);
+    boost::sort(types);
+
+    // populate the hash with garbage so we can calculate its size
+    for (auto t : types) {
+        s.hash.map[t] = -1;
+    }
+
+    auto offset = serialized_size(s.hash);
+    for (auto t : types) {
+        s.hash.map[t] = offset;
+        offset += s.contents[t]->serialized_size();
+    }
+}
+
+static
+sharding_metadata
+create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key, const dht::decorated_key& last_key) {
+    auto range = query::partition_range(dht::ring_position(first_key), dht::ring_position(last_key));
+    auto sharder = dht::ring_position_range_sharder(std::move(range));
+    auto sm = sharding_metadata();
+    auto rpras = sharder.next(*schema);
+    while (rpras) {
+        if (rpras->shard == engine().cpu_id()) {
+            // we know left/right are not infinite
+            auto&& left = rpras->ring_range.start()->value();
+            auto&& right = rpras->ring_range.end()->value();
+            auto&& left_token = left.token();
+            auto left_exclusive = !left.has_key() && left.bound() == dht::ring_position::token_bound::end;
+            auto&& right_token = right.token();
+            auto right_exclusive = !right.has_key() && right.bound() == dht::ring_position::token_bound::start;
+            sm.token_ranges.elements.push_back({
+                {left_exclusive, to_bytes(bytes_view(left_token._data))},
+                {right_exclusive, to_bytes(bytes_view(right_token._data))}});
+        }
+        rpras = sharder.next(*schema);
+    }
+    return sm;
+}
+
+
 // In the beginning of the statistics file, there is a disk_hash used to
 // map each metadata type to its correspondent position in the file.
 static void seal_statistics(statistics& s, metadata_collector& collector,
-        const sstring partitioner, double bloom_filter_fp_chance) {
-    static constexpr int METADATA_TYPE_COUNT = 3;
-
-    size_t old_offset, offset = 0;
-    // account disk_hash size.
-    offset += sizeof(uint32_t);
-    // account disk_hash members.
-    offset += (METADATA_TYPE_COUNT * (sizeof(metadata_type) + sizeof(uint32_t)));
-
+        const sstring partitioner, double bloom_filter_fp_chance, schema_ptr schema,
+        const dht::decorated_key& first_key, const dht::decorated_key& last_key) {
     validation_metadata validation;
     compaction_metadata compaction;
     stats_metadata stats;
 
-    old_offset = offset;
     validation.partitioner.value = to_bytes(partitioner);
     validation.filter_chance = bloom_filter_fp_chance;
-    offset += validation.serialized_size();
     s.contents[metadata_type::Validation] = std::make_unique<validation_metadata>(std::move(validation));
-    s.hash.map[metadata_type::Validation] = old_offset;
 
-    old_offset = offset;
     collector.construct_compaction(compaction);
-    offset += compaction.serialized_size();
     s.contents[metadata_type::Compaction] = std::make_unique<compaction_metadata>(std::move(compaction));
-    s.hash.map[metadata_type::Compaction] = old_offset;
 
     collector.construct_stats(stats);
-    // NOTE: method serialized_size of stats_metadata must be implemented for
-    // a new type of stats to get supported.
     s.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
-    s.hash.map[metadata_type::Stats] = offset;
+
+    auto sm = create_sharding_metadata(schema, first_key, last_key);
+    s.contents[metadata_type::Sharding] = std::make_unique<sharding_metadata>(std::move(sm));
+
+    populate_statistics_offsets(s);
 }
 
 // Returns offset into data component.
@@ -1757,7 +1771,9 @@ void components_writer::consume_end_of_stream() {
         _sst._collector.add_compression_ratio(_sst._compression.compressed_file_length(), _sst._compression.uncompressed_file_length());
     }
 
-    seal_statistics(_sst._statistics, _sst._collector, dht::global_partitioner().name(), _schema.bloom_filter_fp_chance());
+    _sst.set_first_and_last_keys();
+    seal_statistics(_sst._statistics, _sst._collector, dht::global_partitioner().name(), _schema.bloom_filter_fp_chance(),
+            _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key());
 }
 
 future<> sstable::write_components(memtable& mt, bool backup, const io_priority_class& pc, bool leave_unsealed) {
@@ -2389,6 +2405,17 @@ sstable::get_sstable_key_range(const schema& s) {
     });
 }
 
+future<std::vector<shard_id>>
+sstable::get_owning_shards_from_unloaded() {
+    return when_all(read_summary(default_priority_class()), read_statistics(default_priority_class())).then(
+            [this] (std::tuple<future<>, future<>> rets) {
+        std::get<0>(rets).get();
+        std::get<1>(rets).get();
+        set_first_and_last_keys();
+        return get_shards_for_this_sstable();
+    });
+}
+
 void sstable::mark_sstable_for_deletion(const schema_ptr& schema, sstring dir, int64_t generation, version_types v, format_types f) {
     auto sst = sstable(schema, dir, generation, v, f);
     sst.mark_for_deletion();
@@ -2446,6 +2473,37 @@ uint64_t sstable::estimated_keys_for_range(const nonwrapping_range<dht::token>& 
     // adjust for the current sampling level
     uint64_t estimated_keys = sample_key_count * ((downsampling::BASE_SAMPLING_LEVEL * _summary.header.min_index_interval) / _summary.header.sampling_level);
     return std::max(uint64_t(1), estimated_keys);
+}
+
+std::vector<unsigned>
+sstable::get_shards_for_this_sstable() const {
+    std::unordered_set<unsigned> shards;
+    std::vector<nonwrapping_range<dht::ring_position>> token_ranges;
+    auto entry = _statistics.contents.find(metadata_type::Sharding);
+    if (entry == _statistics.contents.end()) {
+        token_ranges.push_back(nonwrapping_range<dht::ring_position>(
+                dht::ring_position::starting_at(get_first_decorated_key().token()),
+                dht::ring_position::ending_at(get_last_decorated_key().token())));
+    } else {
+        auto sm = static_cast<const sharding_metadata*>(entry->second.get());
+        auto disk_token_range_to_ring_position_range = [] (const disk_token_range& dtr) {
+            auto t1 = dht::token(dht::token::kind::key, managed_bytes(bytes_view(dtr.left.token)));
+            auto t2 = dht::token(dht::token::kind::key, managed_bytes(bytes_view(dtr.right.token)));
+            return nonwrapping_range<dht::ring_position>(
+                    (dtr.left.exclusive ? dht::ring_position::ending_at : dht::ring_position::starting_at)(std::move(t1)),
+                    (dtr.right.exclusive ? dht::ring_position::starting_at : dht::ring_position::ending_at)(std::move(t2)));
+        };
+        token_ranges = boost::copy_range<std::vector<nonwrapping_range<dht::ring_position>>>(
+                sm->token_ranges.elements
+                | boost::adaptors::transformed(disk_token_range_to_ring_position_range));
+    }
+    auto sharder = dht::ring_position_range_vector_sharder(std::move(token_ranges));
+    auto rpras = sharder.next(*_schema);
+    while (rpras) {
+        shards.insert(rpras->shard);
+        rpras = sharder.next(*_schema);
+    }
+    return boost::copy_range<std::vector<unsigned>>(shards);
 }
 
 std::ostream&
