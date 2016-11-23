@@ -131,6 +131,9 @@ public:
     // Used for testing that want to control the flush process.
     explicit memtable(schema_ptr schema);
     ~memtable();
+    // Clears this memtable gradually without consuming the whole CPU.
+    // Never resolves with a failed future.
+    future<> clear_gently() noexcept;
     schema_ptr schema() const { return _schema; }
     void set_schema(schema_ptr) noexcept;
     future<> apply(memtable&);

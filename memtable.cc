@@ -57,6 +57,38 @@ void memtable::clear() noexcept {
     remove_flushed_memory(dirty_before - dirty_size());
 }
 
+future<> memtable::clear_gently() noexcept {
+    return futurize_apply([this] {
+        static thread_local seastar::thread_scheduling_group scheduling_group(std::chrono::milliseconds(1), 0.2);
+        auto attr = seastar::thread_attributes();
+        attr.scheduling_group = &scheduling_group;
+        auto t = std::make_unique<seastar::thread>(attr, [this] {
+            auto& alloc = allocator();
+
+            // entries can no longer be moved after unlink_leftmost_without_rebalance()
+            // so need to disable compaction.
+            logalloc::reclaim_lock rl(*this);
+
+            auto p = std::move(partitions);
+            while (!p.empty()) {
+                auto batch_size = std::min<size_t>(p.size(), 32);
+                auto dirty_before = dirty_size();
+                with_allocator(alloc, [&] () noexcept {
+                    while (batch_size--) {
+                        alloc.destroy(p.unlink_leftmost_without_rebalance());
+                    }
+                });
+                remove_flushed_memory(dirty_before - dirty_size());
+                seastar::thread::yield();
+            }
+        });
+        auto f = t->join();
+        return f.then([t = std::move(t)] {});
+    }).handle_exception([this] (auto e) {
+        this->clear();
+    });
+}
+
 partition_entry&
 memtable::find_or_create_partition_slow(partition_key_view key) {
     assert(!reclaiming_enabled());

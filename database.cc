@@ -872,7 +872,7 @@ column_family::update_cache(memtable& m, sstables::shared_sstable exclude_sstabl
        // mutation in m.
        return _cache.update(m, make_partition_presence_checker(std::move(exclude_sstable)));
     } else {
-       return make_ready_future<>();
+       return m.clear_gently();
     }
 }
 
