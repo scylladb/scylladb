@@ -742,28 +742,6 @@ future<> lister::scan_dir(sstring name, lister::dir_entry_types type, walker_typ
     });
 }
 
-static bool belongs_to_current_shard(const schema& s, const partition_key& first, const partition_key& last) {
-    auto key_shard = [&s] (const partition_key& pk) {
-        auto token = dht::global_partitioner().get_token(s, pk);
-        return dht::shard_of(token);
-    };
-    auto s1 = key_shard(first);
-    auto s2 = key_shard(last);
-    auto me = engine().cpu_id();
-    return (s1 <= me) && (me <= s2);
-}
-
-static bool belongs_to_other_shard(const schema& s, const partition_key& first, const partition_key& last) {
-    auto key_shard = [&s] (const partition_key& pk) {
-        auto token = dht::global_partitioner().get_token(s, pk);
-        return dht::shard_of(token);
-    };
-    auto s1 = key_shard(first);
-    auto s2 = key_shard(last);
-    auto me = engine().cpu_id();
-    return (s1 != me) || (me != s2);
-}
-
 static bool belongs_to_current_shard(const std::vector<shard_id>& shards) {
     return boost::find(shards, engine().cpu_id()) != shards.end();
 }
