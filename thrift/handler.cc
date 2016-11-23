@@ -1474,12 +1474,13 @@ private:
     class column_visitor : public Aggregator {
         const schema& _s;
         const query::partition_slice& _slice;
-        uint32_t _cell_limit;
+        const uint32_t _cell_limit;
+        uint32_t _current_cell_limit;
         std::vector<std::pair<std::string, typename Aggregator::type>> _aggregation;
         typename Aggregator::type* _current_aggregation;
     public:
         column_visitor(const schema& s, const query::partition_slice& slice, uint32_t cell_limit)
-                : _s(s), _slice(slice), _cell_limit(cell_limit)
+                : _s(s), _slice(slice), _cell_limit(cell_limit), _current_cell_limit(0)
         { }
         std::vector<std::pair<std::string, typename Aggregator::type>>&& release() {
             return std::move(_aggregation);
@@ -1492,6 +1493,7 @@ private:
         void accept_new_partition(const partition_key& key, uint32_t row_count) {
             _aggregation.emplace_back(partition_key_to_string(_s, key), typename Aggregator::type());
             _current_aggregation = &_aggregation.back().second;
+            _current_cell_limit = _cell_limit;
         }
         void accept_new_partition(uint32_t row_count) {
             // We always ask for the partition_key to be sent in query_opts().
@@ -1500,19 +1502,19 @@ private:
         void accept_new_row(const clustering_key_prefix& key, const query::result_row_view& static_row, const query::result_row_view& row) {
             auto it = row.iterator();
             auto cell = it.next_atomic_cell();
-            if (cell && _cell_limit > 0) {
+            if (cell && _current_cell_limit > 0) {
                 bytes column_name = composite::serialize_value(key.components(), _s.thrift().has_compound_comparator());
                 Aggregator::on_column(_current_aggregation, column_name, *cell);
-                _cell_limit -= 1;
+                _current_cell_limit -= 1;
             }
         }
         void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
             auto it = row.iterator();
             for (auto&& id : _slice.regular_columns) {
                 auto cell = it.next_atomic_cell();
-                if (cell && _cell_limit > 0) {
+                if (cell && _current_cell_limit > 0) {
                     Aggregator::on_column(_current_aggregation, _s.regular_column_at(id).name(), *cell);
-                    _cell_limit -= 1;
+                    _current_cell_limit -= 1;
                 }
             }
         }
