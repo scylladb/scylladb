@@ -1890,7 +1890,8 @@ mutation_query(schema_ptr s,
                const query::partition_slice& slice,
                uint32_t row_limit,
                uint32_t partition_limit,
-               gc_clock::time_point query_time)
+               gc_clock::time_point query_time,
+               query::result_memory_accounter&& accounter)
 {
     if (row_limit == 0 || slice.partition_row_limit() == 0 || partition_limit == 0) {
         return make_ready_future<reconcilable_result>(reconcilable_result());

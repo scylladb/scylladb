@@ -2414,10 +2414,11 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_requ
 }
 
 future<reconcilable_result>
-database::query_mutations(schema_ptr s, const query::read_command& cmd, const query::partition_range& range, tracing::trace_state_ptr trace_state) {
+database::query_mutations(schema_ptr s, const query::read_command& cmd, const query::partition_range& range,
+                          query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state) {
     column_family& cf = find_column_family(cmd.cf_id);
     return mutation_query(std::move(s), cf.as_mutation_source(std::move(trace_state)), range, cmd.slice, cmd.row_limit, cmd.partition_limit,
-            cmd.timestamp).then_wrapped([this, s = _stats] (auto f) {
+            cmd.timestamp, std::move(accounter)).then_wrapped([this, s = _stats] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
         } else {

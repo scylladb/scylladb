@@ -3421,9 +3421,21 @@ void storage_proxy::uninit_messaging_service() {
 class mutation_result_merger {
     unsigned _row_count = 0;
     unsigned _partition_count = 0;
+    bool _short_read_allowed;
     query::short_read _short_read;
     std::vector<partition> _partitions;
+    query::result_memory_accounter _memory_accounter;
 public:
+    explicit mutation_result_merger(const query::read_command& cmd)
+        : _short_read_allowed(cmd.slice.options.contains(query::partition_slice::option::allow_short_read))
+    { }
+
+    query::result_memory_accounter& memory() {
+        return _memory_accounter;
+    }
+    const query::result_memory_accounter& memory() const {
+        return _memory_accounter;
+    }
     void add_result(foreign_ptr<lw_shared_ptr<reconcilable_result>> partial_result) {
         // Following three lines to simplify patch; can remove later
         for (const partition& p : partial_result->partitions()) {
@@ -3432,9 +3444,13 @@ public:
             _partition_count += p._row_count > 0;
         }
         _short_read = partial_result->is_short_read();
+        if (_memory_accounter.update_and_check(partial_result->memory_usage()) && _short_read_allowed) {
+            _short_read = query::short_read::yes;
+        }
     }
     reconcilable_result get() && {
-        return reconcilable_result(_row_count, std::move(_partitions), _short_read);
+        return reconcilable_result(_row_count, std::move(_partitions), _short_read,
+                                   std::move(_memory_accounter).done());
     }
     bool short_read() const {
         return bool(_short_read);
@@ -3452,9 +3468,11 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
     if (pr.is_singular()) {
         unsigned shard = _db.local().shard_of(pr.start()->value().token());
         return _db.invoke_on(shard, [cmd, &pr, gs=global_schema_ptr(s), gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
-            return db.query_mutations(gs, *cmd, pr, gt).then([] (reconcilable_result&& result) {
+          return db.get_result_memory_limiter().new_read().then([&] (query::result_memory_accounter ma) {
+            return db.query_mutations(gs, *cmd, pr, std::move(ma), gt).then([] (reconcilable_result&& result) {
                 return make_foreign(make_lw_shared(std::move(result)));
             });
+          });
         });
     } else {
         return query_nonsingular_mutations_locally(std::move(s), std::move(cmd), {pr}, std::move(trace_state));
@@ -3477,7 +3495,7 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
     auto shard_cmd = make_lw_shared<query::read_command>(*cmd);
     return do_with(cmd,
             shard_cmd,
-            mutation_result_merger{},
+            mutation_result_merger{*cmd},
             dht::ring_position_range_vector_sharder{prs},
             global_schema_ptr(s),
             tracing::global_trace_state_ptr(std::move(trace_state)),
@@ -3487,6 +3505,8 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
                     dht::ring_position_range_vector_sharder& rprs,
                     global_schema_ptr& gs,
                     tracing::global_trace_state_ptr& gt) {
+      return _db.local().get_result_memory_limiter().new_read().then([&, s] (query::result_memory_accounter ma) {
+        mrm.memory() = std::move(ma);
         return repeat_until_value([&, s] () -> future<stdx::optional<reconcilable_result>> {
             auto now = rprs.next(*s);
             if (!now) {
@@ -3495,7 +3515,8 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
             shard_cmd->partition_limit = cmd->partition_limit - mrm.partition_count();
             shard_cmd->row_limit = cmd->row_limit - mrm.row_count();
             return _db.invoke_on(now->shard, [&, now = std::move(*now), gt] (database& db) {
-                return db.query_mutations(gs, *shard_cmd, now.ring_range, std::move(gt)).then([] (reconcilable_result&& rr) {
+                query::result_memory_accounter accounter(db.get_result_memory_limiter(), mrm.memory());
+                return db.query_mutations(gs, *shard_cmd, now.ring_range, std::move(accounter), std::move(gt)).then([] (reconcilable_result&& rr) {
                     return make_foreign(make_lw_shared(std::move(rr)));
                 });
             }).then([&] (foreign_ptr<lw_shared_ptr<reconcilable_result>> rr) -> stdx::optional<reconcilable_result> {
@@ -3506,6 +3527,7 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
                 return stdx::nullopt;
             });
         });
+      });
     }).then([] (reconcilable_result&& result) {
         return make_foreign(make_lw_shared(std::move(result)));
     });

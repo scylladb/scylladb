@@ -89,6 +89,10 @@ public:
         return _short_read;
     }
 
+    size_t memory_usage() const {
+        return _memory_tracker.used_memory();
+    }
+
     bool operator==(const reconcilable_result& other) const;
     bool operator!=(const reconcilable_result& other) const;
 
@@ -121,7 +125,8 @@ future<reconcilable_result> mutation_query(
     const query::partition_slice& slice,
     uint32_t row_limit,
     uint32_t partition_limit,
-    gc_clock::time_point query_time);
+    gc_clock::time_point query_time,
+    query::result_memory_accounter&& accounter = { });
 
 struct data_query_result {
     uint32_t live_rows{0};
