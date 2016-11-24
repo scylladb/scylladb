@@ -1049,6 +1049,24 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
         return newtab->open_data();
     }).then_wrapped([this, old, newtab] (future<> ret) {
         dblog.debug("Flushing to {} done", newtab->get_filename());
+        // Could pass the iterator to the seal functions, and avoid the need to search the
+        // unordered_map here. But this is supposed to be cheap and it is a lot less clutter in the
+        // method signatures. Also makes it optional and streaming memtables don't have to do it.
+        // Note that the number of entries in this hash is limited by the background flushes
+        // semaphore, so it'll always be small.
+        //
+        // In terms of releasing dirty memory, this is almost as far as we should go. We could do
+        // this right before updating the cache, but from this point on to update_cache we have no
+        // deferring points, so that's fine. We do it in here because if we fail this write it will
+        // try the write again and that will create a new flush reader that will decrease dirty
+        // memory again. So we need to get rid of the charges here anyway for correctness.
+        //
+        // After the cache starts to be updated the region in transferred over. We kind of assume
+        // there will be no deferring point between this and update cache transferring ownership.
+        // It's not that bad if it is so we wouldn't really protect against it, but without a
+        // deferring point we can guarantee that no request will see a spike in dirty memory between
+        // the release of our memory and the execution of a request.
+        dirty_memory_manager::from_region_group(old->region_group()).remove_from_flush_manager(&(old->region()));
         try {
             ret.get();
 
@@ -2530,7 +2548,7 @@ future<> dirty_memory_manager::flush_one(memtable_list& mtlist, semaphore_units<
     //
     // If we abandon size-driven flush and go with another flushing scheme that always guarantees
     // that we're picking from this region_group, we can simplify this.
-    dirty_memory_manager::from_region_group(region_group)._flush_manager.emplace(region, std::move(permit));
+    dirty_memory_manager::from_region_group(region_group).add_to_flush_manager(region, std::move(permit));
     auto fut = mtlist.seal_active_memtable(memtable_list::flush_behavior::immediate);
     return get_units(_background_work_flush_serializer, 1).then([this, fut = std::move(fut), region, region_group, schema] (auto permit) mutable {
         return std::move(fut).then_wrapped([this, region, region_group, schema, permit = std::move(permit)] (auto f) {
