@@ -20,7 +20,7 @@ setuid scylla
 setgid scylla
 limit core unlimited unlimited
 limit memlock unlimited unlimited
-limit nofile 200000 200000
+limit nofile 800000 800000
 limit as unlimited unlimited
 limit nproc 8096 8096
 chdir /var/lib/scylla
