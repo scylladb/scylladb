@@ -2341,10 +2341,11 @@ struct query_state {
     explicit query_state(schema_ptr s,
                          const query::read_command& cmd,
                          query::result_request request,
-                         const std::vector<query::partition_range>& ranges)
+                         const std::vector<query::partition_range>& ranges,
+                         query::result_memory_accounter memory_accounter = { })
             : schema(std::move(s))
             , cmd(cmd)
-            , builder(cmd.slice, request, { })
+            , builder(cmd.slice, request, std::move(memory_accounter))
             , limit(cmd.row_limit)
             , partition_limit(cmd.partition_limit)
             , current_partition_range(ranges.begin())
@@ -2360,17 +2361,21 @@ struct query_state {
     std::vector<query::partition_range>::const_iterator range_end;
     mutation_reader reader;
     bool done() const {
-        return !limit || !partition_limit || current_partition_range == range_end;
+        return !limit || !partition_limit || current_partition_range == range_end || builder.is_short_read();
     }
 };
 
 future<lw_shared_ptr<query::result>>
-column_family::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& partition_ranges, tracing::trace_state_ptr trace_state) {
+column_family::query(schema_ptr s, const query::read_command& cmd, query::result_request request,
+                     const std::vector<query::partition_range>& partition_ranges,
+                     tracing::trace_state_ptr trace_state, query::result_memory_limiter& memory_limiter) {
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
-    auto qs_ptr = std::make_unique<query_state>(std::move(s), cmd, request, partition_ranges);
-    auto& qs = *qs_ptr;
-    {
+    auto f = request == query::result_request::only_digest
+             ? make_ready_future<query::result_memory_accounter>() : memory_limiter.new_read();
+    return f.then([this, lc, s = std::move(s), &cmd, request, &partition_ranges, trace_state = std::move(trace_state)] (query::result_memory_accounter accounter) mutable {
+        auto qs_ptr = std::make_unique<query_state>(std::move(s), cmd, request, partition_ranges, std::move(accounter));
+        auto& qs = *qs_ptr;
         return do_until(std::bind(&query_state::done, &qs), [this, &qs, trace_state = std::move(trace_state)] {
             auto&& range = *qs.current_partition_range++;
             return data_query(qs.schema, as_mutation_source(trace_state), range, qs.cmd.slice, qs.limit, qs.partition_limit,
@@ -2387,7 +2392,7 @@ column_family::query(schema_ptr s, const query::read_command& cmd, query::result
                 _stats.estimated_read.add(lc.latency(), _stats.reads.hist.count);
             }
         });
-    }
+    });
 }
 
 mutation_source
@@ -2403,7 +2408,7 @@ column_family::as_mutation_source(tracing::trace_state_ptr trace_state) const {
 future<lw_shared_ptr<query::result>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges, tracing::trace_state_ptr trace_state) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return cf.query(std::move(s), cmd, request, ranges, std::move(trace_state)).then_wrapped([this, s = _stats] (auto f) {
+    return cf.query(std::move(s), cmd, request, ranges, std::move(trace_state), get_result_memory_limiter()).then_wrapped([this, s = _stats] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
         } else {

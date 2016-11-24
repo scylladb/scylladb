@@ -648,7 +648,8 @@ public:
     future<lw_shared_ptr<query::result>> query(schema_ptr,
         const query::read_command& cmd, query::result_request request,
         const std::vector<query::partition_range>& ranges,
-        tracing::trace_state_ptr trace_state);
+        tracing::trace_state_ptr trace_state,
+        query::result_memory_limiter& memory_limiter);
 
     future<> populate(sstring datadir);
 
