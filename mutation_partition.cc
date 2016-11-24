@@ -1841,10 +1841,17 @@ class reconcilable_result_builder {
     bool _has_ck_selector{};
     bool _static_row_is_alive{};
     uint32_t _total_live_rows = 0;
+    query::result_memory_accounter _memory_accounter;
+    stop_iteration _stop;
+    bool _short_read_allowed;
     stdx::optional<streamed_mutation_freezer> _mutation_consumer;
 public:
-    reconcilable_result_builder(const schema& s, const query::partition_slice& slice)
-            : _schema(s), _slice(slice) { }
+    reconcilable_result_builder(const schema& s, const query::partition_slice& slice,
+                                query::result_memory_accounter&& accounter)
+        : _schema(s), _slice(slice)
+        , _memory_accounter(std::move(accounter))
+        , _short_read_allowed(slice.options.contains<query::partition_slice::option::allow_short_read>())
+    { }
 
     void consume_new_partition(const dht::decorated_key& dk) {
         _has_ck_selector = has_ck_selector(_slice.row_ranges(_schema, dk.key()));
@@ -1859,27 +1866,47 @@ public:
     }
     stop_iteration consume(static_row&& sr, tombstone, bool is_alive) {
         _static_row_is_alive = is_alive;
+        _memory_accounter.update(sr.memory_usage());
         return _mutation_consumer->consume(std::move(sr));
     }
     stop_iteration consume(clustering_row&& cr, tombstone, bool is_alive) {
         _live_rows += is_alive;
-        return _mutation_consumer->consume(std::move(cr));
+        auto stop = _memory_accounter.update_and_check(cr.memory_usage());
+        if (is_alive) {
+            // We are considering finishing current read only after consuming a
+            // live clustering row. While sending a single live row is enough to
+            // guarantee progress, not ending the result on a live row would
+            // mean that the next page fetch will read all tombstones after the
+            // last live row again.
+            _stop = stop && stop_iteration(_short_read_allowed);
+        }
+        return _mutation_consumer->consume(std::move(cr)) || _stop;
     }
     stop_iteration consume(range_tombstone&& rt) {
+        _memory_accounter.update(rt.memory_usage());
         return _mutation_consumer->consume(std::move(rt));
     }
 
     stop_iteration consume_end_of_partition() {
         if (_live_rows == 0 && _static_row_is_alive && !_has_ck_selector) {
             ++_live_rows;
+            // Normally we count only live clustering rows, to guarantee that
+            // the next page fetch won't ask for the same range. However,
+            // if we return just a single static row we can stop the result as
+            // well. Next page fetch will ask for the next partition and if we
+            // don't do that we could end up with an unbounded number of
+            // partitions with only a static row.
+            _stop = _stop || _memory_accounter.check();
         }
         _total_live_rows += _live_rows;
         _result.emplace_back(partition { _live_rows, _mutation_consumer->consume_end_of_stream() });
-        return stop_iteration::no;
+        return _stop;
     }
 
     reconcilable_result consume_end_of_stream() {
-        return reconcilable_result(_total_live_rows, std::move(_result), query::short_read::no);
+        return reconcilable_result(_total_live_rows, std::move(_result),
+                                   query::short_read(bool(_stop)),
+                                   std::move(_memory_accounter).done());
     }
 };
 
@@ -1899,7 +1926,7 @@ mutation_query(schema_ptr s,
 
     auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
 
-    auto rrb = reconcilable_result_builder(*s, slice);
+    auto rrb = reconcilable_result_builder(*s, slice, std::move(accounter));
     auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::no, reconcilable_result_builder>>(
             *s, query_time, slice, row_limit, partition_limit, std::move(rrb));
 
