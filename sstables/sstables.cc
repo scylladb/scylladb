@@ -1550,7 +1550,7 @@ populate_statistics_offsets(statistics& s) {
 static
 sharding_metadata
 create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key, const dht::decorated_key& last_key) {
-    auto range = query::partition_range(dht::ring_position(first_key), dht::ring_position(last_key));
+    auto range = query::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
     auto sharder = dht::ring_position_range_sharder(std::move(range));
     auto sm = sharding_metadata();
     auto rpras = sharder.next(*schema);
@@ -2481,7 +2481,7 @@ sstable::get_shards_for_this_sstable() const {
     std::vector<nonwrapping_range<dht::ring_position>> token_ranges;
     auto entry = _statistics.contents.find(metadata_type::Sharding);
     if (entry == _statistics.contents.end()) {
-        token_ranges.push_back(nonwrapping_range<dht::ring_position>(
+        token_ranges.push_back(nonwrapping_range<dht::ring_position>::make(
                 dht::ring_position::starting_at(get_first_decorated_key().token()),
                 dht::ring_position::ending_at(get_last_decorated_key().token())));
     } else {
@@ -2489,7 +2489,7 @@ sstable::get_shards_for_this_sstable() const {
         auto disk_token_range_to_ring_position_range = [] (const disk_token_range& dtr) {
             auto t1 = dht::token(dht::token::kind::key, managed_bytes(bytes_view(dtr.left.token)));
             auto t2 = dht::token(dht::token::kind::key, managed_bytes(bytes_view(dtr.right.token)));
-            return nonwrapping_range<dht::ring_position>(
+            return nonwrapping_range<dht::ring_position>::make(
                     (dtr.left.exclusive ? dht::ring_position::ending_at : dht::ring_position::starting_at)(std::move(t1)),
                     (dtr.right.exclusive ? dht::ring_position::starting_at : dht::ring_position::ending_at)(std::move(t2)));
         };
