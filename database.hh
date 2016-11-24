@@ -135,19 +135,24 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
     // we'll have a period without significant disk activity when the current
     // SSTable is being sealed, the caches are being updated, etc. To do that
     // we need to keep track of who is it that we are flushing this memory from.
-    std::unordered_map<const logalloc::region*, semaphore_units<>> _flush_manager;
-
-    void remove_from_flush_manager(const logalloc::region *region) {
-        // If the flush fails, but the failure happens after we reverted the dirty changes, we
-        // won't find the region here, because it would have been destroyed already. That's
-        // ultimately fine, we just need to check it. If we really want to restrict the new attempt
-        // to run concurrently with a new flush, it can call into the dirty manager to reaquire the
-        // semaphore. Right now we don't bother.
-        auto it = _flush_manager.find(region);
-        if (it != _flush_manager.end()) {
-            _flush_manager.erase(it);
+    struct flush_token {
+        dirty_memory_manager* _dirty_memory_manager;
+        size_t _freed_memory = 0;
+        semaphore_units<> _sem;
+    public:
+        flush_token(dirty_memory_manager *dm, semaphore_units<>&& s) : _dirty_memory_manager(dm), _sem(std::move(s)) {}
+        void mark_end_flush(size_t freed) {
+            auto destroy = std::move(_sem);
+            _freed_memory = freed;
         }
-    }
+        ~flush_token() {
+            _dirty_memory_manager->_region_group.update(_freed_memory);
+            _dirty_memory_manager->_dirty_bytes_released_pre_accounted -= _freed_memory;
+        }
+    };
+    friend class flush_token;
+    std::unordered_map<const logalloc::region*, flush_token> _flush_manager;
+
     future<> _waiting_flush;
 protected:
     virtual void start_reclaiming() override;
@@ -181,20 +186,41 @@ public:
     }
 
     void revert_potentially_cleaned_up_memory(logalloc::region* from, int64_t delta) {
-        _region_group.update(delta);
-        _dirty_bytes_released_pre_accounted -= delta;
         // Flushed the current memtable. There is still some work to do, like finish sealing the
         // SSTable and updating the cache, but we can already allow the next one to start.
         //
         // By erasing this memtable from the flush_manager we'll destroy the semaphore_units
         // associated with this flush and will allow another one to start. We'll signal the
         // condition variable to let them know we might be ready early.
-        remove_from_flush_manager(from);
+        auto it = _flush_manager.find(from);
+        if (it != _flush_manager.end()) {
+            it->second.mark_end_flush(delta);
+        }
     }
 
     void account_potentially_cleaned_up_memory(logalloc::region* from, int64_t delta) {
         _region_group.update(-delta);
         _dirty_bytes_released_pre_accounted += delta;
+    }
+
+    // This can be called multiple times during the lifetime of the region, and should always
+    // ultimately be called after the flush ends. However, some flushers may decide to call it
+    // earlier. For instance, the normal memtables sealing function will call this before updating
+    // the cache.
+    //
+    // Also, for sealing methods like the normal memtable sealing method - that may retry after a
+    // failed write, calling this method after the attempt is completed with success or failure is
+    // mandatory. That's because the new attempt will create a new flush reader for the same
+    // SSTable, so we need to make sure that we revert the old charges.
+    void remove_from_flush_manager(const logalloc::region *region) {
+        auto it = _flush_manager.find(region);
+        if (it != _flush_manager.end()) {
+            _flush_manager.erase(it);
+        }
+    }
+
+    void add_to_flush_manager(const logalloc::region *region, semaphore_units<>&& permit) {
+        _flush_manager.emplace(std::piecewise_construct, std::make_tuple(region), std::make_tuple(this, std::move(permit)));
     }
 
     size_t real_dirty_memory() const {
