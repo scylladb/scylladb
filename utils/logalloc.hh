@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include <bits/unique_ptr.h>
+#include <memory>
 #include <seastar/core/scollectd.hh>
 #include <seastar/core/memory.hh>
 #include <seastar/core/reactor.hh>
