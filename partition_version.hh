@@ -297,12 +297,12 @@ class partition_snapshot_reader : public streamed_mutation::impl, public MemoryA
         position_in_partition::less_compare _cmp;
     public:
         explicit rows_entry_compare(const schema& s) : _cmp(s) { }
-        bool operator()(const rows_entry& a, const position_in_partition& b) {
+        bool operator()(const rows_entry& a, const position_in_partition& b) const {
             position_in_partition_view a_view(position_in_partition_view::clustering_row_tag_t(),
                                               a.key());
             return _cmp(a_view, b);
         }
-        bool operator()(const position_in_partition& a, const rows_entry& b) {
+        bool operator()(const position_in_partition& a, const rows_entry& b) const {
             position_in_partition_view b_view(position_in_partition_view::clustering_row_tag_t(),
                                               b.key());
             return _cmp(a, b_view);
