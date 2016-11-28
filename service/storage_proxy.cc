@@ -79,6 +79,9 @@ static logging::logger logger("storage_proxy");
 static logging::logger qlogger("query_result");
 static logging::logger mlogger("mutation_data");
 
+const sstring storage_proxy::COORDINATOR_STATS_CATEGORY("storage_proxy_coordinator");
+const sstring storage_proxy::REPLICA_STATS_CATEGORY("storage_proxy_replica");
+
 distributed<service::storage_proxy> _the_storage_proxy;
 
 using namespace exceptions;
@@ -418,29 +421,30 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(key
     return register_response_handler(std::move(h));
 }
 
-storage_proxy::split_stats::split_stats(const sstring& description_prefix)
-        : _description_prefix(description_prefix) {
+storage_proxy::split_stats::split_stats(const sstring& category, const sstring& description_prefix)
+        : _description_prefix(description_prefix)
+        , _category(category) {
     // register a local Node counter to begin with...
     _collectd_regs.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(_category
             , scollectd::per_cpu_plugin_instance
             , "total_operations", _description_prefix + sstring(" (local Node)"))
             , scollectd::make_typed(scollectd::data_type::DERIVE, _local.val)));
 }
 
 storage_proxy::stats::stats()
-        : writes_attempts("total write attempts")
-        , writes_errors("write errors")
-        , read_repair_write_attempts("read repair write attempts")
-        , data_read_attempts("data reads")
-        , data_read_completed("completed data reads")
-        , data_read_errors("data read errors")
-        , digest_read_attempts("digest reads")
-        , digest_read_completed("completed digest reads")
-        , digest_read_errors("digest read errors")
-        , mutation_data_read_attempts("mutation data reads")
-        , mutation_data_read_completed("completed mutation data reads")
-        , mutation_data_read_errors("mutation data read errors") {}
+        : writes_attempts(COORDINATOR_STATS_CATEGORY, "total write attempts")
+        , writes_errors(COORDINATOR_STATS_CATEGORY, "write errors")
+        , read_repair_write_attempts(COORDINATOR_STATS_CATEGORY, "read repair write attempts")
+        , data_read_attempts(COORDINATOR_STATS_CATEGORY, "data reads")
+        , data_read_completed(COORDINATOR_STATS_CATEGORY, "completed data reads")
+        , data_read_errors(COORDINATOR_STATS_CATEGORY, "data read errors")
+        , digest_read_attempts(COORDINATOR_STATS_CATEGORY, "digest reads")
+        , digest_read_completed(COORDINATOR_STATS_CATEGORY, "completed digest reads")
+        , digest_read_errors(COORDINATOR_STATS_CATEGORY, "digest read errors")
+        , mutation_data_read_attempts(COORDINATOR_STATS_CATEGORY, "mutation data reads")
+        , mutation_data_read_completed(COORDINATOR_STATS_CATEGORY, "completed mutation data reads")
+        , mutation_data_read_errors(COORDINATOR_STATS_CATEGORY, "mutation data read errors") {}
 
 inline uint64_t& storage_proxy::split_stats::get_ep_stat(gms::inet_address ep) {
     if (is_me(ep)) {
@@ -453,7 +457,7 @@ inline uint64_t& storage_proxy::split_stats::get_ep_stat(gms::inet_address ep) {
     // corresponding collectd metric
     if (_dc_stats.find(dc) == _dc_stats.end()) {
         _collectd_regs.push_back(
-            scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+            scollectd::add_polled_metric(scollectd::type_instance_id(_category
             , scollectd::per_cpu_plugin_instance
             , "total_operations", _description_prefix + sstring(" (external Nodes in DC: ") + dc + sstring(")"))
             , scollectd::make_typed(scollectd::data_type::DERIVE, [this, dc] { return _dc_stats[dc].val; })
@@ -465,97 +469,97 @@ inline uint64_t& storage_proxy::split_stats::get_ep_stat(gms::inet_address ep) {
 storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
     _collectd_registrations = std::make_unique<scollectd::registrations>(scollectd::registrations({
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(COORDINATOR_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "queue_length", "foreground writes")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _stats.writes - _stats.background_writes; })
         ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(COORDINATOR_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "queue_length", "background writes")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, _stats.background_writes)
         ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(COORDINATOR_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "queue_length", "throttled writes")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _throttled_writes.size(); })
         ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(COORDINATOR_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "throttled writes")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.throttled_writes)
         ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(COORDINATOR_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "bytes", "queued write bytes")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, _stats.queued_write_bytes)
         ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(COORDINATOR_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "bytes", "background write bytes")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, _stats.background_write_bytes)
         ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(COORDINATOR_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "queue_length", "reads")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, _stats.reads)
         ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(COORDINATOR_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "queue_length", "background reads")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, _stats.background_reads)
         ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(COORDINATOR_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "read retries")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.read_retries)
         ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(COORDINATOR_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "global_read_repairs_canceled_due_to_concurrent_write")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.global_read_repairs_canceled_due_to_concurrent_write)
         ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(COORDINATOR_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "write timeouts")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.write_timeouts._count)
         ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(COORDINATOR_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "write unavailable")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.write_unavailables._count)
         ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(COORDINATOR_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "read timeouts")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.read_timeouts._count)
         ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(COORDINATOR_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "read unavailable")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.read_unavailables._count)
         ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(COORDINATOR_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "range slice timeouts")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.range_slice_timeouts._count)
         ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(COORDINATOR_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "range slice unavailable")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.range_slice_unavailables._count)
         ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(REPLICA_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "received mutations")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.received_mutations)
         ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(REPLICA_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "forwarded mutations")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.forwarded_mutations)
         ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+        scollectd::add_polled_metric(scollectd::type_instance_id(REPLICA_STATS_CATEGORY
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "forwarding errors")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.forwarding_errors)

@@ -86,6 +86,9 @@ private:
         response_id_type release();
     };
 
+    static const sstring COORDINATOR_STATS_CATEGORY;
+    static const sstring REPLICA_STATS_CATEGORY;
+
 public:
     // split statistics counters
     struct split_stats {
@@ -102,12 +105,15 @@ public:
         std::vector<scollectd::registration> _collectd_regs;
         // a prefix string that will be used for a collecd counters' description
         sstring _description_prefix;
+        // a statistics category, e.g. "client" or "replica"
+        sstring _category;
 
     public:
         /**
+         * @param category a statistics category, e.g. "client" or "replica"
          * @param description_prefix a collectd description prefix
          */
-        split_stats(const sstring& description_prefix);
+        split_stats(const sstring& category, const sstring& description_prefix);
 
         /**
          * Get a reference to the statistics counter corresponding to the given
