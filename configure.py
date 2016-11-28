@@ -227,6 +227,7 @@ scylla_tests = [
     'tests/nonwrapping_range_test',
     'tests/input_stream_test',
     'tests/sstable_atomic_deletion_test',
+    'tests/virtual_reader_test',
 ]
 
 apps = [
@@ -493,7 +494,6 @@ scylla_core = (['database.cc',
                  'tracing/trace_state.cc',
                  'range_tombstone.cc',
                  'range_tombstone_list.cc',
-                 'db/size_estimates_recorder.cc',
                  'disk-error-handler.cc'
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]

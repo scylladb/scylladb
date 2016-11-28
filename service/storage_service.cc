@@ -1097,7 +1097,7 @@ void storage_service::set_tokens(std::unordered_set<token> tokens) {
     logger.debug("Setting tokens to {}", tokens);
     db::system_keyspace::update_tokens(tokens).get();
     _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
-    auto local_tokens = get_local_tokens();
+    auto local_tokens = get_local_tokens().get0();
     set_gossip_tokens(local_tokens);
     set_mode(mode::NORMAL, "node is now in normal status", true);
     replicate_to_all_cores().get();
@@ -1626,16 +1626,16 @@ void storage_service::set_mode(mode m, sstring msg, bool log) {
     }
 }
 
-// Runs inside seastar::async context
-std::unordered_set<dht::token> storage_service::get_local_tokens() {
-    auto tokens = db::system_keyspace::get_saved_tokens().get0();
-    // should not be called before initServer sets this
-    if (tokens.empty()) {
-        auto err = sprint("get_local_tokens: tokens is empty");
-        logger.error(err.c_str());
-        throw std::runtime_error(err);
-    }
-    return tokens;
+future<std::unordered_set<dht::token>> storage_service::get_local_tokens() {
+    return db::system_keyspace::get_saved_tokens().then([] (auto&& tokens) {
+        // should not be called before initServer sets this
+        if (tokens.empty()) {
+            auto err = sprint("get_local_tokens: tokens is empty");
+            logger.error(err.c_str());
+            throw std::runtime_error(err);
+        }
+        return tokens;
+    });
 }
 
 sstring storage_service::get_release_version() {
@@ -1716,7 +1716,7 @@ future<> storage_service::start_gossiping() {
         return seastar::async([&ss] {
             if (!ss._initialized) {
                 logger.warn("Starting gossip by operator request");
-                ss.set_gossip_tokens(ss.get_local_tokens());
+                ss.set_gossip_tokens(ss.get_local_tokens().get0());
                 gms::get_local_gossiper().force_newer_generation();
                 gms::get_local_gossiper().start_gossiping(get_generation_number()).then([&ss] {
                     ss._initialized = true;
@@ -2591,7 +2591,7 @@ void storage_service::leave_ring() {
 
     auto& gossiper = gms::get_local_gossiper();
     auto expire_time = gossiper.compute_expire_time().time_since_epoch().count();
-    gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.left(get_local_tokens(), expire_time)).get();
+    gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.left(get_local_tokens().get0(), expire_time)).get();
     auto delay = std::max(get_ring_delay(), gms::gossiper::INTERVAL);
     logger.info("Announcing that I have left the ring for {}ms", delay.count());
     sleep(delay).get();
@@ -2684,7 +2684,7 @@ future<> storage_service::stream_hints() {
 
 future<> storage_service::start_leaving() {
     auto& gossiper = gms::get_local_gossiper();
-    return gossiper.add_local_application_state(application_state::STATUS, value_factory.leaving(get_local_tokens())).then([this] {
+    return gossiper.add_local_application_state(application_state::STATUS, value_factory.leaving(get_local_tokens().get0())).then([this] {
         _token_metadata.add_leaving_endpoint(get_broadcast_address());
         return update_pending_ranges();
     });
@@ -3105,7 +3105,7 @@ future<> storage_service::move(token new_token) {
             }
 
             gms::get_local_gossiper().add_local_application_state(application_state::STATUS, ss.value_factory.moving(new_token)).get();
-            ss.set_mode(mode::MOVING, sprint("Moving %s from %s to %s.", local_address, *(ss.get_local_tokens().begin()), new_token), true);
+            ss.set_mode(mode::MOVING, sprint("Moving %s from %s to %s.", local_address, *(ss.get_local_tokens().get0().begin()), new_token), true);
 
             ss.set_mode(mode::MOVING, sprint("Sleeping %d ms before start streaming/fetching ranges", ss.get_ring_delay().count()), true);
             sleep(ss.get_ring_delay()).get();
@@ -3125,7 +3125,7 @@ future<> storage_service::move(token new_token) {
 
             ss.set_tokens(std::unordered_set<token>{new_token}); // setting new token as we have everything settled
 
-            logger.debug("Successfully moved to new token {}", *(ss.get_local_tokens().begin()));
+            logger.debug("Successfully moved to new token {}", *(ss.get_local_tokens().get0().begin()));
         });
     });
 }

@@ -70,6 +70,7 @@
 #include "service/storage_proxy.hh"
 #include "message/messaging_service.hh"
 #include "mutation_query.hh"
+#include "db/size_estimates_virtual_reader.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -1022,6 +1023,12 @@ std::vector<schema_ptr> all_tables() {
     return r;
 }
 
+static void maybe_add_virtual_reader(schema_ptr s, database& db) {
+    if (s.get() == size_estimates().get()) {
+        db.find_column_family(s).set_virtual_reader(db::size_estimates::virtual_reader());
+    }
+}
+
 void make(database& db, bool durable, bool volatile_testing_only) {
     auto ksm = make_lw_shared<keyspace_metadata>(NAME,
             "org.apache.cassandra.locator.LocalStrategy",
@@ -1046,6 +1053,7 @@ void make(database& db, bool durable, bool volatile_testing_only) {
     auto& ks = db.find_keyspace(NAME);
     for (auto&& table : all_tables()) {
         db.add_column_family(table, ks.make_column_family_config(*table, db.get_config()));
+        maybe_add_virtual_reader(table, db);
     }
 }
 
@@ -1197,59 +1205,20 @@ future<int> increment_and_get_generation() {
     });
 }
 
-future<> update_size_estimates(sstring ks_name, sstring cf_name, std::vector<range_estimates> estimates) {
-    auto&& schema = size_estimates();
+mutation make_size_estimates_mutation(const sstring& ks, std::vector<range_estimates> estimates) {
+    auto&& schema = db::system_keyspace::size_estimates();
     auto timestamp = api::new_timestamp();
-    mutation m_to_apply{partition_key::from_single_value(*schema, to_bytes(ks_name)), schema};
+    mutation m_to_apply{partition_key::from_single_value(*schema, utf8_type->decompose(ks)), schema};
 
-    // delete all previous values with a single range tombstone.
-    auto ck = clustering_key_prefix::from_single_value(*schema, utf8_type->decompose(cf_name));
-    m_to_apply.partition().apply_row_tombstone(*schema, std::move(ck), {timestamp - 1, gc_clock::now()});
-
-    // add a CQL row for each primary token range.
     for (auto&& e : estimates) {
         auto ck = clustering_key_prefix(std::vector<bytes>{
-                     utf8_type->decompose(cf_name),
-                     utf8_type->decompose(dht::global_partitioner().to_sstring(e.range_start_token)),
-                     utf8_type->decompose(dht::global_partitioner().to_sstring(e.range_end_token))});
+                utf8_type->decompose(e.schema->cf_name()), e.range_start_token, e.range_end_token});
 
-        auto mean_partition_size_col = schema->get_column_definition("mean_partition_size");
-        auto cell = atomic_cell::make_live(timestamp, long_type->decompose(e.mean_partition_size), { });
-        m_to_apply.set_clustered_cell(ck, *mean_partition_size_col, std::move(cell));
-
-        auto partitions_count_col = schema->get_column_definition("partitions_count");
-        cell = atomic_cell::make_live(timestamp, long_type->decompose(e.partitions_count), { });
-        m_to_apply.set_clustered_cell(std::move(ck), *partitions_count_col, std::move(cell));
+        m_to_apply.set_clustered_cell(ck, "mean_partition_size", e.mean_partition_size, timestamp);
+        m_to_apply.set_clustered_cell(ck, "partitions_count", e.partitions_count, timestamp);
     }
 
-    return service::get_local_storage_proxy().mutate_locally(std::move(m_to_apply));
-}
-
-future<> clear_size_estimates(sstring ks_name, sstring cf_name) {
-    sstring req = "DELETE FROM system.%s WHERE keyspace_name = ? AND table_name = ?";
-    return execute_cql(std::move(req), SIZE_ESTIMATES, std::move(ks_name), std::move(cf_name)).discard_result();
-}
-
-future<std::vector<range_estimates>> query_size_estimates(sstring ks_name, sstring cf_name, dht::token start_token, dht::token end_token) {
-    sstring req = "SELECT range_start, range_end, partitions_count, mean_partition_size FROM system.%s WHERE keyspace_name = ? AND table_name = ?";
-    auto query_range = range<dht::token>::make({std::move(start_token)}, {std::move(end_token)});
-    return execute_cql(req, SIZE_ESTIMATES, std::move(ks_name), std::move(cf_name))
-            .then([query_range = std::move(query_range)](::shared_ptr<cql3::untyped_result_set> result) {
-        std::vector<range_estimates> estimates;
-        for (auto&& row : *result) {
-            auto range_start = dht::global_partitioner().from_sstring(row.get_as<sstring>("range_start"));
-            auto range_end = dht::global_partitioner().from_sstring(row.get_as<sstring>("range_end"));
-            auto estimate_range = range<dht::token>::make({std::move(range_start)}, {std::move(range_end)});
-            if (query_range.contains(estimate_range, &dht::tri_compare)) {
-                estimates.emplace_back(range_estimates{
-                    std::move(*estimate_range.start()).value(),
-                    std::move(*estimate_range.end()).value(),
-                    row.get_as<int64_t>("partitions_count"),
-                    row.get_as<int64_t>("mean_partition_size")});
-            }
-        }
-        return estimates;
-    });
+    return m_to_apply;
 }
 
 } // namespace system_keyspace

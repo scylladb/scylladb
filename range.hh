@@ -592,6 +592,63 @@ public:
         deoverlapped_ranges.emplace_back(std::move(current));
         return deoverlapped_ranges;
     }
+
+private:
+    // These private functions optimize the case where a sequence supports the
+    // lower and upper bound operations more efficiently, as is the case with
+    // some boost containers.
+    struct std_ {};
+    struct built_in_ : std_ {};
+
+    template<typename Range, typename LessComparator,
+             typename = decltype(&std::remove_reference<Range>::type::lower_bound)>
+    typename std::remove_reference<Range>::type::const_iterator do_lower_bound(const T& value, Range&& r, LessComparator&& cmp, built_in_) const {
+        return r.lower_bound(value, std::forward<LessComparator>(cmp));
+    }
+
+    template<typename Range, typename LessComparator,
+             typename = decltype(&std::remove_reference<Range>::type::upper_bound)>
+    typename std::remove_reference<Range>::type::const_iterator do_upper_bound(const T& value, Range&& r, LessComparator&& cmp, built_in_) const {
+        return r.upper_bound(value, std::forward<LessComparator>(cmp));
+    }
+
+    template<typename Range, typename LessComparator>
+    typename std::remove_reference<Range>::type::const_iterator do_lower_bound(const T& value, Range&& r, LessComparator&& cmp, std_) const {
+        return std::lower_bound(r.begin(), r.end(), value, std::forward<LessComparator>(cmp));
+    }
+
+    template<typename Range, typename LessComparator>
+    typename std::remove_reference<Range>::type::const_iterator do_upper_bound(const T& value, Range&& r, LessComparator&& cmp, std_) const {
+        return std::upper_bound(r.begin(), r.end(), value, std::forward<LessComparator>(cmp));
+    }
+public:
+    // Return the lower bound of the specified sequence according to these bounds.
+    template<typename Range, typename LessComparator>
+    typename std::remove_reference<Range>::type::const_iterator lower_bound(Range&& r, LessComparator&& cmp) const {
+        return start()
+            ? (start()->is_inclusive()
+                ? do_lower_bound(start()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_())
+                : do_upper_bound(start()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_()))
+            : std::cbegin(r);
+    }
+    // Return the upper bound of the specified sequence according to these bounds.
+    template<typename Range, typename LessComparator>
+    typename std::remove_reference<Range>::type::const_iterator upper_bound(Range&& r, LessComparator&& cmp) const {
+        return end()
+             ? (end()->is_inclusive()
+                ? do_upper_bound(end()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_())
+                : do_lower_bound(end()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_()))
+             : (is_singular()
+                ? do_upper_bound(start()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_())
+                : std::cend(r));
+    }
+    // Returns a subset of the range that is within these bounds.
+    template<typename Range, typename LessComparator>
+    boost::iterator_range<typename std::remove_reference<Range>::type::const_iterator>
+    slice(Range&& range, LessComparator&& cmp) const {
+        return boost::make_iterator_range(lower_bound(range, cmp), upper_bound(range, cmp));
+    }
+
     template<typename U>
     friend std::ostream& operator<<(std::ostream& out, const nonwrapping_range<U>& r);
 };

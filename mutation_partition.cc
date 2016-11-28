@@ -512,17 +512,13 @@ mutation_partition::clustered_row(const schema& s, const clustering_key_view& ke
 mutation_partition::rows_type::const_iterator
 mutation_partition::lower_bound(const schema& schema, const query::clustering_range& r) const {
     auto cmp = rows_entry::key_comparator(clustering_key_prefix::prefix_equality_less_compare(schema));
-    return r.start() ? (r.start()->is_inclusive()
-            ? _rows.lower_bound(r.start()->value(), cmp)
-            : _rows.upper_bound(r.start()->value(), cmp)) : _rows.cbegin();
+    return r.lower_bound(_rows, std::move(cmp));
 }
 
 mutation_partition::rows_type::const_iterator
 mutation_partition::upper_bound(const schema& schema, const query::clustering_range& r) const {
     auto cmp = rows_entry::key_comparator(clustering_key_prefix::prefix_equality_less_compare(schema));
-    return r.end() ? (r.end()->is_inclusive()
-                         ? _rows.upper_bound(r.end()->value(), cmp)
-                         : _rows.lower_bound(r.end()->value(), cmp)) : _rows.cend();
+    return r.upper_bound(_rows, std::move(cmp));
 }
 
 boost::iterator_range<mutation_partition::rows_type::const_iterator>
