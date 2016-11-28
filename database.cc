@@ -754,39 +754,43 @@ static bool belongs_to_other_shard(const std::vector<shard_id>& shards) {
     return shards.size() != size_t(belongs_to_current_shard(shards));
 }
 
-future<> column_family::load_sstable(sstables::sstable&& sstab, bool reset_level) {
-    auto sst = make_lw_shared<sstables::sstable>(std::move(sstab));
-    return sst->get_owning_shards_from_unloaded().then([this, sst, reset_level] (std::vector<shard_id> shards) mutable {
-        // Checks whether or not sstable belongs to current shard.
+future<sstables::shared_sstable>
+column_family::open_sstable(sstring dir, int64_t generation, sstables::sstable::version_types v, sstables::sstable::format_types f) {
+    auto sst = make_lw_shared<sstables::sstable>(_schema, dir, generation, v, f);
+    return sst->get_owning_shards_from_unloaded().then([this, sst] (std::vector<shard_id> shards) mutable {
         if (!belongs_to_current_shard(shards)) {
             dblog.debug("sstable {} not relevant for this shard, ignoring", sst->get_filename());
             sst->mark_for_deletion();
-            return make_ready_future<>();
+            return make_ready_future<sstables::shared_sstable>();
         }
-        bool in_other_shard = belongs_to_other_shard(shards);
-        return sst->load().then([this, sst, in_other_shard, reset_level] () mutable {
-            if (in_other_shard) {
-                // If we're here, this sstable is shared by this and other
-                // shard(s). Shared sstables cannot be deleted until all
-                // shards compacted them, so to reduce disk space usage we
-                // want to start splitting them now.
-                // However, we need to delay this compaction until we read all
-                // the sstables belonging to this CF, because we need all of
-                // them to know which tombstones we can drop, and what
-                // generation number is free.
-                _sstables_need_rewrite.push_back(sst);
-            }
-            if (reset_level) {
-                // When loading a migrated sstable, set level to 0 because
-                // it may overlap with existing tables in levels > 0.
-                // This step is optional, because even if we didn't do this
-                // scylla would detect the overlap, and bring back some of
-                // the sstables to level 0.
-                sst->set_sstable_level(0);
-            }
-            add_sstable(sst);
+        return sst->load().then([sst] () mutable {
+            return make_ready_future<sstables::shared_sstable>(std::move(sst));
         });
     });
+}
+
+void column_family::load_sstable(sstables::shared_sstable& sst, bool reset_level) {
+    auto shards = sst->get_shards_for_this_sstable();
+    if (belongs_to_other_shard(shards)) {
+        // If we're here, this sstable is shared by this and other
+        // shard(s). Shared sstables cannot be deleted until all
+        // shards compacted them, so to reduce disk space usage we
+        // want to start splitting them now.
+        // However, we need to delay this compaction until we read all
+        // the sstables belonging to this CF, because we need all of
+        // them to know which tombstones we can drop, and what
+        // generation number is free.
+        _sstables_need_rewrite.push_back(sst);
+    }
+    if (reset_level) {
+        // When loading a migrated sstable, set level to 0 because
+        // it may overlap with existing tables in levels > 0.
+        // This step is optional, because even if we didn't do this
+        // scylla would detect the overlap, and bring back some of
+        // the sstables to level 0.
+        sst->set_sstable_level(0);
+    }
+    add_sstable(sst);
 }
 
 // load_sstable() wants to start rewriting sstables which are shared between
@@ -824,9 +828,12 @@ future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sst
         }
     }
 
-    return load_sstable(sstables::sstable(
-            _schema, sstdir, comps.generation,
-            comps.version, comps.format)).then_wrapped([fname, comps] (future<> f) {
+    return open_sstable(sstdir, comps.generation, comps.version, comps.format).then([this] (sstables::shared_sstable sst) mutable {
+        if (sst) {
+            load_sstable(sst);
+        }
+        return make_ready_future<>();
+    }).then_wrapped([fname, comps] (future<> f) {
         try {
             f.get();
         } catch (malformed_sstable_exception& e) {
@@ -1385,16 +1392,25 @@ future<> column_family::cleanup_sstables(sstables::compaction_descriptor descrip
 
 future<>
 column_family::load_new_sstables(std::vector<sstables::entry_descriptor> new_tables) {
-    return parallel_for_each(new_tables, [this] (auto comps) {
-        return this->load_sstable(sstables::sstable(
-                _schema, _config.datadir,
-                comps.generation, comps.version, comps.format), true);
-    }).then([this] {
-        start_rewrite();
-        trigger_compaction();
-        // Drop entire cache for this column family because it may be populated
-        // with stale data.
-        return get_row_cache().clear();
+    return do_with(std::vector<sstables::shared_sstable>(), [this, new_tables = std::move(new_tables)] (auto& sstables) {
+        return parallel_for_each(new_tables, [this, &sstables] (auto comps) {
+            return this->open_sstable(_config.datadir, comps.generation, comps.version, comps.format).then([&sstables] (sstables::shared_sstable sst) {
+                if (sst) {
+                    sstables.push_back(std::move(sst));
+                }
+                return make_ready_future<>();
+            });
+        }).then([this, &sstables] {
+            // atomically load all preloaded sstables into column family.
+            for (auto& sst : sstables) {
+                this->load_sstable(sst, true);
+            }
+            this->start_rewrite();
+            this->trigger_compaction();
+            // Drop entire cache for this column family because it may be populated
+            // with stale data.
+            return this->get_row_cache().clear();
+        });
     });
 }
 

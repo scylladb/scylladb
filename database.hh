@@ -499,7 +499,10 @@ private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable);
     void add_sstable(sstables::sstable&& sstable);
     void add_sstable(lw_shared_ptr<sstables::sstable> sstable);
-    future<> load_sstable(sstables::sstable&& sstab, bool reset_level = false);
+    // returns an empty pointer if sstable doesn't belong to current shard.
+    future<lw_shared_ptr<sstables::sstable>> open_sstable(sstring dir, int64_t generation,
+        sstables::sstable::version_types v, sstables::sstable::format_types f);
+    void load_sstable(lw_shared_ptr<sstables::sstable>& sstable, bool reset_level = false);
     lw_shared_ptr<memtable> new_memtable();
     lw_shared_ptr<memtable> new_streaming_memtable();
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt);
