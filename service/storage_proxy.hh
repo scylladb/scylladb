@@ -65,11 +65,13 @@ class abstract_read_executor;
 class mutation_holder;
 
 class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*implements StorageProxyMBean*/ {
+public:
     using clock_type = std::chrono::steady_clock;
+private:
     struct rh_entry {
-        std::unique_ptr<abstract_write_response_handler> handler;
+        ::shared_ptr<abstract_write_response_handler> handler;
         timer<> expire_timer;
-        rh_entry(std::unique_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb);
+        rh_entry(::shared_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb);
     };
 
     using response_id_type = uint64_t;
@@ -151,6 +153,7 @@ public:
         utils::estimated_histogram estimated_read;
         utils::estimated_histogram estimated_write;
         utils::estimated_histogram estimated_range;
+        uint64_t writes = 0;
         uint64_t background_writes = 0; // client no longer waits for the write
         uint64_t background_write_bytes = 0;
         uint64_t queued_write_bytes = 0;
@@ -201,11 +204,11 @@ private:
 private:
     void uninit_messaging_service();
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state);
-    response_id_type register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h);
+    response_id_type register_response_handler(shared_ptr<abstract_write_response_handler>&& h);
     void remove_response_handler(response_id_type id);
     void got_response(response_id_type id, gms::inet_address from);
     future<> response_wait(response_id_type id, clock_type::time_point timeout);
-    abstract_write_response_handler& get_write_response_handler(storage_proxy::response_id_type id);
+    ::shared_ptr<abstract_write_response_handler>& get_write_response_handler(storage_proxy::response_id_type id);
     response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, std::unordered_set<gms::inet_address> targets,
             const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address>, tracing::trace_state_ptr tr_state);
     response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state);
@@ -261,9 +264,15 @@ public:
 
     void init_messaging_service();
 
-    future<> mutate_locally(const mutation& m);
-    future<> mutate_locally(const schema_ptr&, const frozen_mutation& m);
-    future<> mutate_locally(std::vector<mutation> mutations);
+    // Applies mutation on this node.
+    // Resolves with timed_out_error when timeout is reached.
+    future<> mutate_locally(const mutation& m, clock_type::time_point timeout = clock_type::time_point::max());
+    // Applies mutation on this node.
+    // Resolves with timed_out_error when timeout is reached.
+    future<> mutate_locally(const schema_ptr&, const frozen_mutation& m, clock_type::time_point timeout = clock_type::time_point::max());
+    // Applies mutations on this node.
+    // Resolves with timed_out_error when timeout is reached.
+    future<> mutate_locally(std::vector<mutation> mutation, clock_type::time_point timeout = clock_type::time_point::max());
 
     future<> mutate_streaming_mutation(const schema_ptr&, utils::UUID plan_id, const frozen_mutation& m, bool fragmented);
 

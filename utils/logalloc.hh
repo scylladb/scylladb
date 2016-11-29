@@ -30,6 +30,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/circular_buffer.hh>
+#include <seastar/core/expiring_fifo.hh>
 #include "allocation_strategy.hh"
 #include <boost/heap/binomial_heap.hpp>
 
@@ -122,6 +123,8 @@ public:
 
 // Groups regions for the purpose of statistics.  Can be nested.
 class region_group {
+    using timeout_clock = std::chrono::steady_clock;
+
     static region_group_reclaimer no_reclaimer;
 
     struct region_evictable_occupancy_ascending_less_comparator {
@@ -176,6 +179,7 @@ class region_group {
     struct allocating_function {
         virtual ~allocating_function() = default;
         virtual void allocate() = 0;
+        virtual void fail(std::exception_ptr) = 0;
     };
 
     template <typename Func>
@@ -187,10 +191,17 @@ class region_group {
         void allocate() override {
             futurator::apply(func).forward_to(std::move(pr));
         }
+        void fail(std::exception_ptr e) override {
+            pr.set_exception(e);
+        }
         concrete_allocating_function(Func&& func) : func(std::forward<Func>(func)) {}
         typename futurator::type get_future() {
             return pr.get_future();
         }
+    };
+
+    struct on_request_expiry {
+        void operator()(std::unique_ptr<allocating_function>&) noexcept;
     };
 
     // It is a more common idiom to just hold the promises in the circular buffer and make them
@@ -203,7 +214,7 @@ class region_group {
     //
     // This allows us to easily provide strong execution guarantees while keeping all re-check
     // complication in release_requests and keep the main request execution path simpler.
-    circular_buffer<std::unique_ptr<allocating_function>> _blocked_requests;
+    expiring_fifo<std::unique_ptr<allocating_function>, on_request_expiry, timeout_clock> _blocked_requests;
 
     uint64_t _blocked_requests_counter = 0;
 
@@ -304,8 +315,10 @@ public:
     // Requests that are not allowed for execution are queued and released in FIFO order within the
     // same region_group, but no guarantees are made regarding release ordering across different
     // region_groups.
+    //
+    // When timeout is reached first, the returned future is resolved with timed_out_error exception.
     template <typename Func>
-    futurize_t<std::result_of_t<Func()>> run_when_memory_available(Func&& func) {
+    futurize_t<std::result_of_t<Func()>> run_when_memory_available(Func&& func, timeout_clock::time_point timeout = timeout_clock::time_point::max()) {
         // We disallow future-returning functions here, because otherwise memory may be available
         // when we start executing it, but no longer available in the middle of the execution.
         static_assert(!is_future<std::result_of_t<Func()>>::value, "future-returning functions are not permitted.");
@@ -322,7 +335,7 @@ public:
 
         auto fn = std::make_unique<concrete_allocating_function<Func>>(std::forward<Func>(func));
         auto fut = fn->get_future();
-        _blocked_requests.push_back(std::move(fn));
+        _blocked_requests.push_back(std::move(fn), timeout);
         ++_blocked_requests_counter;
 
         // This is called here, and not at update(), for two reasons: the first, is that things that

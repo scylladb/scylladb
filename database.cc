@@ -1775,8 +1775,29 @@ database::setup_collectd() {
     _collectd.push_back(
         scollectd::add_polled_metric(scollectd::type_instance_id("database"
                 , scollectd::per_cpu_plugin_instance
+                , "total_operations", "total_writes_failed")
+                , scollectd::make_typed(scollectd::data_type::COUNTER, _stats->total_writes_failed)
+    ));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "total_writes_timedout")
+                , scollectd::make_typed(scollectd::data_type::COUNTER, _stats->total_writes_timedout)
+    ));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
                 , "total_operations", "total_reads")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats->total_reads)
+    ));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "total_reads_failed")
+                , scollectd::make_typed(scollectd::data_type::COUNTER, _stats->total_reads_failed)
     ));
 
     _collectd.push_back(
@@ -2400,9 +2421,13 @@ column_family::as_mutation_source(tracing::trace_state_ptr trace_state) const {
 future<lw_shared_ptr<query::result>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges, tracing::trace_state_ptr trace_state) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return cf.query(std::move(s), cmd, request, ranges, std::move(trace_state)).then([this, s = _stats] (auto&& res) {
-        ++s->total_reads;
-        return std::move(res);
+    return cf.query(std::move(s), cmd, request, ranges, std::move(trace_state)).then_wrapped([this, s = _stats] (auto f) {
+        if (f.failed()) {
+            ++s->total_reads_failed;
+        } else {
+            ++s->total_reads;
+        }
+        return f;
     });
 }
 
@@ -2410,9 +2435,13 @@ future<reconcilable_result>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const query::partition_range& range, tracing::trace_state_ptr trace_state) {
     column_family& cf = find_column_family(cmd.cf_id);
     return mutation_query(std::move(s), cf.as_mutation_source(std::move(trace_state)), range, cmd.slice, cmd.row_limit, cmd.partition_limit,
-            cmd.timestamp).then([this, s = _stats] (auto&& res) {
-        ++s->total_reads;
-        return std::move(res);
+            cmd.timestamp).then_wrapped([this, s = _stats] (auto f) {
+        if (f.failed()) {
+            ++s->total_reads_failed;
+        } else {
+            ++s->total_reads;
+        }
+        return f;
     });
 }
 
@@ -2637,7 +2666,7 @@ void dirty_memory_manager::start_reclaiming() {
     _should_flush.signal();
 }
 
-future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position rp) {
+future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position rp, timeout_clock::time_point timeout) {
     return _dirty_memory_manager.region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), rp = std::move(rp)] {
         try {
             auto& cf = find_column_family(m.column_family_id());
@@ -2645,10 +2674,10 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
         } catch (no_such_column_family&) {
             dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
         }
-    });
+    }, timeout);
 }
 
-future<> database::do_apply(schema_ptr s, const frozen_mutation& m) {
+future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is
     // initied from datadir.
@@ -2660,8 +2689,8 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m) {
     }
     if (cf.commitlog() != nullptr) {
         commitlog_entry_writer cew(s, m);
-        return cf.commitlog()->add_entry(uuid, cew).then([&m, this, s](auto rp) {
-            return this->apply_in_memory(m, s, rp).handle_exception([this, s, &m] (auto ep) {
+        return cf.commitlog()->add_entry(uuid, cew, timeout).then([&m, this, s, timeout](auto rp) {
+            return this->apply_in_memory(m, s, rp, timeout).handle_exception([this, s, &m, timeout] (auto ep) {
                 try {
                     std::rethrow_exception(ep);
                 } catch (replay_position_reordered_exception&) {
@@ -2671,20 +2700,31 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m) {
                     // let's just try again, add the mutation to the CL once more,
                     // and assume success in inevitable eventually.
                     dblog.debug("replay_position reordering detected");
-                    return this->apply(s, m);
+                    return this->apply(s, m, timeout);
                 }
             });
         });
     }
-    return apply_in_memory(m, s, db::replay_position());
+    return apply_in_memory(m, s, db::replay_position(), timeout);
 }
 
-future<> database::apply(schema_ptr s, const frozen_mutation& m) {
+future<> database::apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
     }
-    return do_apply(std::move(s), m).then([this, s = _stats] {
+    return do_apply(std::move(s), m, timeout).then_wrapped([this, s = _stats] (auto f) {
+        if (f.failed()) {
+            ++s->total_writes_failed;
+            try {
+                f.get();
+            } catch (const timed_out_error&) {
+                ++s->total_writes_timedout;
+                throw;
+            }
+            assert(0 && "should not reach");
+        }
         ++s->total_writes;
+        return f;
     });
 }
 

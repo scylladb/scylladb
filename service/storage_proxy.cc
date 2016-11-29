@@ -171,7 +171,7 @@ public:
     }
 };
 
-class abstract_write_response_handler {
+class abstract_write_response_handler : public enable_shared_from_this<abstract_write_response_handler> {
 protected:
     storage_proxy::response_id_type _id;
     promise<> _ready; // available when cl is achieved
@@ -189,6 +189,7 @@ protected:
     std::vector<gms::inet_address> _dead_endpoints;
     size_t _cl_acks = 0;
     bool _cl_achieved = false;
+    bool _timedout = false;
     bool _throttled = false;
 protected:
     size_t total_block_for() {
@@ -206,8 +207,10 @@ public:
             size_t pending_endpoints = 0, std::vector<gms::inet_address> dead_endpoints = {})
             : _id(p->_next_response_id++), _proxy(std::move(p)), _trace_state(trace_state), _cl(cl), _ks(ks), _type(type), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
               _pending_endpoints(pending_endpoints), _dead_endpoints(std::move(dead_endpoints)) {
+        ++_proxy->_stats.writes;
     }
     virtual ~abstract_write_response_handler() {
+        --_proxy->_stats.writes;
         if (_cl_achieved) {
             if (_throttled) {
                 _ready.set_value();
@@ -216,6 +219,8 @@ public:
                 _proxy->_stats.background_write_bytes -= _mutation_holder->size();
                 _proxy->unthrottle();
             }
+        } else if (_timedout) {
+            _ready.set_exception(mutation_write_timeout_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, total_block_for(), _type));
         }
     };
     void unthrottle() {
@@ -236,6 +241,12 @@ public:
                  unthrottle();
              }
          }
+    }
+    void on_timeout() {
+        if (_cl_achieved) {
+            logger.trace("Write is not acknowledged by {} replicas after achieving CL", get_targets());
+        }
+        _timedout = true;
     }
     // return true on last ack
     bool response(gms::inet_address from) {
@@ -343,7 +354,7 @@ void storage_proxy::unthrottle() {
    }
 }
 
-storage_proxy::response_id_type storage_proxy::register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h) {
+storage_proxy::response_id_type storage_proxy::register_response_handler(shared_ptr<abstract_write_response_handler>&& h) {
     auto id = h->id();
     auto e = _response_handlers.emplace(id, rh_entry(std::move(h), [this, id] {
         auto& e = _response_handlers.find(id)->second;
@@ -358,13 +369,7 @@ storage_proxy::response_id_type storage_proxy::register_response_handler(std::un
             }
         }
 
-        // _cl_achieved can be modified after previous check by call to signal() above if cl == ANY
-        if (!e.handler->_cl_achieved) {
-            // timeout happened before cl was achieved, throw exception
-            e.handler->_ready.set_exception(mutation_write_timeout_exception(e.handler->get_schema()->ks_name(), e.handler->get_schema()->cf_name(), e.handler->_cl, e.handler->_cl_acks, e.handler->total_block_for(), e.handler->_type));
-        } else {
-            logger.trace("Write is not acknowledged by {} replicas after achieving CL", e.handler->get_targets());
-        }
+        e.handler->on_timeout();
         remove_response_handler(id);
     }));
     assert(e.second);
@@ -393,22 +398,22 @@ future<> storage_proxy::response_wait(storage_proxy::response_id_type id, clock_
     return e.handler->wait();
 }
 
-abstract_write_response_handler& storage_proxy::get_write_response_handler(storage_proxy::response_id_type id) {
-        return *_response_handlers.find(id)->second.handler;
+::shared_ptr<abstract_write_response_handler>& storage_proxy::get_write_response_handler(storage_proxy::response_id_type id) {
+        return _response_handlers.find(id)->second.handler;
 }
 
 storage_proxy::response_id_type storage_proxy::create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m,
                              std::unordered_set<gms::inet_address> targets, const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address> dead_endpoints, tracing::trace_state_ptr tr_state)
 {
-    std::unique_ptr<abstract_write_response_handler> h;
+    shared_ptr<abstract_write_response_handler> h;
     auto& rs = ks.get_replication_strategy();
 
     if (db::is_datacenter_local(cl)) {
-        h = std::make_unique<datacenter_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), std::move(pending_endpoints), std::move(dead_endpoints), std::move(tr_state));
+        h = ::make_shared<datacenter_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), std::move(pending_endpoints), std::move(dead_endpoints), std::move(tr_state));
     } else if (cl == db::consistency_level::EACH_QUORUM && rs.get_type() == locator::replication_strategy_type::network_topology){
-        h = std::make_unique<datacenter_sync_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), std::move(pending_endpoints), std::move(dead_endpoints), std::move(tr_state));
+        h = ::make_shared<datacenter_sync_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), std::move(pending_endpoints), std::move(dead_endpoints), std::move(tr_state));
     } else {
-        h = std::make_unique<write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), std::move(pending_endpoints), std::move(dead_endpoints), std::move(tr_state));
+        h = ::make_shared<write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), std::move(pending_endpoints), std::move(dead_endpoints), std::move(tr_state));
     }
     return register_response_handler(std::move(h));
 }
@@ -463,7 +468,7 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
                 , "queue_length", "foreground writes")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _response_handlers.size() - _stats.background_writes; })
+                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _stats.writes - _stats.background_writes; })
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
@@ -558,7 +563,7 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
     }));
 }
 
-storage_proxy::rh_entry::rh_entry(std::unique_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb) : handler(std::move(h)), expire_timer(std::move(cb)) {}
+storage_proxy::rh_entry::rh_entry(shared_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb) : handler(std::move(h)), expire_timer(std::move(cb)) {}
 
 storage_proxy::unique_response_handler::unique_response_handler(storage_proxy& p_, response_id_type id_) : id(id_), p(p_) {}
 storage_proxy::unique_response_handler::unique_response_handler(unique_response_handler&& x) : id(x.id), p(x.p) { x.id = 0; };
@@ -957,26 +962,26 @@ storage_proxy::response_id_type storage_proxy::unique_response_handler::release(
 
 
 future<>
-storage_proxy::mutate_locally(const mutation& m) {
+storage_proxy::mutate_locally(const mutation& m, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(m);
-    return _db.invoke_on(shard, [s = global_schema_ptr(m.schema()), m = freeze(m)] (database& db) -> future<> {
-        return db.apply(s, m);
+    return _db.invoke_on(shard, [s = global_schema_ptr(m.schema()), m = freeze(m), timeout] (database& db) -> future<> {
+        return db.apply(s, m, timeout);
     });
 }
 
 future<>
-storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m) {
+storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(m);
-    return _db.invoke_on(shard, [&m, gs = global_schema_ptr(s)] (database& db) -> future<> {
-        return db.apply(gs, m);
+    return _db.invoke_on(shard, [&m, gs = global_schema_ptr(s), timeout] (database& db) -> future<> {
+        return db.apply(gs, m, timeout);
     });
 }
 
 future<>
-storage_proxy::mutate_locally(std::vector<mutation> mutations) {
-    return do_with(std::move(mutations), [this] (std::vector<mutation>& pmut){
-        return parallel_for_each(pmut.begin(), pmut.end(), [this] (const mutation& m) {
-            return mutate_locally(m);
+storage_proxy::mutate_locally(std::vector<mutation> mutations, clock_type::time_point timeout) {
+    return do_with(std::move(mutations), [this, timeout] (std::vector<mutation>& pmut){
+        return parallel_for_each(pmut.begin(), pmut.end(), [this, timeout] (const mutation& m) {
+            return mutate_locally(m, timeout);
         });
     });
 }
@@ -1059,7 +1064,7 @@ storage_proxy::create_write_response_handler(const std::unordered_map<gms::inet_
 
 void
 storage_proxy::hint_to_dead_endpoints(response_id_type id, db::consistency_level cl) {
-    auto& h = get_write_response_handler(id);
+    auto& h = *get_write_response_handler(id);
 
     size_t hints = hint_to_dead_endpoints(h._mutation_holder, h.get_dead_endpoints());
 
@@ -1328,7 +1333,8 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     std::vector<std::pair<const sstring, std::vector<gms::inet_address>>> local;
     local.reserve(3);
 
-    auto&& handler = get_write_response_handler(response_id);
+    auto handler_ptr = get_write_response_handler(response_id);
+    auto& handler = *handler_ptr;
 
     for(auto dest: handler.get_targets()) {
         sstring dc = get_dc(dest);
@@ -1344,9 +1350,10 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     auto my_address = utils::fb_utilities::get_broadcast_address();
 
     // lambda for applying mutation locally
-    auto lmutate = [&handler, response_id, this, my_address] (lw_shared_ptr<const frozen_mutation> m) {
-        tracing::trace(handler.get_trace_state(), "Executing a mutation locally");
-        return mutate_locally(handler.get_schema(), *m).then([response_id, this, my_address, m, p = shared_from_this()] {
+    auto lmutate = [handler_ptr, response_id, this, my_address, timeout] (lw_shared_ptr<const frozen_mutation> m) mutable {
+        tracing::trace(handler_ptr->get_trace_state(), "Executing a mutation locally");
+        auto s = handler_ptr->get_schema();
+        return mutate_locally(std::move(s), *m, timeout).then([response_id, this, my_address, m, h = std::move(handler_ptr), p = shared_from_this()] {
             // make mutation alive until it is processed locally, otherwise it
             // may disappear if write timeouts before this future is ready
             got_response(response_id, my_address);
@@ -1354,16 +1361,16 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     };
 
     // lambda for applying mutation remotely
-    auto rmutate = [this, &handler, timeout, response_id, my_address] (gms::inet_address coordinator, std::vector<gms::inet_address>&& forward, const frozen_mutation& m) {
+    auto rmutate = [this, handler_ptr, timeout, response_id, my_address] (gms::inet_address coordinator, std::vector<gms::inet_address>&& forward, const frozen_mutation& m) {
         auto& ms = net::get_local_messaging_service();
         auto msize = m.representation().size();
         _stats.queued_write_bytes += msize;
 
-        auto& tr_state = handler.get_trace_state();
+        auto& tr_state = handler_ptr->get_trace_state();
         tracing::trace(tr_state, "Sending a mutation to /{}", coordinator);
 
         return ms.send_mutation(net::messaging_service::msg_addr{coordinator, 0}, timeout, m,
-                std::move(forward), my_address, engine().cpu_id(), response_id, tracing::make_trace_info(tr_state)).finally([this, p = shared_from_this(), msize] {
+                std::move(forward), my_address, engine().cpu_id(), response_id, tracing::make_trace_info(tr_state)).finally([this, p = shared_from_this(), h = std::move(handler_ptr), msize] {
             _stats.queued_write_bytes -= msize;
             unthrottle();
         });
@@ -1405,6 +1412,9 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
                 // ignore, disconnect will be logged by gossiper
             } catch(seastar::gate_closed_exception&) {
                 // may happen during shutdown, ignore it
+            } catch(timed_out_error&) {
+                // from lmutate(). Ignore so that logs are not flooded
+                // database total_writes_timedout counter was incremented.
             } catch(...) {
                 logger.error("exception during mutation write to {}: {}", coordinator, std::current_exception());
             }
@@ -3254,14 +3264,23 @@ void storage_proxy::init_messaging_service() {
             tracing::trace(trace_state_ptr, "Message received from /{}", src_addr.addr);
         }
 
-        return do_with(std::move(in), get_local_shared_storage_proxy(), [src_addr = std::move(src_addr), &cinfo, forward = std::move(forward), reply_to, shard, response_id, trace_state_ptr, t] (const frozen_mutation& m, shared_ptr<storage_proxy>& p) mutable {
+        storage_proxy::clock_type::time_point timeout;
+        if (!t) {
+            auto timeout_in_ms = get_local_shared_storage_proxy()->_db.local().get_config().write_request_timeout_in_ms();
+            timeout = clock_type::now() + std::chrono::milliseconds(timeout_in_ms);
+        } else {
+            timeout = *t;
+        }
+
+        return do_with(std::move(in), get_local_shared_storage_proxy(), [src_addr = std::move(src_addr), &cinfo, forward = std::move(forward), reply_to, shard, response_id, trace_state_ptr, timeout] (const frozen_mutation& m, shared_ptr<storage_proxy>& p) mutable {
             ++p->_stats.received_mutations;
             p->_stats.forwarded_mutations += forward.size();
             return when_all(
                 // mutate_locally() may throw, putting it into apply() converts exception to a future.
-                futurize<void>::apply([&p, &m, reply_to, src_addr = std::move(src_addr)] () mutable {
-                    return get_schema_for_write(m.schema_version(), std::move(src_addr)).then([&m, &p] (schema_ptr s) {
-                        return p->mutate_locally(std::move(s), m);
+                futurize<void>::apply([timeout, &p, &m, reply_to, src_addr = std::move(src_addr)] () mutable {
+                    // FIXME: get_schema_for_write() doesn't timeout
+                    return get_schema_for_write(m.schema_version(), std::move(src_addr)).then([&m, &p, timeout] (schema_ptr s) {
+                        return p->mutate_locally(std::move(s), m, timeout);
                     });
                 }).then([reply_to, shard, response_id, trace_state_ptr] () {
                     auto& ms = net::get_local_messaging_service();
@@ -3274,14 +3293,23 @@ void storage_proxy::init_messaging_service() {
                     return ms.send_mutation_done(net::messaging_service::msg_addr{reply_to, shard}, shard, response_id).then_wrapped([] (future<> f) {
                         f.ignore_ready_future();
                     });
-                }).handle_exception([reply_to, shard] (std::exception_ptr eptr) {
-                    logger.warn("Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
+                }).handle_exception([reply_to, shard, &p] (std::exception_ptr eptr) {
+                    seastar::log_level l = seastar::log_level::warn;
+                    try {
+                        std::rethrow_exception(eptr);
+                    } catch (timed_out_error&) {
+                        // ignore timeouts so that logs are not flooded.
+                        // database total_writes_timedout counter was incremented.
+                        l = seastar::log_level::debug;
+                    } catch (...) {
+                        // ignore
+                    }
+                    logger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
                 }),
-                parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p, trace_state_ptr, t] (gms::inet_address forward) {
+                parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p, trace_state_ptr, timeout] (gms::inet_address forward) {
                     auto& ms = net::get_local_messaging_service();
-                    auto timeout = clock_type::now() + std::chrono::milliseconds(p->_db.local().get_config().write_request_timeout_in_ms());
                     tracing::trace(trace_state_ptr, "Forwarding a mutation to /{}", forward);
-                    return ms.send_mutation(net::messaging_service::msg_addr{forward, 0}, t.value_or(timeout), m, {}, reply_to, shard, response_id, tracing::make_trace_info(trace_state_ptr)).then_wrapped([&p] (future<> f) {
+                    return ms.send_mutation(net::messaging_service::msg_addr{forward, 0}, timeout, m, {}, reply_to, shard, response_id, tracing::make_trace_info(trace_state_ptr)).then_wrapped([&p] (future<> f) {
                         if (f.failed()) {
                             ++p->_stats.forwarding_errors;
                         };

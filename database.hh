@@ -1019,12 +1019,18 @@ public:
 //   use shard_of() for data
 
 class database {
+public:
+    using timeout_clock = std::chrono::steady_clock;
+private:
     ::cf_stats _cf_stats;
     static constexpr size_t max_concurrent_reads() { return 100; }
     static constexpr size_t max_system_concurrent_reads() { return 10; }
     struct db_stats {
         uint64_t total_writes = 0;
+        uint64_t total_writes_failed = 0;
+        uint64_t total_writes_timedout = 0;
         uint64_t total_reads = 0;
+        uint64_t total_reads_failed = 0;
         uint64_t sstable_read_queue_overloaded = 0;
     };
 
@@ -1052,7 +1058,7 @@ class database {
     bool _enable_incremental_backups = false;
 
     future<> init_commitlog();
-    future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position);
+    future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position, timeout_clock::time_point timeout);
     future<> populate(sstring datadir);
     future<> populate_keyspace(sstring datadir, sstring ks_name);
 
@@ -1064,7 +1070,7 @@ private:
     friend void db::system_keyspace::make(database& db, bool durable, bool volatile_testing_only);
     void setup_collectd();
 
-    future<> do_apply(schema_ptr, const frozen_mutation&);
+    future<> do_apply(schema_ptr, const frozen_mutation&, timeout_clock::time_point timeout);
 public:
     static utils::UUID empty_version;
 
@@ -1131,7 +1137,9 @@ public:
     unsigned shard_of(const frozen_mutation& m);
     future<lw_shared_ptr<query::result>> query(schema_ptr, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges, tracing::trace_state_ptr trace_state);
     future<reconcilable_result> query_mutations(schema_ptr, const query::read_command& cmd, const query::partition_range& range, tracing::trace_state_ptr trace_state);
-    future<> apply(schema_ptr, const frozen_mutation&);
+    // Apply the mutation atomically.
+    // Throws timed_out_error when timeout is reached.
+    future<> apply(schema_ptr, const frozen_mutation&, timeout_clock::time_point timeout = timeout_clock::time_point::max());
     future<> apply_streaming_mutation(schema_ptr, utils::UUID plan_id, const frozen_mutation&, bool fragmented);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
     const sstring& get_snitch_name() const;
