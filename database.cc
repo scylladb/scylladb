@@ -2110,9 +2110,13 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     auto uuid = find_uuid(ks_name, cf_name);
     auto& ks = find_keyspace(ks_name);
     auto cf = _column_families.at(uuid);
+    auto&& s = cf->schema();
     _column_families.erase(uuid);
-    ks.metadata()->remove_column_family(cf->schema());
+    ks.metadata()->remove_column_family(s);
     _ks_cf_to_uuid.erase(std::make_pair(ks_name, cf_name));
+    if (s->is_view()) {
+        find_column_family(s->view_info()->base_id()).remove_view(view_ptr(s));
+    }
     return truncate(ks, *cf, std::move(tsf)).then([this, cf] {
         return cf->stop();
     }).then([this, cf] {
