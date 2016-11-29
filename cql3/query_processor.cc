@@ -43,6 +43,7 @@
 #include "cql3/CqlParser.hpp"
 #include "cql3/error_collector.hh"
 #include "cql3/statements/batch_statement.hh"
+#include "cql3/util.hh"
 
 #include "transport/messages/result_message.hh"
 
@@ -312,24 +313,11 @@ query_processor::get_statement(const sstring_view& query, const service::client_
 query_processor::parse_statement(const sstring_view& query)
 {
     try {
-        cql3_parser::CqlLexer::collector_type lexer_error_collector(query);
-        cql3_parser::CqlParser::collector_type parser_error_collector(query);
-        cql3_parser::CqlLexer::InputStreamType input{reinterpret_cast<const ANTLR_UINT8*>(query.begin()), ANTLR_ENC_UTF8, static_cast<ANTLR_UINT32>(query.size()), nullptr};
-        cql3_parser::CqlLexer lexer{&input};
-        lexer.set_error_listener(lexer_error_collector);
-        cql3_parser::CqlParser::TokenStreamType tstream(ANTLR_SIZE_HINT, lexer.get_tokSource());
-        cql3_parser::CqlParser parser{&tstream};
-        parser.set_error_listener(parser_error_collector);
-
-        auto statement = parser.query();
-
-        lexer_error_collector.throw_first_syntax_error();
-        parser_error_collector.throw_first_syntax_error();
-
+        auto statement = util::do_with_parser(query,  std::mem_fn(&cql3_parser::CqlParser::query));
         if (!statement) {
             throw exceptions::syntax_exception("Parsing failed");
         }
-        return std::move(statement);
+        return statement;
     } catch (const exceptions::recognition_exception& e) {
         throw exceptions::syntax_exception(sprint("Invalid or malformed CQL query string: %s", e.what()));
     } catch (const exceptions::cassandra_exception& e) {
