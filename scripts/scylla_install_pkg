@@ -10,13 +10,16 @@ fi
 print_usage() {
     echo "scylla_install_pkg --local-pkg /home/scylla/rpms --repo [URL]"
     echo "  --local-pkg	install locally built .rpm/.deb on specified directory"
-    echo "  --repo specify .repo/.list file URL"
+    echo "  --repo  repository for both install and update, specify .repo/.list file URL"
+    echo "  --repo-for-install  repository for install, specify .repo/.list file URL"
+    echo "  --repo-for-update  repository for update, specify .repo/.list file URL"
     exit 1
 }
 
 LOCAL_PKG=
 UNSTABLE=0
-REPO=
+REPO_FOR_INSTALL=
+REPO_FOR_UPDATE=
 while [ $# -gt 0 ]; do
     case "$1" in
         "--local-pkg")
@@ -24,7 +27,16 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         "--repo")
-            REPO=$2
+            REPO_FOR_INSTALL=$2
+            REPO_FOR_UPDATE=$2
+            shift 2
+            ;;
+        "--repo-for-install")
+            REPO_FOR_INSTALL=$2
+            shift 2
+            ;;
+        "--repo-for-update")
+            REPO_FOR_UPDATE=$2
             shift 2
             ;;
         *)
@@ -42,8 +54,8 @@ if [ "$ID" = "ubuntu" ]; then
     chmod +x /usr/sbin/policy-rc.d
     cp /etc/hosts /etc/hosts.orig
     echo 127.0.0.1 `hostname` >> /etc/hosts
-    if [ "$REPO" != "" ]; then
-        curl -o /etc/apt/sources.list.d/scylla.list $REPO
+    if [ "$REPO_FOR_INSTALL" != "" ]; then
+        curl -o /etc/apt/sources.list.d/scylla_install.list $REPO_FOR_INSTALL
     fi
     apt-get update
     if [ "$LOCAL_PKG" = "" ]; then
@@ -62,9 +74,14 @@ if [ "$ID" = "ubuntu" ]; then
     fi
     mv /etc/hosts.orig /etc/hosts
     rm /usr/sbin/policy-rc.d
+    rm /etc/apt/sources.list.d/scylla_install.list
+    if [ "$REPO_FOR_UPDATE" != "" ]; then
+        curl -o /etc/apt/sources.list.d/scylla.list $REPO_FOR_UPDATE
+    fi
+    apt-get update
 else
-    if [ "$REPO" != "" ]; then
-        curl -o /etc/yum.repos.d/scylla.repo $REPO
+    if [ "$REPO_FOR_INSTALL" != "" ]; then
+        curl -o /etc/yum.repos.d/scylla_install.repo $REPO_FOR_INSTALL
     fi
 
     if [ "$ID" = "centos" ]; then
@@ -80,5 +97,10 @@ else
         yum install -y scylla
     else
         yum install -y $LOCAL_PKG/scylla*.*.rpm
+    fi
+
+    rm /etc/yum.repos.d/scylla_install.repo
+    if [ "$REPO_FOR_UPDATE" != "" ]; then
+        curl -o /etc/yum.repos.d/scylla.repo $REPO_FOR_UPDATE
     fi
 fi
