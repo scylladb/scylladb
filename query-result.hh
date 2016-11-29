@@ -49,17 +49,23 @@ namespace query {
 class result_memory_accounter;
 
 class result_memory_limiter {
+    const size_t _maximum_total_result_memory;
     semaphore _memory_limiter;
 public:
     static constexpr size_t minimum_result_size = 4 * 1024;
     static constexpr size_t maximum_result_size = 1 * 1024 * 1024;
 public:
     result_memory_limiter()
-        : _memory_limiter(memory::stats().total_memory() / 10)
+        : _maximum_total_result_memory(memory::stats().total_memory() / 10)
+        , _memory_limiter(_maximum_total_result_memory)
     { }
 
     result_memory_limiter(const result_memory_limiter&) = delete;
     result_memory_limiter(result_memory_limiter&&) = delete;
+
+    ssize_t total_used_memory() const {
+        return _maximum_total_result_memory - _memory_limiter.available_units();
+    }
 
     // Reserves minimum_result_size and creates new memory accounter.
     future<result_memory_accounter> new_read();

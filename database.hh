@@ -1049,6 +1049,9 @@ private:
         uint64_t total_reads = 0;
         uint64_t total_reads_failed = 0;
         uint64_t sstable_read_queue_overloaded = 0;
+
+        uint64_t short_data_queries = 0;
+        uint64_t short_mutation_queries = 0;
     };
 
     lw_shared_ptr<db_stats> _stats;

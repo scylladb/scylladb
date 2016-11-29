@@ -1813,6 +1813,27 @@ database::setup_collectd() {
                 , "queue_length", "queued_reads_system_keyspace")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _system_read_concurrency_sem.waiters(); })
     ));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
+                , "bytes", "total_result_memory")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
+                    return get_result_memory_limiter().total_used_memory();
+                })
+    ));
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "short_data_queries")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats->short_data_queries)
+    ));
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "short_mutation_queries")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats->short_mutation_queries)
+    ));
 }
 
 database::~database() {
@@ -2413,6 +2434,9 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_requ
             ++s->total_reads_failed;
         } else {
             ++s->total_reads;
+            auto result = f.get0();
+            s->short_data_queries += bool(result->is_short_read());
+            return make_ready_future<lw_shared_ptr<query::result>>(std::move(result));
         }
         return f;
     });
@@ -2428,6 +2452,9 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const qu
             ++s->total_reads_failed;
         } else {
             ++s->total_reads;
+            auto result = f.get0();
+            s->short_mutation_queries += bool(result.is_short_read());
+            return make_ready_future<reconcilable_result>(std::move(result));
         }
         return f;
     });
