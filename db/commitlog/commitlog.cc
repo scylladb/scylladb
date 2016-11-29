@@ -1238,13 +1238,17 @@ future<> db::commitlog::segment_manager::sync_all_segments(bool shutdown) {
 
 future<> db::commitlog::segment_manager::shutdown() {
     if (!_shutdown) {
-        // Wait for all pending requests to finish
-        return get_units(_request_controller, max_request_controller_units()).then([this] (auto permits) {
-            _timer.cancel(); // no more timer calls
-            _shutdown = true; // no re-arm, no create new segments.
-            // Now first wait for periodic task to finish, then sync and close all
-            // segments, flushing out any remaining data.
-            return _gate.close().then(std::bind(&segment_manager::sync_all_segments, this, true));
+        // Wait for all pending requests to finish. Need to sync first because segments that are
+        // alive may be holding semaphore permits.
+        auto block_new_requests = get_units(_request_controller, max_request_controller_units());
+        return sync_all_segments(false).then([this, block_new_requests = std::move(block_new_requests)] () mutable {
+            return std::move(block_new_requests).then([this] (auto permits) {
+                _timer.cancel(); // no more timer calls
+                _shutdown = true; // no re-arm, no create new segments.
+                // Now first wait for periodic task to finish, then sync and close all
+                // segments, flushing out any remaining data.
+                return _gate.close().then(std::bind(&segment_manager::sync_all_segments, this, true));
+            });
         });
     }
     return make_ready_future<>();
