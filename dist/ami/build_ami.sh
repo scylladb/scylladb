@@ -8,7 +8,9 @@ fi
 print_usage() {
     echo "build_ami.sh --localrpm --repo [URL]"
     echo "  --localrpm  deploy locally built rpms"
-    echo "  --repo  specify .repo/.list file URL"
+    echo "  --repo  repository for both install and update, specify .repo/.list file URL"
+    echo "  --repo-for-install  repository for install, specify .repo/.list file URL"
+    echo "  --repo-for-update  repository for update, specify .repo/.list file URL"
     exit 1
 }
 LOCALRPM=0
@@ -22,6 +24,14 @@ while [ $# -gt 0 ]; do
             ;;
         "--repo")
             INSTALL_ARGS="$INSTALL_ARGS --repo $2"
+            shift 2
+            ;;
+        "--repo-for-install")
+            INSTALL_ARGS="$INSTALL_ARGS --repo-for-install $2"
+            shift 2
+            ;;
+        "--repo-for-update")
+            INSTALL_ARGS="$INSTALL_ARGS --repo-for-update $2"
             shift 2
             ;;
         *)
