@@ -138,7 +138,7 @@ void stream_result_future::maybe_complete() {
                 sslog.warn("[Stream #{}] Stream failed, peers={}", plan_id, _coordinator->get_peers());
                 _done.set_exception(stream_exception(final_state, "Stream failed"));
             } else {
-                sslog.info("[Stream #{}] All sessions completed, peers={}", plan_id, _coordinator->get_peers());
+                sslog.info("[Stream #{}] All sessions completed for streaming plan {}, peers={}", plan_id, description, _coordinator->get_peers());
                 _done.set_value(final_state);
             }
         });
