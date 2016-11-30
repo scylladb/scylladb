@@ -38,7 +38,6 @@
 #include "db/commitlog/commitlog_replayer.hh"
 #include "utils/runtime.hh"
 #include "utils/file_lock.hh"
-#include "dns.hh"
 #include "log.hh"
 #include "debug.hh"
 #include "init.hh"
@@ -52,6 +51,7 @@
 #include "tracing/tracing.hh"
 #include "core/prometheus.hh"
 #include "message/messaging_service.hh"
+#include <seastar/net/dns.hh>
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
@@ -415,9 +415,9 @@ int main(int ac, char** av) {
             // #293 - do not stop anything
             // engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
             supervisor::notify("determining DNS name");
-            dns::hostent e = dns::gethostbyname(api_address).get0();
+            auto e = seastar::net::dns::get_host_by_name(api_address).get0();
             supervisor::notify("starting API server");
-            auto ip = e.addresses[0].in.s_addr;
+            auto ip = e.addr_list.front();
             ctx.http_server.start().get();
             api::set_server_init(ctx).get();
             ctx.http_server.listen(ipv4_addr{ip, api_port}).get();
@@ -625,7 +625,7 @@ int main(int ac, char** av) {
                 }).get();
             }
             api::set_server_done(ctx).get();
-            dns::hostent prom_addr = dns::gethostbyname(cfg->prometheus_address()).get0();
+            auto prom_addr = seastar::net::dns::get_host_by_name(cfg->prometheus_address()).get0();
             supervisor::notify("starting prometheus API server");
             uint16_t pport = cfg->prometheus_port();
             if (pport) {
@@ -633,7 +633,7 @@ int main(int ac, char** av) {
                 pctx.prefix = cfg->prometheus_prefix();
                 prometheus_server.start().get();
                 prometheus::start(prometheus_server, pctx);
-                prometheus_server.listen(ipv4_addr{prom_addr.addresses[0].in.s_addr, pport}).handle_exception([pport, &cfg] (auto ep) {
+                prometheus_server.listen(ipv4_addr{prom_addr.addr_list.front(), pport}).handle_exception([pport, &cfg] (auto ep) {
                     startlog.error("Could not start Prometheus API server on {}:{}: {}", cfg->prometheus_address(), pport, ep);
                     return make_exception_future<>(ep);
                 }).get();
