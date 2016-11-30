@@ -40,7 +40,7 @@ void init_storage_service(distributed<database>& db) {
     //engine().at_exit([] { return service::deinit_storage_service(); });
 }
 
-void init_ms_fd_gossiper(sstring listen_address
+void init_ms_fd_gossiper(sstring listen_address_in
                 , uint16_t storage_port
                 , uint16_t ssl_storage_port
                 , sstring ms_encrypt_what
@@ -55,7 +55,7 @@ void init_ms_fd_gossiper(sstring listen_address
                 , double phi
                 , bool sltba)
 {
-    const gms::inet_address listen(listen_address);
+    const auto listen = gms::inet_address::lookup(listen_address_in).get0();
 
     using encrypt_what = net::messaging_service::encrypt_what;
     using compress_what = net::messaging_service::compress_what;
@@ -118,7 +118,7 @@ void init_ms_fd_gossiper(sstring listen_address
         sstring seeds_str = seed_provider.parameters.find("seeds")->second;
         while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
             auto seed = boost::trim_copy(seeds_str.substr(begin,next-begin));
-            seeds.emplace(gms::inet_address(std::move(seed)));
+            seeds.emplace(gms::inet_address::lookup(std::move(seed)).get0());
             begin = next+1;
         }
     }
@@ -126,9 +126,9 @@ void init_ms_fd_gossiper(sstring listen_address
         seeds.emplace(gms::inet_address("127.0.0.1"));
     }
     auto broadcast_address = utils::fb_utilities::get_broadcast_address();
-    if (broadcast_address != listen_address && seeds.count(listen_address)) {
+    if (broadcast_address != listen && seeds.count(listen)) {
         print("Use broadcast_address instead of listen_address for seeds list: seeds=%s, listen_address=%s, broadcast_address=%s\n",
-                to_string(seeds), listen_address, broadcast_address);
+                to_string(seeds), listen_address_in, broadcast_address);
         throw std::runtime_error("Use broadcast_address for seeds list");
     }
     gms::get_gossiper().start().get();

@@ -355,14 +355,14 @@ int main(int ac, char** av) {
 
             if (!broadcast_address.empty()) {
                 try {
-                    utils::fb_utilities::set_broadcast_address(broadcast_address);
+                    utils::fb_utilities::set_broadcast_address(gms::inet_address::lookup(broadcast_address).get0());
                 } catch (...) {
                     startlog.error("Bad configuration: invalid 'broadcast_address': {}: {}", broadcast_address, std::current_exception());
                     throw bad_configuration_error();
                 }
             } else if (!listen_address.empty()) {
                 try {
-                    utils::fb_utilities::set_broadcast_address(listen_address);
+                    utils::fb_utilities::set_broadcast_address(gms::inet_address::lookup(listen_address).get0());
                 } catch (...) {
                     startlog.error("Bad configuration: invalid 'listen_address': {}: {}", listen_address, std::current_exception());
                     throw bad_configuration_error();
@@ -373,13 +373,13 @@ int main(int ac, char** av) {
             }
 
             if (!broadcast_rpc_address.empty()) {
-                utils::fb_utilities::set_broadcast_rpc_address(broadcast_rpc_address);
+                utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address::lookup(broadcast_rpc_address).get0());
             } else {
                 if (rpc_address == "0.0.0.0") {
                     startlog.error("If rpc_address is set to a wildcard address {}, then you must set broadcast_rpc_address to a value other than {}", rpc_address, rpc_address);
                     throw bad_configuration_error();
                 }
-                utils::fb_utilities::set_broadcast_rpc_address(rpc_address);
+                utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address::lookup(rpc_address).get0());
             }
 
             // TODO: lib.
