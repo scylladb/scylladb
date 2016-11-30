@@ -507,9 +507,9 @@ class scylla_ptr(gdb.Command):
             msg += ', large'
 
         # FIXME: handle debug-mode build
-        segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
-        index = gdb.parse_and_eval('(%d - \'logalloc\'::shard_segment_pool._segments_base) / \'logalloc\'::segment::size' % (ptr))
-        desc = gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments[%d]' % (index))
+        segment_size = int(gdb.parse_and_eval('\'logalloc::segment\'::size'))
+        index = gdb.parse_and_eval('(%d - \'logalloc::shard_segment_pool\'._segments_base) / \'logalloc::segment\'::size' % (ptr))
+        desc = gdb.parse_and_eval('\'logalloc::shard_segment_pool\'._segments._M_impl._M_start[%d]' % (index))
         if desc['_lsa_managed']:
             msg += ', LSA-managed'
 
