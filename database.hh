@@ -1087,8 +1087,14 @@ private:
     void setup_collectd();
 
     future<> do_apply(schema_ptr, const frozen_mutation&, timeout_clock::time_point timeout);
+
+    query::result_memory_limiter _result_memory_limiter;
 public:
     static utils::UUID empty_version;
+
+    query::result_memory_limiter& get_result_memory_limiter() {
+        return _result_memory_limiter;
+    }
 
     void set_enable_incremental_backups(bool val) { _enable_incremental_backups = val; }
 
