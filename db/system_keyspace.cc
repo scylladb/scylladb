@@ -438,10 +438,11 @@ schema_ptr size_estimates() {
 }
 
 static future<> setup_version() {
-    sstring req = "INSERT INTO system.%s (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address, supported_features) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+    return gms::inet_address::lookup(qctx->db().get_config().rpc_address()).then([](gms::inet_address a) {
+        sstring req = "INSERT INTO system.%s (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address, supported_features) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
-    return execute_cql(req, db::system_keyspace::LOCAL,
+        return execute_cql(req, db::system_keyspace::LOCAL,
                              sstring(db::system_keyspace::LOCAL),
                              version::release(),
                              cql3::query_processor::CQL_VERSION,
@@ -450,11 +451,12 @@ static future<> setup_version() {
                              snitch->get_datacenter(utils::fb_utilities::get_broadcast_address()),
                              snitch->get_rack(utils::fb_utilities::get_broadcast_address()),
                              sstring(dht::global_partitioner().name()),
-                             gms::inet_address(qctx->db().get_config().rpc_address()).addr(),
+                             a.addr(),
                              utils::fb_utilities::get_broadcast_address().addr(),
                              net::get_local_messaging_service().listen_address().addr(),
                              service::storage_service::get_config_supported_features()
-    ).discard_result();
+        ).discard_result();
+    });
 }
 
 future<> check_health();
