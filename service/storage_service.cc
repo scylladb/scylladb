@@ -62,12 +62,12 @@
 #include "service/load_broadcaster.hh"
 #include "thrift/server.hh"
 #include "transport/server.hh"
-#include "dns.hh"
 #include <seastar/core/rwlock.hh>
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
 #include "auth/auth.hh"
 #include <seastar/net/tls.hh>
+#include <seastar/net/dns.hh>
 #include "utils/exceptions.hh"
 #include "message/messaging_service.hh"
 #include "supervisor.hh"
@@ -1961,8 +1961,7 @@ future<> storage_service::start_rpc_server() {
         auto port = cfg.rpc_port();
         auto addr = cfg.rpc_address();
         auto keepalive = cfg.rpc_keepalive();
-        return dns::gethostbyname(addr).then([&ss, tserver, addr, port, keepalive] (dns::hostent e) {
-            auto ip = e.addresses[0].in.s_addr;
+        return seastar::net::dns::resolve_name(addr).then([&ss, tserver, addr, port, keepalive] (seastar::net::inet_address ip) {
             return tserver->start(std::ref(ss._db), std::ref(cql3::get_query_processor())).then([tserver, port, addr, ip, keepalive] {
                 // #293 - do not stop anything
                 //engine().at_exit([tserver] {
@@ -2015,8 +2014,7 @@ future<> storage_service::start_native_transport() {
         auto ceo = cfg.client_encryption_options();
         auto keepalive = cfg.rpc_keepalive();
         transport::cql_load_balance lb = transport::parse_load_balance(cfg.load_balance());
-        return dns::gethostbyname(addr).then([cserver, addr, port, lb, keepalive, ceo = std::move(ceo)] (dns::hostent e) {
-            auto ip = e.addresses[0].in.s_addr;
+        return seastar::net::dns::resolve_name(addr).then([cserver, addr, port, lb, keepalive, ceo = std::move(ceo)] (seastar::net::inet_address ip) {
             return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), lb).then([cserver, port, addr, ip, ceo, keepalive]() {
                 // #293 - do not stop anything
                 //engine().at_exit([cserver] {
