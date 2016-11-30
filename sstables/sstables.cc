@@ -1057,12 +1057,13 @@ future<> sstable::open_data() {
                     .then([this] (auto files) {
         _index_file = std::get<file>(std::get<0>(files).get());
         _data_file  = std::get<file>(std::get<1>(files).get());
-        return _data_file.size().then([this] (auto size) {
+        return _data_file.stat().then([this] (struct stat st) {
             if (this->has_component(sstable::component_type::CompressionInfo)) {
-                _compression.update(size);
+                _compression.update(st.st_size);
             } else {
-                _data_file_size = size;
+                _data_file_size = st.st_size;
             }
+            _data_file_write_time = db_clock::from_time_t(st.st_mtime);
         }).then([this] {
             return _index_file.size().then([this] (auto size) {
               _index_file_size = size;

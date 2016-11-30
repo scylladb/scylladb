@@ -333,6 +333,10 @@ public:
         return _filter_file_size;
     }
 
+    db_clock::time_point data_file_write_time() const {
+        return _data_file_write_time;
+    }
+
     uint64_t filter_memory_size() const {
         return _filter->memory_size();
     }
@@ -428,6 +432,7 @@ private:
     uint64_t _index_file_size;
     uint64_t _filter_file_size = 0;
     uint64_t _bytes_on_disk = 0;
+    db_clock::time_point _data_file_write_time;
     std::vector<nonwrapping_range<bytes_view>> _clustering_components_ranges;
     stdx::optional<dht::decorated_key> _first;
     stdx::optional<dht::decorated_key> _last;
