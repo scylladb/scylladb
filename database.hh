@@ -271,6 +271,18 @@ public:
         add_memtable();
     }
 
+    memtable_list(std::function<schema_ptr()> cs, dirty_memory_manager* dirty_memory_manager)
+        : _memtables({})
+        , _seal_fn()
+        , _current_schema(cs)
+        , _dirty_memory_manager(dirty_memory_manager) {
+        add_memtable();
+    }
+
+    bool may_flush() const {
+        return bool(_seal_fn);
+    }
+
     shared_memtable back() {
         return _memtables.back();
     }

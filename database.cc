@@ -96,9 +96,8 @@ thread_local memtable_dirty_memory_manager default_dirty_memory_manager;
 
 lw_shared_ptr<memtable_list>
 column_family::make_memory_only_memtable_list() {
-    auto seal = [this] (memtable_list::flush_behavior ignored) { return make_ready_future<>(); };
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager);
+    return make_lw_shared<memtable_list>(std::move(get_schema), _config.dirty_memory_manager);
 }
 
 lw_shared_ptr<memtable_list>
@@ -2576,7 +2575,9 @@ future<> dirty_memory_manager::shutdown() {
 }
 
 future<> memtable_list::request_flush() {
-    if (!_flush_coalescing) {
+    if (!may_flush()) {
+        return make_ready_future<>();
+    } else if (!_flush_coalescing) {
         _flush_coalescing = shared_promise<>();
         return _dirty_memory_manager->get_flush_permit().then([this] (auto permit) {
             auto current_flush = std::move(*_flush_coalescing);
