@@ -806,7 +806,7 @@ private:
     // repair can now choose whatever strategy - small or big ranges - it wants, resting assure
     // that the incoming memtables will be coalesced together.
     shared_promise<> _waiting_streaming_flushes;
-    timer<> _delayed_streaming_flush{[this] { seal_active_streaming_memtable_immediate(); }};
+    timer<> _delayed_streaming_flush{[this] { _streaming_memtables->request_flush(); }};
     future<> seal_active_streaming_memtable_delayed();
     future<> seal_active_streaming_memtable_immediate();
     future<> seal_active_streaming_memtable(memtable_list::flush_behavior behavior) {
