@@ -59,6 +59,7 @@
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/iterator/counting_iterator.hpp>
 #include <boost/range/adaptors.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/algorithm/cxx11/none_of.hpp>
 #include <boost/range/algorithm/count_if.hpp>
 #include <boost/range/algorithm/find.hpp>
@@ -1735,13 +1736,16 @@ class data_read_resolver : public abstract_read_resolver {
     struct reply {
         gms::inet_address from;
         foreign_ptr<lw_shared_ptr<reconcilable_result>> result;
+        bool reached_end = false;
         reply(gms::inet_address from_, foreign_ptr<lw_shared_ptr<reconcilable_result>> result_) : from(std::move(from_)), result(std::move(result_)) {}
     };
     struct version {
         gms::inet_address from;
         stdx::optional<partition> par;
-        version(gms::inet_address from_, stdx::optional<partition> par_)
-                : from(std::move(from_)), par(std::move(par_)) {}
+        bool reached_end;
+        bool reached_partition_end;
+        version(gms::inet_address from_, stdx::optional<partition> par_, bool reached_end, bool reached_partition_end)
+                : from(std::move(from_)), par(std::move(par_)), reached_end(reached_end), reached_partition_end(reached_partition_end) {}
     };
     struct mutation_and_live_row_count {
         mutation mut;
@@ -1767,10 +1771,10 @@ private:
     }
 
     void register_live_count(const std::vector<version>& replica_versions, uint32_t reconciled_live_rows, uint32_t limit) {
-        auto max_replica_live = std::max_element(replica_versions.begin(), replica_versions.end(), [](auto&& v1, auto&& v2) {
-            return v1.par->row_count() < v2.par->row_count();
-        })->par->_row_count;
-        if (max_replica_live >= limit && reconciled_live_rows < limit && limit - reconciled_live_rows > _short_read_diff) {
+        bool any_not_at_end = boost::algorithm::any_of(replica_versions, [] (const version& v) {
+            return !v.reached_partition_end;
+        });
+        if (any_not_at_end && reconciled_live_rows < limit && limit - reconciled_live_rows > _short_read_diff) {
             _short_read_diff = limit - reconciled_live_rows;
             _max_partition_live_count = reconciled_live_rows;
         }
@@ -1806,35 +1810,28 @@ private:
     }
 
     // Returns the highest row sent by the specified replica, according to the schema and the direction of
-    // the query, iff the total number of rows returned by the replica is at least equal to the row limit.
+    // the query.
     // versions is a table where rows are partitions in descending order and the columns identify the partition
     // sent by a particular replica.
-    static stdx::optional<row_address> get_last_row(const schema& s, bool is_reversed, uint32_t row_limit, const std::vector<std::vector<version>>& versions, uint32_t replica) {
-        uint32_t row_count = 0;
+    static row_address get_last_row(const schema& s, bool is_reversed, const std::vector<std::vector<version>>& versions, uint32_t replica) {
         const partition* last_partition = nullptr;
+        // Versions are in the reversed order.
         for (auto&& pv : versions) {
             const stdx::optional<partition>& p = pv[replica].par;
             if (p) {
-                row_count += p->row_count();
-                if (!last_partition) {
-                    last_partition = &p.value();
-                }
+                last_partition = &p.value();
+                break;
             }
         }
-        stdx::optional<row_address> ret;
-        if (row_count >= row_limit) {
-            ret = get_last_row(s, *last_partition, is_reversed);
-        }
-        return ret;
+        return get_last_row(s, *last_partition, is_reversed);
     }
 
     static row_address get_last_reconciled_row(const schema& s, const mutation_and_live_row_count& m_a_rc, const query::read_command& cmd, uint32_t limit, bool is_reversed) {
         const auto& m = m_a_rc.mut;
         auto mp = m.partition();
         auto&& ranges = cmd.slice.row_ranges(s, m.key());
-        auto rc = mp.compact_for_query(s, cmd.timestamp, ranges, is_reversed, limit);
+        mp.compact_for_query(s, cmd.timestamp, ranges, is_reversed, limit);
 
-        assert(rc == limit);
         stdx::optional<clustering_key> ck;
         if (!mp.clustered_rows().empty()) {
             if (is_reversed) {
@@ -1862,9 +1859,9 @@ private:
         }
     }
 
-    static bool got_incomplete_information_in_partition(const schema& s, const row_address& last_reconciled_row, const std::vector<version>& versions, uint32_t limit, bool is_reversed) {
+    static bool got_incomplete_information_in_partition(const schema& s, const row_address& last_reconciled_row, const std::vector<version>& versions, bool is_reversed) {
         for (auto&& v : versions) {
-            if (!v.par || v.par->row_count() < limit) {
+            if (!v.par || v.reached_partition_end) {
                 continue;
             }
             auto replica_last_row = get_last_row(s, *v.par, is_reversed);
@@ -1876,29 +1873,28 @@ private:
     }
 
     static bool got_incomplete_information_across_partitions(const schema& s, const row_address& last_reconciled_row,
-                                                             const std::vector<std::vector<version>>& versions, uint32_t limit, bool is_reversed) {
+                                                             const std::vector<std::vector<version>>& versions, bool is_reversed) {
         auto num_replicas = versions[0].size();
         for (uint32_t i = 0; i < num_replicas; ++i) {
-            auto replica_last_row = get_last_row(s, is_reversed, limit, versions, i);
-            if (!replica_last_row) {
+            if (versions.front()[i].reached_end) {
                 continue;
             }
-            auto pk_compare = replica_last_row->first.tri_compare(s, last_reconciled_row.first);
+            auto replica_last_row = get_last_row(s, is_reversed, versions, i);
+            auto pk_compare = replica_last_row.first.tri_compare(s, last_reconciled_row.first);
             if (pk_compare < 0) {
                 return true;
             } else if (pk_compare > 0) {
                 continue;
             }
-            if (is_missing_rows(s, last_reconciled_row, *replica_last_row, is_reversed)) {
+            if (is_missing_rows(s, last_reconciled_row, replica_last_row, is_reversed)) {
                 return true;
             }
         }
         return false;
     }
 
-    template<typename ReconciledPartitions>
     bool got_incomplete_information(const schema& s, const query::read_command& cmd, uint32_t original_row_limit, uint32_t original_per_partition_limit,
-                            const ReconciledPartitions& rp, const std::vector<std::vector<version>>& versions) {
+                            const std::vector<mutation_and_live_row_count>& rp, const std::vector<std::vector<version>>& versions) {
         // We need to check whether the reconciled result contains all information from all available
         // replicas. It is possible that some of the nodes have returned less rows (because the limit
         // was set and they had some tombstones missing) than the others. In such cases we cannot just
@@ -1913,20 +1909,20 @@ private:
 
         auto limit = original_row_limit;
         auto pv = versions.rbegin();
-        for (auto&& m_a_rc : rp) {
+        for (auto&& m_a_rc : rp | boost::adaptors::reversed) {
             auto row_count = m_a_rc.live_row_count;
             if (row_count < limit) {
                 limit -= row_count;
                 if (original_per_partition_limit != query::max_rows) {
                     auto&& last_row = get_last_reconciled_row(s, m_a_rc, cmd, original_per_partition_limit, is_reversed);
-                    if (got_incomplete_information_in_partition(s, last_row, *pv, original_per_partition_limit, is_reversed)) {
+                    if (got_incomplete_information_in_partition(s, last_row, *pv, is_reversed)) {
                         _increase_per_partition_limit = true;
                         return true;
                     }
                 }
             } else {
                 auto&& last_row = get_last_reconciled_row(s, m_a_rc, cmd, limit, is_reversed);
-                return got_incomplete_information_across_partitions(s, last_row, versions, original_row_limit, is_reversed);
+                return got_incomplete_information_across_partitions(s, last_row, versions, is_reversed);
             }
             ++pv;
         }
@@ -1982,6 +1978,14 @@ public:
         std::vector<std::vector<version>> versions;
         versions.reserve(_data_results.front().result->partitions().size());
 
+        for (auto& r : _data_results) {
+            r.reached_end = r.result->row_count() < cmd.row_limit
+                            && (cmd.partition_limit == query::max_partitions
+                                || boost::range::count_if(r.result->partitions(), [] (const partition& p) {
+                                    return p.row_count();
+                                }) < cmd.partition_limit);
+        }
+
         do {
             // after this sort reply with largest key is at the beginning
             boost::sort(_data_results, cmp);
@@ -1995,11 +1999,12 @@ public:
             for (reply& r : _data_results) {
                 auto pit = r.result->partitions().rbegin();
                 if (pit != r.result->partitions().rend() && pit->mut().key(s).legacy_equal(s, max_key)) {
-                    v.emplace_back(r.from, std::move(*pit));
+                    bool reached_partition_end = pit->row_count() < cmd.slice.partition_row_limit();
+                    v.emplace_back(r.from, std::move(*pit), r.reached_end, reached_partition_end);
                     r.result->partitions().pop_back();
                 } else {
                     // put empty partition for destination without result
-                    v.emplace_back(r.from, stdx::optional<partition>());
+                    v.emplace_back(r.from, stdx::optional<partition>(), r.reached_end, true);
                 }
             }
         } while(true);
@@ -2056,7 +2061,7 @@ public:
         if (has_diff) {
             if (_total_live_count >= original_row_limit && !any_partition_short_read()
                     && got_incomplete_information(*schema, cmd, original_row_limit, original_per_partition_limit,
-                                                  reconciled_partitions | boost::adaptors::reversed, versions)) {
+                                                  reconciled_partitions, versions)) {
                 return {};
             }
             // filter out partitions with empty diffs
