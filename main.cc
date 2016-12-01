@@ -62,17 +62,34 @@ logging::logger startlog("init");
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
 
-void
-supervisor_notify(sstring msg, bool ready = false) {
-    static const char *is_upstart = getenv("UPSTART_JOB");
+static bool
+try_notify_upstart(sstring msg, bool ready) {
+    static const char *upstart_job = getenv("UPSTART_JOB");
+    static const sstring upstart_job_str(!upstart_job ? "" : upstart_job);
+    if (upstart_job_str != "scylla-server") {
+        return false;
+    }
+    if (ready) {
+        raise(SIGSTOP);
+    }
+    return true;
+}
 
-    startlog.trace("{}", msg);
+static void
+try_notify_systemd(sstring msg, bool ready) {
 #ifdef HAVE_LIBSYSTEMD
     auto ready_msg = ready ? "READY=1\n" : "";
     sd_notify(0, sprint("%sSTATUS=%s\n", ready_msg, msg).c_str());
 #endif
-    if (is_upstart != nullptr && ready) {
-        raise(SIGSTOP);
+}
+
+void
+supervisor_notify(sstring msg, bool ready = false) {
+    startlog.trace("{}", msg);
+    if (try_notify_upstart(msg, ready) == true) {
+        return;
+    } else {
+        try_notify_systemd(msg, ready);
     }
 }
 
