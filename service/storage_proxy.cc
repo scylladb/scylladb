@@ -2072,7 +2072,7 @@ public:
         }
 
         if (has_diff) {
-            if (_total_live_count >= original_row_limit && !any_partition_short_read()
+            if (!any_partition_short_read()
                     && got_incomplete_information(*schema, cmd, original_row_limit, original_per_partition_limit,
                                                   original_partition_limit, reconciled_partitions, versions)) {
                 return {};
