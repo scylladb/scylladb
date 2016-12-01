@@ -196,7 +196,7 @@ private:
     std::array<std::unique_ptr<rpc_protocol_server_wrapper>, 2> _server;
     ::shared_ptr<seastar::tls::server_credentials> _credentials;
     std::array<std::unique_ptr<rpc_protocol_server_wrapper>, 2> _server_tls;
-    std::array<clients_map, 3> _clients;
+    std::array<clients_map, 4> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
     bool _stopping = false;
 public:
