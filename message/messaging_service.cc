@@ -385,6 +385,8 @@ static unsigned get_rpc_client_idx(messaging_verb verb) {
                verb == messaging_verb::STREAM_MUTATION_DONE ||
                verb == messaging_verb::COMPLETE_MESSAGE) {
         idx = 2;
+    } else if (verb == messaging_verb::MUTATION_DONE) {
+        idx = 3;
     }
     return idx;
 }
