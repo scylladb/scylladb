@@ -48,7 +48,7 @@ done
 
 . /etc/os-release
 
-if [ "$ID" = "ubuntu" ]; then
+if [ -f /etc/debian_version ]; then
     echo "#!/bin/sh" >> /usr/sbin/policy-rc.d
     echo "exit 101" >> /usr/sbin/policy-rc.d
     chmod +x /usr/sbin/policy-rc.d
