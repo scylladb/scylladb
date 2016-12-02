@@ -2,19 +2,14 @@
 #
 #  Copyright (C) 2015 ScyllaDB
 
+. /usr/lib/scylla/scylla_lib.sh
+
 print_usage() {
     echo "scylla_bootparam_setup --ami"
     echo "  --ami				setup AMI instance"
     exit 1
 }
 
-is_ec2() {
-    if [ -f /sys/hypervisor/uuid ] && [ "$(head -c 3 /sys/hypervisor/uuid)" = "ec2" ]; then
-        echo 1
-    else
-        echo 0
-    fi
-}
 
 AMI_OPT=0
 while [ $# -gt 0 ]; do
@@ -29,12 +24,6 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-. /etc/os-release
-if [ "$ID" = "ubuntu" ]; then
-    . /etc/default/scylla-server
-else
-    . /etc/sysconfig/scylla-server
-fi
 if [ ! -e /etc/default/grub ] && [ ! -e /boot/grub/menu.lst ]; then
     echo "Unsupported bootloader"
     exit 1
@@ -52,14 +41,14 @@ if [ -e /etc/default/grub ]; then
         sed -e "s#^GRUB_CMDLINE_LINUX=\"#GRUB_CMDLINE_LINUX=\"hugepagesz=2M hugepages=$NR_HUGEPAGES #" /etc/default/grub > /tmp/grub
     fi
     mv /tmp/grub /etc/default/grub
-    if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
+    if is_debian_variant; then
         update-grub
     else
         grub2-mkconfig -o /boot/grub2/grub.cfg
     fi
 fi
 
-if [ `is_ec2` -eq 1 ] && [ -e /boot/grub/menu.lst ]; then
+if is_ec2 && [ -e /boot/grub/menu.lst ]; then
     if [ "`grep hugepagesz /boot/grub/menu.lst`" != "" ] || [ "`grep hugepages /boot/grub/menu.lst`" != "" ]; then
         sed -e "s#hugepagesz=2M ##" /boot/grub/menu.lst > /tmp/menu.lst
         mv /tmp/menu.lst /boot/grub/menu.lst

@@ -2,10 +2,10 @@
 #
 #  Copyright (C) 2016 ScyllaDB
 
-. /etc/os-release
+. /usr/lib/scylla/scylla_lib.sh
 
 if [ ! -f /sbin/mkfs.xfs ]; then
-    if [ "$ID" = "ubuntu" ]; then
+    if is_debian_variant; then
         apt-get install -y xfsprogs
     else
         yum install -y xfsprogs

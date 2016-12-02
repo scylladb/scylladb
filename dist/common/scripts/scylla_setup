@@ -2,6 +2,8 @@
 #
 #  Copyright (C) 2015 ScyllaDB
 
+. /usr/lib/scylla/scylla_lib.sh
+
 GREEN='\033[0;32m'
 NO_COLOR='\033[0m' # No Color
 
@@ -65,7 +67,7 @@ interactive_ask_service() {
 }
 
 verify_package() {
-    if [ "$ID" = "ubuntu" ]; then
+    if is_debian_variant; then
         dpkg -s $1 > /dev/null 2>&1 &&:
     else
         rpm -q $1 > /dev/null 2>&1 &&:
@@ -201,8 +203,6 @@ if [ $INTERACTIVE -eq 0 ] && [ $SYSCONFIG_SETUP -eq 1 ] && [ "$NIC" = "" ]; then
     print_usage
 fi
 
-. /etc/os-release
-
 printf "${GREEN}Skip any of the following steps by answering 'no'${NO_COLOR}\n"
 
 if [ $INTERACTIVE -eq 1 ]; then
@@ -229,7 +229,7 @@ if [ $INTERACTIVE -eq 1 ]; then
 fi
 
 if [ $ENABLE_SERVICE -eq 1 ]; then
-    if [ "$ID" = "fedora" ] || [ "$ID" = "centos" ] || [ "$ID" = "ubuntu" -a "$VERSION_ID" != "14.04" ]; then
+    if is_systemd; then
         systemctl enable scylla-server.service
         systemctl enable collectd.service
     fi
@@ -241,14 +241,14 @@ if [ $ENABLE_SERVICE -eq 1 ]; then
         if [ ! -f /etc/scylla.d/housekeeping.cfg ]; then
            printf "[housekeeping]\ncheck-version: True\n" > /etc/scylla.d/housekeeping.cfg
         fi
-        if [ "$ID" = "fedora" ] || [ "$ID" = "centos" ] || [ "$ID" = "ubuntu" -a "$VERSION_ID" != "14.04" ]; then
+        if is_systemd; then
             systemctl unmask scylla-housekeeping.timer
         fi
     else
         if [ ! -f /etc/scylla.d/housekeeping.cfg ]; then
            printf "[housekeeping]\ncheck-version: False\n" > /etc/scylla.d/housekeeping.cfg
         fi
-        if [ "$ID" = "fedora" ] || [ "$ID" = "centos" ] || [ "$ID" = "ubuntu" -a "$VERSION_ID" != "14.04" ]; then
+        if is_systemd; then
             systemctl mask scylla-housekeeping.timer
             systemctl stop scylla-housekeeping.timer || true
         fi

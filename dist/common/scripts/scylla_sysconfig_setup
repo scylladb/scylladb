@@ -2,6 +2,8 @@
 #
 #  Copyright (C) 2015 ScyllaDB
 
+. /usr/lib/scylla/scylla_lib.sh
+
 print_usage() {
     echo "scylla-sysconfig-setup --nic eth0 --mode posix --nr-hugepages 64 --user scylla --group scylla --homedir /var/lib/scylla --confdir /etc/scylla --setup-nic"
     echo "  --nic  specify NIC"
@@ -15,14 +17,6 @@ print_usage() {
     echo "  --ami  AMI instance mode"
     exit 1
 }
-
-. /etc/os-release
-if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
-    SYSCONFIG=/etc/default
-else
-    SYSCONFIG=/etc/sysconfig
-fi
-. $SYSCONFIG/scylla-server
 
 if [ $# -eq 0 ]; then
     print_usage
