@@ -795,6 +795,7 @@ future<> row_cache::clear() {
 }
 
 future<> row_cache::update(memtable& m, partition_presence_checker presence_checker) {
+    m.on_detach_from_region_group();
     _tracker.region().merge(m); // Now all data in memtable belongs to cache
     auto attr = seastar::thread_attributes();
     attr.scheduling_group = &_update_thread_scheduling_group;

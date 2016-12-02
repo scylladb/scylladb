@@ -111,6 +111,7 @@ private:
     partitions_type partitions;
     db::replay_position _replay_position;
     lw_shared_ptr<sstables::sstable> _sstable;
+    uint64_t _flushed_memory = 0;
     void update(const db::replay_position&);
     friend class row_cache;
     friend class memtable_entry;
@@ -121,6 +122,8 @@ private:
     partition_entry& find_or_create_partition(const dht::decorated_key& key);
     partition_entry& find_or_create_partition_slow(partition_key_view key);
     void upgrade_entry(memtable_entry&);
+    void add_flushed_memory(uint64_t);
+    void clear() noexcept;
 public:
     explicit memtable(schema_ptr schema, dirty_memory_manager&, memtable_list *memtable_list = nullptr);
     // Used for testing that want to control the flush process.
@@ -175,6 +178,8 @@ public:
     bool empty() const { return partitions.empty(); }
     void mark_flushed(lw_shared_ptr<sstables::sstable> sst);
     bool is_flushed() const;
+    void on_detach_from_region_group() noexcept;
+    void revert_flushed_memory() noexcept;
 
     const db::replay_position& replay_position() const {
         return _replay_position;

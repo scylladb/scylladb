@@ -41,6 +41,11 @@ memtable::memtable(schema_ptr schema)
 { }
 
 memtable::~memtable() {
+    revert_flushed_memory();
+    clear();
+}
+
+void memtable::clear() noexcept {
     with_allocator(allocator(), [this] {
         partitions.clear_and_dispose(current_deleter<memtable_entry>());
     });
@@ -255,22 +260,39 @@ public:
     }
 };
 
+void memtable::add_flushed_memory(uint64_t delta) {
+    _flushed_memory += delta;
+    _dirty_mgr.account_potentially_cleaned_up_memory(this, delta);
+}
+
+void memtable::on_detach_from_region_group() noexcept {
+    revert_flushed_memory();
+}
+
+void memtable::revert_flushed_memory() noexcept {
+    _dirty_mgr.revert_potentially_cleaned_up_memory(this, _flushed_memory);
+    _flushed_memory = 0;
+}
+
 class flush_memory_accounter {
-    uint64_t _bytes_read = 0;
     memtable& _mt;
 public:
     void update_bytes_read(uint64_t delta) {
-        _bytes_read += delta;
-        _mt._dirty_mgr.account_potentially_cleaned_up_memory(&_mt, delta);
+        _mt.add_flushed_memory(delta);
     }
-
     explicit flush_memory_accounter(memtable& mt)
         : _mt(mt)
 	{}
-
     ~flush_memory_accounter() {
-        assert(_bytes_read <= _mt.occupancy().used_space());
-        _mt._dirty_mgr.revert_potentially_cleaned_up_memory(&_mt, _bytes_read);
+        assert(_mt._flushed_memory <= _mt.occupancy().used_space());
+
+        // Flushed the current memtable. There is still some work to do, like finish sealing the
+        // SSTable and updating the cache, but we can already allow the next one to start.
+        //
+        // By erasing this memtable from the flush_manager we'll destroy the semaphore_units
+        // associated with this flush and will allow another one to start. We'll signal the
+        // condition variable to let them know we might be ready early.
+        _mt._dirty_mgr.remove_from_flush_manager(&_mt);
     }
     void account_component(memtable_entry& e) {
         auto delta = _mt.allocator().object_memory_size_in_allocator(&e)
