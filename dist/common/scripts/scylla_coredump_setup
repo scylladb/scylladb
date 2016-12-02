@@ -30,12 +30,15 @@ done
 
 . /etc/os-release
 
-if [ "$ID" = "ubuntu" ]; then
+if [ "$ID" = "ubuntu" ] && [ "$VERSION_ID" != "16.04" ]; then
     apt-get remove -y apport-noui
     sysctl -p /etc/sysctl.d/99-scylla.conf
 elif [ "$ID" = "debian" ]; then
     sysctl -p /etc/sysctl.d/99-scylla.conf
 else
+    if [ "$ID" = "ubuntu" ]; then
+        apt-get install -y systemd-coredump
+    fi
     cat << EOS > /etc/systemd/coredump.conf
 [Coredump]
 Storage=external
@@ -49,6 +52,10 @@ EOS
         ln -sf /var/lib/scylla/coredump /var/lib/systemd/coredump
     fi
     systemctl daemon-reload
-    echo "kernel.core_pattern=|/usr/lib/systemd/systemd-coredump %p %u %g %s %t %e" > /etc/sysctl.d/99-coredump.conf
-    sysctl -p /etc/sysctl.d/99-coredump.conf
+    if [ "$ID" = "ubuntu" ]; then
+        sysctl -p /usr/lib/sysctl.d/50-coredump.conf
+    else
+        echo "kernel.core_pattern=|/usr/lib/systemd/systemd-coredump %p %u %g %s %t %e" > /etc/sysctl.d/99-coredump.conf
+        sysctl -p /etc/sysctl.d/99-coredump.conf
+    fi
 fi

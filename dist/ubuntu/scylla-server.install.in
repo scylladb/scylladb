@@ -1,5 +1,4 @@
 dist/common/limits.d/scylla.conf etc/security/limits.d
-dist/ubuntu/sysctl.d/99-scylla.conf etc/sysctl.d
 dist/common/collectd.d/scylla.conf etc/collectd/collectd.conf.d
 dist/common/scylla.d/*.conf etc/scylla.d
 seastar/scripts/dpdk_nic_bind.py usr/lib/scylla
@@ -18,3 +17,4 @@ dist/common/sbin/* usr/sbin
 @@ADDHKCFG@@
 @@HKDOTTIMER@@
 @@INSTALL@@
+@@SYSCTL@@
