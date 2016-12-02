@@ -142,7 +142,7 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
 
         memtable_dirty_memory_manager mgr;
 
-        auto mt = make_lw_shared<memtable>(s, &mgr.region_group());
+        auto mt = make_lw_shared<memtable>(s, mgr);
 
         std::vector<mutation> ring = make_ring(s, 3);
         std::vector<mutation> current_ring;
@@ -280,7 +280,7 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
 
         memtable_dirty_memory_manager mgr;
 
-        auto mt = make_lw_shared<memtable>(s, &mgr.region_group());
+        auto mt = make_lw_shared<memtable>(s, mgr);
 
         const int rows_per_partition = 300;
         const int partitions = 3;

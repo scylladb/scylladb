@@ -341,9 +341,7 @@ public:
     // spends in memory allowing for more coalescing opportunities.
     future<> request_flush();
 private:
-    lw_shared_ptr<memtable> new_memtable() {
-        return make_lw_shared<memtable>(_current_schema(), this);
-    }
+    lw_shared_ptr<memtable> new_memtable();
 };
 
 using sstable_list = sstables::sstable_list;

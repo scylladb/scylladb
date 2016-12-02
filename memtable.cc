@@ -26,19 +26,19 @@
 
 namespace stdx = std::experimental;
 
-memtable::memtable(schema_ptr schema, memtable_list* memtable_list)
-        : logalloc::region(memtable_list ? logalloc::region(memtable_list->region_group()) : logalloc::region())
+memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, memtable_list* memtable_list)
+        : logalloc::region(dmm.region_group())
+        , _dirty_mgr(dmm)
         , _memtable_list(memtable_list)
         , _schema(std::move(schema))
         , partitions(memtable_entry::compare(_schema)) {
 }
 
-memtable::memtable(schema_ptr schema, logalloc::region_group *dirty_memory_region_group)
-        : logalloc::region(dirty_memory_region_group ? logalloc::region(*dirty_memory_region_group) : logalloc::region())
-        , _memtable_list(nullptr)
-        , _schema(std::move(schema))
-        , partitions(memtable_entry::compare(_schema)) {
-}
+static thread_local memtable_dirty_memory_manager mgr_for_tests;
+
+memtable::memtable(schema_ptr schema)
+        : memtable(std::move(schema), mgr_for_tests, nullptr)
+{ }
 
 memtable::~memtable() {
     with_allocator(allocator(), [this] {
@@ -257,29 +257,28 @@ public:
 
 class flush_memory_accounter {
     uint64_t _bytes_read = 0;
-    logalloc::region& _region;
-
+    memtable& _mt;
 public:
     void update_bytes_read(uint64_t delta) {
         _bytes_read += delta;
-        dirty_memory_manager::from_region_group(_region.group()).account_potentially_cleaned_up_memory(&_region, delta);
+        _mt._dirty_mgr.account_potentially_cleaned_up_memory(&_mt, delta);
     }
 
-    explicit flush_memory_accounter(logalloc::region& region)
-        : _region(region)
+    explicit flush_memory_accounter(memtable& mt)
+        : _mt(mt)
 	{}
 
     ~flush_memory_accounter() {
-        assert(_bytes_read <= _region.occupancy().used_space());
-        dirty_memory_manager::from_region_group(_region.group()).revert_potentially_cleaned_up_memory(&_region, _bytes_read);
+        assert(_bytes_read <= _mt.occupancy().used_space());
+        _mt._dirty_mgr.revert_potentially_cleaned_up_memory(&_mt, _bytes_read);
     }
     void account_component(memtable_entry& e) {
-        auto delta = _region.allocator().object_memory_size_in_allocator(&e)
+        auto delta = _mt.allocator().object_memory_size_in_allocator(&e)
                      + e.external_memory_usage_without_rows();
         update_bytes_read(delta);
     }
     void account_component(partition_snapshot& snp) {
-        update_bytes_read(_region.allocator().object_memory_size_in_allocator(&*snp.version()));
+        update_bytes_read(_mt.allocator().object_memory_size_in_allocator(&*snp.version()));
     }
 };
 
@@ -317,8 +316,8 @@ class flush_reader final : public iterator_reader {
     flush_memory_accounter _flushed_memory;
 public:
     flush_reader(schema_ptr s, lw_shared_ptr<memtable> m)
-        : iterator_reader(std::move(s), std::move(m), query::full_partition_range)
-        , _flushed_memory(region())
+        : iterator_reader(std::move(s), m, query::full_partition_range)
+        , _flushed_memory(*m)
     {}
     flush_reader(const flush_reader&) = delete;
     flush_reader(flush_reader&&) = delete;

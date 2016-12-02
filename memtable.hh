@@ -94,6 +94,8 @@ public:
     };
 };
 
+class dirty_memory_manager;
+
 // Managed by lw_shared_ptr<>.
 class memtable final : public enable_lw_shared_from_this<memtable>, private logalloc::region {
 public:
@@ -101,6 +103,7 @@ public:
         bi::member_hook<memtable_entry, bi::set_member_hook<>, &memtable_entry::_link>,
         bi::compare<memtable_entry::compare>>;
 private:
+    dirty_memory_manager& _dirty_mgr;
     memtable_list *_memtable_list;
     schema_ptr _schema;
     logalloc::allocating_section _read_section;
@@ -111,15 +114,17 @@ private:
     void update(const db::replay_position&);
     friend class row_cache;
     friend class memtable_entry;
+    friend class flush_reader;
+    friend class flush_memory_accounter;
 private:
     boost::iterator_range<partitions_type::const_iterator> slice(const query::partition_range& r) const;
     partition_entry& find_or_create_partition(const dht::decorated_key& key);
     partition_entry& find_or_create_partition_slow(partition_key_view key);
     void upgrade_entry(memtable_entry&);
 public:
-    explicit memtable(schema_ptr schema, memtable_list *memtable_list);
+    explicit memtable(schema_ptr schema, dirty_memory_manager&, memtable_list *memtable_list = nullptr);
     // Used for testing that want to control the flush process.
-    explicit memtable(schema_ptr schema, logalloc::region_group *dirty_memrory_region= nullptr);
+    explicit memtable(schema_ptr schema);
     ~memtable();
     schema_ptr schema() const { return _schema; }
     void set_schema(schema_ptr) noexcept;

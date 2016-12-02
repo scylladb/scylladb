@@ -2582,6 +2582,10 @@ future<> memtable_list::request_flush() {
     }
 }
 
+lw_shared_ptr<memtable> memtable_list::new_memtable() {
+    return make_lw_shared<memtable>(_current_schema(), *_dirty_memory_manager, this);
+}
+
 future<> dirty_memory_manager::flush_one(memtable_list& mtlist, semaphore_units<> permit) {
     if (mtlist.back()->empty()) {
         return make_ready_future<>();
