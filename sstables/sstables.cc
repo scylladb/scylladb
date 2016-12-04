@@ -496,6 +496,96 @@ inline void write(file_writer& out, const disk_hash<Size, Key, Value>& h) {
     write(out, h.map);
 }
 
+// Abstract parser/sizer/writer for a single tagged member of a tagged union
+template <typename DiskSetOfTaggedUnion>
+struct single_tagged_union_member_serdes {
+    using value_type = typename DiskSetOfTaggedUnion::value_type;
+    virtual ~single_tagged_union_member_serdes() {}
+    virtual future<> do_parse(random_access_reader& in, value_type& v) const = 0;
+    virtual uint32_t do_size(const value_type& v) const = 0;
+    virtual void do_write(file_writer& out, const value_type& v) const = 0;
+};
+
+// Concrete parser for a single member of a tagged union; parses type "Member"
+template <typename DiskSetOfTaggedUnion, typename Member>
+struct single_tagged_union_member_serdes_for final : single_tagged_union_member_serdes<DiskSetOfTaggedUnion> {
+    using base = single_tagged_union_member_serdes<DiskSetOfTaggedUnion>;
+    using value_type = typename base::value_type;
+    virtual future<> do_parse(random_access_reader& in, value_type& v) const {
+        v = Member();
+        return parse(in, boost::get<Member&>(v).value);
+    }
+    virtual uint32_t do_size(const value_type& v) const override {
+        return serialized_size(boost::get<const Member&>(v).value);
+    }
+    virtual void do_write(file_writer& out, const value_type& v) const override {
+        write(out, boost::get<const Member&>(v).value);
+    }
+};
+
+template <typename TagType, typename... Members>
+struct disk_set_of_tagged_union<TagType, Members...>::serdes {
+    using disk_set = disk_set_of_tagged_union<TagType, Members...>;
+    // We can't use unique_ptr, because we initialize from an std::intializer_list, which is not move compatible.
+    using serdes_map_type = std::unordered_map<TagType, shared_ptr<single_tagged_union_member_serdes<disk_set>>, typename disk_set::hash_type>;
+    using value_type = typename disk_set::value_type;
+    serdes_map_type map = {
+        {Members::tag(), make_shared<single_tagged_union_member_serdes_for<disk_set, Members>>()}...
+    };
+    future<> lookup_and_parse(random_access_reader& in, TagType tag, uint32_t& size, disk_set& s, value_type& value) const {
+        auto i = map.find(tag);
+        if (i == map.end()) {
+            return in.read_exactly(size).discard_result();
+        } else {
+            return i->second->do_parse(in, value).then([tag, &s, &value] () mutable {
+                s.data.emplace(tag, std::move(value));
+            });
+        }
+    }
+    uint32_t lookup_and_size(TagType tag, const value_type& value) const {
+        return map.at(tag)->do_size(value);
+    }
+    void lookup_and_write(file_writer& out, TagType tag, const value_type& value) const {
+        return map.at(tag)->do_write(out, value);
+    }
+};
+
+template <typename TagType, typename... Members>
+typename disk_set_of_tagged_union<TagType, Members...>::serdes disk_set_of_tagged_union<TagType, Members...>::s_serdes;
+
+template <typename TagType, typename... Members>
+future<>
+parse(random_access_reader& in, disk_set_of_tagged_union<TagType, Members...>& s) {
+    using disk_set = disk_set_of_tagged_union<TagType, Members...>;
+    using key_type = typename disk_set::key_type;
+    using value_type = typename disk_set::value_type;
+    return do_with(0u, 0u, 0u, value_type{}, [&] (key_type& nr_elements, key_type& new_key, unsigned& new_size, value_type& new_value) {
+        return parse(in, nr_elements).then([&] {
+            auto rng = boost::irange<key_type>(0, nr_elements); // do_for_each doesn't like an rvalue range
+            return do_for_each(rng.begin(), rng.end(), [&] (key_type ignore) {
+                return parse(in, new_key).then([&] {
+                    return parse(in, new_size).then([&] {
+                        return disk_set::s_serdes.lookup_and_parse(in, TagType(new_key), new_size, s, new_value);
+                    });
+                });
+            });
+        });
+    });
+}
+
+template <typename TagType, typename... Members>
+void write(file_writer& out, const disk_set_of_tagged_union<TagType, Members...>& s) {
+    using disk_set = disk_set_of_tagged_union<TagType, Members...>;
+    write(out, uint32_t(s.data.size()));
+    for (auto&& kv : s.data) {
+        auto&& tag = kv.first;
+        auto&& value = kv.second;
+        write(out, tag);
+        write(out, uint32_t(disk_set::s_serdes.lookup_and_size(tag, value)));
+        disk_set::s_serdes.lookup_and_write(out, tag, value);
+    }
+}
+
 future<> parse(random_access_reader& in, summary& s) {
     using pos_type = typename decltype(summary::positions)::value_type;
 
