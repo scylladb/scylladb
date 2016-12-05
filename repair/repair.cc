@@ -88,7 +88,7 @@ public:
     }
     bool check_failed_ranges() {
         if (failed_ranges.empty()) {
-            logger.info("repair {} completed sucessfully", id);
+            logger.info("repair {} completed successfully", id);
             return true;
         } else {
             for (auto& frange: failed_ranges) {
