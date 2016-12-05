@@ -31,7 +31,7 @@ version=0.12.0
 dir=/usr/lib/scylla/Prometheus/node_exporter
 mkdir -p $dir
 cd $dir
-wget -nv https://github.com/prometheus/node_exporter/releases/download/$version/node_exporter-$version.linux-amd64.tar.gz -O $dir/node_exporter-$version.linux-amd64.tar.gz
+curl -L https://github.com/prometheus/node_exporter/releases/download/$version/node_exporter-$version.linux-amd64.tar.gz -o $dir/node_exporter-$version.linux-amd64.tar.gz
 tar -xvzf $dir/node_exporter-$version.linux-amd64.tar.gz
 rm $dir/node_exporter-$version.linux-amd64.tar.gz
 ln -s $dir/node_exporter-$version.linux-amd64/node_exporter /usr/bin
