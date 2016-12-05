@@ -32,14 +32,14 @@ thread_local disk_error_signal_type general_disk_error;
 
 inline
 uint32_t
-do_compute_crc(crc32& c) {
+do_compute_crc(utils::crc32& c) {
     return c.get();
 }
 
 template <typename T, typename... Rest>
 inline
 uint32_t
-do_compute_crc(crc32& c, const T& val, const Rest&... rest) {
+do_compute_crc(utils::crc32& c, const T& val, const Rest&... rest) {
     c.process(val);
     return do_compute_crc(c, rest...);
 }
@@ -48,7 +48,7 @@ template <typename... T>
 inline
 uint32_t
 compute_crc(const T&... vals) {
-    crc32 c;
+    utils::crc32 c;
     return do_compute_crc(c, vals...);
 }
 

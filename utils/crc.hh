@@ -24,6 +24,8 @@
 #include <cstdint>
 #include <smmintrin.h>
 
+namespace utils {
+
 class crc32 {
     uint32_t _r = 0;
 public:
@@ -95,3 +97,5 @@ public:
         return _r;
     }
 };
+
+}

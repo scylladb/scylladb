@@ -83,7 +83,7 @@ static logging::logger logger("commitlog");
 using namespace std::chrono_literals;
 
 class crc32_nbo {
-    crc32 _c;
+    utils::crc32 _c;
 public:
     template <typename T>
     void process(T t) {
