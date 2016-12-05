@@ -45,10 +45,16 @@ memtable::~memtable() {
     clear();
 }
 
+uint64_t memtable::dirty_size() const {
+    return occupancy().total_space();
+}
+
 void memtable::clear() noexcept {
+    auto dirty_before = dirty_size();
     with_allocator(allocator(), [this] {
         partitions.clear_and_dispose(current_deleter<memtable_entry>());
     });
+    remove_flushed_memory(dirty_before - dirty_size());
 }
 
 partition_entry&
@@ -263,6 +269,12 @@ public:
 void memtable::add_flushed_memory(uint64_t delta) {
     _flushed_memory += delta;
     _dirty_mgr.account_potentially_cleaned_up_memory(this, delta);
+}
+
+void memtable::remove_flushed_memory(uint64_t delta) {
+    delta = std::min(_flushed_memory, delta);
+    _flushed_memory -= delta;
+    _dirty_mgr.revert_potentially_cleaned_up_memory(this, delta);
 }
 
 void memtable::on_detach_from_region_group() noexcept {

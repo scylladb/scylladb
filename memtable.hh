@@ -123,7 +123,9 @@ private:
     partition_entry& find_or_create_partition_slow(partition_key_view key);
     void upgrade_entry(memtable_entry&);
     void add_flushed_memory(uint64_t);
+    void remove_flushed_memory(uint64_t);
     void clear() noexcept;
+    uint64_t dirty_size() const;
 public:
     explicit memtable(schema_ptr schema, dirty_memory_manager&, memtable_list *memtable_list = nullptr);
     // Used for testing that want to control the flush process.
