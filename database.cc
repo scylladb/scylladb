@@ -2605,18 +2605,11 @@ future<> dirty_memory_manager::flush_one(memtable_list& mtlist, semaphore_units<
     }
 
     auto* region = &(mtlist.back()->region());
-    auto* region_group = mtlist.back()->region_group();
     auto schema = mtlist.back()->schema();
-    // Because the region groups are hierarchical, when we pick the biggest region creating pressure
-    // (in the memory-driven flush case) we may be picking a memtable that is placed in a region
-    // group below ours. That's totally fine and we can certainly use our semaphore to account for
-    // it, but we need to destroy the semaphore units from the right flush manager.
-    //
-    // If we abandon size-driven flush and go with another flushing scheme that always guarantees
-    // that we're picking from this region_group, we can simplify this.
-    dirty_memory_manager::from_region_group(region_group).add_to_flush_manager(region, std::move(permit));
-    return get_units(_background_work_flush_serializer, 1).then([this, &mtlist, region, region_group, schema] (auto permit) mutable {
-        return mtlist.seal_active_memtable(memtable_list::flush_behavior::immediate).then_wrapped([this, region, region_group, schema, permit = std::move(permit)] (auto f) {
+
+    add_to_flush_manager(region, std::move(permit));
+    return get_units(_background_work_flush_serializer, 1).then([this, &mtlist, region, schema] (auto permit) mutable {
+        return mtlist.seal_active_memtable(memtable_list::flush_behavior::immediate).then_wrapped([this, region, schema, permit = std::move(permit)] (auto f) {
             // There are two cases in which we may still need to remove the permits from here.
             //
             // 1) Some exception happenend, and we can't know at which point. It could be that because
@@ -2624,7 +2617,7 @@ future<> dirty_memory_manager::flush_one(memtable_list& mtlist, semaphore_units<
             // 2) If we are using a memory-only Column Family. That will never create a memtable
             //    flush object, and we'll never get rid of the permits. So we have to remove it
             //    here.
-            dirty_memory_manager::from_region_group(region_group).remove_from_flush_manager(region);
+            this->remove_from_flush_manager(region);
             if (f.failed()) {
                 dblog.error("Failed to flush memtable, {}:{}", schema->ks_name(), schema->cf_name());
             }
@@ -2659,12 +2652,12 @@ future<> dirty_memory_manager::flush_when_needed() {
                 // memtable. The advantage of doing this is that this is objectively the one that will
                 // release the biggest amount of memory and is less likely to be generating tiny
                 // SSTables.
-                memtable& biggest_memtable = memtable::from_region(*(this->_region_group.get_largest_region()));
-                auto mtlist = biggest_memtable.get_memtable_list();
+                memtable& candidate_memtable = memtable::from_region(*(this->_region_group.get_largest_region()));
+                dirty_memory_manager* candidate_dirty_manager = &(dirty_memory_manager::from_region_group(candidate_memtable.region_group()));
                 // Do not wait. The semaphore will protect us against a concurrent flush. But we
                 // want to start a new one as soon as the permits are destroyed and the semaphore is
                 // made ready again, not when we are done with the current one.
-                this->flush_one(*mtlist, std::move(permit));
+                candidate_dirty_manager->flush_one(*(candidate_memtable.get_memtable_list()), std::move(permit));
                 return make_ready_future<>();
             });
         });
