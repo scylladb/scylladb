@@ -258,7 +258,7 @@ private:
     future<> schedule_repair(std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>> diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state);
     bool need_throttle_writes() const;
     void unthrottle();
-    void handle_read_error(std::exception_ptr eptr);
+    void handle_read_error(std::exception_ptr eptr, bool range);
     template<typename Range>
     future<> mutate_internal(Range mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state);
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_nonsingular_mutations_locally(

@@ -2444,7 +2444,13 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     tracing::trace(trace_state, "Creating read executor for token {} with all: {} targets: {} repair decision: {}", token, all_replicas, target_replicas, repair_decision);
 
     // Throw UAE early if we don't have enough replicas.
-    db::assure_sufficient_live_nodes(cl, ks, target_replicas);
+    try {
+        db::assure_sufficient_live_nodes(cl, ks, target_replicas);
+    } catch (exceptions::unavailable_exception& ex) {
+        logger.debug("Read unavailable: cl={} required {} alive {}", ex.consistency, ex.required, ex.alive);
+        _stats.read_unavailables.mark();
+        throw;
+    }
 
     if (repair_decision != db::read_repair_decision::NONE) {
         _stats.read_repair_attempts++;
@@ -2518,12 +2524,16 @@ storage_proxy::query_singular_local(schema_ptr s, lw_shared_ptr<query::read_comm
     });
 }
 
-void storage_proxy::handle_read_error(std::exception_ptr eptr) {
+void storage_proxy::handle_read_error(std::exception_ptr eptr, bool range) {
     try {
         std::rethrow_exception(eptr);
     } catch (read_timeout_exception& ex) {
         logger.debug("Read timeout: received {} of {} required replies, data {}present", ex.received, ex.block_for, ex.data_present ? "" : "not ");
-        _stats.read_timeouts.mark();
+        if (range) {
+            _stats.range_slice_timeouts.mark();
+        } else {
+            _stats.read_timeouts.mark();
+        }
     } catch (...) {
         logger.debug("Error during read query {}", eptr);
     }
@@ -2551,7 +2561,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, std::vecto
 
     return f.handle_exception([exec = std::move(exec), p = shared_from_this()] (std::exception_ptr eptr) {
         // hold onto exec until read is complete
-        p->handle_read_error(eptr);
+        p->handle_read_error(eptr, false);
         return make_exception_future<foreign_ptr<lw_shared_ptr<query::result>>>(eptr);
     });
 }
@@ -2613,7 +2623,14 @@ storage_proxy::query_partition_key_range_concurrent(std::chrono::steady_clock::t
             ++i;
         }
         logger.trace("creating range read executor with targets {}", filtered_endpoints);
-        db::assure_sufficient_live_nodes(cl, ks, filtered_endpoints);
+        try {
+            db::assure_sufficient_live_nodes(cl, ks, filtered_endpoints);
+        } catch(exceptions::unavailable_exception& ex) {
+            logger.debug("Read unavailable: cl={} required {} alive {}", ex.consistency, ex.required, ex.alive);
+            _stats.range_slice_unavailables.mark();
+            throw;
+        }
+
         exec.push_back(::make_shared<range_slice_read_executor>(schema, p, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state));
     }
 
@@ -2635,7 +2652,7 @@ storage_proxy::query_partition_key_range_concurrent(std::chrono::steady_clock::t
             return p->query_partition_key_range_concurrent(timeout, std::move(results), cmd, cl, std::move(i), std::move(ranges), concurrency_factor, std::move(trace_state), total_row_count);
         }
     }).handle_exception([p] (std::exception_ptr eptr) {
-        p->handle_read_error(eptr);
+        p->handle_read_error(eptr, true);
         return make_exception_future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>>(eptr);
     });
 }
