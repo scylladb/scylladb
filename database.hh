@@ -446,9 +446,6 @@ private:
     lw_shared_ptr<memtable_list> _streaming_memtables;
     utils::phased_barrier _streaming_flush_phaser;
 
-    friend class memtable_dirty_memory_manager;
-    friend class streaming_dirty_memory_manager;
-
     // If mutations are fragmented during streaming the sstables cannot be made
     // visible immediately after memtable flush, because that could cause
     // readers to see only a part of a partition thus violating isolation
