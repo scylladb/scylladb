@@ -47,6 +47,7 @@ options {
 #include "cql3/statements/alter_type_statement.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/drop_table_statement.hh"
+#include "cql3/statements/drop_view_statement.hh"
 #include "cql3/statements/truncate_statement.hh"
 #include "cql3/statements/raw/update_statement.hh"
 #include "cql3/statements/raw/insert_statement.hh"
@@ -344,6 +345,7 @@ cqlStatement returns [shared_ptr<raw::parsed_statement> stmt]
 #endif
     | st32=createViewStatement         { $stmt = st32; }
     | st33=alterViewStatement          { $stmt = st33; }
+    | st34=dropViewStatement           { $stmt = st34; }
     ;
 
 /*
@@ -944,6 +946,15 @@ dropTableStatement returns [::shared_ptr<drop_table_statement> stmt]
 dropTypeStatement returns [::shared_ptr<drop_type_statement> stmt]
     @init { bool if_exists = false; }
     : K_DROP K_TYPE (K_IF K_EXISTS { if_exists = true; } )? name=userTypeName { $stmt = ::make_shared<drop_type_statement>(name, if_exists); }
+    ;
+
+/**
+ * DROP MATERIALIZED VIEW [IF EXISTS] <view_name>
+ */
+dropViewStatement returns [::shared_ptr<drop_view_statement> stmt]
+    @init { bool if_exists = false; }
+    : K_DROP K_MATERIALIZED K_VIEW (K_IF K_EXISTS { if_exists = true; } )? cf=columnFamilyName
+      { $stmt = ::make_shared<drop_view_statement>(cf, if_exists); }
     ;
 
 #if 0
