@@ -374,6 +374,29 @@ token_metadata::range_to_interval(range<dht::token> r) {
     }
 }
 
+range<dht::token>
+token_metadata::interval_to_range(boost::icl::interval<token>::interval_type i) {
+    bool start_inclusive;
+    bool end_inclusive;
+    auto bounds = i.bounds().bits();
+    if (bounds == boost::icl::interval_bounds::static_open) {
+        start_inclusive = false;
+        end_inclusive = false;
+    } else if (bounds == boost::icl::interval_bounds::static_left_open) {
+        start_inclusive = false;
+        end_inclusive = true;
+    } else if (bounds == boost::icl::interval_bounds::static_right_open) {
+        start_inclusive = true;
+        end_inclusive = false;
+    } else if (bounds == boost::icl::interval_bounds::static_closed) {
+        start_inclusive = true;
+        end_inclusive = true;
+    } else {
+        throw std::runtime_error("Invalid boost::icl::interval<token> bounds");
+    }
+    return range<dht::token>({{i.lower(), start_inclusive}}, {{i.upper(), end_inclusive}});
+}
+
 void token_metadata::set_pending_ranges(const sstring& keyspace_name,
         std::unordered_multimap<range<token>, inet_address> new_pending_ranges) {
     if (new_pending_ranges.empty()) {
