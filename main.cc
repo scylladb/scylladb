@@ -482,6 +482,10 @@ int main(int ac, char** av) {
             // that can happen, making existing problems worse. So running a single shard first
             // and getting making sure that all temporary tables are deleted provides extra
             // protection against such situations.
+            //
+            // We also need to init commitlog on shard0 before it is inited on other shards
+            // because it obtains the list of pre-existing segments for replay, which must
+            // not include reserve segments created by active commitlogs.
             db.invoke_on(0, [] (database& db) { return db.init_system_keyspace(); }).get();
             db.invoke_on_all([] (database& db) {
                 if (engine().cpu_id() == 0) {
@@ -554,7 +558,7 @@ int main(int ac, char** av) {
             supervisor_notify("starting commit log");
             auto cl = db.local().commitlog();
             if (cl != nullptr) {
-                auto paths = cl->list_existing_segments().get0();
+                auto paths = cl->get_segments_to_replay();
                 if (!paths.empty()) {
                     supervisor_notify("replaying commit log");
                     auto rp = db::commitlog_replayer::create_replayer(qp).get0();
