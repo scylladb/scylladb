@@ -2587,9 +2587,8 @@ future<> dirty_memory_manager::flush_one(memtable_list& mtlist, semaphore_units<
     // If we abandon size-driven flush and go with another flushing scheme that always guarantees
     // that we're picking from this region_group, we can simplify this.
     dirty_memory_manager::from_region_group(region_group).add_to_flush_manager(region, std::move(permit));
-    auto fut = mtlist.seal_active_memtable(memtable_list::flush_behavior::immediate);
-    return get_units(_background_work_flush_serializer, 1).then([this, fut = std::move(fut), region, region_group, schema] (auto permit) mutable {
-        return std::move(fut).then_wrapped([this, region, region_group, schema, permit = std::move(permit)] (auto f) {
+    return get_units(_background_work_flush_serializer, 1).then([this, &mtlist, region, region_group, schema] (auto permit) mutable {
+        return mtlist.seal_active_memtable(memtable_list::flush_behavior::immediate).then_wrapped([this, region, region_group, schema, permit = std::move(permit)] (auto f) {
             // There are two cases in which we may still need to remove the permits from here.
             //
             // 1) Some exception happenend, and we can't know at which point. It could be that because
