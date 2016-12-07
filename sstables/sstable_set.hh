@@ -29,6 +29,7 @@
 namespace sstables {
 
 class sstable_set_impl;
+class incremental_selector_impl;
 
 class sstable_set {
     std::unique_ptr<sstable_set_impl> _impl;
@@ -46,6 +47,21 @@ public:
     lw_shared_ptr<sstable_list> all() const { return _all; }
     void insert(shared_sstable sst);
     void erase(shared_sstable sst);
+
+    // Used to incrementally select sstables from sstable set using tokens.
+    // sstable set must be alive and cannot be modified while incremental
+    // selector is used.
+    class incremental_selector {
+        std::unique_ptr<incremental_selector_impl> _impl;
+        mutable stdx::optional<nonwrapping_range<dht::token>> _current_token_range;
+        mutable std::vector<shared_sstable> _current_sstables;
+    public:
+        ~incremental_selector();
+        incremental_selector(std::unique_ptr<incremental_selector_impl> impl);
+        incremental_selector(incremental_selector&&) noexcept;
+        const std::vector<shared_sstable>& select(const dht::token& t) const;
+    };
+    incremental_selector make_incremental_selector() const;
 };
 
 }
