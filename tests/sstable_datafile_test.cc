@@ -1702,6 +1702,11 @@ static lw_shared_ptr<sstable> add_sstable_for_overlapping_test(lw_shared_ptr<col
     column_family_test(cf).add_sstable(sst);
     return sst;
 }
+static lw_shared_ptr<sstable> sstable_for_overlapping_test(const schema_ptr& schema, int64_t gen, sstring first_key, sstring last_key) {
+    auto sst = make_lw_shared<sstable>(schema, "", gen, la, big);
+    sstables::test(sst).set_values(std::move(first_key), std::move(last_key), {});
+    return sst;
+}
 
 // ranges: [a,b] and [c,d]
 // returns true if token ranges overlap.
@@ -3086,5 +3091,38 @@ SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_test) {
     }
     auto desc = cs.get_sstables_for_compaction(*cf, std::move(candidates));
     BOOST_REQUIRE(desc.sstables.size() == size_t(max_threshold));
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
+    auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
+    auto key_and_token_pair = token_generation_for_current_shard(8);
+
+    sstable_set set = cs.make_sstable_set(s);
+    set.insert(sstable_for_overlapping_test(s, 1, key_and_token_pair[0].first, key_and_token_pair[1].first));
+    set.insert(sstable_for_overlapping_test(s, 2, key_and_token_pair[0].first, key_and_token_pair[1].first));
+    set.insert(sstable_for_overlapping_test(s, 3, key_and_token_pair[3].first, key_and_token_pair[4].first));
+    set.insert(sstable_for_overlapping_test(s, 4, key_and_token_pair[4].first, key_and_token_pair[4].first));
+    set.insert(sstable_for_overlapping_test(s, 5, key_and_token_pair[4].first, key_and_token_pair[5].first));
+
+    sstable_set::incremental_selector selector = set.make_incremental_selector();
+    auto check = [&selector] (const dht::token& token, std::unordered_set<int64_t> expected_gens) {
+        auto sstables = selector.select(token);
+        BOOST_REQUIRE(sstables.size() == expected_gens.size());
+        for (auto& sst : sstables) {
+            BOOST_REQUIRE(expected_gens.count(sst->generation()) == 1);
+        }
+    };
+    check(key_and_token_pair[0].second, {1, 2});
+    check(key_and_token_pair[1].second, {1, 2});
+    check(key_and_token_pair[2].second, {});
+    check(key_and_token_pair[3].second, {3});
+    check(key_and_token_pair[4].second, {3, 4, 5});
+    check(key_and_token_pair[5].second, {5});
+    check(key_and_token_pair[6].second, {});
+    check(key_and_token_pair[7].second, {});
+
     return make_ready_future<>();
 }
