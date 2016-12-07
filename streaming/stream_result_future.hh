@@ -72,6 +72,7 @@ private:
     shared_ptr<stream_coordinator> _coordinator;
     std::vector<stream_event_handler*> _event_listeners;
     promise<stream_state> _done;
+    lowres_clock::time_point _start_time;
 public:
     stream_result_future(UUID plan_id_, sstring description_, bool is_receiving)
         : stream_result_future(plan_id_, description_, make_shared<stream_coordinator>(is_receiving)) {
@@ -90,7 +91,8 @@ public:
     stream_result_future(UUID plan_id_, sstring description_, shared_ptr<stream_coordinator> coordinator_)
         : plan_id(std::move(plan_id_))
         , description(std::move(description_))
-        , _coordinator(coordinator_) {
+        , _coordinator(coordinator_)
+        , _start_time(lowres_clock::now()) {
         // if there is no session to listen to, we immediately set result for returning
         if (!_coordinator->is_receiving() && !_coordinator->has_active_sessions()) {
             _done.set_value(get_current_state());
