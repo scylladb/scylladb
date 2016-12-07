@@ -348,7 +348,8 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._compaction_strategy_options == y._raw._compaction_strategy_options
         && x._raw._caching_options == y._raw._caching_options
         && x._raw._dropped_columns == y._raw._dropped_columns
-        && x._raw._collections == y._raw._collections;
+        && x._raw._collections == y._raw._collections
+        && x._raw._view_info == y._raw._view_info;
 #if 0
         && Objects.equal(triggers, other.triggers)
 #endif
@@ -463,6 +464,9 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
         os << c.first << " : " << c.second->name();
     }
     os << "}";
+    if (s.is_view()) {
+        os << ", viewInfo=" << *s.view_info();
+    }
     os << "]";
     return os;
 }
@@ -681,6 +685,11 @@ void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
             throw exceptions::configuration_exception(sprint("Expecting exactly one regular column. Found %d", regular_cols));
         }
     }
+}
+
+schema_builder& schema_builder::with_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause) {
+    _raw._view_info = view_info(std::move(base_id), std::move(base_name), include_all_columns, std::move(where_clause));
+    return *this;
 }
 
 schema_ptr schema_builder::build() {

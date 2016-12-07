@@ -37,6 +37,7 @@
 #include "compress.hh"
 #include "compaction_strategy.hh"
 #include "caching_options.hh"
+#include "stdx.hh"
 
 using column_count_type = uint32_t;
 
@@ -415,6 +416,7 @@ private:
         table_schema_version _version;
         std::unordered_map<sstring, api::timestamp_type> _dropped_columns;
         std::map<bytes, data_type> _collections;
+        stdx::optional<view_info> _view_info;
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -622,6 +624,12 @@ public:
     }
     const data_type& regular_column_name_type() const {
         return _raw._regular_column_name_type;
+    }
+    const stdx::optional<::view_info>& view_info() const {
+        return _raw._view_info;
+    }
+    bool is_view() const {
+        return bool(_raw._view_info);
     }
     friend std::ostream& operator<<(std::ostream& os, const schema& s);
     friend bool operator==(const schema&, const schema&);
