@@ -470,6 +470,9 @@ public:
 
 nonwrapping_range<ring_position> to_partition_range(nonwrapping_range<dht::token>);
 
+std::map<unsigned, std::vector<nonwrapping_range<ring_position>>>
+split_range_to_shards(nonwrapping_range<ring_position> pr, const schema& s);
+
 } // dht
 
 namespace std {
