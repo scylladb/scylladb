@@ -241,6 +241,14 @@ public:
      */
     std::vector<sstring> get_active_segment_names() const;
 
+    /**
+     * Returns a vector of segment paths which were
+     * preexisting when this instance of commitlog was created.
+     *
+     * The list will be empty when called for the second time.
+     */
+    std::vector<sstring> get_segments_to_replay();
+
     uint64_t get_total_size() const;
     uint64_t get_completed_tasks() const;
     uint64_t get_flush_count() const;

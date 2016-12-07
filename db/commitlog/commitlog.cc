@@ -161,6 +161,7 @@ const std::string db::commitlog::descriptor::FILENAME_EXTENSION(".log");
 class db::commitlog::segment_manager : public ::enable_shared_from_this<segment_manager> {
 public:
     config cfg;
+    std::vector<sstring> _segments_to_replay;
     const uint64_t max_size;
     const uint64_t max_mutation_size;
     // Divide the size-on-disk threshold by #cpus used, since we assume
@@ -1012,9 +1013,11 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) {
 
 future<> db::commitlog::segment_manager::init() {
     return list_descriptors(cfg.commit_log_location).then([this](std::vector<descriptor> descs) {
+        assert(_reserve_segments.empty()); // _segments_to_replay must not pick them up
         segment_id_type id = std::chrono::duration_cast<std::chrono::milliseconds>(runtime::get_boot_time().time_since_epoch()).count() + 1;
         for (auto& d : descs) {
             id = std::max(id, replay_position(d.id).base_id());
+            _segments_to_replay.push_back(cfg.commit_log_location + "/" + d.filename());
         }
 
         // base id counter is [ <shard> | <base> ]
@@ -1860,3 +1863,6 @@ future<std::vector<sstring>> db::commitlog::list_existing_segments(const sstring
     });
 }
 
+std::vector<sstring> db::commitlog::get_segments_to_replay() {
+    return std::move(_segment_manager->_segments_to_replay);
+}
