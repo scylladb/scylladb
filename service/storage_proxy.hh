@@ -51,6 +51,7 @@
 #include "utils/histogram.hh"
 #include "utils/estimated_histogram.hh"
 #include "tracing/trace_state.hh"
+#include <seastar/core/metrics_registration.hh>
 
 namespace compat {
 
@@ -86,6 +87,9 @@ private:
         response_id_type release();
     };
 
+    static const sstring COORDINATOR_STATS_CATEGORY;
+    static const sstring REPLICA_STATS_CATEGORY;
+
 public:
     // split statistics counters
     struct split_stats {
@@ -99,15 +103,20 @@ public:
         // counters of operations performed on external Nodes aggregated per Nodes' DCs
         std::unordered_map<sstring, stats_counter> _dc_stats;
         // collectd registrations container
-        std::vector<scollectd::registration> _collectd_regs;
+        seastar::metrics::metric_groups _metrics;
         // a prefix string that will be used for a collecd counters' description
-        sstring _description_prefix;
+        sstring _short_description_prefix;
+        sstring _long_description_prefix;
+        // a statistics category, e.g. "client" or "replica"
+        sstring _category;
 
     public:
         /**
-         * @param description_prefix a collectd description prefix
+         * @param category a statistics category, e.g. "client" or "replica"
+         * @param short_description_prefix a short description prefix
+         * @param long_description_prefix a long description prefix
          */
-        split_stats(const sstring& description_prefix);
+        split_stats(const sstring& category, const sstring& short_description_prefix, const sstring& long_description_prefix);
 
         /**
          * Get a reference to the statistics counter corresponding to the given
@@ -200,7 +209,7 @@ private:
     // for read repair chance calculation
     std::default_random_engine _urandom;
     std::uniform_real_distribution<> _read_repair_chance = std::uniform_real_distribution<>(0,1);
-    std::unique_ptr<scollectd::registrations> _collectd_registrations;
+    seastar::metrics::metric_groups _metrics;
 private:
     void uninit_messaging_service();
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state);
