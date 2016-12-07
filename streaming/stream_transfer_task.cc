@@ -50,6 +50,8 @@
 #include "service/priority_manager.hh"
 #include <boost/range/irange.hpp>
 #include "service/storage_service.hh"
+#include <boost/icl/interval.hpp>
+#include <boost/icl/interval_set.hpp>
 
 namespace streaming {
 
@@ -139,6 +141,7 @@ void stream_transfer_task::start() {
     auto& schema = session->get_local_db().find_column_family(cf_id).schema();
     auto id = net::messaging_service::msg_addr{session->peer, session->dst_cpu_id};
     sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}", plan_id, cf_id);
+    sort_and_merge_ranges();
     _shard_ranges = dht::split_ranges_to_shards(_ranges, *schema);
     parallel_for_each(_shard_ranges, [this, dst_cpu_id, plan_id, cf_id, id] (auto& item) {
         auto& shard = item.first;
@@ -166,6 +169,25 @@ void stream_transfer_task::start() {
 
 void stream_transfer_task::append_ranges(const std::vector<nonwrapping_range<dht::token>>& ranges) {
     _ranges.insert(_ranges.end(), ranges.begin(), ranges.end());
+}
+
+void stream_transfer_task::sort_and_merge_ranges() {
+    boost::icl::interval_set<dht::token> myset;
+    std::vector<nonwrapping_range<dht::token>> ranges;
+    sslog.debug("cf_id = {}, before ranges = {}, size={}", cf_id, _ranges, _ranges.size());
+    _ranges.swap(ranges);
+    for (auto& range : ranges) {
+        // TODO: We should convert range_to_interval and interval_to_range to
+        // take nonwrapping_range ranges.
+        myset += locator::token_metadata::range_to_interval(range);
+    }
+    ranges.clear();
+    ranges.shrink_to_fit();
+    for (auto& i : myset) {
+        auto r = locator::token_metadata::interval_to_range(i);
+        _ranges.push_back(nonwrapping_range<dht::token>(r));
+    }
+    sslog.debug("cf_id = {}, after  ranges = {}, size={}", cf_id, _ranges, _ranges.size());
 }
 
 } // namespace streaming
