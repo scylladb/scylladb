@@ -50,6 +50,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/adaptor/filtered.hpp>
+#include "service/storage_service.hh"
 
 namespace cql3 {
 
@@ -124,6 +125,10 @@ const sstring& modification_statement::column_family() const {
 
 bool modification_statement::is_counter() const {
     return s->is_counter();
+}
+
+bool modification_statement::is_view() const {
+    return s->is_view();
 }
 
 int64_t modification_statement::get_timestamp(int64_t now, const query_options& options) const {
@@ -647,6 +652,10 @@ modification_statement::validate(distributed<service::storage_proxy>&, const ser
 
     if (is_counter() && attrs->is_time_to_live_set()) {
         throw exceptions::invalid_request_exception("Cannot provide custom TTL for counter updates");
+    }
+
+    if (is_view()) {
+        throw exceptions::invalid_request_exception("Cannot directly modify a materialized view");
     }
 }
 

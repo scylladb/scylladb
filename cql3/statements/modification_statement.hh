@@ -128,6 +128,8 @@ public:
 
     virtual bool is_counter() const;
 
+    virtual bool is_view() const;
+
     int64_t get_timestamp(int64_t now, const query_options& options) const;
 
     bool is_timestamp_set() const;
