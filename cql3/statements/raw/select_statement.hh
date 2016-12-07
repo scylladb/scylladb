@@ -100,13 +100,17 @@ public:
             std::vector<::shared_ptr<relation>> where_clause,
             ::shared_ptr<term::raw> limit);
 
-    virtual ::shared_ptr<prepared> prepare(database& db,cql_stats& stats) override;
+    virtual ::shared_ptr<prepared> prepare(database& db, cql_stats& stats) override {
+        return prepare(db, stats, false);
+    }
+    ::shared_ptr<prepared> prepare(database& db, cql_stats& stats, bool for_view);
 private:
     ::shared_ptr<restrictions::statement_restrictions> prepare_restrictions(
         database& db,
         schema_ptr schema,
         ::shared_ptr<variable_specifications> bound_names,
-        ::shared_ptr<selection::selection> selection);
+        ::shared_ptr<selection::selection> selection,
+        bool for_view = false);
 
     /** Returns a ::shared_ptr<term> for the limit or null if no limit is set */
     ::shared_ptr<term> prepare_limit(database& db, ::shared_ptr<variable_specifications> bound_names);

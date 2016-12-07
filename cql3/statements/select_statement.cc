@@ -396,7 +396,7 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
     , _limit(std::move(limit))
 { }
 
-::shared_ptr<prepared_statement> select_statement::prepare(database& db, cql_stats& stats) {
+::shared_ptr<prepared_statement> select_statement::prepare(database& db, cql_stats& stats, bool for_view) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto bound_names = get_bound_variables();
 
@@ -404,7 +404,7 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
                      ? selection::selection::wildcard(schema)
                      : selection::selection::from_selectors(db, schema, _select_clause);
 
-    auto restrictions = prepare_restrictions(db, schema, bound_names, selection);
+    auto restrictions = prepare_restrictions(db, schema, bound_names, selection, for_view);
 
     if (_parameters->is_distinct()) {
         validate_distinct_selection(schema, selection, restrictions);
@@ -414,6 +414,7 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
     bool is_reversed_ = false;
 
     if (!_parameters->orderings().empty()) {
+        assert(!for_view);
         verify_ordering_is_allowed(restrictions);
         ordering_comparator = get_ordering_comparator(schema, selection, restrictions);
         is_reversed_ = is_reversed(schema);
@@ -438,11 +439,12 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
 select_statement::prepare_restrictions(database& db,
                                        schema_ptr schema,
                                        ::shared_ptr<variable_specifications> bound_names,
-                                       ::shared_ptr<selection::selection> selection)
+                                       ::shared_ptr<selection::selection> selection,
+                                       bool for_view)
 {
     try {
         return ::make_shared<restrictions::statement_restrictions>(db, schema, std::move(_where_clause), bound_names,
-            selection->contains_only_static_columns(), selection->contains_a_collection());
+            selection->contains_only_static_columns(), selection->contains_a_collection(), for_view);
     } catch (const exceptions::unrecognized_entity_exception& e) {
         if (contains_alias(e.entity)) {
             throw exceptions::invalid_request_exception(sprint("Aliases aren't allowed in the where clause ('%s')", e.relation->to_string()));
