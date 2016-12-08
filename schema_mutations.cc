@@ -24,8 +24,8 @@
 #include "db/schema_tables.hh"
 #include "md5_hasher.hh"
 
-schema_mutations::schema_mutations(canonical_mutation columnfamilies, canonical_mutation columns)
-    : _columnfamilies(columnfamilies.to_mutation(db::schema_tables::columnfamilies()))
+schema_mutations::schema_mutations(canonical_mutation columnfamilies, canonical_mutation columns, bool is_view)
+    : _columnfamilies(columnfamilies.to_mutation(is_view ? db::schema_tables::views() : db::schema_tables::columnfamilies()))
       , _columns(columns.to_mutation(db::schema_tables::columns()))
 {
 }
@@ -53,4 +53,8 @@ bool schema_mutations::operator!=(const schema_mutations& other) const {
 
 bool schema_mutations::live() const {
     return _columnfamilies.live_row_count() > 0 || _columns.live_row_count() > 0;
+}
+
+bool schema_mutations::is_view() const {
+    return _columnfamilies.schema() == db::schema_tables::views();
 }

@@ -1217,7 +1217,7 @@ std::vector<mutation> make_create_table_mutations(lw_shared_ptr<keyspace_metadat
     return mutations;
 }
 
-schema_mutations make_table_mutations(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers)
+static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers)
 {
     // When adding new schema properties, don't set cells for default values so that
     // both old and new nodes will see the same version during rolling upgrades.
