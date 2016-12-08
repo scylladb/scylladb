@@ -355,4 +355,19 @@ split_range_to_shards(nonwrapping_range<ring_position> pr, const schema& s) {
     return ret;
 }
 
+std::map<unsigned, std::vector<nonwrapping_range<ring_position>>>
+split_ranges_to_shards(const std::vector<nonwrapping_range<dht::token>>& ranges, const schema& s) {
+    std::map<unsigned, std::vector<nonwrapping_range<ring_position>>> ret;
+    for (const auto& range : ranges) {
+        auto pr = dht::to_partition_range(range);
+        auto sharder = dht::ring_position_range_sharder(std::move(pr));
+        auto rprs = sharder.next(s);
+        while (rprs) {
+            ret[rprs->shard].emplace_back(rprs->ring_range);
+            rprs = sharder.next(s);
+        }
+    }
+    return ret;
+}
+
 }
