@@ -165,6 +165,7 @@ std::unordered_map<sstable::component_type, sstring, enum_hash<sstable::componen
     { component_type::CRC, "CRC.db" },
     { component_type::Filter, "Filter.db" },
     { component_type::Statistics, "Statistics.db" },
+    { component_type::Scylla, "Scylla.db" },
     { component_type::TemporaryTOC, TEMPORARY_TOC_SUFFIX },
     { component_type::TemporaryStatistics, "Statistics.db.tmp" },
 };
@@ -496,6 +497,96 @@ inline void write(file_writer& out, const disk_hash<Size, Key, Value>& h) {
     write(out, h.map);
 }
 
+// Abstract parser/sizer/writer for a single tagged member of a tagged union
+template <typename DiskSetOfTaggedUnion>
+struct single_tagged_union_member_serdes {
+    using value_type = typename DiskSetOfTaggedUnion::value_type;
+    virtual ~single_tagged_union_member_serdes() {}
+    virtual future<> do_parse(random_access_reader& in, value_type& v) const = 0;
+    virtual uint32_t do_size(const value_type& v) const = 0;
+    virtual void do_write(file_writer& out, const value_type& v) const = 0;
+};
+
+// Concrete parser for a single member of a tagged union; parses type "Member"
+template <typename DiskSetOfTaggedUnion, typename Member>
+struct single_tagged_union_member_serdes_for final : single_tagged_union_member_serdes<DiskSetOfTaggedUnion> {
+    using base = single_tagged_union_member_serdes<DiskSetOfTaggedUnion>;
+    using value_type = typename base::value_type;
+    virtual future<> do_parse(random_access_reader& in, value_type& v) const {
+        v = Member();
+        return parse(in, boost::get<Member&>(v).value);
+    }
+    virtual uint32_t do_size(const value_type& v) const override {
+        return serialized_size(boost::get<const Member&>(v).value);
+    }
+    virtual void do_write(file_writer& out, const value_type& v) const override {
+        write(out, boost::get<const Member&>(v).value);
+    }
+};
+
+template <typename TagType, typename... Members>
+struct disk_set_of_tagged_union<TagType, Members...>::serdes {
+    using disk_set = disk_set_of_tagged_union<TagType, Members...>;
+    // We can't use unique_ptr, because we initialize from an std::intializer_list, which is not move compatible.
+    using serdes_map_type = std::unordered_map<TagType, shared_ptr<single_tagged_union_member_serdes<disk_set>>, typename disk_set::hash_type>;
+    using value_type = typename disk_set::value_type;
+    serdes_map_type map = {
+        {Members::tag(), make_shared<single_tagged_union_member_serdes_for<disk_set, Members>>()}...
+    };
+    future<> lookup_and_parse(random_access_reader& in, TagType tag, uint32_t& size, disk_set& s, value_type& value) const {
+        auto i = map.find(tag);
+        if (i == map.end()) {
+            return in.read_exactly(size).discard_result();
+        } else {
+            return i->second->do_parse(in, value).then([tag, &s, &value] () mutable {
+                s.data.emplace(tag, std::move(value));
+            });
+        }
+    }
+    uint32_t lookup_and_size(TagType tag, const value_type& value) const {
+        return map.at(tag)->do_size(value);
+    }
+    void lookup_and_write(file_writer& out, TagType tag, const value_type& value) const {
+        return map.at(tag)->do_write(out, value);
+    }
+};
+
+template <typename TagType, typename... Members>
+typename disk_set_of_tagged_union<TagType, Members...>::serdes disk_set_of_tagged_union<TagType, Members...>::s_serdes;
+
+template <typename TagType, typename... Members>
+future<>
+parse(random_access_reader& in, disk_set_of_tagged_union<TagType, Members...>& s) {
+    using disk_set = disk_set_of_tagged_union<TagType, Members...>;
+    using key_type = typename disk_set::key_type;
+    using value_type = typename disk_set::value_type;
+    return do_with(0u, 0u, 0u, value_type{}, [&] (key_type& nr_elements, key_type& new_key, unsigned& new_size, value_type& new_value) {
+        return parse(in, nr_elements).then([&] {
+            auto rng = boost::irange<key_type>(0, nr_elements); // do_for_each doesn't like an rvalue range
+            return do_for_each(rng.begin(), rng.end(), [&] (key_type ignore) {
+                return parse(in, new_key).then([&] {
+                    return parse(in, new_size).then([&] {
+                        return disk_set::s_serdes.lookup_and_parse(in, TagType(new_key), new_size, s, new_value);
+                    });
+                });
+            });
+        });
+    });
+}
+
+template <typename TagType, typename... Members>
+void write(file_writer& out, const disk_set_of_tagged_union<TagType, Members...>& s) {
+    using disk_set = disk_set_of_tagged_union<TagType, Members...>;
+    write(out, uint32_t(s.data.size()));
+    for (auto&& kv : s.data) {
+        auto&& tag = kv.first;
+        auto&& value = kv.second;
+        write(out, tag);
+        write(out, uint32_t(disk_set::s_serdes.lookup_and_size(tag, value)));
+        disk_set::s_serdes.lookup_and_write(out, tag, value);
+    }
+}
+
 future<> parse(random_access_reader& in, summary& s) {
     using pos_type = typename decltype(summary::positions)::value_type;
 
@@ -614,8 +705,6 @@ future<> parse(random_access_reader& in, statistics& s) {
                     return parse<compaction_metadata>(in, s.contents[val.first]);
                 case metadata_type::Stats:
                     return parse<stats_metadata>(in, s.contents[val.first]);
-                case metadata_type::Sharding:
-                    return parse<sharding_metadata>(in, s.contents[val.first]);
                 default:
                     sstlog.warn("Invalid metadata type at Statistics file: {} ", int(val.first));
                     return make_ready_future<>();
@@ -761,6 +850,7 @@ void sstable::generate_toc(compressor c, double filter_fp_chance) {
     } else {
         _components.insert(component_type::CompressionInfo);
     }
+    _components.insert(component_type::Scylla);
 }
 
 void sstable::write_toc(const io_priority_class& pc) {
@@ -1111,6 +1201,8 @@ future<> sstable::load() {
         validate_min_max_metadata();
         set_clustering_components_ranges();
         return read_compression(default_priority_class());
+    }).then([this] {
+        return read_scylla_metadata(default_priority_class());
     }).then([this] {
         return read_filter(default_priority_class());
     }).then([this] {;
@@ -1593,9 +1685,6 @@ static void seal_statistics(statistics& s, metadata_collector& collector,
     collector.construct_stats(stats);
     s.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
 
-    auto sm = create_sharding_metadata(schema, first_key, last_key);
-    s.contents[metadata_type::Sharding] = std::make_unique<sharding_metadata>(std::move(sm));
-
     populate_statistics_offsets(s);
 }
 
@@ -1783,6 +1872,31 @@ future<> sstable::write_components(memtable& mt, bool backup, const io_priority_
             mt.partition_count(), mt.schema(), std::numeric_limits<uint64_t>::max(), backup, pc, leave_unsealed);
 }
 
+future<>
+sstable::read_scylla_metadata(const io_priority_class& pc) {
+    if (_scylla_metadata) {
+        return make_ready_future<>();
+    }
+    return read_toc().then([this, &pc] {
+        _scylla_metadata.emplace();  // engaged optional means we won't try to re-read this again
+        if (!has_component(component_type::Scylla)) {
+            return make_ready_future<>();
+        }
+        return read_simple<component_type::Scylla>(*_scylla_metadata, pc);
+    });
+}
+
+void
+sstable::write_scylla_metadata(const io_priority_class& pc) {
+    auto&& first_key = get_first_decorated_key();
+    auto&& last_key = get_last_decorated_key();
+    auto sm = create_sharding_metadata(_schema, first_key, last_key);
+    _scylla_metadata.emplace();
+    _scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(sm));
+
+    write_simple<component_type::Scylla>(*_scylla_metadata, pc);
+}
+
 void sstable_writer::prepare_file_writer()
 {
     file_output_stream_options options;
@@ -1837,6 +1951,7 @@ void sstable_writer::consume_end_of_stream()
     _sst.write_filter(_pc);
     _sst.write_statistics(_pc);
     _sst.write_compression(_pc);
+    _sst.write_scylla_metadata(_pc);
 
     if (!_leave_unsealed) {
         _sst.seal_sstable(_backup).get();
@@ -2408,7 +2523,7 @@ sstable::get_sstable_key_range(const schema& s) {
 
 future<std::vector<shard_id>>
 sstable::get_owning_shards_from_unloaded() {
-    return when_all(read_summary(default_priority_class()), read_statistics(default_priority_class())).then(
+    return when_all(read_summary(default_priority_class()), read_scylla_metadata(default_priority_class())).then(
             [this] (std::tuple<future<>, future<>> rets) {
         std::get<0>(rets).get();
         std::get<1>(rets).get();
@@ -2480,13 +2595,14 @@ std::vector<unsigned>
 sstable::get_shards_for_this_sstable() const {
     std::unordered_set<unsigned> shards;
     std::vector<nonwrapping_range<dht::ring_position>> token_ranges;
-    auto entry = _statistics.contents.find(metadata_type::Sharding);
-    if (entry == _statistics.contents.end()) {
+    const auto* sm = _scylla_metadata
+            ? _scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>()
+            : nullptr;
+    if (!sm) {
         token_ranges.push_back(nonwrapping_range<dht::ring_position>::make(
                 dht::ring_position::starting_at(get_first_decorated_key().token()),
                 dht::ring_position::ending_at(get_last_decorated_key().token())));
     } else {
-        auto sm = static_cast<const sharding_metadata*>(entry->second.get());
         auto disk_token_range_to_ring_position_range = [] (const disk_token_range& dtr) {
             auto t1 = dht::token(dht::token::kind::key, managed_bytes(bytes_view(dtr.left.token)));
             auto t2 = dht::token(dht::token::kind::key, managed_bytes(bytes_view(dtr.right.token)));

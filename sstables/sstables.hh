@@ -132,6 +132,7 @@ public:
         Statistics,
         TemporaryTOC,
         TemporaryStatistics,
+        Scylla,
         Unknown,
     };
     enum class version_types { ka, la };
@@ -421,6 +422,7 @@ private:
     compression _compression;
     utils::filter_ptr _filter;
     summary _summary;
+    stdx::optional<scylla_metadata> _scylla_metadata;
     statistics _statistics;
     // NOTE: _collector and _c_stats are used to generation of statistics file
     // when writing a new sstable.
@@ -492,6 +494,9 @@ private:
 
     future<> read_compression(const io_priority_class& pc);
     void write_compression(const io_priority_class& pc);
+
+    future<> read_scylla_metadata(const io_priority_class& pc);
+    void write_scylla_metadata(const io_priority_class& pc);
 
     future<> read_filter(const io_priority_class& pc);
 

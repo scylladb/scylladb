@@ -261,7 +261,7 @@ struct disk_token_range {
 // ranges that are spanned by this sstable.  When loading the
 // sstable, we can see which shards own data in the sstable by
 // checking each such range.
-struct sharding_metadata : metadata_base<sharding_metadata> {
+struct sharding_metadata {
     disk_array<uint32_t, disk_token_range> token_ranges;
 
     template <typename Describer>
@@ -277,9 +277,21 @@ enum class metadata_type : uint32_t {
     Validation = 0,
     Compaction = 1,
     Stats = 2,
-    Sharding = 5001,
 };
 
+
+enum class scylla_metadata_type : uint32_t {
+    Sharding = 1,
+};
+
+struct scylla_metadata {
+    disk_set_of_tagged_union<scylla_metadata_type,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>
+            > data;
+
+    template <typename Describer>
+    auto describe_type(Describer f) { return f(data); }
+};
 
 static constexpr int DEFAULT_CHUNK_SIZE = 65536;
 
