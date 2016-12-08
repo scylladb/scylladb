@@ -451,6 +451,10 @@ public:
                 fail(unimplemented::cause::SUPER);
             }
 
+            if (schema->is_view()) {
+                throw make_exception<InvalidRequestException>("Cannot modify Materialized Views directly");
+            }
+
             mutation m_to_apply(key_from_thrift(*schema, to_bytes_view(key)), schema);
             add_to_mutation(*schema, column, m_to_apply);
             return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY).then([m_to_apply = std::move(m_to_apply), consistency_level] {
@@ -474,6 +478,10 @@ public:
 
     void remove(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnPath& column_path, const int64_t timestamp, const ConsistencyLevel::type consistency_level) {
         with_schema(std::move(cob), std::move(exn_cob), column_path.column_family, [&](schema_ptr schema) {
+            if (schema->is_view()) {
+                throw make_exception<InvalidRequestException>("Cannot modify Materialized Views directly");
+            }
+
             mutation m_to_apply(key_from_thrift(*schema, to_bytes_view(key)), schema);
 
             if (column_path.__isset.super_column) {
@@ -530,6 +538,9 @@ public:
             }
 
             return _query_state.get_client_state().has_column_family_access(current_keyspace(), cfname, auth::permission::MODIFY).then([=] {
+                if (_db.local().find_schema(current_keyspace(), cfname)->is_view()) {
+                    throw make_exception<InvalidRequestException>("Cannot truncate Materialized Views");
+                }
                 return service::get_local_storage_proxy().truncate_blocking(current_keyspace(), cfname);
             });
         });
@@ -760,10 +771,16 @@ public:
             });
         });
     }
-
     void system_drop_column_family(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& column_family) {
         with_cob(std::move(cob), std::move(exn_cob), [&] {
             return _query_state.get_client_state().has_column_family_access(current_keyspace(), column_family, auth::permission::DROP).then([=] {
+                auto& cf = _db.local().find_column_family(current_keyspace(), column_family);
+                if (cf.schema()->is_view()) {
+                    throw make_exception<InvalidRequestException>("Cannot drop Materialized Views from Thrift");
+                }
+                if (!cf.views().empty()) {
+                    throw make_exception<InvalidRequestException>("Cannot drop table with Materialized Views %s", column_family);
+                }
                 return service::get_local_migration_manager().announce_column_family_drop(current_keyspace(), column_family, false).then([this] {
                     return std::string(_db.local().get_version().to_sstring());
                 });
@@ -819,10 +836,21 @@ public:
 
     void system_update_column_family(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const CfDef& cf_def) {
         with_cob(std::move(cob), std::move(exn_cob), [&] {
-            auto schema = _db.local().find_schema(cf_def.keyspace, cf_def.name);
+            auto& cf = _db.local().find_column_family(cf_def.keyspace, cf_def.name);
+            auto schema = cf.schema();
 
             if (schema->is_cql3_table()) {
                 throw make_exception<InvalidRequestException>("Cannot modify CQL3 table {} as it may break the schema. You should use cqlsh to modify CQL3 tables instead.", cf_def.name);
+            }
+
+            if (schema->is_view()) {
+                throw make_exception<InvalidRequestException>("Cannot modify Materialized View table %s as it may break the schema. "
+                                                              "You should use cqlsh to modify Materialized View tables instead.", cf_def.name);
+            }
+
+            if (!cf.views().empty()) {
+                throw make_exception<InvalidRequestException>("Cannot modify table with Materialized Views %s as it may break the schema. "
+                                                              "You should use cqlsh to modify Materialized View tables instead.", cf_def.name);
             }
 
             auto s = schema_from_thrift(cf_def, cf_def.keyspace, schema->id());
@@ -1044,8 +1072,7 @@ private:
         def.__set_strategy_class(meta->strategy_name());
         def.__set_strategy_options(make_options(meta->strategy_options()));
         std::vector<CfDef> cfs;
-        for (auto&& cf : meta->cf_meta_data()) {
-            auto&& s = cf.second;
+        for (auto&& s : meta->tables()) {
             if (s->is_cql3_table()) {
                 continue;
             }
@@ -1746,6 +1773,9 @@ private:
         auto m_by_cf = group_by_cf(const_cast<mutation_map&>(m));
         for (auto&& cf_key : m_by_cf) {
             auto schema = lookup_schema(db, ks_name, cf_key.first);
+            if (schema->is_view()) {
+                throw make_exception<InvalidRequestException>("Cannot modify Materialized Views directly");
+            }
             schemas.emplace_back(schema);
             for (auto&& key_mutations : cf_key.second) {
                 mutation m_to_apply(key_from_thrift(*schema, to_bytes_view(key_mutations.first)), schema);
