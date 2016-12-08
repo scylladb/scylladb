@@ -3446,3 +3446,26 @@ void column_family::set_schema(schema_ptr s) {
     set_compaction_strategy(_schema->compaction_strategy());
     trigger_compaction();
 }
+
+void column_family::update_view_schemas() {
+    _view_schemas = boost::copy_range<std::vector<view_ptr>>(_views | boost::adaptors::map_values | boost::adaptors::transformed([] (auto&& s) {
+        return view_ptr(s.schema());
+    }));
+}
+
+void column_family::add_or_update_view(view_ptr v) {
+    auto e = _views.emplace(v->cf_name(), v);
+    if (!e.second) {
+        e.first->second.update(v);
+    }
+    update_view_schemas();
+}
+
+void column_family::remove_view(view_ptr v) {
+    _views.erase(v->cf_name());
+    update_view_schemas();
+}
+
+const std::vector<view_ptr>& column_family::views() const {
+    return _view_schemas;
+}
