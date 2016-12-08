@@ -751,18 +751,23 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
     });
 }
 
-struct dropped_schema {
-    global_schema_ptr schema;
-    utils::joinpoint<db_clock::time_point> jp{[] {
-        return make_ready_future<db_clock::time_point>(db_clock::now());
-    }};
-};
-
 // see the comments for merge_keyspaces()
-static void merge_tables(distributed<service::storage_proxy>& proxy,
+template <typename CreateSchema, typename NotifyCreate, typename NotifyUpdate, typename NotifyDrop>
+static void merge_schemas(distributed<service::storage_proxy>& proxy,
     std::map<qualified_name, schema_mutations>&& before,
-    std::map<qualified_name, schema_mutations>&& after)
+    std::map<qualified_name, schema_mutations>&& after,
+    CreateSchema&& create_schema,
+    NotifyCreate&& notify_create,
+    NotifyUpdate&& notify_update,
+    NotifyDrop&& notify_drop)
 {
+    struct dropped_schema {
+        global_schema_ptr schema;
+        utils::joinpoint<db_clock::time_point> jp{[] {
+            return make_ready_future<db_clock::time_point>(db_clock::now());
+        }};
+    };
+
     std::vector<global_schema_ptr> created;
     std::vector<global_schema_ptr> altered;
     std::vector<dropped_schema> dropped;
@@ -774,35 +779,48 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
         dropped.emplace_back(dropped_schema{s});
     }
     for (auto&& key : diff.entries_only_on_right) {
-        auto s = create_table_from_mutations(after.at(key));
+        auto s = create_schema(std::move(after.at(key)));
         logger.info("Creating {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
         created.emplace_back(s);
     }
     for (auto&& key : diff.entries_differing) {
-        auto s = create_table_from_mutations(after.at(key));
+        auto s = create_schema(std::move(after.at(key)));
         logger.info("Altering {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
         altered.emplace_back(s);
     }
 
-    proxy.local().get_db().invoke_on_all([&created, &dropped, &altered] (database& db) {
-            return seastar::async([&] {
-                for (auto&& gs : created) {
-                    db.add_column_family_and_make_directory(gs).get();
-                    db.find_column_family(gs).mark_ready_for_writes();
-                    service::get_local_migration_manager().notify_create_column_family(gs).get();
-                }
-                for (auto&& gs : altered) {
-                    bool columns_changed = db.update_column_family(gs);
-                    service::get_local_migration_manager().notify_update_column_family(gs, columns_changed).get();
-                }
-                parallel_for_each(dropped.begin(), dropped.end(), [&db](dropped_schema& dt) {
-                    schema_ptr s = dt.schema.get();
-                    return db.drop_column_family(s->ks_name(), s->cf_name(), [&dt] { return dt.jp.value(); }).then([s] {
-                        return service::get_local_migration_manager().notify_drop_column_family(s);
-                    });
-                }).get();
-            });
+    proxy.local().get_db().invoke_on_all([&] (database& db) {
+        return seastar::async([&] {
+            for (auto&& gs : created) {
+                db.add_column_family_and_make_directory(gs).get();
+                db.find_column_family(gs).mark_ready_for_writes();
+                notify_create(service::get_local_migration_manager(), gs).get();
+            }
+            for (auto&& gs : altered) {
+                bool columns_changed = db.update_column_family(gs);
+                notify_update(service::get_local_migration_manager(), gs, columns_changed).get();
+            }
+            parallel_for_each(dropped, [&] (dropped_schema& dt) {
+                schema_ptr s = dt.schema.get();
+                return db.drop_column_family(s->ks_name(), s->cf_name(), [&] { return dt.jp.value(); }).then([s, &notify_drop] {
+                    return notify_drop(service::get_local_migration_manager(), s);
+                });
+            }).get();
+        });
     }).get();
+}
+
+static void merge_tables(distributed<service::storage_proxy>& proxy,
+    std::map<qualified_name, schema_mutations>&& before,
+    std::map<qualified_name, schema_mutations>&& after)
+{
+    return merge_schemas(proxy,
+            std::move(before),
+            std::move(after),
+            [] (auto&& sm) { return create_table_from_mutations(std::move(sm)); },
+            std::mem_fn(&service::migration_manager::notify_create_column_family),
+            std::mem_fn(&service::migration_manager::notify_update_column_family),
+            std::mem_fn(&service::migration_manager::notify_drop_column_family));
 }
 
 static inline void collect_types(std::set<sstring>& keys, schema_result& result, std::vector<user_type>& to)
@@ -905,51 +923,17 @@ static void merge_types(distributed<service::storage_proxy>& proxy, schema_resul
     }).get();
 }
 
-// see the comments for merge_keyspaces()
 static void merge_views(distributed<service::storage_proxy>& proxy,
     std::map<qualified_name, schema_mutations>&& before,
     std::map<qualified_name, schema_mutations>&& after)
 {
-    std::vector<global_schema_ptr> created;
-    std::vector<global_schema_ptr> altered;
-    std::vector<dropped_schema> dropped;
-
-    auto diff = difference(before, after);
-    for (auto&& key : diff.entries_only_on_left) {
-        auto&& s = proxy.local().get_db().local().find_schema(key.keyspace_name, key.table_name);
-        logger.info("Dropping {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
-        dropped.emplace_back(dropped_schema{s});
-    }
-    for (auto&& key : diff.entries_only_on_right) {
-        auto s = create_view_from_mutations(after.at(key));
-        logger.info("Creating {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
-        created.emplace_back(s);
-    }
-    for (auto&& key : diff.entries_differing) {
-        auto s = create_view_from_mutations(after.at(key));
-        logger.info("Altering {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
-        altered.emplace_back(s);
-    }
-
-    proxy.local().get_db().invoke_on_all([&created, &dropped, &altered] (database& db) {
-            return seastar::async([&] {
-                for (auto&& gs : created) {
-                    db.add_column_family_and_make_directory(gs).get();
-                    db.find_column_family(gs).mark_ready_for_writes();
-                    service::get_local_migration_manager().notify_create_view(view_ptr(gs)).get();
-                }
-                for (auto&& gs : altered) {
-                    bool columns_changed = db.update_column_family(gs);
-                    service::get_local_migration_manager().notify_update_view(view_ptr(gs), columns_changed).get();
-                }
-                parallel_for_each(dropped.begin(), dropped.end(), [&db](dropped_schema& dt) {
-                    schema_ptr s = dt.schema.get();
-                    return db.drop_column_family(s->ks_name(), s->cf_name(), [&dt] { return dt.jp.value(); }).then([s] {
-                        return service::get_local_migration_manager().notify_drop_view(view_ptr(s));
-                    });
-                }).get();
-            });
-    }).get();
+    return merge_schemas(proxy,
+            std::move(before),
+            std::move(after),
+            [] (auto&& sm) { return create_view_from_mutations(std::move(sm)); },
+            [] (auto&& mm, auto&& s) { return mm.notify_create_view(view_ptr(s)); },
+            [] (auto&& mm, auto&& s, bool columns_changed) { return mm.notify_update_view(view_ptr(s), columns_changed); },
+            [] (auto&& mm, auto&& s) { return mm.notify_drop_view(view_ptr(s)); });
 }
 
 #if 0
