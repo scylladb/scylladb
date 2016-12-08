@@ -137,18 +137,9 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
     // we need to keep track of who is it that we are flushing this memory from.
     struct flush_token {
         dirty_memory_manager* _dirty_memory_manager;
-        size_t _freed_memory = 0;
         semaphore_units<> _sem;
     public:
         flush_token(dirty_memory_manager *dm, semaphore_units<>&& s) : _dirty_memory_manager(dm), _sem(std::move(s)) {}
-        void mark_end_flush(size_t freed) {
-            auto destroy = std::move(_sem);
-            _freed_memory = freed;
-        }
-        ~flush_token() {
-            _dirty_memory_manager->_region_group.update(_freed_memory);
-            _dirty_memory_manager->_dirty_bytes_released_pre_accounted -= _freed_memory;
-        }
     };
     friend class flush_token;
     std::unordered_map<const logalloc::region*, flush_token> _flush_manager;
@@ -186,16 +177,8 @@ public:
     }
 
     void revert_potentially_cleaned_up_memory(logalloc::region* from, int64_t delta) {
-        // Flushed the current memtable. There is still some work to do, like finish sealing the
-        // SSTable and updating the cache, but we can already allow the next one to start.
-        //
-        // By erasing this memtable from the flush_manager we'll destroy the semaphore_units
-        // associated with this flush and will allow another one to start. We'll signal the
-        // condition variable to let them know we might be ready early.
-        auto it = _flush_manager.find(from);
-        if (it != _flush_manager.end()) {
-            it->second.mark_end_flush(delta);
-        }
+        _region_group.update(delta);
+        _dirty_bytes_released_pre_accounted -= delta;
     }
 
     void account_potentially_cleaned_up_memory(logalloc::region* from, int64_t delta) {
@@ -341,9 +324,7 @@ public:
     // spends in memory allowing for more coalescing opportunities.
     future<> request_flush();
 private:
-    lw_shared_ptr<memtable> new_memtable() {
-        return make_lw_shared<memtable>(_current_schema(), this);
-    }
+    lw_shared_ptr<memtable> new_memtable();
 };
 
 using sstable_list = sstables::sstable_list;

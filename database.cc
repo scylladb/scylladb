@@ -872,7 +872,7 @@ column_family::update_cache(memtable& m, sstables::shared_sstable exclude_sstabl
        // mutation in m.
        return _cache.update(m, make_partition_presence_checker(std::move(exclude_sstable)));
     } else {
-       return make_ready_future<>();
+       return m.clear_gently();
     }
 }
 
@@ -1060,24 +1060,6 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
         return newtab->open_data();
     }).then_wrapped([this, old, newtab] (future<> ret) {
         dblog.debug("Flushing to {} done", newtab->get_filename());
-        // Could pass the iterator to the seal functions, and avoid the need to search the
-        // unordered_map here. But this is supposed to be cheap and it is a lot less clutter in the
-        // method signatures. Also makes it optional and streaming memtables don't have to do it.
-        // Note that the number of entries in this hash is limited by the background flushes
-        // semaphore, so it'll always be small.
-        //
-        // In terms of releasing dirty memory, this is almost as far as we should go. We could do
-        // this right before updating the cache, but from this point on to update_cache we have no
-        // deferring points, so that's fine. We do it in here because if we fail this write it will
-        // try the write again and that will create a new flush reader that will decrease dirty
-        // memory again. So we need to get rid of the charges here anyway for correctness.
-        //
-        // After the cache starts to be updated the region in transferred over. We kind of assume
-        // there will be no deferring point between this and update cache transferring ownership.
-        // It's not that bad if it is so we wouldn't really protect against it, but without a
-        // deferring point we can guarantee that no request will see a spike in dirty memory between
-        // the release of our memory and the execution of a request.
-        dirty_memory_manager::from_region_group(old->region_group()).remove_from_flush_manager(&(old->region()));
         try {
             ret.get();
 
@@ -1103,6 +1085,9 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
             });
         } catch (...) {
             dblog.error("failed to write sstable {}: {}", newtab->get_filename(), std::current_exception());
+            // If we failed this write we will try the write again and that will create a new flush reader
+            // that will decrease dirty memory again. So we need to reset the accounting.
+            old->revert_flushed_memory();
         }
         return sleep(10s).then([] {
             return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -2580,6 +2565,10 @@ future<> memtable_list::request_flush() {
     } else {
         return _flush_coalescing->get_shared_future();
     }
+}
+
+lw_shared_ptr<memtable> memtable_list::new_memtable() {
+    return make_lw_shared<memtable>(_current_schema(), *_dirty_memory_manager, this);
 }
 
 future<> dirty_memory_manager::flush_one(memtable_list& mtlist, semaphore_units<> permit) {

@@ -26,23 +26,66 @@
 
 namespace stdx = std::experimental;
 
-memtable::memtable(schema_ptr schema, memtable_list* memtable_list)
-        : logalloc::region(memtable_list ? logalloc::region(memtable_list->region_group()) : logalloc::region())
+memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, memtable_list* memtable_list)
+        : logalloc::region(dmm.region_group())
+        , _dirty_mgr(dmm)
         , _memtable_list(memtable_list)
         , _schema(std::move(schema))
         , partitions(memtable_entry::compare(_schema)) {
 }
 
-memtable::memtable(schema_ptr schema, logalloc::region_group *dirty_memory_region_group)
-        : logalloc::region(dirty_memory_region_group ? logalloc::region(*dirty_memory_region_group) : logalloc::region())
-        , _memtable_list(nullptr)
-        , _schema(std::move(schema))
-        , partitions(memtable_entry::compare(_schema)) {
-}
+static thread_local memtable_dirty_memory_manager mgr_for_tests;
+
+memtable::memtable(schema_ptr schema)
+        : memtable(std::move(schema), mgr_for_tests, nullptr)
+{ }
 
 memtable::~memtable() {
+    revert_flushed_memory();
+    clear();
+}
+
+uint64_t memtable::dirty_size() const {
+    return occupancy().total_space();
+}
+
+void memtable::clear() noexcept {
+    auto dirty_before = dirty_size();
     with_allocator(allocator(), [this] {
         partitions.clear_and_dispose(current_deleter<memtable_entry>());
+    });
+    remove_flushed_memory(dirty_before - dirty_size());
+}
+
+future<> memtable::clear_gently() noexcept {
+    return futurize_apply([this] {
+        static thread_local seastar::thread_scheduling_group scheduling_group(std::chrono::milliseconds(1), 0.2);
+        auto attr = seastar::thread_attributes();
+        attr.scheduling_group = &scheduling_group;
+        auto t = std::make_unique<seastar::thread>(attr, [this] {
+            auto& alloc = allocator();
+
+            // entries can no longer be moved after unlink_leftmost_without_rebalance()
+            // so need to disable compaction.
+            logalloc::reclaim_lock rl(*this);
+
+            auto p = std::move(partitions);
+            while (!p.empty()) {
+                auto batch_size = std::min<size_t>(p.size(), 32);
+                auto dirty_before = dirty_size();
+                with_allocator(alloc, [&] () noexcept {
+                    while (batch_size--) {
+                        alloc.destroy(p.unlink_leftmost_without_rebalance());
+                    }
+                });
+                remove_flushed_memory(dirty_before - dirty_size());
+                seastar::thread::yield();
+            }
+        });
+        auto f = t->join();
+        return f.then([t = std::move(t)] {});
+    }).handle_exception([this] (auto e) {
+        this->clear();
     });
 }
 
@@ -255,31 +298,53 @@ public:
     }
 };
 
-class flush_memory_accounter {
-    uint64_t _bytes_read = 0;
-    logalloc::region& _region;
+void memtable::add_flushed_memory(uint64_t delta) {
+    _flushed_memory += delta;
+    _dirty_mgr.account_potentially_cleaned_up_memory(this, delta);
+}
 
+void memtable::remove_flushed_memory(uint64_t delta) {
+    delta = std::min(_flushed_memory, delta);
+    _flushed_memory -= delta;
+    _dirty_mgr.revert_potentially_cleaned_up_memory(this, delta);
+}
+
+void memtable::on_detach_from_region_group() noexcept {
+    revert_flushed_memory();
+}
+
+void memtable::revert_flushed_memory() noexcept {
+    _dirty_mgr.revert_potentially_cleaned_up_memory(this, _flushed_memory);
+    _flushed_memory = 0;
+}
+
+class flush_memory_accounter {
+    memtable& _mt;
 public:
     void update_bytes_read(uint64_t delta) {
-        _bytes_read += delta;
-        dirty_memory_manager::from_region_group(_region.group()).account_potentially_cleaned_up_memory(&_region, delta);
+        _mt.add_flushed_memory(delta);
     }
-
-    explicit flush_memory_accounter(logalloc::region& region)
-        : _region(region)
+    explicit flush_memory_accounter(memtable& mt)
+        : _mt(mt)
 	{}
-
     ~flush_memory_accounter() {
-        assert(_bytes_read <= _region.occupancy().used_space());
-        dirty_memory_manager::from_region_group(_region.group()).revert_potentially_cleaned_up_memory(&_region, _bytes_read);
+        assert(_mt._flushed_memory <= _mt.occupancy().used_space());
+
+        // Flushed the current memtable. There is still some work to do, like finish sealing the
+        // SSTable and updating the cache, but we can already allow the next one to start.
+        //
+        // By erasing this memtable from the flush_manager we'll destroy the semaphore_units
+        // associated with this flush and will allow another one to start. We'll signal the
+        // condition variable to let them know we might be ready early.
+        _mt._dirty_mgr.remove_from_flush_manager(&_mt);
     }
     void account_component(memtable_entry& e) {
-        auto delta = _region.allocator().object_memory_size_in_allocator(&e)
+        auto delta = _mt.allocator().object_memory_size_in_allocator(&e)
                      + e.external_memory_usage_without_rows();
         update_bytes_read(delta);
     }
     void account_component(partition_snapshot& snp) {
-        update_bytes_read(_region.allocator().object_memory_size_in_allocator(&*snp.version()));
+        update_bytes_read(_mt.allocator().object_memory_size_in_allocator(&*snp.version()));
     }
 };
 
@@ -317,8 +382,8 @@ class flush_reader final : public iterator_reader {
     flush_memory_accounter _flushed_memory;
 public:
     flush_reader(schema_ptr s, lw_shared_ptr<memtable> m)
-        : iterator_reader(std::move(s), std::move(m), query::full_partition_range)
-        , _flushed_memory(region())
+        : iterator_reader(std::move(s), m, query::full_partition_range)
+        , _flushed_memory(*m)
     {}
     flush_reader(const flush_reader&) = delete;
     flush_reader(flush_reader&&) = delete;
