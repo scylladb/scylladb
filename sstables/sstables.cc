@@ -2201,7 +2201,11 @@ sstable::format_types sstable::format_from_sstring(sstring &s) {
 }
 
 sstable::component_type sstable::component_from_sstring(sstring &s) {
-    return reverse_map(s, _component_map);
+    try {
+        return reverse_map(s, _component_map);
+    } catch (std::out_of_range&) {
+        return component_type::Unknown;
+    }
 }
 
 input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_priority_class& pc, lw_shared_ptr<file_input_stream_history> history) {
