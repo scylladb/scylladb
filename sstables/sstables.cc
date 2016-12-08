@@ -514,13 +514,13 @@ struct single_tagged_union_member_serdes_for final : single_tagged_union_member_
     using value_type = typename base::value_type;
     virtual future<> do_parse(random_access_reader& in, value_type& v) const {
         v = Member();
-        return parse(in, boost::get<Member&>(v).value);
+        return parse(in, boost::get<Member>(v).value);
     }
     virtual uint32_t do_size(const value_type& v) const override {
-        return serialized_size(boost::get<const Member&>(v).value);
+        return serialized_size(boost::get<Member>(v).value);
     }
     virtual void do_write(file_writer& out, const value_type& v) const override {
-        write(out, boost::get<const Member&>(v).value);
+        write(out, boost::get<Member>(v).value);
     }
 };
 
