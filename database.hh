@@ -956,6 +956,8 @@ public:
     void remove_user_type(const user_type ut) {
         _user_types->remove_type(ut);
     }
+    std::vector<schema_ptr> tables() const;
+    std::vector<view_ptr> views() const;
     friend std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m);
 };
 
