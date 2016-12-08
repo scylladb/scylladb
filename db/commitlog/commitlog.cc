@@ -882,7 +882,7 @@ db::commitlog::segment_manager::allocate_when_possible(const cf_id_type& id, sha
     }
 
     auto fut = get_units(_request_controller, size, timeout);
-    if (!fut.available()) {
+    if (_request_controller.waiters()) {
         totals.requests_blocked_memory++;
     }
     return fut.then([this, id, writer = std::move(writer), timeout] (auto permit) mutable {
