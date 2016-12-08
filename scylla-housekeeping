@@ -78,7 +78,7 @@ def check_version(ar):
         params = "?version=" + current_version
         if ar.mode:
             # mode would accept any string.
-            # use i for install, c (default) for running from the command line 
+            # use i for install, c (default) for running from the command line
             params = params + "&sts=" + ar.mode
         if uuid:
             params = params + "&uu=" + uuid
@@ -93,6 +93,7 @@ parser = argparse.ArgumentParser(description='ScyllaDB help report tool', confli
 parser.add_argument('-q', '--quiet', action='store_true', default=False, help='Quiet mode')
 parser.add_argument('-c', '--config', default="", help='An optional config file. Specifying a missing file will terminate the script')
 parser.add_argument('--uuid', default="", help='A uuid for the requests')
+parser.add_argument('--uuid-file', default="", help='A uuid file for the requests')
 
 subparsers = parser.add_subparsers(help='Available commands')
 parser_help = subparsers.add_parser('help', help='Display help information')
@@ -114,4 +115,7 @@ if args.config != "":
 uuid = None
 if args.uuid != "":
     uuid = args.uuid
+if args.uuid_file != "" and os.path.exists(args.uuid_file):
+    with open(args.uuid_file, 'r') as myfile:
+        uuid = myfile.read().replace('\n', '')
 args.func(args)
