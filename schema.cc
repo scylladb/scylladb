@@ -88,6 +88,23 @@ get_column_types(const Sequence& column_definitions) {
     return result;
 }
 
+std::ostream& operator<<(std::ostream& out, const column_mapping& cm) {
+    column_id n_static = cm.n_static();
+    column_id n_regular = cm.columns().size() - n_static;
+
+    auto pr_entry = [] (column_id i, const column_mapping_entry& e) {
+        // Without schema we don't know if name is UTF8. If we had schema we could use
+        // s->regular_column_name_type()->to_string(e.name()).
+        return sprint("{id=%s, name=0x%s, type=%s}", i, e.name(), e.type()->name());
+    };
+
+    return out << "{static=[" << ::join(", ", boost::irange<column_id>(0, n_static) |
+            boost::adaptors::transformed([&] (column_id i) { return pr_entry(i, cm.static_column_at(i)); }))
+        << "], regular=[" << ::join(", ", boost::irange<column_id>(0, n_regular) |
+            boost::adaptors::transformed([&] (column_id i) { return pr_entry(i, cm.regular_column_at(i)); }))
+        << "]}";
+}
+
 ::shared_ptr<cql3::column_specification>
 schema::make_column_specification(const column_definition& def) {
     auto id = ::make_shared<cql3::column_identifier>(def.name(), column_name_type(def));

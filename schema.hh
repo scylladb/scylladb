@@ -335,6 +335,7 @@ public:
         }
         return _columns[id + _n_static];
     }
+    friend std::ostream& operator<<(std::ostream& out, const column_mapping& cm);
 };
 
 /*
