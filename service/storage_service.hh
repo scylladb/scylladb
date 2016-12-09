@@ -260,6 +260,7 @@ private:
 
     gms::feature _range_tombstones_feature;
     gms::feature _large_partitions_feature;
+    gms::feature _materialized_views_feature;
 
 public:
     void finish_bootstrapping() {
@@ -2209,6 +2210,10 @@ public:
 
     bool cluster_supports_large_partitions() const {
         return bool(_large_partitions_feature);
+    }
+
+    bool cluster_supports_materialized_views() const {
+        return bool(_materialized_views_feature);
     }
 };
 
