@@ -51,6 +51,7 @@
 #include "schema_builder.hh"
 #include "service/storage_proxy.hh"
 #include "validation.hh"
+#include "db/config.hh"
 
 
 namespace cql3 {
@@ -73,6 +74,7 @@ create_view_statement::create_view_statement(
     , _clustering_keys{clustering_keys}
     , _if_not_exists{if_not_exists}
 {
+    service::get_local_storage_proxy().get_db().local().get_config().check_experimental("Creating materialized views");
     // TODO: probably need to create a "statement_restrictions" like select does
     // based on the select_clause, base_name and where_clause; However need to
     // pass for_view=true.
