@@ -131,7 +131,14 @@ uint32_t select_statement::get_bound_terms() {
 }
 
 future<> select_statement::check_access(const service::client_state& state) {
-    return state.has_column_family_access(keyspace(), column_family(), auth::permission::SELECT);
+    try {
+        auto&& s = service::get_local_storage_proxy().get_db().local().find_schema(keyspace(), column_family());
+        auto& cf_name = s->is_view() ? s->view_info()->base_name() : column_family();
+        return state.has_column_family_access(keyspace(), cf_name, auth::permission::SELECT);
+    } catch (const no_such_column_family& e) {
+        // Will be validated afterwards.
+        return make_ready_future<>();
+    }
 }
 
 void select_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state) {
