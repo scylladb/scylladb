@@ -243,7 +243,7 @@ void compaction_manager::submit_sstable_rewrite(column_family* cf, sstables::sha
     _compacting_sstables.insert(sst);
     auto task = make_lw_shared<compaction_manager::task>();
     _tasks.push_back(task);
-    task->compaction_done = with_semaphore(sem, 1, [cf, sst] {
+    task->compaction_done = with_semaphore(sem, 1, [this, cf, sst] {
         _stats.active_tasks++;
         return cf->compact_sstables(sstables::compaction_descriptor(
                 std::vector<sstables::shared_sstable>{sst},
