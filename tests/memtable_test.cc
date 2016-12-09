@@ -140,7 +140,7 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
                 .with_column("col", bytes_type, column_kind::regular_column)
                 .build();
 
-        memtable_dirty_memory_manager mgr;
+        dirty_memory_manager mgr;
 
         auto mt = make_lw_shared<memtable>(s, mgr);
 
@@ -278,7 +278,7 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
                 .with_column("col", bytes_type, column_kind::regular_column)
                 .build();
 
-        memtable_dirty_memory_manager mgr;
+        dirty_memory_manager mgr;
 
         auto mt = make_lw_shared<memtable>(s, mgr);
 
