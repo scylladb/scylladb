@@ -153,6 +153,10 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
     future<> _waiting_flush;
 protected:
     virtual void start_reclaiming() override;
+
+    bool has_pressure() const {
+        return over_soft_limit();
+    }
 public:
     future<> shutdown();
 
