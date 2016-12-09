@@ -141,14 +141,7 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
     // we'll have a period without significant disk activity when the current
     // SSTable is being sealed, the caches are being updated, etc. To do that
     // we need to keep track of who is it that we are flushing this memory from.
-    struct flush_token {
-        dirty_memory_manager* _dirty_memory_manager;
-        flush_permit _perm;
-    public:
-        flush_token(dirty_memory_manager *dm, flush_permit&& permit) : _dirty_memory_manager(dm), _perm(std::move(permit)) {}
-    };
-    friend class flush_token;
-    std::unordered_map<const logalloc::region*, flush_token> _flush_manager;
+    std::unordered_map<const logalloc::region*, flush_permit> _flush_manager;
 
     future<> _waiting_flush;
 protected:
@@ -213,7 +206,7 @@ public:
     }
 
     void add_to_flush_manager(const logalloc::region *region, flush_permit&& permit) {
-        _flush_manager.emplace(std::piecewise_construct, std::make_tuple(region), std::make_tuple(this, std::move(permit)));
+        _flush_manager.emplace(region, std::move(permit));
     }
 
     size_t real_dirty_memory() const {
