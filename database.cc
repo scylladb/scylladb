@@ -91,7 +91,7 @@ public:
 
 // Used for tests where the CF exists without a database object. We need to pass a valid
 // dirty_memory manager in that case.
-thread_local memtable_dirty_memory_manager default_dirty_memory_manager;
+thread_local dirty_memory_manager default_dirty_memory_manager;
 
 lw_shared_ptr<memtable_list>
 column_family::make_memory_only_memtable_list() {
@@ -1661,30 +1661,10 @@ database::database(const db::config& cfg)
         return memtable_total_space;
     }())
     , _streaming_memtable_total_space(_memtable_total_space / 4)
-    // Allow system tables a pool of 10 MB extra memory to write over the threshold. Under normal
-    // circumnstances it won't matter, but when we throttle, some system requests will be able to
-    // keep being serviced even if user requests are not.
-    //
-    // Note that even if we didn't allow extra memory, we would still want to keep system requests
-    // in a different region group. This is because throttled requests are serviced in FIFO order,
-    // and we don't want system requests to be waiting for a long time behind user requests.
-    , _system_dirty_memory_manager(*this, _memtable_total_space / 2 + (10 << 20))
-    // The total space that can be used by memtables is _memtable_total_space, but we will only
-    // allow the region_group to grow to half of that. This is because of virtual_dirty: memtables
-    // can take a long time to flush, and if we are using the maximum amount of memory possible,
-    // then requests will block until we finish flushing at least one memtable.
-    //
-    // We can free memory until the whole memtable is flushed because we need to keep it in memory
-    // until the end, but we can fake freeing memory. When we are done with an element of the
-    // memtable, we will update the region group pretending memory just went down by that amount.
-    //
-    // Because the amount of memory that we pretend to free should be close enough to the actual
-    // memory used by the memtables, that effectively creates two sub-regions inside the dirty
-    // region group, of equal size. In the worst case, we will have _memtable_total_space dirty
-    // bytes used, and half of that already virtually freed.
-    , _dirty_memory_manager(*this, &_system_dirty_memory_manager, _memtable_total_space / 2)
-    // The same goes for streaming in respect to virtual dirty.
-    , _streaming_dirty_memory_manager(*this, &_dirty_memory_manager, _streaming_memtable_total_space / 2)
+    // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
+    , _system_dirty_memory_manager(*this, 10 << 20)
+    , _dirty_memory_manager(*this, memory::stats().total_memory() * 0.45)
+    , _streaming_dirty_memory_manager(*this, memory::stats().total_memory() * 0.10)
     , _version(empty_version)
     , _enable_incremental_backups(cfg.incremental_backups())
 {
