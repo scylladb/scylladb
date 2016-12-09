@@ -63,6 +63,21 @@ column_mapping_entry::column_mapping_entry(bytes name, sstring type_name)
 {
 }
 
+column_mapping_entry::column_mapping_entry(const column_mapping_entry& o)
+    : _name(o._name)
+    , _type(db::marshal::type_parser::parse(o._type->name()))
+{
+}
+
+column_mapping_entry& column_mapping_entry::operator=(const column_mapping_entry& o) {
+    if (this != &o) {
+        auto tmp = o;
+        this->~column_mapping_entry();
+        new (this) column_mapping_entry(std::move(tmp));
+    }
+    return *this;
+}
+
 template<typename Sequence>
 std::vector<data_type>
 get_column_types(const Sequence& column_definitions) {

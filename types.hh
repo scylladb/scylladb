@@ -361,6 +361,7 @@ class serialized_compare;
 class serialized_tri_compare;
 class user_type_impl;
 
+// Unsafe to access across shards unless otherwise noted.
 class abstract_type : public enable_shared_from_this<abstract_type> {
     sstring _name;
 public:
@@ -452,6 +453,7 @@ public:
         serialize(value._value, i);
         return b;
     }
+    // Safe to call across shards
     const sstring& name() const {
         return _name;
     }

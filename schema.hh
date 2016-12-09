@@ -281,6 +281,8 @@ static constexpr int DEFAULT_MIN_COMPACTION_THRESHOLD = 4;
 static constexpr int DEFAULT_MAX_COMPACTION_THRESHOLD = 32;
 static constexpr int DEFAULT_MIN_INDEX_INTERVAL = 128;
 
+// Unsafe to access across shards.
+// Safe to copy across shards.
 class column_mapping_entry {
     bytes _name;
     data_type _type;
@@ -288,12 +290,19 @@ public:
     column_mapping_entry(bytes name, data_type type)
         : _name(std::move(name)), _type(std::move(type)) { }
     column_mapping_entry(bytes name, sstring type_name);
+    column_mapping_entry(const column_mapping_entry&);
+    column_mapping_entry& operator=(const column_mapping_entry&);
+    column_mapping_entry(column_mapping_entry&&) = default;
+    column_mapping_entry& operator=(column_mapping_entry&&) = default;
     const bytes& name() const { return _name; }
     const data_type& type() const { return _type; }
     const sstring& type_name() const { return _type->name(); }
 };
 
 // Encapsulates information needed for converting mutations between different schema versions.
+//
+// Unsafe to access across shards.
+// Safe to copy across shards.
 class column_mapping {
 private:
     // Contains _n_static definitions for static columns followed by definitions for regular columns,
