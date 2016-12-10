@@ -36,6 +36,7 @@ options {
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/statements/alter_keyspace_statement.hh"
 #include "cql3/statements/alter_table_statement.hh"
+#include "cql3/statements/alter_view_statement.hh"
 #include "cql3/statements/create_keyspace_statement.hh"
 #include "cql3/statements/drop_keyspace_statement.hh"
 #include "cql3/statements/create_index_statement.hh"
@@ -342,6 +343,7 @@ cqlStatement returns [shared_ptr<raw::parsed_statement> stmt]
     | st31=dropAggregateStatement      { $stmt = st31; }
 #endif
     | st32=createViewStatement         { $stmt = st32; }
+    | st33=alterViewStatement          { $stmt = st33; }
     ;
 
 /*
@@ -868,7 +870,7 @@ alterKeyspaceStatement returns [shared_ptr<cql3::statements::alter_keyspace_stat
 alterTableStatement returns [shared_ptr<alter_table_statement> expr]
     @init {
         alter_table_statement::type type;
-        auto props = make_shared<cql3::statements::cf_prop_defs>();;
+        auto props = make_shared<cql3::statements::cf_prop_defs>();
         std::vector<std::pair<shared_ptr<cql3::column_identifier::raw>, shared_ptr<cql3::column_identifier::raw>>> renames;
         bool is_static = false;
     }
@@ -902,6 +904,18 @@ alterTypeStatement returns [::shared_ptr<alter_type_statement> expr]
           )
     ;
 
+/**
+ * ALTER MATERIALIZED VIEW <CF> WITH <property> = <value>;
+ */
+alterViewStatement returns [::shared_ptr<alter_view_statement> expr]
+    @init {
+        auto props = make_shared<cql3::statements::cf_prop_defs>();
+    }
+    : K_ALTER K_MATERIALIZED K_VIEW cf=columnFamilyName K_WITH properties[props]
+    {
+        $expr = ::make_shared<alter_view_statement>(std::move(cf), std::move(props));
+    }
+    ;
 
 renames[::shared_ptr<alter_type_statement::renames> expr]
     : fromId=ident K_TO toId=ident { $expr->add_rename(fromId, toId); }
