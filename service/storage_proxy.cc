@@ -2409,11 +2409,13 @@ protected:
     std::vector<gms::inet_address> _targets;
     promise<foreign_ptr<lw_shared_ptr<query::result>>> _result_promise;
     tracing::trace_state_ptr _trace_state;
+    lw_shared_ptr<column_family> _cf;
 
 public:
     abstract_read_executor(schema_ptr s, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
             std::vector<gms::inet_address> targets, tracing::trace_state_ptr trace_state) :
                            _schema(std::move(s)), _proxy(std::move(proxy)), _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)) {
+        _cf = _proxy->_db.local().find_column_family(_schema).shared_from_this();
         _proxy->_stats.reads++;
     }
     virtual ~abstract_read_executor() {
@@ -2470,7 +2472,9 @@ protected:
         return parallel_for_each(begin, end, [this, &cmd, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
             return make_mutation_data_request(cmd, ep, timeout).then_wrapped([this, resolver, ep] (future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> f) {
                 try {
-                    resolver->add_mutate_data(ep, f.get0());
+                    auto v = f.get();
+                    _cf->set_hit_rate(ep, std::get<1>(v));
+                    resolver->add_mutate_data(ep, std::get<0>(std::move(v)));
                     ++_proxy->_stats.mutation_data_read_completed.get_ep_stat(ep);
                 } catch(...) {
                     ++_proxy->_stats.mutation_data_read_errors.get_ep_stat(ep);
@@ -2483,7 +2487,9 @@ protected:
         return parallel_for_each(begin, end, [this, resolver = std::move(resolver), timeout, want_digest] (gms::inet_address ep) {
             return make_data_request(ep, timeout, want_digest).then_wrapped([this, resolver, ep] (future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> f) {
                 try {
-                    resolver->add_data(ep, f.get0());
+                    auto v = f.get();
+                    _cf->set_hit_rate(ep, std::get<1>(v));
+                    resolver->add_data(ep, std::get<0>(std::move(v)));
                     ++_proxy->_stats.data_read_completed.get_ep_stat(ep);
                 } catch(...) {
                     ++_proxy->_stats.data_read_errors.get_ep_stat(ep);
@@ -2497,6 +2503,7 @@ protected:
             return make_digest_request(ep, timeout).then_wrapped([this, resolver, ep] (future<query::result_digest, api::timestamp_type, cache_temperature> f) {
                 try {
                     auto v = f.get();
+                    _cf->set_hit_rate(ep, std::get<2>(v));
                     resolver->add_digest(ep, std::get<0>(v), std::get<1>(v));
                     ++_proxy->_stats.digest_read_completed.get_ep_stat(ep);
                 } catch(...) {

@@ -409,7 +409,7 @@ public:
     friend struct ser::serializer<cache_temperature>;
 };
 
-class column_family {
+class column_family : public enable_lw_shared_from_this<column_family> {
 public:
     using timeout_clock = lowres_clock;
 
@@ -450,6 +450,10 @@ public:
     struct snapshot_details {
         int64_t total;
         int64_t live;
+    };
+    struct cache_hit_rate {
+        cache_temperature rate;
+        lowres_clock::time_point last_updated;
     };
 private:
     schema_ptr _schema;
@@ -559,6 +563,11 @@ private:
     // holds average cache hit rate of all shards
     // recalculated periodically
     cache_temperature _global_cache_hit_rate = cache_temperature(0.0f);
+
+    // holds cache hit rates per each node in a cluster
+    // may not have information for some node, since it fills
+    // in dynamically
+    std::unordered_map<gms::inet_address, cache_hit_rate> _cluster_cache_hit_rates;
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, std::vector<unsigned>&& shards_for_the_sstable);
     // Adds new sstable to the set of sstables
@@ -857,6 +866,9 @@ public:
     void set_global_cache_hit_rate(cache_temperature rate) {
         _global_cache_hit_rate = rate;
     }
+
+    void set_hit_rate(gms::inet_address addr, cache_temperature rate);
+    cache_hit_rate get_hit_rate(gms::inet_address addr);
 
     template<typename Func, typename Result = futurize_t<std::result_of_t<Func()>>>
     Result run_with_compaction_disabled(Func && func) {
