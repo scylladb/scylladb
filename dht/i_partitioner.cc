@@ -112,21 +112,6 @@ static inline unsigned char get_byte(bytes_view b, size_t off) {
     }
 }
 
-int i_partitioner::tri_compare(const token& t1, const token& t2) const {
-    size_t sz = std::min(t1._data.size(), t2._data.size());
-
-    for (size_t i = 0; i < sz; i++) {
-        auto b1 = get_byte(t1._data, i);
-        auto b2 = get_byte(t2._data, i);
-        if (b1 < b2) {
-            return -1;
-        } else if (b1 > b2) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 int tri_compare(const token& t1, const token& t2) {
     if (t1._kind == t2._kind) {
         return global_partitioner().tri_compare(t1, t2);
