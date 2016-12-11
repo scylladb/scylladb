@@ -1469,6 +1469,10 @@ int64_t column_family::get_unleveled_sstables() const {
     return 0;
 }
 
+const sstables::sstable_set& column_family::get_sstable_set() const {
+    return *_sstables;
+}
+
 lw_shared_ptr<sstable_list> column_family::get_sstables() const {
     return _sstables->all();
 }
@@ -1493,6 +1497,10 @@ lw_shared_ptr<sstable_list> column_family::get_sstables_including_compacted_unde
         ret->insert(s);
     }
     return ret;
+}
+
+const std::vector<sstables::shared_sstable>& column_family::compacted_undeleted_sstables() const {
+    return _sstables_compacted_but_not_deleted;
 }
 
 inline bool column_family::manifest_json_filter(const sstring& fname) {

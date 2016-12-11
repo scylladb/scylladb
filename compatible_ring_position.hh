@@ -39,6 +39,9 @@ public:
     compatible_ring_position(const schema& s, dht::ring_position&& rp)
             : _schema(&s), _rp(std::move(rp)) {
     }
+    const dht::token& token() const {
+        return _rp->token();
+    }
     friend int tri_compare(const compatible_ring_position& x, const compatible_ring_position& y) {
         return x._rp->tri_compare(*x._schema, *y._rp);
     }
