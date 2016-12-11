@@ -113,7 +113,7 @@ static inline unsigned char get_byte(bytes_view b, size_t off) {
 }
 
 int i_partitioner::tri_compare(const token& t1, const token& t2) const {
-    size_t sz = std::max(t1._data.size(), t2._data.size());
+    size_t sz = std::min(t1._data.size(), t2._data.size());
 
     for (size_t i = 0; i < sz; i++) {
         auto b1 = get_byte(t1._data, i);
