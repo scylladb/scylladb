@@ -613,6 +613,7 @@ public:
 
     std::vector<nonwrapping_range<token>> get_primary_ranges_for(token right);
     static boost::icl::interval<token>::interval_type range_to_interval(range<dht::token> r);
+    static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 
 private:
     std::unordered_multimap<range<token>, inet_address>& get_pending_ranges_mm(sstring keyspace_name);

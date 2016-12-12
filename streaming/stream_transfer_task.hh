@@ -59,8 +59,8 @@ private:
     bool aborted = false;
     // A stream_transfer_task always contains the same range to stream
     std::vector<nonwrapping_range<dht::token>> _ranges;
+    std::map<unsigned, std::vector<query::partition_range>> _shard_ranges;
     long _total_size;
-    std::unordered_multimap<unsigned, foreign_ptr<shared_ptr<send_info>>> _send_infos;
 public:
     using UUID = utils::UUID;
     stream_transfer_task(stream_transfer_task&&) = default;
@@ -81,6 +81,7 @@ public:
     void start();
 
     void append_ranges(const std::vector<nonwrapping_range<dht::token>>& ranges);
+    void sort_and_merge_ranges();
 };
 
 } // namespace streaming

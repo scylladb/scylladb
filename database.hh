@@ -568,6 +568,9 @@ public:
     mutation_reader make_streaming_reader(schema_ptr schema,
             const query::partition_range& range = query::full_partition_range) const;
 
+    mutation_reader make_streaming_reader(schema_ptr schema,
+            const std::vector<query::partition_range>& ranges) const;
+
     mutation_source as_mutation_source(tracing::trace_state_ptr trace_state) const;
 
     void set_virtual_reader(virtual_reader_type virtual_reader) {

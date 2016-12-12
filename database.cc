@@ -630,6 +630,25 @@ column_family::make_streaming_reader(schema_ptr s,
     return make_combined_reader(std::move(readers));
 }
 
+mutation_reader
+column_family::make_streaming_reader(schema_ptr s,
+                           const std::vector<query::partition_range>& ranges) const {
+    auto& slice = query::full_slice;
+    auto& pc = service::get_local_streaming_read_priority();
+
+    std::vector<mutation_reader> readers;
+    readers.reserve(ranges.size() * (_memtables->size() + 1));
+
+    for (auto& range : ranges) {
+        for (auto&& mt : *_memtables) {
+            readers.emplace_back(mt->make_reader(s, range, slice, pc));
+        }
+        readers.emplace_back(make_sstable_reader(s, range, slice, pc, nullptr));
+    }
+
+    return make_combined_reader(std::move(readers));
+}
+
 // Not performance critical. Currently used for testing only.
 template <typename Func>
 future<bool>
