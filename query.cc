@@ -190,7 +190,7 @@ result::result()
         bytes_ostream out;
         ser::writer_of_query_result(out).skip_partitions().end_query_result();
         return out;
-    }(), short_read::no)
+    }(), short_read::no, 0, 0)
 { }
 
 foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {

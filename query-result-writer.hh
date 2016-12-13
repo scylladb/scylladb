@@ -179,7 +179,7 @@ public:
         std::move(_w).end_partitions().end_query_result();
         switch (_request) {
         case result_request::only_result:
-            return result(std::move(_out), _short_read, _row_count, std::move(_memory_accounter).done());
+            return result(std::move(_out), _short_read, _row_count, _partition_count, std::move(_memory_accounter).done());
         case result_request::only_digest: {
             bytes_ostream buf;
             ser::writer_of_query_result(buf).start_partitions().end_partitions().end_query_result();
@@ -187,7 +187,7 @@ public:
         }
         case result_request::result_and_digest:
             return result(std::move(_out), result_digest(_digest.finalize_array()),
-                          _last_modified, _short_read, _row_count, std::move(_memory_accounter).done());
+                          _last_modified, _short_read, _row_count, _partition_count, std::move(_memory_accounter).done());
         }
         abort();
     }
