@@ -774,6 +774,7 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
         pw.retract();
     } else {
         pw.row_count() += row_count ? : 1;
+        pw.partition_count() += 1;
         std::move(rows_wr).end_rows().end_qr_partition();
     }
 }
