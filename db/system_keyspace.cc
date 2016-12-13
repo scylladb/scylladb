@@ -1022,6 +1022,10 @@ std::vector<schema_ptr> all_tables() {
     return r;
 }
 
+static bool maybe_write_in_user_memory(schema_ptr s, database& db) {
+    return (s.get() == batchlog().get());
+}
+
 void make(database& db, bool durable, bool volatile_testing_only) {
     auto ksm = make_lw_shared<keyspace_metadata>(NAME,
             "org.apache.cassandra.locator.LocalStrategy",
@@ -1045,7 +1049,11 @@ void make(database& db, bool durable, bool volatile_testing_only) {
     db.add_keyspace(NAME, std::move(_ks));
     auto& ks = db.find_keyspace(NAME);
     for (auto&& table : all_tables()) {
-        db.add_column_family(table, ks.make_column_family_config(*table, db.get_config()));
+        auto cfg = ks.make_column_family_config(*table, db.get_config());
+        if (maybe_write_in_user_memory(table, db)) {
+            cfg.dirty_memory_manager = &db._dirty_memory_manager;
+        }
+        db.add_column_family(table, std::move(cfg));
     }
 }
 
