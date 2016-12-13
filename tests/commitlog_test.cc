@@ -277,8 +277,24 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
 }
 
 SEASTAR_TEST_CASE(test_commitlog_reader){
+    static auto count_mutations_in_segment = [] (sstring path) -> future<size_t> {
+        auto count = make_lw_shared<size_t>(0);
+        return db::commitlog::read_log_file(path, [count](temporary_buffer<char> buf, db::replay_position rp) {
+            sstring str(buf.get(), buf.size());
+            BOOST_CHECK_EQUAL(str, "hej bubba cow");
+            (*count)++;
+            return make_ready_future<>();
+        }).then([](auto s) {
+            return do_with(std::move(s), [](auto& s) {
+                return s->done();
+            });
+        }).then([count] {
+            return *count;
+        });
+    };
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
+    logging::logger_registry().set_logger_level("commitlog", seastar::log_level::trace);
     return cl_test(cfg, [](commitlog& log) {
             auto set = make_lw_shared<std::set<segment_id_type>>();
             auto count = make_lw_shared<size_t>(0);
@@ -309,18 +325,19 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
                         if (i == segments.end()) {
                             throw std::runtime_error("Did not find expected log file");
                         }
-                        return db::commitlog::read_log_file(*i, [count2](temporary_buffer<char> buf, db::replay_position rp) {
-                                    sstring str(buf.get(), buf.size());
-                                    BOOST_CHECK_EQUAL(str, "hej bubba cow");
-                                    (*count2)++;
-                                    return make_ready_future<>();
-                                }).then([](auto s) {
-                                    return do_with(std::move(s), [](auto& s) {
-                                        return s->done();
-                                    });
+                        return *i;
+                    }).then([&log, count] (sstring segment_path) {
+                        // Check reading from an unsynced segment
+                        return count_mutations_in_segment(segment_path).then([count] (size_t replay_count) {
+                            BOOST_CHECK_GE(*count, replay_count);
+                        }).then([&log, count, segment_path] {
+                            return log.sync_all_segments().then([count, segment_path] {
+                                // Check reading from a synced segment
+                                return count_mutations_in_segment(segment_path).then([count] (size_t replay_count) {
+                                    BOOST_CHECK_EQUAL(*count, replay_count);
                                 });
-                    }).then([count, count2] {
-                        BOOST_CHECK_EQUAL(*count, *count2);
+                            });
+                        });
                     });
         });
 }
