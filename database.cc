@@ -2390,7 +2390,7 @@ struct query_state {
     std::vector<query::partition_range>::const_iterator range_end;
     mutation_reader reader;
     bool done() const {
-        return !limit || current_partition_range == range_end;
+        return !limit || !partition_limit || current_partition_range == range_end;
     }
 };
 
