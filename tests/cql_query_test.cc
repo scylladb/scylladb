@@ -1360,11 +1360,12 @@ SEASTAR_TEST_CASE(test_types) {
                     "    o decimal,"
                     "    p tinyint,"
                     "    q smallint,"
+                    "    r date,"
                     ");").discard_result();
         }).then([&e] {
             e.require_table_exists("ks", "all_types");
             return e.execute_cql(
-                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q) VALUES ("
+                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r) VALUES ("
                     "    'ascii',"
                     "    123456789,"
                     "    0xdeadbeef,"
@@ -1381,7 +1382,8 @@ SEASTAR_TEST_CASE(test_types) {
                     "    123,"
                     "    1.23,"
                     "    3,"
-                    "    3"
+                    "    3,"
+                    "    '1970-01-02'"
                     ");").discard_result();
         }).then([&e] {
             return e.execute_cql("SELECT * FROM all_types WHERE a = 'ascii'");
@@ -1408,10 +1410,11 @@ SEASTAR_TEST_CASE(test_types) {
                     decimal_type->decompose(big_decimal { 2, boost::multiprecision::cpp_int(123) }),
                     byte_type->decompose(int8_t(3)),
                     short_type->decompose(int16_t(3)),
+                    simple_date_type->decompose(int32_t(0x80000001)),
                 }
             });
             return e.execute_cql(
-                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q) VALUES ("
+                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r) VALUES ("
                     "    blobAsAscii(asciiAsBlob('ascii2')),"
                     "    blobAsBigint(bigintAsBlob(123456789)),"
                     "    bigintAsBlob(12),"
@@ -1427,7 +1430,8 @@ SEASTAR_TEST_CASE(test_types) {
                     "    blobAsVarchar(varcharAsBlob('varchar')), blobAsVarint(varintAsBlob(123)),"
                     "    blobAsDecimal(decimalAsBlob(1.23)),"
                     "    blobAsTinyint(tinyintAsBlob(3)),"
-                    "    blobAsSmallint(smallintAsBlob(3))"
+                    "    blobAsSmallint(smallintAsBlob(3)),"
+                    "    blobAsDate(dateAsBlob('1970-01-02'))"
                     ");").discard_result();
         }).then([&e] {
              return e.execute_cql("SELECT * FROM all_types WHERE a = 'ascii2'");
@@ -1454,6 +1458,7 @@ SEASTAR_TEST_CASE(test_types) {
                     decimal_type->decompose(big_decimal { 2, boost::multiprecision::cpp_int(123) }),
                     byte_type->decompose(int8_t(3)),
                     short_type->decompose(int16_t(3)),
+                    simple_date_type->decompose(int32_t(0x80000001)),
                 }
             });
         });
