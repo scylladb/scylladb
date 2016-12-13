@@ -323,7 +323,7 @@ public:
         return _partition_count;
     }
 
-    uint32_t calculate_row_count(const query::partition_slice&);
+    void calculate_counts(const query::partition_slice&);
 
     struct printer {
         schema_ptr s;
