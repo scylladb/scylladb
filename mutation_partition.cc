@@ -1777,15 +1777,16 @@ uint32_t mutation_querier::consume_end_of_stream() {
         _pw.retract();
         return 0;
     } else {
+        auto live_rows = std::max(_live_clustering_rows, uint32_t(1));
+        _pw.row_count() += live_rows;
+        _pw.partition_count() += 1;
         std::move(*_rows_wr).end_rows().end_qr_partition();
-        return std::max(_live_clustering_rows, uint32_t(1));
+        return live_rows;
     }
 }
 
 class query_result_builder {
     const schema& _schema;
-    uint32_t _live_rows = 0;
-    uint32_t _partitions = 0;
     query::result::builder& _rb;
     stdx::optional<query::result::partition_writer> _pw;
     stdx::optional<mutation_querier> _mutation_consumer;
@@ -1820,9 +1821,7 @@ public:
 
     stop_iteration consume_end_of_partition() {
         auto live_rows_in_partition = _mutation_consumer->consume_end_of_stream();
-        _live_rows += live_rows_in_partition;
-        _partitions += live_rows_in_partition > 0;
-        if (live_rows_in_partition && !_stop) {
+        if (live_rows_in_partition > 0 && !_stop) {
             _stop = _rb.memory_accounter().check();
         }
         if (_stop) {
@@ -1832,7 +1831,7 @@ public:
     }
 
     data_query_result consume_end_of_stream() {
-        return {_live_rows, _partitions};
+        return {_rb.row_count(), _rb.partition_count()};
     }
 };
 
