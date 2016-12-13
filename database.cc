@@ -2381,8 +2381,14 @@ struct query_state {
     std::vector<query::partition_range>::const_iterator current_partition_range;
     std::vector<query::partition_range>::const_iterator range_end;
     mutation_reader reader;
+    uint32_t remaining_rows() const {
+        return limit - builder.row_count();
+    }
+    uint32_t remaining_partitions() const {
+        return partition_limit - builder.partition_count();
+    }
     bool done() const {
-        return !limit || !partition_limit || current_partition_range == range_end || builder.is_short_read();
+        return !remaining_rows() || !remaining_partitions() || current_partition_range == range_end || builder.is_short_read();
     }
 };
 
@@ -2399,11 +2405,8 @@ column_family::query(schema_ptr s, const query::read_command& cmd, query::result
         auto& qs = *qs_ptr;
         return do_until(std::bind(&query_state::done, &qs), [this, &qs, trace_state = std::move(trace_state)] {
             auto&& range = *qs.current_partition_range++;
-            return data_query(qs.schema, as_mutation_source(trace_state), range, qs.cmd.slice, qs.limit, qs.partition_limit,
-                              qs.cmd.timestamp, qs.builder).then([&qs] (auto&& r) {
-                qs.limit -= r.live_rows;
-                qs.partition_limit -= r.partitions;
-            });
+            return data_query(qs.schema, as_mutation_source(trace_state), range, qs.cmd.slice, qs.remaining_rows(),
+                              qs.remaining_partitions(), qs.cmd.timestamp, qs.builder);
         }).then([qs_ptr = std::move(qs_ptr), &qs] {
             return make_ready_future<lw_shared_ptr<query::result>>(
                     make_lw_shared<query::result>(qs.builder.build()));

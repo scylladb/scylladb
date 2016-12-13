@@ -1830,17 +1830,17 @@ public:
         return _stop;
     }
 
-    data_query_result consume_end_of_stream() {
-        return {_rb.row_count(), _rb.partition_count()};
+    void consume_end_of_stream() {
     }
 };
 
-future<data_query_result> data_query(schema_ptr s, const mutation_source& source, const query::partition_range& range,
-                            const query::partition_slice& slice, uint32_t row_limit, uint32_t partition_limit,
-                            gc_clock::time_point query_time, query::result::builder& builder)
+future<> data_query(
+        schema_ptr s, const mutation_source& source, const query::partition_range& range,
+        const query::partition_slice& slice, uint32_t row_limit, uint32_t partition_limit,
+        gc_clock::time_point query_time, query::result::builder& builder)
 {
     if (row_limit == 0 || slice.partition_row_limit() == 0 || partition_limit == 0) {
-        return make_ready_future<data_query_result>();
+        return make_ready_future<>();
     }
 
     auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
