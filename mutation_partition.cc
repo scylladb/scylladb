@@ -769,13 +769,13 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
     // If ck:s exist, and we do a restriction on them, we either have maching
     // rows, or return nothing, since cql does not allow "is null".
     if (row_count == 0
-			&& (has_ck_selector(pw.ranges())
-					|| !has_any_live_data(s, column_kind::static_column, static_row()))) {
-		pw.retract();
-	} else {
-	    pw.row_count() += row_count ? : 1;
+            && (has_ck_selector(pw.ranges())
+                    || !has_any_live_data(s, column_kind::static_column, static_row()))) {
+        pw.retract();
+    } else {
+        pw.row_count() += row_count ? : 1;
         std::move(rows_wr).end_rows().end_qr_partition();
-	}
+    }
 }
 
 std::ostream&
