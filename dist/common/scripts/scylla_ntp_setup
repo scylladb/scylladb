@@ -22,7 +22,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ `is_debian_variant` -eq 1 ]; then
+if is_debian_variant; then
     apt-get install -y ntp ntpdate
     service ntp stop
     count=$(egrep '^server' /etc/ntp.conf|wc -l)
