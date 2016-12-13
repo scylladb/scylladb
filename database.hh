@@ -1049,8 +1049,6 @@ class database {
     lw_shared_ptr<db_stats> _stats;
 
     std::unique_ptr<db::config> _cfg;
-    size_t _memtable_total_space = 500 << 20;
-    size_t _streaming_memtable_total_space = 500 << 20;
 
     dirty_memory_manager _system_dirty_memory_manager;
     dirty_memory_manager _dirty_memory_manager;

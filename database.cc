@@ -1650,17 +1650,8 @@ database::database() : database(db::config())
 {}
 
 database::database(const db::config& cfg)
-    : _cfg(std::make_unique<db::config>(cfg))
-    , _memtable_total_space([this] {
-        _stats = make_lw_shared<db_stats>();
-
-        auto memtable_total_space = size_t(_cfg->memtable_total_space_in_mb()) << 20;
-        if (!memtable_total_space) {
-            return memory::stats().total_memory() / 2;
-        }
-        return memtable_total_space;
-    }())
-    , _streaming_memtable_total_space(_memtable_total_space / 4)
+    : _stats(make_lw_shared<db_stats>())
+    , _cfg(std::make_unique<db::config>(cfg))
     // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
     , _system_dirty_memory_manager(*this, 10 << 20)
     , _dirty_memory_manager(*this, memory::stats().total_memory() * 0.45)
