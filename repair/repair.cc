@@ -32,6 +32,8 @@
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
+#include <boost/range/algorithm.hpp>
 
 #include <cryptopp/sha.h>
 #include <seastar/core/gate.hh>
@@ -608,36 +610,99 @@ static future<> repair_cf_range(repair_info& ri,
                     // If one of the available checksums is different, repair
                     // all the neighbors which returned a checksum.
                     auto checksum0 = checksums[0].get0();
-                    auto all_live_neighbors_have_same_checksum = std::all_of(live_neighbors_checksum.begin() + 1,
-                            live_neighbors_checksum.end(), [&live_neighbors_checksum] (const auto& checksum) {
-                            return checksum == live_neighbors_checksum.front();
-                    });
                     std::vector<gms::inet_address> live_neighbors_in(live_neighbors);
                     std::vector<gms::inet_address> live_neighbors_out(live_neighbors);
-                    if (all_live_neighbors_have_same_checksum) {
-                        // Since all the live neighbors have the same checksum,
-                        // we can fetch data from one of the them instead all of them.
-                        // TODO: Choose a best node from live_neighbors, not the first one
-                        logger.debug("Reduce live_neighbors_in {} to one node, range = {}", live_neighbors_in, range);
-                        live_neighbors_in.resize(1);
-                        // - If local node has zero data and all peer nodes have
-                        // the same data we can skip sending data to peer node.
-                        // - If local node has data and all peer nodes have the
-                        // same data, we need to fetch data from one of the
-                        // peer node and merge the data with local data and
-                        // send back to *all* the peer node.
-                        if (checksum0 == partition_checksum()) {
-                            logger.debug("Reduce live_neighbors_out {} to zero node, range = {}", live_neighbors_out, range);
-                            live_neighbors_out.clear();
+
+                    std::unordered_map<partition_checksum, std::vector<gms::inet_address>> checksum_map;
+                    for (size_t idx = 0 ; idx < live_neighbors.size(); idx++) {
+                        checksum_map[live_neighbors_checksum[idx]].emplace_back(live_neighbors[idx]);
+                    }
+
+                    auto node_reducer = [] (std::vector<gms::inet_address>& live_neighbors_in_or_out,
+                            std::vector<gms::inet_address>& nodes_with_same_checksum, size_t nr_nodes_to_keep) {
+                        auto nr_nodes = nodes_with_same_checksum.size();
+                        if (nr_nodes <= nr_nodes_to_keep) {
+                            return;
+                        }
+
+                        // TODO: Remove the "far" nodes and keep the "near" nodes
+                        // to have better streaming performance
+                        nodes_with_same_checksum.resize(nr_nodes - nr_nodes_to_keep);
+
+                        // Now, nodes_with_same_checksum contains nodes we want to remove, remove it from live_neighbors_in_or_out
+                        auto it = boost::range::remove_if(live_neighbors_in_or_out, [&nodes_with_same_checksum] (const auto& ip) {
+                            return boost::algorithm::any_of_equal(nodes_with_same_checksum, ip);
+                        });
+                        live_neighbors_in_or_out.erase(it, live_neighbors_in_or_out.end());
+                    };
+
+                    // Reduce in traffic
+                    for (auto& item : checksum_map) {
+                        auto& sum = item.first;
+                        auto nodes_with_same_checksum = item.second;
+                        // If remote nodes have the same checksum, fetch only from one of them
+                        size_t nr_nodes_to_fetch = 1;
+                        // If remote nodes have zero checksum or have the same
+                        // checksum as local checksum, do not fetch from them at all
+                        if (sum == partition_checksum() || sum == checksum0) {
+                            nr_nodes_to_fetch = 0;
+                        }
+                        // E.g.,
+                        // Local  Remote1 Remote2 Remote3
+                        // 5      5       5       5         : IN: 0
+                        // 5      5       5       0         : IN: 0
+                        // 5      5       0       0         : IN: 0
+                        // 5      0       0       0         : IN: 0
+                        // 0      5       5       5         : IN: 1
+                        // 0      5       5       0         : IN: 1
+                        // 0      5       0       0         : IN: 1
+                        // 0      0       0       0         : IN: 0
+                        // 3      5       5       3         : IN: 1
+                        // 3      5       3       3         : IN: 1
+                        // 3      3       3       3         : IN: 0
+                        // 3      5       4       3         : IN: 2
+                        node_reducer(live_neighbors_in, nodes_with_same_checksum, nr_nodes_to_fetch);
+                    }
+
+                    // Reduce out traffic
+                    if (live_neighbors_in.empty()) {
+                        for (auto& item : checksum_map) {
+                            auto& sum = item.first;
+                            auto nodes_with_same_checksum = item.second;
+                            // Skip to send to the nodes with the same checksum as local node
+                            // E.g.,
+                            // Local  Remote1 Remote2 Remote3
+                            // 5      5       5       5         : IN: 0  OUT: 0 SKIP_OUT: Remote1, Remote2, Remote3
+                            // 5      5       5       0         : IN: 0  OUT: 1 SKIP_OUT: Remote1, Remote2
+                            // 5      5       0       0         : IN: 0  OUT: 2 SKIP_OUT: Remote1
+                            // 5      0       0       0         : IN: 0  OUT: 3 SKIP_OUT: None
+                            // 0      0       0       0         : IN: 0  OUT: 0 SKIP_OUT: Remote1, Remote2, Remote3
+                            if (sum == checksum0) {
+                                size_t nr_nodes_to_send = 0;
+                                node_reducer(live_neighbors_out, nodes_with_same_checksum, nr_nodes_to_send);
+                            }
+                        }
+                    } else if (live_neighbors_in.size() == 1 && checksum0 == partition_checksum()) {
+                        for (auto& item : checksum_map) {
+                            auto& sum = item.first;
+                            auto nodes_with_same_checksum = item.second;
+                            // Skip to send to the nodes with none zero checksum
+                            // E.g.,
+                            // Local  Remote1 Remote2 Remote3
+                            // 0      5       5       5         : IN: 1  OUT: 0 SKIP_OUT: Remote1, Remote2, Remote3
+                            // 0      5       5       0         : IN: 1  OUT: 1 SKIP_OUT: Remote1, Remote2
+                            // 0      5       0       0         : IN: 1  OUT: 2 SKIP_OUT: Remote1
+                            if (sum != checksum0) {
+                                size_t nr_nodes_to_send = 0;
+                                node_reducer(live_neighbors_out, nodes_with_same_checksum, nr_nodes_to_send);
+                            }
                         }
                     }
-                    for (const auto& checksum : live_neighbors_checksum) {
-                        if (checksum0 != checksum) {
-                            logger.info("Found differing range {} on nodes {}, in = {}, out = {}", range,
-                                    live_neighbors, live_neighbors_in, live_neighbors_out);
-                            ri.request_transfer_ranges(cf, range, live_neighbors_in, live_neighbors_out);
-                            return make_ready_future<>();
-                        }
+                    if (!(live_neighbors_in.empty() && live_neighbors_out.empty())) {
+                        logger.info("Found differing range {} on nodes {}, in = {}, out = {}", range,
+                                live_neighbors, live_neighbors_in, live_neighbors_out);
+                        ri.request_transfer_ranges(cf, range, live_neighbors_in, live_neighbors_out);
+                        return make_ready_future<>();
                     }
                     return make_ready_future<>();
                 }).handle_exception([&ri, &success, &cf, &range] (std::exception_ptr eptr) {
