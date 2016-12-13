@@ -52,6 +52,7 @@ class result::partition_writer {
     md5_hasher& _digest;
     md5_hasher _digest_pos;
     uint32_t& _row_count;
+    uint32_t& _partition_count;
     api::timestamp_type& _last_modified;
 public:
     partition_writer(
@@ -63,6 +64,7 @@ public:
         ser::after_qr_partition__key w,
         md5_hasher& digest,
         uint32_t& row_count,
+        uint32_t& partition_count,
         api::timestamp_type& last_modified)
         : _request(request)
         , _w(std::move(w))
@@ -73,6 +75,7 @@ public:
         , _digest(digest)
         , _digest_pos(digest)
         , _row_count(row_count)
+        , _partition_count(partition_count)
         , _last_modified(last_modified)
     { }
 
@@ -108,6 +111,9 @@ public:
     uint32_t& row_count() {
         return _row_count;
     }
+    uint32_t& partition_count() {
+        return _partition_count;
+    }
     api::timestamp_type& last_modified() {
         return _last_modified;
     }
@@ -121,6 +127,7 @@ class result::builder {
     ser::query_result__partitions _w;
     result_request _request;
     uint32_t _row_count = 0;
+    uint32_t _partition_count = 0;
     api::timestamp_type _last_modified = api::missing_timestamp;
     short_read _short_read;
     result_memory_accounter _memory_accounter;
@@ -140,6 +147,14 @@ public:
 
     const partition_slice& slice() const { return _slice; }
 
+    uint32_t row_count() const {
+        return _row_count;
+    }
+
+    uint32_t partition_count() const {
+        return _partition_count;
+    }
+
     // Starts new partition and returns a builder for its contents.
     // Invalidates all previously obtained builders
     partition_writer add_partition(const schema& s, const partition_key& key) {
@@ -156,7 +171,8 @@ public:
         if (_request != result_request::only_result) {
             key.feed_hash(_digest, s);
         }
-        return partition_writer(_request, _slice, ranges, _w, std::move(pos), std::move(after_key), _digest, _row_count, _last_modified);
+        return partition_writer(_request, _slice, ranges, _w, std::move(pos), std::move(after_key), _digest, _row_count,
+                                _partition_count, _last_modified);
     }
 
     result build() {
