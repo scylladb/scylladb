@@ -196,6 +196,27 @@ result::result()
     }(), short_read::no, 0, 0)
 { }
 
+static void write_partial_partition(ser::writer_of_qr_partition&& pw, const ser::qr_partition_view& pv, uint32_t rows_to_include) {
+    auto key = pv.key();
+    auto static_cells_wr = (key ? std::move(pw).write_key(*key) : std::move(pw).skip_key())
+            .start_static_row()
+            .start_cells();
+    for (auto&& cell : pv.static_row().cells()) {
+        static_cells_wr.add(cell);
+    }
+    auto rows_wr = std::move(static_cells_wr)
+            .end_cells()
+            .end_static_row()
+            .start_rows();
+    auto rows = pv.rows();
+    // rows.size() can be 0 is there's a single static row
+    auto it = rows.begin();
+    for (uint32_t i = 0; i < std::min(rows.size(), uint64_t{rows_to_include}); ++i) {
+        rows_wr.add(*it++);
+    }
+    std::move(rows_wr).end_rows().end_qr_partition();
+}
+
 foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
     if (_partial.size() == 1) {
         return std::move(_partial[0]);
@@ -203,22 +224,27 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
 
     bytes_ostream w;
     auto partitions = ser::writer_of_query_result(w).start_partitions();
-    std::experimental::optional<uint32_t> row_count = 0;
+    uint32_t row_count = 0;
     short_read is_short_read;
     uint32_t partition_count = 0;
 
     for (auto&& r : _partial) {
-        if (row_count) {
-            if (r->row_count()) {
-                row_count = row_count.value() + r->row_count().value();
-            } else {
-                row_count = std::experimental::nullopt;
-            }
-        }
         result_view::do_with(*r, [&] (result_view rv) {
             for (auto&& pv : rv._v.partitions()) {
-                partitions.add(pv);
-                if (++partition_count >= _max_partitions) {
+                auto rows = pv.rows();
+                // If rows.empty(), then there's a static row, or there wouldn't be a partition
+                const uint32_t rows_in_partition = rows.size() ? : 1;
+                const uint32_t rows_to_include = std::min(_max_rows - row_count, rows_in_partition);
+                row_count += rows_to_include;
+                if (rows_to_include >= rows_in_partition) {
+                    partitions.add(pv);
+                    if (++partition_count >= _max_partitions) {
+                        return;
+                    }
+                } else if (rows_to_include > 0) {
+                    write_partial_partition(partitions.add(), pv, rows_to_include);
+                    return;
+                } else {
                     return;
                 }
             }
@@ -227,7 +253,7 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
             is_short_read = short_read::yes;
             break;
         }
-        if (partition_count >= _max_partitions) {
+        if (row_count >= _max_rows || partition_count >= _max_partitions) {
             break;
         }
     }

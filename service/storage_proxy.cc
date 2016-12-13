@@ -2671,7 +2671,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, std::vecto
         exec.push_back(get_read_executor(cmd, std::move(pr), cl, trace_state));
     }
 
-    query::result_merger merger(cmd->partition_limit);
+    query::result_merger merger(cmd->row_limit, cmd->partition_limit);
     merger.reserve(exec.size());
 
     auto f = ::map_reduce(exec.begin(), exec.end(), [timeout] (::shared_ptr<abstract_read_executor>& rex) {
@@ -2754,7 +2754,7 @@ storage_proxy::query_partition_key_range_concurrent(std::chrono::steady_clock::t
         exec.push_back(::make_shared<range_slice_read_executor>(schema, p, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state));
     }
 
-    query::result_merger merger(cmd->partition_limit);
+    query::result_merger merger(cmd->row_limit, cmd->partition_limit);
     merger.reserve(exec.size());
 
     auto f = ::map_reduce(exec.begin(), exec.end(), [timeout] (::shared_ptr<abstract_read_executor>& rex) {
@@ -2824,8 +2824,8 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
 
     return query_partition_key_range_concurrent(timeout, std::move(results), cmd, cl, ranges.begin(), std::move(ranges), concurrency_factor,
                                                 std::move(trace_state), cmd->row_limit, cmd->partition_limit)
-            .then([partition_limit = cmd->partition_limit](std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results) {
-        query::result_merger merger(partition_limit);
+            .then([row_limit = cmd->row_limit, partition_limit = cmd->partition_limit](std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results) {
+        query::result_merger merger(row_limit, partition_limit);
         merger.reserve(results.size());
 
         for (auto&& r: results) {
