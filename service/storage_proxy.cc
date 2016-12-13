@@ -428,26 +428,25 @@ storage_proxy::split_stats::split_stats(const sstring& category, const sstring& 
     // register a local Node counter to begin with...
     namespace sm = seastar::metrics;
 
-    _metrics = sm::create_metric_groups();
-    _metrics->add_group(_category, {
-        sm::make_derive("total_operations", _short_description_prefix + sstring(" (local Node)"), [this] { return _local.val; },
+    _metrics.add_group(_category, {
+        sm::make_derive(_short_description_prefix + sstring("_local_node"), [this] { return _local.val; },
                        sm::description(_long_description_prefix + "on a local Node"))
     });
 }
 
 storage_proxy::stats::stats()
-        : writes_attempts(COORDINATOR_STATS_CATEGORY, "total write attempts", "total number of write requests")
-        , writes_errors(COORDINATOR_STATS_CATEGORY, "write errors", "number of write requests that failed")
-        , read_repair_write_attempts(COORDINATOR_STATS_CATEGORY, "read repair write attempts", "number of write operations in a read repair context")
-        , data_read_attempts(COORDINATOR_STATS_CATEGORY, "data reads", "number of data read requests")
-        , data_read_completed(COORDINATOR_STATS_CATEGORY, "completed data reads", "number of data read requests that completed")
-        , data_read_errors(COORDINATOR_STATS_CATEGORY, "data read errors", "number of data read requests that failed")
-        , digest_read_attempts(COORDINATOR_STATS_CATEGORY, "digest reads", "number of digest read requests")
-        , digest_read_completed(COORDINATOR_STATS_CATEGORY, "completed digest reads", "number of digest read requests that completed")
-        , digest_read_errors(COORDINATOR_STATS_CATEGORY, "digest read errors", "number of digest read requests that failed")
-        , mutation_data_read_attempts(COORDINATOR_STATS_CATEGORY, "mutation data reads", "number of mutation data read requests")
-        , mutation_data_read_completed(COORDINATOR_STATS_CATEGORY, "completed mutation data reads", "number of mutation data read requests that completed")
-        , mutation_data_read_errors(COORDINATOR_STATS_CATEGORY, "mutation data read errors", "number of mutation data read requests that failed") {}
+        : writes_attempts(COORDINATOR_STATS_CATEGORY, "total_write_attempts", "total number of write requests")
+        , writes_errors(COORDINATOR_STATS_CATEGORY, "write_errors", "number of write requests that failed")
+        , read_repair_write_attempts(COORDINATOR_STATS_CATEGORY, "read_repair_write_attempts", "number of write operations in a read repair context")
+        , data_read_attempts(COORDINATOR_STATS_CATEGORY, "data_reads", "number of data read requests")
+        , data_read_completed(COORDINATOR_STATS_CATEGORY, "completed_data_reads", "number of data read requests that completed")
+        , data_read_errors(COORDINATOR_STATS_CATEGORY, "data_read_errors", "number of data read requests that failed")
+        , digest_read_attempts(COORDINATOR_STATS_CATEGORY, "digest_reads", "number of digest read requests")
+        , digest_read_completed(COORDINATOR_STATS_CATEGORY, "completed_digest_reads", "number of digest read requests that completed")
+        , digest_read_errors(COORDINATOR_STATS_CATEGORY, "digest_read_errors", "number of digest read requests that failed")
+        , mutation_data_read_attempts(COORDINATOR_STATS_CATEGORY, "mutation_data_reads", "number of mutation data read requests")
+        , mutation_data_read_completed(COORDINATOR_STATS_CATEGORY, "completed_mutation_data_reads", "number of mutation data read requests that completed")
+        , mutation_data_read_errors(COORDINATOR_STATS_CATEGORY, "mutation_data_read_errors", "number of mutation data read requests that failed") {}
 
 inline uint64_t& storage_proxy::split_stats::get_ep_stat(gms::inet_address ep) {
     if (is_me(ep)) {
@@ -461,8 +460,8 @@ inline uint64_t& storage_proxy::split_stats::get_ep_stat(gms::inet_address ep) {
     if (_dc_stats.find(dc) == _dc_stats.end()) {
         namespace sm = seastar::metrics;
 
-        _metrics->add_group(_category, {
-            sm::make_derive("total_operations", seastar::format("{} (external Nodes in DC: {})", _short_description_prefix, dc), [this, dc] { return _dc_stats[dc].val; },
+        _metrics.add_group(_category, {
+            sm::make_derive(seastar::format("{}_{}", _short_description_prefix, dc), [this, dc] { return _dc_stats[dc].val; },
                             sm::description(seastar::format("{} when communicating with external Nodes in DC {}", _long_description_prefix, dc)))
         });
     }
@@ -473,65 +472,64 @@ storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
     namespace sm = seastar::metrics;
 
-    _metrics = sm::create_metric_groups();
-    _metrics->add_group(COORDINATOR_STATS_CATEGORY, {
-        sm::make_gauge("queue_length", "foreground writes", [this] { return _stats.writes - _stats.background_writes; },
+    _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
+        sm::make_queue_length("foreground_writes", [this] { return _stats.writes - _stats.background_writes; },
                        sm::description("number of currently pending forground write requests")),
 
-        sm::make_gauge("queue_length", "background writes", [this] { return _stats.background_writes; },
+        sm::make_queue_length("background_writes", [this] { return _stats.background_writes; },
                        sm::description("number of currently pending background write requests")),
 
-        sm::make_gauge("queue_length", "throttled writes", [this] { return _throttled_writes.size(); },
+        sm::make_queue_length("throttled_writes", [this] { return _throttled_writes.size(); },
                        sm::description("number of currently throttled write requests")),
 
-        sm::make_derive("total_operations", "throttled writes", [this] { return _stats.throttled_writes; },
+        sm::make_total_operations("throttled_writes", [this] { return _stats.throttled_writes; },
                        sm::description("number of throttled write requests")),
 
-        sm::make_gauge("bytes", "queued write bytes", [this] { return _stats.queued_write_bytes; },
+        sm::make_current_bytes("queued_write_bytes", [this] { return _stats.queued_write_bytes; },
                        sm::description("number of bytes in pending write requests")),
 
-        sm::make_gauge("bytes", "background write bytes", [this] { return _stats.background_write_bytes; },
+        sm::make_current_bytes("background_write_bytes", [this] { return _stats.background_write_bytes; },
                        sm::description("number of bytes in pending background write requests")),
 
-        sm::make_gauge("queue_length", "reads", [this] { return _stats.reads; },
+        sm::make_queue_length("reads", [this] { return _stats.reads; },
                        sm::description("number of currently pending read requests")),
 
-        sm::make_gauge("queue_length", "background reads", [this] { return _stats.background_reads; },
+        sm::make_queue_length("background_reads", [this] { return _stats.background_reads; },
                        sm::description("number of currently pending background read requests")),
 
-        sm::make_derive("total_operations", "read retries", [this] { return _stats.read_retries; },
+        sm::make_total_operations("read_retries", [this] { return _stats.read_retries; },
                        sm::description("number of read retry attempts")),
 
-        sm::make_derive("total_operations", "canceled read repairs", [this] { return _stats.global_read_repairs_canceled_due_to_concurrent_write; },
+        sm::make_total_operations("canceled_read_repairs", [this] { return _stats.global_read_repairs_canceled_due_to_concurrent_write; },
                        sm::description("number of global read repairs canceled due to a concurrent write")),
 
-        sm::make_derive("total_operations", "write timeouts", [this] { return _stats.write_timeouts._count; },
+        sm::make_total_operations("write_timeouts", [this] { return _stats.write_timeouts._count; },
                        sm::description("number of write request failed due to a timeout")),
 
-        sm::make_derive("total_operations", "write unavailable", [this] { return _stats.write_unavailables._count; },
+        sm::make_total_operations("write_unavailable", [this] { return _stats.write_unavailables._count; },
                        sm::description("number write requests failed due to an \"unavailable\" error")),
 
-        sm::make_derive("total_operations", "read timeouts", [this] { return _stats.read_timeouts._count; },
+        sm::make_total_operations("read_timeouts", [this] { return _stats.read_timeouts._count; },
                        sm::description("number of read request failed due to a timeout")),
 
-        sm::make_derive("total_operations", "read unavailable", [this] { return _stats.read_unavailables._count; },
+        sm::make_total_operations("read_unavailable", [this] { return _stats.read_unavailables._count; },
                        sm::description("number read requests failed due to an \"unavailable\" error")),
 
-        sm::make_derive("total_operations", "range timeouts", [this] { return _stats.range_slice_timeouts._count; },
+        sm::make_total_operations("range_timeouts", [this] { return _stats.range_slice_timeouts._count; },
                        sm::description("number of range read operations failed due to a timeout")),
 
-        sm::make_derive("total_operations", "range unavailable", [this] { return _stats.range_slice_unavailables._count; },
+        sm::make_total_operations("range_unavailable", [this] { return _stats.range_slice_unavailables._count; },
                        sm::description("number of range read operations failed due to an \"unavailable\" error")),
     });
 
-    _metrics->add_group(REPLICA_STATS_CATEGORY, {
-        sm::make_derive("total_operations", "received mutations", _stats.received_mutations,
+    _metrics.add_group(REPLICA_STATS_CATEGORY, {
+        sm::make_total_operations("received_mutations", _stats.received_mutations,
                        sm::description("number of mutations received by a replica Node")),
 
-        sm::make_derive("total_operations", "forwarded mutations", _stats.forwarded_mutations,
+        sm::make_total_operations("forwarded_mutations", _stats.forwarded_mutations,
                        sm::description("number of mutations forwarded to other replica Nodes")),
 
-        sm::make_derive("total_operations", "forwarding errors", _stats.forwarding_errors,
+        sm::make_total_operations("forwarding_errors", _stats.forwarding_errors,
                        sm::description("number of errors during forwarding mutations to other replica Nodes")),
     });
 }
