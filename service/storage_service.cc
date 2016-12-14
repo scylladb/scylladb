@@ -3130,9 +3130,9 @@ future<> storage_service::move(token new_token) {
     });
 }
 
-std::vector<storage_service::token_range>
+std::vector<storage_service::token_range_endpoints>
 storage_service::describe_ring(const sstring& keyspace, bool include_only_local_dc) const {
-    std::vector<token_range> ranges;
+    std::vector<token_range_endpoints> ranges;
     //Token.TokenFactory tf = getPartitioner().getTokenFactory();
 
     std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> range_to_address_map =
@@ -3142,7 +3142,7 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
     for (auto entry : range_to_address_map) {
         auto range = entry.first;
         auto addresses = entry.second;
-        token_range tr;
+        token_range_endpoints tr;
         if (range.start()) {
             tr._start_token = dht::global_partitioner().to_sstring(range.start()->value());
         }
@@ -3161,10 +3161,10 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
         ranges.push_back(tr);
     }
     // Convert to wrapping ranges
-    auto left_inf = boost::find_if(ranges, [] (const token_range& tr) {
+    auto left_inf = boost::find_if(ranges, [] (const token_range_endpoints& tr) {
         return tr._start_token.empty();
     });
-    auto right_inf = boost::find_if(ranges, [] (const token_range& tr) {
+    auto right_inf = boost::find_if(ranges, [] (const token_range_endpoints& tr) {
         return tr._end_token.empty();
     });
     using set = std::unordered_set<sstring>;

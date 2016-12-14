@@ -47,7 +47,7 @@
 #include "core/distributed.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/boot_strapper.hh"
-#include "dht/token_range.hh"
+#include "dht/token_range_endpoints.hh"
 #include "core/sleep.hh"
 #include "gms/application_state.hh"
 #include "db/system_keyspace.hh"
@@ -98,7 +98,7 @@ public:
     };
 private:
     using token = dht::token;
-    using token_range = dht::token_range;
+    using token_range_endpoints = dht::token_range_endpoints;
     using endpoint_details = dht::endpoint_details;
     using boot_strapper = dht::boot_strapper;
     using token_metadata = locator::token_metadata;
@@ -566,7 +566,7 @@ public:
         return describeRing(keyspace, true);
     }
 #endif
-    std::vector<token_range> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const;
+    std::vector<token_range_endpoints> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const;
 
     /**
      * Retrieve a map of tokens to endpoints, including the bootstrapping ones.
