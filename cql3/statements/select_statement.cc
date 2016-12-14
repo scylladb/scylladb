@@ -377,8 +377,8 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
         if (_is_reversed) {
             rs->reverse();
         }
+        rs->trim(cmd->row_limit);
     }
-    rs->trim(cmd->row_limit);
     return ::make_shared<transport::messages::result_message::rows>(std::move(rs));
 }
 
