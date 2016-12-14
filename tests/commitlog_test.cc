@@ -296,7 +296,6 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
     };
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
-    logging::logger_registry().set_logger_level("commitlog", seastar::log_level::trace);
     return cl_test(cfg, [](commitlog& log) {
             auto set = make_lw_shared<std::set<segment_id_type>>();
             auto count = make_lw_shared<size_t>(0);
