@@ -232,34 +232,19 @@ private:
             impl& _impl;
             uint32_t page_size;
             uint32_t part_rows = 0;
-
-            uint32_t included_rows = 0;
             uint32_t total_rows = 0;
             std::experimental::optional<partition_key> last_pkey;
             std::experimental::optional<clustering_key> last_ckey;
 
-            // just for verbosity
-            uint32_t part_ignored = 0;
-
             clustering_key::less_compare _less;
 
-            bool include_row() {
+            void include_row() {
                 ++total_rows;
                 ++part_rows;
-                if (included_rows >= page_size) {
-                    ++part_ignored;
-                    return false;
-                }
-                ++included_rows;
-                return true;
             }
-
-            bool include_row(const clustering_key& key) {
-                if (!include_row()) {
-                    return false;
-                }
+            void include_row(const clustering_key& key) {
+                include_row();
                 last_ckey = key;
-                return true;
             }
             myvisitor(impl& i, uint32_t ps,
                     cql3::selection::result_set_builder& builder,
@@ -274,8 +259,7 @@ private:
             void accept_new_partition(const partition_key& key, uint32_t row_count) {
                 logger.trace("Begin partition: {} ({})", key, row_count);
                 part_rows = 0;
-                part_ignored = 0;
-                if (included_rows < page_size) {
+                if (total_rows < page_size) {
                     last_pkey = key;
                     last_ckey = { };
                 }
@@ -284,20 +268,13 @@ private:
             void accept_new_row(const clustering_key& key,
                     const query::result_row_view& static_row,
                     const query::result_row_view& row) {
-                // TODO: should we use exception/long jump or introduce
-                // a "stop" condition to the calling result_view and
-                // avoid processing unneeded rows?
-                auto ok = include_row(key);
-                if (ok) {
-                    visitor::accept_new_row(key, static_row, row);
-                }
+                include_row(key);
+                visitor::accept_new_row(key, static_row, row);
             }
             void accept_new_row(const query::result_row_view& static_row,
                     const query::result_row_view& row) {
-                auto ok = include_row();
-                if (ok) {
-                    visitor::accept_new_row(static_row, row);
-                }
+                include_row();
+                visitor::accept_new_row(static_row, row);
             }
             void accept_partition_end(const query::result_row_view& static_row) {
                 // accept_partition_end with row_count == 0
@@ -306,13 +283,9 @@ private:
                 // no CK restrictions.
                 // I.e. _row_count == 0 -> add a partially empty row
                 // So, treat this case as an accept_row variant
-                if (_row_count > 0 || include_row()) {
-                    visitor::accept_partition_end(static_row);
-                }
-                logger.trace(
-                        "End partition, included={}, ignored={}",
-                        part_rows - part_ignored,
-                        part_ignored);
+                include_row();
+                visitor::accept_partition_end(static_row);
+                logger.trace("End partition, rows={}", part_rows);
             }
         };
 
@@ -328,13 +301,12 @@ private:
             _cmd->slice.clear_range(*_schema, *_last_pkey);
         }
 
-        _max = _max - v.included_rows;
-        _exhausted = (v.included_rows < page_size && !results->is_short_read()) || _max == 0;
+        _max = _max - v.total_rows;
+        _exhausted = (v.total_rows < page_size && !results->is_short_read()) || _max == 0;
         _last_pkey = v.last_pkey;
         _last_ckey = v.last_ckey;
 
-        logger.debug("Fetched {}/{} rows, max_remain={} {}", v.included_rows, v.total_rows,
-                _max, _exhausted ? "(exh)" : "");
+        logger.debug("Fetched {} rows, max_remain={} {}", v.total_rows, _max, _exhausted ? "(exh)" : "");
 
         if (_last_pkey) {
             logger.debug("Last partition key: {}", *_last_pkey);
