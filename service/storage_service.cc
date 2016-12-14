@@ -2474,21 +2474,21 @@ void storage_service::unbootstrap() {
 }
 
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
-    std::unordered_multimap<sstring, std::unordered_map<inet_address, std::vector<dht::token_range>>> ranges_to_fetch;
+    std::unordered_multimap<sstring, std::unordered_map<inet_address, dht::token_range_vector>> ranges_to_fetch;
 
     auto my_address = get_broadcast_address();
 
     auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
     for (const auto& keyspace_name : non_system_keyspaces) {
         std::unordered_multimap<dht::token_range, inet_address> changed_ranges = get_changed_ranges_for_leaving(keyspace_name, endpoint);
-        std::vector<dht::token_range> my_new_ranges;
+        dht::token_range_vector my_new_ranges;
         for (auto& x : changed_ranges) {
             if (x.second == my_address) {
                 my_new_ranges.emplace_back(x.first);
             }
         }
         std::unordered_multimap<inet_address, dht::token_range> source_ranges = get_new_source_ranges(keyspace_name, my_new_ranges);
-        std::unordered_map<inet_address, std::vector<dht::token_range>> tmp;
+        std::unordered_map<inet_address, dht::token_range_vector> tmp;
         for (auto& x : source_ranges) {
             tmp[x.first].emplace_back(x.second);
         }
@@ -2497,7 +2497,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
     auto sp = make_lw_shared<streaming::stream_plan>("Restore replica count");
     for (auto& x: ranges_to_fetch) {
         const sstring& keyspace_name = x.first;
-        std::unordered_map<inet_address, std::vector<dht::token_range>>& maps = x.second;
+        std::unordered_map<inet_address, dht::token_range_vector>& maps = x.second;
         for (auto& m : maps) {
             auto source = m.first;
             auto ranges = m.second;
@@ -2600,7 +2600,7 @@ void storage_service::leave_ring() {
 future<>
 storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream_by_keyspace) {
     // First, we build a list of ranges to stream to each host, per table
-    std::unordered_map<sstring, std::unordered_map<inet_address, std::vector<dht::token_range>>> sessions_to_stream_by_keyspace;
+    std::unordered_map<sstring, std::unordered_map<inet_address, dht::token_range_vector>> sessions_to_stream_by_keyspace;
     for (auto& entry : ranges_to_stream_by_keyspace) {
         const auto& keyspace = entry.first;
         auto& ranges_with_endpoints = entry.second;
@@ -2609,7 +2609,7 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
             continue;
         }
 
-        std::unordered_map<inet_address, std::vector<dht::token_range>> ranges_per_endpoint;
+        std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
         for (auto& end_point_entry : ranges_with_endpoints) {
             dht::token_range r = end_point_entry.first;
             inet_address endpoint = end_point_entry.second;
@@ -2666,7 +2666,7 @@ future<> storage_service::stream_hints() {
         auto hints_destination_host = candidates.front();
 
         // stream all hints -- range list will be a singleton of "the entire ring"
-        std::vector<dht::token_range> ranges = {dht::token_range::make_open_ended_both_sides()};
+        dht::token_range_vector ranges = {dht::token_range::make_open_ended_both_sides()};
         logger.debug("stream_hints: ranges={}", ranges);
 
         auto sp = make_lw_shared<streaming::stream_plan>("Hints");
@@ -2837,7 +2837,7 @@ future<> storage_service::shutdown_client_servers() {
 }
 
 std::unordered_multimap<inet_address, dht::token_range>
-storage_service::get_new_source_ranges(const sstring& keyspace_name, const std::vector<dht::token_range>& ranges) {
+storage_service::get_new_source_ranges(const sstring& keyspace_name, const dht::token_range_vector& ranges) {
     auto my_address = get_broadcast_address();
     auto& fd = gms::get_local_failure_detector();
     auto& ks = _db.local().find_keyspace(keyspace_name);
@@ -2874,7 +2874,7 @@ storage_service::get_new_source_ranges(const sstring& keyspace_name, const std::
 }
 
 std::pair<std::unordered_set<dht::token_range>, std::unordered_set<dht::token_range>>
-storage_service::calculate_stream_and_fetch_ranges(const std::vector<dht::token_range>& current, const std::vector<dht::token_range>& updated) {
+storage_service::calculate_stream_and_fetch_ranges(const dht::token_range_vector& current, const dht::token_range_vector& updated) {
     std::unordered_set<dht::token_range> to_stream;
     std::unordered_set<dht::token_range> to_fetch;
 
@@ -2937,9 +2937,9 @@ void storage_service::range_relocator::calculate_to_from_streams(std::unordered_
             auto& ks = ss._db.local().find_keyspace(keyspace);
             auto& strategy = ks.get_replication_strategy();
             // getting collection of the currently used ranges by this keyspace
-            std::vector<dht::token_range> current_ranges = ss.get_ranges_for_endpoint(keyspace, local_address);
+            dht::token_range_vector current_ranges = ss.get_ranges_for_endpoint(keyspace, local_address);
             // collection of ranges which this node will serve after move to the new token
-            std::vector<dht::token_range> updated_ranges = strategy.get_pending_address_ranges(token_meta_clone, new_token, local_address);
+            dht::token_range_vector updated_ranges = strategy.get_pending_address_ranges(token_meta_clone, new_token, local_address);
 
             // ring ranges and endpoints associated with them
             // this used to determine what nodes should we ping about range data
@@ -3024,7 +3024,7 @@ void storage_service::range_relocator::calculate_to_from_streams(std::unordered_
             // calculating endpoints to stream current ranges to if needed
             // in some situations node will handle current ranges as part of the new ranges
             std::unordered_multimap<inet_address, dht::token_range> endpoint_ranges;
-            std::unordered_map<inet_address, std::vector<dht::token_range>> endpoint_ranges_map;
+            std::unordered_map<inet_address, dht::token_range_vector> endpoint_ranges_map;
             for (dht::token_range to_stream : ranges_per_keyspace.first) {
                 auto end_token = to_stream.end() ? to_stream.end()->value() : dht::maximum_token();
                 std::vector<inet_address> current_endpoints = strategy.calculate_natural_endpoints(end_token, token_meta_clone);
@@ -3056,7 +3056,7 @@ void storage_service::range_relocator::calculate_to_from_streams(std::unordered_
             // stream requests
             std::unordered_multimap<inet_address, dht::token_range> work =
                 dht::range_streamer::get_work_map(ranges_to_fetch_with_preferred_endpoints, keyspace);
-            std::unordered_map<inet_address, std::vector<dht::token_range>> work_map;
+            std::unordered_map<inet_address, dht::token_range_vector> work_map;
             for (auto& x : work) {
                 work_map[x.first].emplace_back(x.second);
             }
@@ -3182,7 +3182,7 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
 std::unordered_map<dht::token_range, std::vector<inet_address>>
 storage_service::construct_range_to_endpoint_map(
         const sstring& keyspace,
-        const std::vector<dht::token_range>& ranges) const {
+        const dht::token_range_vector& ranges) const {
     std::unordered_map<dht::token_range, std::vector<inet_address>> res;
     for (auto r : ranges) {
         res[r] = _db.local().find_keyspace(keyspace).get_replication_strategy().get_natural_endpoints(
@@ -3389,17 +3389,17 @@ storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, rang
     return calculate_splits(std::move(tokens), split_count, cf);
 };
 
-std::vector<dht::token_range>
+dht::token_range_vector
 storage_service::get_ranges_for_endpoint(const sstring& name, const gms::inet_address& ep) const {
     return _db.local().find_keyspace(name).get_replication_strategy().get_ranges(ep);
 }
 
-std::vector<dht::token_range>
+dht::token_range_vector
 storage_service::get_all_ranges(const std::vector<token>& sorted_tokens) const {
     if (sorted_tokens.empty())
-        return std::vector<dht::token_range>();
+        return dht::token_range_vector();
     int size = sorted_tokens.size();
-    std::vector<dht::token_range> ranges;
+    dht::token_range_vector ranges;
     ranges.push_back(dht::token_range::make_ending_with(range_bound<token>(sorted_tokens[0], true)));
     for (int i = 1; i < size; ++i) {
         dht::token_range r(range<token>::bound(sorted_tokens[i - 1], false), range<token>::bound(sorted_tokens[i], true));

@@ -708,7 +708,7 @@ future<> messaging_service::send_stream_mutation(msg_addr id, UUID plan_id, froz
 
 // STREAM_MUTATION_DONE
 void messaging_service::register_stream_mutation_done(std::function<future<> (const rpc::client_info& cinfo,
-        UUID plan_id, std::vector<dht::token_range> ranges, UUID cf_id, unsigned dst_cpu_id)>&& func) {
+        UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id)>&& func) {
     register_handler(this, messaging_verb::STREAM_MUTATION_DONE,
             [func = std::move(func)] (const rpc::client_info& cinfo,
                     UUID plan_id, std::vector<wrapping_range<dht::token>> ranges,
@@ -716,7 +716,7 @@ void messaging_service::register_stream_mutation_done(std::function<future<> (co
         return func(cinfo, plan_id, compat::unwrap(std::move(ranges)), cf_id, dst_cpu_id);
     });
 }
-future<> messaging_service::send_stream_mutation_done(msg_addr id, UUID plan_id, std::vector<dht::token_range> ranges, UUID cf_id, unsigned dst_cpu_id) {
+future<> messaging_service::send_stream_mutation_done(msg_addr id, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id) {
     return send_message_timeout_and_retry<void>(this, messaging_verb::STREAM_MUTATION_DONE, id,
         streaming_timeout, streaming_nr_retry, streaming_wait_before_retry,
         plan_id, std::move(ranges), cf_id, dst_cpu_id);

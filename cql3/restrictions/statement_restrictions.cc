@@ -352,7 +352,7 @@ void statement_restrictions::process_clustering_columns_restrictions(bool has_qu
     }
 }
 
-std::vector<dht::partition_range> statement_restrictions::get_partition_key_ranges(const query_options& options) const {
+dht::partition_range_vector statement_restrictions::get_partition_key_ranges(const query_options& options) const {
     if (_partition_key_restrictions->empty()) {
         return {dht::partition_range::make_open_ended_both_sides()};
     }

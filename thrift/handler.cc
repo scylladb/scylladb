@@ -331,7 +331,7 @@ public:
         });
     }
 
-    static lw_shared_ptr<query::read_command> make_paged_read_cmd(const schema& s, uint32_t column_limit, const std::string* start_column, const std::vector<dht::partition_range>& range) {
+    static lw_shared_ptr<query::read_command> make_paged_read_cmd(const schema& s, uint32_t column_limit, const std::string* start_column, const dht::partition_range_vector& range) {
         auto opts = query_opts(s);
         std::vector<query::clustering_range> clustering_ranges;
         std::vector<column_id> regular_columns;
@@ -369,7 +369,7 @@ public:
     static future<> do_get_paged_slice(
             schema_ptr schema,
             uint32_t column_limit,
-            std::vector<dht::partition_range> range,
+            dht::partition_range_vector range,
             const std::string* start_column,
             db::consistency_level consistency_level,
             std::vector<KeySlice>& output) {
@@ -722,7 +722,7 @@ public:
 
     void describe_splits_ex(tcxx::function<void(std::vector<CfSplit>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& cfName, const std::string& start_token, const std::string& end_token, const int32_t keys_per_split) {
         with_cob(std::move(cob), std::move(exn_cob), [&]{
-            std::vector<dht::token_range> ranges;
+            dht::token_range_vector ranges;
             auto tstart = start_token.empty() ? dht::minimum_token() : dht::global_partitioner().from_sstring(sstring(start_token));
             auto tend = end_token.empty() ? dht::maximum_token() : dht::global_partitioner().from_sstring(sstring(end_token));
             range<dht::token> r({{ std::move(tstart), false }}, {{ std::move(tend), true }});
@@ -1407,8 +1407,8 @@ private:
         }
         return ret;
     }
-    static std::vector<dht::partition_range> make_partition_ranges(const schema& s, const std::vector<std::string>& keys) {
-        std::vector<dht::partition_range> ranges;
+    static dht::partition_range_vector make_partition_ranges(const schema& s, const std::vector<std::string>& keys) {
+        dht::partition_range_vector ranges;
         for (auto&& key : keys) {
             auto pk = key_from_thrift(s, to_bytes_view(key));
             auto dk = dht::global_partitioner().decorate_key(s, pk);
@@ -1510,7 +1510,7 @@ private:
         }
     };
     using column_counter = column_visitor<counter>;
-    static std::vector<dht::partition_range> make_partition_range(const schema& s, const KeyRange& range) {
+    static dht::partition_range_vector make_partition_range(const schema& s, const KeyRange& range) {
         if (range.__isset.row_filter) {
             fail(unimplemented::cause::INDEXES);
         }

@@ -49,7 +49,7 @@ class repair_info {
 public:
     seastar::sharded<database>& db;
     sstring keyspace;
-    std::vector<dht::token_range> ranges;
+    dht::token_range_vector ranges;
     std::vector<sstring> cfs;
     int id;
     std::vector<sstring> data_centers;
@@ -64,7 +64,7 @@ public:
 public:
     repair_info(seastar::sharded<database>& db_,
             const sstring& keyspace_,
-            const std::vector<dht::token_range>& ranges_,
+            const dht::token_range_vector& ranges_,
             const std::vector<sstring>& cfs_,
             int id_,
             const std::vector<sstring>& data_centers_,
@@ -423,7 +423,7 @@ std::ostream& operator<<(std::ostream& out, const partition_checksum& c) {
 // vary the collection of sstables used throught a long repair.
 static future<partition_checksum> checksum_range_shard(database &db,
         const sstring& keyspace_name, const sstring& cf_name,
-        const std::vector<dht::partition_range>& prs, repair_checksum hash_version) {
+        const dht::partition_range_vector& prs, repair_checksum hash_version) {
     auto& cf = db.find_column_family(keyspace_name, cf_name);
     auto reader = cf.make_streaming_reader(cf.schema(), prs);
     return do_with(std::move(reader), partition_checksum(),
@@ -741,24 +741,24 @@ static future<> repair_range(repair_info& ri, auto& range) {
     });
 }
 
-static std::vector<dht::token_range> get_ranges_for_endpoint(
+static dht::token_range_vector get_ranges_for_endpoint(
         database& db, sstring keyspace, gms::inet_address ep) {
     auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
     return rs.get_ranges(ep);
 }
 
-static std::vector<dht::token_range> get_local_ranges(
+static dht::token_range_vector get_local_ranges(
         database& db, sstring keyspace) {
     return get_ranges_for_endpoint(db, keyspace, utils::fb_utilities::get_broadcast_address());
 }
 
-static std::vector<dht::token_range> get_primary_ranges_for_endpoint(
+static dht::token_range_vector get_primary_ranges_for_endpoint(
         database& db, sstring keyspace, gms::inet_address ep) {
     auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
     return rs.get_primary_ranges(ep);
 }
 
-static std::vector<dht::token_range> get_primary_ranges(
+static dht::token_range_vector get_primary_ranges(
         database& db, sstring keyspace) {
     return get_primary_ranges_for_endpoint(db, keyspace,
             utils::fb_utilities::get_broadcast_address());
@@ -774,7 +774,7 @@ struct repair_options {
     // If ranges is not empty, it overrides the repair's default heuristics
     // for determining the list of ranges to repair. In particular, "ranges"
     // overrides the setting of "primary_range".
-    std::vector<dht::token_range> ranges;
+    dht::token_range_vector ranges;
     // If start_token and end_token are set, they define a range which is
     // intersected with the ranges actually held by this node to decide what
     // to repair.
@@ -897,7 +897,7 @@ private:
 
     // A range is expressed as start_token:end token and multiple ranges can
     // be given as comma separated ranges(e.g. aaa:bbb,ccc:ddd).
-    static void ranges_opt(std::vector<dht::token_range>& var,
+    static void ranges_opt(dht::token_range_vector& var,
             std::unordered_map<sstring, sstring>& options,
                         const sstring& key) {
         auto it = options.find(key);
@@ -989,7 +989,7 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     // local ranges (the token ranges for which this node holds a replica of).
     // Each of these ranges may have a different set of replicas, so the
     // repair of each range is performed separately with repair_range().
-    std::vector<dht::token_range> ranges;
+    dht::token_range_vector ranges;
     if (options.ranges.size()) {
         ranges = options.ranges;
     } else if (options.primary_range) {
@@ -1033,7 +1033,7 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
                 false);
         }
         dht::token_range given_range_complement(tok_end, tok_start);
-        std::vector<dht::token_range> intersections;
+        dht::token_range_vector intersections;
         for (const auto& range : ranges) {
             auto rs = range.subtract(given_range_complement,
                     dht::token_comparator());

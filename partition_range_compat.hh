@@ -102,13 +102,13 @@ wrap(std::vector<nonwrapping_range<T>>&& v) {
 }
 
 inline
-std::vector<dht::token_range>
+dht::token_range_vector
 unwrap(const std::vector<wrapping_range<dht::token>>& v) {
     return unwrap(v, dht::token_comparator());
 }
 
 inline
-std::vector<dht::token_range>
+dht::token_range_vector
 unwrap(std::vector<wrapping_range<dht::token>>&& v) {
     return unwrap(std::move(v), dht::token_comparator());
 }
@@ -123,8 +123,8 @@ public:
     explicit one_or_two_partition_ranges(dht::partition_range&& f, dht::partition_range&& s)
         : pair(std::move(f), std::move(s)) {
     }
-    operator std::vector<dht::partition_range>() const & {
-        auto ret = std::vector<dht::partition_range>();
+    operator dht::partition_range_vector() const & {
+        auto ret = dht::partition_range_vector();
         // not reserving, since ret.size() is likely to be 1
         ret.push_back(first);
         if (second) {
@@ -132,8 +132,8 @@ public:
         }
         return ret;
     }
-    operator std::vector<dht::partition_range>() && {
-        auto ret = std::vector<dht::partition_range>();
+    operator dht::partition_range_vector() && {
+        auto ret = dht::partition_range_vector();
         // not reserving, since ret.size() is likely to be 1
         ret.push_back(std::move(first));
         if (second) {

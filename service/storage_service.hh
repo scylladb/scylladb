@@ -185,7 +185,7 @@ public:
     }
 #endif
 public:
-    std::vector<dht::token_range> get_local_ranges(const sstring& keyspace_name) {
+    dht::token_range_vector get_local_ranges(const sstring& keyspace_name) {
         return get_ranges_for_endpoint(keyspace_name, get_broadcast_address());
     }
 #if 0
@@ -598,7 +598,7 @@ public:
     */
     std::unordered_map<dht::token_range, std::vector<inet_address>> construct_range_to_endpoint_map(
             const sstring& keyspace,
-            const std::vector<dht::token_range>& ranges) const;
+            const dht::token_range_vector& ranges) const;
 public:
     virtual void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
     virtual void before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, const gms::versioned_value& new_value) override;
@@ -757,7 +757,7 @@ private:
      * @param ranges the ranges to find sources for
      * @return multimap of addresses to ranges the address is responsible for
      */
-    std::unordered_multimap<inet_address, dht::token_range> get_new_source_ranges(const sstring& keyspaceName, const std::vector<dht::token_range>& ranges);
+    std::unordered_multimap<inet_address, dht::token_range> get_new_source_ranges(const sstring& keyspaceName, const dht::token_range_vector& ranges);
 public:
     future<> confirm_replication(inet_address node);
 
@@ -1600,7 +1600,7 @@ public:
      * @param ep endpoint we are interested in.
      * @return ranges for the specified endpoint.
      */
-    std::vector<dht::token_range> get_ranges_for_endpoint(const sstring& name, const gms::inet_address& ep) const;
+    dht::token_range_vector get_ranges_for_endpoint(const sstring& name, const gms::inet_address& ep) const;
 
     /**
      * Get all ranges that span the ring given a set
@@ -1608,7 +1608,7 @@ public:
      * ranges.
      * @return ranges in sorted order
     */
-    std::vector<dht::token_range> get_all_ranges(const std::vector<token>& sorted_tokens) const;
+    dht::token_range_vector get_all_ranges(const std::vector<token>& sorted_tokens) const;
     /**
      * This method returns the N endpoints that are responsible for storing the
      * specified key i.e for replication.
@@ -1994,7 +1994,7 @@ public:
      * @return pair of ranges to stream/fetch for given current and updated range collections
      */
     std::pair<std::unordered_set<dht::token_range>, std::unordered_set<dht::token_range>>
-    calculate_stream_and_fetch_ranges(const std::vector<dht::token_range>& current, const std::vector<dht::token_range>& updated);
+    calculate_stream_and_fetch_ranges(const dht::token_range_vector& current, const dht::token_range_vector& updated);
 #if 0
     public void bulkLoad(String directory)
     {

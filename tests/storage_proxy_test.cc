@@ -59,7 +59,7 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
             std::vector<dht::ring_position> ring = make_ring(s, 10);
 
             auto check = [&s](locator::token_metadata& tm, dht::partition_range input,
-                              std::vector<dht::partition_range> expected) {
+                              dht::partition_range_vector expected) {
                 auto actual = service::get_restricted_ranges(tm, *s, input);
                 if (!std::equal(actual.begin(), actual.end(), expected.begin(), [&s](auto&& r1, auto&& r2) {
                     return r1.equal(r2, dht::ring_position_comparator(*s));

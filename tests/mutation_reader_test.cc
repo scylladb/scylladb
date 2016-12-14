@@ -324,7 +324,7 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
                 return make_reader_returning_many(std::move(ms), range);
             });
 
-            auto ranges = std::vector<dht::partition_range> {
+            auto ranges = dht::partition_range_vector {
                     dht::partition_range::make(ring[1], ring[2]),
                     dht::partition_range::make_singular(ring[4]),
                     dht::partition_range::make(ring[6], ring[8]),

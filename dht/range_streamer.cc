@@ -104,7 +104,7 @@ range_streamer::get_range_fetch_map(const std::unordered_multimap<dht::token_ran
 }
 
 std::unordered_multimap<dht::token_range, inet_address>
-range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, std::vector<dht::token_range> desired_ranges) {
+range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dht::token_range_vector desired_ranges) {
     logger.debug("{} ks={}", __func__, keyspace_name);
 
     auto& ks = _db.local().find_keyspace(keyspace_name);
@@ -138,7 +138,7 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, st
 }
 
 std::unordered_multimap<dht::token_range, inet_address>
-range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, std::vector<dht::token_range> desired_ranges) {
+range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, dht::token_range_vector desired_ranges) {
     logger.debug("{} ks={}", __func__, keyspace_name);
     assert (_tokens.empty() == false);
 
@@ -211,7 +211,7 @@ bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name)
            && _metadata.get_all_endpoints().size() != strat.get_replication_factor();
 }
 
-void range_streamer::add_ranges(const sstring& keyspace_name, std::vector<dht::token_range> ranges) {
+void range_streamer::add_ranges(const sstring& keyspace_name, dht::token_range_vector ranges) {
     auto ranges_for_keyspace = use_strict_sources_for_ranges(keyspace_name)
         ? get_all_ranges_with_strict_sources_for(keyspace_name, ranges)
         : get_all_ranges_with_sources_for(keyspace_name, ranges);
@@ -222,7 +222,7 @@ void range_streamer::add_ranges(const sstring& keyspace_name, std::vector<dht::t
         }
     }
 
-    std::unordered_map<inet_address, std::vector<dht::token_range>> range_fetch_map;
+    std::unordered_map<inet_address, dht::token_range_vector> range_fetch_map;
     for (auto& x : get_range_fetch_map(ranges_for_keyspace, _source_filters, keyspace_name)) {
         range_fetch_map[x.first].emplace_back(x.second);
     }

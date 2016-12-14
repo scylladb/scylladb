@@ -428,6 +428,6 @@ stable_flattened_mutations_consumer<FlattenedConsumer> make_stable_flattened_mut
 
 // Requires ranges to be sorted and disjoint.
 mutation_reader
-make_multi_range_reader(schema_ptr s, mutation_source source, const std::vector<dht::partition_range>& ranges,
+make_multi_range_reader(schema_ptr s, mutation_source source, const dht::partition_range_vector& ranges,
                         const query::partition_slice& slice, const io_priority_class& pc = default_priority_class(),
                         tracing::trace_state_ptr trace_state = nullptr);

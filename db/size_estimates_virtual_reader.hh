@@ -250,7 +250,7 @@ private:
         auto from_bytes = [] (auto& b) {
             return dht::global_partitioner().from_sstring(utf8_type->to_string(b));
         };
-        std::vector<dht::token_range> ranges;
+        dht::token_range_vector ranges;
         compat::unwrap_into(
             wrapping_range<dht::token>({{ from_bytes(r.start) }}, {{ from_bytes(r.end) }}),
             dht::token_comparator(),

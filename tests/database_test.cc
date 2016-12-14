@@ -41,7 +41,7 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
             e.execute_cql("create table ks.cf (k text, v int, primary key (k));").get();
             auto& db = e.local_db();
             auto s = db.find_schema("ks", "cf");
-            std::vector<dht::partition_range> pranges;
+            dht::partition_range_vector pranges;
             for (uint32_t i = 1; i <= 3; ++i) {
                 auto pkey = partition_key::from_single_value(*s, to_bytes(sprint("key%d", i)));
                 mutation m(pkey, s);

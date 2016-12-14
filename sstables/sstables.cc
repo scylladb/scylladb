@@ -2598,7 +2598,7 @@ uint64_t sstable::estimated_keys_for_range(const dht::token_range& range) {
 std::vector<unsigned>
 sstable::get_shards_for_this_sstable() const {
     std::unordered_set<unsigned> shards;
-    std::vector<dht::partition_range> token_ranges;
+    dht::partition_range_vector token_ranges;
     const auto* sm = _scylla_metadata
             ? _scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>()
             : nullptr;
@@ -2614,7 +2614,7 @@ sstable::get_shards_for_this_sstable() const {
                     (dtr.left.exclusive ? dht::ring_position::ending_at : dht::ring_position::starting_at)(std::move(t1)),
                     (dtr.right.exclusive ? dht::ring_position::starting_at : dht::ring_position::ending_at)(std::move(t2)));
         };
-        token_ranges = boost::copy_range<std::vector<dht::partition_range>>(
+        token_ranges = boost::copy_range<dht::partition_range_vector>(
                 sm->token_ranges.elements
                 | boost::adaptors::transformed(disk_token_range_to_ring_position_range));
     }

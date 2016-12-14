@@ -329,8 +329,8 @@ token token_metadata::get_predecessor(token t) {
     }
 }
 
-std::vector<dht::token_range> token_metadata::get_primary_ranges_for(std::unordered_set<token> tokens) {
-    std::vector<dht::token_range> ranges;
+dht::token_range_vector token_metadata::get_primary_ranges_for(std::unordered_set<token> tokens) {
+    dht::token_range_vector ranges;
     ranges.reserve(tokens.size() + 1); // one of the ranges will wrap
     for (auto right : tokens) {
         auto left = get_predecessor(right);
@@ -342,7 +342,7 @@ std::vector<dht::token_range> token_metadata::get_primary_ranges_for(std::unorde
     return ranges;
 }
 
-std::vector<dht::token_range> token_metadata::get_primary_ranges_for(token right) {
+dht::token_range_vector token_metadata::get_primary_ranges_for(token right) {
     return get_primary_ranges_for(std::unordered_set<token>{right});
 }
 

@@ -631,7 +631,7 @@ column_family::make_streaming_reader(schema_ptr s,
 
 mutation_reader
 column_family::make_streaming_reader(schema_ptr s,
-                           const std::vector<dht::partition_range>& ranges) const {
+                           const dht::partition_range_vector& ranges) const {
     auto& slice = query::full_slice;
     auto& pc = service::get_local_streaming_read_priority();
 
@@ -1362,7 +1362,7 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
 }
 
 static bool needs_cleanup(const lw_shared_ptr<sstables::sstable>& sst,
-                   const lw_shared_ptr<std::vector<dht::token_range>>& owned_ranges,
+                   const lw_shared_ptr<dht::token_range_vector>& owned_ranges,
                    schema_ptr s) {
     auto first = sst->get_first_partition_key();
     auto last = sst->get_last_partition_key();
@@ -1380,8 +1380,8 @@ static bool needs_cleanup(const lw_shared_ptr<sstables::sstable>& sst,
 }
 
 future<> column_family::cleanup_sstables(sstables::compaction_descriptor descriptor) {
-    std::vector<dht::token_range> r = service::get_local_storage_service().get_local_ranges(_schema->ks_name());
-    auto owned_ranges = make_lw_shared<std::vector<dht::token_range>>(std::move(r));
+    dht::token_range_vector r = service::get_local_storage_service().get_local_ranges(_schema->ks_name());
+    auto owned_ranges = make_lw_shared<dht::token_range_vector>(std::move(r));
     auto sstables_to_cleanup = make_lw_shared<std::vector<sstables::shared_sstable>>(std::move(descriptor.sstables));
 
     return parallel_for_each(*sstables_to_cleanup, [this, owned_ranges = std::move(owned_ranges), sstables_to_cleanup] (auto& sst) {
@@ -2391,7 +2391,7 @@ struct query_state {
     explicit query_state(schema_ptr s,
                          const query::read_command& cmd,
                          query::result_request request,
-                         const std::vector<dht::partition_range>& ranges,
+                         const dht::partition_range_vector& ranges,
                          query::result_memory_accounter memory_accounter = { })
             : schema(std::move(s))
             , cmd(cmd)
@@ -2407,8 +2407,8 @@ struct query_state {
     uint32_t limit;
     uint32_t partition_limit;
     bool range_empty = false;   // Avoid ubsan false-positive when moving after construction
-    std::vector<dht::partition_range>::const_iterator current_partition_range;
-    std::vector<dht::partition_range>::const_iterator range_end;
+    dht::partition_range_vector::const_iterator current_partition_range;
+    dht::partition_range_vector::const_iterator range_end;
     mutation_reader reader;
     uint32_t remaining_rows() const {
         return limit - builder.row_count();
@@ -2423,7 +2423,7 @@ struct query_state {
 
 future<lw_shared_ptr<query::result>>
 column_family::query(schema_ptr s, const query::read_command& cmd, query::result_request request,
-                     const std::vector<dht::partition_range>& partition_ranges,
+                     const dht::partition_range_vector& partition_ranges,
                      tracing::trace_state_ptr trace_state, query::result_memory_limiter& memory_limiter) {
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
@@ -2459,7 +2459,7 @@ column_family::as_mutation_source(tracing::trace_state_ptr trace_state) const {
 }
 
 future<lw_shared_ptr<query::result>>
-database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const std::vector<dht::partition_range>& ranges, tracing::trace_state_ptr trace_state) {
+database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state) {
     column_family& cf = find_column_family(cmd.cf_id);
     return cf.query(std::move(s), cmd, request, ranges, std::move(trace_state), get_result_memory_limiter()).then_wrapped([this, s = _stats] (auto f) {
         if (f.failed()) {
@@ -3286,7 +3286,7 @@ future<> column_family::flush(const db::replay_position& pos) {
 // so we always flush. When we can differentiate those streams, we should not
 // be indiscriminately touching the cache during repair. We will just have to
 // invalidate the entries that are relevant to things we already have in the cache.
-future<> column_family::flush_streaming_mutations(utils::UUID plan_id, std::vector<dht::partition_range> ranges) {
+future<> column_family::flush_streaming_mutations(utils::UUID plan_id, dht::partition_range_vector ranges) {
     // This will effectively take the gate twice for this call. The proper way to fix that would
     // be to change seal_active_streaming_memtable_delayed to take a range parameter. However, we
     // need this code to go away as soon as we can (see FIXME above). So the double gate is a better

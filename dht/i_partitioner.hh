@@ -460,7 +460,7 @@ public:
 };
 
 class ring_position_range_vector_sharder {
-    using vec_type = std::vector<dht::partition_range>;
+    using vec_type = dht::partition_range_vector;
     vec_type _ranges;
     vec_type::iterator _current_range;
     stdx::optional<ring_position_range_sharder> _current_sharder;
@@ -471,20 +471,20 @@ private:
         }
     }
 public:
-    explicit ring_position_range_vector_sharder(std::vector<dht::partition_range> ranges);
+    explicit ring_position_range_vector_sharder(dht::partition_range_vector ranges);
     stdx::optional<ring_position_range_and_shard> next(const schema& s);
 };
 
 dht::partition_range to_partition_range(dht::token_range);
 
 // Each shard gets a sorted, disjoint vector of ranges
-std::map<unsigned, std::vector<dht::partition_range>>
+std::map<unsigned, dht::partition_range_vector>
 split_range_to_shards(dht::partition_range pr, const schema& s);
 
 // If input ranges are sorted and disjoint then the ranges for each shard
 // are also sorted and disjoint.
-std::map<unsigned, std::vector<dht::partition_range>>
-split_ranges_to_shards(const std::vector<dht::token_range>& ranges, const schema& s);
+std::map<unsigned, dht::partition_range_vector>
+split_ranges_to_shards(const dht::token_range_vector& ranges, const schema& s);
 
 } // dht
 

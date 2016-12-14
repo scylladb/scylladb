@@ -604,7 +604,7 @@ public:
 
     // Requires ranges to be sorted and disjoint.
     mutation_reader make_streaming_reader(schema_ptr schema,
-            const std::vector<dht::partition_range>& ranges) const;
+            const dht::partition_range_vector& ranges) const;
 
     mutation_source as_mutation_source(tracing::trace_state_ptr trace_state) const;
 
@@ -652,7 +652,7 @@ public:
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(schema_ptr,
         const query::read_command& cmd, query::result_request request,
-        const std::vector<dht::partition_range>& ranges,
+        const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         query::result_memory_limiter& memory_limiter);
 
@@ -662,7 +662,7 @@ public:
     future<> stop();
     future<> flush();
     future<> flush(const db::replay_position&);
-    future<> flush_streaming_mutations(utils::UUID plan_id, std::vector<dht::partition_range> ranges = std::vector<dht::partition_range>{});
+    future<> flush_streaming_mutations(utils::UUID plan_id, dht::partition_range_vector ranges = dht::partition_range_vector{});
     future<> fail_streaming_mutations(utils::UUID plan_id);
     future<> clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);
@@ -1166,7 +1166,7 @@ public:
     unsigned shard_of(const dht::token& t);
     unsigned shard_of(const mutation& m);
     unsigned shard_of(const frozen_mutation& m);
-    future<lw_shared_ptr<query::result>> query(schema_ptr, const query::read_command& cmd, query::result_request request, const std::vector<dht::partition_range>& ranges, tracing::trace_state_ptr trace_state);
+    future<lw_shared_ptr<query::result>> query(schema_ptr, const query::read_command& cmd, query::result_request request, const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state);
     future<reconcilable_result> query_mutations(schema_ptr, const query::read_command& cmd, const dht::partition_range& range,
                                                 query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state);
     // Apply the mutation atomically.

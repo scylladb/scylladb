@@ -2636,7 +2636,7 @@ storage_proxy::query_singular_local_digest(schema_ptr s, lw_shared_ptr<query::re
 future<foreign_ptr<lw_shared_ptr<query::result>>>
 storage_proxy::query_singular_local(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, query::result_request request, tracing::trace_state_ptr trace_state) {
     unsigned shard = _db.local().shard_of(pr.start()->value().token());
-    return _db.invoke_on(shard, [gs = global_schema_ptr(s), prv = std::vector<dht::partition_range>({pr}) /* FIXME: pr is copied */, cmd, request, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
+    return _db.invoke_on(shard, [gs = global_schema_ptr(s), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, request, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
         return db.query(gs, *cmd, request, prv, gt).then([](auto&& f) {
             return make_foreign(std::move(f));
         });
@@ -2659,7 +2659,7 @@ void storage_proxy::handle_read_error(std::exception_ptr eptr, bool range) {
 }
 
 future<foreign_ptr<lw_shared_ptr<query::result>>>
-storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<dht::partition_range>&& partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state) {
+storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state) {
     std::vector<::shared_ptr<abstract_read_executor>> exec;
     exec.reserve(partition_ranges.size());
     auto timeout = std::chrono::steady_clock::now() + std::chrono::milliseconds(_db.local().get_config().read_request_timeout_in_ms());
@@ -2687,8 +2687,8 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, std::vecto
 
 future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>>
 storage_proxy::query_partition_key_range_concurrent(std::chrono::steady_clock::time_point timeout, std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
-        lw_shared_ptr<query::read_command> cmd, db::consistency_level cl, std::vector<dht::partition_range>::iterator&& i,
-        std::vector<dht::partition_range>&& ranges, int concurrency_factor, tracing::trace_state_ptr trace_state,
+        lw_shared_ptr<query::read_command> cmd, db::consistency_level cl, dht::partition_range_vector::iterator&& i,
+        dht::partition_range_vector&& ranges, int concurrency_factor, tracing::trace_state_ptr trace_state,
         uint32_t remaining_row_count, uint32_t remaining_partition_count) {
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
@@ -2786,10 +2786,10 @@ storage_proxy::query_partition_key_range_concurrent(std::chrono::steady_clock::t
 }
 
 future<foreign_ptr<lw_shared_ptr<query::result>>>
-storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd, std::vector<dht::partition_range> partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state) {
+storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state) {
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
-    std::vector<dht::partition_range> ranges;
+    dht::partition_range_vector ranges;
     auto timeout = std::chrono::steady_clock::now() + std::chrono::milliseconds(_db.local().get_config().read_request_timeout_in_ms());
 
     // when dealing with LocalStrategy keyspaces, we can skip the range splitting and merging (which can be
@@ -2839,7 +2839,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
 future<foreign_ptr<lw_shared_ptr<query::result>>>
 storage_proxy::query(schema_ptr s,
     lw_shared_ptr<query::read_command> cmd,
-    std::vector<dht::partition_range>&& partition_ranges,
+    dht::partition_range_vector&& partition_ranges,
     db::consistency_level cl, tracing::trace_state_ptr trace_state)
 {
     if (logger.is_enabled(logging::log_level::trace) || qlogger.is_enabled(logging::log_level::trace)) {
@@ -2865,7 +2865,7 @@ storage_proxy::query(schema_ptr s,
 future<foreign_ptr<lw_shared_ptr<query::result>>>
 storage_proxy::do_query(schema_ptr s,
     lw_shared_ptr<query::read_command> cmd,
-    std::vector<dht::partition_range>&& partition_ranges,
+    dht::partition_range_vector&& partition_ranges,
     db::consistency_level cl,
     tracing::trace_state_ptr trace_state)
 {
@@ -3063,13 +3063,13 @@ float storage_proxy::estimate_result_rows_per_range(lw_shared_ptr<query::read_co
  * Compute all ranges we're going to query, in sorted order. Nodes can be replica destinations for many ranges,
  * so we need to restrict each scan to the specific range we want, or else we'd get duplicate results.
  */
-std::vector<dht::partition_range>
+dht::partition_range_vector
 storage_proxy::get_restricted_ranges(keyspace& ks, const schema& s, dht::partition_range range) {
     locator::token_metadata& tm = get_local_storage_service().get_token_metadata();
     return service::get_restricted_ranges(tm, s, std::move(range));
 }
 
-std::vector<dht::partition_range>
+dht::partition_range_vector
 get_restricted_ranges(locator::token_metadata& tm, const schema& s, dht::partition_range range) {
     dht::ring_position_comparator cmp(s);
 
@@ -3078,10 +3078,10 @@ get_restricted_ranges(locator::token_metadata& tm, const schema& s, dht::partiti
         if (start_token(range).is_minimum()) {
             return {};
         }
-        return std::vector<dht::partition_range>({std::move(range)});
+        return dht::partition_range_vector({std::move(range)});
     }
 
-    std::vector<dht::partition_range> ranges;
+    dht::partition_range_vector ranges;
 
     auto add_range = [&ranges, &cmp] (dht::partition_range&& r) {
         ranges.emplace_back(std::move(r));
@@ -3622,7 +3622,7 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
 
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
-storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const std::vector<dht::partition_range>& prs, tracing::trace_state_ptr trace_state) {
+storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector& prs, tracing::trace_state_ptr trace_state) {
     // no one permitted us to modify *cmd, so make a copy
     auto shard_cmd = make_lw_shared<query::read_command>(*cmd);
     return do_with(cmd,
