@@ -188,6 +188,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/scylla_config_get.py
 %{_prefix}/lib/scylla/scylla_config_get.pyc
 %{_prefix}/lib/scylla/scylla_config_get.pyo
+%{_prefix}/lib/scylla/scylla_lib.sh
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/data
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/commitlog
