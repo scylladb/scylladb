@@ -42,14 +42,14 @@ static logging::logger logger("repair");
 
 struct failed_range {
     sstring cf;
-    ::nonwrapping_range<dht::token> range;
+    ::dht::token_range range;
 };
 
 class repair_info {
 public:
     seastar::sharded<database>& db;
     sstring keyspace;
-    std::vector<nonwrapping_range<dht::token>> ranges;
+    std::vector<dht::token_range> ranges;
     std::vector<sstring> cfs;
     int id;
     std::vector<sstring> data_centers;
@@ -64,7 +64,7 @@ public:
 public:
     repair_info(seastar::sharded<database>& db_,
             const sstring& keyspace_,
-            const std::vector<nonwrapping_range<dht::token>>& ranges_,
+            const std::vector<dht::token_range>& ranges_,
             const std::vector<sstring>& cfs_,
             int id_,
             const std::vector<sstring>& data_centers_,
@@ -101,7 +101,7 @@ public:
         }
     }
     void request_transfer_ranges(const sstring& cf,
-        const ::nonwrapping_range<dht::token>& range,
+        const ::dht::token_range& range,
         const std::vector<gms::inet_address>& neighbors_in,
         const std::vector<gms::inet_address>& neighbors_out) {
         for (const auto& peer : neighbors_in) {
@@ -458,7 +458,7 @@ static future<partition_checksum> checksum_range_shard(database &db,
 // function is not resolved.
 future<partition_checksum> checksum_range(seastar::sharded<database> &db,
         const sstring& keyspace, const sstring& cf,
-        const ::nonwrapping_range<dht::token>& range, repair_checksum hash_version) {
+        const ::dht::token_range& range, repair_checksum hash_version) {
     auto& schema = db.local().find_column_family(keyspace, cf).schema();
     auto shard_ranges = dht::split_range_to_shards(dht::to_partition_range(range), *schema);
     return do_with(partition_checksum(), std::move(shard_ranges), [&db, &keyspace, &cf, hash_version] (auto& result, auto& shard_ranges) {
@@ -478,8 +478,8 @@ future<partition_checksum> checksum_range(seastar::sharded<database> &db,
     });
 }
 
-static void split_and_add(std::vector<::nonwrapping_range<dht::token>>& ranges,
-        const nonwrapping_range<dht::token>& range,
+static void split_and_add(std::vector<::dht::token_range>& ranges,
+        const dht::token_range& range,
         uint64_t estimated_partitions, uint64_t target_partitions) {
     if (estimated_partitions < target_partitions) {
         // We're done, the range is small enough to not be split further
@@ -515,14 +515,14 @@ static thread_local semaphore parallelism_semaphore(parallelism);
 // Repair a single cf in a single local range.
 // Comparable to RepairJob in Origin.
 static future<> repair_cf_range(repair_info& ri,
-        sstring cf, ::nonwrapping_range<dht::token> range,
+        sstring cf, ::dht::token_range range,
         const std::vector<gms::inet_address>& neighbors) {
     if (neighbors.empty()) {
         // Nothing to do in this case...
         return make_ready_future<>();
     }
 
-    std::vector<::nonwrapping_range<dht::token>> ranges;
+    std::vector<::dht::token_range> ranges;
     ranges.push_back(range);
 
     // Additionally, we want to break up large ranges so they will have
@@ -538,7 +538,7 @@ static future<> repair_cf_range(repair_info& ri,
 
     // FIXME: we should have an on-the-fly iterator generator here, not
     // fill a vector in advance.
-    std::vector<::nonwrapping_range<dht::token>> tosplit;
+    std::vector<::dht::token_range> tosplit;
     while (estimated_partitions > ri.target_partitions) {
         tosplit.clear();
         ranges.swap(tosplit);
@@ -741,24 +741,24 @@ static future<> repair_range(repair_info& ri, auto& range) {
     });
 }
 
-static std::vector<nonwrapping_range<dht::token>> get_ranges_for_endpoint(
+static std::vector<dht::token_range> get_ranges_for_endpoint(
         database& db, sstring keyspace, gms::inet_address ep) {
     auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
     return rs.get_ranges(ep);
 }
 
-static std::vector<nonwrapping_range<dht::token>> get_local_ranges(
+static std::vector<dht::token_range> get_local_ranges(
         database& db, sstring keyspace) {
     return get_ranges_for_endpoint(db, keyspace, utils::fb_utilities::get_broadcast_address());
 }
 
-static std::vector<nonwrapping_range<dht::token>> get_primary_ranges_for_endpoint(
+static std::vector<dht::token_range> get_primary_ranges_for_endpoint(
         database& db, sstring keyspace, gms::inet_address ep) {
     auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
     return rs.get_primary_ranges(ep);
 }
 
-static std::vector<nonwrapping_range<dht::token>> get_primary_ranges(
+static std::vector<dht::token_range> get_primary_ranges(
         database& db, sstring keyspace) {
     return get_primary_ranges_for_endpoint(db, keyspace,
             utils::fb_utilities::get_broadcast_address());
@@ -774,7 +774,7 @@ struct repair_options {
     // If ranges is not empty, it overrides the repair's default heuristics
     // for determining the list of ranges to repair. In particular, "ranges"
     // overrides the setting of "primary_range".
-    std::vector<nonwrapping_range<dht::token>> ranges;
+    std::vector<dht::token_range> ranges;
     // If start_token and end_token are set, they define a range which is
     // intersected with the ranges actually held by this node to decide what
     // to repair.
@@ -897,7 +897,7 @@ private:
 
     // A range is expressed as start_token:end token and multiple ranges can
     // be given as comma separated ranges(e.g. aaa:bbb,ccc:ddd).
-    static void ranges_opt(std::vector<nonwrapping_range<dht::token>>& var,
+    static void ranges_opt(std::vector<dht::token_range>& var,
             std::unordered_map<sstring, sstring>& options,
                         const sstring& key) {
         auto it = options.find(key);
@@ -918,7 +918,7 @@ private:
             auto rng = wrapping_range<dht::token>(
                     ::range<dht::token>::bound(tok_start, false),
                     ::range<dht::token>::bound(tok_end, true));
-            compat::unwrap_into(std::move(rng), dht::token_comparator(), [&] (nonwrapping_range<dht::token>&& x) {
+            compat::unwrap_into(std::move(rng), dht::token_comparator(), [&] (dht::token_range&& x) {
                 var.push_back(std::move(x));
             });
         }
@@ -989,7 +989,7 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     // local ranges (the token ranges for which this node holds a replica of).
     // Each of these ranges may have a different set of replicas, so the
     // repair of each range is performed separately with repair_range().
-    std::vector<nonwrapping_range<dht::token>> ranges;
+    std::vector<dht::token_range> ranges;
     if (options.ranges.size()) {
         ranges = options.ranges;
     } else if (options.primary_range) {
@@ -1032,8 +1032,8 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
                 dht::global_partitioner().from_sstring(options.end_token),
                 false);
         }
-        nonwrapping_range<dht::token> given_range_complement(tok_end, tok_start);
-        std::vector<nonwrapping_range<dht::token>> intersections;
+        dht::token_range given_range_complement(tok_end, tok_start);
+        std::vector<dht::token_range> intersections;
         for (const auto& range : ranges) {
             auto rs = range.subtract(given_range_complement,
                     dht::token_comparator());

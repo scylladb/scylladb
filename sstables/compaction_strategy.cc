@@ -62,7 +62,7 @@ extern logging::logger logger;
 class incremental_selector_impl {
 public:
     virtual ~incremental_selector_impl() {}
-    virtual std::pair<nonwrapping_range<dht::token>, std::vector<shared_sstable>> select(const dht::token& token) = 0;
+    virtual std::pair<dht::token_range, std::vector<shared_sstable>> select(const dht::token& token) = 0;
 };
 
 class sstable_set_impl {
@@ -173,8 +173,8 @@ public:
     incremental_selector(const std::vector<shared_sstable>& sstables)
         : _sstables(sstables) {
     }
-    virtual std::pair<nonwrapping_range<dht::token>, std::vector<shared_sstable>> select(const dht::token& token) override {
-        return std::make_pair(nonwrapping_range<dht::token>::make_open_ended_both_sides(), _sstables);
+    virtual std::pair<dht::token_range, std::vector<shared_sstable>> select(const dht::token& token) override {
+        return std::make_pair(dht::token_range::make_open_ended_both_sides(), _sstables);
     }
 };
 
@@ -267,8 +267,8 @@ class partitioned_sstable_set::incremental_selector : public incremental_selecto
     map_iterator _it;
     const map_iterator _end;
 private:
-    static nonwrapping_range<dht::token> to_token_range(const interval_type& i) {
-        return nonwrapping_range<dht::token>::make({i.lower().token(), boost::icl::is_left_closed(i.bounds())},
+    static dht::token_range to_token_range(const interval_type& i) {
+        return dht::token_range::make({i.lower().token(), boost::icl::is_left_closed(i.bounds())},
             {i.upper().token(), boost::icl::is_right_closed(i.bounds())});
     }
 public:
@@ -277,7 +277,7 @@ public:
         , _it(sstables.begin())
         , _end(sstables.end()) {
     }
-    virtual std::pair<nonwrapping_range<dht::token>, std::vector<shared_sstable>> select(const dht::token& token) override {
+    virtual std::pair<dht::token_range, std::vector<shared_sstable>> select(const dht::token& token) override {
         auto pr = query::partition_range::make(dht::ring_position::starting_at(token), dht::ring_position::ending_at(token));
         auto interval = make_interval(*_schema, std::move(pr));
 
@@ -287,12 +287,12 @@ public:
             }
             // we don't want to skip current interval if token lies before it.
             if (boost::icl::lower_less(interval, _it->first)) {
-                return std::make_pair(nonwrapping_range<dht::token>::make({token, true}, {_it->first.lower().token(), false}),
+                return std::make_pair(dht::token_range::make({token, true}, {_it->first.lower().token(), false}),
                     std::vector<shared_sstable>());
             }
             _it++;
         }
-        return std::make_pair(nonwrapping_range<dht::token>::make_open_ended_both_sides(), std::vector<shared_sstable>());
+        return std::make_pair(dht::token_range::make_open_ended_both_sides(), std::vector<shared_sstable>());
     }
 };
 

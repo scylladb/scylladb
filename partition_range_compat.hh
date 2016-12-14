@@ -102,13 +102,13 @@ wrap(std::vector<nonwrapping_range<T>>&& v) {
 }
 
 inline
-std::vector<nonwrapping_range<dht::token>>
+std::vector<dht::token_range>
 unwrap(const std::vector<wrapping_range<dht::token>>& v) {
     return unwrap(v, dht::token_comparator());
 }
 
 inline
-std::vector<nonwrapping_range<dht::token>>
+std::vector<dht::token_range>
 unwrap(std::vector<wrapping_range<dht::token>>&& v) {
     return unwrap(std::move(v), dht::token_comparator());
 }

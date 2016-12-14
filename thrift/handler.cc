@@ -722,7 +722,7 @@ public:
 
     void describe_splits_ex(tcxx::function<void(std::vector<CfSplit>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& cfName, const std::string& start_token, const std::string& end_token, const int32_t keys_per_split) {
         with_cob(std::move(cob), std::move(exn_cob), [&]{
-            std::vector<nonwrapping_range<dht::token>> ranges;
+            std::vector<dht::token_range> ranges;
             auto tstart = start_token.empty() ? dht::minimum_token() : dht::global_partitioner().from_sstring(sstring(start_token));
             auto tend = end_token.empty() ? dht::maximum_token() : dht::global_partitioner().from_sstring(sstring(end_token));
             range<dht::token> r({{ std::move(tstart), false }}, {{ std::move(tend), true }});

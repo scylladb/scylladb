@@ -329,8 +329,8 @@ token token_metadata::get_predecessor(token t) {
     }
 }
 
-std::vector<nonwrapping_range<token>> token_metadata::get_primary_ranges_for(std::unordered_set<token> tokens) {
-    std::vector<nonwrapping_range<token>> ranges;
+std::vector<dht::token_range> token_metadata::get_primary_ranges_for(std::unordered_set<token> tokens) {
+    std::vector<dht::token_range> ranges;
     ranges.reserve(tokens.size() + 1); // one of the ranges will wrap
     for (auto right : tokens) {
         auto left = get_predecessor(right);
@@ -342,7 +342,7 @@ std::vector<nonwrapping_range<token>> token_metadata::get_primary_ranges_for(std
     return ranges;
 }
 
-std::vector<nonwrapping_range<token>> token_metadata::get_primary_ranges_for(token right) {
+std::vector<dht::token_range> token_metadata::get_primary_ranges_for(token right) {
     return get_primary_ranges_for(std::unordered_set<token>{right});
 }
 
@@ -452,7 +452,7 @@ void token_metadata::calculate_pending_ranges(abstract_replication_strategy& str
         return;
     }
 
-    std::unordered_multimap<inet_address, nonwrapping_range<token>> address_ranges = strategy.get_address_ranges(*this);
+    std::unordered_multimap<inet_address, dht::token_range> address_ranges = strategy.get_address_ranges(*this);
 
     // FIMXE
     // Copy of metadata reflecting the situation after all leave operations are finished.

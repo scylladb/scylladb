@@ -90,7 +90,7 @@ public:
      * @param ranges ranges to fetch
      * @return this object for chaining
      */
-    stream_plan& request_ranges(inet_address from, sstring keyspace, std::vector<nonwrapping_range<token>> ranges);
+    stream_plan& request_ranges(inet_address from, sstring keyspace, std::vector<dht::token_range> ranges);
 
     /**
      * Request data in {@code columnFamilies} under {@code keyspace} and {@code ranges} from specific node.
@@ -102,7 +102,7 @@ public:
      * @param columnFamilies specific column families
      * @return this object for chaining
      */
-    stream_plan& request_ranges(inet_address from, sstring keyspace, std::vector<nonwrapping_range<token>> ranges, std::vector<sstring> column_families);
+    stream_plan& request_ranges(inet_address from, sstring keyspace, std::vector<dht::token_range> ranges, std::vector<sstring> column_families);
 
     /**
      * Add transfer task to send data of specific keyspace and ranges.
@@ -113,7 +113,7 @@ public:
      * @param ranges ranges to send
      * @return this object for chaining
      */
-    stream_plan& transfer_ranges(inet_address to, sstring keyspace, std::vector<nonwrapping_range<token>> ranges);
+    stream_plan& transfer_ranges(inet_address to, sstring keyspace, std::vector<dht::token_range> ranges);
 
     /**
      * Add transfer task to send data of specific {@code columnFamilies} under {@code keyspace} and {@code ranges}.
@@ -125,7 +125,7 @@ public:
      * @param columnFamilies specific column families
      * @return this object for chaining
      */
-    stream_plan& transfer_ranges(inet_address to, sstring keyspace, std::vector<nonwrapping_range<token>> ranges, std::vector<sstring> column_families);
+    stream_plan& transfer_ranges(inet_address to, sstring keyspace, std::vector<dht::token_range> ranges, std::vector<sstring> column_families);
 
     stream_plan& listeners(std::vector<stream_event_handler*> handlers);
 public:

@@ -2545,7 +2545,7 @@ void sstable::mark_sstable_for_deletion(const schema_ptr& schema, sstring dir, i
  * Returns a pair of positions [p1, p2) in the summary file corresponding to entries
  * covered by the specified range, or a disengaged optional if no such pair exists.
  */
-stdx::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_range(const nonwrapping_range<dht::token>& range) {
+stdx::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_range(const dht::token_range& range) {
     auto entries_size = _summary.entries.size();
     auto search = [this](bool before, const dht::token& token) {
         auto kind = before ? key::kind::before_all_keys : key::kind::after_all_keys;
@@ -2575,7 +2575,7 @@ stdx::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_ra
     return stdx::nullopt;
 }
 
-std::vector<dht::decorated_key> sstable::get_key_samples(const schema& s, const nonwrapping_range<dht::token>& range) {
+std::vector<dht::decorated_key> sstable::get_key_samples(const schema& s, const dht::token_range& range) {
     auto index_range = get_sample_indexes_for_range(range);
     std::vector<dht::decorated_key> res;
     if (index_range) {
@@ -2587,7 +2587,7 @@ std::vector<dht::decorated_key> sstable::get_key_samples(const schema& s, const 
     return res;
 }
 
-uint64_t sstable::estimated_keys_for_range(const nonwrapping_range<dht::token>& range) {
+uint64_t sstable::estimated_keys_for_range(const dht::token_range& range) {
     auto sample_index_range = get_sample_indexes_for_range(range);
     uint64_t sample_key_count = sample_index_range ? sample_index_range->second - sample_index_range->first : 0;
     // adjust for the current sampling level

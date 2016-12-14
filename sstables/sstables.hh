@@ -294,9 +294,9 @@ public:
                 _summary.header.min_index_interval;
     }
 
-    uint64_t estimated_keys_for_range(const nonwrapping_range<dht::token>& range);
+    uint64_t estimated_keys_for_range(const dht::token_range& range);
 
-    std::vector<dht::decorated_key> get_key_samples(const schema& s, const nonwrapping_range<dht::token>& range);
+    std::vector<dht::decorated_key> get_key_samples(const schema& s, const dht::token_range& range);
 
     // mark_for_deletion() specifies that a sstable isn't relevant to the
     // current shard, and thus can be deleted by the deletion manager, if
@@ -599,7 +599,7 @@ private:
     }
     void write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation_view collection);
 
-    stdx::optional<std::pair<uint64_t, uint64_t>> get_sample_indexes_for_range(const nonwrapping_range<dht::token>& range);
+    stdx::optional<std::pair<uint64_t, uint64_t>> get_sample_indexes_for_range(const dht::token_range& range);
 public:
     future<> read_toc();
 

@@ -85,7 +85,7 @@ public:
         return ss.get_local_tokens().then([&ss] (auto&& tokens) {
             auto ranges = ss.get_token_metadata().get_primary_ranges_for(std::move(tokens));
             std::vector<token_range> local_ranges;
-            auto to_bytes = [](const stdx::optional<nonwrapping_range<dht::token>::bound>& b) {
+            auto to_bytes = [](const stdx::optional<dht::token_range::bound>& b) {
                 assert(b);
                 return utf8_type->decompose(dht::global_partitioner().to_sstring(b->value()));
             };
@@ -230,7 +230,7 @@ private:
     /**
      * Makes a wrapping range of ring_position from a nonwrapping range of token, used to select sstables.
      */
-    static nonwrapping_range<dht::ring_position> as_ring_position_range(nonwrapping_range<dht::token>& r) {
+    static nonwrapping_range<dht::ring_position> as_ring_position_range(dht::token_range& r) {
         stdx::optional<range<dht::ring_position>::bound> start_bound, end_bound;
         if (r.start()) {
             start_bound = {{ dht::ring_position(r.start()->value(), dht::ring_position::token_bound::start), r.start()->is_inclusive() }};
@@ -250,7 +250,7 @@ private:
         auto from_bytes = [] (auto& b) {
             return dht::global_partitioner().from_sstring(utf8_type->to_string(b));
         };
-        std::vector<nonwrapping_range<dht::token>> ranges;
+        std::vector<dht::token_range> ranges;
         compat::unwrap_into(
             wrapping_range<dht::token>({{ from_bytes(r.start) }}, {{ from_bytes(r.end) }}),
             dht::token_comparator(),

@@ -57,7 +57,7 @@ namespace streaming {
 
 extern logging::logger sslog;
 
-stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, std::vector<nonwrapping_range<dht::token>> ranges, long total_size)
+stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, std::vector<dht::token_range> ranges, long total_size)
     : stream_task(session, cf_id)
     , _ranges(std::move(ranges))
     , _total_size(total_size) {
@@ -167,13 +167,13 @@ void stream_transfer_task::start() {
     });
 }
 
-void stream_transfer_task::append_ranges(const std::vector<nonwrapping_range<dht::token>>& ranges) {
+void stream_transfer_task::append_ranges(const std::vector<dht::token_range>& ranges) {
     _ranges.insert(_ranges.end(), ranges.begin(), ranges.end());
 }
 
 void stream_transfer_task::sort_and_merge_ranges() {
     boost::icl::interval_set<dht::token> myset;
-    std::vector<nonwrapping_range<dht::token>> ranges;
+    std::vector<dht::token_range> ranges;
     sslog.debug("cf_id = {}, before ranges = {}, size={}", cf_id, _ranges, _ranges.size());
     _ranges.swap(ranges);
     for (auto& range : ranges) {
@@ -185,7 +185,7 @@ void stream_transfer_task::sort_and_merge_ranges() {
     ranges.shrink_to_fit();
     for (auto& i : myset) {
         auto r = locator::token_metadata::interval_to_range(i);
-        _ranges.push_back(nonwrapping_range<dht::token>(r));
+        _ranges.push_back(dht::token_range(r));
     }
     sslog.debug("cf_id = {}, after  ranges = {}, size={}", cf_id, _ranges, _ranges.size());
 }

@@ -53,7 +53,7 @@ public:
     // selector is used.
     class incremental_selector {
         std::unique_ptr<incremental_selector_impl> _impl;
-        mutable stdx::optional<nonwrapping_range<dht::token>> _current_token_range;
+        mutable stdx::optional<dht::token_range> _current_token_range;
         mutable std::vector<shared_sstable> _current_sstables;
     public:
         ~incremental_selector();

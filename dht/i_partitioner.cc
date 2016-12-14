@@ -324,7 +324,7 @@ int ring_position::tri_compare(const schema& s, const ring_position& o) const {
 }
 
 nonwrapping_range<ring_position>
-to_partition_range(nonwrapping_range<dht::token> r) {
+to_partition_range(dht::token_range r) {
     using bound_opt = std::experimental::optional<nonwrapping_range<ring_position>::bound>;
     auto start = r.start()
                  ? bound_opt(dht::ring_position(r.start()->value(),
@@ -356,7 +356,7 @@ split_range_to_shards(nonwrapping_range<ring_position> pr, const schema& s) {
 }
 
 std::map<unsigned, std::vector<nonwrapping_range<ring_position>>>
-split_ranges_to_shards(const std::vector<nonwrapping_range<dht::token>>& ranges, const schema& s) {
+split_ranges_to_shards(const std::vector<dht::token_range>& ranges, const schema& s) {
     std::map<unsigned, std::vector<nonwrapping_range<ring_position>>> ret;
     for (const auto& range : ranges) {
         auto pr = dht::to_partition_range(range);

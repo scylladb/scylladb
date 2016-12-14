@@ -238,7 +238,7 @@ public:
      * @param ranges Ranges to retrieve data
      * @param columnFamilies ColumnFamily names. Can be empty if requesting all CF under the keyspace.
      */
-    void add_stream_request(sstring keyspace, std::vector<nonwrapping_range<token>> ranges, std::vector<sstring> column_families) {
+    void add_stream_request(sstring keyspace, std::vector<dht::token_range> ranges, std::vector<sstring> column_families) {
         _requests.emplace_back(std::move(keyspace), std::move(ranges), std::move(column_families));
     }
 
@@ -253,7 +253,7 @@ public:
      * @param flushTables flush tables?
      * @param repairedAt the time the repair started.
      */
-    void add_transfer_ranges(sstring keyspace, std::vector<nonwrapping_range<token>> ranges, std::vector<sstring> column_families);
+    void add_transfer_ranges(sstring keyspace, std::vector<dht::token_range> ranges, std::vector<sstring> column_families);
 
     std::vector<column_family*> get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families);
 
