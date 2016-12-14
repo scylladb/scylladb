@@ -34,7 +34,7 @@ memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, memtable_list* 
         , partitions(memtable_entry::compare(_schema)) {
 }
 
-static thread_local memtable_dirty_memory_manager mgr_for_tests;
+static thread_local dirty_memory_manager mgr_for_tests;
 
 memtable::memtable(schema_ptr schema)
         : memtable(std::move(schema), mgr_for_tests, nullptr)

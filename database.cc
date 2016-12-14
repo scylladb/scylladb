@@ -92,13 +92,12 @@ public:
 
 // Used for tests where the CF exists without a database object. We need to pass a valid
 // dirty_memory manager in that case.
-thread_local memtable_dirty_memory_manager default_dirty_memory_manager;
+thread_local dirty_memory_manager default_dirty_memory_manager;
 
 lw_shared_ptr<memtable_list>
 column_family::make_memory_only_memtable_list() {
-    auto seal = [this] (memtable_list::flush_behavior ignored) { return make_ready_future<>(); };
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager);
+    return make_lw_shared<memtable_list>(std::move(get_schema), _config.dirty_memory_manager);
 }
 
 lw_shared_ptr<memtable_list>
@@ -1655,41 +1654,12 @@ database::database() : database(db::config())
 {}
 
 database::database(const db::config& cfg)
-    : _cfg(std::make_unique<db::config>(cfg))
-    , _memtable_total_space([this] {
-        _stats = make_lw_shared<db_stats>();
-
-        auto memtable_total_space = size_t(_cfg->memtable_total_space_in_mb()) << 20;
-        if (!memtable_total_space) {
-            return memory::stats().total_memory() / 2;
-        }
-        return memtable_total_space;
-    }())
-    , _streaming_memtable_total_space(_memtable_total_space / 4)
-    // Allow system tables a pool of 10 MB extra memory to write over the threshold. Under normal
-    // circumnstances it won't matter, but when we throttle, some system requests will be able to
-    // keep being serviced even if user requests are not.
-    //
-    // Note that even if we didn't allow extra memory, we would still want to keep system requests
-    // in a different region group. This is because throttled requests are serviced in FIFO order,
-    // and we don't want system requests to be waiting for a long time behind user requests.
-    , _system_dirty_memory_manager(*this, _memtable_total_space / 2 + (10 << 20))
-    // The total space that can be used by memtables is _memtable_total_space, but we will only
-    // allow the region_group to grow to half of that. This is because of virtual_dirty: memtables
-    // can take a long time to flush, and if we are using the maximum amount of memory possible,
-    // then requests will block until we finish flushing at least one memtable.
-    //
-    // We can free memory until the whole memtable is flushed because we need to keep it in memory
-    // until the end, but we can fake freeing memory. When we are done with an element of the
-    // memtable, we will update the region group pretending memory just went down by that amount.
-    //
-    // Because the amount of memory that we pretend to free should be close enough to the actual
-    // memory used by the memtables, that effectively creates two sub-regions inside the dirty
-    // region group, of equal size. In the worst case, we will have _memtable_total_space dirty
-    // bytes used, and half of that already virtually freed.
-    , _dirty_memory_manager(*this, &_system_dirty_memory_manager, _memtable_total_space / 2)
-    // The same goes for streaming in respect to virtual dirty.
-    , _streaming_dirty_memory_manager(*this, &_dirty_memory_manager, _streaming_memtable_total_space / 2)
+    : _stats(make_lw_shared<db_stats>())
+    , _cfg(std::make_unique<db::config>(cfg))
+    // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
+    , _system_dirty_memory_manager(*this, 10 << 20)
+    , _dirty_memory_manager(*this, memory::stats().total_memory() * 0.45)
+    , _streaming_dirty_memory_manager(*this, memory::stats().total_memory() * 0.10)
     , _version(empty_version)
     , _enable_incremental_backups(cfg.incremental_backups())
 {
@@ -2576,7 +2546,9 @@ future<> dirty_memory_manager::shutdown() {
 }
 
 future<> memtable_list::request_flush() {
-    if (!_flush_coalescing) {
+    if (!may_flush()) {
+        return make_ready_future<>();
+    } else if (!_flush_coalescing) {
         _flush_coalescing = shared_promise<>();
         return _dirty_memory_manager->get_flush_permit().then([this] (auto permit) {
             auto current_flush = std::move(*_flush_coalescing);
@@ -2604,18 +2576,11 @@ future<> dirty_memory_manager::flush_one(memtable_list& mtlist, semaphore_units<
     }
 
     auto* region = &(mtlist.back()->region());
-    auto* region_group = mtlist.back()->region_group();
     auto schema = mtlist.back()->schema();
-    // Because the region groups are hierarchical, when we pick the biggest region creating pressure
-    // (in the memory-driven flush case) we may be picking a memtable that is placed in a region
-    // group below ours. That's totally fine and we can certainly use our semaphore to account for
-    // it, but we need to destroy the semaphore units from the right flush manager.
-    //
-    // If we abandon size-driven flush and go with another flushing scheme that always guarantees
-    // that we're picking from this region_group, we can simplify this.
-    dirty_memory_manager::from_region_group(region_group).add_to_flush_manager(region, std::move(permit));
-    return get_units(_background_work_flush_serializer, 1).then([this, &mtlist, region, region_group, schema] (auto permit) mutable {
-        return mtlist.seal_active_memtable(memtable_list::flush_behavior::immediate).then_wrapped([this, region, region_group, schema, permit = std::move(permit)] (auto f) {
+
+    add_to_flush_manager(region, std::move(permit));
+    return get_units(_background_work_flush_serializer, 1).then([this, &mtlist, region, schema] (auto permit) mutable {
+        return mtlist.seal_active_memtable(memtable_list::flush_behavior::immediate).then_wrapped([this, region, schema, permit = std::move(permit)] (auto f) {
             // There are two cases in which we may still need to remove the permits from here.
             //
             // 1) Some exception happenend, and we can't know at which point. It could be that because
@@ -2623,7 +2588,7 @@ future<> dirty_memory_manager::flush_one(memtable_list& mtlist, semaphore_units<
             // 2) If we are using a memory-only Column Family. That will never create a memtable
             //    flush object, and we'll never get rid of the permits. So we have to remove it
             //    here.
-            dirty_memory_manager::from_region_group(region_group).remove_from_flush_manager(region);
+            this->remove_from_flush_manager(region);
             if (f.failed()) {
                 dblog.error("Failed to flush memtable, {}:{}", schema->ks_name(), schema->cf_name());
             }
@@ -2638,7 +2603,7 @@ future<> dirty_memory_manager::flush_when_needed() {
     }
     // If there are explicit flushes requested, we must wait for them to finish before we stop.
     return do_until([this] { return _db_shutdown_requested; }, [this] {
-        auto has_work = [this] { return over_soft_limit() || _db_shutdown_requested; };
+        auto has_work = [this] { return has_pressure() || _db_shutdown_requested; };
         return _should_flush.wait(std::move(has_work)).then([this] {
             return get_flush_permit().then([this] (auto permit) {
                 // We give priority to explicit flushes. They are mainly user-initiated flushes,
@@ -2647,7 +2612,7 @@ future<> dirty_memory_manager::flush_when_needed() {
                     return make_ready_future<>();
                 }
                 // condition abated while we waited for the semaphore
-                if (!this->over_soft_limit() || _db_shutdown_requested) {
+                if (!this->has_pressure() || _db_shutdown_requested) {
                     return make_ready_future<>();
                 }
                 // There are many criteria that can be used to select what is the best memtable to
@@ -2658,12 +2623,12 @@ future<> dirty_memory_manager::flush_when_needed() {
                 // memtable. The advantage of doing this is that this is objectively the one that will
                 // release the biggest amount of memory and is less likely to be generating tiny
                 // SSTables.
-                memtable& biggest_memtable = memtable::from_region(*(this->_region_group.get_largest_region()));
-                auto mtlist = biggest_memtable.get_memtable_list();
+                memtable& candidate_memtable = memtable::from_region(*(this->_region_group.get_largest_region()));
+                dirty_memory_manager* candidate_dirty_manager = &(dirty_memory_manager::from_region_group(candidate_memtable.region_group()));
                 // Do not wait. The semaphore will protect us against a concurrent flush. But we
                 // want to start a new one as soon as the permits are destroyed and the semaphore is
                 // made ready again, not when we are done with the current one.
-                this->flush_one(*mtlist, std::move(permit));
+                candidate_dirty_manager->flush_one(*(candidate_memtable.get_memtable_list()), std::move(permit));
                 return make_ready_future<>();
             });
         });

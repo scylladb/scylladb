@@ -256,7 +256,7 @@ public:
             "Log a warning when compacting partitions larger than this value"   \
     )                                               \
     /* Common memtable settings */  \
-    val(memtable_total_space_in_mb, uint32_t, 0, Used,     \
+    val(memtable_total_space_in_mb, uint32_t, 0, Invalid,     \
             "Specifies the total memory used for all memtables on a node. This replaces the per-table storage settings memtable_operations_in_millions and memtable_throughput_in_mb."  \
     )                                                   \
     /* Common disk settings */  \
