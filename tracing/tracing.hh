@@ -91,6 +91,31 @@ inline std::chrono::seconds ttl_by_type(const trace_type t) {
     }
 }
 
+/**
+ * @brief represents an ID of a single tracing span.
+ *
+ * Currently span ID is a random 64-bit integer.
+ */
+class span_id {
+private:
+    uint64_t _id = illegal_id;
+
+public:
+    static constexpr uint64_t illegal_id = 0;
+
+public:
+    span_id() = default;
+    uint64_t get_id() const { return _id; }
+    span_id(uint64_t id) : _id(id) {}
+
+    /**
+     * @return New span_id with a random legal value
+     */
+    static span_id make_span_id();
+};
+
+std::ostream& operator<<(std::ostream& os, const span_id& id);
+
 // !!!!IMPORTANT!!!!
 //
 // The enum_set based on this enum is serialized using IDL, therefore new items
@@ -116,15 +141,17 @@ public:
     trace_state_props_set state_props;
     uint32_t slow_query_threshold_us; // in microseconds
     uint32_t slow_query_ttl_sec; // in seconds
+    span_id parent_id;
 
 public:
-    trace_info(utils::UUID sid, trace_type t, bool w_o_c, trace_state_props_set s_p, uint32_t slow_query_threshold, uint32_t slow_query_ttl)
+    trace_info(utils::UUID sid, trace_type t, bool w_o_c, trace_state_props_set s_p, uint32_t slow_query_threshold, uint32_t slow_query_ttl, span_id p_id)
         : session_id(std::move(sid))
         , type(t)
         , write_on_close(w_o_c)
         , state_props(s_p)
         , slow_query_threshold_us(slow_query_threshold)
         , slow_query_ttl_sec(slow_query_ttl)
+        , parent_id(std::move(p_id))
     {
         state_props.set_if<trace_state_props::write_on_close>(write_on_close);
     }
@@ -220,6 +247,13 @@ public:
     // of this tracing session should consume from (e.g. "cached" or "pending
     // for write").
     uint64_t* budget_ptr;
+
+    // Each tracing session object represents a single tracing span.
+    //
+    // Each span has a span ID. In order to be able to build a full tree of all
+    // spans of the same query we need a parent span ID as well.
+    span_id parent_id;
+    span_id my_span_id;
 
     one_session_records();
 
@@ -363,6 +397,10 @@ private:
     std::chrono::seconds _slow_query_record_ttl;
 
 public:
+    uint64_t get_next_rand_uint64() {
+        return _gen();
+    }
+
     i_tracing_backend_helper& backend_helper() {
         return *_tracing_backend_helper_ptr;
     }
@@ -633,5 +671,10 @@ void one_session_records::data_consumed() {
 
     _is_pending_for_write = false;
     budget_ptr = tracing::get_local_tracing_instance().get_cached_records_ptr();
+}
+
+inline span_id span_id::make_span_id() {
+    // make sure the value is always greater than 0
+    return 1 + (tracing::get_local_tracing_instance().get_next_rand_uint64() << 1);
 }
 }

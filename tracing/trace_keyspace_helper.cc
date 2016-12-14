@@ -95,6 +95,8 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                 "source inet,"
                                 "source_elapsed int,"
                                 "thread text,"
+                                "scylla_parent_id bigint,"
+                                "scylla_span_id bigint,"
                                 "PRIMARY KEY ((session_id), event_id)) "
                                 "WITH default_time_to_live = 86400", KEYSPACE_NAME, EVENTS),
 
@@ -104,7 +106,9 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                 "activity, "
                                 "source, "
                                 "source_elapsed, "
-                                "thread) VALUES (?, ?, ?, ?, ?, ?) "
+                                "thread,"
+                                "scylla_parent_id,"
+                                "scylla_span_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
                                 "USING TTL ?", KEYSPACE_NAME, EVENTS))
 
             , _slow_query_log(NODE_SLOW_QUERY_LOG, *this,
@@ -311,6 +315,8 @@ std::vector<cql3::raw_value> trace_keyspace_helper::make_event_mutation_data(one
         cql3::raw_value::make_value(inet_addr_type->decompose(utils::fb_utilities::get_broadcast_address().addr())),
         cql3::raw_value::make_value(int32_type->decompose(elapsed_to_micros(record.elapsed))),
         cql3::raw_value::make_value(utf8_type->decompose(_local_tracing.get_thread_name())),
+        cql3::raw_value::make_value(long_type->decompose(int64_t(session_records.parent_id.get_id()))),
+        cql3::raw_value::make_value(long_type->decompose(int64_t(session_records.my_span_id.get_id()))),
         cql3::raw_value::make_value(int32_type->decompose((int32_t)(session_records.ttl.count())))
     });
 
@@ -323,7 +329,7 @@ future<> trace_keyspace_helper::apply_events_mutation(lw_shared_ptr<one_session_
     }
 
     return _events.cache_table_info().then([this, records, &events_records] {
-        logger.trace("{}: storing {} events records", records->session_id, events_records.size());
+        logger.trace("{}: storing {} events records: parent_id {} span_id {}", records->session_id, events_records.size(), records->parent_id, records->my_span_id);
 
         std::vector<shared_ptr<cql3::statements::modification_statement>> modifications(events_records.size(), _events.insert_stmt());
         std::vector<std::vector<cql3::raw_value>> values;

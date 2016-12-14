@@ -26,6 +26,10 @@ enum class trace_type : uint8_t {
     REPAIR,
 };
 
+class span_id {
+    uint64_t get_id();
+};
+
 class trace_info {
     utils::UUID session_id;
     tracing::trace_type type;
@@ -33,6 +37,7 @@ class trace_info {
     tracing::trace_state_props_set state_props [[version 1.4]];
     uint32_t slow_query_threshold_us [[version 1.4]];
     uint32_t slow_query_ttl_sec [[version 1.4]];
+    tracing::span_id parent_id [[version 1.8]]; /// RPC sender's tracing session span ID
 };
 }
 

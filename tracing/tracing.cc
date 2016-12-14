@@ -207,5 +207,9 @@ void tracing::set_trace_probability(double p) {
 one_session_records::one_session_records()
     : backend_state_ptr(tracing::get_local_tracing_instance().allocate_backend_session_state())
     , budget_ptr(tracing::get_local_tracing_instance().get_cached_records_ptr()) {}
+
+std::ostream& operator<<(std::ostream& os, const span_id& id) {
+    return os << id.get_id();
+}
 }
 

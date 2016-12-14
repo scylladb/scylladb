@@ -30,7 +30,9 @@ events_cols = {
     'activity'      : 'text',
     'source'        : 'inet',
     'source_elapsed': 'int',
-    'thread'        : 'text'
+    'thread'        : 'text',
+    'scylla_span_id'   : 'bigint',
+    'scylla_parent_id' : 'bigint'
 }
 
 sessions_cols = {
