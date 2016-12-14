@@ -244,7 +244,7 @@ private:
     future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>> query_partition_key_range_concurrent(std::chrono::steady_clock::time_point timeout,
             std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results, lw_shared_ptr<query::read_command> cmd, db::consistency_level cl, std::vector<query::partition_range>::iterator&& i,
             std::vector<query::partition_range>&& ranges, int concurrency_factor, tracing::trace_state_ptr trace_state,
-            uint32_t total_row_count = 0, uint32_t total_partition_count = 0);
+            uint32_t remaining_row_count, uint32_t remaining_partition_count);
 
     future<foreign_ptr<lw_shared_ptr<query::result>>> do_query(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,
