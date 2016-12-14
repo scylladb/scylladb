@@ -997,3 +997,7 @@ std::ostream& operator<<(std::ostream& os, const view_info& view) {
     os << "}";
     return os;
 }
+
+std::ostream& operator<<(std::ostream& os, const view_ptr& view) {
+    return view ? os << *view : os << "null";
+}

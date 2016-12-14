@@ -649,4 +649,33 @@ bool operator==(const schema&, const schema&);
 
 using schema_ptr = lw_shared_ptr<const schema>;
 
+/**
+ * Wraper for schema_ptr used by functions that except an engaged view_info field.
+ */
+class view_ptr final {
+    schema_ptr _schema;
+public:
+    explicit view_ptr(schema_ptr schema) noexcept : _schema(schema) {
+        if (schema) {
+            assert(_schema->is_view());
+        }
+    }
+
+    const schema& operator*() const noexcept { return *_schema; }
+    const schema* operator->() const noexcept { return _schema.operator->(); }
+    const schema* get() const noexcept { return _schema.get(); }
+
+    operator schema_ptr() const noexcept {
+        return _schema;
+    }
+
+    explicit operator bool() const noexcept {
+        return bool(_schema);
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const view_ptr& s);
+};
+
+std::ostream& operator<<(std::ostream& os, const view_ptr& view);
+
 utils::UUID generate_legacy_id(const sstring& ks_name, const sstring& cf_name);
