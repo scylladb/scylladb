@@ -72,6 +72,9 @@ class decorated_key;
 class token;
 class ring_position;
 
+using partition_range = nonwrapping_range<ring_position>;
+using token_range = nonwrapping_range<token>;
+
 class token {
 public:
     enum class kind {
