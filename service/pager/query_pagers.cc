@@ -258,9 +258,7 @@ private:
                 if (!include_row()) {
                     return false;
                 }
-                if (included_rows == page_size) {
-                    last_ckey = key;
-                }
+                last_ckey = key;
                 return true;
             }
             myvisitor(impl& i, uint32_t ps,
@@ -279,6 +277,7 @@ private:
                 part_ignored = 0;
                 if (included_rows < page_size) {
                     last_pkey = key;
+                    last_ckey = { };
                 }
                 visitor::accept_new_partition(key, row_count);
             }
@@ -330,7 +329,7 @@ private:
         }
 
         _max = _max - v.included_rows;
-        _exhausted = v.included_rows < page_size || _max == 0;
+        _exhausted = (v.included_rows < page_size && !results->is_short_read()) || _max == 0;
         _last_pkey = v.last_pkey;
         _last_ckey = v.last_ckey;
 

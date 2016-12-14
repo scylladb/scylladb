@@ -44,14 +44,14 @@ enum class compact_for_sstables {
 template<typename T>
 concept bool CompactedMutationsConsumer() {
     return requires(T obj, tombstone t, const dht::decorated_key& dk, static_row sr,
-        clustering_row cr, range_tombstone_begin rt, tombstone current_tombstone, bool is_alive)
+        clustering_row cr, range_tombstone rt, tombstone current_tombstone, bool is_alive)
     {
         obj.consume_new_partition(dk);
         obj.consume(t);
-        obj.consume(std::move(sr), current_tombstone, is_alive);
-        obj.consume(std::move(cr), current_tombstone, is_alive);
-        obj.consume(std::move(rt));
-        obj.consume_end_of_partition();
+        { obj.consume(std::move(sr), current_tombstone, is_alive) } ->stop_iteration;
+        { obj.consume(std::move(cr), current_tombstone, is_alive) } ->stop_iteration;
+        { obj.consume(std::move(rt)) } ->stop_iteration;
+        { obj.consume_end_of_partition() } ->stop_iteration;
         obj.consume_end_of_stream();
     };
 }
@@ -177,7 +177,7 @@ public:
         _static_row_live = is_live;
         if (is_live || (!only_live() && !sr.empty())) {
             partition_is_not_empty();
-            _consumer.consume(std::move(sr), current_tombstone, is_live);
+            return _consumer.consume(std::move(sr), current_tombstone, is_live);
         }
         return stop_iteration::no;
     }
@@ -193,10 +193,11 @@ public:
         is_live |= cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, _can_gc, _gc_before);
         if (only_live() && is_live) {
             partition_is_not_empty();
-            _consumer.consume(std::move(cr), t, true);
+            auto stop = _consumer.consume(std::move(cr), t, true);
             if (++_rows_in_current_partition == _current_partition_limit) {
                 return stop_iteration::yes;
             }
+            return stop;
         } else if (!only_live()) {
             if (is_live) {
                 if (!sstable_compaction() && _rows_in_current_partition == _current_partition_limit) {
@@ -206,7 +207,7 @@ public:
             }
             if (!cr.empty()) {
                 partition_is_not_empty();
-                _consumer.consume(std::move(cr), t, is_live);
+                return _consumer.consume(std::move(cr), t, is_live);
             }
         }
         return stop_iteration::no;
@@ -217,7 +218,7 @@ public:
         // FIXME: drop tombstone if it is fully covered by other range tombstones
         if (!can_purge_tombstone(rt.tomb) && rt.tomb > _range_tombstones.get_partition_tombstone()) {
             partition_is_not_empty();
-            _consumer.consume(std::move(rt));
+            return _consumer.consume(std::move(rt));
         }
         return stop_iteration::no;
     }
@@ -232,9 +233,10 @@ public:
 
             _row_limit -= _rows_in_current_partition;
             _partition_limit -= _rows_in_current_partition > 0;
-            _consumer.consume_end_of_partition();
+            auto stop = _consumer.consume_end_of_partition();
             if (!sstable_compaction()) {
-                return _row_limit && _partition_limit ? stop_iteration::no : stop_iteration::yes;
+                return _row_limit && _partition_limit && stop != stop_iteration::yes
+                       ? stop_iteration::no : stop_iteration::yes;
             }
         }
         return stop_iteration::no;

@@ -122,13 +122,23 @@ class result::builder {
     result_request _request;
     uint32_t _row_count = 0;
     api::timestamp_type _last_modified = api::missing_timestamp;
+    short_read _short_read;
+    result_memory_accounter _memory_accounter;
 public:
-    builder(const partition_slice& slice, result_request request)
+    builder(const partition_slice& slice, result_request request, result_memory_accounter memory_accounter)
         : _slice(slice)
         , _w(ser::writer_of_query_result(_out).start_partitions())
         , _request(request)
+        , _memory_accounter(std::move(memory_accounter))
     { }
     builder(builder&&) = delete; // _out is captured by reference
+
+    void mark_as_short_read() { _short_read = short_read::yes; }
+    short_read is_short_read() const { return _short_read; }
+
+    result_memory_accounter& memory_accounter() { return _memory_accounter; }
+
+    const partition_slice& slice() const { return _slice; }
 
     // Starts new partition and returns a builder for its contents.
     // Invalidates all previously obtained builders
@@ -153,14 +163,15 @@ public:
         std::move(_w).end_partitions().end_query_result();
         switch (_request) {
         case result_request::only_result:
-            return result(std::move(_out), _row_count);
+            return result(std::move(_out), _short_read, _row_count, std::move(_memory_accounter).done());
         case result_request::only_digest: {
             bytes_ostream buf;
             ser::writer_of_query_result(buf).start_partitions().end_partitions().end_query_result();
-            return result(std::move(buf), result_digest(_digest.finalize_array()), _last_modified);
+            return result(std::move(buf), result_digest(_digest.finalize_array()), _last_modified, _short_read);
         }
         case result_request::result_and_digest:
-            return result(std::move(_out), result_digest(_digest.finalize_array()), _last_modified, _row_count);
+            return result(std::move(_out), result_digest(_digest.finalize_array()),
+                          _last_modified, _short_read, _row_count, std::move(_memory_accounter).done());
         }
         abort();
     }

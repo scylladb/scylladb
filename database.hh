@@ -648,7 +648,8 @@ public:
     future<lw_shared_ptr<query::result>> query(schema_ptr,
         const query::read_command& cmd, query::result_request request,
         const std::vector<query::partition_range>& ranges,
-        tracing::trace_state_ptr trace_state);
+        tracing::trace_state_ptr trace_state,
+        query::result_memory_limiter& memory_limiter);
 
     future<> populate(sstring datadir);
 
@@ -1048,6 +1049,9 @@ private:
         uint64_t total_reads = 0;
         uint64_t total_reads_failed = 0;
         uint64_t sstable_read_queue_overloaded = 0;
+
+        uint64_t short_data_queries = 0;
+        uint64_t short_mutation_queries = 0;
     };
 
     lw_shared_ptr<db_stats> _stats;
@@ -1087,8 +1091,14 @@ private:
     void setup_collectd();
 
     future<> do_apply(schema_ptr, const frozen_mutation&, timeout_clock::time_point timeout);
+
+    query::result_memory_limiter _result_memory_limiter;
 public:
     static utils::UUID empty_version;
+
+    query::result_memory_limiter& get_result_memory_limiter() {
+        return _result_memory_limiter;
+    }
 
     void set_enable_incremental_backups(bool val) { _enable_incremental_backups = val; }
 
@@ -1152,7 +1162,8 @@ public:
     unsigned shard_of(const mutation& m);
     unsigned shard_of(const frozen_mutation& m);
     future<lw_shared_ptr<query::result>> query(schema_ptr, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges, tracing::trace_state_ptr trace_state);
-    future<reconcilable_result> query_mutations(schema_ptr, const query::read_command& cmd, const query::partition_range& range, tracing::trace_state_ptr trace_state);
+    future<reconcilable_result> query_mutations(schema_ptr, const query::read_command& cmd, const query::partition_range& range,
+                                                query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state);
     // Apply the mutation atomically.
     // Throws timed_out_error when timeout is reached.
     future<> apply(schema_ptr, const frozen_mutation&, timeout_clock::time_point timeout = timeout_clock::time_point::max());

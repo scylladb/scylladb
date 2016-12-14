@@ -67,19 +67,30 @@ struct partition {
 // Can be read by other cores after publishing.
 class reconcilable_result {
     uint32_t _row_count;
+    query::short_read _short_read;
+    query::result_memory_tracker _memory_tracker;
     std::vector<partition> _partitions;
 public:
     ~reconcilable_result();
     reconcilable_result();
     reconcilable_result(reconcilable_result&&) = default;
     reconcilable_result& operator=(reconcilable_result&&) = default;
-    reconcilable_result(uint32_t row_count, std::vector<partition> partitions);
+    reconcilable_result(uint32_t row_count, std::vector<partition> partitions, query::short_read short_read,
+                        query::result_memory_tracker memory_tracker = { });
 
     const std::vector<partition>& partitions() const;
     std::vector<partition>& partitions();
 
     uint32_t row_count() const {
         return _row_count;
+    }
+
+    query::short_read is_short_read() const {
+        return _short_read;
+    }
+
+    size_t memory_usage() const {
+        return _memory_tracker.used_memory();
     }
 
     bool operator==(const reconcilable_result& other) const;
@@ -114,7 +125,8 @@ future<reconcilable_result> mutation_query(
     const query::partition_slice& slice,
     uint32_t row_limit,
     uint32_t partition_limit,
-    gc_clock::time_point query_time);
+    gc_clock::time_point query_time,
+    query::result_memory_accounter&& accounter = { });
 
 struct data_query_result {
     uint32_t live_rows{0};

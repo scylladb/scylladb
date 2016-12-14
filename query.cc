@@ -32,6 +32,8 @@
 
 namespace query {
 
+thread_local semaphore result_memory_tracker::_dummy { 0 };
+
 const partition_range full_partition_range = partition_range::make_open_ended_both_sides();
 
 const query::partition_slice full_slice = query::partition_slice({ query::clustering_range::make_open_ended_both_sides() }, { }, { }, { });
@@ -145,7 +147,7 @@ result::pretty_print(schema_ptr s, const query::partition_slice& slice) const {
     } else {
         out << "{}";
     }
-    out << " }";
+    out << ", short_read=" << is_short_read() << " }";
     return out.str();
 }
 
@@ -188,7 +190,7 @@ result::result()
         bytes_ostream out;
         ser::writer_of_query_result(out).skip_partitions().end_query_result();
         return out;
-    }())
+    }(), short_read::no)
 { }
 
 foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
@@ -199,6 +201,7 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
     bytes_ostream w;
     auto partitions = ser::writer_of_query_result(w).start_partitions();
     std::experimental::optional<uint32_t> row_count = 0;
+    short_read is_short_read;
 
     for (auto&& r : _partial) {
         if (row_count) {
@@ -213,11 +216,15 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
                 partitions.add(pv);
             }
         });
+        if (r->is_short_read()) {
+            is_short_read = short_read::yes;
+            break;
+        }
     }
 
     std::move(partitions).end_partitions().end_query_result();
 
-    return make_foreign(make_lw_shared<query::result>(std::move(w), row_count));
+    return make_foreign(make_lw_shared<query::result>(std::move(w), is_short_read, row_count));
 }
 
 }

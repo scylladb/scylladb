@@ -254,6 +254,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
                 now);
     }
 
+    command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto p = service::pager::query_pagers::pager(_schema, _selection,
             state, options, command, std::move(key_ranges));
 
