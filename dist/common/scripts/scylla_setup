@@ -5,6 +5,7 @@
 . /usr/lib/scylla/scylla_lib.sh
 
 GREEN='\033[0;32m'
+RED='\033[0;31m'
 NO_COLOR='\033[0m' # No Color
 
 if [ "`id -u`" -ne 0 ]; then
@@ -91,6 +92,16 @@ get_unused_disks() {
             echo -n "$dev "
         fi
     done
+}
+
+run_setup_script() {
+    name=$1
+    shift 1
+    $* &&:
+    if [ $? -ne 0 ] && [ $INTERACTIVE -eq 1 ]; then
+        printf "${RED}$name setup failed. press any key to continue...${NO_COLOR}\n"
+        read
+    fi
 }
 
 AMI=0
@@ -272,7 +283,7 @@ if [ $INTERACTIVE -eq 1 ]; then
     SELINUX_SETUP=$?
 fi
 if [ $SELINUX_SETUP -eq 1 ]; then
-    /usr/lib/scylla/scylla_selinux_setup
+    run_setup_script "SELinux" /usr/lib/scylla/scylla_selinux_setup
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
@@ -280,7 +291,7 @@ if [ $INTERACTIVE -eq 1 ]; then
     BOOTPARAM_SETUP=$?
 fi
 if [ $BOOTPARAM_SETUP -eq 1 ]; then
-    /usr/lib/scylla/scylla_bootparam_setup
+    run_setup_script "boot parameter" /usr/lib/scylla/scylla_bootparam_setup
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
@@ -289,9 +300,9 @@ if [ $INTERACTIVE -eq 1 ]; then
 fi
 if [ $NTP_SETUP -eq 1 ]; then
     if [ "$NTP_DOMAIN" != "" ]; then
-        /usr/lib/scylla/scylla_ntp_setup --subdomain $NTP_DOMAIN
+        run_setup_script "NTP" /usr/lib/scylla/scylla_ntp_setup --subdomain $NTP_DOMAIN
     else
-        /usr/lib/scylla/scylla_ntp_setup
+        run_setup_script "NTP" /usr/lib/scylla/scylla_ntp_setup
     fi
 fi
 
@@ -333,7 +344,7 @@ if [ $INTERACTIVE -eq 1 ]; then
     fi
 fi
 if [ $RAID_SETUP -eq 1 ]; then
-    /usr/lib/scylla/scylla_raid_setup --disks $DISKS --update-fstab
+    run_setup_script "RAID" /usr/lib/scylla/scylla_raid_setup --disks $DISKS --update-fstab
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
@@ -342,9 +353,9 @@ if [ $INTERACTIVE -eq 1 ]; then
 fi
 if [ $COREDUMP_SETUP -eq 1 ]; then
     if [ "$DISKS" != "" ]; then
-        /usr/lib/scylla/scylla_coredump_setup --dump-to-raiddir
+        run_setup_script "coredump" /usr/lib/scylla/scylla_coredump_setup --dump-to-raiddir
     else
-        /usr/lib/scylla/scylla_coredump_setup
+        run_setup_script "coredump" /usr/lib/scylla/scylla_coredump_setup
     fi
 fi
 
@@ -379,7 +390,7 @@ if [ $SYSCONFIG_SETUP -eq 1 ]; then
     if [ $SET_NIC -eq 1 ]; then
         SETUP_ARGS="--setup-nic"
     fi
-    /usr/lib/scylla/scylla_sysconfig_setup --nic $NIC $SETUP_ARGS
+    run_setup_script "NIC queue" /usr/lib/scylla/scylla_sysconfig_setup --nic $NIC $SETUP_ARGS
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
@@ -388,7 +399,7 @@ if [ $INTERACTIVE -eq 1 ]; then
 fi
 
 if [ $IO_SETUP -eq 1 ]; then
-    /usr/lib/scylla/scylla_io_setup
+    run_setup_script "IO configuration" /usr/lib/scylla/scylla_io_setup
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
@@ -397,7 +408,7 @@ if [ $INTERACTIVE -eq 1 ]; then
 fi
 
 if [ $NODE_EXPORTER -eq 1 ]; then
-    /usr/lib/scylla/node_exporter_install
+    run_setup_script "node exporter" /usr/lib/scylla/node_exporter_install
 fi
 
 if [ $DEV_MODE -eq 1 ]; then
