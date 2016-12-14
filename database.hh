@@ -1142,7 +1142,8 @@ public:
     future<> init_system_keyspace();
     future<> load_sstables(distributed<service::storage_proxy>& p); // after init_system_keyspace()
 
-    void add_column_family(schema_ptr schema, column_family::config cfg);
+    void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);
+    future<> add_column_family_and_make_directory(schema_ptr schema);
 
     /* throws std::out_of_range if missing */
     const utils::UUID& find_uuid(const sstring& ks, const sstring& cf) const;

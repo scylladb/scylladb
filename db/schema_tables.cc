@@ -795,14 +795,9 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
     proxy.local().get_db().invoke_on_all([&created, &dropped, &altered] (database& db) {
             return seastar::async([&] {
                 for (auto&& gs : created) {
-                    schema_ptr s = gs.get();
-                    auto& ks = db.find_keyspace(s->ks_name());
-                    auto cfg = ks.make_column_family_config(*s, db.get_config());
-                    db.add_column_family(s, cfg);
-                    auto& cf = db.find_column_family(s);
-                    cf.mark_ready_for_writes();
-                    ks.make_directory_for_column_family(s->cf_name(), s->id()).get();
-                    service::get_local_migration_manager().notify_create_column_family(s).get();
+                    db.add_column_family_and_make_directory(gs).get();
+                    db.find_column_family(gs).mark_ready_for_writes();
+                    service::get_local_migration_manager().notify_create_column_family(gs).get();
                 }
                 for (auto&& gs : altered) {
                     update_column_family(db, gs.get()).get();
