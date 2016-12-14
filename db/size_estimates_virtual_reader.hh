@@ -230,7 +230,7 @@ private:
     /**
      * Makes a wrapping range of ring_position from a nonwrapping range of token, used to select sstables.
      */
-    static nonwrapping_range<dht::ring_position> as_ring_position_range(dht::token_range& r) {
+    static dht::partition_range as_ring_position_range(dht::token_range& r) {
         stdx::optional<range<dht::ring_position>::bound> start_bound, end_bound;
         if (r.start()) {
             start_bound = {{ dht::ring_position(r.start()->value(), dht::ring_position::token_bound::start), r.start()->is_inclusive() }};
@@ -238,7 +238,7 @@ private:
         if (r.end()) {
             end_bound = {{ dht::ring_position(r.end()->value(), dht::ring_position::token_bound::end), r.end()->is_inclusive() }};
         }
-        return nonwrapping_range<dht::ring_position>(std::move(start_bound), std::move(end_bound), r.is_singular());
+        return dht::partition_range(std::move(start_bound), std::move(end_bound), r.is_singular());
     }
 
     /**

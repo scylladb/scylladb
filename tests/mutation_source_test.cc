@@ -68,7 +68,7 @@ static void test_range_queries(populate_fn populate) {
 
     auto ds = populate(s, partitions);
 
-    auto test_slice = [&] (nonwrapping_range<dht::ring_position> r) {
+    auto test_slice = [&] (dht::partition_range r) {
         BOOST_TEST_MESSAGE(sprint("Testing range %s", r));
         assert_that(ds(s, r))
             .produces(slice(partitions, r))

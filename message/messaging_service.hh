@@ -65,7 +65,7 @@ namespace dht {
 }
 
 namespace query {
-    using partition_range = nonwrapping_range<ring_position>;
+    using partition_range = dht::partition_range;
     class read_command;
     class result;
 }

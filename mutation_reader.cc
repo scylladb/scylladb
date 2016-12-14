@@ -274,7 +274,7 @@ make_restricted_reader(const restricted_mutation_reader_config& config, unsigned
 
 class multi_range_mutation_reader : public mutation_reader::impl {
 public:
-    using ranges_vector = std::vector<query::partition_range>;
+    using ranges_vector = std::vector<dht::partition_range>;
 private:
     const ranges_vector& _ranges;
     ranges_vector::const_iterator _current_range;
@@ -306,7 +306,7 @@ public:
         });
     }
 
-    virtual future<> fast_forward_to(const query::partition_range& pr) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         // When end of pr is reached, this reader will increment _current_range
         // and notice that it now points to _ranges.end().
         _current_range = std::prev(_ranges.end());
@@ -315,7 +315,7 @@ public:
 };
 
 mutation_reader
-make_multi_range_reader(schema_ptr s, mutation_source source, const std::vector<query::partition_range>& ranges,
+make_multi_range_reader(schema_ptr s, mutation_source source, const std::vector<dht::partition_range>& ranges,
                         const query::partition_slice& slice, const io_priority_class& pc,
                         tracing::trace_state_ptr trace_state)
 {

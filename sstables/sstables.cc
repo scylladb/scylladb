@@ -2598,23 +2598,23 @@ uint64_t sstable::estimated_keys_for_range(const dht::token_range& range) {
 std::vector<unsigned>
 sstable::get_shards_for_this_sstable() const {
     std::unordered_set<unsigned> shards;
-    std::vector<nonwrapping_range<dht::ring_position>> token_ranges;
+    std::vector<dht::partition_range> token_ranges;
     const auto* sm = _scylla_metadata
             ? _scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>()
             : nullptr;
     if (!sm) {
-        token_ranges.push_back(nonwrapping_range<dht::ring_position>::make(
+        token_ranges.push_back(dht::partition_range::make(
                 dht::ring_position::starting_at(get_first_decorated_key().token()),
                 dht::ring_position::ending_at(get_last_decorated_key().token())));
     } else {
         auto disk_token_range_to_ring_position_range = [] (const disk_token_range& dtr) {
             auto t1 = dht::token(dht::token::kind::key, managed_bytes(bytes_view(dtr.left.token)));
             auto t2 = dht::token(dht::token::kind::key, managed_bytes(bytes_view(dtr.right.token)));
-            return nonwrapping_range<dht::ring_position>::make(
+            return dht::partition_range::make(
                     (dtr.left.exclusive ? dht::ring_position::ending_at : dht::ring_position::starting_at)(std::move(t1)),
                     (dtr.right.exclusive ? dht::ring_position::starting_at : dht::ring_position::ending_at)(std::move(t2)));
         };
-        token_ranges = boost::copy_range<std::vector<nonwrapping_range<dht::ring_position>>>(
+        token_ranges = boost::copy_range<std::vector<dht::partition_range>>(
                 sm->token_ranges.elements
                 | boost::adaptors::transformed(disk_token_range_to_ring_position_range));
     }

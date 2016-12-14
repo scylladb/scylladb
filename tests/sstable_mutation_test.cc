@@ -310,7 +310,7 @@ future<> test_range_reads(const dht::token& min, const dht::token& max, std::vec
         auto count = make_lw_shared<size_t>(0);
         auto expected_size = expected.size();
         auto stop = make_lw_shared<bool>(false);
-        return do_with(nonwrapping_range<dht::ring_position>::make(dht::ring_position::starting_at(min),
+        return do_with(dht::partition_range::make(dht::ring_position::starting_at(min),
                                                               dht::ring_position::ending_at(max)), [&, sstp, s] (auto& pr) {
             auto mutations = sstp->read_range_rows(s, pr);
             return do_until([stop] { return *stop; },

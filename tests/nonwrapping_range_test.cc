@@ -37,7 +37,7 @@ thread_local disk_error_signal_type general_disk_error;
 using ring_position = dht::ring_position;
 
 static
-bool includes_token(const schema& s, const nonwrapping_range<ring_position>& r, const dht::token& tok) {
+bool includes_token(const schema& s, const dht::partition_range& r, const dht::token& tok) {
     dht::ring_position_comparator cmp(s);
 
     return !r.before(dht::ring_position(tok, dht::ring_position::token_bound::end), cmp)
@@ -45,7 +45,7 @@ bool includes_token(const schema& s, const nonwrapping_range<ring_position>& r, 
 }
 
 BOOST_AUTO_TEST_CASE(test_range_with_positions_within_the_same_token) {
-    using bound = nonwrapping_range<dht::ring_position>::bound;
+    using bound = dht::partition_range::bound;
     auto s = schema_builder("ks", "cf")
         .with_column("key", bytes_type, column_kind::partition_key)
         .with_column("v", bytes_type)
@@ -60,7 +60,7 @@ BOOST_AUTO_TEST_CASE(test_range_with_positions_within_the_same_token) {
                                    partition_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("key2"))))};
 
     {
-        auto r = nonwrapping_range<ring_position>(
+        auto r = dht::partition_range(
             {bound(dht::ring_position(key1))},
             {bound(dht::ring_position(key2))});
 
@@ -70,7 +70,7 @@ BOOST_AUTO_TEST_CASE(test_range_with_positions_within_the_same_token) {
     }
 
     {
-        auto r = nonwrapping_range<ring_position>(
+        auto r = dht::partition_range(
             {bound(dht::ring_position(key1), false)},
             {bound(dht::ring_position(key2), false)});
 
@@ -80,7 +80,7 @@ BOOST_AUTO_TEST_CASE(test_range_with_positions_within_the_same_token) {
     }
 
     {
-        auto r = nonwrapping_range<ring_position>(
+        auto r = dht::partition_range(
             {bound(dht::ring_position::starting_at(tok), false)},
             {bound(dht::ring_position(key2), true)});
 
@@ -90,7 +90,7 @@ BOOST_AUTO_TEST_CASE(test_range_with_positions_within_the_same_token) {
     }
 
     {
-        auto r = nonwrapping_range<ring_position>(
+        auto r = dht::partition_range(
             {bound(dht::ring_position::starting_at(tok), true)},
             {bound(dht::ring_position::ending_at(tok), true)});
 

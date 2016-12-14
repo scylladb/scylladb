@@ -635,7 +635,7 @@ column_family::make_streaming_reader(schema_ptr s,
     auto& slice = query::full_slice;
     auto& pc = service::get_local_streaming_read_priority();
 
-    auto source = mutation_source([this] (schema_ptr s, const query::partition_range& range, const query::partition_slice& slice,
+    auto source = mutation_source([this] (schema_ptr s, const dht::partition_range& range, const query::partition_slice& slice,
                                       const io_priority_class& pc, tracing::trace_state_ptr trace_state) {
         std::vector<mutation_reader> readers;
         readers.reserve(_memtables->size() + 1);
