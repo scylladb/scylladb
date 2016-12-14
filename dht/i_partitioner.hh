@@ -49,6 +49,7 @@
 #include <memory>
 #include <random>
 #include <utility>
+#include <vector>
 #include <range.hh>
 
 namespace sstables {
@@ -74,6 +75,9 @@ class ring_position;
 
 using partition_range = nonwrapping_range<ring_position>;
 using token_range = nonwrapping_range<token>;
+
+using partition_range_vector = std::vector<partition_range>;
+using token_range_vector = std::vector<token_range>;
 
 class token {
 public:
