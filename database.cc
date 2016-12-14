@@ -1968,6 +1968,14 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
             return make_ready_future<>();
         });
     }).then([&proxy, this] {
+        return do_parse_system_tables(proxy, db::schema_tables::VIEWS, [this, &proxy] (schema_result_value_type &v) {
+            return create_views_from_schema_partition(proxy, v.second).then([this] (std::vector<view_ptr> views) {
+                return parallel_for_each(views.begin(), views.end(), [this] (auto&& v) {
+                    return this->add_column_family_and_make_directory(v);
+                });
+            });
+        });
+    }).then([&proxy, this] {
         return do_parse_system_tables(proxy, db::schema_tables::COLUMNFAMILIES, [this, &proxy] (schema_result_value_type &v) {
             return create_tables_from_tables_partition(proxy, v.second).then([this] (std::map<sstring, schema_ptr> tables) {
                 return parallel_for_each(tables.begin(), tables.end(), [this] (auto& t) {
@@ -2087,6 +2095,9 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     cf->start();
     _column_families.emplace(uuid, std::move(cf));
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
+    if (schema->is_view()) {
+        find_column_family(schema->view_info()->base_id()).add_or_update_view(view_ptr(schema));
+    }
 }
 
 future<> database::add_column_family_and_make_directory(schema_ptr schema) {
