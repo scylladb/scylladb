@@ -288,7 +288,7 @@ modification_statement::read_required_rows(
                 query::partition_slice::option::send_partition_key,
                 query::partition_slice::option::send_clustering_key,
                 query::partition_slice::option::collections_as_maps>());
-    std::vector<query::partition_range> pr;
+    std::vector<dht::partition_range> pr;
     for (auto&& pk : *keys) {
         pr.emplace_back(dht::global_partitioner().decorate_key(*s, pk));
     }

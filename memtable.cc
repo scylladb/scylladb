@@ -127,7 +127,7 @@ memtable::find_or_create_partition(const dht::decorated_key& key) {
 }
 
 boost::iterator_range<memtable::partitions_type::const_iterator>
-memtable::slice(const query::partition_range& range) const {
+memtable::slice(const dht::partition_range& range) const {
     if (query::is_single_partition(range)) {
         const query::ring_position& pos = range.start()->value();
         auto i = partitions.find(pos, memtable_entry::compare(_schema));
@@ -158,7 +158,7 @@ memtable::slice(const query::partition_range& range) const {
 class iterator_reader: public mutation_reader::impl {
     lw_shared_ptr<memtable> _memtable;
     schema_ptr _schema;
-    const query::partition_range* _range;
+    const dht::partition_range* _range;
     stdx::optional<dht::decorated_key> _last;
     memtable::partitions_type::iterator _i;
     memtable::partitions_type::iterator _end;
@@ -199,7 +199,7 @@ class iterator_reader: public mutation_reader::impl {
 protected:
     iterator_reader(schema_ptr s,
                     lw_shared_ptr<memtable> m,
-                    const query::partition_range& range)
+                    const dht::partition_range& range)
         : _memtable(std::move(m))
         , _schema(std::move(s))
         , _range(&range)
@@ -234,7 +234,7 @@ protected:
         return *_memtable;
     };
 
-    std::experimental::optional<query::partition_range> get_delegate_range() {
+    std::experimental::optional<dht::partition_range> get_delegate_range() {
         // We cannot run concurrently with row_cache::update().
         if (_memtable->is_flushed()) {
             return _last ? _range->split_after(*_last, dht::ring_position_comparator(*_memtable->_schema)) : *_range;
@@ -242,7 +242,7 @@ protected:
         return {};
     }
 
-    mutation_reader delegate_reader(const query::partition_range& delegate,
+    mutation_reader delegate_reader(const dht::partition_range& delegate,
                                     const query::partition_slice& slice,
                                     const io_priority_class& pc) {
         auto ret = make_mutation_reader<sstable_range_wrapping_reader>(
@@ -252,7 +252,7 @@ protected:
         return ret;
     }
 public:
-    virtual future<> fast_forward_to(const query::partition_range& pr) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         _range = &pr;
         _last = { };
         return make_ready_future<>();
@@ -260,14 +260,14 @@ public:
 };
 
 class scanning_reader final: public iterator_reader {
-    stdx::optional<query::partition_range> _delegate_range;
+    stdx::optional<dht::partition_range> _delegate_range;
     mutation_reader _delegate;
     const io_priority_class& _pc;
     const query::partition_slice& _slice;
 public:
      scanning_reader(schema_ptr s,
                      lw_shared_ptr<memtable> m,
-                     const query::partition_range& range,
+                     const dht::partition_range& range,
                      const query::partition_slice& slice,
                      const io_priority_class& pc)
          : iterator_reader(std::move(s), std::move(m), range)
@@ -409,7 +409,7 @@ public:
 
 mutation_reader
 memtable::make_reader(schema_ptr s,
-                      const query::partition_range& range,
+                      const dht::partition_range& range,
                       const query::partition_slice& slice,
                       const io_priority_class& pc) {
     if (query::is_single_partition(range)) {
@@ -486,7 +486,7 @@ logalloc::occupancy_stats memtable::occupancy() const {
 }
 
 mutation_source memtable::as_data_source() {
-    return mutation_source([mt = shared_from_this()] (schema_ptr s, const query::partition_range& range) {
+    return mutation_source([mt = shared_from_this()] (schema_ptr s, const dht::partition_range& range) {
         return mt->make_reader(std::move(s), range);
     });
 }

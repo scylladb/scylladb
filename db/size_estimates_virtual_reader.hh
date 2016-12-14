@@ -47,13 +47,13 @@ class size_estimates_mutation_reader final : public mutation_reader::impl {
         bytes end;
     };
     schema_ptr _schema;
-    const query::partition_range& _prange;
+    const dht::partition_range& _prange;
     const query::partition_slice& _slice;
     using ks_range = std::vector<sstring>;
     stdx::optional<ks_range> _keyspaces;
     ks_range::const_iterator _current_partition;
 public:
-    size_estimates_mutation_reader(schema_ptr schema, const query::partition_range& prange, const query::partition_slice& slice)
+    size_estimates_mutation_reader(schema_ptr schema, const dht::partition_range& prange, const query::partition_slice& slice)
             : _schema(schema)
             , _prange(prange)
             , _slice(slice)
@@ -203,7 +203,7 @@ private:
     /**
      * Returns the keyspaces, ordered by name, as selected by the partition_range.
      */
-    static ks_range get_keyspaces(const schema& s, const database& db, query::partition_range range) {
+    static ks_range get_keyspaces(const schema& s, const database& db, dht::partition_range range) {
         struct keyspace_less_comparator {
             const schema& _s;
             keyspace_less_comparator(const schema& s) : _s(s) { }
@@ -268,7 +268,7 @@ private:
 
 struct virtual_reader {
     mutation_reader operator()(schema_ptr schema,
-            const query::partition_range& range,
+            const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_state) {

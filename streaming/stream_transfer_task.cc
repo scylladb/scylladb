@@ -69,7 +69,7 @@ struct send_info {
     database& db;
     utils::UUID plan_id;
     utils::UUID cf_id;
-    std::vector<query::partition_range> prs;
+    std::vector<dht::partition_range> prs;
     net::messaging_service::msg_addr id;
     uint32_t dst_cpu_id;
     size_t mutations_nr{0};
@@ -77,7 +77,7 @@ struct send_info {
     bool error_logged = false;
     mutation_reader reader;
     send_info(database& db_, utils::UUID plan_id_, utils::UUID cf_id_,
-              std::vector<query::partition_range> prs_, net::messaging_service::msg_addr id_,
+              std::vector<dht::partition_range> prs_, net::messaging_service::msg_addr id_,
               uint32_t dst_cpu_id_)
         : db(db_)
         , plan_id(plan_id_)

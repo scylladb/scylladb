@@ -41,7 +41,7 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
             e.execute_cql("create table ks.cf (k text, v int, primary key (k));").get();
             auto& db = e.local_db();
             auto s = db.find_schema("ks", "cf");
-            std::vector<query::partition_range> pranges;
+            std::vector<dht::partition_range> pranges;
             for (uint32_t i = 1; i <= 3; ++i) {
                 auto pkey = partition_key::from_single_value(*s, to_bytes(sprint("key%d", i)));
                 mutation m(pkey, s);
@@ -53,7 +53,7 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
                 mutation m(pkey, s);
                 m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", data_value(bytes("v1")), 1);
                 db.apply(s, freeze(m)).get();
-                pranges.emplace_back(query::partition_range::make_singular(dht::global_partitioner().decorate_key(*s, std::move(pkey))));
+                pranges.emplace_back(dht::partition_range::make_singular(dht::global_partitioner().decorate_key(*s, std::move(pkey))));
             }
 
             {

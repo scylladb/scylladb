@@ -54,7 +54,7 @@ public:
     public:
         virtual ~impl() {}
         virtual future<streamed_mutation_opt> operator()() = 0;
-        virtual future<> fast_forward_to(const query::partition_range&) {
+        virtual future<> fast_forward_to(const dht::partition_range&) {
             throw std::bad_function_call();
         }
     };
@@ -80,7 +80,7 @@ public:
     // previous fast forward target).
     // pr needs to be valid until the reader is destroyed or fast_forward_to()
     // is called again.
-    future<> fast_forward_to(const query::partition_range& pr) { return _impl->fast_forward_to(pr); }
+    future<> fast_forward_to(const dht::partition_range& pr) { return _impl->fast_forward_to(pr); }
 };
 
 // Impl: derived from mutation_reader::impl; Args/args: arguments for Impl's constructor
@@ -132,11 +132,11 @@ private:
 protected:
     combined_mutation_reader() = default;
     void init_mutation_reader_set(std::vector<mutation_reader*>);
-    future<> fast_forward_to(std::vector<mutation_reader*> to_add, std::vector<mutation_reader*> to_remove, const query::partition_range& pr);
+    future<> fast_forward_to(std::vector<mutation_reader*> to_add, std::vector<mutation_reader*> to_remove, const dht::partition_range& pr);
 public:
     combined_mutation_reader(std::vector<mutation_reader> readers);
     virtual future<streamed_mutation_opt> operator()() override;
-    virtual future<> fast_forward_to(const query::partition_range& pr) override;
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override;
 };
 
 // Creates a mutation reader which combines data return by supplied readers.
@@ -149,7 +149,7 @@ mutation_reader make_reader_returning(mutation);
 mutation_reader make_reader_returning(streamed_mutation);
 mutation_reader make_reader_returning_many(std::vector<mutation>,
     const query::partition_slice& slice = query::full_slice);
-mutation_reader make_reader_returning_many(std::vector<mutation>, const query::partition_range&);
+mutation_reader make_reader_returning_many(std::vector<mutation>, const dht::partition_range&);
 mutation_reader make_reader_returning_many(std::vector<streamed_mutation>);
 mutation_reader make_empty_reader();
 
@@ -206,7 +206,7 @@ public:
             return make_ready_future<streamed_mutation_opt>(std::move(_current));
         });
     };
-    virtual future<> fast_forward_to(const query::partition_range& pr) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         return _rd.fast_forward_to(pr);
     }
 };
@@ -251,7 +251,7 @@ future<> consume(mutation_reader& reader, Consumer consumer) {
 // The reader returns mutations having all the same schema, the one passed
 // when invoking the source.
 class mutation_source {
-    using partition_range = const query::partition_range&;
+    using partition_range = const dht::partition_range&;
     using io_priority = const io_priority_class&;
     std::function<mutation_reader(schema_ptr, partition_range, const query::partition_slice&, io_priority, tracing::trace_state_ptr)> _fn;
 public:

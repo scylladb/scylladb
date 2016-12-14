@@ -272,7 +272,7 @@ public:
     }
 
     boost::iterator_range<tokens_iterator> ring_range(
-        const std::experimental::optional<query::partition_range::bound>& start, bool include_min = false) const;
+        const std::experimental::optional<dht::partition_range::bound>& start, bool include_min = false) const;
 
     topology& get_topology() {
         return _topology;

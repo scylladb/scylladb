@@ -211,7 +211,7 @@ public:
      * @return the specified bound of the partition key
      * @throws InvalidRequestException if the boundary cannot be retrieved
      */
-    std::vector<query::partition_range> get_partition_key_ranges(const query_options& options) const;
+    std::vector<dht::partition_range> get_partition_key_ranges(const query_options& options) const;
 
 #if 0
     /**

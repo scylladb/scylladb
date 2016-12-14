@@ -36,13 +36,12 @@ template <typename T>
 using range = wrapping_range<T>;
 
 using ring_position = dht::ring_position;
-using partition_range = nonwrapping_range<ring_position>;
 using clustering_range = nonwrapping_range<clustering_key_prefix>;
 
-extern const partition_range full_partition_range;
+extern const dht::partition_range full_partition_range;
 
 inline
-bool is_single_partition(const query::partition_range& range) {
+bool is_single_partition(const dht::partition_range& range) {
     return range.is_singular() && range.start()->value().has_key();
 }
 

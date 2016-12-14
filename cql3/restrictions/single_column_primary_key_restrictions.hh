@@ -334,9 +334,9 @@ public:
 };
 
 template<>
-std::vector<query::partition_range>
+std::vector<dht::partition_range>
 single_column_primary_key_restrictions<partition_key>::bounds_ranges(const query_options& options) const {
-    std::vector<query::partition_range> ranges;
+    std::vector<dht::partition_range> ranges;
     ranges.reserve(size());
     for (query::range<partition_key>& r : compute_bounds(options)) {
         if (!r.is_singular()) {

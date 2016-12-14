@@ -114,17 +114,17 @@ unwrap(std::vector<wrapping_range<dht::token>>&& v) {
 }
 
 
-class one_or_two_partition_ranges : public std::pair<query::partition_range, stdx::optional<query::partition_range>> {
-    using pair = std::pair<query::partition_range, stdx::optional<query::partition_range>>;
+class one_or_two_partition_ranges : public std::pair<dht::partition_range, stdx::optional<dht::partition_range>> {
+    using pair = std::pair<dht::partition_range, stdx::optional<dht::partition_range>>;
 public:
-    explicit one_or_two_partition_ranges(query::partition_range&& f)
+    explicit one_or_two_partition_ranges(dht::partition_range&& f)
         : pair(std::move(f), stdx::nullopt) {
     }
-    explicit one_or_two_partition_ranges(query::partition_range&& f, query::partition_range&& s)
+    explicit one_or_two_partition_ranges(dht::partition_range&& f, dht::partition_range&& s)
         : pair(std::move(f), std::move(s)) {
     }
-    operator std::vector<query::partition_range>() const & {
-        auto ret = std::vector<query::partition_range>();
+    operator std::vector<dht::partition_range>() const & {
+        auto ret = std::vector<dht::partition_range>();
         // not reserving, since ret.size() is likely to be 1
         ret.push_back(first);
         if (second) {
@@ -132,8 +132,8 @@ public:
         }
         return ret;
     }
-    operator std::vector<query::partition_range>() && {
-        auto ret = std::vector<query::partition_range>();
+    operator std::vector<dht::partition_range>() && {
+        auto ret = std::vector<dht::partition_range>();
         // not reserving, since ret.size() is likely to be 1
         ret.push_back(std::move(first));
         if (second) {
@@ -150,10 +150,10 @@ unwrap(wrapping_partition_range pr, const schema& s) {
         auto unw = std::move(pr).unwrap();
         // Preserve ring order
         return one_or_two_partition_ranges(
-                query::partition_range(std::move(unw.second)),
-                query::partition_range(std::move(unw.first)));
+                dht::partition_range(std::move(unw.second)),
+                dht::partition_range(std::move(unw.first)));
     } else {
-        return one_or_two_partition_ranges(query::partition_range(std::move(pr)));
+        return one_or_two_partition_ranges(dht::partition_range(std::move(pr)));
     }
 }
 

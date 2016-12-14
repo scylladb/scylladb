@@ -59,7 +59,7 @@ private:
     bool aborted = false;
     // A stream_transfer_task always contains the same range to stream
     std::vector<dht::token_range> _ranges;
-    std::map<unsigned, std::vector<query::partition_range>> _shard_ranges;
+    std::map<unsigned, std::vector<dht::partition_range>> _shard_ranges;
     long _total_size;
 public:
     using UUID = utils::UUID;

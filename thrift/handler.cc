@@ -331,7 +331,7 @@ public:
         });
     }
 
-    static lw_shared_ptr<query::read_command> make_paged_read_cmd(const schema& s, uint32_t column_limit, const std::string* start_column, const std::vector<query::partition_range>& range) {
+    static lw_shared_ptr<query::read_command> make_paged_read_cmd(const schema& s, uint32_t column_limit, const std::string* start_column, const std::vector<dht::partition_range>& range) {
         auto opts = query_opts(s);
         std::vector<query::clustering_range> clustering_ranges;
         std::vector<column_id> regular_columns;
@@ -369,7 +369,7 @@ public:
     static future<> do_get_paged_slice(
             schema_ptr schema,
             uint32_t column_limit,
-            std::vector<query::partition_range> range,
+            std::vector<dht::partition_range> range,
             const std::string* start_column,
             db::consistency_level consistency_level,
             std::vector<KeySlice>& output) {
@@ -380,7 +380,7 @@ public:
             // For static CFs, we must first query for a specific key so as to consume the remainder
             // of columns in that partition.
             start_key = range[0].start()->value().key();
-            range = {query::partition_range::make_singular(std::move(range[0].start()->value()))};
+            range = {dht::partition_range::make_singular(std::move(range[0].start()->value()))};
         }
         auto range1 = range; // query() below accepts an rvalue, so need a copy to reuse later
         return service::get_local_storage_proxy().query(schema, cmd, std::move(range), consistency_level, nullptr).then([schema, cmd, column_limit](auto result) {
@@ -405,7 +405,7 @@ public:
                 start_key = key_from_thrift(*schema, to_bytes_view(output.back().key));
             }
             auto start = dht::global_partitioner().decorate_key(*schema, std::move(*start_key));
-            range[0] = query::partition_range(query::partition_range::bound(std::move(start), false), std::move(end));
+            range[0] = dht::partition_range(dht::partition_range::bound(std::move(start), false), std::move(end));
             return do_get_paged_slice(schema, column_limit - columns, std::move(range), nullptr, consistency_level, output);
         });
     }
@@ -591,7 +591,7 @@ public:
                 return service::get_local_storage_proxy().query(
                         schema,
                         cmd,
-                        {query::partition_range::make_singular(dk)},
+                        {dht::partition_range::make_singular(dk)},
                         cl_from_thrift(cl),
                         nullptr).then([schema, cmd, column_limit](auto result) {
                     return query::result_view::do_with(*result, [schema, cmd, column_limit](query::result_view v) {
@@ -1407,12 +1407,12 @@ private:
         }
         return ret;
     }
-    static std::vector<query::partition_range> make_partition_ranges(const schema& s, const std::vector<std::string>& keys) {
-        std::vector<query::partition_range> ranges;
+    static std::vector<dht::partition_range> make_partition_ranges(const schema& s, const std::vector<std::string>& keys) {
+        std::vector<dht::partition_range> ranges;
         for (auto&& key : keys) {
             auto pk = key_from_thrift(s, to_bytes_view(key));
             auto dk = dht::global_partitioner().decorate_key(s, pk);
-            ranges.emplace_back(query::partition_range::make_singular(std::move(dk)));
+            ranges.emplace_back(dht::partition_range::make_singular(std::move(dk)));
         }
         return ranges;
     }
@@ -1510,7 +1510,7 @@ private:
         }
     };
     using column_counter = column_visitor<counter>;
-    static std::vector<query::partition_range> make_partition_range(const schema& s, const KeyRange& range) {
+    static std::vector<dht::partition_range> make_partition_range(const schema& s, const KeyRange& range) {
         if (range.__isset.row_filter) {
             fail(unimplemented::cause::INDEXES);
         }
@@ -1541,8 +1541,8 @@ private:
                             "Start key's token sorts after end key's token. This is not allowed; you probably should not specify end key at all except with an ordered partitioner");
                 }
             }
-            return {{query::partition_range::bound(std::move(start), true),
-                     query::partition_range::bound(std::move(end), true)}};
+            return {{dht::partition_range::bound(std::move(start), true),
+                     dht::partition_range::bound(std::move(end), true)}};
         }
 
         if (range.__isset.start_key && range.__isset.end_token) {
@@ -1556,8 +1556,8 @@ private:
             } else if (end.less_compare(s, start)) {
                 throw make_exception<InvalidRequestException>("Start key's token sorts after end token");
             }
-            return {{query::partition_range::bound(std::move(start), true),
-                     query::partition_range::bound(std::move(end), true)}};
+            return {{dht::partition_range::bound(std::move(start), true),
+                     dht::partition_range::bound(std::move(end), true)}};
         }
 
         // Token range can wrap; the start token is exclusive.
@@ -1568,11 +1568,11 @@ private:
         }
         // Special case of start == end also generates wrap-around range
         if (start.token() >= end.token()) {
-            return {query::partition_range(query::partition_range::bound(std::move(start), false), {}),
-                    query::partition_range({}, query::partition_range::bound(std::move(end), true))};
+            return {dht::partition_range(dht::partition_range::bound(std::move(start), false), {}),
+                    dht::partition_range({}, dht::partition_range::bound(std::move(end), true))};
         }
-        return {{query::partition_range::bound(std::move(start), false),
-                 query::partition_range::bound(std::move(end), true)}};
+        return {{dht::partition_range::bound(std::move(start), false),
+                 dht::partition_range::bound(std::move(end), true)}};
     }
     static std::vector<KeySlice> to_key_slices(const schema& s, const query::partition_slice& slice, query::result_view v, uint32_t cell_limit) {
         column_aggregator aggregator(s, slice, cell_limit);

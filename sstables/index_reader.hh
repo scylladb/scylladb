@@ -248,14 +248,14 @@ private:
         });
     }
 
-    future<uint64_t> start_position(const schema& s, const query::partition_range& range) {
+    future<uint64_t> start_position(const schema& s, const dht::partition_range& range) {
         return range.start() ? (range.start()->is_inclusive()
                                 ? lower_bound(s, range.start()->value())
                                 : upper_bound(s, range.start()->value()))
                              : make_ready_future<uint64_t>(0);
     }
 
-    future<uint64_t> end_position(const schema& s, const query::partition_range& range) {
+    future<uint64_t> end_position(const schema& s, const dht::partition_range& range) {
         return range.end() ? (range.end()->is_inclusive()
                               ? upper_bound(s, range.end()->value())
                               : lower_bound(s, range.end()->value()))
@@ -336,7 +336,7 @@ private:
         return find_bound<bound_kind::upper>(s, pos);
     }
 public:
-    future<sstable::disk_read_range> get_disk_read_range(const schema& s, const query::partition_range& range) {
+    future<sstable::disk_read_range> get_disk_read_range(const schema& s, const dht::partition_range& range) {
         return start_position(s, range).then([this, &s, &range] (uint64_t start) {
             return end_position(s, range).then([&s, &range, start] (uint64_t end) {
                 return sstable::disk_read_range(start, end);

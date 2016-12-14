@@ -1643,7 +1643,7 @@ populate_statistics_offsets(statistics& s) {
 static
 sharding_metadata
 create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key, const dht::decorated_key& last_key) {
-    auto range = query::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
+    auto range = dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
     auto sharder = dht::ring_position_range_sharder(std::move(range));
     auto sm = sharding_metadata();
     auto rpras = sharder.next(*schema);

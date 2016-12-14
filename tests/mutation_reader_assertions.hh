@@ -28,7 +28,7 @@
 // Intended to be called in a seastar thread
 class reader_assertions {
     mutation_reader _reader;
-    query::partition_range _pr;
+    dht::partition_range _pr;
 public:
     reader_assertions(mutation_reader reader)
         : _reader(std::move(reader))
@@ -84,7 +84,7 @@ public:
         return *this;
     }
 
-    reader_assertions& fast_forward_to(const query::partition_range& pr) {
+    reader_assertions& fast_forward_to(const dht::partition_range& pr) {
         _pr = pr;
         _reader.fast_forward_to(_pr).get0();
         return *this;

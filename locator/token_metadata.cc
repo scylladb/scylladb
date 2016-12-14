@@ -243,7 +243,7 @@ void token_metadata::add_bootstrap_token(token t, inet_address endpoint) {
 
 boost::iterator_range<token_metadata::tokens_iterator>
 token_metadata::ring_range(
-    const std::experimental::optional<query::partition_range::bound>& start,
+    const std::experimental::optional<dht::partition_range::bound>& start,
     bool include_min) const
 {
     auto r = ring_range(start ? start->value().token() : dht::minimum_token(), include_min);

@@ -58,8 +58,8 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
 
             std::vector<dht::ring_position> ring = make_ring(s, 10);
 
-            auto check = [&s](locator::token_metadata& tm, query::partition_range input,
-                              std::vector<query::partition_range> expected) {
+            auto check = [&s](locator::token_metadata& tm, dht::partition_range input,
+                              std::vector<dht::partition_range> expected) {
                 auto actual = service::get_restricted_ranges(tm, *s, input);
                 if (!std::equal(actual.begin(), actual.end(), expected.begin(), [&s](auto&& r1, auto&& r2) {
                     return r1.equal(r2, dht::ring_position_comparator(*s));
@@ -73,12 +73,12 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
                 locator::token_metadata tm;
                 tm.update_normal_token(dht::minimum_token(), {"10.0.0.1"});
 
-                check(tm, query::partition_range::make_singular(ring[0]), {
-                        query::partition_range::make_singular(ring[0])
+                check(tm, dht::partition_range::make_singular(ring[0]), {
+                        dht::partition_range::make_singular(ring[0])
                 });
 
-                check(tm, query::partition_range({ring[2]}, {ring[3]}), {
-                        query::partition_range({ring[2]}, {ring[3]})
+                check(tm, dht::partition_range({ring[2]}, {ring[3]}), {
+                        dht::partition_range({ring[2]}, {ring[3]})
                 });
             }
 
@@ -87,30 +87,30 @@ SEASTAR_TEST_CASE(test_get_restricted_ranges) {
                 tm.update_normal_token(ring[2].token(), {"10.0.0.1"});
                 tm.update_normal_token(ring[5].token(), {"10.0.0.2"});
 
-                check(tm, query::partition_range::make_singular(ring[0]), {
-                        query::partition_range::make_singular(ring[0])
+                check(tm, dht::partition_range::make_singular(ring[0]), {
+                        dht::partition_range::make_singular(ring[0])
                 });
 
-                check(tm, query::partition_range::make_singular(ring[2]), {
-                        query::partition_range::make_singular(ring[2])
+                check(tm, dht::partition_range::make_singular(ring[2]), {
+                        dht::partition_range::make_singular(ring[2])
                 });
 
-                check(tm, query::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]}), {
-                        query::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]})
+                check(tm, dht::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]}), {
+                        dht::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]})
                 });
 
-                check(tm, query::partition_range({ring[3]}, {ring[4]}), {
-                    query::partition_range({ring[3]}, {ring[4]})
+                check(tm, dht::partition_range({ring[3]}, {ring[4]}), {
+                    dht::partition_range({ring[3]}, {ring[4]})
                 });
 
-                check(tm, query::partition_range({ring[2]}, {ring[3]}), {
-                    query::partition_range({ring[2]}, {dht::ring_position::ending_at(ring[2].token())}),
-                    query::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]})
+                check(tm, dht::partition_range({ring[2]}, {ring[3]}), {
+                    dht::partition_range({ring[2]}, {dht::ring_position::ending_at(ring[2].token())}),
+                    dht::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]})
                 });
 
-                check(tm, query::partition_range({{ring[2], false}}, {ring[3]}), {
-                    query::partition_range({{ring[2], false}}, {dht::ring_position::ending_at(ring[2].token())}),
-                    query::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]})
+                check(tm, dht::partition_range({{ring[2], false}}, {ring[3]}), {
+                    dht::partition_range({{ring[2], false}}, {dht::ring_position::ending_at(ring[2].token())}),
+                    dht::partition_range({{dht::ring_position::ending_at(ring[2].token()), false}}, {ring[3]})
                 });
             }
         });

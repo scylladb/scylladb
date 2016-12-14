@@ -43,7 +43,7 @@ public:
     sstable_set(sstable_set&&) noexcept;
     sstable_set& operator=(const sstable_set&);
     sstable_set& operator=(sstable_set&&) noexcept;
-    std::vector<shared_sstable> select(const query::partition_range& range) const;
+    std::vector<shared_sstable> select(const dht::partition_range& range) const;
     lw_shared_ptr<sstable_list> all() const { return _all; }
     void insert(shared_sstable sst);
     void erase(shared_sstable sst);

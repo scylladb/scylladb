@@ -998,7 +998,7 @@ static ::mutation_reader sstable_reader(shared_sstable sst, schema_ptr s) {
 
 }
 
-static ::mutation_reader sstable_reader(shared_sstable sst, schema_ptr s, const query::partition_range& pr) {
+static ::mutation_reader sstable_reader(shared_sstable sst, schema_ptr s, const dht::partition_range& pr) {
     return as_mutation_reader(sst, sst->read_range_rows(s, pr));
 }
 
@@ -3023,33 +3023,33 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
 
         assert_that(sstable_reader(sst, s)).produces(keys);
 
-        auto pr = query::partition_range::make(dht::ring_position(keys[0]), dht::ring_position(keys[1]));
+        auto pr = dht::partition_range::make(dht::ring_position(keys[0]), dht::ring_position(keys[1]));
         assert_that(sstable_reader(sst, s, pr))
             .produces(keys[0])
             .produces(keys[1])
             .produces_end_of_stream()
-            .fast_forward_to(query::partition_range::make_starting_with(dht::ring_position(keys[8])))
+            .fast_forward_to(dht::partition_range::make_starting_with(dht::ring_position(keys[8])))
             .produces(keys[8])
             .produces(keys[9])
             .produces_end_of_stream();
 
-        pr = query::partition_range::make(dht::ring_position(keys[1]), dht::ring_position(keys[1]));
+        pr = dht::partition_range::make(dht::ring_position(keys[1]), dht::ring_position(keys[1]));
         assert_that(sstable_reader(sst, s, pr))
             .produces(keys[1])
             .produces_end_of_stream()
-            .fast_forward_to(query::partition_range::make(dht::ring_position(keys[3]), dht::ring_position(keys[4])))
+            .fast_forward_to(dht::partition_range::make(dht::ring_position(keys[3]), dht::ring_position(keys[4])))
             .produces(keys[3])
             .produces(keys[4])
             .produces_end_of_stream()
-            .fast_forward_to(query::partition_range::make({ dht::ring_position(keys[4]), false }, dht::ring_position(keys[5])))
+            .fast_forward_to(dht::partition_range::make({ dht::ring_position(keys[4]), false }, dht::ring_position(keys[5])))
             .produces(keys[5])
             .produces_end_of_stream()
-            .fast_forward_to(query::partition_range::make(dht::ring_position(keys[6]), dht::ring_position(keys[6])))
+            .fast_forward_to(dht::partition_range::make(dht::ring_position(keys[6]), dht::ring_position(keys[6])))
             .produces(keys[6])
             .produces_end_of_stream()
-            .fast_forward_to(query::partition_range::make(dht::ring_position(keys[7]), dht::ring_position(keys[8])))
+            .fast_forward_to(dht::partition_range::make(dht::ring_position(keys[7]), dht::ring_position(keys[8])))
             .produces(keys[7])
-            .fast_forward_to(query::partition_range::make(dht::ring_position(keys[9]), dht::ring_position(keys[9])))
+            .fast_forward_to(dht::partition_range::make(dht::ring_position(keys[9]), dht::ring_position(keys[9])))
             .produces(keys[9])
             .produces_end_of_stream();
     });

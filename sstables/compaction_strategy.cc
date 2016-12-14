@@ -69,7 +69,7 @@ class sstable_set_impl {
 public:
     virtual ~sstable_set_impl() {}
     virtual std::unique_ptr<sstable_set_impl> clone() const = 0;
-    virtual std::vector<shared_sstable> select(const query::partition_range& range) const = 0;
+    virtual std::vector<shared_sstable> select(const dht::partition_range& range) const = 0;
     virtual void insert(shared_sstable sst) = 0;
     virtual void erase(shared_sstable sst) = 0;
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const = 0;
@@ -100,7 +100,7 @@ sstable_set&
 sstable_set::operator=(sstable_set&&) noexcept = default;
 
 std::vector<shared_sstable>
-sstable_set::select(const query::partition_range& range) const {
+sstable_set::select(const dht::partition_range& range) const {
     return _impl->select(range);
 }
 
@@ -154,7 +154,7 @@ public:
     virtual std::unique_ptr<sstable_set_impl> clone() const override {
         return std::make_unique<bag_sstable_set>(*this);
     }
-    virtual std::vector<shared_sstable> select(const query::partition_range& range = query::full_partition_range) const override {
+    virtual std::vector<shared_sstable> select(const dht::partition_range& range = query::full_partition_range) const override {
         return _sstables;
     }
     virtual void insert(shared_sstable sst) override {
@@ -193,19 +193,19 @@ private:
     schema_ptr _schema;
     interval_map_type _sstables;
 private:
-    static interval_type make_interval(const schema& s, const query::partition_range& range) {
+    static interval_type make_interval(const schema& s, const dht::partition_range& range) {
         return interval_type::closed(
                 compatible_ring_position(s, range.start()->value()),
                 compatible_ring_position(s, range.end()->value()));
     }
-    interval_type make_interval(const query::partition_range& range) const {
+    interval_type make_interval(const dht::partition_range& range) const {
         return make_interval(*_schema, range);
     }
     interval_type singular(const dht::ring_position& rp) const {
         auto crp = compatible_ring_position(*_schema, rp);
         return interval_type::closed(crp, crp);
     }
-    std::pair<map_iterator, map_iterator> query(const query::partition_range& range) const {
+    std::pair<map_iterator, map_iterator> query(const dht::partition_range& range) const {
         if (range.start() && range.end()) {
             return _sstables.equal_range(make_interval(range));
         }
@@ -226,7 +226,7 @@ public:
     virtual std::unique_ptr<sstable_set_impl> clone() const override {
         return std::make_unique<partitioned_sstable_set>(*this);
     }
-    virtual std::vector<shared_sstable> select(const query::partition_range& range) const override {
+    virtual std::vector<shared_sstable> select(const dht::partition_range& range) const override {
         auto ipair = query(range);
         auto b = std::move(ipair.first);
         auto e = std::move(ipair.second);
@@ -239,10 +239,10 @@ public:
     virtual void insert(shared_sstable sst) override {
         auto first = sst->get_first_decorated_key().token();
         auto last = sst->get_last_decorated_key().token();
-        using bound = query::partition_range::bound;
+        using bound = dht::partition_range::bound;
         _sstables.add({
                 make_interval(
-                        query::partition_range(
+                        dht::partition_range(
                                 bound(dht::ring_position::starting_at(first)),
                                 bound(dht::ring_position::ending_at(last)))),
                 value_set({sst})});
@@ -250,10 +250,10 @@ public:
     virtual void erase(shared_sstable sst) override {
         auto first = sst->get_first_decorated_key().token();
         auto last = sst->get_last_decorated_key().token();
-        using bound = query::partition_range::bound;
+        using bound = dht::partition_range::bound;
         _sstables.subtract({
                 make_interval(
-                        query::partition_range(
+                        dht::partition_range(
                                 bound(dht::ring_position::starting_at(first)),
                                 bound(dht::ring_position::ending_at(last)))),
                 value_set({sst})});
@@ -278,7 +278,7 @@ public:
         , _end(sstables.end()) {
     }
     virtual std::pair<dht::token_range, std::vector<shared_sstable>> select(const dht::token& token) override {
-        auto pr = query::partition_range::make(dht::ring_position::starting_at(token), dht::ring_position::ending_at(token));
+        auto pr = dht::partition_range::make(dht::ring_position::starting_at(token), dht::ring_position::ending_at(token));
         auto interval = make_interval(*_schema, std::move(pr));
 
         while (_it != _end) {

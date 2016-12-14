@@ -272,7 +272,7 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combining_reader) {
             },
         };
 
-        auto make_reader = [&] (const query::partition_range& pr) {
+        auto make_reader = [&] (const dht::partition_range& pr) {
             std::vector<mutation_reader> readers;
             boost::range::transform(mutations, std::back_inserter(readers), [&pr] (auto& ms) {
                 return make_reader_returning_many(ms, pr);
@@ -280,7 +280,7 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combining_reader) {
             return make_combined_reader(std::move(readers));
         };
 
-        auto pr = query::partition_range::make_open_ended_both_sides();
+        auto pr = dht::partition_range::make_open_ended_both_sides();
         assert_that(make_reader(pr))
             .produces(keys[0])
             .produces(keys[1])
@@ -291,19 +291,19 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combining_reader) {
             .produces(keys[6])
             .produces_end_of_stream();
 
-        pr = query::partition_range::make(ring[0], ring[0]);
+        pr = dht::partition_range::make(ring[0], ring[0]);
             assert_that(make_reader(pr))
                     .produces(keys[0])
                     .produces_end_of_stream()
-                    .fast_forward_to(query::partition_range::make(ring[1], ring[1]))
+                    .fast_forward_to(dht::partition_range::make(ring[1], ring[1]))
                     .produces(keys[1])
                     .produces_end_of_stream()
-                    .fast_forward_to(query::partition_range::make(ring[3], ring[4]))
+                    .fast_forward_to(dht::partition_range::make(ring[3], ring[4]))
                     .produces(keys[3])
-            .fast_forward_to(query::partition_range::make({ ring[4], false }, ring[5]))
+            .fast_forward_to(dht::partition_range::make({ ring[4], false }, ring[5]))
                     .produces(keys[5])
                     .produces_end_of_stream()
-            .fast_forward_to(query::partition_range::make_starting_with(ring[6]))
+            .fast_forward_to(dht::partition_range::make_starting_with(ring[6]))
                     .produces(keys[6])
                     .produces_end_of_stream();
     });
@@ -320,16 +320,16 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
                 return make_mutation_with_key(s, key);
             }));
 
-            auto source = mutation_source([&] (schema_ptr, const query::partition_range& range) {
+            auto source = mutation_source([&] (schema_ptr, const dht::partition_range& range) {
                 return make_reader_returning_many(std::move(ms), range);
             });
 
-            auto ranges = std::vector<query::partition_range> {
-                    query::partition_range::make(ring[1], ring[2]),
-                    query::partition_range::make_singular(ring[4]),
-                    query::partition_range::make(ring[6], ring[8]),
+            auto ranges = std::vector<dht::partition_range> {
+                    dht::partition_range::make(ring[1], ring[2]),
+                    dht::partition_range::make_singular(ring[4]),
+                    dht::partition_range::make(ring[6], ring[8]),
             };
-            auto fft_range = query::partition_range::make_starting_with(ring[9]);
+            auto fft_range = dht::partition_range::make_starting_with(ring[9]);
 
             assert_that(make_multi_range_reader(s, std::move(source), ranges, query::full_slice))
                     .produces(keys[1])

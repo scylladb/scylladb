@@ -608,7 +608,7 @@ public:
     virtual future<streamed_mutation_opt> operator()() override {
         return _rd.read();
     }
-    virtual future<> fast_forward_to(const query::partition_range& pr) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         return _rd.fast_forward_to(pr);
     }
 };

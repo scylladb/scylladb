@@ -104,7 +104,7 @@ class mutation_reader {
     friend class sstable;
 public:
     future<streamed_mutation_opt> read();
-    future<> fast_forward_to(const query::partition_range&);
+    future<> fast_forward_to(const dht::partition_range&);
     // Define (as defaults) the destructor and move operations in the source
     // file, so here we don't need to know the incomplete impl type.
     ~mutation_reader();
@@ -258,7 +258,7 @@ public:
     // Returns a mutation_reader for given range of partitions
     mutation_reader read_range_rows(
         schema_ptr schema,
-        const query::partition_range& range,
+        const dht::partition_range& range,
         const query::partition_slice& slice = query::full_slice,
         const io_priority_class& pc = default_priority_class());
 

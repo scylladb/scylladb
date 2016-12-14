@@ -156,7 +156,7 @@ void stream_session::init_messaging_service_handler() {
                                 plan_id, from, cf_id);
                     return make_ready_future<>();
                 }
-                std::vector<query::partition_range> query_ranges;
+                std::vector<dht::partition_range> query_ranges;
                 try {
                     auto& cf = db.find_column_family(cf_id);
                     query_ranges.reserve(ranges.size());

@@ -357,7 +357,7 @@ SEASTAR_TEST_CASE(read_partial_range_2) {
 }
 
 ::mutation_source as_mutation_source(lw_shared_ptr<sstables::sstable> sst) {
-    return mutation_source([sst] (schema_ptr s, const query::partition_range& range) mutable {
+    return mutation_source([sst] (schema_ptr s, const dht::partition_range& range) mutable {
         return as_mutation_reader(sst, sst->read_range_rows(s, range));
     });
 }

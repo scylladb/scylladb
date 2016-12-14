@@ -1020,7 +1020,7 @@ public:
         }) { }
     impl(shared_sstable sst,
          schema_ptr schema,
-         const query::partition_range& pr,
+         const dht::partition_range& pr,
          const query::partition_slice& slice,
          const io_priority_class& pc)
         : _pc(pc), _schema(schema)
@@ -1052,7 +1052,7 @@ public:
             return do_read();
         });
     }
-    future<> fast_forward_to(const query::partition_range& pr) {
+    future<> fast_forward_to(const dht::partition_range& pr) {
         assert(_ds->_index);
         return _ds->_index->get_disk_read_range(*_schema, pr).then([this] (sstable::disk_read_range drr) {
             return _ds->_context.fast_forward_to(drr.start, drr.end);
@@ -1087,7 +1087,7 @@ mutation_reader::mutation_reader(std::unique_ptr<impl> p)
 future<streamed_mutation_opt> mutation_reader::read() {
     return _pimpl->read();
 }
-future<> mutation_reader::fast_forward_to(const query::partition_range& pr) {
+future<> mutation_reader::fast_forward_to(const dht::partition_range& pr) {
     return _pimpl->fast_forward_to(pr);
 }
 
@@ -1097,7 +1097,7 @@ mutation_reader sstable::read_rows(schema_ptr schema, const io_priority_class& p
 
 mutation_reader
 sstable::read_range_rows(schema_ptr schema,
-                         const query::partition_range& range,
+                         const dht::partition_range& range,
                          const query::partition_slice& slice,
                          const io_priority_class& pc) {
     return std::make_unique<mutation_reader::impl>(

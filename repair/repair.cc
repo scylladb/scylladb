@@ -423,7 +423,7 @@ std::ostream& operator<<(std::ostream& out, const partition_checksum& c) {
 // vary the collection of sstables used throught a long repair.
 static future<partition_checksum> checksum_range_shard(database &db,
         const sstring& keyspace_name, const sstring& cf_name,
-        const std::vector<query::partition_range>& prs, repair_checksum hash_version) {
+        const std::vector<dht::partition_range>& prs, repair_checksum hash_version) {
     auto& cf = db.find_column_family(keyspace_name, cf_name);
     auto reader = cf.make_streaming_reader(cf.schema(), prs);
     return do_with(std::move(reader), partition_checksum(),

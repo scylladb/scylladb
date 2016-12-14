@@ -296,7 +296,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
 future<shared_ptr<transport::messages::result_message>>
 select_statement::execute(distributed<service::storage_proxy>& proxy,
                           lw_shared_ptr<query::read_command> cmd,
-                          std::vector<query::partition_range>&& partition_ranges,
+                          std::vector<dht::partition_range>&& partition_ranges,
                           service::query_state& state,
                           const query_options& options,
                           db_clock::time_point now)
@@ -306,11 +306,11 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
     // is no way to tell which of these rows belong to the query result before
     // doing post-query ordering.
     if (needs_post_query_ordering() && _limit) {
-        return do_with(std::forward<std::vector<query::partition_range>>(partition_ranges), [this, &proxy, &state, &options, cmd](auto prs) {
+        return do_with(std::forward<std::vector<dht::partition_range>>(partition_ranges), [this, &proxy, &state, &options, cmd](auto prs) {
             assert(cmd->partition_limit == query::max_partitions);
             query::result_merger merger(cmd->row_limit * prs.size(), query::max_partitions);
             return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, &options, cmd] (auto pr) {
-                std::vector<query::partition_range> prange { pr };
+                std::vector<dht::partition_range> prange { pr };
                 auto command = ::make_lw_shared<query::read_command>(*cmd);
                 return proxy.local().query(_schema, command, std::move(prange), options.get_consistency(), state.get_trace_state());
             }, std::move(merger));
@@ -345,7 +345,7 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy,
             assert(command->partition_limit == query::max_partitions);
             query::result_merger merger(command->row_limit * prs.size(), query::max_partitions);
             return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, command] (auto pr) {
-                std::vector<query::partition_range> prange { pr };
+                std::vector<dht::partition_range> prange { pr };
                 auto cmd = ::make_lw_shared<query::read_command>(*command);
                 return proxy.local().query(_schema, cmd, std::move(prange), db::consistency_level::ONE, state.get_trace_state());
             }, std::move(merger));
