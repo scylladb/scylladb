@@ -1849,7 +1849,7 @@ void gossiper::check_knows_remote_features(sstring local_features_string, std::u
 }
 
 static bool check_features(std::set<sstring> features, std::set<sstring> need_features) {
-    logger.info("Checking if need_features {} in features {}", need_features, features);
+    logger.debug("Checking if need_features {} in features {}", need_features, features);
     return boost::range::includes(features, need_features);
 }
 
