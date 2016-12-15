@@ -1867,7 +1867,7 @@ future<> gossiper::wait_for_feature_on_node(std::set<sstring> features, inet_add
 
 void gossiper::register_feature(feature* f) {
     if (check_features(get_local_gossiper().get_supported_features(), {f->name()})) {
-        f->_enabled = true;
+        f->enable();
     } else {
         _registered_features.emplace(f->name(), std::vector<feature*>()).first->second.emplace_back(f);
     }
@@ -1894,7 +1894,7 @@ void gossiper::maybe_enable_features() {
     for (auto it = _registered_features.begin(); it != _registered_features.end(); ) {
         if (features.find(it->first) != features.end()) {
             for (auto&& f : it->second) {
-                f->_enabled = true;
+                f->enable();
             }
             it = _registered_features.erase(it);
         } else {
@@ -1930,6 +1930,11 @@ feature& feature::operator=(feature other) {
         get_local_gossiper().register_feature(this);
     }
     return *this;
+}
+
+void feature::enable() {
+    logger.info("Feature {} is enabled", name());
+    _enabled = true;
 }
 
 } // namespace gms

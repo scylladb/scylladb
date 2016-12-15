@@ -42,6 +42,7 @@ public:
     feature(const feature& other)
             : feature(other._name, other._enabled)
     { }
+    void enable();
     feature& operator=(feature other);
     const sstring& name() const {
         return _name;
