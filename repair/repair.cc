@@ -419,11 +419,6 @@ std::ostream& operator<<(std::ostream& out, const partition_checksum& c) {
 // so it would be useful to have this code cache its stopping point or have
 // some object live throughout the operation. Moreover, it makes sense to to
 // vary the collection of sstables used throught a long repair.
-// FIXME: cf.make_reader() puts all read partitions in the cache. This might
-// not be a good idea (see issue #382). Perhaps it is better to read the
-// sstables directly (as compaction does) - after flushing memtables first
-// (there might be old data in memtables which isn't flushed because no new
-// data is coming in).
 static future<partition_checksum> checksum_range_shard(database &db,
         const sstring& keyspace_name, const sstring& cf_name,
         const std::vector<query::partition_range>& prs, repair_checksum hash_version) {

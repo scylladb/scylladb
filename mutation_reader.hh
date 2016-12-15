@@ -425,3 +425,9 @@ template<typename FlattenedConsumer, typename... Args>
 stable_flattened_mutations_consumer<FlattenedConsumer> make_stable_flattened_mutations_consumer(Args&&... args) {
     return { std::make_unique<FlattenedConsumer>(std::forward<Args>(args)...) };
 }
+
+// Requires ranges to be sorted and disjoint.
+mutation_reader
+make_multi_range_reader(schema_ptr s, mutation_source source, const std::vector<query::partition_range>& ranges,
+                        const query::partition_slice& slice, const io_priority_class& pc = default_priority_class(),
+                        tracing::trace_state_ptr trace_state = nullptr);

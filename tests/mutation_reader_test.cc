@@ -21,6 +21,7 @@
 
 
 #include <boost/test/unit_test.hpp>
+#include <boost/range/irange.hpp>
 
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"
@@ -226,25 +227,27 @@ SEASTAR_TEST_CASE(test_combining_one_empty_reader) {
     });
 }
 
+std::vector<dht::decorated_key> generate_keys(schema_ptr s, int count) {
+    auto keys = boost::copy_range<std::vector<dht::decorated_key>>(
+        boost::irange(0, count) | boost::adaptors::transformed([s] (int key) {
+            auto pk = partition_key::from_single_value(*s, int32_type->decompose(data_value(key)));
+            return dht::global_partitioner().decorate_key(*s, std::move(pk));
+        }));
+    return std::move(boost::range::sort(keys, dht::decorated_key::less_comparator(s)));
+}
+
+std::vector<dht::ring_position> to_ring_positions(const std::vector<dht::decorated_key>& keys) {
+    return boost::copy_range<std::vector<dht::ring_position>>(keys | boost::adaptors::transformed([] (const dht::decorated_key& key) {
+        return dht::ring_position(key);
+    }));
+}
+
 SEASTAR_TEST_CASE(test_fast_forwarding_combining_reader) {
     return seastar::async([] {
         auto s = make_schema();
 
-        std::vector<sstring> key_values = {
-            "a", "b", "c", "d", "e", "f", "z",
-        };
-        std::vector<dht::decorated_key> keys;
-        boost::range::transform(key_values, std::back_inserter(keys), [&] (sstring key) {
-            auto pk = partition_key::from_single_value(*s, bytes_type->decompose(data_value(to_bytes(key))));
-            return dht::global_partitioner().decorate_key(*s, std::move(pk));
-        });
-        dht::decorated_key::less_comparator cmp(s);
-        boost::range::sort(keys, cmp);
-
-        std::vector<dht::ring_position> ring;
-            boost::range::transform(keys, std::back_inserter(ring), [&] (const dht::decorated_key& key) {
-                return dht::ring_position(key);
-            });
+        auto keys = generate_keys(s, 7);
+        auto ring = to_ring_positions(keys);
 
         std::vector<std::vector<mutation>> mutations {
             {
@@ -304,4 +307,37 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combining_reader) {
                     .produces(keys[6])
                     .produces_end_of_stream();
     });
+}
+
+SEASTAR_TEST_CASE(test_multi_range_reader) {
+        return seastar::async([] {
+            auto s = make_schema();
+
+            auto keys = generate_keys(s, 10);
+            auto ring = to_ring_positions(keys);
+
+            auto ms = boost::copy_range<std::vector<mutation>>(keys | boost::adaptors::transformed([s] (auto& key) {
+                return make_mutation_with_key(s, key);
+            }));
+
+            auto source = mutation_source([&] (schema_ptr, const query::partition_range& range) {
+                return make_reader_returning_many(std::move(ms), range);
+            });
+
+            auto ranges = std::vector<query::partition_range> {
+                    query::partition_range::make(ring[1], ring[2]),
+                    query::partition_range::make_singular(ring[4]),
+                    query::partition_range::make(ring[6], ring[8]),
+            };
+            auto fft_range = query::partition_range::make_starting_with(ring[9]);
+
+            assert_that(make_multi_range_reader(s, std::move(source), ranges, query::full_slice))
+                    .produces(keys[1])
+                    .produces(keys[2])
+                    .produces(keys[4])
+                    .produces(keys[6])
+                    .fast_forward_to(fft_range)
+                    .produces(keys[9])
+                    .produces_end_of_stream();
+        });
 }

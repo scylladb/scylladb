@@ -598,6 +598,7 @@ public:
     mutation_reader make_streaming_reader(schema_ptr schema,
             const query::partition_range& range = query::full_partition_range) const;
 
+    // Requires ranges to be sorted and disjoint.
     mutation_reader make_streaming_reader(schema_ptr schema,
             const std::vector<query::partition_range>& ranges) const;
 

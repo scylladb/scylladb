@@ -470,9 +470,12 @@ public:
 
 nonwrapping_range<ring_position> to_partition_range(nonwrapping_range<dht::token>);
 
+// Each shard gets a sorted, disjoint vector of ranges
 std::map<unsigned, std::vector<nonwrapping_range<ring_position>>>
 split_range_to_shards(nonwrapping_range<ring_position> pr, const schema& s);
 
+// If input ranges are sorted and disjoint then the ranges for each shard
+// are also sorted and disjoint.
 std::map<unsigned, std::vector<nonwrapping_range<ring_position>>>
 split_ranges_to_shards(const std::vector<nonwrapping_range<dht::token>>& ranges, const schema& s);
 
