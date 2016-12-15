@@ -21,6 +21,7 @@
 
 
 #include <boost/test/unit_test.hpp>
+#include <boost/range/irange.hpp>
 
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"
@@ -226,25 +227,27 @@ SEASTAR_TEST_CASE(test_combining_one_empty_reader) {
     });
 }
 
+std::vector<dht::decorated_key> generate_keys(schema_ptr s, int count) {
+    auto keys = boost::copy_range<std::vector<dht::decorated_key>>(
+        boost::irange(0, count) | boost::adaptors::transformed([s] (int key) {
+            auto pk = partition_key::from_single_value(*s, int32_type->decompose(data_value(key)));
+            return dht::global_partitioner().decorate_key(*s, std::move(pk));
+        }));
+    return std::move(boost::range::sort(keys, dht::decorated_key::less_comparator(s)));
+}
+
+std::vector<dht::ring_position> to_ring_positions(const std::vector<dht::decorated_key>& keys) {
+    return boost::copy_range<std::vector<dht::ring_position>>(keys | boost::adaptors::transformed([] (const dht::decorated_key& key) {
+        return dht::ring_position(key);
+    }));
+}
+
 SEASTAR_TEST_CASE(test_fast_forwarding_combining_reader) {
     return seastar::async([] {
         auto s = make_schema();
 
-        std::vector<sstring> key_values = {
-            "a", "b", "c", "d", "e", "f", "z",
-        };
-        std::vector<dht::decorated_key> keys;
-        boost::range::transform(key_values, std::back_inserter(keys), [&] (sstring key) {
-            auto pk = partition_key::from_single_value(*s, bytes_type->decompose(data_value(to_bytes(key))));
-            return dht::global_partitioner().decorate_key(*s, std::move(pk));
-        });
-        dht::decorated_key::less_comparator cmp(s);
-        boost::range::sort(keys, cmp);
-
-        std::vector<dht::ring_position> ring;
-            boost::range::transform(keys, std::back_inserter(ring), [&] (const dht::decorated_key& key) {
-                return dht::ring_position(key);
-            });
+        auto keys = generate_keys(s, 7);
+        auto ring = to_ring_positions(keys);
 
         std::vector<std::vector<mutation>> mutations {
             {
