@@ -1849,7 +1849,7 @@ void gossiper::check_knows_remote_features(sstring local_features_string, std::u
 }
 
 static bool check_features(std::set<sstring> features, std::set<sstring> need_features) {
-    logger.info("Checking if need_features {} in features {}", need_features, features);
+    logger.debug("Checking if need_features {} in features {}", need_features, features);
     return boost::range::includes(features, need_features);
 }
 
@@ -1867,7 +1867,7 @@ future<> gossiper::wait_for_feature_on_node(std::set<sstring> features, inet_add
 
 void gossiper::register_feature(feature* f) {
     if (check_features(get_local_gossiper().get_supported_features(), {f->name()})) {
-        f->_enabled = true;
+        f->enable();
     } else {
         _registered_features.emplace(f->name(), std::vector<feature*>()).first->second.emplace_back(f);
     }
@@ -1894,7 +1894,7 @@ void gossiper::maybe_enable_features() {
     for (auto it = _registered_features.begin(); it != _registered_features.end(); ) {
         if (features.find(it->first) != features.end()) {
             for (auto&& f : it->second) {
-                f->_enabled = true;
+                f->enable();
             }
             it = _registered_features.erase(it);
         } else {
@@ -1930,6 +1930,13 @@ feature& feature::operator=(feature other) {
         get_local_gossiper().register_feature(this);
     }
     return *this;
+}
+
+void feature::enable() {
+    if (engine().cpu_id() == 0) {
+        logger.info("Feature {} is enabled", name());
+    }
+    _enabled = true;
 }
 
 } // namespace gms
