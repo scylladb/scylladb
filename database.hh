@@ -149,7 +149,11 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
     bool has_pressure() const {
         return over_soft_limit();
     }
+
+    std::vector<scollectd::registration> _collectd;
 public:
+    void setup_collectd(sstring namestr);
+
     future<> shutdown();
 
     // Limits and pressure conditions:
