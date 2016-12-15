@@ -354,3 +354,15 @@ future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, const db::
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func) {
     return do_with_cql_env(std::move(func), db::config{});
 }
+
+future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, const db::config& cfg_in) {
+    return single_node_cql_env::do_with([func = std::move(func)] (auto& e) {
+        return seastar::async([func = std::move(func), &e] {
+            return func(e);
+        });
+    }, cfg_in);
+}
+
+future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func) {
+    return do_with_cql_env_thread(std::move(func), db::config{});
+}
