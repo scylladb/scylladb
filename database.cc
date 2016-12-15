@@ -1670,14 +1670,40 @@ database::database(const db::config& cfg)
     dblog.info("Row: max_vector_size: {}, internal_count: {}", size_t(row::max_vector_size), size_t(row::internal_count));
 }
 
+
+void
+dirty_memory_manager::setup_collectd(sstring namestr) {
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("memory"
+                , scollectd::per_cpu_plugin_instance
+                , "bytes", namestr + "_dirty")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
+            return real_dirty_memory();
+    })));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("memory"
+                , scollectd::per_cpu_plugin_instance
+                , "bytes", namestr +"_virtual_dirty")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
+            return virtual_dirty_memory();
+    })));
+}
+
 void
 database::setup_collectd() {
+    _dirty_memory_manager.setup_collectd("regular");
+    _system_dirty_memory_manager.setup_collectd("system");
+    _streaming_dirty_memory_manager.setup_collectd("streaming");
+
     _collectd.push_back(
         scollectd::add_polled_metric(scollectd::type_instance_id("memory"
                 , scollectd::per_cpu_plugin_instance
                 , "bytes", "dirty")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
-            return _dirty_memory_manager.real_dirty_memory();
+            return _dirty_memory_manager.real_dirty_memory() +
+                   _system_dirty_memory_manager.real_dirty_memory() +
+                   _streaming_dirty_memory_manager.real_dirty_memory();
     })));
 
     _collectd.push_back(
@@ -1685,7 +1711,9 @@ database::setup_collectd() {
                 , scollectd::per_cpu_plugin_instance
                 , "bytes", "virtual_dirty")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
-            return _dirty_memory_manager.virtual_dirty_memory();
+        return _dirty_memory_manager.virtual_dirty_memory() +
+               _system_dirty_memory_manager.virtual_dirty_memory() +
+               _streaming_dirty_memory_manager.virtual_dirty_memory();
     })));
 
     _collectd.push_back(
