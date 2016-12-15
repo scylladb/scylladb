@@ -345,10 +345,15 @@ private:
 
     records_bulk _pending_for_write_records_bulk;
     timer<lowres_clock> _write_timer;
-    bool _down = false;
+    // _down becomes FALSE after the local service is fully initialized and
+    // tracing records are allowed to be created and collected. It becomes TRUE
+    // after the shutdown() call and prevents further write attempts to I/O
+    // backend.
+    bool _down = true;
     bool _slow_query_logging_enabled = false;
     std::unique_ptr<i_tracing_backend_helper> _tracing_backend_helper_ptr;
     sstring _thread_name;
+    sstring _tracing_backend_helper_class_name;
     scollectd::registrations _registrations;
     double _trace_probability = 0.0; // keep this one for querying purposes
     uint64_t _normalized_trace_probability = 0;
@@ -376,8 +381,13 @@ public:
         return tracing_instance().local();
     }
 
-    static future<> create_tracing(const sstring& tracing_backend_helper_class_name);
-    tracing(const sstring& tracing_backend_helper_class_name);
+    bool started() const {
+        return !_down;
+    }
+
+    static future<> create_tracing(sstring tracing_backend_helper_class_name);
+    static future<> start_tracing();
+    tracing(sstring tracing_backend_helper_class_name);
 
     // Initialize a tracing backend (e.g. tracing_keyspace or logstash)
     future<> start();

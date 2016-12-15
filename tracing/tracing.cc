@@ -55,9 +55,10 @@ std::vector<sstring> trace_type_names = {
     "REPAIR"
 };
 
-tracing::tracing(const sstring& tracing_backend_helper_class_name)
+tracing::tracing(sstring tracing_backend_helper_class_name)
         : _write_timer([this] { write_timer_callback(); })
         , _thread_name(seastar::format("shard {:d}", engine().cpu_id()))
+        , _tracing_backend_helper_class_name(std::move(tracing_backend_helper_class_name))
         , _registrations{
             scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
                     , scollectd::per_cpu_plugin_instance
@@ -93,27 +94,23 @@ tracing::tracing(const sstring& tracing_backend_helper_class_name)
                     , scollectd::make_typed(scollectd::data_type::GAUGE, _flushing_records))}
         , _gen(std::random_device()())
         , _slow_query_duration_threshold(default_slow_query_duraion_threshold)
-        , _slow_query_record_ttl(default_slow_query_record_ttl) {
-    try {
-        _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(tracing_backend_helper_class_name, *this);
-    } catch (no_such_class& e) {
-        tracing_logger.error("Can't create tracing backend helper {}: not supported", tracing_backend_helper_class_name);
-        throw;
-    } catch (...) {
-        throw;
-    }
+        , _slow_query_record_ttl(default_slow_query_record_ttl) {}
+
+future<> tracing::create_tracing(sstring tracing_backend_class_name) {
+    return tracing_instance().start(std::move(tracing_backend_class_name));
 }
 
-future<> tracing::create_tracing(const sstring& tracing_backend_class_name) {
-    return tracing_instance().start(tracing_backend_class_name).then([] {
-        return tracing_instance().invoke_on_all([] (tracing& local_tracing) {
-            return local_tracing.start();
-        });
+future<> tracing::start_tracing() {
+    return tracing_instance().invoke_on_all([] (tracing& local_tracing) {
+        return local_tracing.start();
     });
 }
 
 trace_state_ptr tracing::create_session(trace_type type, trace_state_props_set props) {
-    trace_state_ptr tstate;
+    if (!started()) {
+        return trace_state_ptr();
+    }
+
     try {
         // Don't create a session if its records are likely to be dropped
         if (!may_create_new_session()) {
@@ -129,6 +126,10 @@ trace_state_ptr tracing::create_session(trace_type type, trace_state_props_set p
 }
 
 trace_state_ptr tracing::create_session(const trace_info& secondary_session_info) {
+    if (!started()) {
+        return trace_state_ptr();
+    }
+
     try {
         // Don't create a session if its records are likely to be dropped
         if (!may_create_new_session(secondary_session_info.session_id)) {
@@ -144,7 +145,17 @@ trace_state_ptr tracing::create_session(const trace_info& secondary_session_info
 }
 
 future<> tracing::start() {
+    try {
+        _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(_tracing_backend_helper_class_name, *this);
+    } catch (no_such_class& e) {
+        tracing_logger.error("Can't create tracing backend helper {}: not supported", _tracing_backend_helper_class_name);
+        throw;
+    } catch (...) {
+        throw;
+    }
+
     return _tracing_backend_helper_ptr->start().then([this] {
+        _down = false;
         _write_timer.arm(write_period);
     });
 }

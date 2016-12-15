@@ -426,6 +426,8 @@ int main(int ac, char** av) {
             if (opts.count("developer-mode")) {
                 smp::invoke_on_all([] { engine().set_strict_dma(false); }).get();
             }
+            supervisor_notify("creating tracing");
+            tracing::tracing::create_tracing("trace_keyspace_helper").get();
             supervisor_notify("creating snitch");
             i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).get();
             // #293 - do not stop anything
@@ -632,7 +634,7 @@ int main(int ac, char** av) {
             gms::get_local_gossiper().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx).get();
             supervisor_notify("starting tracing");
-            tracing::tracing::create_tracing("trace_keyspace_helper").get();
+            tracing::tracing::start_tracing().get();
             supervisor_notify("starting native transport");
             service::get_local_storage_service().start_native_transport().get();
             if (start_thrift) {
