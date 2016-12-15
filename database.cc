@@ -635,17 +635,18 @@ column_family::make_streaming_reader(schema_ptr s,
     auto& slice = query::full_slice;
     auto& pc = service::get_local_streaming_read_priority();
 
-    std::vector<mutation_reader> readers;
-    readers.reserve(ranges.size() * (_memtables->size() + 1));
-
-    for (auto& range : ranges) {
+    auto source = mutation_source([this] (schema_ptr s, const query::partition_range& range, const query::partition_slice& slice,
+                                      const io_priority_class& pc, tracing::trace_state_ptr trace_state) {
+        std::vector<mutation_reader> readers;
+        readers.reserve(_memtables->size() + 1);
         for (auto&& mt : *_memtables) {
             readers.emplace_back(mt->make_reader(s, range, slice, pc));
         }
-        readers.emplace_back(make_sstable_reader(s, range, slice, pc, nullptr));
-    }
+        readers.emplace_back(make_sstable_reader(s, range, slice, pc, std::move(trace_state)));
+        return make_combined_reader(std::move(readers));
+    });
 
-    return make_combined_reader(std::move(readers));
+    return make_multi_range_reader(s, std::move(source), ranges, slice, pc, nullptr);
 }
 
 // Not performance critical. Currently used for testing only.
