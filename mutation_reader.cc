@@ -271,3 +271,54 @@ mutation_reader
 make_restricted_reader(const restricted_mutation_reader_config& config, unsigned weight, mutation_reader&& base) {
     return make_mutation_reader<restricting_mutation_reader>(config, weight, std::move(base));
 }
+
+class multi_range_mutation_reader : public mutation_reader::impl {
+public:
+    using ranges_vector = std::vector<query::partition_range>;
+private:
+    const ranges_vector& _ranges;
+    ranges_vector::const_iterator _current_range;
+    mutation_reader _reader;
+public:
+    multi_range_mutation_reader(schema_ptr s, mutation_source source, const ranges_vector& ranges,
+                                const query::partition_slice& slice, const io_priority_class& pc,
+                                tracing::trace_state_ptr trace_state)
+        : _ranges(ranges)
+        , _current_range(_ranges.begin())
+        , _reader(source(s, *_current_range, slice, pc, trace_state))
+    {
+    }
+
+    virtual future<streamed_mutation_opt> operator()() override {
+        return repeat_until_value([this] {
+            return _reader().then([this] (streamed_mutation_opt smopt) {
+                if (smopt) {
+                    return make_ready_future<stdx::optional<streamed_mutation_opt>>(std::move(smopt));
+                }
+                ++_current_range;
+                if (_current_range == _ranges.end()) {
+                    return make_ready_future<stdx::optional<streamed_mutation_opt>>(streamed_mutation_opt());
+                }
+                return _reader.fast_forward_to(*_current_range).then([] {
+                    return make_ready_future<stdx::optional<streamed_mutation_opt>>();
+                });
+            });
+        });
+    }
+
+    virtual future<> fast_forward_to(const query::partition_range& pr) override {
+        // When end of pr is reached, this reader will increment _current_range
+        // and notice that it now points to _ranges.end().
+        _current_range = std::prev(_ranges.end());
+        return _reader.fast_forward_to(pr);
+    }
+};
+
+mutation_reader
+make_multi_range_reader(schema_ptr s, mutation_source source, const std::vector<query::partition_range>& ranges,
+                        const query::partition_slice& slice, const io_priority_class& pc,
+                        tracing::trace_state_ptr trace_state)
+{
+    return make_mutation_reader<multi_range_mutation_reader>(std::move(s), std::move(source), ranges,
+                                                             slice, pc, std::move(trace_state));
+}
