@@ -1933,7 +1933,9 @@ feature& feature::operator=(feature other) {
 }
 
 void feature::enable() {
-    logger.info("Feature {} is enabled", name());
+    if (engine().cpu_id() == 0) {
+        logger.info("Feature {} is enabled", name());
+    }
     _enabled = true;
 }
 
