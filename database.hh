@@ -155,7 +155,11 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
 
     future<> _waiting_flush;
     virtual void start_reclaiming() override;
+
+    std::vector<scollectd::registration> _collectd;
 public:
+    void setup_collectd(sstring namestr);
+
     future<> shutdown();
 
     // Limits and pressure conditions:
