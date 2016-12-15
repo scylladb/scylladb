@@ -1096,6 +1096,7 @@ extern thread_local const shared_ptr<const abstract_type> date_type;
 extern thread_local const shared_ptr<const abstract_type> timeuuid_type;
 extern thread_local const shared_ptr<const abstract_type> timestamp_type;
 extern thread_local const shared_ptr<const abstract_type> simple_date_type;
+extern thread_local const shared_ptr<const abstract_type> time_type;
 extern thread_local const shared_ptr<const abstract_type> uuid_type;
 extern thread_local const shared_ptr<const abstract_type> inet_addr_type;
 extern thread_local const shared_ptr<const abstract_type> float_type;

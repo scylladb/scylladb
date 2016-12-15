@@ -98,7 +98,7 @@ private:
 
 public:
     enum class kind : int8_t {
-        ASCII, BIGINT, BLOB, BOOLEAN, COUNTER, DECIMAL, DOUBLE, FLOAT, INT, SMALLINT, TINYINT, INET, TEXT, TIMESTAMP, UUID, VARCHAR, VARINT, TIMEUUID, DATE
+        ASCII, BIGINT, BLOB, BOOLEAN, COUNTER, DECIMAL, DOUBLE, FLOAT, INT, SMALLINT, TINYINT, INET, TEXT, TIMESTAMP, UUID, VARCHAR, VARINT, TIMEUUID, DATE, TIME
     };
     using kind_enum = super_enum<kind,
         kind::ASCII,
@@ -119,7 +119,8 @@ public:
         kind::VARCHAR,
         kind::VARINT,
         kind::TIMEUUID,
-        kind::DATE>;
+        kind::DATE,
+        kind::TIME>;
     using kind_enum_set = enum_set<kind_enum>;
 private:
     std::experimental::optional<kind_enum_set::prepared> _kind;
@@ -142,6 +143,7 @@ public:
     static thread_local shared_ptr<cql3_type> varchar;
     static thread_local shared_ptr<cql3_type> timeuuid;
     static thread_local shared_ptr<cql3_type> date;
+    static thread_local shared_ptr<cql3_type> time;
     static thread_local shared_ptr<cql3_type> inet;
     static thread_local shared_ptr<cql3_type> varint;
     static thread_local shared_ptr<cql3_type> decimal;

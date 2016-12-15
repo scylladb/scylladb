@@ -32,7 +32,9 @@
 #include "utils/serialization.hh"
 #include "combine.hh"
 #include <cmath>
+#include <chrono>
 #include <sstream>
+#include <string>
 #include <regex>
 #include <boost/iterator/transform_iterator.hpp>
 #include <boost/range/adaptor/filtered.hpp>
@@ -64,6 +66,7 @@ static const char* timeuuid_type_name  = "org.apache.cassandra.db.marshal.TimeUU
 static const char* timestamp_type_name = "org.apache.cassandra.db.marshal.TimestampType";
 static const char* date_type_name      = "org.apache.cassandra.db.marshal.DateType";
 static const char* simple_date_type_name = "org.apache.cassandra.db.marshal.SimpleDateType";
+static const char* time_type_name      = "org.apache.cassandra.db.marshal.TimeType";
 static const char* uuid_type_name      = "org.apache.cassandra.db.marshal.UUIDType";
 static const char* inet_addr_type_name = "org.apache.cassandra.db.marshal.InetAddressType";
 static const char* double_type_name    = "org.apache.cassandra.db.marshal.DoubleType";
@@ -860,6 +863,105 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::date;
+    }
+};
+
+struct time_type_impl : public simple_type_impl<int64_t> {
+    time_type_impl() : simple_type_impl{time_type_name}
+    { }
+    virtual void serialize(const void* value, bytes::iterator& out) const override {
+        if (!value) {
+            return;
+        }
+        auto&& v1 = from_value(value);
+        if (v1.empty()) {
+            return;
+        }
+        uint64_t v = v1.get();
+        v = net::hton(v);
+        out = std::copy_n(reinterpret_cast<const char*>(&v), sizeof(v), out);
+    }
+    virtual size_t serialized_size(const void* value) const override {
+        if (!value || from_value(value).empty()) {
+            return 0;
+        }
+        return 8;
+    }
+    virtual data_value deserialize(bytes_view in) const override {
+        if (in.empty()) {
+            return make_empty();
+        }
+        auto v = read_simple_exactly<int64_t>(in);
+        return make_value(v);
+    }
+    virtual void validate(bytes_view v) const override {
+        if (v.size() != 0 && v.size() != 8) {
+            throw marshal_exception(sprint("Expected 8 byte long for time (%d)", v.size()));
+        }
+    }
+    virtual bytes from_string(sstring_view s) const override {
+        if (s.empty()) {
+            return bytes();
+        }
+        int64_t ts = net::hton(parse_time(s));
+        bytes b(bytes::initialized_later(), sizeof(int64_t));
+        std::copy_n(reinterpret_cast<const int8_t*>(&ts), sizeof(ts), b.begin());
+        return b;
+    }
+    static int64_t parse_time(sstring_view s) {
+        static auto format_error = "Timestamp format must be hh:mm:ss[.fffffffff]";
+        auto hours_end = s.find(':');
+        if (hours_end == std::string::npos) {
+            throw marshal_exception(format_error);
+        }
+        int64_t hours = std::stol(s.substr(0, hours_end).to_string());
+        if (hours < 0 || hours >= 24) {
+            throw marshal_exception("Hour out of bounds.");
+        }
+        auto minutes_end = s.find(':', hours_end+1);
+        if (minutes_end == std::string::npos) {
+            throw marshal_exception(format_error);
+        }
+        int64_t minutes = std::stol(s.substr(hours_end + 1, hours_end-minutes_end).to_string());
+        if (minutes < 0 || minutes >= 60) {
+            throw marshal_exception("Minute out of bounds.");
+        }
+        auto seconds_end = s.find('.', minutes_end+1);
+        if (seconds_end == std::string::npos) {
+            seconds_end = s.length();
+        }
+        int64_t seconds = std::stol(s.substr(minutes_end + 1, minutes_end-seconds_end).to_string());
+        if (seconds < 0 || seconds >= 60) {
+            throw marshal_exception("Second out of bounds.");
+        }
+        int64_t nanoseconds = 0;
+        if (seconds_end < s.length()) {
+            nanoseconds = std::stol(s.substr(seconds_end + 1).to_string());
+            nanoseconds *= std::pow(10, 9-(s.length() - (seconds_end + 1)));
+            if (nanoseconds < 0 || nanoseconds >= 1000 * 1000 * 1000) {
+                throw marshal_exception("Nanosecond out of bounds.");
+            }
+        }
+        std::chrono::nanoseconds result;
+        result += std::chrono::hours(hours);
+        result += std::chrono::minutes(minutes);
+        result += std::chrono::seconds(seconds);
+        result += std::chrono::nanoseconds(nanoseconds);
+        return result.count();
+    }
+    virtual sstring to_string(const bytes& b) const override {
+        auto v = deserialize(b);
+        if (v.is_null()) {
+            return "";
+        }
+        std::chrono::nanoseconds nanoseconds{from_value(v).get()};
+        auto time = date::make_time(nanoseconds);
+        std::ostringstream str;
+        str << time;
+        return str.str();
+    }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
+        return cql3::cql3_type::time;
     }
 };
 
@@ -2954,6 +3056,7 @@ thread_local const shared_ptr<const abstract_type> date_type(make_shared<date_ty
 thread_local const shared_ptr<const abstract_type> timeuuid_type(make_shared<timeuuid_type_impl>());
 thread_local const shared_ptr<const abstract_type> timestamp_type(make_shared<timestamp_type_impl>());
 thread_local const shared_ptr<const abstract_type> simple_date_type(make_shared<simple_date_type_impl>());
+thread_local const shared_ptr<const abstract_type> time_type(make_shared<time_type_impl>());
 thread_local const shared_ptr<const abstract_type> uuid_type(make_shared<uuid_type_impl>());
 thread_local const shared_ptr<const abstract_type> inet_addr_type(make_shared<inet_addr_type_impl>());
 thread_local const shared_ptr<const abstract_type> float_type(make_shared<float_type_impl>());
@@ -2978,6 +3081,7 @@ data_type abstract_type::parse_type(const sstring& name)
         { timeuuid_type_name,  timeuuid_type  },
         { timestamp_type_name, timestamp_type },
         { simple_date_type_name, simple_date_type },
+        { time_type_name,      time_type },
         { uuid_type_name,      uuid_type      },
         { inet_addr_type_name, inet_addr_type },
         { float_type_name,     float_type     },
