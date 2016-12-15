@@ -139,11 +139,15 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog* cl
 }
 
 partition_presence_checker
-column_family::make_partition_presence_checker(sstables::shared_sstable exclude_sstable) {
-    return [this, exclude_sstable = std::move(exclude_sstable)] (partition_key_view key) {
-        auto exclude = [e = std::move(exclude_sstable)] (auto s) { return s != e; };
-        for (auto&& s : *_sstables->all() | boost::adaptors::filtered(exclude)) {
-            if (s->filter_has_key(*_schema, key)) {
+column_family::make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set> sstables) {
+    auto sel = make_lw_shared(sstables->make_incremental_selector());
+    return [this, sstables = std::move(sstables), sel = std::move(sel)] (const dht::decorated_key& key) {
+        auto& sst = sel->select(key.token());
+        if (sst.empty()) {
+            return partition_presence_checker_result::definitely_doesnt_exist;
+        }
+        for (auto&& s : sst) {
+            if (s->filter_has_key(*_schema, key.key())) {
                 return partition_presence_checker_result::maybe_exists;
             }
         }
@@ -885,11 +889,12 @@ void column_family::add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
 }
 
 future<>
-column_family::update_cache(memtable& m, sstables::shared_sstable exclude_sstable) {
+column_family::update_cache(memtable& m, lw_shared_ptr<sstables::sstable_set> old_sstables) {
     if (_config.enable_cache) {
        // be careful to use the old sstable list, since the new one will hit every
        // mutation in m.
-       return _cache.update(m, make_partition_presence_checker(std::move(exclude_sstable)));
+       return _cache.update(m, make_partition_presence_checker(std::move(old_sstables)));
+
     } else {
        return m.clear_gently();
     }
@@ -1082,15 +1087,20 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
         try {
             ret.get();
 
-            // We must add sstable before we call update_cache(), because
-            // memtable's data after moving to cache can be evicted at any time.
-            auto old_sstables = _sstables;
-            add_sstable(newtab);
-            old->mark_flushed(newtab);
+            // Cache updates are serialized because partition_presence_checker
+            // is using data source snapshot created before the update starts, so that
+            // we can use incremental_selector. If updates were done concurrently we
+            // could mispopulate due to stale presence information.
+            return with_semaphore(_cache_update_sem, 1, [this, old, newtab] {
+                // We must add sstable before we call update_cache(), because
+                // memtable's data after moving to cache can be evicted at any time.
+                auto old_sstables = _sstables;
+                add_sstable(newtab);
+                old->mark_flushed(newtab);
 
-            trigger_compaction();
-
-            return update_cache(*old, newtab).then_wrapped([this, newtab, old] (future<> f) {
+                trigger_compaction();
+                return update_cache(*old, std::move(old_sstables));
+            }).then_wrapped([this, newtab, old] (future<> f) {
                 try {
                     f.get();
                 } catch(...) {

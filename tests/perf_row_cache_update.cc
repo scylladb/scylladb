@@ -95,7 +95,7 @@ int main(int argc, char** argv) {
                     mt->apply(m);
                 }
 
-                auto checker = [](const partition_key& key) {
+                auto checker = [](auto) {
                     return partition_presence_checker_result::maybe_exists;
                 };
 

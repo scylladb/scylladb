@@ -290,11 +290,11 @@ enum class partition_presence_checker_result {
     definitely_doesnt_exist,
     maybe_exists
 };
-using partition_presence_checker = std::function<partition_presence_checker_result (const partition_key& key)>;
+using partition_presence_checker = std::function<partition_presence_checker_result (const dht::decorated_key& key)>;
 
 inline
 partition_presence_checker make_default_partition_presence_checker() {
-    return [] (partition_key_view key) { return partition_presence_checker_result::maybe_exists; };
+    return [] (const dht::decorated_key&) { return partition_presence_checker_result::maybe_exists; };
 }
 
 template<typename Consumer>
