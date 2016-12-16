@@ -1361,11 +1361,12 @@ SEASTAR_TEST_CASE(test_types) {
                     "    p tinyint,"
                     "    q smallint,"
                     "    r date,"
+                    "    s time,"
                     ");").discard_result();
         }).then([&e] {
             e.require_table_exists("ks", "all_types");
             return e.execute_cql(
-                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r) VALUES ("
+                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s) VALUES ("
                     "    'ascii',"
                     "    123456789,"
                     "    0xdeadbeef,"
@@ -1383,7 +1384,8 @@ SEASTAR_TEST_CASE(test_types) {
                     "    1.23,"
                     "    3,"
                     "    3,"
-                    "    '1970-01-02'"
+                    "    '1970-01-02',"
+                    "    '00:00:00.000000001'"
                     ");").discard_result();
         }).then([&e] {
             return e.execute_cql("SELECT * FROM all_types WHERE a = 'ascii'");
@@ -1411,10 +1413,11 @@ SEASTAR_TEST_CASE(test_types) {
                     byte_type->decompose(int8_t(3)),
                     short_type->decompose(int16_t(3)),
                     simple_date_type->decompose(int32_t(0x80000001)),
+                    time_type->decompose(int64_t(0x0000000000000001)),
                 }
             });
             return e.execute_cql(
-                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r) VALUES ("
+                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s) VALUES ("
                     "    blobAsAscii(asciiAsBlob('ascii2')),"
                     "    blobAsBigint(bigintAsBlob(123456789)),"
                     "    bigintAsBlob(12),"
@@ -1431,7 +1434,8 @@ SEASTAR_TEST_CASE(test_types) {
                     "    blobAsDecimal(decimalAsBlob(1.23)),"
                     "    blobAsTinyint(tinyintAsBlob(3)),"
                     "    blobAsSmallint(smallintAsBlob(3)),"
-                    "    blobAsDate(dateAsBlob('1970-01-02'))"
+                    "    blobAsDate(dateAsBlob('1970-01-02')),"
+                    "    blobAsTime(timeAsBlob('00:00:00.000000001'))"
                     ");").discard_result();
         }).then([&e] {
              return e.execute_cql("SELECT * FROM all_types WHERE a = 'ascii2'");
@@ -1459,6 +1463,7 @@ SEASTAR_TEST_CASE(test_types) {
                     byte_type->decompose(int8_t(3)),
                     short_type->decompose(int16_t(3)),
                     simple_date_type->decompose(int32_t(0x80000001)),
+                    time_type->decompose(int64_t(0x0000000000000001)),
                 }
             });
         });
