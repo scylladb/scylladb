@@ -161,16 +161,18 @@ std::ostream& operator<<(std::ostream& os, const query::result::printer& p) {
     return os;
 }
 
-uint32_t result::calculate_row_count(const query::partition_slice& slice) {
+void result::calculate_counts(const query::partition_slice& slice) {
     struct {
         uint32_t total_count = 0;
         uint32_t current_partition_count = 0;
+        uint32_t live_partitions = 0;
         void accept_new_partition(const partition_key& key, uint32_t row_count) {
             accept_new_partition(row_count);
         }
         void accept_new_partition(uint32_t row_count) {
             total_count += row_count;
             current_partition_count = row_count;
+            live_partitions += 1;
         }
         void accept_new_row(const clustering_key& key, const result_row_view& static_row, const result_row_view& row) {}
         void accept_new_row(const result_row_view& static_row, const result_row_view& row) {}
@@ -182,7 +184,8 @@ uint32_t result::calculate_row_count(const query::partition_slice& slice) {
     } counter;
 
     result_view::consume(*this, slice, counter);
-    return counter.total_count;
+    _row_count = counter.total_count;
+    _partition_count = counter.live_partitions;
 }
 
 result::result()
@@ -190,7 +193,7 @@ result::result()
         bytes_ostream out;
         ser::writer_of_query_result(out).skip_partitions().end_query_result();
         return out;
-    }(), short_read::no)
+    }(), short_read::no, 0, 0)
 { }
 
 foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
@@ -202,6 +205,7 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
     auto partitions = ser::writer_of_query_result(w).start_partitions();
     std::experimental::optional<uint32_t> row_count = 0;
     short_read is_short_read;
+    uint32_t partition_count = 0;
 
     for (auto&& r : _partial) {
         if (row_count) {
@@ -214,10 +218,16 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
         result_view::do_with(*r, [&] (result_view rv) {
             for (auto&& pv : rv._v.partitions()) {
                 partitions.add(pv);
+                if (++partition_count >= _max_partitions) {
+                    return;
+                }
             }
         });
         if (r->is_short_read()) {
             is_short_read = short_read::yes;
+            break;
+        }
+        if (partition_count >= _max_partitions) {
             break;
         }
     }
