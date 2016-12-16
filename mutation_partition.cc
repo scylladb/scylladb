@@ -769,13 +769,14 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
     // If ck:s exist, and we do a restriction on them, we either have maching
     // rows, or return nothing, since cql does not allow "is null".
     if (row_count == 0
-			&& (has_ck_selector(pw.ranges())
-					|| !has_any_live_data(s, column_kind::static_column, static_row()))) {
-		pw.retract();
-	} else {
-	    pw.row_count() += row_count ? : 1;
+            && (has_ck_selector(pw.ranges())
+                    || !has_any_live_data(s, column_kind::static_column, static_row()))) {
+        pw.retract();
+    } else {
+        pw.row_count() += row_count ? : 1;
+        pw.partition_count() += 1;
         std::move(rows_wr).end_rows().end_qr_partition();
-	}
+    }
 }
 
 std::ostream&
@@ -1776,15 +1777,16 @@ uint32_t mutation_querier::consume_end_of_stream() {
         _pw.retract();
         return 0;
     } else {
+        auto live_rows = std::max(_live_clustering_rows, uint32_t(1));
+        _pw.row_count() += live_rows;
+        _pw.partition_count() += 1;
         std::move(*_rows_wr).end_rows().end_qr_partition();
-        return std::max(_live_clustering_rows, uint32_t(1));
+        return live_rows;
     }
 }
 
 class query_result_builder {
     const schema& _schema;
-    uint32_t _live_rows = 0;
-    uint32_t _partitions = 0;
     query::result::builder& _rb;
     stdx::optional<query::result::partition_writer> _pw;
     stdx::optional<mutation_querier> _mutation_consumer;
@@ -1819,9 +1821,7 @@ public:
 
     stop_iteration consume_end_of_partition() {
         auto live_rows_in_partition = _mutation_consumer->consume_end_of_stream();
-        _live_rows += live_rows_in_partition;
-        _partitions += live_rows_in_partition > 0;
-        if (live_rows_in_partition && !_stop) {
+        if (live_rows_in_partition > 0 && !_stop) {
             _stop = _rb.memory_accounter().check();
         }
         if (_stop) {
@@ -1830,17 +1830,17 @@ public:
         return _stop;
     }
 
-    data_query_result consume_end_of_stream() {
-        return {_live_rows, _partitions};
+    void consume_end_of_stream() {
     }
 };
 
-future<data_query_result> data_query(schema_ptr s, const mutation_source& source, const query::partition_range& range,
-                            const query::partition_slice& slice, uint32_t row_limit, uint32_t partition_limit,
-                            gc_clock::time_point query_time, query::result::builder& builder)
+future<> data_query(
+        schema_ptr s, const mutation_source& source, const query::partition_range& range,
+        const query::partition_slice& slice, uint32_t row_limit, uint32_t partition_limit,
+        gc_clock::time_point query_time, query::result::builder& builder)
 {
     if (row_limit == 0 || slice.partition_row_limit() == 0 || partition_limit == 0) {
-        return make_ready_future<data_query_result>();
+        return make_ready_future<>();
     }
 
     auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
