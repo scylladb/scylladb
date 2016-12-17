@@ -62,7 +62,7 @@ void mutation::set_static_cell(const bytes& name, const data_value& value, api::
 }
 
 void mutation::set_clustered_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection&& value) {
-    auto& row = partition().clustered_row(clustering_key::from_clustering_prefix(*schema(), prefix)).cells();
+    auto& row = partition().clustered_row(*schema(), clustering_key::from_clustering_prefix(*schema(), prefix)).cells();
     row.apply(def, std::move(value));
 }
 
@@ -76,7 +76,7 @@ void mutation::set_clustered_cell(const clustering_key& key, const bytes& name, 
 }
 
 void mutation::set_clustered_cell(const clustering_key& key, const column_definition& def, atomic_cell_or_collection&& value) {
-    auto& row = partition().clustered_row(key).cells();
+    auto& row = partition().clustered_row(*schema(), key).cells();
     row.apply(def, std::move(value));
 }
 
@@ -108,7 +108,7 @@ mutation::get_cell(const clustering_key& rkey, const column_definition& def) con
         }
         return { *cell };
     } else {
-        const row* r = partition().find_row(rkey);
+        const row* r = partition().find_row(*schema(), rkey);
         if (!r) {
             return {};
         }
@@ -287,7 +287,7 @@ public:
         if (!check_remaining_limit(cr)) {
             return stop_iteration::yes;
         }
-        auto& dr = _m.partition().clustered_row(std::move(cr.key()));
+        auto& dr = _m.partition().clustered_row(*_m.schema(), std::move(cr.key()));
         dr.apply(cr.tomb());
         dr.apply(cr.marker());
         dr.cells().apply(*_m.schema(), column_kind::regular_column, std::move(cr.cells()));

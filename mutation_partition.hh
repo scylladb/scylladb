@@ -671,8 +671,8 @@ public:
     // Returns true if there is no live data or tombstones.
     bool empty() const;
 public:
-    deletable_row& clustered_row(const clustering_key& key);
-    deletable_row& clustered_row(clustering_key&& key);
+    deletable_row& clustered_row(const schema& s, const clustering_key& key);
+    deletable_row& clustered_row(const schema& s, clustering_key&& key);
     deletable_row& clustered_row(const schema& s, const clustering_key_view& key);
 public:
     tombstone partition_tombstone() const { return _tombstone; }
@@ -683,7 +683,7 @@ public:
     const range_tombstone_list& row_tombstones() const { return _row_tombstones; }
     rows_type& clustered_rows() { return _rows; }
     range_tombstone_list& row_tombstones() { return _row_tombstones; }
-    const row* find_row(const clustering_key& key) const;
+    const row* find_row(const schema& s, const clustering_key& key) const;
     tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key) const;
     tombstone tombstone_for_row(const schema& schema, const clustering_key& key) const;
     tombstone tombstone_for_row(const schema& schema, const rows_entry& e) const;

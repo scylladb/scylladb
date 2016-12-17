@@ -465,7 +465,7 @@ public:
         size_t row_count = row_count_dist(_gen);
         for (size_t i = 0; i < row_count; ++i) {
             auto ckey = clustering_key::from_exploded(*_schema, {random_blob(), random_blob()});
-            deletable_row& row = m.partition().clustered_row(ckey);
+            deletable_row& row = m.partition().clustered_row(*_schema, ckey);
             set_random_cells(row.cells(), column_kind::regular_column);
             row.marker() = random_row_marker();
         }
