@@ -239,7 +239,7 @@ auto apply_reversibly_intrusive_set(Container& dst, Container& src, Apply&& appl
 mutation_partition::mutation_partition(const mutation_partition& x)
         : _tombstone(x._tombstone)
         , _static_row(x._static_row)
-        , _rows(x._rows.value_comp())
+        , _rows(x._rows.key_comp())
         , _row_tombstones(x._row_tombstones) {
     auto cloner = [] (const auto& x) {
         return current_allocator().construct<std::remove_const_t<std::remove_reference_t<decltype(x)>>>(x);
@@ -251,7 +251,7 @@ mutation_partition::mutation_partition(const mutation_partition& x, const schema
         query::clustering_key_filter_ranges ck_ranges)
         : _tombstone(x._tombstone)
         , _static_row(x._static_row)
-        , _rows(x._rows.value_comp())
+        , _rows(x._rows.key_comp())
         , _row_tombstones(x._row_tombstones) {
     try {
         for(auto&& r : ck_ranges) {
