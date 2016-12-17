@@ -41,6 +41,7 @@
 #include "hashing_partition_visitor.hh"
 #include "range_tombstone_list.hh"
 #include "clustering_key_filter.hh"
+#include "intrusive_set.hh"
 
 //
 // Container for cells of a row. Cells are identified by column_id.
@@ -438,7 +439,7 @@ public:
 };
 
 class rows_entry {
-    boost::intrusive::set_member_hook<> _link;
+    intrusive_set_member_hook _link;
     clustering_key _key;
     deletable_row _row;
     friend class mutation_partition;
@@ -534,10 +535,7 @@ class serializer;
 
 class mutation_partition final {
 public:
-    // FIXME: using boost::intrusive because gcc's std::set<> does not support heterogeneous lookup yet
-    using rows_type = boost::intrusive::set<rows_entry,
-        boost::intrusive::member_hook<rows_entry, boost::intrusive::set_member_hook<>, &rows_entry::_link>,
-        boost::intrusive::compare<rows_entry::compare>>;
+    using rows_type = intrusive_set<rows_entry, &rows_entry::_link, rows_entry::compare>;
     friend class rows_entry;
     friend class size_calculator;
 private:
