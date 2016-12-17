@@ -138,7 +138,7 @@ future<mutation> generate_clustered(bytes&& key) {
 inline auto clustered_row(mutation& mutation, const schema& s, std::vector<bytes>&& v) {
     auto exploded = exploded_clustering_prefix(std::move(v));
     auto clustering_pair = clustering_key::from_clustering_prefix(s, exploded);
-    return mutation.partition().clustered_row(clustering_pair);
+    return mutation.partition().clustered_row(s, clustering_pair);
 }
 
 SEASTAR_TEST_CASE(complex_sst1_k1) {
@@ -437,7 +437,7 @@ SEASTAR_TEST_CASE(compact_storage_sparse_read) {
                 return mutation_from_streamed_mutation(std::move(sm));
             }).then([sstp, s, &key] (auto mutation) {
                 auto& mp = mutation->partition();
-                auto row = mp.clustered_row(clustering_key::make_empty());
+                auto row = mp.clustered_row(*s, clustering_key::make_empty());
                 match_live_cell(row.cells(), *s, "cl1", data_value(to_bytes("cl1")));
                 match_live_cell(row.cells(), *s, "cl2", data_value(to_bytes("cl2")));
                 return make_ready_future<>();
@@ -458,7 +458,7 @@ SEASTAR_TEST_CASE(compact_storage_simple_dense_read) {
                 auto exploded = exploded_clustering_prefix({"cl1"});
                 auto clustering = clustering_key::from_clustering_prefix(*s, exploded);
 
-                auto row = mp.clustered_row(clustering);
+                auto row = mp.clustered_row(*s, clustering);
                 match_live_cell(row.cells(), *s, "cl2", data_value(to_bytes("cl2")));
                 return make_ready_future<>();
             });
@@ -478,7 +478,7 @@ SEASTAR_TEST_CASE(compact_storage_dense_read) {
                 auto exploded = exploded_clustering_prefix({"cl1", "cl2"});
                 auto clustering = clustering_key::from_clustering_prefix(*s, exploded);
 
-                auto row = mp.clustered_row(clustering);
+                auto row = mp.clustered_row(*s, clustering);
                 match_live_cell(row.cells(), *s, "cl3", data_value(to_bytes("cl3")));
                 return make_ready_future<>();
             });
@@ -505,10 +505,10 @@ SEASTAR_TEST_CASE(broken_ranges_collection) {
                 if (!mut) {
                     return stop_iteration::yes;
                 } else if (key_equal("127.0.0.1")) {
-                    auto row = mut->partition().clustered_row(clustering_key::make_empty());
+                    auto row = mut->partition().clustered_row(*s, clustering_key::make_empty());
                     match_absent(row.cells(), *s, "tokens");
                 } else if (key_equal("127.0.0.3")) {
-                    auto row = mut->partition().clustered_row(clustering_key::make_empty());
+                    auto row = mut->partition().clustered_row(*s, clustering_key::make_empty());
                     auto tokens = match_collection(row.cells(), *s, "tokens", tombstone(deletion_time{0x55E5F2D5, 0x051EB3FC99715Dl }));
                     match_collection_element<status::live>(tokens.cells[0], to_bytes("-8180144272884242102"), bytes_opt{});
                 } else {

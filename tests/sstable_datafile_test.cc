@@ -794,7 +794,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
 
             auto& mp = mutation->partition();
             BOOST_REQUIRE(mp.clustered_rows().size() == 1);
-            auto r = mp.find_row(c_key);
+            auto r = mp.find_row(*s, c_key);
             BOOST_REQUIRE(r);
             BOOST_REQUIRE(r->size() == 1);
             auto cell = r->find_cell(set_col.id);
@@ -1403,7 +1403,7 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
                         auto exploded = exploded_clustering_prefix({"cl1"});
                         auto clustering = clustering_key::from_clustering_prefix(*s, exploded);
 
-                        auto row = mp.clustered_row(clustering);
+                        auto row = mp.clustered_row(*s, clustering);
                         match_live_cell(row.cells(), *s, "cl2", data_value(to_bytes("cl2")));
                         return make_ready_future<>();
                     });
@@ -1440,7 +1440,7 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
                         auto exploded = exploded_clustering_prefix({"cl1", "cl2"});
                         auto clustering = clustering_key::from_clustering_prefix(*s, exploded);
 
-                        auto row = mp.clustered_row(clustering);
+                        auto row = mp.clustered_row(*s, clustering);
                         match_live_cell(row.cells(), *s, "cl3", data_value(to_bytes("cl3")));
                         return make_ready_future<>();
                     });
@@ -1475,7 +1475,7 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
                         return mutation_from_streamed_mutation(std::move(sm));
                     }).then([sstp, s] (auto mutation) {
                         auto& mp = mutation->partition();
-                        auto row = mp.clustered_row(clustering_key::make_empty());
+                        auto row = mp.clustered_row(*s, clustering_key::make_empty());
                         match_live_cell(row.cells(), *s, "cl1", data_value(data_value(to_bytes("cl1"))));
                         match_live_cell(row.cells(), *s, "cl2", data_value(data_value(to_bytes("cl2"))));
                         return make_ready_future<>();

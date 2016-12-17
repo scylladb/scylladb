@@ -466,8 +466,8 @@ void mutation_partition::insert_row(const schema& s, const clustering_key& key, 
 }
 
 const row*
-mutation_partition::find_row(const clustering_key& key) const {
-    auto i = _rows.find(key);
+mutation_partition::find_row(const schema& s, const clustering_key& key) const {
+    auto i = _rows.find(key, rows_entry::compare(s));
     if (i == _rows.end()) {
         return nullptr;
     }
@@ -475,8 +475,8 @@ mutation_partition::find_row(const clustering_key& key) const {
 }
 
 deletable_row&
-mutation_partition::clustered_row(clustering_key&& key) {
-    auto i = _rows.find(key);
+mutation_partition::clustered_row(const schema& s, clustering_key&& key) {
+    auto i = _rows.find(key, rows_entry::compare(s));
     if (i == _rows.end()) {
         auto e = current_allocator().construct<rows_entry>(std::move(key));
         _rows.insert(i, *e);
@@ -486,8 +486,8 @@ mutation_partition::clustered_row(clustering_key&& key) {
 }
 
 deletable_row&
-mutation_partition::clustered_row(const clustering_key& key) {
-    auto i = _rows.find(key);
+mutation_partition::clustered_row(const schema& s, const clustering_key& key) {
+    auto i = _rows.find(key, rows_entry::compare(s));
     if (i == _rows.end()) {
         auto e = current_allocator().construct<rows_entry>(key);
         _rows.insert(i, *e);
