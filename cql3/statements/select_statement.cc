@@ -308,7 +308,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
     if (needs_post_query_ordering() && _limit) {
         return do_with(std::forward<std::vector<query::partition_range>>(partition_ranges), [this, &proxy, &state, &options, cmd](auto prs) {
             assert(cmd->partition_limit == query::max_partitions);
-            query::result_merger merger(query::max_partitions);
+            query::result_merger merger(cmd->row_limit * prs.size(), query::max_partitions);
             return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, &options, cmd] (auto pr) {
                 std::vector<query::partition_range> prange { pr };
                 auto command = ::make_lw_shared<query::read_command>(*cmd);
@@ -343,7 +343,7 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy,
     if (needs_post_query_ordering() && _limit) {
         return do_with(std::move(partition_ranges), [this, &proxy, &state, command] (auto prs) {
             assert(command->partition_limit == query::max_partitions);
-            query::result_merger merger(query::max_partitions);
+            query::result_merger merger(command->row_limit * prs.size(), query::max_partitions);
             return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, command] (auto pr) {
                 std::vector<query::partition_range> prange { pr };
                 auto cmd = ::make_lw_shared<query::read_command>(*command);
@@ -377,8 +377,8 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
         if (_is_reversed) {
             rs->reverse();
         }
+        rs->trim(cmd->row_limit);
     }
-    rs->trim(cmd->row_limit);
     return ::make_shared<transport::messages::result_message::rows>(std::move(rs));
 }
 
