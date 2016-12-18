@@ -32,6 +32,7 @@
 #include "mutation_query.hh"
 #include "service/priority_manager.hh"
 #include "mutation_compactor.hh"
+#include "intrusive_set_external_comparator.hh"
 
 template<bool reversed>
 struct reversal_traits;
@@ -168,7 +169,7 @@ void revert_intrusive_set_range(const schema& s, mutation_partition::rows_type& 
         // lower_bound() can allocate if linearization is required but it should have
         // been already performed by the lower_bound() invocation in apply_reversibly_intrusive_set() and
         // stored in the linearization context.
-        auto i = dst.find(e);
+        auto i = dst.find(e, rows_entry::compare(s));
         assert(i != dst.end());
         rows_entry& dst_e = *i;
 
@@ -196,6 +197,7 @@ void revert_intrusive_set(const schema& s, mutation_partition::rows_type& dst, m
 auto apply_reversibly_intrusive_set(const schema& s, mutation_partition::rows_type& dst, mutation_partition::rows_type& src) {
     auto src_i = src.begin();
     try {
+        rows_entry::compare cmp(s);
         while (src_i != src.end()) {
             rows_entry& src_e = *src_i;
 
@@ -207,8 +209,8 @@ auto apply_reversibly_intrusive_set(const schema& s, mutation_partition::rows_ty
                 continue;
             }
 
-            auto i = dst.lower_bound(src_e);
-            if (i == dst.end() || dst.key_comp()(src_e, *i)) {
+            auto i = dst.lower_bound(src_e, cmp);
+            if (i == dst.end() || cmp(src_e, *i)) {
                 // Construct neutral entry which will represent missing dst entry for revert.
                 rows_entry* empty_e = current_allocator().construct<rows_entry>(src_e.key());
                 [&] () noexcept {
@@ -231,7 +233,7 @@ auto apply_reversibly_intrusive_set(const schema& s, mutation_partition::rows_ty
 mutation_partition::mutation_partition(const mutation_partition& x)
         : _tombstone(x._tombstone)
         , _static_row(x._static_row)
-        , _rows(x._rows.key_comp())
+        , _rows()
         , _row_tombstones(x._row_tombstones) {
     auto cloner = [] (const auto& x) {
         return current_allocator().construct<std::remove_const_t<std::remove_reference_t<decltype(x)>>>(x);
@@ -243,12 +245,12 @@ mutation_partition::mutation_partition(const mutation_partition& x, const schema
         query::clustering_key_filter_ranges ck_ranges)
         : _tombstone(x._tombstone)
         , _static_row(x._static_row)
-        , _rows(x._rows.key_comp())
+        , _rows()
         , _row_tombstones(x._row_tombstones) {
     try {
         for(auto&& r : ck_ranges) {
             for (const rows_entry& e : x.range(schema, r)) {
-                _rows.push_back(*current_allocator().construct<rows_entry>(e));
+                _rows.insert(_rows.end(), *current_allocator().construct<rows_entry>(e), rows_entry::compare(schema));
             }
         }
     } catch (...) {
@@ -447,12 +449,12 @@ mutation_partition::apply_insert(const schema& s, clustering_key_view key, api::
 
 void mutation_partition::insert_row(const schema& s, const clustering_key& key, deletable_row&& row) {
     auto e = current_allocator().construct<rows_entry>(key, std::move(row));
-    _rows.insert(_rows.end(), *e);
+    _rows.insert(_rows.end(), *e, rows_entry::compare(s));
 }
 
 void mutation_partition::insert_row(const schema& s, const clustering_key& key, const deletable_row& row) {
     auto e = current_allocator().construct<rows_entry>(key, row);
-    _rows.insert(_rows.end(), *e);
+    _rows.insert(_rows.end(), *e, rows_entry::compare(s));
 }
 
 const row*
@@ -469,7 +471,7 @@ mutation_partition::clustered_row(const schema& s, clustering_key&& key) {
     auto i = _rows.find(key, rows_entry::compare(s));
     if (i == _rows.end()) {
         auto e = current_allocator().construct<rows_entry>(std::move(key));
-        _rows.insert(i, *e);
+        _rows.insert(i, *e, rows_entry::compare(s));
         return e->row();
     }
     return i->row();
@@ -480,7 +482,7 @@ mutation_partition::clustered_row(const schema& s, const clustering_key& key) {
     auto i = _rows.find(key, rows_entry::compare(s));
     if (i == _rows.end()) {
         auto e = current_allocator().construct<rows_entry>(key);
-        _rows.insert(i, *e);
+        _rows.insert(i, *e, rows_entry::compare(s));
         return e->row();
     }
     return i->row();
@@ -491,7 +493,7 @@ mutation_partition::clustered_row(const schema& s, const clustering_key_view& ke
     auto i = _rows.find(key, rows_entry::compare(s));
     if (i == _rows.end()) {
         auto e = current_allocator().construct<rows_entry>(key);
-        _rows.insert(i, *e);
+        _rows.insert(i, *e, rows_entry::compare(s));
         return e->row();
     }
     return i->row();
