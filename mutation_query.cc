@@ -57,13 +57,14 @@ bool reconcilable_result::operator!=(const reconcilable_result& other) const {
 }
 
 query::result
-to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::partition_slice& slice, uint32_t max_partitions) {
+to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::partition_slice& slice, uint32_t max_rows, uint32_t max_partitions) {
     query::result::builder builder(slice, query::result_request::only_result, { });
     for (const partition& p : r.partitions()) {
-        if (!max_partitions--) {
+        if (builder.row_count() >= max_rows || builder.partition_count() >= max_partitions) {
             break;
         }
-        p.mut().unfreeze(s).query(builder, slice, gc_clock::time_point::min(), query::max_rows);
+        // Also enforces the per-partition limit.
+        p.mut().unfreeze(s).query(builder, slice, gc_clock::time_point::min(), max_rows - builder.row_count());
     }
     if (r.is_short_read()) {
         builder.mark_as_short_read();

@@ -105,7 +105,7 @@ public:
     printer pretty_printer(schema_ptr) const;
 };
 
-query::result to_data_query_result(const reconcilable_result&, schema_ptr, const query::partition_slice&, uint32_t partition_limit = query::max_partitions);
+query::result to_data_query_result(const reconcilable_result&, schema_ptr, const query::partition_slice&, uint32_t row_limit, uint32_t partition_limit);
 
 // Performs a query on given data source returning data in reconcilable form.
 //
