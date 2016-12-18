@@ -41,7 +41,7 @@
 #include "hashing_partition_visitor.hh"
 #include "range_tombstone_list.hh"
 #include "clustering_key_filter.hh"
-#include "intrusive_set.hh"
+#include "intrusive_set_external_comparator.hh"
 
 //
 // Container for cells of a row. Cells are identified by column_id.
@@ -439,7 +439,7 @@ public:
 };
 
 class rows_entry {
-    intrusive_set_member_hook _link;
+    intrusive_set_external_comparator_member_hook _link;
     clustering_key _key;
     deletable_row _row;
     friend class mutation_partition;
@@ -535,7 +535,7 @@ class serializer;
 
 class mutation_partition final {
 public:
-    using rows_type = intrusive_set<rows_entry, &rows_entry::_link, rows_entry::compare>;
+    using rows_type = intrusive_set_external_comparator<rows_entry, &rows_entry::_link>;
     friend class rows_entry;
     friend class size_calculator;
 private:
@@ -553,11 +553,11 @@ private:
 public:
     struct copy_comparators_only {};
     mutation_partition(schema_ptr s)
-        : _rows(rows_entry::compare(*s))
+        : _rows()
         , _row_tombstones(*s)
     { }
     mutation_partition(mutation_partition& other, copy_comparators_only)
-        : _rows(other._rows.key_comp())
+        : _rows()
         , _row_tombstones(other._row_tombstones, range_tombstone_list::copy_comparator_only())
     { }
     mutation_partition(mutation_partition&&) = default;
