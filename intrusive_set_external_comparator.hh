@@ -58,7 +58,7 @@ public:
 
 private:
     intrusive_set_external_comparator_member_hook _header;
-    value_traits _value_traits;
+    static const value_traits _value_traits;
 
     struct key_of_value {
         typedef Elem type;
@@ -103,7 +103,7 @@ private:
     }
 public:
     intrusive_set_external_comparator() { algo::init_header(_header.this_ptr()); }
-    intrusive_set_external_comparator(intrusive_set_external_comparator&& o) : _value_traits(std::move(o._value_traits)) {
+    intrusive_set_external_comparator(intrusive_set_external_comparator&& o) {
         algo::swap_tree(_header.this_ptr(), node_ptr(o._header.this_ptr()));
     }
     iterator begin() { return iterator(algo::begin_node(_header.this_ptr()), priv_value_traits_ptr()); }
@@ -117,8 +117,8 @@ public:
     template<class Disposer>
     void clear_and_dispose(Disposer disposer) {
         algo::clear_and_dispose(_header.this_ptr(),
-                                [this, &disposer] (const node_ptr& p) {
-                                    disposer(this->_value_traits.to_value_ptr(p));
+                                [&disposer] (const node_ptr& p) {
+                                    disposer(_value_traits.to_value_ptr(p));
                                 });
         algo::init_header(_header.this_ptr());
     }
@@ -161,11 +161,11 @@ public:
             auto rollback = defer([this, &disposer] { this->clear_and_dispose(disposer); });
             algo::clone(src._header.this_ptr(),
                         _header.this_ptr(),
-                        [this, &cloner] (const node_ptr& p) {
-                            return this->_value_traits.to_node_ptr(*cloner(*this->_value_traits.to_value_ptr(p)));
+                        [&cloner] (const node_ptr& p) {
+                            return _value_traits.to_node_ptr(*cloner(*_value_traits.to_value_ptr(p)));
                         },
-                        [this, &disposer] (const node_ptr& p) {
-                            disposer(this->_value_traits.to_value_ptr(p));
+                        [&disposer] (const node_ptr& p) {
+                            disposer(_value_traits.to_value_ptr(p));
                         });
             rollback.cancel();
         }
@@ -218,3 +218,7 @@ public:
                           : iterator(ret.first, priv_value_traits_ptr());
     }
 };
+
+template<typename Elem,
+         intrusive_set_external_comparator_member_hook Elem::* PtrToMember>
+const typename intrusive_set_external_comparator<Elem, PtrToMember>::value_traits intrusive_set_external_comparator<Elem, PtrToMember>::_value_traits;
