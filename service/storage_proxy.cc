@@ -2388,6 +2388,13 @@ protected:
                             _retry_cmd->row_limit = x(cmd->row_limit, data_resolver->total_live_count());
                         }
                     }
+
+                    // We may be unable to send a single live row because of replicas bailing out too early.
+                    // If that is the case disallow short reads so that we can make progress.
+                    if (!data_resolver->total_live_count()) {
+                        _retry_cmd->slice.options.remove<query::partition_slice::option::allow_short_read>();
+                    }
+
                     logger.trace("Retrying query with command {} (previous is {})", *_retry_cmd, *cmd);
                     reconcile(cl, timeout, _retry_cmd);
                 }
