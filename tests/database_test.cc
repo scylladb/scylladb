@@ -56,23 +56,24 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
                 pranges.emplace_back(dht::partition_range::make_singular(dht::global_partitioner().decorate_key(*s, std::move(pkey))));
             }
 
+            auto max_size = std::numeric_limits<size_t>::max();
             {
                 auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(), 3);
-                auto result = db.query(s, cmd, query::result_request::only_result, pranges, nullptr).get0();
+                auto result = db.query(s, cmd, query::result_request::only_result, pranges, nullptr, max_size).get0();
                 assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(3);
             }
 
             {
                 auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(),
                         query::max_rows, gc_clock::now(), std::experimental::nullopt, 5);
-                auto result = db.query(s, cmd, query::result_request::only_result, pranges, nullptr).get0();
+                auto result = db.query(s, cmd, query::result_request::only_result, pranges, nullptr, max_size).get0();
                 assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(5);
             }
 
             {
                 auto cmd = query::read_command(s->id(), s->version(), partition_slice_builder(*s).build(),
                         query::max_rows, gc_clock::now(), std::experimental::nullopt, 3);
-                auto result = db.query(s, cmd, query::result_request::only_result, pranges, nullptr).get0();
+                auto result = db.query(s, cmd, query::result_request::only_result, pranges, nullptr, max_size).get0();
                 assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(3);
             }
         });

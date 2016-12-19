@@ -2489,10 +2489,10 @@ struct query_state {
 future<lw_shared_ptr<query::result>>
 column_family::query(schema_ptr s, const query::read_command& cmd, query::result_request request,
                      const dht::partition_range_vector& partition_ranges,
-                     tracing::trace_state_ptr trace_state, query::result_memory_limiter& memory_limiter) {
+                     tracing::trace_state_ptr trace_state, query::result_memory_limiter& memory_limiter,
+                     uint64_t max_size) {
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
-    auto max_size = query::result_memory_limiter::maximum_result_size;
     auto f = request == query::result_request::only_digest
              ? memory_limiter.new_digest_read(max_size) : memory_limiter.new_data_read(max_size);
     return f.then([this, lc, s = std::move(s), &cmd, request, &partition_ranges, trace_state = std::move(trace_state)] (query::result_memory_accounter accounter) mutable {
@@ -2525,9 +2525,10 @@ column_family::as_mutation_source(tracing::trace_state_ptr trace_state) const {
 }
 
 future<lw_shared_ptr<query::result>>
-database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state) {
+database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state,
+                uint64_t max_result_size) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return cf.query(std::move(s), cmd, request, ranges, std::move(trace_state), get_result_memory_limiter()).then_wrapped([this, s = _stats] (auto f) {
+    return cf.query(std::move(s), cmd, request, ranges, std::move(trace_state), get_result_memory_limiter(), max_result_size).then_wrapped([this, s = _stats] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
         } else {
