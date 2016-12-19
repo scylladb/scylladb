@@ -58,7 +58,7 @@ public:
 
 private:
     intrusive_set_external_comparator_member_hook _header;
-    value_traits _value_traits;
+    static const value_traits _value_traits;
 
     typedef typename bi::value_traits_pointers<value_traits>::const_value_traits_ptr const_value_traits_ptr;
     typedef typename bi::detail::identity<value_type> key_of_value;
@@ -82,7 +82,7 @@ private:
     }
 public:
     intrusive_set_external_comparator() { algo::init_header(_header.this_ptr()); }
-    intrusive_set_external_comparator(intrusive_set_external_comparator&& o) : _value_traits(std::move(o._value_traits)) {
+    intrusive_set_external_comparator(intrusive_set_external_comparator&& o) {
         algo::swap_tree(_header.this_ptr(), node_ptr(o._header.this_ptr()));
     }
     iterator begin() { return iterator(algo::begin_node(_header.this_ptr()), priv_value_traits_ptr()); }
@@ -197,3 +197,7 @@ public:
                           : iterator(ret.first, priv_value_traits_ptr());
     }
 };
+
+template<typename Elem,
+         intrusive_set_external_comparator_member_hook Elem::* PtrToMember>
+const typename intrusive_set_external_comparator<Elem, PtrToMember>::value_traits intrusive_set_external_comparator<Elem, PtrToMember>::_value_traits;
