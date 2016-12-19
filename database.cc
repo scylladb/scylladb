@@ -2493,7 +2493,7 @@ column_family::query(schema_ptr s, const query::read_command& cmd, query::result
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
     auto f = request == query::result_request::only_digest
-             ? make_ready_future<query::result_memory_accounter>() : memory_limiter.new_read();
+             ? make_ready_future<query::result_memory_accounter>() : memory_limiter.new_data_read(query::result_memory_limiter::maximum_result_size);
     return f.then([this, lc, s = std::move(s), &cmd, request, &partition_ranges, trace_state = std::move(trace_state)] (query::result_memory_accounter accounter) mutable {
         auto qs_ptr = std::make_unique<query_state>(std::move(s), cmd, request, partition_ranges, std::move(accounter));
         auto& qs = *qs_ptr;

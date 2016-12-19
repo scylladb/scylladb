@@ -3664,7 +3664,8 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
     if (pr.is_singular()) {
         unsigned shard = _db.local().shard_of(pr.start()->value().token());
         return _db.invoke_on(shard, [cmd, &pr, gs=global_schema_ptr(s), gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
-          return db.get_result_memory_limiter().new_read().then([&] (query::result_memory_accounter ma) {
+          auto max_size = query::result_memory_limiter::maximum_result_size;
+          return db.get_result_memory_limiter().new_mutation_read(max_size).then([&] (query::result_memory_accounter ma) {
             return db.query_mutations(gs, *cmd, pr, std::move(ma), gt).then([] (reconcilable_result&& result) {
                 return make_foreign(make_lw_shared(std::move(result)));
             });
@@ -3738,7 +3739,8 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
                     dht::ring_position_range_vector_sharder& rprs,
                     global_schema_ptr& gs,
                     tracing::global_trace_state_ptr& gt) {
-      return _db.local().get_result_memory_limiter().new_read().then([&, s] (query::result_memory_accounter ma) {
+      auto max_size = query::result_memory_limiter::maximum_result_size;
+      return _db.local().get_result_memory_limiter().new_mutation_read(max_size).then([&, s] (query::result_memory_accounter ma) {
         mrm.memory() = std::move(ma);
         return repeat_until_value([&, s] () -> future<stdx::optional<reconcilable_result>> {
             // We don't want to query a sparsely populated table sequentially, because the latency
