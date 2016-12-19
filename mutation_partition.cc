@@ -1819,7 +1819,7 @@ public:
 
     stop_iteration consume_end_of_partition() {
         auto live_rows_in_partition = _mutation_consumer->consume_end_of_stream();
-        if (live_rows_in_partition > 0 && !_stop) {
+        if (_short_read_allowed && live_rows_in_partition > 0 && !_stop) {
             _stop = _rb.memory_accounter().check();
         }
         if (_stop) {
@@ -1916,7 +1916,7 @@ public:
             // well. Next page fetch will ask for the next partition and if we
             // don't do that we could end up with an unbounded number of
             // partitions with only a static row.
-            _stop = _stop || _memory_accounter.check();
+            _stop = _stop || (_memory_accounter.check() && stop_iteration(_short_read_allowed));
         }
         _total_live_rows += _live_rows;
         _result.emplace_back(partition { _live_rows, _mutation_consumer->consume_end_of_stream() });
