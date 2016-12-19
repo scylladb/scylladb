@@ -303,10 +303,11 @@ def handle_visitors_state(info, hout, clases = []):
     name = "__".join(clases) if clases else cls["name"]
     frame = "empty_frame" if "final" in cls else "frame"
     fprintln(hout, Template("""
+template<typename Output>
 struct state_of_$name {
-    $frame f;""").substitute({'name': name, 'frame': frame }))
+    $frame<Output> f;""").substitute({'name': name, 'frame': frame }))
     if clases:
-        local_state = "state_of_" + "__".join(clases[:-1])
+        local_state = "state_of_" + "__".join(clases[:-1]) + '<Output>'
         fprintln(hout, Template("    $name _parent;").substitute({'name':  local_state}))
         if "final" in cls:
             fprintln(hout, Template("    state_of_$name($state parent) : _parent(parent) {}").substitute({'name':  name, 'state' : local_state}))
@@ -327,18 +328,19 @@ def add_vector_node(hout, cls, members, base_state, current_node, ind):
     current = members[ind]
     typ = current["type"][1]
     fprintln(hout, Template("""
+template<typename Output>
 struct $node_name {
-    bytes_ostream& _out;
-    state_of_$base_state _state;
-    place_holder _size;
+    Outout& _out;
+    state_of_$base_state<Output> _state;
+    place_holder<Output> _size;
     size_type _count = 0;
-    $node_name(bytes_ostream& out, state_of_$base_state state)
+    $node_name(Output& out, state_of_$base_state<Output> state)
         : _out(out)
         , _state(state)
         , _size(start_place_holder(out))
     {
     }
-    $next_state end_$name() {
+    $next_state<Output> end_$name() {
         _size.set(_out, _count);
     }""").substitute({'node_name': '', 'name': current["name"] }))
 
@@ -363,7 +365,7 @@ def optional_add_methods(typ):
     }""")).substitute({'type' : added_type})
     if is_local_type(typ):
         res = res + Template(reindent(4, """
-    writer_of_$type write() {
+    writer_of_$type<Output> write() {
         serialize(_out, true);
         return {_out};
     }""")).substitute({'type' : param_type(typ)})
@@ -381,7 +383,7 @@ def vector_add_method(current, base_state):
   }""").substitute({'type': param_type(typ[1][0]), 'name': current["name"]})
     else:
         res = res + Template("""
-  writer_of_$type add() {
+  writer_of_$type<Output> add() {
         _count++;
         return {_out};
   }""").substitute({'type': flat_type(typ[1][0]), 'name': current["name"]})
@@ -391,7 +393,7 @@ def vector_add_method(current, base_state):
         _count++;
   }""").substitute({'type': param_view_type(typ[1][0])})
     return res + Template("""
-  after_${basestate}__$name end_$name() && {
+  after_${basestate}__$name<Output> end_$name() && {
         _size.set(_out, _count);
         return { _out, std::move(_state) };
   }
@@ -418,7 +420,7 @@ def add_param_writer_basic_type(name, base_state, typ, var_type = "", var_index 
         typ = 'const ' + typ + '&'
 
     return Template(reindent(4, """
-        after_${base_state}__$name write_$name$var_type($typ t) && {
+        after_${base_state}__$name<Output> write_$name$var_type($typ t) && {
             $set_varient_index
             serialize(_out, t);
             $set_command
@@ -431,7 +433,7 @@ def add_param_writer_object(name, base_state, typ, var_type = "", var_index = No
         var_index = "uint32_t(" + str(var_index) +")"
     set_varient_index = "serialize(_out, " + var_index +");\n" if var_index is not None else ""
     ret = Template(reindent(4,"""
-        ${base_state}__${name}$var_type1 start_${name}$var_type() && {
+        ${base_state}__${name}$var_type1<Output> start_${name}$var_type() && {
             $set_varient_index
             return { _out, std::move(_state) };
         }
@@ -443,9 +445,9 @@ def add_param_writer_object(name, base_state, typ, var_type = "", var_index = No
         return_command = "{ _out, std::move(_state._parent) }" if var_type is not "" and not root_node else "{ _out, std::move(_state) }"
         ret += Template(reindent(4, """
             template<typename Serializer>
-            after_${base_state}__${name} ${name}$var_type(Serializer&& f) && {
+            after_${base_state}__${name}<Output> ${name}$var_type(Serializer&& f) && {
                 $set_varient_index
-                f(writer_of_$typ(_out));
+                f(writer_of_$typ<Output>(_out));
                 $set_command
                 return $return_command;
             }""")).substitute(locals())
@@ -458,7 +460,7 @@ def add_param_write(current, base_state, vector = False, root_node = False):
         res = res + add_param_writer_basic_type(current["name"], base_state, typ)
     elif is_optional(typ):
             res = res +  Template(reindent(4, """
-    after_${basestate}__$name skip_$name() && {
+    after_${basestate}__$name<Output> skip_$name() && {
         serialize(_out, false);
         return { _out, std::move(_state) };
     }""")).substitute({'type': param_type(typ), 'name': current["name"], 'basestate' : base_state})
@@ -472,11 +474,11 @@ def add_param_write(current, base_state, vector = False, root_node = False):
         set_size = "_size.set(_out, 0);" if vector else "serialize(_out, size_type(0));"
 
         res = res +  Template("""
-    ${basestate}__$name start_$name() && {
+    ${basestate}__$name<Output> start_$name() && {
         return { _out, std::move(_state) };
     }
 
-    after_${basestate}__$name skip_$name() && {
+    after_${basestate}__$name<Output> skip_$name() && {
         $set
         return { _out, std::move(_state) };
     }
@@ -506,7 +508,7 @@ def get_return_struct(variant_node, clases):
 
 def add_variant_end_method(base_state, name, clases):
 
-    return_struct = "after_" + base_state
+    return_struct = "after_" + base_state + '<Output>'
     return Template("""
     $return_struct  end_$name() && {
         _state.f.end(_out);
@@ -520,7 +522,7 @@ def add_end_method(parents, name, variant_node = False, return_value = True):
         return add_variant_end_method(parents, name, return_value)
     base_state = parents + "__" + name
     if return_value:
-        return_struct =  "after_" + base_state
+        return_struct =  "after_" + base_state + '<Output>'
         return Template("""
     $return_struct  end_$name() && {
         _state.f.end(_out);
@@ -534,7 +536,7 @@ def add_end_method(parents, name, variant_node = False, return_value = True):
 """).substitute({'name': name, 'basestate':base_state})
 
 def add_vector_placeholder():
-    return """    place_holder _size;
+    return """    place_holder<Output> _size;
     size_type _count = 0;"""
 
 def add_node(hout, name, member, base_state, prefix, parents, fun, is_type_vector = False, is_type_final = False):
@@ -554,21 +556,22 @@ def add_node(hout, name, member, base_state, prefix, parents, fun, is_type_vecto
         else:
             state_init = ""
     if prefix == "writer_of_":
-        constructor = Template("""$name(bytes_ostream& out)
+        constructor = Template("""$name(Output& out)
             : _out(out)
             , _state{start_frame(out)}${vector_init}
             {}""").substitute({'name': struct_name, 'vector_init' : vector_init})
     elif state_init != "":
-        constructor = Template("""$name(bytes_ostream& out, state_of_$state state)
+        constructor = Template("""$name(Output& out, state_of_$state<Output> state)
             : _out(out)
             , $state_init${vector_init}
             {}""").substitute({'name': struct_name, 'vector_init' : vector_init, 'state' : parents, 'state_init' : state_init})
     else:
         constructor = ""
     fprintln(hout, Template("""
+template<typename Output>
 struct $name {
-    bytes_ostream& _out;
-    state_of_$state _state;
+    Output& _out;
+    state_of_$state<Output> _state;
     ${vector_placeholder}
     ${constructor}
     $fun
@@ -588,8 +591,9 @@ def add_optional_node(hout, typ):
         return
     optional_nodes.add(full_type)
     fprintln(hout, Template(reindent(0,"""
+template<typename Output>
 struct writer_of_$type {
-    bytes_ostream& _out;
+    Output& _out;
     $add_method
 };""")).substitute({'type': full_type, 'add_method': optional_add_methods(typ[1][0])}))
 
@@ -604,7 +608,7 @@ def add_variant_nodes(hout, member, param, base_state, parents, classes):
             new_member = {"type": typ, "name" : "variant"}
             return_struct = "after_" + par
             end_method = Template("""
-    $return_struct  end_variant() && {
+    $return_struct<Output>  end_variant() && {
         _state.f.end(_out);
         return { _out, std::move(_state._parent) };
     }

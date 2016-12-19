@@ -29,6 +29,7 @@
 #include "streamed_mutation.hh"
 
 namespace ser {
+template<typename Output>
 class writer_of_mutation_partition;
 }
 
@@ -47,9 +48,9 @@ public:
     mutation_partition_serializer(const schema&, const mutation_partition&);
 public:
     void write(bytes_ostream&) const;
-    void write(ser::writer_of_mutation_partition&&) const;
+    void write(ser::writer_of_mutation_partition<bytes_ostream>&&) const;
 };
 
 void serialize_mutation_fragments(const schema& s, tombstone partition_tombstone,
     stdx::optional<static_row> sr, range_tombstone_list range_tombstones,
-    std::deque<clustering_row> clustering_rows, ser::writer_of_mutation_partition&&);
+    std::deque<clustering_row> clustering_rows, ser::writer_of_mutation_partition<bytes_ostream>&&);

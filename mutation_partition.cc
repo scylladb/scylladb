@@ -576,7 +576,7 @@ void mutation_partition::for_each_row(const schema& schema, const query::cluster
 template<typename RowWriter>
 void write_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell_view c) {
     assert(c.is_live());
-    ser::writer_of_qr_cell wr = w.add().write();
+    auto wr = w.add().write();
     auto after_timestamp = [&, wr = std::move(wr)] () mutable {
         if (slice.options.contains<query::partition_slice::option::send_timestamp>()) {
             return std::move(wr).write_timestamp(c.timestamp());
@@ -1669,10 +1669,10 @@ class mutation_querier {
     const schema& _schema;
     query::result_memory_accounter& _memory_accounter;
     query::result::partition_writer& _pw;
-    ser::qr_partition__static_row__cells _static_cells_wr;
+    ser::qr_partition__static_row__cells<bytes_ostream> _static_cells_wr;
     bool _live_data_in_static_row{};
     uint32_t _live_clustering_rows = 0;
-    stdx::optional<ser::qr_partition__rows> _rows_wr;
+    stdx::optional<ser::qr_partition__rows<bytes_ostream>> _rows_wr;
 private:
     void query_static_row(const row& r, tombstone current_tombstone);
     void prepare_writers();

@@ -40,13 +40,13 @@ namespace query {
 
 class result::partition_writer {
     result_request _request;
-    ser::after_qr_partition__key _w;
+    ser::after_qr_partition__key<bytes_ostream> _w;
     const partition_slice& _slice;
     // We are tasked with keeping track of the range
     // as well, since we are the primary "context"
     // when iterating "inside" a partition
     const clustering_row_ranges& _ranges;
-    ser::query_result__partitions& _pw;
+    ser::query_result__partitions<bytes_ostream>& _pw;
     ser::vector_position _pos;
     bool _static_row_added = false;
     md5_hasher& _digest;
@@ -59,9 +59,9 @@ public:
         result_request request,
         const partition_slice& slice,
         const clustering_row_ranges& ranges,
-        ser::query_result__partitions& pw,
+        ser::query_result__partitions<bytes_ostream>& pw,
         ser::vector_position pos,
-        ser::after_qr_partition__key w,
+        ser::after_qr_partition__key<bytes_ostream> w,
         md5_hasher& digest,
         uint32_t& row_count,
         uint32_t& partition_count,
@@ -87,7 +87,7 @@ public:
         return _request != result_request::only_digest;
     }
 
-    ser::after_qr_partition__key start() {
+    ser::after_qr_partition__key<bytes_ostream> start() {
         return std::move(_w);
     }
 
@@ -124,7 +124,7 @@ class result::builder {
     bytes_ostream _out;
     md5_hasher _digest;
     const partition_slice& _slice;
-    ser::query_result__partitions _w;
+    ser::query_result__partitions<bytes_ostream> _w;
     result_request _request;
     uint32_t _row_count = 0;
     uint32_t _partition_count = 0;
@@ -134,7 +134,7 @@ class result::builder {
 public:
     builder(const partition_slice& slice, result_request request, result_memory_accounter memory_accounter)
         : _slice(slice)
-        , _w(ser::writer_of_query_result(_out).start_partitions())
+        , _w(ser::writer_of_query_result<bytes_ostream>(_out).start_partitions())
         , _request(request)
         , _memory_accounter(std::move(memory_accounter))
     { }
@@ -182,7 +182,7 @@ public:
             return result(std::move(_out), _short_read, _row_count, _partition_count, std::move(_memory_accounter).done());
         case result_request::only_digest: {
             bytes_ostream buf;
-            ser::writer_of_query_result(buf).start_partitions().end_partitions().end_query_result();
+            ser::writer_of_query_result<bytes_ostream>(buf).start_partitions().end_partitions().end_query_result();
             return result(std::move(buf), result_digest(_digest.finalize_array()), _last_modified, _short_read);
         }
         case result_request::result_and_digest:

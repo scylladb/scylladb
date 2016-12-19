@@ -191,12 +191,12 @@ void result::calculate_counts(const query::partition_slice& slice) {
 result::result()
     : result([] {
         bytes_ostream out;
-        ser::writer_of_query_result(out).skip_partitions().end_query_result();
+        ser::writer_of_query_result<bytes_ostream>(out).skip_partitions().end_query_result();
         return out;
     }(), short_read::no, 0, 0)
 { }
 
-static void write_partial_partition(ser::writer_of_qr_partition&& pw, const ser::qr_partition_view& pv, uint32_t rows_to_include) {
+static void write_partial_partition(ser::writer_of_qr_partition<bytes_ostream>&& pw, const ser::qr_partition_view& pv, uint32_t rows_to_include) {
     auto key = pv.key();
     auto static_cells_wr = (key ? std::move(pw).write_key(*key) : std::move(pw).skip_key())
             .start_static_row()
@@ -223,7 +223,7 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
     }
 
     bytes_ostream w;
-    auto partitions = ser::writer_of_query_result(w).start_partitions();
+    auto partitions = ser::writer_of_query_result<bytes_ostream>(w).start_partitions();
     uint32_t row_count = 0;
     short_read is_short_read;
     uint32_t partition_count = 0;

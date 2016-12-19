@@ -131,7 +131,7 @@ BOOST_AUTO_TEST_CASE(test_simple_compound)
     BOOST_REQUIRE_EQUAL(buf1.size(), 12);
 
     bytes_ostream buf2;
-    ser::writer_of_writable_simple_compound wowsc(buf2);
+    ser::writer_of_writable_simple_compound<bytes_ostream> wowsc(buf2);
     std::move(wowsc).write_foo(sc.foo).write_bar(sc.bar).end_writable_simple_compound();
     BOOST_REQUIRE_EQUAL(buf1.linearize(), buf2.linearize());
 
@@ -170,7 +170,7 @@ BOOST_AUTO_TEST_CASE(test_vector)
     BOOST_REQUIRE_EQUAL(buf1.size(), 136);
 
     bytes_ostream buf2;
-    ser::writer_of_writable_vectors_of_compounds wowvoc(buf2);
+    ser::writer_of_writable_vectors_of_compounds<bytes_ostream> wowvoc(buf2);
     auto first_writer = std::move(wowvoc).start_first();
     for (auto& c : vec1) {
         first_writer.add().write_foo(c.foo).write_bar(c.bar).end_writable_simple_compound();
@@ -221,7 +221,7 @@ BOOST_AUTO_TEST_CASE(test_variant)
     simple_compound sc2 = { 0x12344321, 0x56788765 };
 
     bytes_ostream buf;
-    ser::writer_of_writable_variants wowv(buf);
+    ser::writer_of_writable_variants<bytes_ostream> wowv(buf);
     auto second_writer = std::move(wowv).write_id(17).write_first_simple_compound(sc).start_second_writable_vector().start_vector();
     for (auto&& v : vec) {
         second_writer.add_vector(v);
