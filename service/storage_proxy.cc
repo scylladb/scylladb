@@ -3586,7 +3586,7 @@ public:
         _partitions.emplace(key, std::move(partitions));
         _short_read = partial_result->is_short_read();
         if (_memory_accounter.update_and_check(partial_result->memory_usage()) && _short_read_allowed) {
-            _short_read = query::short_read::yes;
+            _short_read = _short_read || query::short_read(_row_count > 0);
         }
     }
     reconcilable_result get() && {
