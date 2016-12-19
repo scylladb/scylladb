@@ -32,6 +32,9 @@
 
 namespace query {
 
+constexpr size_t result_memory_limiter::minimum_result_size;
+constexpr size_t result_memory_limiter::maximum_result_size;
+
 thread_local semaphore result_memory_tracker::_dummy { 0 };
 
 const dht::partition_range full_partition_range = dht::partition_range::make_open_ended_both_sides();
