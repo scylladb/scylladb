@@ -78,6 +78,11 @@ public:
     // mismatches.
     future<result_memory_accounter> new_data_read(size_t max_result_size);
 
+    // Creates a memory accounter for digest reads. Such accounter doesn't
+    // contribute to the shard memory usage, but still stops producing the
+    // result after individual limit has been reached.
+    future<result_memory_accounter> new_digest_read(size_t max_result_size);
+
     // Checks whether the result can grow any more, takes into account only
     // the per shard limit.
     stop_iteration check() const {
@@ -135,6 +140,15 @@ private:
     explicit result_memory_accounter(data_query_tag, result_memory_limiter& limiter, size_t max_size) noexcept
         : _limiter(&limiter)
         , _blocked_bytes(result_memory_limiter::minimum_result_size)
+        , _maximum_result_size(max_size)
+    { }
+
+    // Digest query accounter. Uses provided individual result size limit and
+    // will *not* stop even though shard memory pressure grows too high. This
+    // accounter does not contribute to the shard memory limits.
+    struct digest_query_tag { };
+    explicit result_memory_accounter(digest_query_tag, result_memory_limiter&, size_t max_size) noexcept
+        : _blocked_bytes(0)
         , _maximum_result_size(max_size)
     { }
 
@@ -226,6 +240,10 @@ inline future<result_memory_accounter> result_memory_limiter::new_data_read(size
     return _memory_limiter.wait(minimum_result_size).then([this, max_size] {
         return result_memory_accounter(result_memory_accounter::data_query_tag(), *this, max_size);
     });
+}
+
+inline future<result_memory_accounter> result_memory_limiter::new_digest_read(size_t max_size) {
+    return make_ready_future<result_memory_accounter>(result_memory_accounter(result_memory_accounter::digest_query_tag(), *this, max_size));
 }
 
 enum class result_request {
