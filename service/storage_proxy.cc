@@ -2074,7 +2074,7 @@ public:
         versions.reserve(_data_results.front().result->partitions().size());
 
         for (auto& r : _data_results) {
-            _is_short_read = r.result->is_short_read();
+            _is_short_read = _is_short_read || r.result->is_short_read();
             r.reached_end = !r.result->is_short_read() && r.result->row_count() < cmd.row_limit
                             && (cmd.partition_limit == query::max_partitions
                                 || boost::range::count_if(r.result->partitions(), [] (const partition& p) {
