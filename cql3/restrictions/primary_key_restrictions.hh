@@ -67,7 +67,7 @@ template<typename ValueType>
 struct range_type_for;
 
 template<>
-struct range_type_for<partition_key> : public std::remove_reference<query::partition_range> {};
+struct range_type_for<partition_key> : public std::remove_reference<dht::partition_range> {};
 template<>
 struct range_type_for<clustering_key_prefix> : public std::remove_reference<query::clustering_range> {};
 

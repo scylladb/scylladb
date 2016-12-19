@@ -53,22 +53,22 @@ logging::logger logger("range_streamer");
 
 using inet_address = gms::inet_address;
 
-static std::unordered_map<nonwrapping_range<token>, std::unordered_set<inet_address>>
-unordered_multimap_to_unordered_map(const std::unordered_multimap<nonwrapping_range<token>, inet_address>& multimap) {
-    std::unordered_map<nonwrapping_range<token>, std::unordered_set<inet_address>> ret;
+static std::unordered_map<dht::token_range, std::unordered_set<inet_address>>
+unordered_multimap_to_unordered_map(const std::unordered_multimap<dht::token_range, inet_address>& multimap) {
+    std::unordered_map<dht::token_range, std::unordered_set<inet_address>> ret;
     for (auto x : multimap) {
         ret[x.first].emplace(x.second);
     }
     return ret;
 }
 
-std::unordered_multimap<inet_address, nonwrapping_range<token>>
-range_streamer::get_range_fetch_map(const std::unordered_multimap<nonwrapping_range<token>, inet_address>& ranges_with_sources,
+std::unordered_multimap<inet_address, dht::token_range>
+range_streamer::get_range_fetch_map(const std::unordered_multimap<dht::token_range, inet_address>& ranges_with_sources,
                                     const std::unordered_set<std::unique_ptr<i_source_filter>>& source_filters,
                                     const sstring& keyspace) {
-    std::unordered_multimap<inet_address, nonwrapping_range<token>> range_fetch_map_map;
+    std::unordered_multimap<inet_address, dht::token_range> range_fetch_map_map;
     for (auto x : unordered_multimap_to_unordered_map(ranges_with_sources)) {
-        const nonwrapping_range<token>& range_ = x.first;
+        const dht::token_range& range_ = x.first;
         const std::unordered_set<inet_address>& addresses = x.second;
         bool found_source = false;
         for (auto address : addresses) {
@@ -103,8 +103,8 @@ range_streamer::get_range_fetch_map(const std::unordered_multimap<nonwrapping_ra
     return range_fetch_map_map;
 }
 
-std::unordered_multimap<nonwrapping_range<token>, inet_address>
-range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, std::vector<nonwrapping_range<token>> desired_ranges) {
+std::unordered_multimap<dht::token_range, inet_address>
+range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dht::token_range_vector desired_ranges) {
     logger.debug("{} ks={}", __func__, keyspace_name);
 
     auto& ks = _db.local().find_keyspace(keyspace_name);
@@ -113,7 +113,7 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, st
     auto tm = _metadata.clone_only_token_map();
     auto range_addresses = unordered_multimap_to_unordered_map(strat.get_range_addresses(tm));
 
-    std::unordered_multimap<nonwrapping_range<token>, inet_address> range_sources;
+    std::unordered_multimap<dht::token_range, inet_address> range_sources;
     auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
     for (auto& desired_range : desired_ranges) {
         auto found = false;
@@ -137,8 +137,8 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, st
     return range_sources;
 }
 
-std::unordered_multimap<nonwrapping_range<token>, inet_address>
-range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, std::vector<nonwrapping_range<token>> desired_ranges) {
+std::unordered_multimap<dht::token_range, inet_address>
+range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, dht::token_range_vector desired_ranges) {
     logger.debug("{} ks={}", __func__, keyspace_name);
     assert (_tokens.empty() == false);
 
@@ -154,7 +154,7 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
     auto pending_range_addresses  = unordered_multimap_to_unordered_map(strat.get_range_addresses(metadata_clone));
 
     //Collects the source that will have its range moved to the new node
-    std::unordered_multimap<nonwrapping_range<token>, inet_address> range_sources;
+    std::unordered_multimap<dht::token_range, inet_address> range_sources;
 
     for (auto& desired_range : desired_ranges) {
         for (auto& x : range_addresses) {
@@ -211,7 +211,7 @@ bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name)
            && _metadata.get_all_endpoints().size() != strat.get_replication_factor();
 }
 
-void range_streamer::add_ranges(const sstring& keyspace_name, std::vector<nonwrapping_range<token>> ranges) {
+void range_streamer::add_ranges(const sstring& keyspace_name, dht::token_range_vector ranges) {
     auto ranges_for_keyspace = use_strict_sources_for_ranges(keyspace_name)
         ? get_all_ranges_with_strict_sources_for(keyspace_name, ranges)
         : get_all_ranges_with_sources_for(keyspace_name, ranges);
@@ -222,7 +222,7 @@ void range_streamer::add_ranges(const sstring& keyspace_name, std::vector<nonwra
         }
     }
 
-    std::unordered_map<inet_address, std::vector<nonwrapping_range<token>>> range_fetch_map;
+    std::unordered_map<inet_address, dht::token_range_vector> range_fetch_map;
     for (auto& x : get_range_fetch_map(ranges_for_keyspace, _source_filters, keyspace_name)) {
         range_fetch_map[x.first].emplace_back(x.second);
     }
@@ -252,8 +252,8 @@ future<streaming::stream_state> range_streamer::fetch_async() {
     return _stream_plan.execute();
 }
 
-std::unordered_multimap<inet_address, nonwrapping_range<token>>
-range_streamer::get_work_map(const std::unordered_multimap<nonwrapping_range<token>, inet_address>& ranges_with_source_target,
+std::unordered_multimap<inet_address, dht::token_range>
+range_streamer::get_work_map(const std::unordered_multimap<dht::token_range, inet_address>& ranges_with_source_target,
              const sstring& keyspace) {
     auto filter = std::make_unique<dht::range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector());
     std::unordered_set<std::unique_ptr<i_source_filter>> source_filters;

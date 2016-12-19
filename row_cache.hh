@@ -279,7 +279,7 @@ private:
     logalloc::allocating_section _populate_section;
     logalloc::allocating_section _read_section;
     mutation_reader make_scanning_reader(schema_ptr,
-                                         const query::partition_range&,
+                                         const dht::partition_range&,
                                          const io_priority_class& pc,
                                          const query::partition_slice& slice,
                                          tracing::trace_state_ptr trace_state);
@@ -288,7 +288,7 @@ private:
     void on_uncached_wide_partition();
     void upgrade_entry(cache_entry&);
     void invalidate_locked(const dht::decorated_key&);
-    void invalidate_unwrapped(const query::partition_range&);
+    void invalidate_unwrapped(const dht::partition_range&);
     void clear_now() noexcept;
     static thread_local seastar::thread_scheduling_group _update_thread_scheduling_group;
 
@@ -330,7 +330,7 @@ public:
     // as long as the reader is used.
     // The range must not wrap around.
     mutation_reader make_reader(schema_ptr,
-                                const query::partition_range& = query::full_partition_range,
+                                const dht::partition_range& = query::full_partition_range,
                                 const query::partition_slice& slice = query::full_slice,
                                 const io_priority_class& = default_priority_class(),
                                 tracing::trace_state_ptr trace_state = nullptr);
@@ -373,7 +373,7 @@ public:
     // using readers created before this method was invoked.
     //
     // The range must be kept alive until method resolves.
-    future<> invalidate(const query::partition_range&);
+    future<> invalidate(const dht::partition_range&);
 
     auto num_entries() const {
         return _partitions.size();

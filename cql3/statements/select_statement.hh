@@ -123,7 +123,7 @@ public:
             service::query_state& state, const query_options& options) override;
 
     future<::shared_ptr<transport::messages::result_message>> execute(distributed<service::storage_proxy>& proxy,
-        lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, service::query_state& state,
+        lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
          const query_options& options, db_clock::time_point now);
 
     shared_ptr<transport::messages::result_message> process_results(foreign_ptr<lw_shared_ptr<query::result>> results,

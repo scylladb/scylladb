@@ -118,22 +118,22 @@ public:
         _source_filters.emplace(std::move(filter));
     }
 
-    void add_ranges(const sstring& keyspace_name, std::vector<nonwrapping_range<token>> ranges);
+    void add_ranges(const sstring& keyspace_name, dht::token_range_vector ranges);
 private:
     bool use_strict_sources_for_ranges(const sstring& keyspace_name);
     /**
      * Get a map of all ranges and their respective sources that are candidates for streaming the given ranges
      * to us. For each range, the list of sources is sorted by proximity relative to the given destAddress.
      */
-    std::unordered_multimap<nonwrapping_range<token>, inet_address>
-    get_all_ranges_with_sources_for(const sstring& keyspace_name, std::vector<nonwrapping_range<token>> desired_ranges);
+    std::unordered_multimap<dht::token_range, inet_address>
+    get_all_ranges_with_sources_for(const sstring& keyspace_name, dht::token_range_vector desired_ranges);
     /**
      * Get a map of all ranges and the source that will be cleaned up once this bootstrapped node is added for the given ranges.
      * For each range, the list should only contain a single source. This allows us to consistently migrate data without violating
      * consistency.
      */
-    std::unordered_multimap<nonwrapping_range<token>, inet_address>
-    get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, std::vector<nonwrapping_range<token>> desired_ranges);
+    std::unordered_multimap<dht::token_range, inet_address>
+    get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, dht::token_range_vector desired_ranges);
 private:
     /**
      * @param rangesWithSources The ranges we want to fetch (key) and their potential sources (value)
@@ -141,14 +141,14 @@ private:
      *                      here, we always exclude ourselves.
      * @return
      */
-    static std::unordered_multimap<inet_address, nonwrapping_range<token>>
-    get_range_fetch_map(const std::unordered_multimap<nonwrapping_range<token>, inet_address>& ranges_with_sources,
+    static std::unordered_multimap<inet_address, dht::token_range>
+    get_range_fetch_map(const std::unordered_multimap<dht::token_range, inet_address>& ranges_with_sources,
                         const std::unordered_set<std::unique_ptr<i_source_filter>>& source_filters,
                         const sstring& keyspace);
 
 public:
-    static std::unordered_multimap<inet_address, nonwrapping_range<token>>
-    get_work_map(const std::unordered_multimap<nonwrapping_range<token>, inet_address>& ranges_with_source_target,
+    static std::unordered_multimap<inet_address, dht::token_range>
+    get_work_map(const std::unordered_multimap<dht::token_range, inet_address>& ranges_with_source_target,
                  const sstring& keyspace);
 #if 0
 
@@ -166,7 +166,7 @@ private:
     std::unordered_set<token> _tokens;
     inet_address _address;
     sstring _description;
-    std::unordered_multimap<sstring, std::unordered_map<inet_address, std::vector<nonwrapping_range<token>>>> _to_fetch;
+    std::unordered_multimap<sstring, std::unordered_map<inet_address, dht::token_range_vector>> _to_fetch;
     std::unordered_set<std::unique_ptr<i_source_filter>> _source_filters;
     stream_plan _stream_plan;
 };

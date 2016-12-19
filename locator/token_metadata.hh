@@ -272,7 +272,7 @@ public:
     }
 
     boost::iterator_range<tokens_iterator> ring_range(
-        const std::experimental::optional<query::partition_range::bound>& start, bool include_min = false) const;
+        const std::experimental::optional<dht::partition_range::bound>& start, bool include_min = false) const;
 
     topology& get_topology() {
         return _topology;
@@ -609,9 +609,9 @@ public:
     }
 #endif
 public:
-    std::vector<nonwrapping_range<token>> get_primary_ranges_for(std::unordered_set<token> tokens);
+    dht::token_range_vector get_primary_ranges_for(std::unordered_set<token> tokens);
 
-    std::vector<nonwrapping_range<token>> get_primary_ranges_for(token right);
+    dht::token_range_vector get_primary_ranges_for(token right);
     static boost::icl::interval<token>::interval_type range_to_interval(range<dht::token> r);
     static range<dht::token> interval_to_range(boost::icl::interval<token>::interval_type i);
 

@@ -1643,7 +1643,7 @@ populate_statistics_offsets(statistics& s) {
 static
 sharding_metadata
 create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key, const dht::decorated_key& last_key) {
-    auto range = query::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
+    auto range = dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
     auto sharder = dht::ring_position_range_sharder(std::move(range));
     auto sm = sharding_metadata();
     auto rpras = sharder.next(*schema);
@@ -2545,7 +2545,7 @@ void sstable::mark_sstable_for_deletion(const schema_ptr& schema, sstring dir, i
  * Returns a pair of positions [p1, p2) in the summary file corresponding to entries
  * covered by the specified range, or a disengaged optional if no such pair exists.
  */
-stdx::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_range(const nonwrapping_range<dht::token>& range) {
+stdx::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_range(const dht::token_range& range) {
     auto entries_size = _summary.entries.size();
     auto search = [this](bool before, const dht::token& token) {
         auto kind = before ? key::kind::before_all_keys : key::kind::after_all_keys;
@@ -2575,7 +2575,7 @@ stdx::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_ra
     return stdx::nullopt;
 }
 
-std::vector<dht::decorated_key> sstable::get_key_samples(const schema& s, const nonwrapping_range<dht::token>& range) {
+std::vector<dht::decorated_key> sstable::get_key_samples(const schema& s, const dht::token_range& range) {
     auto index_range = get_sample_indexes_for_range(range);
     std::vector<dht::decorated_key> res;
     if (index_range) {
@@ -2587,7 +2587,7 @@ std::vector<dht::decorated_key> sstable::get_key_samples(const schema& s, const 
     return res;
 }
 
-uint64_t sstable::estimated_keys_for_range(const nonwrapping_range<dht::token>& range) {
+uint64_t sstable::estimated_keys_for_range(const dht::token_range& range) {
     auto sample_index_range = get_sample_indexes_for_range(range);
     uint64_t sample_key_count = sample_index_range ? sample_index_range->second - sample_index_range->first : 0;
     // adjust for the current sampling level
@@ -2598,23 +2598,23 @@ uint64_t sstable::estimated_keys_for_range(const nonwrapping_range<dht::token>& 
 std::vector<unsigned>
 sstable::get_shards_for_this_sstable() const {
     std::unordered_set<unsigned> shards;
-    std::vector<nonwrapping_range<dht::ring_position>> token_ranges;
+    dht::partition_range_vector token_ranges;
     const auto* sm = _scylla_metadata
             ? _scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>()
             : nullptr;
     if (!sm) {
-        token_ranges.push_back(nonwrapping_range<dht::ring_position>::make(
+        token_ranges.push_back(dht::partition_range::make(
                 dht::ring_position::starting_at(get_first_decorated_key().token()),
                 dht::ring_position::ending_at(get_last_decorated_key().token())));
     } else {
         auto disk_token_range_to_ring_position_range = [] (const disk_token_range& dtr) {
             auto t1 = dht::token(dht::token::kind::key, managed_bytes(bytes_view(dtr.left.token)));
             auto t2 = dht::token(dht::token::kind::key, managed_bytes(bytes_view(dtr.right.token)));
-            return nonwrapping_range<dht::ring_position>::make(
+            return dht::partition_range::make(
                     (dtr.left.exclusive ? dht::ring_position::ending_at : dht::ring_position::starting_at)(std::move(t1)),
                     (dtr.right.exclusive ? dht::ring_position::starting_at : dht::ring_position::ending_at)(std::move(t2)));
         };
-        token_ranges = boost::copy_range<std::vector<nonwrapping_range<dht::ring_position>>>(
+        token_ranges = boost::copy_range<dht::partition_range_vector>(
                 sm->token_ranges.elements
                 | boost::adaptors::transformed(disk_token_range_to_ring_position_range));
     }

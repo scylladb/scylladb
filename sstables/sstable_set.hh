@@ -43,7 +43,7 @@ public:
     sstable_set(sstable_set&&) noexcept;
     sstable_set& operator=(const sstable_set&);
     sstable_set& operator=(sstable_set&&) noexcept;
-    std::vector<shared_sstable> select(const query::partition_range& range) const;
+    std::vector<shared_sstable> select(const dht::partition_range& range) const;
     lw_shared_ptr<sstable_list> all() const { return _all; }
     void insert(shared_sstable sst);
     void erase(shared_sstable sst);
@@ -53,7 +53,7 @@ public:
     // selector is used.
     class incremental_selector {
         std::unique_ptr<incremental_selector_impl> _impl;
-        mutable stdx::optional<nonwrapping_range<dht::token>> _current_token_range;
+        mutable stdx::optional<dht::token_range> _current_token_range;
         mutable std::vector<shared_sstable> _current_sstables;
     public:
         ~incremental_selector();

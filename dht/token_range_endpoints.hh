@@ -29,11 +29,12 @@ struct endpoint_details {
     sstring _rack;
 };
 
-struct token_range {
+struct token_range_endpoints {
     sstring _start_token;
     sstring _end_token;
     std::vector<sstring> _endpoints;
     std::vector<sstring> _rpc_endpoints;
     std::vector<endpoint_details> _endpoint_details;
 };
+
 }

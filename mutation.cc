@@ -169,7 +169,7 @@ mutation_decorated_key_less_comparator::operator()(const mutation& m1, const mut
 }
 
 boost::iterator_range<std::vector<mutation>::const_iterator>
-slice(const std::vector<mutation>& partitions, const query::partition_range& r) {
+slice(const std::vector<mutation>& partitions, const dht::partition_range& r) {
     struct cmp {
         bool operator()(const dht::ring_position& pos, const mutation& m) const {
             return m.decorated_key().tri_compare(*m.schema(), pos) > 0;

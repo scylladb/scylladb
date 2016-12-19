@@ -183,7 +183,7 @@ void apply(mutation_opt& dst, mutation_opt&& src) {
 // range must not wrap around.
 boost::iterator_range<std::vector<mutation>::const_iterator> slice(
     const std::vector<mutation>& partitions,
-    const query::partition_range&);
+    const dht::partition_range&);
 
 future<mutation_opt> mutation_from_streamed_mutation(streamed_mutation_opt sm);
 future<mutation_opt>

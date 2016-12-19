@@ -46,7 +46,7 @@ thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
 
 static
-bool includes_token(const schema& s, const query::partition_range& r, const dht::token& tok) {
+bool includes_token(const schema& s, const dht::partition_range& r, const dht::token& tok) {
     dht::ring_position_comparator cmp(s);
 
     return !r.before(dht::ring_position(tok, dht::ring_position::token_bound::end), cmp)
@@ -68,7 +68,7 @@ BOOST_AUTO_TEST_CASE(test_range_with_positions_within_the_same_token) {
                                    partition_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("key2"))))};
 
     {
-        auto r = query::partition_range::make(
+        auto r = dht::partition_range::make(
             dht::ring_position(key1),
             dht::ring_position(key2));
 
@@ -78,7 +78,7 @@ BOOST_AUTO_TEST_CASE(test_range_with_positions_within_the_same_token) {
     }
 
     {
-        auto r = query::partition_range::make(
+        auto r = dht::partition_range::make(
             {dht::ring_position(key1), false},
             {dht::ring_position(key2), false});
 
@@ -88,7 +88,7 @@ BOOST_AUTO_TEST_CASE(test_range_with_positions_within_the_same_token) {
     }
 
     {
-        auto r = query::partition_range::make(
+        auto r = dht::partition_range::make(
             {dht::ring_position::starting_at(tok), false},
             {dht::ring_position(key2), true});
 
@@ -98,7 +98,7 @@ BOOST_AUTO_TEST_CASE(test_range_with_positions_within_the_same_token) {
     }
 
     {
-        auto r = query::partition_range::make(
+        auto r = dht::partition_range::make(
             {dht::ring_position::starting_at(tok), true},
             {dht::ring_position::ending_at(tok), true});
 

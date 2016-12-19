@@ -212,7 +212,7 @@ private:
     seastar::metrics::metric_groups _metrics;
 private:
     void uninit_messaging_service();
-    future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state);
+    future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular(lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state);
     response_id_type register_response_handler(shared_ptr<abstract_write_response_handler>&& h);
     void remove_response_handler(response_id_type id);
     void got_response(response_id_type id, gms::inet_address from);
@@ -232,23 +232,23 @@ private:
     bool submit_hint(std::unique_ptr<mutation_holder>& mh, gms::inet_address target);
     std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token);
     db::read_repair_decision new_read_repair_decision(const schema& s);
-    ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl, tracing::trace_state_ptr trace_state);
-    future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr,
+    ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, tracing::trace_state_ptr trace_state);
+    future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
                                                                            query::result_request request,
                                                                            tracing::trace_state_ptr trace_state);
-    future<query::result_digest, api::timestamp_type> query_singular_local_digest(schema_ptr, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr, tracing::trace_state_ptr trace_state);
-    future<foreign_ptr<lw_shared_ptr<query::result>>> query_partition_key_range(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range> partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state);
-    std::vector<query::partition_range> get_restricted_ranges(keyspace& ks, const schema& s, query::partition_range range);
+    future<query::result_digest, api::timestamp_type> query_singular_local_digest(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state);
+    future<foreign_ptr<lw_shared_ptr<query::result>>> query_partition_key_range(lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state);
+    dht::partition_range_vector get_restricted_ranges(keyspace& ks, const schema& s, dht::partition_range range);
     float estimate_result_rows_per_range(lw_shared_ptr<query::read_command> cmd, keyspace& ks);
     static std::vector<gms::inet_address> intersection(const std::vector<gms::inet_address>& l1, const std::vector<gms::inet_address>& l2);
     future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>> query_partition_key_range_concurrent(std::chrono::steady_clock::time_point timeout,
-            std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results, lw_shared_ptr<query::read_command> cmd, db::consistency_level cl, std::vector<query::partition_range>::iterator&& i,
-            std::vector<query::partition_range>&& ranges, int concurrency_factor, tracing::trace_state_ptr trace_state,
+            std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results, lw_shared_ptr<query::read_command> cmd, db::consistency_level cl, dht::partition_range_vector::iterator&& i,
+            dht::partition_range_vector&& ranges, int concurrency_factor, tracing::trace_state_ptr trace_state,
             uint32_t remaining_row_count, uint32_t remaining_partition_count);
 
     future<foreign_ptr<lw_shared_ptr<query::result>>> do_query(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,
-        std::vector<query::partition_range>&& partition_ranges,
+        dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl, tracing::trace_state_ptr trace_state);
     template<typename Range, typename CreateWriteHandler>
     future<std::vector<unique_response_handler>> mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler handler);
@@ -263,7 +263,7 @@ private:
     template<typename Range>
     future<> mutate_internal(Range mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state);
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_nonsingular_mutations_locally(
-            schema_ptr s, lw_shared_ptr<query::read_command> cmd, const std::vector<query::partition_range>& pr, tracing::trace_state_ptr trace_state);
+            schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector& pr, tracing::trace_state_ptr trace_state);
 
 public:
     storage_proxy(distributed<database>& db);
@@ -332,12 +332,12 @@ public:
      */
     future<foreign_ptr<lw_shared_ptr<query::result>>> query(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,
-        std::vector<query::partition_range>&& partition_ranges,
+        dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
         tracing::trace_state_ptr trace_state);
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations_locally(
-        schema_ptr, lw_shared_ptr<query::read_command> cmd, const query::partition_range&,
+        schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range&,
         tracing::trace_state_ptr trace_state = nullptr);
 
 
@@ -346,7 +346,7 @@ public:
         tracing::trace_state_ptr trace_state = nullptr);
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations_locally(
-            schema_ptr s, lw_shared_ptr<query::read_command> cmd, const std::vector<query::partition_range>& pr,
+            schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector& pr,
             tracing::trace_state_ptr trace_state = nullptr);
 
 
@@ -374,7 +374,7 @@ inline shared_ptr<storage_proxy> get_local_shared_storage_proxy() {
     return _the_storage_proxy.local_shared();
 }
 
-std::vector<query::partition_range> get_restricted_ranges(locator::token_metadata&,
-    const schema&, query::partition_range);
+dht::partition_range_vector get_restricted_ranges(locator::token_metadata&,
+    const schema&, dht::partition_range);
 
 }

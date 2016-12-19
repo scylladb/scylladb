@@ -544,14 +544,14 @@ private:
                               const std::vector<sstables::shared_sstable>& sstables_to_remove);
     void rebuild_statistics();
 private:
-    using virtual_reader_type = std::function<mutation_reader(schema_ptr, const query::partition_range&, const query::partition_slice&, const io_priority_class&, tracing::trace_state_ptr)>;
+    using virtual_reader_type = std::function<mutation_reader(schema_ptr, const dht::partition_range&, const query::partition_slice&, const io_priority_class&, tracing::trace_state_ptr)>;
     virtual_reader_type _virtual_reader;
     // Creates a mutation reader which covers sstables.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
     // The 'range' parameter must be live as long as the reader is used.
     // Mutations returned by the reader will all have given schema.
     mutation_reader make_sstable_reader(schema_ptr schema,
-                                        const query::partition_range& range,
+                                        const dht::partition_range& range,
                                         const query::partition_slice& slice,
                                         const io_priority_class& pc,
                                         tracing::trace_state_ptr trace_state) const;
@@ -590,7 +590,7 @@ public:
     // If I/O needs to be issued to read anything in the specified range, the operations
     // will be scheduled under the priority class given by pc.
     mutation_reader make_reader(schema_ptr schema,
-            const query::partition_range& range = query::full_partition_range,
+            const dht::partition_range& range = query::full_partition_range,
             const query::partition_slice& slice = query::full_slice,
             const io_priority_class& pc = default_priority_class(),
             tracing::trace_state_ptr trace_state = nullptr) const;
@@ -600,11 +600,11 @@ public:
     //    reader and a _bounded_ amount of writes which arrive later.
     //  - Does not populate the cache
     mutation_reader make_streaming_reader(schema_ptr schema,
-            const query::partition_range& range = query::full_partition_range) const;
+            const dht::partition_range& range = query::full_partition_range) const;
 
     // Requires ranges to be sorted and disjoint.
     mutation_reader make_streaming_reader(schema_ptr schema,
-            const std::vector<query::partition_range>& ranges) const;
+            const dht::partition_range_vector& ranges) const;
 
     mutation_source as_mutation_source(tracing::trace_state_ptr trace_state) const;
 
@@ -652,7 +652,7 @@ public:
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(schema_ptr,
         const query::read_command& cmd, query::result_request request,
-        const std::vector<query::partition_range>& ranges,
+        const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         query::result_memory_limiter& memory_limiter);
 
@@ -662,7 +662,7 @@ public:
     future<> stop();
     future<> flush();
     future<> flush(const db::replay_position&);
-    future<> flush_streaming_mutations(utils::UUID plan_id, std::vector<query::partition_range> ranges = std::vector<query::partition_range>{});
+    future<> flush_streaming_mutations(utils::UUID plan_id, dht::partition_range_vector ranges = dht::partition_range_vector{});
     future<> fail_streaming_mutations(utils::UUID plan_id);
     future<> clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);
@@ -756,7 +756,7 @@ public:
     lw_shared_ptr<sstable_list> get_sstables() const;
     lw_shared_ptr<sstable_list> get_sstables_including_compacted_undeleted() const;
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const;
-    std::vector<sstables::shared_sstable> select_sstables(const query::partition_range& range) const;
+    std::vector<sstables::shared_sstable> select_sstables(const dht::partition_range& range) const;
     size_t sstables_count() const;
     std::vector<uint64_t> sstable_count_per_level() const;
     int64_t get_unleveled_sstables() const;
@@ -1166,8 +1166,8 @@ public:
     unsigned shard_of(const dht::token& t);
     unsigned shard_of(const mutation& m);
     unsigned shard_of(const frozen_mutation& m);
-    future<lw_shared_ptr<query::result>> query(schema_ptr, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges, tracing::trace_state_ptr trace_state);
-    future<reconcilable_result> query_mutations(schema_ptr, const query::read_command& cmd, const query::partition_range& range,
+    future<lw_shared_ptr<query::result>> query(schema_ptr, const query::read_command& cmd, query::result_request request, const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state);
+    future<reconcilable_result> query_mutations(schema_ptr, const query::read_command& cmd, const dht::partition_range& range,
                                                 query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state);
     // Apply the mutation atomically.
     // Throws timed_out_error when timeout is reached.

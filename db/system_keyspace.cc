@@ -1127,7 +1127,7 @@ query(distributed<service::storage_proxy>& proxy, const sstring& cf_name, const 
         .with_range(std::move(row_range))
         .build();
     auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), query::max_rows);
-    return proxy.local().query(schema, cmd, {query::partition_range::make_singular(key)}, db::consistency_level::ONE, nullptr).then([schema, cmd] (auto&& result) {
+    return proxy.local().query(schema, cmd, {dht::partition_range::make_singular(key)}, db::consistency_level::ONE, nullptr).then([schema, cmd] (auto&& result) {
         return make_lw_shared(query::result_set::from_raw_result(schema, cmd->slice, *result));
     });
 }

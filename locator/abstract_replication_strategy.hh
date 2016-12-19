@@ -105,22 +105,22 @@ public:
     // The list is sorted, and its elements are non overlapping and non wrap-around.
     // It the analogue of Origin's getAddressRanges().get(endpoint).
     // This function is not efficient, and not meant for the fast path.
-    std::vector<nonwrapping_range<token>> get_ranges(inet_address ep) const;
+    dht::token_range_vector get_ranges(inet_address ep) const;
     // get_primary_ranges() returns the list of "primary ranges" for the given
     // endpoint. "Primary ranges" are the ranges that the node is responsible
     // for storing replica primarily, which means this is the first node
     // returned calculate_natural_endpoints().
     // This function is the analogue of Origin's
     // StorageService.getPrimaryRangesForEndpoint().
-    std::vector<nonwrapping_range<token>> get_primary_ranges(inet_address ep);
+    dht::token_range_vector get_primary_ranges(inet_address ep);
 
-    std::unordered_multimap<inet_address, nonwrapping_range<token>> get_address_ranges(token_metadata& tm) const;
+    std::unordered_multimap<inet_address, dht::token_range> get_address_ranges(token_metadata& tm) const;
 
-    std::unordered_multimap<nonwrapping_range<token>, inet_address> get_range_addresses(token_metadata& tm) const;
+    std::unordered_multimap<dht::token_range, inet_address> get_range_addresses(token_metadata& tm) const;
 
-    std::vector<nonwrapping_range<token>> get_pending_address_ranges(token_metadata& tm, token pending_token, inet_address pending_address);
+    dht::token_range_vector get_pending_address_ranges(token_metadata& tm, token pending_token, inet_address pending_address);
 
-    std::vector<nonwrapping_range<token>> get_pending_address_ranges(token_metadata& tm, std::unordered_set<token> pending_tokens, inet_address pending_address);
+    dht::token_range_vector get_pending_address_ranges(token_metadata& tm, std::unordered_set<token> pending_tokens, inet_address pending_address);
 };
 
 }

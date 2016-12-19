@@ -57,7 +57,7 @@ namespace streaming {
 
 extern logging::logger sslog;
 
-stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, std::vector<nonwrapping_range<dht::token>> ranges, long total_size)
+stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, dht::token_range_vector ranges, long total_size)
     : stream_task(session, cf_id)
     , _ranges(std::move(ranges))
     , _total_size(total_size) {
@@ -69,7 +69,7 @@ struct send_info {
     database& db;
     utils::UUID plan_id;
     utils::UUID cf_id;
-    std::vector<query::partition_range> prs;
+    dht::partition_range_vector prs;
     net::messaging_service::msg_addr id;
     uint32_t dst_cpu_id;
     size_t mutations_nr{0};
@@ -77,7 +77,7 @@ struct send_info {
     bool error_logged = false;
     mutation_reader reader;
     send_info(database& db_, utils::UUID plan_id_, utils::UUID cf_id_,
-              std::vector<query::partition_range> prs_, net::messaging_service::msg_addr id_,
+              dht::partition_range_vector prs_, net::messaging_service::msg_addr id_,
               uint32_t dst_cpu_id_)
         : db(db_)
         , plan_id(plan_id_)
@@ -167,13 +167,13 @@ void stream_transfer_task::start() {
     });
 }
 
-void stream_transfer_task::append_ranges(const std::vector<nonwrapping_range<dht::token>>& ranges) {
+void stream_transfer_task::append_ranges(const dht::token_range_vector& ranges) {
     _ranges.insert(_ranges.end(), ranges.begin(), ranges.end());
 }
 
 void stream_transfer_task::sort_and_merge_ranges() {
     boost::icl::interval_set<dht::token> myset;
-    std::vector<nonwrapping_range<dht::token>> ranges;
+    dht::token_range_vector ranges;
     sslog.debug("cf_id = {}, before ranges = {}, size={}", cf_id, _ranges, _ranges.size());
     _ranges.swap(ranges);
     for (auto& range : ranges) {
@@ -185,7 +185,7 @@ void stream_transfer_task::sort_and_merge_ranges() {
     ranges.shrink_to_fit();
     for (auto& i : myset) {
         auto r = locator::token_metadata::interval_to_range(i);
-        _ranges.push_back(nonwrapping_range<dht::token>(r));
+        _ranges.push_back(dht::token_range(r));
     }
     sslog.debug("cf_id = {}, after  ranges = {}, size={}", cf_id, _ranges, _ranges.size());
 }

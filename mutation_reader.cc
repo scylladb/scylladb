@@ -82,7 +82,7 @@ void combined_mutation_reader::init_mutation_reader_set(std::vector<mutation_rea
     _ptables.reserve(_all_readers.size());
 }
 
-future<> combined_mutation_reader::fast_forward_to(std::vector<mutation_reader*> to_add, std::vector<mutation_reader*> to_remove, const query::partition_range& pr)
+future<> combined_mutation_reader::fast_forward_to(std::vector<mutation_reader*> to_add, std::vector<mutation_reader*> to_remove, const dht::partition_range& pr)
 {
     _ptables.clear();
 
@@ -112,7 +112,7 @@ combined_mutation_reader::combined_mutation_reader(std::vector<mutation_reader> 
     _all_readers.assign(_next.begin(), _next.end());
 }
 
-future<> combined_mutation_reader::fast_forward_to(const query::partition_range& pr) {
+future<> combined_mutation_reader::fast_forward_to(const dht::partition_range& pr) {
     _ptables.clear();
     _next.assign(_all_readers.begin(), _all_readers.end());
     return parallel_for_each(_next, [this, &pr] (mutation_reader* mr) {
@@ -164,9 +164,9 @@ mutation_reader make_reader_returning(streamed_mutation m) {
 
 class reader_returning_many final : public mutation_reader::impl {
     std::vector<streamed_mutation> _m;
-    query::partition_range _pr;
+    dht::partition_range _pr;
 public:
-    reader_returning_many(std::vector<streamed_mutation> m, const query::partition_range& pr) : _m(std::move(m)), _pr(pr) {
+    reader_returning_many(std::vector<streamed_mutation> m, const dht::partition_range& pr) : _m(std::move(m)), _pr(pr) {
         boost::range::reverse(_m);
     }
     virtual future<streamed_mutation_opt> operator()() override {
@@ -185,7 +185,7 @@ public:
         }
         return make_ready_future<streamed_mutation_opt>();
     }
-    virtual future<> fast_forward_to(const query::partition_range& pr) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         _pr = pr;
         return make_ready_future<>();
     }
@@ -203,7 +203,7 @@ mutation_reader make_reader_returning_many(std::vector<mutation> mutations, cons
     return make_mutation_reader<reader_returning_many>(std::move(streamed_mutations), query::full_partition_range);
 }
 
-mutation_reader make_reader_returning_many(std::vector<mutation> mutations, const query::partition_range& pr) {
+mutation_reader make_reader_returning_many(std::vector<mutation> mutations, const dht::partition_range& pr) {
     std::vector<streamed_mutation> streamed_mutations;
     boost::range::transform(mutations, std::back_inserter(streamed_mutations), [] (auto& m) {
         return streamed_mutation_from_mutation(std::move(m));
@@ -220,7 +220,7 @@ public:
     virtual future<streamed_mutation_opt> operator()() override {
         return make_ready_future<streamed_mutation_opt>();
     }
-    virtual future<> fast_forward_to(const query::partition_range&) override {
+    virtual future<> fast_forward_to(const dht::partition_range&) override {
         return make_ready_future<>();
     }
 };
@@ -262,7 +262,7 @@ public:
         });
     }
 
-    virtual future<> fast_forward_to(const query::partition_range& pr) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         return _base.fast_forward_to(pr);
     }
 };
@@ -274,7 +274,7 @@ make_restricted_reader(const restricted_mutation_reader_config& config, unsigned
 
 class multi_range_mutation_reader : public mutation_reader::impl {
 public:
-    using ranges_vector = std::vector<query::partition_range>;
+    using ranges_vector = dht::partition_range_vector;
 private:
     const ranges_vector& _ranges;
     ranges_vector::const_iterator _current_range;
@@ -306,7 +306,7 @@ public:
         });
     }
 
-    virtual future<> fast_forward_to(const query::partition_range& pr) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         // When end of pr is reached, this reader will increment _current_range
         // and notice that it now points to _ranges.end().
         _current_range = std::prev(_ranges.end());
@@ -315,7 +315,7 @@ public:
 };
 
 mutation_reader
-make_multi_range_reader(schema_ptr s, mutation_source source, const std::vector<query::partition_range>& ranges,
+make_multi_range_reader(schema_ptr s, mutation_source source, const dht::partition_range_vector& ranges,
                         const query::partition_slice& slice, const io_priority_class& pc,
                         tracing::trace_state_ptr trace_state)
 {

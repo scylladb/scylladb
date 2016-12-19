@@ -117,26 +117,26 @@ void
 insert_token_range_to_sorted_container_while_unwrapping(
         const dht::token& prev_tok,
         const dht::token& tok,
-        std::vector<nonwrapping_range<dht::token>>& ret) {
+        dht::token_range_vector& ret) {
     if (prev_tok < tok) {
         ret.emplace_back(
-                nonwrapping_range<token>::bound(prev_tok, false),
-                nonwrapping_range<token>::bound(tok, true));
+                dht::token_range::bound(prev_tok, false),
+                dht::token_range::bound(tok, true));
     } else {
         ret.emplace_back(
-                nonwrapping_range<token>::bound(prev_tok, false),
+                dht::token_range::bound(prev_tok, false),
                 stdx::nullopt);
         // Insert in front to maintain sorded order
         ret.emplace(
                 ret.begin(),
                 stdx::nullopt,
-                nonwrapping_range<token>::bound(tok, true));
+                dht::token_range::bound(tok, true));
     }
 }
 
-std::vector<nonwrapping_range<token>>
+dht::token_range_vector
 abstract_replication_strategy::get_ranges(inet_address ep) const {
-    std::vector<nonwrapping_range<token>> ret;
+    dht::token_range_vector ret;
     auto prev_tok = _token_metadata.sorted_tokens().back();
     for (auto tok : _token_metadata.sorted_tokens()) {
         for (inet_address a : calculate_natural_endpoints(tok, _token_metadata)) {
@@ -150,9 +150,9 @@ abstract_replication_strategy::get_ranges(inet_address ep) const {
     return ret;
 }
 
-std::vector<nonwrapping_range<token>>
+dht::token_range_vector
 abstract_replication_strategy::get_primary_ranges(inet_address ep) {
-    std::vector<nonwrapping_range<token>> ret;
+    dht::token_range_vector ret;
     auto prev_tok = _token_metadata.sorted_tokens().back();
     for (auto tok : _token_metadata.sorted_tokens()) {
         auto&& eps = calculate_natural_endpoints(tok, _token_metadata);
@@ -164,11 +164,11 @@ abstract_replication_strategy::get_primary_ranges(inet_address ep) {
     return ret;
 }
 
-std::unordered_multimap<inet_address, nonwrapping_range<token>>
+std::unordered_multimap<inet_address, dht::token_range>
 abstract_replication_strategy::get_address_ranges(token_metadata& tm) const {
-    std::unordered_multimap<inet_address, nonwrapping_range<token>> ret;
+    std::unordered_multimap<inet_address, dht::token_range> ret;
     for (auto& t : tm.sorted_tokens()) {
-        std::vector<nonwrapping_range<token>> r = tm.get_primary_ranges_for(t);
+        dht::token_range_vector r = tm.get_primary_ranges_for(t);
         auto eps = calculate_natural_endpoints(t, tm);
         logger.debug("token={}, primary_range={}, address={}", t, r, eps);
         for (auto ep : eps) {
@@ -180,11 +180,11 @@ abstract_replication_strategy::get_address_ranges(token_metadata& tm) const {
     return ret;
 }
 
-std::unordered_multimap<nonwrapping_range<token>, inet_address>
+std::unordered_multimap<dht::token_range, inet_address>
 abstract_replication_strategy::get_range_addresses(token_metadata& tm) const {
-    std::unordered_multimap<nonwrapping_range<token>, inet_address> ret;
+    std::unordered_multimap<dht::token_range, inet_address> ret;
     for (auto& t : tm.sorted_tokens()) {
-        std::vector<nonwrapping_range<token>> r = tm.get_primary_ranges_for(t);
+        dht::token_range_vector r = tm.get_primary_ranges_for(t);
         auto eps = calculate_natural_endpoints(t, tm);
         for (auto ep : eps) {
             for (auto&& rng : r)
@@ -194,14 +194,14 @@ abstract_replication_strategy::get_range_addresses(token_metadata& tm) const {
     return ret;
 }
 
-std::vector<nonwrapping_range<token>>
+dht::token_range_vector
 abstract_replication_strategy::get_pending_address_ranges(token_metadata& tm, token pending_token, inet_address pending_address) {
     return get_pending_address_ranges(tm, std::unordered_set<token>{pending_token}, pending_address);
 }
 
-std::vector<nonwrapping_range<token>>
+dht::token_range_vector
 abstract_replication_strategy::get_pending_address_ranges(token_metadata& tm, std::unordered_set<token> pending_tokens, inet_address pending_address) {
-    std::vector<nonwrapping_range<token>> ret;
+    dht::token_range_vector ret;
     auto temp = tm.clone_only_token_map();
     temp.update_normal_tokens(pending_tokens, pending_address);
     for (auto& x : get_address_ranges(temp)) {

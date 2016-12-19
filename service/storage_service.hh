@@ -47,7 +47,7 @@
 #include "core/distributed.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/boot_strapper.hh"
-#include "dht/token_range.hh"
+#include "dht/token_range_endpoints.hh"
 #include "core/sleep.hh"
 #include "gms/application_state.hh"
 #include "db/system_keyspace.hh"
@@ -98,7 +98,7 @@ public:
     };
 private:
     using token = dht::token;
-    using token_range = dht::token_range;
+    using token_range_endpoints = dht::token_range_endpoints;
     using endpoint_details = dht::endpoint_details;
     using boot_strapper = dht::boot_strapper;
     using token_metadata = locator::token_metadata;
@@ -185,7 +185,7 @@ public:
     }
 #endif
 public:
-    std::vector<nonwrapping_range<token>> get_local_ranges(const sstring& keyspace_name) {
+    dht::token_range_vector get_local_ranges(const sstring& keyspace_name) {
         return get_ranges_for_endpoint(keyspace_name, get_broadcast_address());
     }
 #if 0
@@ -529,16 +529,16 @@ public:
         return map;
     }
 #endif
-    std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> get_range_to_address_map(const sstring& keyspace) const;
+    std::unordered_map<dht::token_range, std::vector<inet_address>> get_range_to_address_map(const sstring& keyspace) const;
 
-    std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> get_range_to_address_map_in_local_dc(
+    std::unordered_map<dht::token_range, std::vector<inet_address>> get_range_to_address_map_in_local_dc(
             const sstring& keyspace) const;
 
     std::vector<token> get_tokens_in_local_dc() const;
 
     bool is_local_dc(const inet_address& targetHost) const;
 
-    std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> get_range_to_address_map(const sstring& keyspace,
+    std::unordered_map<dht::token_range, std::vector<inet_address>> get_range_to_address_map(const sstring& keyspace,
             const std::vector<token>& sorted_tokens) const;
 
     /**
@@ -566,7 +566,7 @@ public:
         return describeRing(keyspace, true);
     }
 #endif
-    std::vector<token_range> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const;
+    std::vector<token_range_endpoints> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const;
 
     /**
      * Retrieve a map of tokens to endpoints, including the bootstrapping ones.
@@ -596,9 +596,9 @@ public:
      * @param ranges
      * @return mapping of ranges to the replicas responsible for them.
     */
-    std::unordered_map<nonwrapping_range<token>, std::vector<inet_address>> construct_range_to_endpoint_map(
+    std::unordered_map<dht::token_range, std::vector<inet_address>> construct_range_to_endpoint_map(
             const sstring& keyspace,
-            const std::vector<nonwrapping_range<token>>& ranges) const;
+            const dht::token_range_vector& ranges) const;
 public:
     virtual void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
     virtual void before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, const gms::versioned_value& new_value) override;
@@ -757,7 +757,7 @@ private:
      * @param ranges the ranges to find sources for
      * @return multimap of addresses to ranges the address is responsible for
      */
-    std::unordered_multimap<inet_address, nonwrapping_range<token>> get_new_source_ranges(const sstring& keyspaceName, const std::vector<nonwrapping_range<token>>& ranges);
+    std::unordered_multimap<inet_address, dht::token_range> get_new_source_ranges(const sstring& keyspaceName, const dht::token_range_vector& ranges);
 public:
     future<> confirm_replication(inet_address node);
 
@@ -783,7 +783,7 @@ private:
     future<> restore_replica_count(inet_address endpoint, inet_address notify_endpoint);
 
     // needs to be modified to accept either a keyspace or ARS.
-    std::unordered_multimap<nonwrapping_range<token>, inet_address> get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint);
+    std::unordered_multimap<dht::token_range, inet_address> get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint);
 public:
     /** raw load value */
     double get_load();
@@ -1600,7 +1600,7 @@ public:
      * @param ep endpoint we are interested in.
      * @return ranges for the specified endpoint.
      */
-    std::vector<nonwrapping_range<token>> get_ranges_for_endpoint(const sstring& name, const gms::inet_address& ep) const;
+    dht::token_range_vector get_ranges_for_endpoint(const sstring& name, const gms::inet_address& ep) const;
 
     /**
      * Get all ranges that span the ring given a set
@@ -1608,7 +1608,7 @@ public:
      * ranges.
      * @return ranges in sorted order
     */
-    std::vector<nonwrapping_range<token>> get_all_ranges(const std::vector<token>& sorted_tokens) const;
+    dht::token_range_vector get_all_ranges(const std::vector<token>& sorted_tokens) const;
     /**
      * This method returns the N endpoints that are responsible for storing the
      * specified key i.e for replication.
@@ -1713,7 +1713,7 @@ public:
      * @return Vector of Token ranges (_not_ keys!) together with estimated key count,
      *      breaking up the data this node is responsible for into pieces of roughly keys_per_split
      */
-    std::vector<std::pair<nonwrapping_range<dht::token>, uint64_t>> get_splits(const sstring& ks_name,
+    std::vector<std::pair<dht::token_range, uint64_t>> get_splits(const sstring& ks_name,
             const sstring& cf_name,
             range<dht::token> range,
             uint32_t keys_per_split);
@@ -1982,7 +1982,7 @@ private:
      * @param rangesToStreamByKeyspace keyspaces and data ranges with endpoints included for each
      * @return async Future for whether stream was success
      */
-    future<> stream_ranges(std::unordered_map<sstring, std::unordered_multimap<nonwrapping_range<token>, inet_address>> ranges_to_stream_by_keyspace);
+    future<> stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream_by_keyspace);
 
 public:
     /**
@@ -1993,8 +1993,8 @@ public:
      * @param updated collection of the ranges after token is changed
      * @return pair of ranges to stream/fetch for given current and updated range collections
      */
-    std::pair<std::unordered_set<nonwrapping_range<token>>, std::unordered_set<nonwrapping_range<token>>>
-    calculate_stream_and_fetch_ranges(const std::vector<nonwrapping_range<token>>& current, const std::vector<nonwrapping_range<token>>& updated);
+    std::pair<std::unordered_set<dht::token_range>, std::unordered_set<dht::token_range>>
+    calculate_stream_and_fetch_ranges(const dht::token_range_vector& current, const dht::token_range_vector& updated);
 #if 0
     public void bulkLoad(String directory)
     {

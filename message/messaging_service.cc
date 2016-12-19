@@ -708,7 +708,7 @@ future<> messaging_service::send_stream_mutation(msg_addr id, UUID plan_id, froz
 
 // STREAM_MUTATION_DONE
 void messaging_service::register_stream_mutation_done(std::function<future<> (const rpc::client_info& cinfo,
-        UUID plan_id, std::vector<nonwrapping_range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id)>&& func) {
+        UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id)>&& func) {
     register_handler(this, messaging_verb::STREAM_MUTATION_DONE,
             [func = std::move(func)] (const rpc::client_info& cinfo,
                     UUID plan_id, std::vector<wrapping_range<dht::token>> ranges,
@@ -716,7 +716,7 @@ void messaging_service::register_stream_mutation_done(std::function<future<> (co
         return func(cinfo, plan_id, compat::unwrap(std::move(ranges)), cf_id, dst_cpu_id);
     });
 }
-future<> messaging_service::send_stream_mutation_done(msg_addr id, UUID plan_id, std::vector<nonwrapping_range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id) {
+future<> messaging_service::send_stream_mutation_done(msg_addr id, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id) {
     return send_message_timeout_and_retry<void>(this, messaging_verb::STREAM_MUTATION_DONE, id,
         streaming_timeout, streaming_nr_retry, streaming_wait_before_retry,
         plan_id, std::move(ranges), cf_id, dst_cpu_id);
@@ -834,7 +834,7 @@ void messaging_service::register_read_data(std::function<future<foreign_ptr<lw_s
 void messaging_service::unregister_read_data() {
     _rpc->unregister_handler(net::messaging_verb::READ_DATA);
 }
-future<query::result> messaging_service::send_read_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const query::partition_range& pr, query::digest_algorithm da) {
+future<query::result> messaging_service::send_read_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr, query::digest_algorithm da) {
     return send_message_timeout<query::result>(this, messaging_verb::READ_DATA, std::move(id), timeout, cmd, pr, da);
 }
 
@@ -864,7 +864,7 @@ void messaging_service::register_read_mutation_data(std::function<future<foreign
 void messaging_service::unregister_read_mutation_data() {
     _rpc->unregister_handler(net::messaging_verb::READ_MUTATION_DATA);
 }
-future<reconcilable_result> messaging_service::send_read_mutation_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const query::partition_range& pr) {
+future<reconcilable_result> messaging_service::send_read_mutation_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr) {
     return send_message_timeout<reconcilable_result>(this, messaging_verb::READ_MUTATION_DATA, std::move(id), timeout, cmd, pr);
 }
 
@@ -874,7 +874,7 @@ void messaging_service::register_read_digest(std::function<future<query::result_
 void messaging_service::unregister_read_digest() {
     _rpc->unregister_handler(net::messaging_verb::READ_DIGEST);
 }
-future<query::result_digest, rpc::optional<api::timestamp_type>> messaging_service::send_read_digest(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const query::partition_range& pr) {
+future<query::result_digest, rpc::optional<api::timestamp_type>> messaging_service::send_read_digest(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr) {
     return send_message_timeout<future<query::result_digest, rpc::optional<api::timestamp_type>>>(this, net::messaging_verb::READ_DIGEST, std::move(id), timeout, cmd, pr);
 }
 
@@ -906,14 +906,14 @@ future<> messaging_service::send_replication_finished(msg_addr id, inet_address 
 // Wrapper for REPAIR_CHECKSUM_RANGE
 void messaging_service::register_repair_checksum_range(
         std::function<future<partition_checksum> (sstring keyspace,
-                sstring cf, nonwrapping_range<dht::token> range, rpc::optional<repair_checksum> hash_version)>&& f) {
+                sstring cf, dht::token_range range, rpc::optional<repair_checksum> hash_version)>&& f) {
     register_handler(this, messaging_verb::REPAIR_CHECKSUM_RANGE, std::move(f));
 }
 void messaging_service::unregister_repair_checksum_range() {
     _rpc->unregister_handler(messaging_verb::REPAIR_CHECKSUM_RANGE);
 }
 future<partition_checksum> messaging_service::send_repair_checksum_range(
-        msg_addr id, sstring keyspace, sstring cf, ::nonwrapping_range<dht::token> range, repair_checksum hash_version)
+        msg_addr id, sstring keyspace, sstring cf, ::dht::token_range range, repair_checksum hash_version)
 {
     return send_message<partition_checksum>(this,
             messaging_verb::REPAIR_CHECKSUM_RANGE, std::move(id),

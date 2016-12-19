@@ -191,7 +191,7 @@ int main(int argc, char** argv) {
 
             // Verify that all mutations from memtable went through
             for (auto&& key : keys) {
-                auto range = query::partition_range::make_singular(key);
+                auto range = dht::partition_range::make_singular(key);
                 auto reader = cache.make_reader(s, range);
                 auto mo = mutation_from_streamed_mutation(reader().get0()).get0();
                 assert(mo);
@@ -208,7 +208,7 @@ int main(int argc, char** argv) {
             }
 
             for (auto&& key : keys) {
-                auto range = query::partition_range::make_singular(key);
+                auto range = dht::partition_range::make_singular(key);
                 auto reader = cache.make_reader(s, range);
                 auto mo = reader().get0();
                 assert(mo);
@@ -228,7 +228,7 @@ int main(int argc, char** argv) {
                 }
 
                 const mutation& m = make_large_mutation();
-                auto range = query::partition_range::make_singular(m.decorated_key());
+                auto range = dht::partition_range::make_singular(m.decorated_key());
 
                 cache.populate(m);
 

@@ -146,7 +146,7 @@ void stream_session::init_messaging_service_handler() {
             });
         });
     });
-    ms().register_stream_mutation_done([] (const rpc::client_info& cinfo, UUID plan_id, std::vector<nonwrapping_range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id) {
+    ms().register_stream_mutation_done([] (const rpc::client_info& cinfo, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return smp::submit_to(dst_cpu_id, [ranges = std::move(ranges), plan_id, cf_id, from] () mutable {
             auto session = get_session(plan_id, from, "STREAM_MUTATION_DONE", cf_id);
@@ -156,7 +156,7 @@ void stream_session::init_messaging_service_handler() {
                                 plan_id, from, cf_id);
                     return make_ready_future<>();
                 }
-                std::vector<query::partition_range> query_ranges;
+                dht::partition_range_vector query_ranges;
                 try {
                     auto& cf = db.find_column_family(cf_id);
                     query_ranges.reserve(ranges.size());
@@ -415,7 +415,7 @@ std::vector<column_family*> stream_session::get_column_family_stores(const sstri
     return stores;
 }
 
-void stream_session::add_transfer_ranges(sstring keyspace, std::vector<nonwrapping_range<token>> ranges, std::vector<sstring> column_families) {
+void stream_session::add_transfer_ranges(sstring keyspace, dht::token_range_vector ranges, std::vector<sstring> column_families) {
     auto cfs = get_column_family_stores(keyspace, column_families);
     for (auto& cf : cfs) {
         auto cf_id = cf->schema()->id();

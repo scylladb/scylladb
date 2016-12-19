@@ -261,16 +261,16 @@ ring_position_range_sharder::next(const schema& s) {
         // split the range at end_of_shard
         auto start = _range.start();
         auto end = range_bound<ring_position>(shard_boundary, false);
-        _range = nonwrapping_range<ring_position>(
+        _range = dht::partition_range(
                 range_bound<ring_position>(std::move(shard_boundary), true),
                 std::move(_range.end()));
-        return ring_position_range_and_shard{nonwrapping_range<ring_position>(std::move(start), std::move(end)), shard};
+        return ring_position_range_and_shard{dht::partition_range(std::move(start), std::move(end)), shard};
     }
     _done = true;
     return ring_position_range_and_shard{std::move(_range), shard};
 }
 
-ring_position_range_vector_sharder::ring_position_range_vector_sharder(std::vector<nonwrapping_range<ring_position>> ranges)
+ring_position_range_vector_sharder::ring_position_range_vector_sharder(dht::partition_range_vector ranges)
         : _ranges(std::move(ranges))
         , _current_range(_ranges.begin()) {
     next_range();
@@ -323,9 +323,9 @@ int ring_position::tri_compare(const schema& s, const ring_position& o) const {
     }
 }
 
-nonwrapping_range<ring_position>
-to_partition_range(nonwrapping_range<dht::token> r) {
-    using bound_opt = std::experimental::optional<nonwrapping_range<ring_position>::bound>;
+dht::partition_range
+to_partition_range(dht::token_range r) {
+    using bound_opt = std::experimental::optional<dht::partition_range::bound>;
     auto start = r.start()
                  ? bound_opt(dht::ring_position(r.start()->value(),
                                                 r.start()->is_inclusive()
@@ -343,9 +343,9 @@ to_partition_range(nonwrapping_range<dht::token> r) {
     return { std::move(start), std::move(end) };
 }
 
-std::map<unsigned, std::vector<nonwrapping_range<ring_position>>>
-split_range_to_shards(nonwrapping_range<ring_position> pr, const schema& s) {
-    std::map<unsigned, std::vector<nonwrapping_range<ring_position>>> ret;
+std::map<unsigned, dht::partition_range_vector>
+split_range_to_shards(dht::partition_range pr, const schema& s) {
+    std::map<unsigned, dht::partition_range_vector> ret;
     auto sharder = dht::ring_position_range_sharder(std::move(pr));
     auto rprs = sharder.next(s);
     while (rprs) {
@@ -355,9 +355,9 @@ split_range_to_shards(nonwrapping_range<ring_position> pr, const schema& s) {
     return ret;
 }
 
-std::map<unsigned, std::vector<nonwrapping_range<ring_position>>>
-split_ranges_to_shards(const std::vector<nonwrapping_range<dht::token>>& ranges, const schema& s) {
-    std::map<unsigned, std::vector<nonwrapping_range<ring_position>>> ret;
+std::map<unsigned, dht::partition_range_vector>
+split_ranges_to_shards(const dht::token_range_vector& ranges, const schema& s) {
+    std::map<unsigned, dht::partition_range_vector> ret;
     for (const auto& range : ranges) {
         auto pr = dht::to_partition_range(range);
         auto sharder = dht::ring_position_range_sharder(std::move(pr));

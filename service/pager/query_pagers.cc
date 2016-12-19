@@ -53,7 +53,7 @@ public:
                     service::query_state& state,
                     const cql3::query_options& options,
                     lw_shared_ptr<query::read_command> cmd,
-                    std::vector<query::partition_range> ranges)
+                    dht::partition_range_vector ranges)
                     : _has_clustering_keys(has_clustering_keys(*s, *cmd))
                     , _max(cmd->row_limit)
                     , _schema(std::move(s))
@@ -346,12 +346,12 @@ private:
     service::query_state& _state;
     const cql3::query_options& _options;
     lw_shared_ptr<query::read_command> _cmd;
-    std::vector<query::partition_range> _ranges;
+    dht::partition_range_vector _ranges;
 };
 
 bool service::pager::query_pagers::may_need_paging(uint32_t page_size,
         const query::read_command& cmd,
-        const std::vector<query::partition_range>& ranges) {
+        const dht::partition_range_vector& ranges) {
     auto est_max_rows =
             [&] {
                 if (ranges.empty()) {
@@ -382,7 +382,7 @@ bool service::pager::query_pagers::may_need_paging(uint32_t page_size,
         schema_ptr s, ::shared_ptr<cql3::selection::selection> selection,
         service::query_state& state, const cql3::query_options& options,
         lw_shared_ptr<query::read_command> cmd,
-        std::vector<query::partition_range> ranges) {
+        dht::partition_range_vector ranges) {
     return ::make_shared<impl>(std::move(s), std::move(selection), state,
             options, std::move(cmd), std::move(ranges));
 }

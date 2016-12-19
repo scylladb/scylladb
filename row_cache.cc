@@ -269,7 +269,7 @@ class single_partition_populating_reader final : public mutation_reader::impl {
     mutation_reader _delegate;
     const io_priority_class _pc;
     const query::partition_slice& _slice;
-    query::partition_range _large_partition_range;
+    dht::partition_range _large_partition_range;
     mutation_reader _large_partition_reader;
     tracing::trace_state_ptr _trace_state;
 public:
@@ -307,7 +307,7 @@ public:
                     } else {
                         _cache.on_uncached_wide_partition();
                         _cache.mark_partition_as_wide(dk);
-                        _large_partition_range = query::partition_range::make_singular(std::move(dk));
+                        _large_partition_range = dht::partition_range::make_singular(std::move(dk));
                         _large_partition_reader = _underlying(_schema, _large_partition_range, _slice, _pc, _trace_state);
                         return _large_partition_reader();
                     }
@@ -339,7 +339,7 @@ class just_cache_scanning_reader final {
     row_cache& _cache;
     row_cache::partitions_type::iterator _it;
     row_cache::partitions_type::iterator _end;
-    const query::partition_range& _range;
+    const dht::partition_range& _range;
     stdx::optional<dht::decorated_key> _last;
     uint64_t _last_reclaim_count;
     size_t _last_modification_count;
@@ -385,7 +385,7 @@ public:
         streamed_mutation_opt mut;
         bool continuous;
     };
-    just_cache_scanning_reader(schema_ptr s, row_cache& cache, const query::partition_range& range,
+    just_cache_scanning_reader(schema_ptr s, row_cache& cache, const dht::partition_range& range,
                                const query::partition_slice& slice, const io_priority_class& pc)
         : _schema(std::move(s)), _cache(cache), _range(range), _slice(slice), _pc(pc)
     { }
@@ -423,7 +423,7 @@ public:
 class range_populating_reader {
     row_cache& _cache;
     schema_ptr _schema;
-    query::partition_range _range;
+    dht::partition_range _range;
     const query::partition_slice& _slice;
     utils::phased_barrier::phase_type _populate_phase;
     const io_priority_class& _pc;
@@ -431,7 +431,7 @@ class range_populating_reader {
     mutation_reader _reader;
     bool _reader_created = false;
     row_cache::previous_entry_pointer _last_key;
-    query::partition_range _large_partition_range;
+    dht::partition_range _large_partition_range;
     mutation_reader _large_partition_reader;
 private:
     void update_reader() {
@@ -458,7 +458,7 @@ private:
         _cache.mark_partition_as_wide(dk, &_last_key);
         _last_key.reset(dk, _populate_phase);
 
-        _large_partition_range = query::partition_range::make_singular(dk);
+        _large_partition_range = dht::partition_range::make_singular(dk);
         _large_partition_reader = _cache._underlying(_schema, _large_partition_range, _slice, _pc, _trace_state);
         return _large_partition_reader().then([this, dk = std::move(dk)] (auto smopt) mutable -> streamed_mutation_opt {
             _large_partition_reader = {};
@@ -537,7 +537,7 @@ public:
         });
     }
 
-    future<> fast_forward_to(const query::partition_range& pr) {
+    future<> fast_forward_to(const dht::partition_range& pr) {
         _range = pr;
 
         auto phase = _cache._populate_phaser.phase();
@@ -561,9 +561,9 @@ public:
 };
 
 class scanning_and_populating_reader final : public mutation_reader::impl {
-    const query::partition_range& _pr;
+    const dht::partition_range& _pr;
     schema_ptr _schema;
-    query::partition_range _secondary_range;
+    dht::partition_range _secondary_range;
 
     just_cache_scanning_reader _primary_reader;
     range_populating_reader _secondary_reader;
@@ -608,12 +608,12 @@ private:
                     }
                 } else {
                     if (_last_key) {
-                        _secondary_range = query::partition_range::make({ *_last_key, false }, { _next_primary->decorated_key(), false });
+                        _secondary_range = dht::partition_range::make({ *_last_key, false }, { _next_primary->decorated_key(), false });
                     } else {
                         if (!_pr.start()) {
-                            _secondary_range = query::partition_range::make_ending_with({ _next_primary->decorated_key(), false });
+                            _secondary_range = dht::partition_range::make_ending_with({ _next_primary->decorated_key(), false });
                         } else {
-                            _secondary_range = query::partition_range::make(*_pr.start(), { _next_primary->decorated_key(), false });
+                            _secondary_range = dht::partition_range::make(*_pr.start(), { _next_primary->decorated_key(), false });
                         }
                     }
                 }
@@ -640,7 +640,7 @@ private:
 public:
     scanning_and_populating_reader(schema_ptr s,
                                     row_cache& cache,
-                                    const query::partition_range& range,
+                                    const dht::partition_range& range,
                                     const query::partition_slice& slice,
                                     const io_priority_class& pc,
                                     tracing::trace_state_ptr trace_state)
@@ -661,7 +661,7 @@ public:
 
 mutation_reader
 row_cache::make_scanning_reader(schema_ptr s,
-                                const query::partition_range& range,
+                                const dht::partition_range& range,
                                 const io_priority_class& pc,
                                 const query::partition_slice& slice,
                                 tracing::trace_state_ptr trace_state) {
@@ -670,7 +670,7 @@ row_cache::make_scanning_reader(schema_ptr s,
 
 mutation_reader
 row_cache::make_reader(schema_ptr s,
-                       const query::partition_range& range,
+                       const dht::partition_range& range,
                        const query::partition_slice& slice,
                        const io_priority_class& pc,
                        tracing::trace_state_ptr trace_state) {
@@ -914,7 +914,7 @@ return _populate_phaser.advance_and_await().then([this, &dk] {
 });
 }
 
-future<> row_cache::invalidate(const query::partition_range& range) {
+future<> row_cache::invalidate(const dht::partition_range& range) {
     return _populate_phaser.advance_and_await().then([this, &range] {
         with_linearized_managed_bytes([&] {
             invalidate_unwrapped(range);
@@ -922,7 +922,7 @@ future<> row_cache::invalidate(const query::partition_range& range) {
     });
 }
 
-void row_cache::invalidate_unwrapped(const query::partition_range& range) {
+void row_cache::invalidate_unwrapped(const dht::partition_range& range) {
     logalloc::reclaim_lock _(_tracker.region());
 
     auto cmp = cache_entry::compare(_schema);
@@ -993,16 +993,16 @@ void row_cache::set_schema(schema_ptr new_schema) noexcept {
 
 future<streamed_mutation_opt> cache_entry::read_wide(row_cache& rc, schema_ptr s, const query::partition_slice& slice, const io_priority_class& pc) {
     struct range_and_underlyig_reader {
-        query::partition_range _range;
+        dht::partition_range _range;
         mutation_reader _reader;
-        range_and_underlyig_reader(row_cache& rc, schema_ptr s, query::partition_range pr,
+        range_and_underlyig_reader(row_cache& rc, schema_ptr s, dht::partition_range pr,
                                    const query::partition_slice& slice, const io_priority_class& pc)
                 : _range(std::move(pr))
                 , _reader(rc._underlying(s, _range, slice, pc))
         { }
     };
     rc._tracker.on_uncached_wide_partition();
-    auto pr = query::partition_range::make_singular(_key);
+    auto pr = dht::partition_range::make_singular(_key);
     return do_with(range_and_underlyig_reader(rc, s, std::move(pr), slice, pc), [] (auto& r_a_ur) {
         return r_a_ur._reader();
     });

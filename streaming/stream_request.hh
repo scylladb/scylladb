@@ -50,14 +50,14 @@ class stream_request {
 public:
     using token = dht::token;
     sstring keyspace;
-    std::vector<nonwrapping_range<token>> ranges;
+    dht::token_range_vector ranges;
     // For compatibility with <= 1.5, we send wrapping ranges (though they will never wrap).
     std::vector<wrapping_range<token>> ranges_compat() const {
         return compat::wrap(ranges);
     }
     std::vector<sstring> column_families;
     stream_request() = default;
-    stream_request(sstring _keyspace, std::vector<nonwrapping_range<token>> _ranges, std::vector<sstring> _column_families)
+    stream_request(sstring _keyspace, dht::token_range_vector _ranges, std::vector<sstring> _column_families)
         : keyspace(std::move(_keyspace))
         , ranges(std::move(_ranges))
         , column_families(std::move(_column_families)) {

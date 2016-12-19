@@ -118,7 +118,7 @@ private:
     friend class flush_reader;
     friend class flush_memory_accounter;
 private:
-    boost::iterator_range<partitions_type::const_iterator> slice(const query::partition_range& r) const;
+    boost::iterator_range<partitions_type::const_iterator> slice(const dht::partition_range& r) const;
     partition_entry& find_or_create_partition(const dht::decorated_key& key);
     partition_entry& find_or_create_partition_slow(partition_key_view key);
     void upgrade_entry(memtable_entry&);
@@ -171,7 +171,7 @@ public:
     //
     // Mutations returned by the reader will all have given schema.
     mutation_reader make_reader(schema_ptr,
-                                const query::partition_range& range = query::full_partition_range,
+                                const dht::partition_range& range = query::full_partition_range,
                                 const query::partition_slice& slice = query::full_slice,
                                 const io_priority_class& pc = default_priority_class());
 

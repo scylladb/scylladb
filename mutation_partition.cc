@@ -1835,7 +1835,7 @@ public:
 };
 
 future<> data_query(
-        schema_ptr s, const mutation_source& source, const query::partition_range& range,
+        schema_ptr s, const mutation_source& source, const dht::partition_range& range,
         const query::partition_slice& slice, uint32_t row_limit, uint32_t partition_limit,
         gc_clock::time_point query_time, query::result::builder& builder)
 {
@@ -1935,7 +1935,7 @@ public:
 future<reconcilable_result>
 mutation_query(schema_ptr s,
                const mutation_source& source,
-               const query::partition_range& range,
+               const dht::partition_range& range,
                const query::partition_slice& slice,
                uint32_t row_limit,
                uint32_t partition_limit,

@@ -154,7 +154,7 @@ column_family::make_partition_presence_checker(sstables::shared_sstable exclude_
 mutation_source
 column_family::sstables_as_mutation_source() {
     return mutation_source([this] (schema_ptr s,
-                                   const query::partition_range& r,
+                                   const dht::partition_range& r,
                                    const query::partition_slice& slice,
                                    const io_priority_class& pc,
                                    tracing::trace_state_ptr trace_state) {
@@ -322,7 +322,7 @@ filter_sstable_for_reader(std::vector<sstables::shared_sstable>&& sstables, colu
 
 class range_sstable_reader final : public combined_mutation_reader {
     schema_ptr _s;
-    const query::partition_range* _pr;
+    const dht::partition_range* _pr;
     lw_shared_ptr<sstables::sstable_set> _sstables;
 
     struct sstable_and_reader {
@@ -370,7 +370,7 @@ private:
 public:
     range_sstable_reader(schema_ptr s,
                          lw_shared_ptr<sstables::sstable_set> sstables,
-                         const query::partition_range& pr,
+                         const dht::partition_range& pr,
                          const query::partition_slice& slice,
                          const io_priority_class& pc,
                          tracing::trace_state_ptr trace_state)
@@ -395,7 +395,7 @@ public:
 
     range_sstable_reader(range_sstable_reader&&) = delete; // reader takes reference to member fields
 
-    virtual future<> fast_forward_to(const query::partition_range& pr) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         _pr = &pr;
 
         auto new_sstables = _sstables->select(pr);
@@ -473,7 +473,7 @@ public:
         if (_done) {
             return make_ready_future<streamed_mutation_opt>();
         }
-        auto candidates = filter_sstable_for_reader(_sstables->select(query::partition_range(_rp)), *_cf, _schema, _key, _slice);
+        auto candidates = filter_sstable_for_reader(_sstables->select(dht::partition_range(_rp)), *_cf, _schema, _key, _slice);
         return parallel_for_each(std::move(candidates),
             [this](const lw_shared_ptr<sstables::sstable>& sstable) {
                 tracing::trace(_trace_state, "Reading key {} from sstable {}", *_rp.key(), seastar::value_of([&sstable] { return sstable->get_filename(); }));
@@ -495,7 +495,7 @@ public:
 
 mutation_reader
 column_family::make_sstable_reader(schema_ptr s,
-                                   const query::partition_range& pr,
+                                   const dht::partition_range& pr,
                                    const query::partition_slice& slice,
                                    const io_priority_class& pc,
                                    tracing::trace_state_ptr trace_state) const {
@@ -530,7 +530,7 @@ column_family::make_sstable_reader(schema_ptr s,
 // Exposed for testing, not performance critical.
 future<column_family::const_mutation_partition_ptr>
 column_family::find_partition(schema_ptr s, const dht::decorated_key& key) const {
-    return do_with(query::partition_range::make_singular(key), [s = std::move(s), this] (auto& range) {
+    return do_with(dht::partition_range::make_singular(key), [s = std::move(s), this] (auto& range) {
         return do_with(this->make_reader(s, range), [] (mutation_reader& reader) {
             return reader().then([] (auto sm) {
                 return mutation_from_streamed_mutation(std::move(sm));
@@ -567,7 +567,7 @@ column_family::find_row(schema_ptr s, const dht::decorated_key& partition_key, c
 
 mutation_reader
 column_family::make_reader(schema_ptr s,
-                           const query::partition_range& range,
+                           const dht::partition_range& range,
                            const query::partition_slice& slice,
                            const io_priority_class& pc,
                            tracing::trace_state_ptr trace_state) const {
@@ -613,7 +613,7 @@ column_family::make_reader(schema_ptr s,
 
 mutation_reader
 column_family::make_streaming_reader(schema_ptr s,
-                           const query::partition_range& range) const {
+                           const dht::partition_range& range) const {
     auto& slice = query::full_slice;
     auto& pc = service::get_local_streaming_read_priority();
 
@@ -631,11 +631,11 @@ column_family::make_streaming_reader(schema_ptr s,
 
 mutation_reader
 column_family::make_streaming_reader(schema_ptr s,
-                           const std::vector<query::partition_range>& ranges) const {
+                           const dht::partition_range_vector& ranges) const {
     auto& slice = query::full_slice;
     auto& pc = service::get_local_streaming_read_priority();
 
-    auto source = mutation_source([this] (schema_ptr s, const query::partition_range& range, const query::partition_slice& slice,
+    auto source = mutation_source([this] (schema_ptr s, const dht::partition_range& range, const query::partition_slice& slice,
                                       const io_priority_class& pc, tracing::trace_state_ptr trace_state) {
         std::vector<mutation_reader> readers;
         readers.reserve(_memtables->size() + 1);
@@ -1362,13 +1362,13 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
 }
 
 static bool needs_cleanup(const lw_shared_ptr<sstables::sstable>& sst,
-                   const lw_shared_ptr<std::vector<nonwrapping_range<dht::token>>>& owned_ranges,
+                   const lw_shared_ptr<dht::token_range_vector>& owned_ranges,
                    schema_ptr s) {
     auto first = sst->get_first_partition_key();
     auto last = sst->get_last_partition_key();
     auto first_token = dht::global_partitioner().get_token(*s, first);
     auto last_token = dht::global_partitioner().get_token(*s, last);
-    nonwrapping_range<dht::token> sst_token_range = nonwrapping_range<dht::token>::make(first_token, last_token);
+    dht::token_range sst_token_range = dht::token_range::make(first_token, last_token);
 
     // return true iff sst partition range isn't fully contained in any of the owned ranges.
     for (auto& r : *owned_ranges) {
@@ -1380,8 +1380,8 @@ static bool needs_cleanup(const lw_shared_ptr<sstables::sstable>& sst,
 }
 
 future<> column_family::cleanup_sstables(sstables::compaction_descriptor descriptor) {
-    std::vector<nonwrapping_range<dht::token>> r = service::get_local_storage_service().get_local_ranges(_schema->ks_name());
-    auto owned_ranges = make_lw_shared<std::vector<nonwrapping_range<dht::token>>>(std::move(r));
+    dht::token_range_vector r = service::get_local_storage_service().get_local_ranges(_schema->ks_name());
+    auto owned_ranges = make_lw_shared<dht::token_range_vector>(std::move(r));
     auto sstables_to_cleanup = make_lw_shared<std::vector<sstables::shared_sstable>>(std::move(descriptor.sstables));
 
     return parallel_for_each(*sstables_to_cleanup, [this, owned_ranges = std::move(owned_ranges), sstables_to_cleanup] (auto& sst) {
@@ -1496,7 +1496,7 @@ lw_shared_ptr<sstable_list> column_family::get_sstables() const {
     return _sstables->all();
 }
 
-std::vector<sstables::shared_sstable> column_family::select_sstables(const query::partition_range& range) const {
+std::vector<sstables::shared_sstable> column_family::select_sstables(const dht::partition_range& range) const {
     return _sstables->select(range);
 }
 
@@ -2391,7 +2391,7 @@ struct query_state {
     explicit query_state(schema_ptr s,
                          const query::read_command& cmd,
                          query::result_request request,
-                         const std::vector<query::partition_range>& ranges,
+                         const dht::partition_range_vector& ranges,
                          query::result_memory_accounter memory_accounter = { })
             : schema(std::move(s))
             , cmd(cmd)
@@ -2407,8 +2407,8 @@ struct query_state {
     uint32_t limit;
     uint32_t partition_limit;
     bool range_empty = false;   // Avoid ubsan false-positive when moving after construction
-    std::vector<query::partition_range>::const_iterator current_partition_range;
-    std::vector<query::partition_range>::const_iterator range_end;
+    dht::partition_range_vector::const_iterator current_partition_range;
+    dht::partition_range_vector::const_iterator range_end;
     mutation_reader reader;
     uint32_t remaining_rows() const {
         return limit - builder.row_count();
@@ -2423,7 +2423,7 @@ struct query_state {
 
 future<lw_shared_ptr<query::result>>
 column_family::query(schema_ptr s, const query::read_command& cmd, query::result_request request,
-                     const std::vector<query::partition_range>& partition_ranges,
+                     const dht::partition_range_vector& partition_ranges,
                      tracing::trace_state_ptr trace_state, query::result_memory_limiter& memory_limiter) {
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
@@ -2451,7 +2451,7 @@ column_family::query(schema_ptr s, const query::read_command& cmd, query::result
 mutation_source
 column_family::as_mutation_source(tracing::trace_state_ptr trace_state) const {
     return mutation_source([this, trace_state = std::move(trace_state)] (schema_ptr s,
-                                   const query::partition_range& range,
+                                   const dht::partition_range& range,
                                    const query::partition_slice& slice,
                                    const io_priority_class& pc) {
         return this->make_reader(std::move(s), range, slice, pc, std::move(trace_state));
@@ -2459,7 +2459,7 @@ column_family::as_mutation_source(tracing::trace_state_ptr trace_state) const {
 }
 
 future<lw_shared_ptr<query::result>>
-database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges, tracing::trace_state_ptr trace_state) {
+database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state) {
     column_family& cf = find_column_family(cmd.cf_id);
     return cf.query(std::move(s), cmd, request, ranges, std::move(trace_state), get_result_memory_limiter()).then_wrapped([this, s = _stats] (auto f) {
         if (f.failed()) {
@@ -2475,7 +2475,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_requ
 }
 
 future<reconcilable_result>
-database::query_mutations(schema_ptr s, const query::read_command& cmd, const query::partition_range& range,
+database::query_mutations(schema_ptr s, const query::read_command& cmd, const dht::partition_range& range,
                           query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state) {
     column_family& cf = find_column_family(cmd.cf_id);
     return mutation_query(std::move(s), cf.as_mutation_source(std::move(trace_state)), range, cmd.slice, cmd.row_limit, cmd.partition_limit,
@@ -3286,7 +3286,7 @@ future<> column_family::flush(const db::replay_position& pos) {
 // so we always flush. When we can differentiate those streams, we should not
 // be indiscriminately touching the cache during repair. We will just have to
 // invalidate the entries that are relevant to things we already have in the cache.
-future<> column_family::flush_streaming_mutations(utils::UUID plan_id, std::vector<query::partition_range> ranges) {
+future<> column_family::flush_streaming_mutations(utils::UUID plan_id, dht::partition_range_vector ranges) {
     // This will effectively take the gate twice for this call. The proper way to fix that would
     // be to change seal_active_streaming_memtable_delayed to take a range parameter. However, we
     // need this code to go away as soon as we can (see FIXME above). So the double gate is a better
