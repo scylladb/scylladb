@@ -146,8 +146,9 @@ column_family::make_partition_presence_checker(lw_shared_ptr<sstables::sstable_s
         if (sst.empty()) {
             return partition_presence_checker_result::definitely_doesnt_exist;
         }
+        auto hk = sstables::sstable::make_hashed_key(*_schema, key.key());
         for (auto&& s : sst) {
-            if (s->filter_has_key(*_schema, key.key())) {
+            if (s->filter_has_key(hk)) {
                 return partition_presence_checker_result::maybe_exists;
             }
         }

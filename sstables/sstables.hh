@@ -607,9 +607,15 @@ public:
         return _filter->is_present(bytes_view(key));
     }
 
+    bool filter_has_key(utils::hashed_key key) {
+        return _filter->is_present(key);
+    }
+
     bool filter_has_key(const schema& s, partition_key_view key) {
         return filter_has_key(key::from_partition_key(s, key));
     }
+
+    static utils::hashed_key make_hashed_key(const schema& s, const partition_key& key);
 
     uint64_t filter_get_false_positive() {
         return _filter_tracker.false_positive;

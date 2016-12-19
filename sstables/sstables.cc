@@ -2627,6 +2627,10 @@ sstable::get_shards_for_this_sstable() const {
     return boost::copy_range<std::vector<unsigned>>(shards);
 }
 
+utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key& key) {
+    return utils::make_hashed_key(static_cast<bytes_view>(key::from_partition_key(s, key)));
+}
+
 std::ostream&
 operator<<(std::ostream& os, const sstable_to_delete& std) {
     return os << std.name << "(" << (std.shared ? "shared" : "unshared") << ")";
