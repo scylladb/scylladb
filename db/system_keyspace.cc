@@ -1060,7 +1060,7 @@ void make(database& db, bool durable, bool volatile_testing_only) {
         if (maybe_write_in_user_memory(table, db)) {
             cfg.dirty_memory_manager = &db._dirty_memory_manager;
         }
-        db.add_column_family(table, std::move(cfg));
+        db.add_column_family(ks, table, std::move(cfg));
         maybe_add_virtual_reader(table, db);
     }
 }

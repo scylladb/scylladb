@@ -273,6 +273,20 @@ future<> migration_manager::notify_create_user_type(const user_type& type) {
     });
 }
 
+future<> migration_manager::notify_create_view(const view_ptr& view) {
+    return seastar::async([this, view] {
+        auto&& ks_name = view->ks_name();
+        auto&& view_name = view->cf_name();
+        for (auto&& listener : _listeners) {
+            try {
+                listener->on_create_view(ks_name, view_name);
+            } catch (...) {
+                logger.warn("Create view notification failed {}.{}: {}", ks_name, view_name, std::current_exception());
+            }
+        }
+    });
+}
+
 #if 0
 public void notifyCreateFunction(UDFunction udf)
 {
@@ -328,6 +342,20 @@ future<> migration_manager::notify_update_user_type(const user_type& type) {
     });
 }
 
+future<> migration_manager::notify_update_view(const view_ptr& view, bool columns_changed) {
+    return seastar::async([this, view, columns_changed] {
+        auto&& ks_name = view->ks_name();
+        auto&& view_name = view->cf_name();
+        for (auto&& listener : _listeners) {
+            try {
+                listener->on_update_view(ks_name, view_name, columns_changed);
+            } catch (...) {
+                logger.warn("Update view notification failed {}.{}: {}", ks_name, view_name, std::current_exception());
+            }
+        }
+    });
+}
+
 #if 0
 public void notifyUpdateFunction(UDFunction udf)
 {
@@ -377,6 +405,20 @@ future<> migration_manager::notify_drop_user_type(const user_type& type) {
                 listener->on_drop_user_type(ks_name, type_name);
             } catch (...) {
                 logger.warn("Drop user type notification failed {}.{}: {}", ks_name, type_name, std::current_exception());
+            }
+        }
+    });
+}
+
+future<> migration_manager::notify_drop_view(const view_ptr& view) {
+    return seastar::async([this, view] {
+        auto&& ks_name = view->ks_name();
+        auto&& view_name = view->cf_name();
+        for (auto&& listener : _listeners) {
+            try {
+                listener->on_drop_view(ks_name, view_name);
+            } catch (...) {
+                logger.warn("Drop view notification failed {}.{}: {}", ks_name, view_name, std::current_exception());
             }
         }
     });
@@ -555,10 +597,19 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
 {
     try {
         auto& db = get_local_storage_proxy().get_db().local();
-        auto&& old_cfm = db.find_schema(ks_name, cf_name);
-        auto&& keyspace = db.find_keyspace(ks_name);
-        logger.info("Drop table '{}.{}'", old_cfm->ks_name(), old_cfm->cf_name());
-        auto mutations = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), old_cfm, api::new_timestamp());
+        auto& old_cfm = db.find_column_family(ks_name, cf_name);
+        auto& schema = old_cfm.schema();
+        if (schema->is_view()) {
+            throw exceptions::invalid_request_exception("Cannot use DROP TABLE on Materialized View");
+        }
+        auto&& views = old_cfm.views();
+        if (!views.empty()) {
+            throw exceptions::invalid_request_exception(sprint(
+                        "Cannot drop table when materialized views still depend on it (%s.{%s})",
+                        ks_name, ::join(", ", views | boost::adaptors::transformed([](auto&& v) { return v->cf_name(); }))));
+        }
+        logger.info("Drop table '{}.{}'", schema->ks_name(), schema->cf_name());
+        auto mutations = db::schema_tables::make_drop_table_mutations(db.find_keyspace(ks_name).metadata(), schema, api::new_timestamp());
         return announce(std::move(mutations), announce_locally);
     } catch (const no_such_column_family& e) {
         throw exceptions::configuration_exception(sprint("Cannot drop non existing table '%s' in keyspace '%s'.", cf_name, ks_name));
@@ -572,6 +623,69 @@ future<> migration_manager::announce_type_drop(user_type dropped_type, bool anno
     logger.info("Drop User Type: {}", dropped_type->get_name_as_string());
     auto mutations = db::schema_tables::make_drop_type_mutations(keyspace.metadata(), dropped_type, api::new_timestamp());
     return announce(std::move(mutations), announce_locally);
+}
+
+future<> migration_manager::announce_new_view(view_ptr view, bool announce_locally)
+{
+#if 0
+    view.metadata.validate();
+#endif
+    auto& db = get_local_storage_proxy().get_db().local();
+    try {
+        auto&& keyspace = db.find_keyspace(view->ks_name()).metadata();
+        if (keyspace->cf_meta_data().find(view->cf_name()) != keyspace->cf_meta_data().end()) {
+            throw exceptions::already_exists_exception(view->ks_name(), view->cf_name());
+        }
+        logger.info("Create new view: {}", view);
+        auto mutations = db::schema_tables::make_create_view_mutations(keyspace, std::move(view), api::new_timestamp());
+        return announce(std::move(mutations), announce_locally);
+    } catch (const no_such_keyspace& e) {
+        throw exceptions::configuration_exception(sprint("Cannot add view '%s' to non existing keyspace '%s'.", view->cf_name(), view->ks_name()));
+    }
+}
+
+future<> migration_manager::announce_view_update(view_ptr view, bool announce_locally)
+{
+#if 0
+    view.metadata.validate();
+#endif
+    auto& db = get_local_storage_proxy().get_db().local();
+    try {
+        auto&& keyspace = db.find_keyspace(view->ks_name()).metadata();
+        auto& old_view = keyspace->cf_meta_data().at(view->cf_name());
+        if (!old_view->is_view()) {
+            throw exceptions::invalid_request_exception("Cannot use ALTER MATERIALIZED VIEW on Table");
+        }
+#if 0
+        oldCfm.validateCompatility(cfm);
+#endif
+        logger.info("Update view '{}.{}' From {} To {}", view->ks_name(), view->cf_name(), *old_view, *view);
+        auto mutations = db::schema_tables::make_update_view_mutations(std::move(keyspace), view_ptr(old_view), std::move(view), api::new_timestamp());
+        return announce(std::move(mutations), announce_locally);
+    } catch (const std::out_of_range& e) {
+        throw exceptions::configuration_exception(sprint("Cannot update non existing materialized view '%s' in keyspace '%s'.",
+                                                         view->cf_name(), view->ks_name()));
+    }
+}
+
+future<> migration_manager::announce_view_drop(const sstring& ks_name,
+                                               const sstring& cf_name,
+                                               bool announce_locally)
+{
+    auto& db = get_local_storage_proxy().get_db().local();
+    try {
+        auto& view = db.find_column_family(ks_name, cf_name).schema();
+        if (!view->is_view()) {
+            throw exceptions::invalid_request_exception("Cannot use DROP MATERIALIZED VIEW on Table");
+        }
+        auto keyspace = db.find_keyspace(ks_name).metadata();
+        logger.info("Drop view '{}.{}'", view->ks_name(), view->cf_name());
+        auto mutations = db::schema_tables::make_drop_view_mutations(std::move(keyspace), view_ptr(std::move(view)), api::new_timestamp());
+        return announce(std::move(mutations), announce_locally);
+    } catch (const no_such_column_family& e) {
+        throw exceptions::configuration_exception(sprint("Cannot drop non existing materialized view '%s' in keyspace '%s'.",
+                                                         cf_name, ks_name));
+    }
 }
 
 #if 0

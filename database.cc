@@ -1968,14 +1968,18 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
             return make_ready_future<>();
         });
     }).then([&proxy, this] {
+        return do_parse_system_tables(proxy, db::schema_tables::VIEWS, [this, &proxy] (schema_result_value_type &v) {
+            return create_views_from_schema_partition(proxy, v.second).then([this] (std::vector<view_ptr> views) {
+                return parallel_for_each(views.begin(), views.end(), [this] (auto&& v) {
+                    return this->add_column_family_and_make_directory(v);
+                });
+            });
+        });
+    }).then([&proxy, this] {
         return do_parse_system_tables(proxy, db::schema_tables::COLUMNFAMILIES, [this, &proxy] (schema_result_value_type &v) {
             return create_tables_from_tables_partition(proxy, v.second).then([this] (std::map<sstring, schema_ptr> tables) {
                 return parallel_for_each(tables.begin(), tables.end(), [this] (auto& t) {
-                    auto s = t.second;
-                    auto& ks = this->find_keyspace(s->ks_name());
-                    auto cfg = ks.make_column_family_config(*s, this->get_config());
-                    this->add_column_family(s, std::move(cfg));
-                    return ks.make_directory_for_column_family(s->cf_name(), s->id()).then([s] {});
+                    return this->add_column_family_and_make_directory(t.second);
                 });
             });
         });
@@ -2068,10 +2072,10 @@ void database::drop_keyspace(const sstring& name) {
     _keyspaces.erase(name);
 }
 
-void database::add_column_family(schema_ptr schema, column_family::config cfg) {
+void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg) {
     schema = local_schema_registry().learn(schema);
     schema->registry_entry()->mark_synced();
-    auto uuid = schema->id();
+
     lw_shared_ptr<column_family> cf;
     if (cfg.enable_commitlog && _commitlog) {
        cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog, _compaction_manager);
@@ -2079,10 +2083,7 @@ void database::add_column_family(schema_ptr schema, column_family::config cfg) {
        cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog(), _compaction_manager);
     }
 
-    auto ks = _keyspaces.find(schema->ks_name());
-    if (ks == _keyspaces.end()) {
-        throw std::invalid_argument("Keyspace " + schema->ks_name() + " not defined");
-    }
+    auto uuid = schema->id();
     if (_column_families.count(uuid) != 0) {
         throw std::invalid_argument("UUID " + uuid.to_sstring() + " already mapped");
     }
@@ -2090,19 +2091,53 @@ void database::add_column_family(schema_ptr schema, column_family::config cfg) {
     if (_ks_cf_to_uuid.count(kscf) != 0) {
         throw std::invalid_argument("Column family " + schema->cf_name() + " exists");
     }
-    ks->second.add_or_update_column_family(schema);
+    ks.add_or_update_column_family(schema);
     cf->start();
     _column_families.emplace(uuid, std::move(cf));
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
+    if (schema->is_view()) {
+        find_column_family(schema->view_info()->base_id()).add_or_update_view(view_ptr(schema));
+    }
+}
+
+future<> database::add_column_family_and_make_directory(schema_ptr schema) {
+    auto& ks = find_keyspace(schema->ks_name());
+    add_column_family(ks, schema, ks.make_column_family_config(*schema, get_config()));
+    return ks.make_directory_for_column_family(schema->cf_name(), schema->id());
+}
+
+bool database::update_column_family(schema_ptr new_schema) {
+    column_family& cfm = find_column_family(new_schema->id());
+    bool columns_changed = !cfm.schema()->equal_columns(*new_schema);
+    auto s = local_schema_registry().learn(new_schema);
+    s->registry_entry()->mark_synced();
+    cfm.set_schema(s);
+    find_keyspace(s->ks_name()).metadata()->add_or_update_column_family(s);
+    if (s->is_view()) {
+        try {
+            find_column_family(s->view_info()->base_id()).add_or_update_view(view_ptr(s));
+        } catch (no_such_column_family&) {
+            // Update view mutations received after base table drop.
+        }
+    }
+    return columns_changed;
 }
 
 future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf) {
     auto uuid = find_uuid(ks_name, cf_name);
     auto& ks = find_keyspace(ks_name);
     auto cf = _column_families.at(uuid);
+    auto&& s = cf->schema();
     _column_families.erase(uuid);
-    ks.metadata()->remove_column_family(cf->schema());
+    ks.metadata()->remove_column_family(s);
     _ks_cf_to_uuid.erase(std::make_pair(ks_name, cf_name));
+    if (s->is_view()) {
+        try {
+            find_column_family(s->view_info()->base_id()).remove_view(view_ptr(s));
+        } catch (no_such_column_family&) {
+            // Drop view mutations received after base table drop.
+        }
+    }
     return truncate(ks, *cf, std::move(tsf)).then([this, cf] {
         return cf->stop();
     }).then([this, cf] {
@@ -2292,6 +2327,19 @@ void keyspace_metadata::validate() const {
 
     auto& ss = service::get_local_storage_service();
     abstract_replication_strategy::validate_replication_strategy(name(), strategy_name(), ss.get_token_metadata(), strategy_options());
+}
+
+std::vector<schema_ptr> keyspace_metadata::tables() const {
+    return boost::copy_range<std::vector<schema_ptr>>(_cf_meta_data
+            | boost::adaptors::map_values
+            | boost::adaptors::filtered([] (auto&& s) { return !s->is_view(); }));
+}
+
+std::vector<view_ptr> keyspace_metadata::views() const {
+    return boost::copy_range<std::vector<view_ptr>>(_cf_meta_data
+            | boost::adaptors::map_values
+            | boost::adaptors::filtered(std::mem_fn(&schema::is_view))
+            | boost::adaptors::transformed([] (auto&& s) { return view_ptr(s); }));
 }
 
 schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name) const {
@@ -3445,4 +3493,27 @@ void column_family::set_schema(schema_ptr s) {
 
     set_compaction_strategy(_schema->compaction_strategy());
     trigger_compaction();
+}
+
+void column_family::update_view_schemas() {
+    _view_schemas = boost::copy_range<std::vector<view_ptr>>(_views | boost::adaptors::map_values | boost::adaptors::transformed([] (auto&& s) {
+        return view_ptr(s.schema());
+    }));
+}
+
+void column_family::add_or_update_view(view_ptr v) {
+    auto e = _views.emplace(v->cf_name(), v);
+    if (!e.second) {
+        e.first->second.update(v);
+    }
+    update_view_schemas();
+}
+
+void column_family::remove_view(view_ptr v) {
+    _views.erase(v->cf_name());
+    update_view_schemas();
+}
+
+const std::vector<view_ptr>& column_family::views() const {
+    return _view_schemas;
 }

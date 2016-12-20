@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 ScyllaDB
+ * Copyright (C) 2016 ScyllaDB
  */
 
 /*
@@ -19,21 +19,30 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-class canonical_mutation final {
-    bytes representation();
+#pragma once
+
+#include "schema.hh"
+
+namespace db {
+
+namespace view {
+
+class view final {
+    view_ptr _schema;
+public:
+    view(view_ptr schema)
+            : _schema(schema)
+    { }
+
+    view_ptr schema() const {
+        return _schema;
+    }
+
+    void update(view_ptr new_schema) {
+        _schema = new_schema;
+    }
 };
 
-class schema_mutations {
-    canonical_mutation columnfamilies_canonical_mutation();
-    canonical_mutation columns_canonical_mutation();
-    bool is_view()[[version 1.6]];
-};
+}
 
-class schema stub [[writable]] {
-    utils::UUID version;
-    schema_mutations mutations;
-};
-
-class frozen_schema final {
-    bytes representation();
-};
+}

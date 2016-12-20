@@ -169,6 +169,13 @@ protected:
         return ::make_shared<restrictions::single_column_restriction::contains>(column_def, std::move(term), is_key);
     }
 
+    virtual ::shared_ptr<relation> maybe_rename_identifier(const column_identifier::raw& from, column_identifier::raw to) override {
+        return *_entity == from
+            ? ::make_shared(single_column_relation(
+                  ::make_shared<column_identifier::raw>(std::move(to)), _map_key, _relation_type, _value, _in_values))
+            : static_pointer_cast<single_column_relation>(shared_from_this());
+    }
+
 private:
     /**
      * Returns the receivers for this relation.

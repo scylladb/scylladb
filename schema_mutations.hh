@@ -35,7 +35,7 @@ public:
             : _columnfamilies(std::move(columnfamilies))
             , _columns(std::move(columns))
     { }
-    schema_mutations(canonical_mutation columnfamilies, canonical_mutation columns);
+    schema_mutations(canonical_mutation columnfamilies, canonical_mutation columns, bool is_view);
 
     schema_mutations(schema_mutations&&) = default;
     schema_mutations& operator=(schema_mutations&&) = default;
@@ -59,6 +59,8 @@ public:
     canonical_mutation columns_canonical_mutation() const {
         return canonical_mutation(_columns);
     }
+
+    bool is_view() const;
 
     table_schema_version digest() const;
 

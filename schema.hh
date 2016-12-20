@@ -37,6 +37,7 @@
 #include "compress.hh"
 #include "compaction_strategy.hh"
 #include "caching_options.hh"
+#include "stdx.hh"
 
 using column_count_type = uint32_t;
 
@@ -280,6 +281,7 @@ bool operator==(const column_definition&, const column_definition&);
 static constexpr int DEFAULT_MIN_COMPACTION_THRESHOLD = 4;
 static constexpr int DEFAULT_MAX_COMPACTION_THRESHOLD = 32;
 static constexpr int DEFAULT_MIN_INDEX_INTERVAL = 128;
+static constexpr int DEFAULT_GC_GRACE_SECONDS = 864000;
 
 // Unsafe to access across shards.
 // Safe to copy across shards.
@@ -338,6 +340,40 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const column_mapping& cm);
 };
 
+/**
+ * Augments a schema with fields related to materialized views.
+ * Effectively immutable.
+ */
+class view_info final {
+    utils::UUID _base_id;
+    sstring _base_name;
+    bool _include_all_columns;
+    sstring _where_clause;
+public:
+    view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause);
+
+    const utils::UUID& base_id() const {
+        return _base_id;
+    }
+
+    const sstring& base_name() const {
+        return _base_name;
+    }
+
+    bool include_all_columns() const {
+        return _include_all_columns;
+    }
+
+    const sstring& where_clause() const {
+        return _where_clause;
+    }
+
+    friend bool operator==(const view_info&, const view_info&);
+    friend std::ostream& operator<<(std::ostream& os, const view_info& view);
+};
+
+bool operator==(const view_info&, const view_info&);
+std::ostream& operator<<(std::ostream& os, const view_info& view);
 /*
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
@@ -364,7 +400,7 @@ private:
         bool _is_dense = false;
         bool _is_compound = true;
         cf_type _type = cf_type::standard;
-        int32_t _gc_grace_seconds = 864000;
+        int32_t _gc_grace_seconds = DEFAULT_GC_GRACE_SECONDS;
         double _dc_local_read_repair_chance = 0.1;
         double _read_repair_chance = 0.0;
         int32_t _min_compaction_threshold = DEFAULT_MIN_COMPACTION_THRESHOLD;
@@ -381,6 +417,7 @@ private:
         table_schema_version _version;
         std::unordered_map<sstring, api::timestamp_type> _dropped_columns;
         std::map<bytes, data_type> _collections;
+        stdx::optional<view_info> _view_info;
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -589,6 +626,12 @@ public:
     const data_type& regular_column_name_type() const {
         return _raw._regular_column_name_type;
     }
+    const stdx::optional<::view_info>& view_info() const {
+        return _raw._view_info;
+    }
+    bool is_view() const {
+        return bool(_raw._view_info);
+    }
     friend std::ostream& operator<<(std::ostream& os, const schema& s);
     friend bool operator==(const schema&, const schema&);
     const column_mapping& get_column_mapping() const;
@@ -606,5 +649,34 @@ public:
 bool operator==(const schema&, const schema&);
 
 using schema_ptr = lw_shared_ptr<const schema>;
+
+/**
+ * Wraper for schema_ptr used by functions that except an engaged view_info field.
+ */
+class view_ptr final {
+    schema_ptr _schema;
+public:
+    explicit view_ptr(schema_ptr schema) noexcept : _schema(schema) {
+        if (schema) {
+            assert(_schema->is_view());
+        }
+    }
+
+    const schema& operator*() const noexcept { return *_schema; }
+    const schema* operator->() const noexcept { return _schema.operator->(); }
+    const schema* get() const noexcept { return _schema.get(); }
+
+    operator schema_ptr() const noexcept {
+        return _schema;
+    }
+
+    explicit operator bool() const noexcept {
+        return bool(_schema);
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const view_ptr& s);
+};
+
+std::ostream& operator<<(std::ostream& os, const view_ptr& view);
 
 utils::UUID generate_legacy_id(const sstring& ks_name, const sstring& cf_name);

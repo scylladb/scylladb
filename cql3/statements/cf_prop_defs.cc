@@ -144,6 +144,11 @@ int32_t cf_prop_defs::get_default_time_to_live() const
     return get_int(KW_DEFAULT_TIME_TO_LIVE, 0);
 }
 
+int32_t cf_prop_defs::get_gc_grace_seconds() const
+{
+    return get_int(KW_GCGRACESECONDS, DEFAULT_GC_GRACE_SECONDS);
+}
+
 void cf_prop_defs::apply_to_builder(schema_builder& builder) {
     if (has_property(KW_COMMENT)) {
         builder.set_comment(get_string(KW_COMMENT, ""));

@@ -129,3 +129,10 @@ sstring cql3::token_relation::to_string() const {
     term->collect_marker_specification(bound_names);
     return term;
 }
+
+::shared_ptr<cql3::relation> cql3::token_relation::maybe_rename_identifier(const cql3::column_identifier::raw& from, cql3::column_identifier::raw to) {
+    auto new_entities = boost::copy_range<decltype(_entities)>(_entities | boost::adaptors::transformed([&] (auto&& entity) {
+        return *entity == from ? ::make_shared<column_identifier::raw>(to) : entity;
+    }));
+    return ::make_shared<token_relation>(std::move(new_entities), _relation_type, _value);
+}

@@ -36,6 +36,7 @@ options {
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/statements/alter_keyspace_statement.hh"
 #include "cql3/statements/alter_table_statement.hh"
+#include "cql3/statements/alter_view_statement.hh"
 #include "cql3/statements/create_keyspace_statement.hh"
 #include "cql3/statements/drop_keyspace_statement.hh"
 #include "cql3/statements/create_index_statement.hh"
@@ -46,6 +47,7 @@ options {
 #include "cql3/statements/alter_type_statement.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/drop_table_statement.hh"
+#include "cql3/statements/drop_view_statement.hh"
 #include "cql3/statements/truncate_statement.hh"
 #include "cql3/statements/raw/update_statement.hh"
 #include "cql3/statements/raw/insert_statement.hh"
@@ -342,6 +344,8 @@ cqlStatement returns [shared_ptr<raw::parsed_statement> stmt]
     | st31=dropAggregateStatement      { $stmt = st31; }
 #endif
     | st32=createViewStatement         { $stmt = st32; }
+    | st33=alterViewStatement          { $stmt = st33; }
+    | st34=dropViewStatement           { $stmt = st34; }
     ;
 
 /*
@@ -868,7 +872,7 @@ alterKeyspaceStatement returns [shared_ptr<cql3::statements::alter_keyspace_stat
 alterTableStatement returns [shared_ptr<alter_table_statement> expr]
     @init {
         alter_table_statement::type type;
-        auto props = make_shared<cql3::statements::cf_prop_defs>();;
+        auto props = make_shared<cql3::statements::cf_prop_defs>();
         std::vector<std::pair<shared_ptr<cql3::column_identifier::raw>, shared_ptr<cql3::column_identifier::raw>>> renames;
         bool is_static = false;
     }
@@ -902,6 +906,18 @@ alterTypeStatement returns [::shared_ptr<alter_type_statement> expr]
           )
     ;
 
+/**
+ * ALTER MATERIALIZED VIEW <CF> WITH <property> = <value>;
+ */
+alterViewStatement returns [::shared_ptr<alter_view_statement> expr]
+    @init {
+        auto props = make_shared<cql3::statements::cf_prop_defs>();
+    }
+    : K_ALTER K_MATERIALIZED K_VIEW cf=columnFamilyName K_WITH properties[props]
+    {
+        $expr = ::make_shared<alter_view_statement>(std::move(cf), std::move(props));
+    }
+    ;
 
 renames[::shared_ptr<alter_type_statement::renames> expr]
     : fromId=ident K_TO toId=ident { $expr->add_rename(fromId, toId); }
@@ -930,6 +946,15 @@ dropTableStatement returns [::shared_ptr<drop_table_statement> stmt]
 dropTypeStatement returns [::shared_ptr<drop_type_statement> stmt]
     @init { bool if_exists = false; }
     : K_DROP K_TYPE (K_IF K_EXISTS { if_exists = true; } )? name=userTypeName { $stmt = ::make_shared<drop_type_statement>(name, if_exists); }
+    ;
+
+/**
+ * DROP MATERIALIZED VIEW [IF EXISTS] <view_name>
+ */
+dropViewStatement returns [::shared_ptr<drop_view_statement> stmt]
+    @init { bool if_exists = false; }
+    : K_DROP K_MATERIALIZED K_VIEW (K_IF K_EXISTS { if_exists = true; } )? cf=columnFamilyName
+      { $stmt = ::make_shared<drop_view_statement>(cf, if_exists); }
     ;
 
 #if 0

@@ -81,6 +81,7 @@ static logging::logger logger("storage_service");
 
 static const sstring RANGE_TOMBSTONES_FEATURE = "RANGE_TOMBSTONES";
 static const sstring LARGE_PARTITIONS_FEATURE = "LARGE_PARTITIONS";
+static const sstring MATERIALIZED_VIEWS_FEATURE = "MATERIALIZED_VIEWS";
 
 distributed<storage_service> _the_storage_service;
 
@@ -120,6 +121,7 @@ sstring storage_service::get_config_supported_features() {
     std::vector<sstring> features = {
         RANGE_TOMBSTONES_FEATURE,
         LARGE_PARTITIONS_FEATURE,
+        MATERIALIZED_VIEWS_FEATURE,
     };
     return join(",", features);
 }
@@ -1326,6 +1328,7 @@ future<> storage_service::init_server(int delay) {
         get_storage_service().invoke_on_all([] (auto& ss) {
             ss._range_tombstones_feature = gms::feature(RANGE_TOMBSTONES_FEATURE);
             ss._large_partitions_feature = gms::feature(LARGE_PARTITIONS_FEATURE);
+            ss._materialized_views_feature = gms::feature(MATERIALIZED_VIEWS_FEATURE);
         }).get();
     });
 }

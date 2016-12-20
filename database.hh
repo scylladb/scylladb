@@ -74,6 +74,7 @@
 #include <seastar/core/shared_future.hh>
 #include "tracing/trace_state.hh"
 #include <boost/intrusive/parent_from_member.hpp>
+#include "db/view/view.hh"
 
 class frozen_mutation;
 class reconcilable_result;
@@ -510,6 +511,8 @@ private:
     // Last but not least, we seldom need to guarantee any ordering here: as long
     // as all data is waited for, we're good.
     seastar::gate _streaming_flush_gate;
+    std::unordered_map<sstring, db::view::view> _views;
+    std::vector<view_ptr> _view_schemas;
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable);
     void add_sstable(sstables::sstable&& sstable);
@@ -796,7 +799,13 @@ public:
             }
         });
     }
+
+    void add_or_update_view(view_ptr v);
+    void remove_view(view_ptr v);
+    const std::vector<view_ptr>& views() const;
 private:
+    void update_view_schemas();
+
     // One does not need to wait on this future if all we are interested in, is
     // initiating the write.  The writes initiated here will eventually
     // complete, and the seastar::gate below will make sure they are all
@@ -947,6 +956,8 @@ public:
     void remove_user_type(const user_type ut) {
         _user_types->remove_type(ut);
     }
+    std::vector<schema_ptr> tables() const;
+    std::vector<view_ptr> views() const;
     friend std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m);
 };
 
@@ -1131,7 +1142,8 @@ public:
     future<> init_system_keyspace();
     future<> load_sstables(distributed<service::storage_proxy>& p); // after init_system_keyspace()
 
-    void add_column_family(schema_ptr schema, column_family::config cfg);
+    void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);
+    future<> add_column_family_and_make_directory(schema_ptr schema);
 
     /* throws std::out_of_range if missing */
     const utils::UUID& find_uuid(const sstring& ks, const sstring& cf) const;
@@ -1215,6 +1227,7 @@ public:
     future<> truncate(sstring ksname, sstring cfname, timestamp_func);
     future<> truncate(const keyspace& ks, column_family& cf, timestamp_func);
 
+    bool update_column_family(schema_ptr s);
     future<> drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func);
 
     const logalloc::region_group& dirty_memory_region_group() const {

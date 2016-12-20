@@ -76,6 +76,7 @@ boost_tests = [
     'input_stream_test',
     'nonwrapping_range_test',
     'virtual_reader_test',
+    'view_schema_test.cc',
 ]
 
 other_tests = [

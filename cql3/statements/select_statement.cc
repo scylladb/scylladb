@@ -44,6 +44,7 @@
 
 #include "transport/messages/result_message.hh"
 #include "cql3/selection/selection.hh"
+#include "cql3/util.hh"
 #include "core/shared_ptr.hh"
 #include "query-result-reader.hh"
 #include "query_result_merger.hh"
@@ -131,7 +132,14 @@ uint32_t select_statement::get_bound_terms() {
 }
 
 future<> select_statement::check_access(const service::client_state& state) {
-    return state.has_column_family_access(keyspace(), column_family(), auth::permission::SELECT);
+    try {
+        auto&& s = service::get_local_storage_proxy().get_db().local().find_schema(keyspace(), column_family());
+        auto& cf_name = s->is_view() ? s->view_info()->base_name() : column_family();
+        return state.has_column_family_access(keyspace(), cf_name, auth::permission::SELECT);
+    } catch (const no_such_column_family& e) {
+        // Will be validated afterwards.
+        return make_ready_future<>();
+    }
 }
 
 void select_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state) {
@@ -382,6 +390,10 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
     return ::make_shared<transport::messages::result_message::rows>(std::move(rs));
 }
 
+::shared_ptr<restrictions::statement_restrictions> select_statement::get_restrictions() const {
+    return _restrictions;
+}
+
 namespace raw {
 
 select_statement::select_statement(::shared_ptr<cf_name> cf_name,
@@ -396,7 +408,7 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
     , _limit(std::move(limit))
 { }
 
-::shared_ptr<prepared_statement> select_statement::prepare(database& db, cql_stats& stats) {
+::shared_ptr<prepared_statement> select_statement::prepare(database& db, cql_stats& stats, bool for_view) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto bound_names = get_bound_variables();
 
@@ -404,7 +416,7 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
                      ? selection::selection::wildcard(schema)
                      : selection::selection::from_selectors(db, schema, _select_clause);
 
-    auto restrictions = prepare_restrictions(db, schema, bound_names, selection);
+    auto restrictions = prepare_restrictions(db, schema, bound_names, selection, for_view);
 
     if (_parameters->is_distinct()) {
         validate_distinct_selection(schema, selection, restrictions);
@@ -414,6 +426,7 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
     bool is_reversed_ = false;
 
     if (!_parameters->orderings().empty()) {
+        assert(!for_view);
         verify_ordering_is_allowed(restrictions);
         ordering_comparator = get_ordering_comparator(schema, selection, restrictions);
         is_reversed_ = is_reversed(schema);
@@ -438,11 +451,12 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
 select_statement::prepare_restrictions(database& db,
                                        schema_ptr schema,
                                        ::shared_ptr<variable_specifications> bound_names,
-                                       ::shared_ptr<selection::selection> selection)
+                                       ::shared_ptr<selection::selection> selection,
+                                       bool for_view)
 {
     try {
         return ::make_shared<restrictions::statement_restrictions>(db, schema, std::move(_where_clause), bound_names,
-            selection->contains_only_static_columns(), selection->contains_a_collection());
+            selection->contains_only_static_columns(), selection->contains_a_collection(), for_view);
     } catch (const exceptions::unrecognized_entity_exception& e) {
         if (contains_alias(e.entity)) {
             throw exceptions::invalid_request_exception(sprint("Aliases aren't allowed in the where clause ('%s')", e.relation->to_string()));
@@ -630,6 +644,25 @@ bool select_statement::contains_alias(::shared_ptr<column_identifier> name) {
         int32_type);
 }
 
+}
+
+}
+
+namespace util {
+
+shared_ptr<cql3::statements::raw::select_statement> build_select_statement(
+            const sstring_view& cf_name,
+            const sstring_view& where_clause,
+            std::vector<sstring_view> included_columns) {
+    std::ostringstream out;
+    out << "SELECT ";
+    if (included_columns.empty()) {
+        out << "*";
+    } else {
+        out << join(", ", included_columns);
+    }
+    out << " FROM " << cf_name << " WHERE " << where_clause << " ALLOW FILTERING";
+    return do_with_parser(out.str(), std::mem_fn(&cql3_parser::CqlParser::selectStatement));
 }
 
 }

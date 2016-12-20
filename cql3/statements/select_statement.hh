@@ -183,6 +183,8 @@ public:
 
     query::partition_slice make_partition_slice(const query_options& options);
 
+    ::shared_ptr<restrictions::statement_restrictions> get_restrictions() const;
+
 #if 0
     private SliceQueryFilter sliceFilter(ColumnSlice slice, int limit, int toGroup)
     {

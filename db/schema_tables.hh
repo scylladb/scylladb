@@ -66,6 +66,7 @@ static constexpr auto TRIGGERS = "schema_triggers";
 static constexpr auto USERTYPES = "schema_usertypes";
 static constexpr auto FUNCTIONS = "schema_functions";
 static constexpr auto AGGREGATES = "schema_aggregates";
+static constexpr auto VIEWS = "views";
 
 extern std::vector<const char*> ALL;
 
@@ -111,17 +112,15 @@ std::vector<mutation> make_update_table_mutations(
     api::timestamp_type timestamp,
     bool from_thrift);
 
-schema_mutations make_table_mutations(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers = true);
-
 future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result);
-
-void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, std::vector<mutation>& mutations);
 
 std::vector<mutation> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp);
 
 future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table);
 
 future<schema_ptr> create_table_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row);
+
+void prepare_builder_from_table_row(schema_builder& builder, const query::result_set_row& table_row);
 
 schema_ptr create_table_from_mutations(schema_mutations, std::experimental::optional<table_schema_version> version = {});
 
@@ -142,12 +141,27 @@ column_definition create_column_from_column_row(const query::result_set_row& row
 
 void add_column_to_schema_mutation(schema_ptr table, const column_definition& column, api::timestamp_type timestamp, mutation& mutation);
 
+view_ptr create_view_from_mutations(schema_mutations sm, std::experimental::optional<table_schema_version> version = {});
+
+future<std::vector<view_ptr>> create_views_from_schema_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result);
+
+schema_mutations make_schema_mutations(schema_ptr s, api::timestamp_type timestamp, bool with_columns);
+
+void add_table_or_view_to_schema_mutation(schema_ptr view, api::timestamp_type timestamp, bool with_columns, std::vector<mutation>& mutations);
+
+std::vector<mutation> make_create_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace, view_ptr view, api::timestamp_type timestamp);
+
+std::vector<mutation> make_update_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace, view_ptr old_view, view_ptr new_view, api::timestamp_type timestamp);
+
+std::vector<mutation> make_drop_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace, view_ptr view, api::timestamp_type timestamp);
+
 sstring serialize_kind(column_kind kind);
 column_kind deserialize_kind(sstring kind);
 data_type parse_type(sstring str);
 
 schema_ptr columns();
 schema_ptr columnfamilies();
+schema_ptr views();
 
 template<typename Hasher>
 void feed_hash_for_schema_digest(Hasher& h, const mutation& m) {

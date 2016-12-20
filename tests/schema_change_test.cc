@@ -152,23 +152,27 @@ public:
     int create_user_type_count = 0;
     int create_function_count = 0;
     int create_aggregate_count = 0;
+    int create_view_count = 0;
     int update_keyspace_count = 0;
     int update_column_family_count = 0;
     int columns_changed_count = 0;
     int update_user_type_count = 0;
     int update_function_count = 0;
     int update_aggregate_count = 0;
+    int update_view_count = 0;
     int drop_keyspace_count = 0;
     int drop_column_family_count = 0;
     int drop_user_type_count = 0;
     int drop_function_count = 0;
     int drop_aggregate_count = 0;
+    int drop_view_count = 0;
 public:
     virtual void on_create_keyspace(const sstring&) override { ++create_keyspace_count; }
     virtual void on_create_column_family(const sstring&, const sstring&) override { ++create_column_family_count; }
     virtual void on_create_user_type(const sstring&, const sstring&) override { ++create_user_type_count; }
     virtual void on_create_function(const sstring&, const sstring&) override { ++create_function_count; }
     virtual void on_create_aggregate(const sstring&, const sstring&) override { ++create_aggregate_count; }
+    virtual void on_create_view(const sstring&, const sstring&) override { ++create_view_count; }
     virtual void on_update_keyspace(const sstring&) override { ++update_keyspace_count; }
     virtual void on_update_column_family(const sstring&, const sstring&, bool columns_changed) override {
         ++update_column_family_count;
@@ -177,11 +181,13 @@ public:
     virtual void on_update_user_type(const sstring&, const sstring&) override { ++update_user_type_count; }
     virtual void on_update_function(const sstring&, const sstring&) override { ++update_function_count; }
     virtual void on_update_aggregate(const sstring&, const sstring&) override { ++update_aggregate_count; }
+    virtual void on_update_view(const sstring&, const sstring&, bool) override { ++update_view_count; }
     virtual void on_drop_keyspace(const sstring&) override { ++drop_keyspace_count; }
     virtual void on_drop_column_family(const sstring&, const sstring&) override { ++drop_column_family_count; }
     virtual void on_drop_user_type(const sstring&, const sstring&) override { ++drop_user_type_count; }
     virtual void on_drop_function(const sstring&, const sstring&) override { ++drop_function_count; }
     virtual void on_drop_aggregate(const sstring&, const sstring&) override { ++drop_aggregate_count; }
+    virtual void on_drop_view(const sstring&, const sstring&) override { ++drop_view_count; }
 };
 
 SEASTAR_TEST_CASE(test_notifications) {

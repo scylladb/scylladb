@@ -348,7 +348,8 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._compaction_strategy_options == y._raw._compaction_strategy_options
         && x._raw._caching_options == y._raw._caching_options
         && x._raw._dropped_columns == y._raw._dropped_columns
-        && x._raw._collections == y._raw._collections;
+        && x._raw._collections == y._raw._collections
+        && x._raw._view_info == y._raw._view_info;
 #if 0
         && Objects.equal(triggers, other.triggers)
 #endif
@@ -463,6 +464,9 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
         os << c.first << " : " << c.second->name();
     }
     os << "}";
+    if (s.is_view()) {
+        os << ", viewInfo=" << *s.view_info();
+    }
     os << "]";
     return os;
 }
@@ -681,6 +685,11 @@ void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
             throw exceptions::configuration_exception(sprint("Expecting exactly one regular column. Found %d", regular_cols));
         }
     }
+}
+
+schema_builder& schema_builder::with_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause) {
+    _raw._view_info = view_info(std::move(base_id), std::move(base_name), include_all_columns, std::move(where_clause));
+    return *this;
 }
 
 schema_ptr schema_builder::build() {
@@ -963,4 +972,32 @@ bool schema::is_synced() const {
 
 bool schema::equal_columns(const schema& other) const {
     return boost::equal(all_columns_in_select_order(), other.all_columns_in_select_order());
+}
+
+view_info::view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause)
+        : _base_id(std::move(base_id))
+        , _base_name(std::move(base_name))
+        , _include_all_columns(include_all_columns)
+        , _where_clause(where_clause)
+{ }
+
+bool operator==(const view_info& x, const view_info& y) {
+    return x._base_id == y._base_id
+        && x._base_name == y._base_name
+        && x._include_all_columns != y._include_all_columns
+        && x._where_clause == y._where_clause;
+}
+
+std::ostream& operator<<(std::ostream& os, const view_info& view) {
+    os << "ViewInfo{";
+    os << "baseTableId=" << view._base_id;
+    os << ", baseTableName=" << view._base_name;
+    os << ", includeAllColumns=" << view._include_all_columns;
+    os << ", whereClause=" << view._where_clause;
+    os << "}";
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const view_ptr& view) {
+    return view ? os << *view : os << "null";
 }

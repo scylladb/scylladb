@@ -51,9 +51,20 @@ result_msg_assertions assert_that(shared_ptr<transport::messages::result_message
 template<typename... T>
 void assert_that_failed(future<T...>& f)
 {
-    assert(f.failed());
     try {
         f.get();
+        assert(f.failed());
+    }
+    catch (...) {
+    }
+}
+
+template<typename... T>
+void assert_that_failed(future<T...>&& f)
+{
+    try {
+        f.get();
+        assert(f.failed());
     }
     catch (...) {
     }

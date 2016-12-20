@@ -64,7 +64,7 @@ public:
                     , _ranges(std::move(ranges))
     {}
 
-private:   
+private:
     static bool has_clustering_keys(const schema& s, const query::read_command& cmd) {
         return s.clustering_key_size() > 0
                && !cmd.slice.options.contains<query::partition_slice::option::distinct>();
@@ -229,67 +229,42 @@ private:
 
         class myvisitor : public cql3::selection::result_set_builder::visitor {
         public:
-            impl& _impl;
-            uint32_t page_size;
-            uint32_t part_rows = 0;
             uint32_t total_rows = 0;
             std::experimental::optional<partition_key> last_pkey;
             std::experimental::optional<clustering_key> last_ckey;
 
-            clustering_key::less_compare _less;
-
-            void include_row() {
-                ++total_rows;
-                ++part_rows;
-            }
-            void include_row(const clustering_key& key) {
-                include_row();
-                last_ckey = key;
-            }
-            myvisitor(impl& i, uint32_t ps,
-                    cql3::selection::result_set_builder& builder,
+            myvisitor(cql3::selection::result_set_builder& builder,
                     const schema& s,
                     const cql3::selection::selection& selection)
-                    : visitor(builder, s, selection), _impl(i), page_size(ps), _less(*_impl._schema) {
+                    : visitor(builder, s, selection) {
             }
 
             void accept_new_partition(uint32_t) {
                 throw std::logic_error("Should not reach!");
             }
             void accept_new_partition(const partition_key& key, uint32_t row_count) {
-                logger.trace("Begin partition: {} ({})", key, row_count);
-                part_rows = 0;
-                if (total_rows < page_size) {
-                    last_pkey = key;
-                    last_ckey = { };
-                }
+                logger.trace("Accepting partition: {} ({})", key, row_count);
+                total_rows += row_count;
+                last_pkey = key;
+                last_ckey = { };
                 visitor::accept_new_partition(key, row_count);
             }
             void accept_new_row(const clustering_key& key,
                     const query::result_row_view& static_row,
                     const query::result_row_view& row) {
-                include_row(key);
+                last_ckey = key;
                 visitor::accept_new_row(key, static_row, row);
             }
             void accept_new_row(const query::result_row_view& static_row,
                     const query::result_row_view& row) {
-                include_row();
                 visitor::accept_new_row(static_row, row);
             }
             void accept_partition_end(const query::result_row_view& static_row) {
-                // accept_partition_end with row_count == 0
-                // means we had an empty partition but live
-                // static columns, and since the fix,
-                // no CK restrictions.
-                // I.e. _row_count == 0 -> add a partially empty row
-                // So, treat this case as an accept_row variant
-                include_row();
                 visitor::accept_partition_end(static_row);
-                logger.trace("End partition, rows={}", part_rows);
             }
         };
 
-        myvisitor v(*this, std::min(page_size, _max), builder, *_schema, *_selection);
+        myvisitor v(builder, *_schema, *_selection);
         query::result_view::consume(*results, _cmd->slice, v);
 
         if (_last_pkey) {
@@ -335,7 +310,6 @@ private:
     // remember if we use clustering. if not, each partition == one row
     const bool _has_clustering_keys;
     bool _exhausted = false;
-    uint32_t _rem = 0;
     uint32_t _max;
 
     std::experimental::optional<partition_key> _last_pkey;

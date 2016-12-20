@@ -89,3 +89,5 @@ public:
 
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func);
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, const db::config&);
+future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func);
+future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, const db::config&);

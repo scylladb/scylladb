@@ -260,6 +260,7 @@ private:
 
     gms::feature _range_tombstones_feature;
     gms::feature _large_partitions_feature;
+    gms::feature _materialized_views_feature;
 
 public:
     void finish_bootstrapping() {
@@ -647,18 +648,21 @@ public:
     virtual void on_create_user_type(const sstring& ks_name, const sstring& type_name) override {}
     virtual void on_create_function(const sstring& ks_name, const sstring& function_name) override {}
     virtual void on_create_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
+    virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override {}
 
     virtual void on_update_keyspace(const sstring& ks_name) override { keyspace_changed(ks_name).get(); }
     virtual void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool) override {}
     virtual void on_update_user_type(const sstring& ks_name, const sstring& type_name) override {}
     virtual void on_update_function(const sstring& ks_name, const sstring& function_name) override {}
     virtual void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
+    virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {}
 
     virtual void on_drop_keyspace(const sstring& ks_name) override { keyspace_changed(ks_name).get(); }
     virtual void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {}
     virtual void on_drop_user_type(const sstring& ks_name, const sstring& type_name) override {}
     virtual void on_drop_function(const sstring& ks_name, const sstring& function_name) override {}
     virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
+    virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
 private:
     void update_peer_info(inet_address endpoint);
     void do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value);
@@ -2206,6 +2210,10 @@ public:
 
     bool cluster_supports_large_partitions() const {
         return bool(_large_partitions_feature);
+    }
+
+    bool cluster_supports_materialized_views() const {
+        return bool(_materialized_views_feature);
     }
 };
 

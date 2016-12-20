@@ -228,6 +228,7 @@ scylla_tests = [
     'tests/input_stream_test',
     'tests/sstable_atomic_deletion_test',
     'tests/virtual_reader_test',
+    'tests/view_schema_test',
 ]
 
 apps = [
@@ -341,6 +342,7 @@ scylla_core = (['database.cc',
                  'cql3/statements/create_user_statement.cc',
                  'cql3/statements/drop_keyspace_statement.cc',
                  'cql3/statements/drop_table_statement.cc',
+                 'cql3/statements/drop_view_statement.cc',
                  'cql3/statements/drop_type_statement.cc',
                  'cql3/statements/schema_altering_statement.cc',
                  'cql3/statements/ks_prop_defs.cc',
@@ -357,6 +359,7 @@ scylla_core = (['database.cc',
                  'cql3/statements/create_index_statement.cc',
                  'cql3/statements/truncate_statement.cc',
                  'cql3/statements/alter_table_statement.cc',
+                 'cql3/statements/alter_view_statement.cc',
                  'cql3/statements/alter_user_statement.cc',
                  'cql3/statements/drop_user_statement.cc',
                  'cql3/statements/list_users_statement.cc',
