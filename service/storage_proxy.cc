@@ -3551,38 +3551,95 @@ void storage_proxy::uninit_messaging_service() {
 // Merges reconcilable_result:s from different shards into one
 // Drops partitions which exceed the limit.
 class mutation_result_merger {
+    schema_ptr _schema;
+    lw_shared_ptr<const query::read_command> _cmd;
     unsigned _row_count = 0;
     unsigned _partition_count = 0;
     bool _short_read_allowed;
     query::short_read _short_read;
-    std::vector<partition> _partitions;
+    // we get a batch of partitions each time, each with a key
+    // partition batches should be maintained in key order
+    // batches that share a key should be merged and sorted in decorated_key
+    // order
+    std::multimap<unsigned, std::vector<partition>> _partitions;
     query::result_memory_accounter _memory_accounter;
 public:
-    explicit mutation_result_merger(const query::read_command& cmd)
-        : _short_read_allowed(cmd.slice.options.contains(query::partition_slice::option::allow_short_read))
-    { }
-
+    explicit mutation_result_merger(schema_ptr schema, lw_shared_ptr<const query::read_command> cmd)
+            : _schema(std::move(schema))
+            , _cmd(std::move(cmd)) {
+    }
     query::result_memory_accounter& memory() {
         return _memory_accounter;
     }
     const query::result_memory_accounter& memory() const {
         return _memory_accounter;
     }
-    void add_result(foreign_ptr<lw_shared_ptr<reconcilable_result>> partial_result) {
+    void add_result(unsigned key, foreign_ptr<lw_shared_ptr<reconcilable_result>> partial_result) {
+        std::vector<partition> partitions;
+        partitions.reserve(partial_result->partitions().size());
         // Following three lines to simplify patch; can remove later
         for (const partition& p : partial_result->partitions()) {
-            _partitions.push_back(p);
+            partitions.push_back(p);
             _row_count += p._row_count;
             _partition_count += p._row_count > 0;
         }
+        _partitions.emplace(key, std::move(partitions));
         _short_read = partial_result->is_short_read();
         if (_memory_accounter.update_and_check(partial_result->memory_usage()) && _short_read_allowed) {
             _short_read = query::short_read::yes;
         }
     }
     reconcilable_result get() && {
-        return reconcilable_result(_row_count, std::move(_partitions), _short_read,
-                                   std::move(_memory_accounter).done());
+        auto unsorted = std::unordered_set<unsigned>();
+        auto merged = std::map<unsigned, std::vector<partition>>();
+        // merge batches with equal keys, and note if we need to sort afterwards
+        for (auto&& key_value : _partitions) {
+            auto&& key = key_value.first;
+            auto&& batch = key_value.second;
+            auto&& dest = merged[key];
+            if (dest.empty()) {
+                dest = std::move(batch);
+            } else {
+                unsorted.insert(key);
+                std::move(batch.begin(), batch.end(), std::back_inserter(dest));
+            }
+        }
+
+        // Sort batches that arrived with the same keys
+        for (auto key : unsorted) {
+            auto dkcmp = dht::decorated_key::less_comparator(_schema);
+            auto&& batch = merged[key];
+            boost::sort(batch, [&] (const partition& a, const partition& b) {
+                return dkcmp(a.mut().decorated_key(*_schema), b.mut().decorated_key(*_schema));
+            });
+        }
+
+        auto final = std::vector<partition>();
+        final.reserve(_partition_count);
+        for (auto&& batch : merged | boost::adaptors::map_values) {
+            std::move(batch.begin(), batch.end(), std::back_inserter(final));
+        }
+
+        // Trim back partition count and row count in case we overshot.
+        // Should be rare for dense tables.
+        while ((_partition_count > _cmd->partition_limit)
+                || (_partition_count && (_row_count - final.back().row_count() >= _cmd->row_limit))) {
+            _row_count -= final.back().row_count();
+            _partition_count -= final.back().row_count() > 0;
+            final.pop_back();
+        }
+        if (_row_count > _cmd->row_limit) {
+            auto mut = final.back().mut().unfreeze(_schema);
+            static const auto all = std::vector<query::clustering_range>({query::clustering_range::make_open_ended_both_sides()});
+            auto is_reversed = _cmd->slice.options.contains(query::partition_slice::option::reversed);
+            auto final_rows = _cmd->row_limit - (_row_count - final.back().row_count());
+            _row_count -= final.back().row_count();
+            auto rc = mut.partition().compact_for_query(*_schema, _cmd->timestamp, all, is_reversed, final_rows);
+            final.back() = partition(rc, freeze(mut));
+            _row_count += rc;
+        }
+
+        return reconcilable_result(_row_count, std::move(final), _short_read, std::move(_memory_accounter).done());
     }
     bool short_read() const {
         return bool(_short_read);
@@ -3620,6 +3677,33 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
     }
 }
 
+}
+
+namespace {
+
+struct element_and_shard {
+    unsigned element;   // element in a partition range vector
+    unsigned shard;
+};
+
+bool operator==(element_and_shard a, element_and_shard b) {
+    return a.element == b.element && a.shard == b.shard;
+}
+
+}
+
+namespace std {
+
+template <>
+struct hash<element_and_shard> {
+    size_t operator()(element_and_shard es) const {
+        return es.element * 31 + es.shard;
+    }
+};
+
+}
+
+namespace service {
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
 storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector& prs, tracing::trace_state_ptr trace_state) {
@@ -3627,12 +3711,22 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
     auto shard_cmd = make_lw_shared<query::read_command>(*cmd);
     return do_with(cmd,
             shard_cmd,
-            mutation_result_merger{*cmd},
+            1u,
+            0u,
+            false,
+            prs.size(),
+            std::unordered_map<element_and_shard, query::partition_range>{},
+            mutation_result_merger{s, cmd},
             dht::ring_position_range_vector_sharder{prs},
             global_schema_ptr(s),
             tracing::global_trace_state_ptr(std::move(trace_state)),
             [this, s] (lw_shared_ptr<query::read_command>& cmd,
                     lw_shared_ptr<query::read_command>& shard_cmd,
+                    unsigned& shards_in_parallel,
+                    unsigned& mutation_result_merger_key,
+                    bool& no_more_ranges,
+                    unsigned partition_range_count,
+                    std::unordered_map<element_and_shard, query::partition_range>& shards_for_this_iteration,
                     mutation_result_merger& mrm,
                     dht::ring_position_range_vector_sharder& rprs,
                     global_schema_ptr& gs,
@@ -3640,21 +3734,61 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
       return _db.local().get_result_memory_limiter().new_read().then([&, s] (query::result_memory_accounter ma) {
         mrm.memory() = std::move(ma);
         return repeat_until_value([&, s] () -> future<stdx::optional<reconcilable_result>> {
-            auto now = rprs.next(*s);
-            if (!now) {
-                return make_ready_future<stdx::optional<reconcilable_result>>(std::move(mrm).get());
+            // We don't want to query a sparsely populated table sequentially, because the latency
+            // will go through the roof.  We don't want to query a densely populated table in parallel,
+            // because we'll throw away most of the results.  So we'll exponentially increase
+            // concurrency starting at 1, so we won't waste on dense tables and at most
+            // `log(nr_shards) + ignore_msb_bits` latency multiplier for near-empty tables.
+            shards_for_this_iteration.clear();
+            // If we're reading from less than smp::count shards, then we can just append
+            // each shard in order without sorting.  If we're reading from more, then
+            // we'll read from some shards at least twice, so the partitions within will be
+            // out-of-order wrt. other shards
+            auto retain_shard_order = true;
+            for (auto i = 0u; i < shards_in_parallel; ++i) {
+                auto now = rprs.next(*s);
+                if (!now) {
+                    no_more_ranges = true;
+                    break;
+                }
+                // Let's see if this is a new shard, or if we can expand an existing range
+                auto&& rng_ok = shards_for_this_iteration.emplace(element_and_shard{now->element, now->shard}, now->ring_range);
+                if (!rng_ok.second) {
+                    // We saw this shard already, enlarge the range (we know now->ring_range came from the same partition range;
+                    // otherwise it would have had a unique now->element).
+                    auto& rng = rng_ok.first->second;
+                    rng = nonwrapping_range<dht::ring_position>(std::move(rng.start()), std::move(now->ring_range.end()));
+                    retain_shard_order = false;
+                }
             }
+            auto key_base = mutation_result_merger_key;
+
+            // prepare for next iteration
+            mutation_result_merger_key += smp::count * partition_range_count; // worst case, each element queried on each shard
+            shards_in_parallel *= 2;
+
             shard_cmd->partition_limit = cmd->partition_limit - mrm.partition_count();
             shard_cmd->row_limit = cmd->row_limit - mrm.row_count();
-            return _db.invoke_on(now->shard, [&, now = std::move(*now), gt] (database& db) {
-                query::result_memory_accounter accounter(db.get_result_memory_limiter(), mrm.memory());
-                return db.query_mutations(gs, *shard_cmd, now.ring_range, std::move(accounter), std::move(gt)).then([] (reconcilable_result&& rr) {
-                    return make_foreign(make_lw_shared(std::move(rr)));
+
+            return parallel_for_each(shards_for_this_iteration, [&, key_base, retain_shard_order] (const std::pair<const element_and_shard, query::partition_range>& elem_shard_range) {
+                auto&& elem = elem_shard_range.first.element;
+                auto&& shard = elem_shard_range.first.shard;
+                auto&& range = elem_shard_range.second;
+                return _db.invoke_on(shard, [&, range, gt] (database& db) {
+                    query::result_memory_accounter accounter(db.get_result_memory_limiter(), mrm.memory());
+                    return db.query_mutations(gs, *shard_cmd, range, std::move(accounter), std::move(gt)).then([] (reconcilable_result&& rr) {
+                        return make_foreign(make_lw_shared(std::move(rr)));
+                    });
+                }).then([&, key_base, retain_shard_order, elem, shard] (foreign_ptr<lw_shared_ptr<reconcilable_result>> partial_result) {
+                    auto key = key_base + elem * smp::count;
+                    if (retain_shard_order) {
+                        key += shard;
+                    }
+                    mrm.add_result(key, std::move(partial_result));
                 });
-            }).then([&] (foreign_ptr<lw_shared_ptr<reconcilable_result>> rr) -> stdx::optional<reconcilable_result> {
-                mrm.add_result(std::move(rr));
-                if (mrm.short_read() || mrm.partition_count() >= cmd->partition_limit || mrm.row_count() >= cmd->row_limit) {
-                    return std::move(mrm).get();
+            }).then([&] () -> stdx::optional<reconcilable_result> {
+                if (mrm.short_read() || mrm.partition_count() >= cmd->partition_limit || mrm.row_count() >= cmd->row_limit || no_more_ranges) {
+                    return stdx::make_optional(std::move(mrm).get());
                 }
                 return stdx::nullopt;
             });
