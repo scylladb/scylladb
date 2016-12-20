@@ -256,9 +256,7 @@ mutation_partition::mutation_partition(const mutation_partition& x, const schema
     try {
         for(auto&& r : ck_ranges) {
             for (const rows_entry& e : x.range(schema, r)) {
-                std::unique_ptr<rows_entry> copy(current_allocator().construct<rows_entry>(e));
-                _rows.insert(_rows.end(), *copy);
-                copy.release();
+                _rows.push_back(*current_allocator().construct<rows_entry>(e));
             }
         }
     } catch (...) {
