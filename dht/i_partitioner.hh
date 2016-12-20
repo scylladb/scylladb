@@ -452,6 +452,13 @@ public:
     stdx::optional<ring_position_range_and_shard> next(const schema& s);
 };
 
+struct ring_position_range_and_shard_and_element : ring_position_range_and_shard {
+    ring_position_range_and_shard_and_element(ring_position_range_and_shard&& rpras, unsigned element)
+            : ring_position_range_and_shard(std::move(rpras)), element(element) {
+    }
+    unsigned element;
+};
+
 class ring_position_range_vector_sharder {
     using vec_type = std::vector<nonwrapping_range<ring_position>>;
     vec_type _ranges;
@@ -465,7 +472,8 @@ private:
     }
 public:
     explicit ring_position_range_vector_sharder(std::vector<nonwrapping_range<ring_position>> ranges);
-    stdx::optional<ring_position_range_and_shard> next(const schema& s);
+    // results are returned sorted by index within the vector first, then within each vector item
+    stdx::optional<ring_position_range_and_shard_and_element> next(const schema& s);
 };
 
 nonwrapping_range<ring_position> to_partition_range(nonwrapping_range<dht::token>);

@@ -276,15 +276,19 @@ ring_position_range_vector_sharder::ring_position_range_vector_sharder(std::vect
     next_range();
 }
 
-stdx::optional<ring_position_range_and_shard>
+stdx::optional<ring_position_range_and_shard_and_element>
 ring_position_range_vector_sharder::next(const schema& s) {
     if (!_current_sharder) {
         return stdx::nullopt;
     }
-    auto ret = _current_sharder->next(s);
-    while (!ret && _current_range != _ranges.end()) {
+    auto range_and_shard = _current_sharder->next(s);
+    while (!range_and_shard && _current_range != _ranges.end()) {
         next_range();
-        ret = _current_sharder->next(s);
+        range_and_shard = _current_sharder->next(s);
+    }
+    auto ret = stdx::optional<ring_position_range_and_shard_and_element>();
+    if (range_and_shard) {
+        ret.emplace(std::move(*range_and_shard), _current_range - _ranges.begin() - 1);
     }
     return ret;
 }
