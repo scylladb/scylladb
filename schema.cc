@@ -984,7 +984,7 @@ view_info::view_info(utils::UUID base_id, sstring base_name, bool include_all_co
 bool operator==(const view_info& x, const view_info& y) {
     return x._base_id == y._base_id
         && x._base_name == y._base_name
-        && x._include_all_columns != y._include_all_columns
+        && x._include_all_columns == y._include_all_columns
         && x._where_clause == y._where_clause;
 }
 
