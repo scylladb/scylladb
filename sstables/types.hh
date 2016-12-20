@@ -153,7 +153,12 @@ struct summary_ka {
      * Similar to origin off heap size
      */
     uint64_t memory_footprint() const {
-        return sizeof(summary_entry) * entries.size() + sizeof(uint32_t) * positions.size() + sizeof(*this);
+        auto sz = sizeof(summary_entry) * entries.size() + sizeof(uint32_t) * positions.size() + sizeof(*this);
+        sz += first_key.value.size() + last_key.value.size();
+        for (auto& e : entries) {
+            sz += e.key.size();
+        }
+        return sz;
     }
 
     explicit operator bool() const {
