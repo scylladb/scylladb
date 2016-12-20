@@ -3646,3 +3646,12 @@ void column_family::remove_view(view_ptr v) {
 const std::vector<view_ptr>& column_family::views() const {
     return _view_schemas;
 }
+
+std::vector<lw_shared_ptr<db::view::view>> column_family::affected_views(const schema_ptr& base, const mutation& update) const {
+    //FIXME: Avoid allocating a vector here; consider returning the boost iterator.
+    return boost::copy_range<std::vector<lw_shared_ptr<db::view::view>>>(_views
+            | boost::adaptors::map_values
+            | boost::adaptors::filtered([&, this] (auto&& view) {
+        return view->partition_key_matches(*base, update.decorated_key());
+    }));
+}
