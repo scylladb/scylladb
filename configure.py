@@ -794,6 +794,8 @@ with open(buildfile, 'w') as f:
         libs = {libs}
         pool link_pool
             depth = {link_pool_depth}
+        pool seastar_pool
+            depth = 1
         rule ragel
             command = ragel -G2 -o $out $in
             description = RAGEL $out
@@ -956,6 +958,7 @@ with open(buildfile, 'w') as f:
                 f.write('build {}: cxx.{} {} || {}\n'.format(obj, mode, cc, ' '.join(serializers)))
         f.write('build seastar/build/{mode}/libseastar.a seastar/build/{mode}/apps/iotune/iotune seastar/build/{mode}/gen/http/request_parser.hh seastar/build/{mode}/gen/http/http_response_parser.hh: ninja {seastar_deps}\n'
                 .format(**locals()))
+        f.write('  pool = seastar_pool\n')
         f.write('  subdir = seastar\n')
         f.write('  target = build/{mode}/libseastar.a build/{mode}/apps/iotune/iotune build/{mode}/gen/http/request_parser.hh build/{mode}/gen/http/http_response_parser.hh\n'.format(**locals()))
         f.write(textwrap.dedent('''\
