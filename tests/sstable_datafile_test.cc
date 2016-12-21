@@ -793,7 +793,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
         auto verifier = [s, set_col, c_key] (auto& mutation) {
 
             auto& mp = mutation->partition();
-            BOOST_REQUIRE(mp.clustered_rows().size() == 1);
+            BOOST_REQUIRE(mp.clustered_rows().calculate_size() == 1);
             auto r = mp.find_row(*s, c_key);
             BOOST_REQUIRE(r);
             BOOST_REQUIRE(r->size() == 1);
@@ -1123,7 +1123,7 @@ SEASTAR_TEST_CASE(compact) {
                         BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("jerry")))));
                         BOOST_REQUIRE(!m->partition().partition_tombstone());
                         auto &rows = m->partition().clustered_rows();
-                        BOOST_REQUIRE(rows.size() == 1);
+                        BOOST_REQUIRE(rows.calculate_size() == 1);
                         auto &row = rows.begin()->row();
                         BOOST_REQUIRE(!row.deleted_at());
                         auto &cells = row.cells();
@@ -1137,7 +1137,7 @@ SEASTAR_TEST_CASE(compact) {
                         BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("tom")))));
                         BOOST_REQUIRE(!m->partition().partition_tombstone());
                         auto &rows = m->partition().clustered_rows();
-                        BOOST_REQUIRE(rows.size() == 1);
+                        BOOST_REQUIRE(rows.calculate_size() == 1);
                         auto &row = rows.begin()->row();
                         BOOST_REQUIRE(!row.deleted_at());
                         auto &cells = row.cells();
@@ -1151,7 +1151,7 @@ SEASTAR_TEST_CASE(compact) {
                         BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("john")))));
                         BOOST_REQUIRE(!m->partition().partition_tombstone());
                         auto &rows = m->partition().clustered_rows();
-                        BOOST_REQUIRE(rows.size() == 1);
+                        BOOST_REQUIRE(rows.calculate_size() == 1);
                         auto &row = rows.begin()->row();
                         BOOST_REQUIRE(!row.deleted_at());
                         auto &cells = row.cells();
@@ -1165,7 +1165,7 @@ SEASTAR_TEST_CASE(compact) {
                         BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("nadav")))));
                         BOOST_REQUIRE(m->partition().partition_tombstone());
                         auto &rows = m->partition().clustered_rows();
-                        BOOST_REQUIRE(rows.size() == 0);
+                        BOOST_REQUIRE(rows.calculate_size() == 0);
                         return (*reader)();
                     }).then([reader] (streamed_mutation_opt m) {
                         BOOST_REQUIRE(!m);
@@ -1572,7 +1572,7 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
                         return mutation_from_streamed_mutation(std::move(sm));
                     }).then([sstp, s, tomb] (auto mutation) {
                         auto& mp = mutation->partition();
-                        BOOST_REQUIRE(mp.clustered_rows().size() == 1);
+                        BOOST_REQUIRE(mp.clustered_rows().calculate_size() == 1);
                         auto c_row = *(mp.clustered_rows().begin());
                         BOOST_REQUIRE(c_row.row().deleted_at() == tomb);
                     });
@@ -2302,7 +2302,7 @@ SEASTAR_TEST_CASE(check_multi_schema) {
             BOOST_REQUIRE(m);
             BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, 0)));
             auto& rows = m->partition().clustered_rows();
-            BOOST_REQUIRE_EQUAL(rows.size(), 1);
+            BOOST_REQUIRE_EQUAL(rows.calculate_size(), 1);
             auto& row = rows.begin()->row();
             BOOST_REQUIRE(!row.deleted_at());
             auto& cells = row.cells();

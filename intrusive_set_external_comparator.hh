@@ -104,7 +104,7 @@ public:
     bool empty() const { return algo::unique(_header.this_ptr()); }
 
     // WARNING: this method has O(N) time complexity, use with care
-    auto size() const { return algo::size(_header.this_ptr()); }
+    auto calculate_size() const { return algo::size(_header.this_ptr()); }
     iterator erase(const_iterator i) {
         const_iterator ret(i);
         ++ret;
