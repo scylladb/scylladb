@@ -296,6 +296,25 @@ verify_seastar_io_scheduler(bool has_max_io_requests, bool developer_mode) {
     });
 }
 
+static
+void
+verify_adequate_memory_per_shard(bool developer_mode) {
+    auto mem = memory::stats().total_memory();
+    auto shards = smp::count;
+    auto shard_mem = mem / shards;
+    if (shard_mem >= (1 << 30)) {
+        return;
+    }
+    if (developer_mode) {
+        startlog.warn("Only {} MiB per shard; this is below the recommended minimum of 1 GiB/shard;"
+                " continuing since running in developer mode", shard_mem >> 20);
+    } else {
+        startlog.error("Only {} MiB per shard; this is below the recommended minimum of 1 GiB/shard; terminating."
+                "Configure more memory (--memory option) or decrease shard count (--smp option).");
+        throw std::runtime_error("configuration (memory per shard too low)");
+    }
+}
+
 int main(int ac, char** av) {
   int return_value = 0;
   try {
@@ -361,6 +380,7 @@ int main(int ac, char** av) {
             apply_logger_settings(cfg->default_log_level(), cfg->logger_log_level(),
                     cfg->log_to_stdout(), cfg->log_to_syslog());
             verify_rlimit(cfg->developer_mode());
+            verify_adequate_memory_per_shard(cfg->developer_mode());
             dht::set_global_partitioner(cfg->partitioner(), cfg->murmur3_partitioner_ignore_msb_bits());
             auto start_thrift = cfg->start_rpc();
             uint16_t api_port = cfg->api_port();
