@@ -23,6 +23,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <chrono>
 #include "db_clock.hh"
 
 namespace api {
@@ -32,9 +33,28 @@ timestamp_type constexpr missing_timestamp = std::numeric_limits<timestamp_type>
 timestamp_type constexpr min_timestamp = std::numeric_limits<timestamp_type>::min() + 1;
 timestamp_type constexpr max_timestamp = std::numeric_limits<timestamp_type>::max();
 
+// Used for generating server-side mutation timestamps.
+// Same epoch as Java's System.currentTimeMillis() for compatibility.
+// Satisfies requirements of TrivialClock.
+class timestamp_clock {
+    using base = std::chrono::system_clock;
+public:
+    using rep = timestamp_type;
+    using duration = std::chrono::microseconds;
+    using period = typename duration::period;
+    using time_point = std::chrono::time_point<timestamp_clock, duration>;
+
+    static constexpr bool is_steady = base::is_steady;
+
+    static time_point now() noexcept {
+        auto now_since_epoch = base::now() - base::from_time_t(0);
+        return time_point(std::chrono::duration_cast<duration>(now_since_epoch)) + get_clocks_offset();
+    }
+};
+
 static inline
 timestamp_type new_timestamp() {
-    return db_clock::now_in_usecs();
+    return timestamp_clock::now().time_since_epoch().count();
 }
 
 }

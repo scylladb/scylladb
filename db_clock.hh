@@ -47,9 +47,6 @@ public:
         auto now_since_epoch = base::now() - base::from_time_t(0);
         return time_point(std::chrono::duration_cast<duration>(now_since_epoch)) + get_clocks_offset();
     }
-    static uint64_t now_in_usecs() {
-        return now().time_since_epoch().count() * 1000;
-    }
 };
 
 static inline
