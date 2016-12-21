@@ -187,7 +187,7 @@ size_t uncompress_snappy(const char* input, size_t input_len,
             == SNAPPY_OK) {
         return output_len;
     } else {
-        throw std::runtime_error("deflate uncompression failure");
+        throw std::runtime_error("snappy uncompression failure");
     }
 }
 
