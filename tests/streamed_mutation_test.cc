@@ -144,7 +144,7 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing_streamed_mutations) {
                 return make_ready_future<>();
             }, 1).get0();
 
-            auto expected_fragments = m.partition().clustered_rows().size()
+            auto expected_fragments = m.partition().clustered_rows().calculate_size()
                                       + m.partition().row_tombstones().size()
                                       + !m.partition().static_row().empty();
             BOOST_REQUIRE_EQUAL(fms.size(), std::max(expected_fragments, size_t(1)));
