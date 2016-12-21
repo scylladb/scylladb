@@ -513,6 +513,7 @@ private:
     seastar::gate _streaming_flush_gate;
     std::unordered_map<sstring, db::view::view> _views;
     std::vector<view_ptr> _view_schemas;
+    semaphore _cache_update_sem{1};
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable);
     void add_sstable(sstables::sstable&& sstable);
@@ -524,7 +525,7 @@ private:
     lw_shared_ptr<memtable> new_memtable();
     lw_shared_ptr<memtable> new_streaming_memtable();
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt);
-    future<> update_cache(memtable&, sstables::shared_sstable exclude_sstable);
+    future<> update_cache(memtable&, lw_shared_ptr<sstables::sstable_set> old_sstables);
     struct merge_comparator;
 
     // update the sstable generation, making sure that new new sstables don't overwrite this one.
@@ -560,7 +561,7 @@ private:
                                         tracing::trace_state_ptr trace_state) const;
 
     mutation_source sstables_as_mutation_source();
-    partition_presence_checker make_partition_presence_checker(sstables::shared_sstable exclude_sstable);
+    partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set>);
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
     void do_trigger_compaction();
 public:

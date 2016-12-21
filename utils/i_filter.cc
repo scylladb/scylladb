@@ -51,4 +51,11 @@ filter_ptr i_filter::get_filter(int64_t num_elements, int target_buckets_per_ele
     auto spec = bloom_calculations::compute_bloom_spec(buckets_per_element);
     return filter::create_filter(spec.K, num_elements, spec.buckets_per_element);
 }
+
+hashed_key make_hashed_key(bytes_view b) {
+    std::array<uint64_t, 2> h;
+    utils::murmur_hash::hash3_x64_128(b, 0, h);
+    return { h };
+}
+
 }

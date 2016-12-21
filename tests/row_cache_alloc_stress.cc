@@ -123,7 +123,7 @@ int main(int argc, char** argv) {
             // When this assertion fails, increase amount of memory
             assert(mt->occupancy().used_space() < reclaimable_memory());
 
-            auto checker = [](const partition_key& key) {
+            auto checker = [](auto) {
                 return partition_presence_checker_result::maybe_exists;
             };
 

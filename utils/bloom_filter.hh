@@ -58,11 +58,6 @@ public:
 private:
     bitmap _bitset;
     int _hash_count;
-
-    void set_indexes(int64_t base, int64_t inc, int count, int64_t max, std::vector<int64_t>& results);
-    std::vector<int64_t> get_hash_buckets(const bytes_view& key, int hash_count, int64_t max);
-    std::vector<int64_t> indexes(const bytes_view& key);
-
 public:
     int num_hashes() { return _hash_count; }
     bitmap& bits() { return _bitset; }
@@ -70,26 +65,11 @@ public:
     bloom_filter(int hashes, bitmap&& bs) : _bitset(std::move(bs)), _hash_count(hashes) {
     }
 
-    virtual void hash(const bytes_view& b, int64_t seed, std::array<uint64_t, 2>& result) = 0;
+    virtual void add(const bytes_view& key) override;
 
-    virtual void add(const bytes_view& key) override {
+    virtual bool is_present(const bytes_view& key) override;
 
-        auto idx = indexes(key);
-        for (int i = 0; i < _hash_count; i++) {
-            _bitset.set(idx[i]);
-        }
-    }
-
-    virtual bool is_present(const bytes_view& key) override {
-
-        auto idx = indexes(key);
-        for (int i = 0; i < _hash_count; i++) {
-            if (!_bitset.test(idx[i])) {
-                return false;
-            }
-        }
-        return true;
-    }
+    virtual bool is_present(hashed_key key) override;
 
     virtual void clear() override {
         _bitset.clear();
@@ -106,14 +86,15 @@ struct murmur3_bloom_filter: public bloom_filter {
 
     murmur3_bloom_filter(int hashes, bitmap&& bs) : bloom_filter(hashes, std::move(bs)) {}
 
-    virtual void hash(const bytes_view& b, int64_t seed, std::array<uint64_t, 2>& result) {
-        utils::murmur_hash::hash3_x64_128(b, seed, result);
-    }
 };
 
 struct always_present_filter: public i_filter {
 
     virtual bool is_present(const bytes_view& key) override {
+        return true;
+    }
+
+    virtual bool is_present(hashed_key key) override {
         return true;
     }
 

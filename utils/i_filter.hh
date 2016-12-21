@@ -48,6 +48,16 @@ namespace utils {
 struct i_filter;
 using filter_ptr = std::unique_ptr<i_filter>;
 
+class hashed_key {
+private:
+    std::array<uint64_t, 2> _hash;
+public:
+    hashed_key(std::array<uint64_t, 2> h) : _hash(h) {}
+    std::array<uint64_t, 2> hash() const { return _hash; };
+};
+
+hashed_key make_hashed_key(bytes_view key);
+
 // FIXME: serialize() and serialized_size() not implemented. We should only be serializing to
 // disk, not in the wire.
 struct i_filter {
@@ -55,6 +65,7 @@ struct i_filter {
 
     virtual void add(const bytes_view& key) = 0;
     virtual bool is_present(const bytes_view& key) = 0;
+    virtual bool is_present(hashed_key) = 0;
     virtual void clear() = 0;
     virtual void close() = 0;
 
