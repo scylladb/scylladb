@@ -822,6 +822,12 @@ future<> column_family::load_sstable(sstables::sstable&& sstab, bool reset_level
 // several shards, but we can't start any compaction before all the sstables
 // of this CF were loaded. So call this function to start rewrites, if any.
 void column_family::start_rewrite() {
+    // submit shared sstables in generation order to guarantee that all shards
+    // owning a sstable will agree on its deletion nearly the same time,
+    // therefore, reducing disk space requirements.
+    boost::sort(_sstables_need_rewrite, [] (const sstables::shared_sstable& x, const sstables::shared_sstable& y) {
+        return x->generation() < y->generation();
+    });
     for (auto sst : _sstables_need_rewrite) {
         dblog.info("Splitting {} for shard", sst->get_filename());
         _compaction_manager.submit_sstable_rewrite(this, sst);
