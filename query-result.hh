@@ -154,6 +154,15 @@ private:
 
     friend class result_memory_limiter;
 public:
+    // State of a accounter on another shard. Used to pass information about
+    // the size of the result so far in range queries.
+    class foreign_state {
+        size_t _used_memory;
+    public:
+        explicit foreign_state(size_t used_mem) : _used_memory(used_mem) { }
+        size_t used_memory() const { return _used_memory; }
+    };
+public:
     result_memory_accounter() = default;
 
     // This constructor is used in cases when a result is produced on multiple
@@ -162,9 +171,9 @@ public:
     // accouter will learn how big the total result alread is and limit the
     // part produced on this shard so that after merging the final result
     // does not exceed the individual limit.
-    result_memory_accounter(result_memory_limiter& limiter, const result_memory_accounter& foreign_accounter) noexcept
+    result_memory_accounter(result_memory_limiter& limiter, foreign_state fstate) noexcept
         : _limiter(&limiter)
-        , _total_used_memory(foreign_accounter.used_memory())
+        , _total_used_memory(fstate.used_memory())
     { }
 
     result_memory_accounter(result_memory_accounter&& other) noexcept
@@ -191,6 +200,10 @@ public:
     }
 
     size_t used_memory() const { return _used_memory; }
+
+    foreign_state state_for_another_shard() {
+        return foreign_state(_used_memory);
+    }
 
     // Consume n more bytes for the result. Returns stop_iteration::yes if
     // the result cannot grow any more (taking into account both individual

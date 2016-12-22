@@ -3854,8 +3854,8 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
                 auto&& elem = elem_shard_range.first.element;
                 auto&& shard = elem_shard_range.first.shard;
                 auto&& range = elem_shard_range.second;
-                return _db.invoke_on(shard, [&, range, gt] (database& db) {
-                    query::result_memory_accounter accounter(db.get_result_memory_limiter(), mrm.memory());
+                return _db.invoke_on(shard, [&, range, gt, fstate = mrm.memory().state_for_another_shard()] (database& db) {
+                    query::result_memory_accounter accounter(db.get_result_memory_limiter(), std::move(fstate));
                     return db.query_mutations(gs, *shard_cmd, range, std::move(accounter), std::move(gt)).then([] (reconcilable_result&& rr) {
                         return make_foreign(make_lw_shared(std::move(rr)));
                     });
