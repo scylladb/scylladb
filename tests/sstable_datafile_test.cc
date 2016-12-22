@@ -2162,16 +2162,20 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
         auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm);
         cf->mark_ready_for_writes();
 
+        auto next_timestamp = [] {
+            static thread_local api::timestamp_type next = 1;
+            return next++;
+        };
+
         auto make_insert = [&] (partition_key key) {
             mutation m(key, s);
-            const column_definition& col = *s->get_column_definition("value");
-            m.set_clustered_cell(clustering_key::make_empty(), col, make_atomic_cell(int32_type->decompose(1)));
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), next_timestamp());
             return m;
         };
 
         auto make_delete = [&] (partition_key key) {
             mutation m(key, s);
-            tombstone tomb(api::new_timestamp(), gc_clock::now());
+            tombstone tomb(next_timestamp(), gc_clock::now());
             m.partition().apply(tomb);
             return m;
         };
