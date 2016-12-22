@@ -235,10 +235,10 @@ public:
 private:
     std::vector<api::timestamp_type> _timestamps;
     std::vector<int32_t> _ttls;
-    const db_clock::time_point _now;
+    const gc_clock::time_point _now;
     cql_serialization_format _cql_serialization_format;
 public:
-    result_set_builder(const selection& s, db_clock::time_point now, cql_serialization_format sf);
+    result_set_builder(const selection& s, gc_clock::time_point now, cql_serialization_format sf);
     void add_empty();
     void add(bytes_opt value);
     void add(const column_definition& def, const query::result_atomic_cell_view& c);

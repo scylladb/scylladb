@@ -70,7 +70,7 @@ private:
                && !cmd.slice.options.contains<query::partition_slice::option::distinct>();
     }
 
-    future<> fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, db_clock::time_point now) override {
+    future<> fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now) override {
         auto state = _options.get_paging_state();
 
         if (!_last_pkey && state) {
@@ -211,7 +211,7 @@ private:
     }
 
     future<std::unique_ptr<cql3::result_set>> fetch_page(uint32_t page_size,
-            db_clock::time_point now) override {
+            gc_clock::time_point now) override {
         return do_with(
                 cql3::selection::result_set_builder(*_selection, now,
                         _options.get_cql_serialization_format()),
@@ -225,7 +225,7 @@ private:
     void handle_result(
             cql3::selection::result_set_builder& builder,
             foreign_ptr<lw_shared_ptr<query::result>> results,
-            uint32_t page_size, db_clock::time_point now) {
+            uint32_t page_size, gc_clock::time_point now) {
 
         class myvisitor : public cql3::selection::result_set_builder::visitor {
         public:

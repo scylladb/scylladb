@@ -124,10 +124,10 @@ public:
 
     future<::shared_ptr<transport::messages::result_message>> execute(distributed<service::storage_proxy>& proxy,
         lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
-         const query_options& options, db_clock::time_point now);
+         const query_options& options, gc_clock::time_point now);
 
     shared_ptr<transport::messages::result_message> process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
-        lw_shared_ptr<query::read_command> cmd, const query_options& options, db_clock::time_point now);
+        lw_shared_ptr<query::read_command> cmd, const query_options& options, gc_clock::time_point now);
 #if 0
     private ResultMessage.Rows pageAggregateQuery(QueryPager pager, QueryOptions options, int pageSize, long now)
             throws RequestValidationException, RequestExecutionException

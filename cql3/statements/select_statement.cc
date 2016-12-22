@@ -236,12 +236,12 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
     validate_for_read(_schema->ks_name(), cl);
 
     int32_t limit = get_limit(options);
-    auto now = db_clock::now();
+    auto now = gc_clock::now();
 
     ++_stats.reads;
 
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
-        make_partition_slice(options), limit, to_gc_clock(now), tracing::make_trace_info(state.get_trace_state()), query::max_partitions, options.get_timestamp(state));
+        make_partition_slice(options), limit, now, tracing::make_trace_info(state.get_trace_state()), query::max_partitions, options.get_timestamp(state));
 
     int32_t page_size = options.get_page_size();
 
@@ -258,8 +258,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
     if (!aggregate && (page_size <= 0
             || !service::pager::query_pagers::may_need_paging(page_size,
                     *command, key_ranges))) {
-        return execute(proxy, command, std::move(key_ranges), state, options,
-                now);
+        return execute(proxy, command, std::move(key_ranges), state, options, now);
     }
 
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
@@ -307,7 +306,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
                           dht::partition_range_vector&& partition_ranges,
                           service::query_state& state,
                           const query_options& options,
-                          db_clock::time_point now)
+                          gc_clock::time_point now)
 {
     // If this is a query with IN on partition key, ORDER BY clause and LIMIT
     // is specified we need to get "limit" rows from each partition since there
@@ -339,9 +338,9 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy,
                                    const query_options& options)
 {
     int32_t limit = get_limit(options);
-    auto now = db_clock::now();
+    auto now = gc_clock::now();
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
-        make_partition_slice(options), limit, to_gc_clock(now), std::experimental::nullopt, query::max_partitions, options.get_timestamp(state));
+        make_partition_slice(options), limit, now, std::experimental::nullopt, query::max_partitions, options.get_timestamp(state));
     auto partition_ranges = _restrictions->get_partition_key_ranges(options);
 
     tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
@@ -371,7 +370,7 @@ shared_ptr<transport::messages::result_message>
 select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
                                   lw_shared_ptr<query::read_command> cmd,
                                   const query_options& options,
-                                  db_clock::time_point now)
+                                  gc_clock::time_point now)
 {
     cql3::selection::result_set_builder builder(*_selection, now,
             options.get_cql_serialization_format());

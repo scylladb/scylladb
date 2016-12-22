@@ -253,7 +253,7 @@ selection::collect_metadata(schema_ptr schema, const std::vector<::shared_ptr<ra
     return r;
 }
 
-result_set_builder::result_set_builder(const selection& s, db_clock::time_point now, cql_serialization_format sf)
+result_set_builder::result_set_builder(const selection& s, gc_clock::time_point now, cql_serialization_format sf)
     : _result_set(std::make_unique<result_set>(::make_shared<metadata>(*(s.get_result_metadata()))))
     , _selectors(s.new_selectors())
     , _now(now)
@@ -290,7 +290,7 @@ void result_set_builder::add(const column_definition& def, const query::result_a
         gc_clock::duration ttl_left(-1);
         expiry_opt e = c.expiry();
         if (e) {
-            ttl_left = *e - to_gc_clock(_now);
+            ttl_left = *e - _now;
         }
         _ttls[current->size() - 1] = ttl_left.count();
     }
