@@ -2158,9 +2158,15 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
             return make_lw_shared<sstable>(s, tmp->path, (*gen)++, la, big);
         };
 
-        auto cm = make_lw_shared<compaction_manager>();
-        auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm);
-        cf->mark_ready_for_writes();
+        auto compact = [&sst_gen, s] (std::vector<shared_sstable> all, std::vector<shared_sstable> to_compact) -> std::vector<shared_sstable> {
+            auto cm = make_lw_shared<compaction_manager>();
+            auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm);
+            cf->mark_ready_for_writes();
+            for (auto&& sst : all) {
+                cf->add_sstable(sst);
+            }
+            return sstables::compact_sstables(to_compact, *cf, sst_gen, std::numeric_limits<uint64_t>::max(), 0).get0();
+        };
 
         auto next_timestamp = [] {
             static thread_local api::timestamp_type next = 1;
@@ -2195,11 +2201,67 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
 
             forward_jump_clocks(std::chrono::seconds(1));
 
-            auto result = sstables::compact_sstables(sstables, *cf, sst_gen, std::numeric_limits<uint64_t>::max(), 0).get0();
+            auto result = compact(sstables, sstables);
             BOOST_REQUIRE_EQUAL(1, result.size());
 
             assert_that(sstable_reader(result[0], s))
                     .produces(mut2)
+                    .produces_end_of_stream();
+        }
+
+        {
+            auto mut1 = make_insert(alpha);
+            auto mut2 = make_insert(alpha);
+            auto mut3 = make_delete(alpha);
+
+            auto sst1 = make_sstable_containing(sst_gen, {mut1});
+            auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3});
+
+            forward_jump_clocks(std::chrono::seconds(1));
+
+            auto result = compact({sst1, sst2}, {sst2});
+            BOOST_REQUIRE_EQUAL(1, result.size());
+
+            assert_that(sstable_reader(result[0], s))
+                    .produces(mut3)
+                    .produces_end_of_stream();
+        }
+
+        {
+            auto mut1 = make_insert(alpha);
+            auto mut2 = make_delete(alpha);
+            auto mut3 = make_insert(beta);
+            auto mut4 = make_insert(alpha);
+
+            auto sst1 = make_sstable_containing(sst_gen, {mut1, mut2, mut3});
+            auto sst2 = make_sstable_containing(sst_gen, {mut4});
+
+            forward_jump_clocks(std::chrono::seconds(1));
+
+            auto result = compact({sst1, sst2}, {sst1});
+            BOOST_REQUIRE_EQUAL(1, result.size());
+
+            assert_that(sstable_reader(result[0], s))
+                    .produces(mut3)
+                    .produces_end_of_stream();
+        }
+
+        {
+            auto mut1 = make_insert(alpha);
+            auto mut2 = make_delete(alpha);
+            auto mut3 = make_insert(beta);
+            auto mut4 = make_insert(beta);
+
+            auto sst1 = make_sstable_containing(sst_gen, {mut1, mut2, mut3});
+            auto sst2 = make_sstable_containing(sst_gen, {mut4});
+
+            forward_jump_clocks(std::chrono::seconds(1));
+
+            auto result = compact({sst1, sst2}, {sst1});
+            BOOST_REQUIRE_EQUAL(1, result.size());
+
+            assert_that(sstable_reader(result[0], s))
+                    .produces(mut3)
                     .produces_end_of_stream();
         }
     });
