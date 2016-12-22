@@ -517,7 +517,6 @@ private:
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable);
     void add_sstable(sstables::sstable&& sstable);
-    void add_sstable(lw_shared_ptr<sstables::sstable> sstable);
     // returns an empty pointer if sstable doesn't belong to current shard.
     future<lw_shared_ptr<sstables::sstable>> open_sstable(sstring dir, int64_t generation,
         sstables::sstable::version_types v, sstables::sstable::format_types f);
@@ -565,6 +564,11 @@ private:
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
     void do_trigger_compaction();
 public:
+    // Adds new sstable to the set of sstables
+    // Doesn't update the cache.
+    // Doesn't trigger compaction.
+    // Public for tests.
+    void add_sstable(lw_shared_ptr<sstables::sstable> sstable);
 
     // This function should be called when this column family is ready for writes, IOW,
     // to produce SSTables. Extensive details about why this is important can be found
