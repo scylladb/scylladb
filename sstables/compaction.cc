@@ -88,11 +88,15 @@ public:
 static api::timestamp_type get_max_purgeable_timestamp(const column_family& cf, sstable_set::incremental_selector& selector,
         const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk) {
     auto timestamp = api::max_timestamp;
+    stdx::optional<utils::hashed_key> hk;
     for (auto&& sst : boost::range::join(selector.select(dk.token()), cf.compacted_undeleted_sstables())) {
         if (compacting_set.count(sst)) {
             continue;
         }
-        if (sst->filter_has_key(*cf.schema(), dk.key())) {
+        if (!hk) {
+            hk = sstables::sstable::make_hashed_key(*cf.schema(), dk.key());
+        }
+        if (sst->filter_has_key(*hk)) {
             timestamp = std::min(timestamp, sst->get_stats_metadata().min_timestamp);
         }
     }
