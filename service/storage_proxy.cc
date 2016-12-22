@@ -3566,13 +3566,17 @@ class mutation_result_merger {
     unsigned _row_count = 0;
     unsigned _partition_count = 0;
     bool _short_read_allowed;
-    query::short_read _short_read;
     // we get a batch of partitions each time, each with a key
     // partition batches should be maintained in key order
     // batches that share a key should be merged and sorted in decorated_key
     // order
-    std::multimap<unsigned, std::vector<partition>> _partitions;
+    struct partitions_batch {
+        std::vector<partition> partitions;
+        query::short_read short_read;
+    };
+    std::multimap<unsigned, partitions_batch> _partitions;
     query::result_memory_accounter _memory_accounter;
+    stdx::optional<unsigned> _stop_after_key;
 public:
     explicit mutation_result_merger(schema_ptr schema, lw_shared_ptr<const query::read_command> cmd)
             : _schema(std::move(schema))
@@ -3585,6 +3589,10 @@ public:
         return _memory_accounter;
     }
     void add_result(unsigned key, foreign_ptr<lw_shared_ptr<reconcilable_result>> partial_result) {
+        if (_stop_after_key && key > *_stop_after_key) {
+            // A short result was added that goes before this one.
+            return;
+        }
         std::vector<partition> partitions;
         partitions.reserve(partial_result->partitions().size());
         // Following three lines to simplify patch; can remove later
@@ -3593,41 +3601,100 @@ public:
             _row_count += p._row_count;
             _partition_count += p._row_count > 0;
         }
-        _partitions.emplace(key, std::move(partitions));
-        _short_read = partial_result->is_short_read();
-        if (_memory_accounter.update_and_check(partial_result->memory_usage()) && _short_read_allowed) {
-            _short_read = _short_read || query::short_read(_row_count > 0);
+        _memory_accounter.update(partial_result->memory_usage());
+        if (partial_result->is_short_read()) {
+            _stop_after_key = key;
         }
+        _partitions.emplace(key, partitions_batch { std::move(partitions), partial_result->is_short_read() });
     }
     reconcilable_result get() && {
         auto unsorted = std::unordered_set<unsigned>();
-        auto merged = std::map<unsigned, std::vector<partition>>();
+        struct partitions_and_last_key {
+            std::vector<partition> partitions;
+            stdx::optional<dht::decorated_key> last; // set if we had a short read
+        };
+        auto merged = std::map<unsigned, partitions_and_last_key>();
+        auto short_read = query::short_read::no;
         // merge batches with equal keys, and note if we need to sort afterwards
         for (auto&& key_value : _partitions) {
             auto&& key = key_value.first;
+            if (*_stop_after_key && key > *_stop_after_key) {
+                break;
+            }
             auto&& batch = key_value.second;
             auto&& dest = merged[key];
-            if (dest.empty()) {
-                dest = std::move(batch);
+            if (dest.partitions.empty()) {
+                dest.partitions = std::move(batch.partitions);
             } else {
                 unsorted.insert(key);
-                std::move(batch.begin(), batch.end(), std::back_inserter(dest));
+                std::move(batch.partitions.begin(), batch.partitions.end(), std::back_inserter(dest.partitions));
+            }
+            // In case of a short read we need to remove all partitions from the
+            // batch that come after the last partition of the short read
+            // result.
+            if (batch.short_read) {
+                // Nobody sends a short read with no data.
+                const auto& last = dest.partitions.back().mut().decorated_key(*_schema);
+                if (!dest.last || last.less_compare(*_schema, *dest.last)) {
+                    dest.last = last;
+                }
+                short_read = query::short_read::yes;
             }
         }
 
         // Sort batches that arrived with the same keys
         for (auto key : unsorted) {
-            auto dkcmp = dht::decorated_key::less_comparator(_schema);
+            struct comparator {
+                const schema& s;
+                dht::decorated_key::less_comparator dkcmp;
+
+                bool operator()(const partition& a, const partition& b) const {
+                    return dkcmp(a.mut().decorated_key(s), b.mut().decorated_key(s));
+                }
+                bool operator()(const dht::decorated_key& a, const partition& b) const {
+                    return dkcmp(a, b.mut().decorated_key(s));
+                }
+                bool operator()(const partition& a, const dht::decorated_key& b) const {
+                    return dkcmp(a.mut().decorated_key(s), b);
+                }
+            };
+            auto cmp = comparator { *_schema, dht::decorated_key::less_comparator(_schema) };
+
             auto&& batch = merged[key];
-            boost::sort(batch, [&] (const partition& a, const partition& b) {
-                return dkcmp(a.mut().decorated_key(*_schema), b.mut().decorated_key(*_schema));
-            });
+            boost::sort(batch.partitions, cmp);
+            if (batch.last) {
+                // This batch was built from a result that was a short read.
+                // We need to remove all partitions that are after that short
+                // read.
+                auto it = boost::range::upper_bound(batch.partitions, std::move(*batch.last), cmp);
+                batch.partitions.erase(it, batch.partitions.end());
+            }
         }
 
         auto final = std::vector<partition>();
         final.reserve(_partition_count);
         for (auto&& batch : merged | boost::adaptors::map_values) {
-            std::move(batch.begin(), batch.end(), std::back_inserter(final));
+            std::move(batch.partitions.begin(), batch.partitions.end(), std::back_inserter(final));
+        }
+
+        if (short_read) {
+            // Short read row and partition counts may be incorrect, recalculate.
+            _row_count = 0;
+            _partition_count = 0;
+            for (const auto& p : final) {
+                _row_count += p.row_count();
+                _partition_count += p.row_count() > 0;
+            }
+
+            if (_row_count >= _cmd->row_limit || _partition_count > _cmd->partition_limit) {
+                // Even though there was a short read contributing to the final
+                // result we got limited by total row limit or partition limit.
+                // Note that we cannot with trivial check make unset short read flag
+                // in case _partition_count == _cmd->partition_limit since the short
+                // read may have caused the last partition to contain less rows
+                // than asked for.
+                short_read = query::short_read::no;
+            }
         }
 
         // Trim back partition count and row count in case we overshot.
@@ -3649,10 +3716,10 @@ public:
             _row_count += rc;
         }
 
-        return reconcilable_result(_row_count, std::move(final), _short_read, std::move(_memory_accounter).done());
+        return reconcilable_result(_row_count, std::move(final), short_read, std::move(_memory_accounter).done());
     }
     bool short_read() const {
-        return bool(_short_read);
+        return bool(_stop_after_key) || (_short_read_allowed && _row_count > 0 && _memory_accounter.check());
     }
     unsigned partition_count() const {
         return _partition_count;
