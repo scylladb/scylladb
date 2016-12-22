@@ -2111,110 +2111,94 @@ SEASTAR_TEST_CASE(check_read_indexes) {
     });
 }
 
+// Must run in a seastar thread
+static shared_sstable make_sstable_containing(std::function<shared_sstable()> sst_factory, std::vector<mutation> muts) {
+    auto sst = sst_factory();
+    schema_ptr s = muts[0].schema();
+    auto mt = make_lw_shared<memtable>(s);
+    for (auto&& m : muts) {
+        mt->apply(m);
+    }
+    sst->write_components(*mt).get();
+    sst->open_data().get();
+
+    std::set<mutation, mutation_decorated_key_less_comparator> merged;
+    for (auto&& m : muts) {
+        auto result = merged.insert(m);
+        if (!result.second) {
+            auto old = *result.first;
+            merged.erase(result.first);
+            merged.insert(old + m);
+        }
+    }
+
+    // validate the sstable
+    auto rd = assert_that(sstable_reader(sst, s));
+    for (auto&& m : merged) {
+        rd.produces(m);
+    }
+    rd.produces_end_of_stream();
+
+    return sst;
+}
+
 SEASTAR_TEST_CASE(tombstone_purge_test) {
     BOOST_REQUIRE(smp::count == 1);
-    // In a column family with gc_grace_seconds set to 0, check that a tombstone
-    // is purged after compaction.
-    auto builder = schema_builder("tests", "tombstone_purge")
-        .with_column("id", utf8_type, column_kind::partition_key)
-        .with_column("value", int32_type);
-    builder.set_gc_grace_seconds(0);
-    auto s = builder.build();
+    return seastar::async([] {
+        // In a column family with gc_grace_seconds set to 0, check that a tombstone
+        // is purged after compaction.
+        auto builder = schema_builder("tests", "tombstone_purge")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        builder.set_gc_grace_seconds(0);
+        auto s = builder.build();
 
-    // Create a memtable containing two partitions, alpha and beta.
-    auto mt1 = make_lw_shared<memtable>(s);
-    auto insert_data = [&mt1, s] (sstring key_value) {
-        auto key = partition_key::from_exploded(*s, {to_bytes(key_value)});
-        mutation m(key, s);
-        const column_definition& col = *s->get_column_definition("value");
-        m.set_clustered_cell(clustering_key::make_empty(), col, make_atomic_cell(int32_type->decompose(1)));
-        mt1->apply(std::move(m));
-    };
-    insert_data("alpha");
-    insert_data("beta");
+        auto tmp = make_lw_shared<tmpdir>();
+        auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            return make_lw_shared<sstable>(s, tmp->path, (*gen)++, la, big);
+        };
 
-    // Create a second memtable containing one tombstone for the partition alpha.
-    auto mt2 = make_lw_shared<memtable>(s);
-    auto key = partition_key::from_exploded(*s, {to_bytes("alpha")});
-    mutation m(key, s);
-    // gc_clock isn't very precise and tombstone's deletion time has to be lower
-    // than gc_before for it to be purged. So let's subtract 1 second from now().
-    tombstone tomb(api::new_timestamp(), gc_clock::now() - std::chrono::seconds(1));
-    m.partition().apply(tomb);
-    mt2->apply(std::move(m));
-
-    auto memtables = make_lw_shared<std::vector<lw_shared_ptr<memtable>>>();
-    memtables->push_back(std::move(mt1));
-    memtables->push_back(std::move(mt2));
-
-    auto tmp = make_lw_shared<tmpdir>();
-    auto gen = make_lw_shared<unsigned>(1);
-    auto sstables = make_lw_shared<std::vector<shared_sstable>>();
-
-    return do_for_each(*memtables, [tmp, gen, sstables, memtables, s] (lw_shared_ptr<memtable>& mt) {
-        auto sst = make_lw_shared<sstable>(s, tmp->path, (*gen)++, la, big);
-        return sst->write_components(*mt).then([sstables, sst] {
-            return sst->open_data().then([sstables, sst] {
-                sstables->push_back(sst);
-            });
-        });
-    }).then([s, sstables] {
-        BOOST_REQUIRE(sstables->size() == 2);
-
-        // Validate first generated sstable
-        auto sst = (*sstables)[0];
-        BOOST_REQUIRE(sst->generation() == 1);
-        auto reader = make_lw_shared(sstable_reader(sst, s));
-        return (*reader)().then([s, reader] (streamed_mutation_opt m) {
-            BOOST_REQUIRE(m);
-            auto beta = partition_key::from_exploded(*s, {to_bytes("beta")});
-            BOOST_REQUIRE(m->key().equal(*s, beta));
-            return (*reader)();
-        }).then([s, reader] (streamed_mutation_opt m) {
-            BOOST_REQUIRE(m);
-            auto alpha = partition_key::from_exploded(*s, {to_bytes("alpha")});
-            BOOST_REQUIRE(m->key().equal(*s, alpha));
-            return (*reader)();
-        }).then([reader] (streamed_mutation_opt m) {
-            BOOST_REQUIRE(!m);
-        });
-    }).then([s, sstables, tomb] {
-        // Validate second generated sstable
-        auto sst = (*sstables)[1];
-        BOOST_REQUIRE(sst->generation() == 2);
-        auto reader = make_lw_shared(sstable_reader(sst, s));
-        return (*reader)().then([s, reader, tomb] (streamed_mutation_opt m) {
-            BOOST_REQUIRE(m);
-            auto alpha = partition_key::from_exploded(*s, {to_bytes("alpha")});
-            BOOST_REQUIRE(m->key().equal(*s, alpha));
-            BOOST_REQUIRE(m->partition_tombstone() == tomb);
-            return (*reader)();
-        }).then([reader] (streamed_mutation_opt m) {
-            BOOST_REQUIRE(!m);
-        });
-    }).then([s, tmp, sstables] {
         auto cm = make_lw_shared<compaction_manager>();
         auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm);
         cf->mark_ready_for_writes();
-        auto create = [s, tmp] {
-            return make_lw_shared<sstable>(s, tmp->path, 3, la, big);
+
+        auto make_insert = [&] (partition_key key) {
+            mutation m(key, s);
+            const column_definition& col = *s->get_column_definition("value");
+            m.set_clustered_cell(clustering_key::make_empty(), col, make_atomic_cell(int32_type->decompose(1)));
+            return m;
         };
 
-        return sstables::compact_sstables(*sstables, *cf, create, std::numeric_limits<uint64_t>::max(), 0).then([s, tmp, sstables, cf, cm] (auto) {
-            return open_sstable(s, tmp->path, 3).then([s] (shared_sstable sst) {
-                auto reader = make_lw_shared(sstable_reader(sst, s)); // reader holds sst and s alive.
-                return (*reader)().then([s, reader] (streamed_mutation_opt m) {
-                    BOOST_REQUIRE(m);
-                    auto beta = partition_key::from_exploded(*s, {to_bytes("beta")});
-                    BOOST_REQUIRE(m->key().equal(*s, beta));
-                    BOOST_REQUIRE(!m->partition_tombstone());
-                    return (*reader)();
-                }).then([reader] (streamed_mutation_opt m) {
-                    BOOST_REQUIRE(!m);
-                });
-            });
-        });
-    }).then([s, tmp] {});
+        auto make_delete = [&] (partition_key key) {
+            mutation m(key, s);
+            tombstone tomb(api::new_timestamp(), gc_clock::now());
+            m.partition().apply(tomb);
+            return m;
+        };
+
+        auto alpha = partition_key::from_exploded(*s, {to_bytes("alpha")});
+        auto beta = partition_key::from_exploded(*s, {to_bytes("beta")});
+
+        {
+            auto mut1 = make_insert(alpha);
+            auto mut2 = make_insert(beta);
+            auto mut3 = make_delete(alpha);
+
+            std::vector<shared_sstable> sstables = {
+                    make_sstable_containing(sst_gen, {mut1, mut2}),
+                    make_sstable_containing(sst_gen, {mut3})
+            };
+
+            forward_jump_clocks(std::chrono::seconds(1));
+
+            auto result = sstables::compact_sstables(sstables, *cf, sst_gen, std::numeric_limits<uint64_t>::max(), 0).get0();
+            BOOST_REQUIRE_EQUAL(1, result.size());
+
+            assert_that(sstable_reader(result[0], s))
+                    .produces(mut2)
+                    .produces_end_of_stream();
+        }
+    });
 }
 
 SEASTAR_TEST_CASE(check_multi_schema) {
