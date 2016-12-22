@@ -1703,7 +1703,7 @@ file_writer components_writer::index_file_writer(sstable& sst, const io_priority
     options.buffer_size = sst.sstable_buffer_size;
     options.io_priority_class = pc;
     options.write_behind = 10;
-    return file_writer(sst._index_file, std::move(options));
+    return file_writer(std::move(sst._index_file), std::move(options));
 }
 
 // Get the currently loaded configuration, or the default configuration in
@@ -1855,7 +1855,6 @@ void components_writer::consume_end_of_stream() {
     seal_summary(_sst._summary, std::move(_first_key), std::move(_last_key)); // what if there is only one partition? what if it is empty?
 
     _index.close().get();
-    _sst._index_file = file(); // index->close() closed _index_file
 
     if (_sst.has_component(sstable::component_type::CompressionInfo)) {
         _sst._collector.add_compression_ratio(_sst._compression.compressed_file_length(), _sst._compression.uncompressed_file_length());
@@ -1905,17 +1904,16 @@ void sstable_writer::prepare_file_writer()
     options.write_behind = 10;
 
     if (!_compression_enabled) {
-        _writer = make_shared<checksummed_file_writer>(_sst._data_file, std::move(options), true);
+        _writer = make_shared<checksummed_file_writer>(std::move(_sst._data_file), std::move(options), true);
     } else {
         prepare_compression(_sst._compression, _schema);
-        _writer = make_shared<file_writer>(make_compressed_file_output_stream(_sst._data_file, std::move(options), &_sst._compression));
+        _writer = make_shared<file_writer>(make_compressed_file_output_stream(std::move(_sst._data_file), std::move(options), &_sst._compression));
     }
 }
 
 void sstable_writer::finish_file_writer()
 {
     _writer->close().get();
-    _sst._data_file = file(); // w->close() closed _data_file
 
     if (!_compression_enabled) {
         auto chksum_wr = static_pointer_cast<checksummed_file_writer>(_writer);
