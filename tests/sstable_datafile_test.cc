@@ -2163,7 +2163,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
             auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm);
             cf->mark_ready_for_writes();
             for (auto&& sst : all) {
-                cf->add_sstable(sst);
+                column_family_test(cf).add_sstable(sst);
             }
             return sstables::compact_sstables(to_compact, *cf, sst_gen, std::numeric_limits<uint64_t>::max(), 0).get0();
         };
