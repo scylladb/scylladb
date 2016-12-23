@@ -35,6 +35,7 @@
 #include "core/seastar.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/rwlock.hh>
+#include <seastar/core/metrics.hh>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include "sstables/sstables.hh"
@@ -1729,7 +1730,7 @@ database::database(const db::config& cfg)
     , _enable_incremental_backups(cfg.incremental_backups())
 {
     _compaction_manager.start();
-    setup_collectd();
+    setup_metrics();
 
     dblog.info("Row: max_vector_size: {}, internal_count: {}", size_t(row::max_vector_size), size_t(row::internal_count));
 }
@@ -1737,196 +1738,117 @@ database::database(const db::config& cfg)
 
 void
 dirty_memory_manager::setup_collectd(sstring namestr) {
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("memory"
-                , scollectd::per_cpu_plugin_instance
-                , "bytes", namestr + "_dirty")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
-            return real_dirty_memory();
-    })));
+    namespace sm = seastar::metrics;
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("memory"
-                , scollectd::per_cpu_plugin_instance
-                , "bytes", namestr +"_virtual_dirty")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
-            return virtual_dirty_memory();
-    })));
+    _metrics.add_group("memory", {
+        sm::make_gauge(namestr + "_dirty_bytes", [this] { return real_dirty_memory(); },
+                       sm::description("Holds the current size of a all non-free memory in bytes: used memory + released memory that hasn't been returned to a free memory pool yet. "
+                                       "Total memory size minus this value represents the amount of available memory. "
+                                       "If this value minus virtual_dirty_bytes is too high then this means that the dirty memory eviction lags behind.")),
+
+        sm::make_gauge(namestr +"_virtual_dirty_bytes", [this] { return virtual_dirty_memory(); },
+                       sm::description("Holds the size of used memory in bytes. Compare it to \"dirty_bytes\" to see how many memory is wasted (neither used nor available).")),
+    });
 }
 
 void
-database::setup_collectd() {
+database::setup_metrics() {
     _dirty_memory_manager.setup_collectd("regular");
     _system_dirty_memory_manager.setup_collectd("system");
     _streaming_dirty_memory_manager.setup_collectd("streaming");
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("memory"
-                , scollectd::per_cpu_plugin_instance
-                , "bytes", "dirty")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
-            return _dirty_memory_manager.real_dirty_memory() +
-                   _system_dirty_memory_manager.real_dirty_memory() +
-                   _streaming_dirty_memory_manager.real_dirty_memory();
-    })));
+    namespace sm = seastar::metrics;
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("memory"
-                , scollectd::per_cpu_plugin_instance
-                , "bytes", "virtual_dirty")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
-        return _dirty_memory_manager.virtual_dirty_memory() +
-               _system_dirty_memory_manager.virtual_dirty_memory() +
-               _streaming_dirty_memory_manager.virtual_dirty_memory();
-    })));
+    _metrics.add_group("memory", {
+        sm::make_gauge("dirty_bytes", [this] { return _dirty_memory_manager.real_dirty_memory() + _system_dirty_memory_manager.real_dirty_memory() + _streaming_dirty_memory_manager.real_dirty_memory(); },
+                       sm::description("Holds the current size of all (\"regular\", \"system\" and \"streaming\") non-free memory in bytes: used memory + released memory that hasn't been returned to a free memory pool yet. "
+                                       "Total memory size minus this value represents the amount of available memory. "
+                                       "If this value minus virtual_dirty_bytes is too high then this means that the dirty memory eviction lags behind.")),
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("memtables"
-                , scollectd::per_cpu_plugin_instance
-                , "queue_length", "pending_flushes")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, _cf_stats.pending_memtables_flushes_count)
-    ));
+        sm::make_gauge("virtual_dirty_bytes", [this] { return _dirty_memory_manager.virtual_dirty_memory() + _system_dirty_memory_manager.virtual_dirty_memory() + _streaming_dirty_memory_manager.virtual_dirty_memory(); },
+                       sm::description("Holds the size of all (\"regular\", \"system\" and \"streaming\") used memory in bytes. Compare it to \"dirty_bytes\" to see how many memory is wasted (neither used nor available).")),
+    });
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "queue_length", "requests_blocked_memory")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
-                    return _dirty_memory_manager.region_group().blocked_requests();
-                })
-    ));
+    _metrics.add_group("memtables", {
+        sm::make_gauge("pending_flushes", _cf_stats.pending_memtables_flushes_count,
+                       sm::description("Holds the current number of memtables that are currently being flushed to sstables. "
+                                       "High value in this mertic may be an indication of storage being a bottleneck.")),
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "requests_blocked_memory")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, [this] {
-                    return _dirty_memory_manager.region_group().blocked_requests_counter();
-                })
-    ));
+        sm::make_gauge("pending_flushes_bytes", _cf_stats.pending_memtables_flushes_bytes,
+                       sm::description("Holds the current number of bytes in memtables that are currently being flushed to sstables. "
+                                       "High value in this mertic may be an indication of storage being a bottleneck.")),
+    });
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("memtables"
-                , scollectd::per_cpu_plugin_instance
-                , "bytes", "pending_flushes")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, _cf_stats.pending_memtables_flushes_bytes)
-    ));
+    _metrics.add_group("database", {
+        sm::make_gauge("requests_blocked_memory", [this] { return _dirty_memory_manager.region_group().blocked_requests(); },
+                       sm::description(
+                           seastar::format("Holds the current number of requests blocked due to reaching the memory quota ({}B). "
+                                           "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"database\" component.", _dirty_memory_manager.throttle_threshold()))),
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "clustering_filter_count")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _cf_stats.clustering_filter_count)
-    ));
+        sm::make_derive("requests_blocked_memory", [this] { return _dirty_memory_manager.region_group().blocked_requests_counter(); },
+                       sm::description(seastar::format("Holds the current number of requests blocked due to reaching the memory quota ({}B). "
+                                       "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"database\" component.", _dirty_memory_manager.throttle_threshold()))),
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "clustering_filter_sstables_checked")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _cf_stats.sstables_checked_by_clustering_filter)
-    ));
+        sm::make_derive("clustering_filter_count", _cf_stats.clustering_filter_count,
+                       sm::description("Counts bloom filter invocations.")),
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "clustering_filter_fast_path_count")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _cf_stats.clustering_filter_fast_path_count)
-    ));
+        sm::make_derive("clustering_filter_sstables_checked", _cf_stats.sstables_checked_by_clustering_filter,
+                       sm::description("Counts sstables checked after applying the bloom filter. "
+                                       "High value indicates that bloom filter is not very efficient.")),
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "clustering_filter_surviving_sstables")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _cf_stats.surviving_sstables_after_clustering_filter)
-    ));
+        sm::make_derive("clustering_filter_fast_path_count", _cf_stats.clustering_filter_fast_path_count,
+                       sm::description("Counts number of times bloom filtering short cut to include all sstables when only one full range was specified.")),
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "total_writes")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats->total_writes)
-    ));
+        sm::make_derive("clustering_filter_surviving_sstables", _cf_stats.surviving_sstables_after_clustering_filter,
+                       sm::description("Counts sstables that survived the clustering key filtering. "
+                                       "High value indicates that bloom filter is not very efficient and still have to access a lot of sstables to get data.")),
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "total_writes_failed")
-                , scollectd::make_typed(scollectd::data_type::COUNTER, _stats->total_writes_failed)
-    ));
+        sm::make_derive("total_writes", _stats->total_writes,
+                       sm::description("Counts the total number of successful write operations performed by this shard.")),
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "total_writes_timedout")
-                , scollectd::make_typed(scollectd::data_type::COUNTER, _stats->total_writes_timedout)
-    ));
+        sm::make_derive("total_writes_failed", _stats->total_writes_failed,
+                       sm::description("Counts the total number of failed write operations. "
+                                       "A sum of this value plus total_writes represents a total amount of writes attempted on this shard.")),
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "total_reads")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats->total_reads)
-    ));
+        sm::make_derive("total_writes_timedout", _stats->total_writes_timedout,
+                       sm::description("Counts write operations failed due to a timeout. None zero value is a sign of storage being overloaded.")),
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "total_reads_failed")
-                , scollectd::make_typed(scollectd::data_type::COUNTER, _stats->total_reads_failed)
-    ));
+        sm::make_derive("total_reads", _stats->total_reads,
+                       sm::description("Counts the total number of successful reads on this shard.")),
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "sstable_read_queue_overloads")
-                , scollectd::make_typed(scollectd::data_type::COUNTER, _stats->sstable_read_queue_overloaded)
-    ));
+        sm::make_derive("total_reads_failed", _stats->total_reads_failed,
+                       sm::description("Counts the total number of failed read operations. "
+                                       "Add the total_reads to this value to get the total amount of reads issued on this shard.")),
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "queue_length", "active_reads")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return max_concurrent_reads() - _read_concurrency_sem.current(); })
-    ));
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "queue_length", "queued_reads")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _read_concurrency_sem.waiters(); })
-    ));
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "queue_length", "active_reads_system_keyspace")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return max_system_concurrent_reads() - _system_read_concurrency_sem.current(); })
-    ));
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "queue_length", "queued_reads_system_keyspace")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _system_read_concurrency_sem.waiters(); })
-    ));
+        sm::make_derive("sstable_read_queue_overloads", _stats->sstable_read_queue_overloaded,
+                       sm::description("Counts the number of times the sstable read queue was overloaded. "
+                                       "A non-zero value indicates that we have to drop read requests because they arrive faster than we can serve them.")),
 
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "bytes", "total_result_memory")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
-                    return get_result_memory_limiter().total_used_memory();
-                })
-    ));
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "short_data_queries")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats->short_data_queries)
-    ));
-    _collectd.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("database"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "short_mutation_queries")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats->short_mutation_queries)
-    ));
+        sm::make_gauge("active_reads", [this] { return max_concurrent_reads() - _read_concurrency_sem.current(); },
+                       sm::description(seastar::format("Holds the number of currently active read operations. "
+                                                       "If this vlaue gets close to {} we are likely to start dropping new read requests. "
+                                                       "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_concurrent_reads()))),
+
+        sm::make_gauge("queued_reads", [this] { return _read_concurrency_sem.waiters(); },
+                       sm::description("Holds the number of currently queued read operations.")),
+
+        sm::make_gauge("active_reads_system_keyspace", [this] { return max_system_concurrent_reads() - _system_read_concurrency_sem.current(); },
+                       sm::description(seastar::format("Holds the number of currently active read operations from \"system\" keyspace tables. "
+                                                       "If this vlaue gets close to {} we are likely to start dropping new read requests. "
+                                                       "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_system_concurrent_reads()))),
+
+        sm::make_gauge("queued_reads_system_keyspace", [this] { return _system_read_concurrency_sem.waiters(); },
+                       sm::description("Holds the number of currently queued read operations from \"system\" keyspace tables.")),
+
+        sm::make_gauge("total_result_bytes", [this] { return get_result_memory_limiter().total_used_memory(); },
+                       sm::description("Holds the current amount of memory used for results.")),
+
+        sm::make_derive("short_data_queries", _stats->short_data_queries,
+                       sm::description("The rate of data queries (data or digest reads) that returned less rows than requested due to result size limiting.")),
+
+        sm::make_derive("short_mutation_queries", _stats->short_mutation_queries,
+                       sm::description("The rate of mutation queries that returned less rows than requested due to result size limiting.")),
+    });
 }
 
 database::~database() {
