@@ -41,6 +41,7 @@
 #pragma once
 
 #include <seastar/core/gate.hh>
+#include <seastar/core/metrics_registration.hh>
 #include "database.hh"
 #include "tracing/tracing.hh"
 #include "cql3/query_processor.hh"
@@ -96,7 +97,7 @@ private:
         uint64_t bad_column_family_errors = 0;
     } _stats;
 
-    scollectd::registrations _registrations;
+    seastar::metrics::metric_groups _metrics;
 
 public:
     trace_keyspace_helper(tracing& tr);
