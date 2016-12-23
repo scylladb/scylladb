@@ -43,6 +43,7 @@
 
 #include <experimental/string_view>
 #include <unordered_map>
+#include <seastar/core/metrics_registration.hh>
 
 #include "core/shared_ptr.hh"
 #include "exceptions/exceptions.hh"
@@ -77,7 +78,7 @@ private:
 
     cql_stats _cql_stats;
 
-    scollectd::registrations _collectd_regs;
+    seastar::metrics::metric_groups _metrics;
 
     class internal_state;
     std::unique_ptr<internal_state> _internal_state;
