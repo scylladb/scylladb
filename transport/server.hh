@@ -32,6 +32,7 @@
 #include <memory>
 #include <boost/intrusive/list.hpp>
 #include <seastar/net/tls.hh>
+#include <seastar/core/metrics_registration.hh>
 
 namespace scollectd {
 
@@ -107,10 +108,9 @@ private:
     distributed<cql3::query_processor>& _query_processor;
     size_t _max_request_size;
     semaphore _memory_available;
-    std::unique_ptr<scollectd::registrations> _collectd_registrations;
+    seastar::metrics::metric_groups _metrics;
     std::unique_ptr<event_notifier> _notifier;
 private:
-    scollectd::registrations setup_collectd();
     uint64_t _connects = 0;
     uint64_t _connections = 0;
     uint64_t _requests_served = 0;

@@ -38,7 +38,7 @@
 #include "utils/UUID.hh"
 #include "database.hh"
 #include "net/byteorder.hh"
-#include <seastar/core/scollectd.hh>
+#include <seastar/core/metrics.hh>
 #include <seastar/net/byteorder.hh>
 #include <seastar/util/lazy.hh>
 
@@ -274,35 +274,28 @@ cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<c
     , _query_processor(qp)
     , _max_request_size(memory::stats().total_memory() / 10)
     , _memory_available(_max_request_size)
-    , _collectd_registrations(std::make_unique<scollectd::registrations>(setup_collectd()))
     , _lb(lb)
 {
-}
+    namespace sm = seastar::metrics;
 
-scollectd::registrations
-cql_server::setup_collectd() {
-    return {
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("transport", scollectd::per_cpu_plugin_instance,
-                    "connections", "cql-connections"),
-            scollectd::make_typed(scollectd::data_type::DERIVE, _connects)),
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("transport", scollectd::per_cpu_plugin_instance,
-                    "current_connections", "current"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, _connections)),
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("transport", scollectd::per_cpu_plugin_instance,
-                    "total_requests", "requests_served"),
-            scollectd::make_typed(scollectd::data_type::DERIVE, _requests_served)),
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("transport", scollectd::per_cpu_plugin_instance,
-                    "queue_length", "requests_serving"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, _requests_serving)),
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("transport", scollectd::per_cpu_plugin_instance,
-                    "queue_length", "requests_blocked_memory"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _memory_available.waiters(); })),
-    };
+    _metrics.add_group("transport", {
+        sm::make_derive("cql-connections", _connects,
+                        sm::description("Counts a number of client connections.")),
+
+        sm::make_gauge("current_connections", _connections,
+                        sm::description("Holds a current number of client connections.")),
+
+        sm::make_derive("requests_served", _requests_served,
+                        sm::description("Counts a number of served requests.")),
+
+        sm::make_gauge("requests_serving", _requests_serving,
+                        sm::description("Holds a number of requests that are being processed right now.")),
+
+        sm::make_gauge("requests_blocked_memory", [this] { return _memory_available.waiters(); },
+                        sm::description(
+                            seastar::format("Holds a number of requests that are blocked due to reaching the memory quota limit ({}B). "
+                                            "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"CQL transport\" component.", _max_request_size))),
+    });
 }
 
 future<> cql_server::stop() {
