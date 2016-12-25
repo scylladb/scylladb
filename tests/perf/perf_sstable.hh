@@ -168,7 +168,7 @@ public:
                     if (!m) {
                         *done = true;
                     } else {
-                        auto row = m->partition().find_row(*s, clustering_key::make_empty());
+                        auto row = m->partition().find_row(clustering_key::make_empty());
                         if (!row || row->size() != _cfg.num_columns) {
                             throw std::invalid_argument("Invalid sstable found. Maybe you ran write mode with different num_columns settings?");
                         } else {

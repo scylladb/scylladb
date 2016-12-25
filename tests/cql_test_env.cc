@@ -194,7 +194,7 @@ public:
           return cf.find_partition_slow(schema, pkey)
                   .then([schema, ckey, column_name, exp] (column_family::const_mutation_partition_ptr p) {
             assert(p != nullptr);
-            auto row = p->find_row(*schema, ckey);
+            auto row = p->find_row(ckey);
             assert(row != nullptr);
             auto col_def = schema->get_column_definition(utf8_type->decompose(column_name));
             assert(col_def != nullptr);

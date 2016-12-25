@@ -556,11 +556,11 @@ column_family::find_partition_slow(schema_ptr s, const partition_key& key) const
 
 future<column_family::const_row_ptr>
 column_family::find_row(schema_ptr s, const dht::decorated_key& partition_key, clustering_key clustering_key) const {
-    return find_partition(s, partition_key).then([clustering_key = std::move(clustering_key), s] (const_mutation_partition_ptr p) {
+    return find_partition(std::move(s), partition_key).then([clustering_key = std::move(clustering_key)] (const_mutation_partition_ptr p) {
         if (!p) {
             return make_ready_future<const_row_ptr>();
         }
-        auto r = p->find_row(*s, clustering_key);
+        auto r = p->find_row(clustering_key);
         if (r) {
             // FIXME: remove copy if only one data source
             return make_ready_future<const_row_ptr>(std::make_unique<row>(*r));

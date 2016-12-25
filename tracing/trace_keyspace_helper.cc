@@ -269,7 +269,7 @@ mutation trace_keyspace_helper::make_session_mutation(const one_session_records&
     const session_record& record = session_records.session_rec;
     auto timestamp = api::new_timestamp();
     mutation m(key, schema);
-    auto& cells = m.partition().clustered_row(*schema, clustering_key::make_empty(*schema)).cells();
+    auto& cells = m.partition().clustered_row(clustering_key::make_empty(*schema)).cells();
 
     cells.apply(*_client_column, atomic_cell::make_live(timestamp, inet_addr_type->decompose(record.client.addr()), ttl));
     cells.apply(*_coordinator_column, atomic_cell::make_live(timestamp, inet_addr_type->decompose(utils::fb_utilities::get_broadcast_address().addr()), ttl));
@@ -306,7 +306,7 @@ mutation trace_keyspace_helper::make_slow_query_mutation(const one_session_recor
     full_components.reserve(2);
     full_components.emplace_back(inet_addr_type->decompose(utils::fb_utilities::get_broadcast_address().addr()));
     full_components.emplace_back(int32_type->decompose((int32_t)(engine().cpu_id())));
-    auto& cells = m.partition().clustered_row(*schema, clustering_key::from_exploded(*schema, full_components)).cells();
+    auto& cells = m.partition().clustered_row(clustering_key::from_exploded(*schema, full_components)).cells();
 
     // the corresponding tracing session ID
     cells.apply(*_slow_session_id_column, atomic_cell::make_live(timestamp, uuid_type->decompose(session_records.session_id), ttl));
@@ -364,7 +364,7 @@ mutation trace_keyspace_helper::make_event_mutation(one_session_records& session
     int64_t& last_event_nanos = backend_state_ptr->last_nanos;
     auto timestamp = api::new_timestamp();
     mutation m(key, schema);
-    auto& cells = m.partition().clustered_row(*schema, clustering_key::from_singular(*schema, utils::UUID_gen::get_time_UUID(make_monotonic_UUID_tp(last_event_nanos, record.event_time_point)))).cells();
+    auto& cells = m.partition().clustered_row(clustering_key::from_singular(*schema, utils::UUID_gen::get_time_UUID(make_monotonic_UUID_tp(last_event_nanos, record.event_time_point)))).cells();
 
     cells.apply(*_activity_column, atomic_cell::make_live(timestamp, utf8_type->decompose(record.message), ttl));
     cells.apply(*_source_column, atomic_cell::make_live(timestamp, inet_addr_type->decompose(utils::fb_utilities::get_broadcast_address().addr()), ttl));
