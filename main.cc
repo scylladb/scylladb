@@ -666,6 +666,7 @@ int main(int ac, char** av) {
             uint16_t pport = cfg->prometheus_port();
             if (pport) {
                 pctx.metric_help = "Scylla server statistics";
+                pctx.prefix = cfg->prometheus_prefix();
                 prometheus_server.start().get();
                 prometheus::start(prometheus_server, pctx);
                 prometheus_server.listen(ipv4_addr{prom_addr.addresses[0].in.s_addr, pport}).get();
