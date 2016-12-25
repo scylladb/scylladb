@@ -79,8 +79,16 @@ verify_package() {
     fi
 }
 
+list_block_devices() {
+    if lsblk --help | grep -q -e -p; then
+        lsblk -pnr | awk '{ print $1 }'
+    else
+        ls -1 /dev/sd* /dev/hd* /dev/xvd* /dev/nvme* /dev/mapper/*  2>/dev/null|grep -v control
+    fi
+}
+
 get_unused_disks() {
-    blkid -c /dev/null|cut -f 1 -d ' '|sed s/://g|grep -v loop|while read dev
+    list_block_devices|grep -v loop|while read dev
     do
         count_raw=$(grep $dev /proc/mounts|wc -l)
         count_pvs=0
