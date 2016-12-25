@@ -32,6 +32,7 @@
 #include "mutation_query.hh"
 #include "service/priority_manager.hh"
 #include "mutation_compactor.hh"
+#include "intrusive_set_external_comparator.hh"
 
 template<bool reversed>
 struct reversal_traits;
@@ -136,7 +137,7 @@ struct reversal_traits<true> {
 
 //
 // apply_reversibly_intrusive_set() and revert_intrusive_set() implement ReversiblyMergeable
-// for a boost::intrusive_set<> container of ReversiblyMergeable entries.
+// for a rows_type container of ReversiblyMergeable entries.
 //
 // See reversibly_mergeable.hh
 //
@@ -158,38 +159,34 @@ struct reversal_traits<true> {
 //
 
 // revert for apply_reversibly_intrusive_set()
-template<typename Container, typename Revert = default_reverter<typename Container::value_type>>
-void revert_intrusive_set_range(Container& dst, Container& src,
-    typename Container::iterator start,
-    typename Container::iterator end,
-    Revert&& revert = Revert()) noexcept
+void revert_intrusive_set_range(const schema& s, mutation_partition::rows_type& dst, mutation_partition::rows_type& src,
+    mutation_partition::rows_type::iterator start,
+    mutation_partition::rows_type::iterator end) noexcept
 {
-    using value_type = typename Container::value_type;
-    auto deleter = current_deleter<value_type>();
+    auto deleter = current_deleter<rows_entry>();
     while (start != end) {
         auto& e = *start;
         // lower_bound() can allocate if linearization is required but it should have
         // been already performed by the lower_bound() invocation in apply_reversibly_intrusive_set() and
         // stored in the linearization context.
-        auto i = dst.find(e);
+        auto i = dst.find(e, rows_entry::compare(s));
         assert(i != dst.end());
-        value_type& dst_e = *i;
+        rows_entry& dst_e = *i;
 
         if (e.empty()) {
             dst.erase(i);
             start = src.erase_and_dispose(start, deleter);
             start = src.insert_before(start, dst_e);
         } else {
-            revert(dst_e, e);
+            dst_e.revert(s, e);
         }
 
         ++start;
     }
 }
 
-template<typename Container, typename Revert = default_reverter<typename Container::value_type>>
-void revert_intrusive_set(Container& dst, Container& src, Revert&& revert = Revert()) noexcept {
-    revert_intrusive_set_range(dst, src, src.begin(), src.end(), std::forward<Revert>(revert));
+void revert_intrusive_set(const schema& s, mutation_partition::rows_type& dst, mutation_partition::rows_type& src) noexcept {
+    revert_intrusive_set_range(s, dst, src, src.begin(), src.end());
 }
 
 // Applies src onto dst. See comment above revert_intrusive_set_range() for more details.
@@ -197,41 +194,38 @@ void revert_intrusive_set(Container& dst, Container& src, Revert&& revert = Reve
 // Returns an object which upon going out of scope, unless cancel() is called on it,
 // reverts the applicaiton by calling revert_intrusive_set(). The references to containers
 // must be stable as long as the returned object is live.
-template<typename Container,
-        typename Apply = default_reversible_applier<typename Container::value_type>,
-        typename Revert = default_reverter<typename Container::value_type>>
-auto apply_reversibly_intrusive_set(Container& dst, Container& src, Apply&& apply = Apply(), Revert&& revert = Revert()) {
-    using value_type = typename Container::value_type;
+auto apply_reversibly_intrusive_set(const schema& s, mutation_partition::rows_type& dst, mutation_partition::rows_type& src) {
     auto src_i = src.begin();
     try {
+        rows_entry::compare cmp(s);
         while (src_i != src.end()) {
-            value_type& src_e = *src_i;
+            rows_entry& src_e = *src_i;
 
             // neutral entries will be given special meaning for the purpose of revert, so
             // get rid of empty rows from the input as if they were not there. This doesn't change
             // the value of src.
             if (src_e.empty()) {
-                src_i = src.erase_and_dispose(src_i, current_deleter<value_type>());
+                src_i = src.erase_and_dispose(src_i, current_deleter<rows_entry>());
                 continue;
             }
 
-            auto i = dst.lower_bound(src_e);
-            if (i == dst.end() || dst.key_comp()(src_e, *i)) {
+            auto i = dst.lower_bound(src_e, cmp);
+            if (i == dst.end() || cmp(src_e, *i)) {
                 // Construct neutral entry which will represent missing dst entry for revert.
-                value_type* empty_e = current_allocator().construct<value_type>(src_e.key());
+                rows_entry* empty_e = current_allocator().construct<rows_entry>(src_e.key());
                 [&] () noexcept {
                     src_i = src.erase(src_i);
                     src_i = src.insert_before(src_i, *empty_e);
                     dst.insert_before(i, src_e);
                 }();
             } else {
-                apply(*i, src_e);
+                i->apply_reversibly(s, src_e);
             }
             ++src_i;
         }
-        return defer([&dst, &src, revert] { revert_intrusive_set(dst, src, revert); });
+        return defer([&s, &dst, &src] { revert_intrusive_set(s, dst, src); });
     } catch (...) {
-        revert_intrusive_set_range(dst, src, src.begin(), src_i, revert);
+        revert_intrusive_set_range(s, dst, src, src.begin(), src_i);
         throw;
     }
 }
@@ -239,7 +233,7 @@ auto apply_reversibly_intrusive_set(Container& dst, Container& src, Apply&& appl
 mutation_partition::mutation_partition(const mutation_partition& x)
         : _tombstone(x._tombstone)
         , _static_row(x._static_row)
-        , _rows(x._rows.value_comp())
+        , _rows()
         , _row_tombstones(x._row_tombstones) {
     auto cloner = [] (const auto& x) {
         return current_allocator().construct<std::remove_const_t<std::remove_reference_t<decltype(x)>>>(x);
@@ -251,12 +245,12 @@ mutation_partition::mutation_partition(const mutation_partition& x, const schema
         query::clustering_key_filter_ranges ck_ranges)
         : _tombstone(x._tombstone)
         , _static_row(x._static_row)
-        , _rows(x._rows.value_comp())
+        , _rows()
         , _row_tombstones(x._row_tombstones) {
     try {
         for(auto&& r : ck_ranges) {
             for (const rows_entry& e : x.range(schema, r)) {
-                _rows.push_back(*current_allocator().construct<rows_entry>(e));
+                _rows.insert(_rows.end(), *current_allocator().construct<rows_entry>(e), rows_entry::compare(schema));
             }
         }
     } catch (...) {
@@ -352,9 +346,7 @@ mutation_partition::apply(const schema& s, mutation_partition&& p) {
         _static_row.revert(s, column_kind::static_column, p._static_row);
     });
 
-    auto revert_rows = apply_reversibly_intrusive_set(_rows, p._rows,
-        [&s] (rows_entry& dst, rows_entry& src) { dst.apply_reversibly(s, src); },
-        [&s] (rows_entry& dst, rows_entry& src) noexcept { dst.revert(s, src); });
+    auto revert_rows = apply_reversibly_intrusive_set(s, _rows, p._rows);
 
     _tombstone.apply(p._tombstone); // noexcept
 
@@ -457,17 +449,17 @@ mutation_partition::apply_insert(const schema& s, clustering_key_view key, api::
 
 void mutation_partition::insert_row(const schema& s, const clustering_key& key, deletable_row&& row) {
     auto e = current_allocator().construct<rows_entry>(key, std::move(row));
-    _rows.insert(_rows.end(), *e);
+    _rows.insert(_rows.end(), *e, rows_entry::compare(s));
 }
 
 void mutation_partition::insert_row(const schema& s, const clustering_key& key, const deletable_row& row) {
     auto e = current_allocator().construct<rows_entry>(key, row);
-    _rows.insert(_rows.end(), *e);
+    _rows.insert(_rows.end(), *e, rows_entry::compare(s));
 }
 
 const row*
-mutation_partition::find_row(const clustering_key& key) const {
-    auto i = _rows.find(key);
+mutation_partition::find_row(const schema& s, const clustering_key& key) const {
+    auto i = _rows.find(key, rows_entry::compare(s));
     if (i == _rows.end()) {
         return nullptr;
     }
@@ -475,22 +467,22 @@ mutation_partition::find_row(const clustering_key& key) const {
 }
 
 deletable_row&
-mutation_partition::clustered_row(clustering_key&& key) {
-    auto i = _rows.find(key);
+mutation_partition::clustered_row(const schema& s, clustering_key&& key) {
+    auto i = _rows.find(key, rows_entry::compare(s));
     if (i == _rows.end()) {
         auto e = current_allocator().construct<rows_entry>(std::move(key));
-        _rows.insert(i, *e);
+        _rows.insert(i, *e, rows_entry::compare(s));
         return e->row();
     }
     return i->row();
 }
 
 deletable_row&
-mutation_partition::clustered_row(const clustering_key& key) {
-    auto i = _rows.find(key);
+mutation_partition::clustered_row(const schema& s, const clustering_key& key) {
+    auto i = _rows.find(key, rows_entry::compare(s));
     if (i == _rows.end()) {
         auto e = current_allocator().construct<rows_entry>(key);
-        _rows.insert(i, *e);
+        _rows.insert(i, *e, rows_entry::compare(s));
         return e->row();
     }
     return i->row();
@@ -501,7 +493,7 @@ mutation_partition::clustered_row(const schema& s, const clustering_key_view& ke
     auto i = _rows.find(key, rows_entry::compare(s));
     if (i == _rows.end()) {
         auto e = current_allocator().construct<rows_entry>(key);
-        _rows.insert(i, *e);
+        _rows.insert(i, *e, rows_entry::compare(s));
         return e->row();
     }
     return i->row();
@@ -1302,13 +1294,10 @@ mutation_partition::live_row_count(const schema& s, gc_clock::time_point query_t
 }
 
 rows_entry::rows_entry(rows_entry&& o) noexcept
-    : _key(std::move(o._key))
+    : _link(std::move(o._link))
+    , _key(std::move(o._key))
     , _row(std::move(o._row))
-{
-    using container_type = mutation_partition::rows_type;
-    container_type::node_algorithms::replace_node(o._link.this_ptr(), _link.this_ptr());
-    container_type::node_algorithms::init(o._link.this_ptr());
-}
+{ }
 
 row::row(const row& o)
     : _type(o._type)
