@@ -27,5 +27,5 @@ class partition {
 class reconcilable_result {
     uint32_t row_count();
     std::vector<partition> partitions();
-    query::short_read is_short_read() [[version 1.7]] = query::short_read::no;
+    query::short_read is_short_read() [[version 1.6]] = query::short_read::no;
 };

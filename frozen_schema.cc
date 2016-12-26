@@ -34,7 +34,7 @@ frozen_schema::frozen_schema(const schema_ptr& s)
     : _data([&s] {
         schema_mutations sm = db::schema_tables::make_table_mutations(s, api::new_timestamp());
         bytes_ostream out;
-        ser::writer_of_schema wr(out);
+        ser::writer_of_schema<bytes_ostream> wr(out);
         std::move(wr).write_version(s->version())
                      .write_mutations(sm)
                      .end_schema();

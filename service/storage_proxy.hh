@@ -235,9 +235,11 @@ private:
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl, tracing::trace_state_ptr trace_state);
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr,
                                                                            query::result_request request,
-                                                                           tracing::trace_state_ptr trace_state);
-    future<query::result_digest, api::timestamp_type> query_singular_local_digest(schema_ptr, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr, tracing::trace_state_ptr trace_state);
-    future<foreign_ptr<lw_shared_ptr<query::result>>> query_partition_key_range(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range> partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state);
+                                                                           tracing::trace_state_ptr trace_state,
+                                                                           uint64_t max_size = query::result_memory_limiter::maximum_result_size);
+    future<query::result_digest, api::timestamp_type> query_singular_local_digest(schema_ptr, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr, tracing::trace_state_ptr trace_state,
+                                                                                  uint64_t max_size  = query::result_memory_limiter::maximum_result_size);
+    future<foreign_ptr<lw_shared_ptr<query::result>>> query_partition_key_range(lw_shared_ptr<query::read_command> cmd, const std::vector<query::partition_range> partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state);
     std::vector<query::partition_range> get_restricted_ranges(keyspace& ks, const schema& s, query::partition_range range);
     float estimate_result_rows_per_range(lw_shared_ptr<query::read_command> cmd, keyspace& ks);
     static std::vector<gms::inet_address> intersection(const std::vector<gms::inet_address>& l1, const std::vector<gms::inet_address>& l2);
@@ -263,7 +265,7 @@ private:
     template<typename Range>
     future<> mutate_internal(Range mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state);
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_nonsingular_mutations_locally(
-            schema_ptr s, lw_shared_ptr<query::read_command> cmd, const std::vector<query::partition_range>& pr, tracing::trace_state_ptr trace_state);
+            schema_ptr s, lw_shared_ptr<query::read_command> cmd, const std::vector<query::partition_range>& pr, tracing::trace_state_ptr trace_state, uint64_t max_size);
 
 public:
     storage_proxy(distributed<database>& db);
@@ -338,16 +340,19 @@ public:
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations_locally(
         schema_ptr, lw_shared_ptr<query::read_command> cmd, const query::partition_range&,
-        tracing::trace_state_ptr trace_state = nullptr);
+        tracing::trace_state_ptr trace_state = nullptr,
+        uint64_t max_size = query::result_memory_limiter::maximum_result_size);
 
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations_locally(
         schema_ptr, lw_shared_ptr<query::read_command> cmd, const compat::one_or_two_partition_ranges&,
-        tracing::trace_state_ptr trace_state = nullptr);
+        tracing::trace_state_ptr trace_state = nullptr,
+        uint64_t max_size = query::result_memory_limiter::maximum_result_size);
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations_locally(
             schema_ptr s, lw_shared_ptr<query::read_command> cmd, const std::vector<query::partition_range>& pr,
-            tracing::trace_state_ptr trace_state = nullptr);
+            tracing::trace_state_ptr trace_state = nullptr,
+            uint64_t max_size = query::result_memory_limiter::maximum_result_size);
 
 
     future<> stop();
