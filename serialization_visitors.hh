@@ -27,8 +27,14 @@ namespace ser {
 
 // frame represents a place holder for object size which will be known later
 
+template<typename Output>
+struct place_holder { };
 
-struct place_holder {
+template<typename Output>
+struct frame { };
+
+template<>
+struct place_holder<bytes_ostream> {
     bytes_ostream::place_holder<size_type> ph;
 
     place_holder(bytes_ostream::place_holder<size_type> ph) : ph(ph) { }
@@ -39,7 +45,8 @@ struct place_holder {
     }
 };
 
-struct frame : public place_holder {
+template<>
+struct frame<bytes_ostream> : public place_holder<bytes_ostream> {
     bytes_ostream::size_type offset;
 
     frame(bytes_ostream::place_holder<size_type> ph, bytes_ostream::size_type offset)
@@ -56,25 +63,26 @@ struct vector_position {
 };
 
 //empty frame, behave like a place holder, but is used when no place holder is needed
+template<typename Output>
 struct empty_frame {
-    void end(bytes_ostream&) {}
+    void end(Output&) {}
     empty_frame() = default;
-    empty_frame(const frame&){}
+    empty_frame(const frame<Output>&){}
 };
 
-inline place_holder start_place_holder(bytes_ostream& out) {
+inline place_holder<bytes_ostream> start_place_holder(bytes_ostream& out) {
     auto size_ph = out.write_place_holder<size_type>();
     return { size_ph};
 }
 
-inline frame start_frame(bytes_ostream& out) {
+inline frame<bytes_ostream> start_frame(bytes_ostream& out) {
     auto offset = out.size();
     auto size_ph = out.write_place_holder<size_type>();
     {
         auto out = size_ph.get_stream();
         serialize(out, (size_type)0);
     }
-    return frame { size_ph, offset };
+    return frame<bytes_ostream> { size_ph, offset };
 }
 
 template<typename Input>
@@ -84,6 +92,27 @@ size_type read_frame_size(Input& in) {
         throw std::runtime_error("Truncated frame");
     }
     return sz - sizeof(size_type);
+}
+
+
+template<>
+struct place_holder<seastar::measuring_output_stream> {
+    void set(seastar::measuring_output_stream&, size_type) { }
+};
+
+template<>
+struct frame<seastar::measuring_output_stream> : public place_holder<seastar::measuring_output_stream> {
+    void end(seastar::measuring_output_stream& out) { }
+};
+
+inline place_holder<seastar::measuring_output_stream> start_place_holder(seastar::measuring_output_stream& out) {
+    serialize(out, size_type());
+    return { };
+}
+
+inline frame<seastar::measuring_output_stream> start_frame(seastar::measuring_output_stream& out) {
+    serialize(out, size_type());
+    return { };
 }
 
 }

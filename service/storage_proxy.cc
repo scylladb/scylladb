@@ -2074,7 +2074,7 @@ public:
         versions.reserve(_data_results.front().result->partitions().size());
 
         for (auto& r : _data_results) {
-            _is_short_read = r.result->is_short_read();
+            _is_short_read = _is_short_read || r.result->is_short_read();
             r.reached_end = !r.result->is_short_read() && r.result->row_count() < cmd.row_limit
                             && (cmd.partition_limit == query::max_partitions
                                 || boost::range::count_if(r.result->partitions(), [] (const partition& p) {
@@ -2388,6 +2388,13 @@ protected:
                             _retry_cmd->row_limit = x(cmd->row_limit, data_resolver->total_live_count());
                         }
                     }
+
+                    // We may be unable to send a single live row because of replicas bailing out too early.
+                    // If that is the case disallow short reads so that we can make progress.
+                    if (!data_resolver->total_live_count()) {
+                        _retry_cmd->slice.options.remove<query::partition_slice::option::allow_short_read>();
+                    }
+
                     logger.trace("Retrying query with command {} (previous is {})", *_retry_cmd, *cmd);
                     reconcile(cl, timeout, _retry_cmd);
                 }
@@ -2627,17 +2634,17 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
 }
 
 future<query::result_digest, api::timestamp_type>
-storage_proxy::query_singular_local_digest(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state) {
-    return query_singular_local(std::move(s), std::move(cmd), pr, query::result_request::only_digest, std::move(trace_state)).then([] (foreign_ptr<lw_shared_ptr<query::result>> result) {
+storage_proxy::query_singular_local_digest(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state, uint64_t max_size) {
+    return query_singular_local(std::move(s), std::move(cmd), pr, query::result_request::only_digest, std::move(trace_state), max_size).then([] (foreign_ptr<lw_shared_ptr<query::result>> result) {
         return make_ready_future<query::result_digest, api::timestamp_type>(*result->digest(), result->last_modified());
     });
 }
 
 future<foreign_ptr<lw_shared_ptr<query::result>>>
-storage_proxy::query_singular_local(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, query::result_request request, tracing::trace_state_ptr trace_state) {
+storage_proxy::query_singular_local(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, query::result_request request, tracing::trace_state_ptr trace_state, uint64_t max_size) {
     unsigned shard = _db.local().shard_of(pr.start()->value().token());
-    return _db.invoke_on(shard, [gs = global_schema_ptr(s), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, request, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
-        return db.query(gs, *cmd, request, prv, gt).then([](auto&& f) {
+    return _db.invoke_on(shard, [max_size, gs = global_schema_ptr(s), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, request, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
+        return db.query(gs, *cmd, request, prv, gt, max_size).then([](auto&& f) {
             return make_foreign(std::move(f));
         });
     });
@@ -3459,9 +3466,10 @@ void storage_proxy::init_messaging_service() {
             tracing::trace(trace_state_ptr, "read_data: message received from /{}", src_addr.addr);
         }
         auto da = oda.value_or(query::digest_algorithm::MD5);
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da] (compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+        auto max_size = cinfo.retrieve_auxiliary<uint64_t>("max_result_size");
+        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, max_size] (compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
             auto src_ip = src_addr.addr;
-            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, da, &pr, &p, &trace_state_ptr] (schema_ptr s) {
+            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, da, &pr, &p, &trace_state_ptr, max_size] (schema_ptr s) {
                 auto pr2 = compat::unwrap(std::move(pr), *s);
                 if (pr2.second) {
                     // this function assumes singular queries but doesn't validate
@@ -3476,7 +3484,7 @@ void storage_proxy::init_messaging_service() {
                     qrr = query::result_request::result_and_digest;
                     break;
                 }
-                return p->query_singular_local(std::move(s), cmd, std::move(pr2.first), qrr, trace_state_ptr);
+                return p->query_singular_local(std::move(s), cmd, std::move(pr2.first), qrr, trace_state_ptr, max_size);
             }).finally([&trace_state_ptr, src_ip] () mutable {
                 tracing::trace(trace_state_ptr, "read_data handling is done, sending a response to /{}", src_ip);
             });
@@ -3490,10 +3498,11 @@ void storage_proxy::init_messaging_service() {
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "read_mutation_data: message received from /{}", src_addr.addr);
         }
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr)] (compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+        auto max_size = cinfo.retrieve_auxiliary<uint64_t>("max_result_size");
+        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), max_size] (compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
             auto src_ip = src_addr.addr;
-            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr] (schema_ptr s) mutable {
-                return p->query_mutations_locally(std::move(s), cmd, compat::unwrap(std::move(pr), *s), trace_state_ptr);
+            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr, max_size] (schema_ptr s) mutable {
+                return p->query_mutations_locally(std::move(s), cmd, compat::unwrap(std::move(pr), *s), trace_state_ptr, max_size);
             }).finally([&trace_state_ptr, src_ip] () mutable {
                 tracing::trace(trace_state_ptr, "read_mutation_data handling is done, sending a response to /{}", src_ip);
             });
@@ -3507,15 +3516,16 @@ void storage_proxy::init_messaging_service() {
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "read_digest: message received from /{}", src_addr.addr);
         }
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr)] (compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+        auto max_size = cinfo.retrieve_auxiliary<uint64_t>("max_result_size");
+        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), max_size] (compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
             auto src_ip = src_addr.addr;
-            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr] (schema_ptr s) {
+            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr, max_size] (schema_ptr s) {
                 auto pr2 = compat::unwrap(std::move(pr), *s);
                 if (pr2.second) {
                     // this function assumes singular queries but doesn't validate
                     throw std::runtime_error("READ_DIGEST called with wrapping range");
                 }
-                return p->query_singular_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr);
+                return p->query_singular_local_digest(std::move(s), cmd, std::move(pr2.first), trace_state_ptr, max_size);
             }).finally([&trace_state_ptr, src_ip] () mutable {
                 tracing::trace(trace_state_ptr, "read_digest handling is done, sending a response to /{}", src_ip);
             });
@@ -3556,13 +3566,17 @@ class mutation_result_merger {
     unsigned _row_count = 0;
     unsigned _partition_count = 0;
     bool _short_read_allowed;
-    query::short_read _short_read;
     // we get a batch of partitions each time, each with a key
     // partition batches should be maintained in key order
     // batches that share a key should be merged and sorted in decorated_key
     // order
-    std::multimap<unsigned, std::vector<partition>> _partitions;
+    struct partitions_batch {
+        std::vector<partition> partitions;
+        query::short_read short_read;
+    };
+    std::multimap<unsigned, partitions_batch> _partitions;
     query::result_memory_accounter _memory_accounter;
+    stdx::optional<unsigned> _stop_after_key;
 public:
     explicit mutation_result_merger(schema_ptr schema, lw_shared_ptr<const query::read_command> cmd)
             : _schema(std::move(schema))
@@ -3575,6 +3589,10 @@ public:
         return _memory_accounter;
     }
     void add_result(unsigned key, foreign_ptr<lw_shared_ptr<reconcilable_result>> partial_result) {
+        if (_stop_after_key && key > *_stop_after_key) {
+            // A short result was added that goes before this one.
+            return;
+        }
         std::vector<partition> partitions;
         partitions.reserve(partial_result->partitions().size());
         // Following three lines to simplify patch; can remove later
@@ -3583,41 +3601,100 @@ public:
             _row_count += p._row_count;
             _partition_count += p._row_count > 0;
         }
-        _partitions.emplace(key, std::move(partitions));
-        _short_read = partial_result->is_short_read();
-        if (_memory_accounter.update_and_check(partial_result->memory_usage()) && _short_read_allowed) {
-            _short_read = query::short_read::yes;
+        _memory_accounter.update(partial_result->memory_usage());
+        if (partial_result->is_short_read()) {
+            _stop_after_key = key;
         }
+        _partitions.emplace(key, partitions_batch { std::move(partitions), partial_result->is_short_read() });
     }
     reconcilable_result get() && {
         auto unsorted = std::unordered_set<unsigned>();
-        auto merged = std::map<unsigned, std::vector<partition>>();
+        struct partitions_and_last_key {
+            std::vector<partition> partitions;
+            stdx::optional<dht::decorated_key> last; // set if we had a short read
+        };
+        auto merged = std::map<unsigned, partitions_and_last_key>();
+        auto short_read = query::short_read::no;
         // merge batches with equal keys, and note if we need to sort afterwards
         for (auto&& key_value : _partitions) {
             auto&& key = key_value.first;
+            if (*_stop_after_key && key > *_stop_after_key) {
+                break;
+            }
             auto&& batch = key_value.second;
             auto&& dest = merged[key];
-            if (dest.empty()) {
-                dest = std::move(batch);
+            if (dest.partitions.empty()) {
+                dest.partitions = std::move(batch.partitions);
             } else {
                 unsorted.insert(key);
-                std::move(batch.begin(), batch.end(), std::back_inserter(dest));
+                std::move(batch.partitions.begin(), batch.partitions.end(), std::back_inserter(dest.partitions));
+            }
+            // In case of a short read we need to remove all partitions from the
+            // batch that come after the last partition of the short read
+            // result.
+            if (batch.short_read) {
+                // Nobody sends a short read with no data.
+                const auto& last = dest.partitions.back().mut().decorated_key(*_schema);
+                if (!dest.last || last.less_compare(*_schema, *dest.last)) {
+                    dest.last = last;
+                }
+                short_read = query::short_read::yes;
             }
         }
 
         // Sort batches that arrived with the same keys
         for (auto key : unsorted) {
-            auto dkcmp = dht::decorated_key::less_comparator(_schema);
+            struct comparator {
+                const schema& s;
+                dht::decorated_key::less_comparator dkcmp;
+
+                bool operator()(const partition& a, const partition& b) const {
+                    return dkcmp(a.mut().decorated_key(s), b.mut().decorated_key(s));
+                }
+                bool operator()(const dht::decorated_key& a, const partition& b) const {
+                    return dkcmp(a, b.mut().decorated_key(s));
+                }
+                bool operator()(const partition& a, const dht::decorated_key& b) const {
+                    return dkcmp(a.mut().decorated_key(s), b);
+                }
+            };
+            auto cmp = comparator { *_schema, dht::decorated_key::less_comparator(_schema) };
+
             auto&& batch = merged[key];
-            boost::sort(batch, [&] (const partition& a, const partition& b) {
-                return dkcmp(a.mut().decorated_key(*_schema), b.mut().decorated_key(*_schema));
-            });
+            boost::sort(batch.partitions, cmp);
+            if (batch.last) {
+                // This batch was built from a result that was a short read.
+                // We need to remove all partitions that are after that short
+                // read.
+                auto it = boost::range::upper_bound(batch.partitions, std::move(*batch.last), cmp);
+                batch.partitions.erase(it, batch.partitions.end());
+            }
         }
 
         auto final = std::vector<partition>();
         final.reserve(_partition_count);
         for (auto&& batch : merged | boost::adaptors::map_values) {
-            std::move(batch.begin(), batch.end(), std::back_inserter(final));
+            std::move(batch.partitions.begin(), batch.partitions.end(), std::back_inserter(final));
+        }
+
+        if (short_read) {
+            // Short read row and partition counts may be incorrect, recalculate.
+            _row_count = 0;
+            _partition_count = 0;
+            for (const auto& p : final) {
+                _row_count += p.row_count();
+                _partition_count += p.row_count() > 0;
+            }
+
+            if (_row_count >= _cmd->row_limit || _partition_count > _cmd->partition_limit) {
+                // Even though there was a short read contributing to the final
+                // result we got limited by total row limit or partition limit.
+                // Note that we cannot with trivial check make unset short read flag
+                // in case _partition_count == _cmd->partition_limit since the short
+                // read may have caused the last partition to contain less rows
+                // than asked for.
+                short_read = query::short_read::no;
+            }
         }
 
         // Trim back partition count and row count in case we overshot.
@@ -3639,10 +3716,10 @@ public:
             _row_count += rc;
         }
 
-        return reconcilable_result(_row_count, std::move(final), _short_read, std::move(_memory_accounter).done());
+        return reconcilable_result(_row_count, std::move(final), short_read, std::move(_memory_accounter).done());
     }
     bool short_read() const {
-        return bool(_short_read);
+        return bool(_stop_after_key) || (_short_read_allowed && _row_count > 0 && _memory_accounter.check());
     }
     unsigned partition_count() const {
         return _partition_count;
@@ -3653,27 +3730,29 @@ public:
 };
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
-storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state) {
+storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
+                                       tracing::trace_state_ptr trace_state, uint64_t max_size) {
     if (pr.is_singular()) {
         unsigned shard = _db.local().shard_of(pr.start()->value().token());
-        return _db.invoke_on(shard, [cmd, &pr, gs=global_schema_ptr(s), gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
-          return db.get_result_memory_limiter().new_read().then([&] (query::result_memory_accounter ma) {
+        return _db.invoke_on(shard, [max_size, cmd, &pr, gs=global_schema_ptr(s), gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
+          return db.get_result_memory_limiter().new_mutation_read(max_size).then([&] (query::result_memory_accounter ma) {
             return db.query_mutations(gs, *cmd, pr, std::move(ma), gt).then([] (reconcilable_result&& result) {
                 return make_foreign(make_lw_shared(std::move(result)));
             });
           });
         });
     } else {
-        return query_nonsingular_mutations_locally(std::move(s), std::move(cmd), {pr}, std::move(trace_state));
+        return query_nonsingular_mutations_locally(std::move(s), std::move(cmd), {pr}, std::move(trace_state), max_size);
     }
 }
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
-storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const compat::one_or_two_partition_ranges& pr, tracing::trace_state_ptr trace_state) {
+storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const compat::one_or_two_partition_ranges& pr,
+                                       tracing::trace_state_ptr trace_state, uint64_t max_size) {
     if (!pr.second) {
-        return query_mutations_locally(std::move(s), std::move(cmd), pr.first, std::move(trace_state));
+        return query_mutations_locally(std::move(s), std::move(cmd), pr.first, std::move(trace_state), max_size);
     } else {
-        return query_nonsingular_mutations_locally(std::move(s), std::move(cmd), pr, std::move(trace_state));
+        return query_nonsingular_mutations_locally(std::move(s), std::move(cmd), pr, std::move(trace_state), max_size);
     }
 }
 
@@ -3706,7 +3785,8 @@ struct hash<element_and_shard> {
 namespace service {
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
-storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector& prs, tracing::trace_state_ptr trace_state) {
+storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector& prs,
+                                                   tracing::trace_state_ptr trace_state, uint64_t max_size) {
     // no one permitted us to modify *cmd, so make a copy
     auto shard_cmd = make_lw_shared<query::read_command>(*cmd);
     return do_with(cmd,
@@ -3720,7 +3800,7 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
             dht::ring_position_range_vector_sharder{prs},
             global_schema_ptr(s),
             tracing::global_trace_state_ptr(std::move(trace_state)),
-            [this, s] (lw_shared_ptr<query::read_command>& cmd,
+            [this, s, max_size] (lw_shared_ptr<query::read_command>& cmd,
                     lw_shared_ptr<query::read_command>& shard_cmd,
                     unsigned& shards_in_parallel,
                     unsigned& mutation_result_merger_key,
@@ -3731,7 +3811,7 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
                     dht::ring_position_range_vector_sharder& rprs,
                     global_schema_ptr& gs,
                     tracing::global_trace_state_ptr& gt) {
-      return _db.local().get_result_memory_limiter().new_read().then([&, s] (query::result_memory_accounter ma) {
+      return _db.local().get_result_memory_limiter().new_mutation_read(max_size).then([&, s] (query::result_memory_accounter ma) {
         mrm.memory() = std::move(ma);
         return repeat_until_value([&, s] () -> future<stdx::optional<reconcilable_result>> {
             // We don't want to query a sparsely populated table sequentially, because the latency
@@ -3774,8 +3854,8 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
                 auto&& elem = elem_shard_range.first.element;
                 auto&& shard = elem_shard_range.first.shard;
                 auto&& range = elem_shard_range.second;
-                return _db.invoke_on(shard, [&, range, gt] (database& db) {
-                    query::result_memory_accounter accounter(db.get_result_memory_limiter(), mrm.memory());
+                return _db.invoke_on(shard, [&, range, gt, fstate = mrm.memory().state_for_another_shard()] (database& db) {
+                    query::result_memory_accounter accounter(db.get_result_memory_limiter(), std::move(fstate));
                     return db.query_mutations(gs, *shard_cmd, range, std::move(accounter), std::move(gt)).then([] (reconcilable_result&& rr) {
                         return make_foreign(make_lw_shared(std::move(rr)));
                     });

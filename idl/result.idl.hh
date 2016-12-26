@@ -29,7 +29,7 @@ class result {
     bytes buf();
     std::experimental::optional<query::result_digest> digest();
     api::timestamp_type last_modified() [ [version 1.2] ] = api::missing_timestamp;
-    query::short_read is_short_read() [[version 1.7]] = query::short_read::no;
+    query::short_read is_short_read() [[version 1.6]] = query::short_read::no;
 };
 
 }

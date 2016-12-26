@@ -189,17 +189,17 @@ mutation_partition_serializer::mutation_partition_serializer(const schema& schem
 
 void
 mutation_partition_serializer::write(bytes_ostream& out) const {
-    write(ser::writer_of_mutation_partition(out));
+    write(ser::writer_of_mutation_partition<bytes_ostream>(out));
 }
 
-void mutation_partition_serializer::write(ser::writer_of_mutation_partition&& wr) const
+void mutation_partition_serializer::write(ser::writer_of_mutation_partition<bytes_ostream>&& wr) const
 {
     write_serialized(std::move(wr), _schema, _p);
 }
 
 void serialize_mutation_fragments(const schema& s, tombstone partition_tombstone,
     stdx::optional<static_row> sr,  range_tombstone_list rts,
-    std::deque<clustering_row> crs, ser::writer_of_mutation_partition&& wr)
+    std::deque<clustering_row> crs, ser::writer_of_mutation_partition<bytes_ostream>&& wr)
 {
     auto srow_writer = std::move(wr).write_tomb(partition_tombstone).start_static_row();
     auto row_tombstones = [&] {

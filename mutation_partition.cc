@@ -576,7 +576,7 @@ void mutation_partition::for_each_row(const schema& schema, const query::cluster
 template<typename RowWriter>
 void write_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell_view c) {
     assert(c.is_live());
-    ser::writer_of_qr_cell wr = w.add().write();
+    auto wr = w.add().write();
     auto after_timestamp = [&, wr = std::move(wr)] () mutable {
         if (slice.options.contains<query::partition_slice::option::send_timestamp>()) {
             return std::move(wr).write_timestamp(c.timestamp());
@@ -1669,10 +1669,11 @@ class mutation_querier {
     const schema& _schema;
     query::result_memory_accounter& _memory_accounter;
     query::result::partition_writer& _pw;
-    ser::qr_partition__static_row__cells _static_cells_wr;
+    ser::qr_partition__static_row__cells<bytes_ostream> _static_cells_wr;
     bool _live_data_in_static_row{};
     uint32_t _live_clustering_rows = 0;
-    stdx::optional<ser::qr_partition__rows> _rows_wr;
+    stdx::optional<ser::qr_partition__rows<bytes_ostream>> _rows_wr;
+    bool _short_reads_allowed;
 private:
     void query_static_row(const row& r, tombstone current_tombstone);
     void prepare_writers();
@@ -1694,6 +1695,7 @@ mutation_querier::mutation_querier(const schema& s, query::result::partition_wri
     , _memory_accounter(memory_accounter)
     , _pw(pw)
     , _static_cells_wr(pw.start().start_static_row().start_cells())
+    , _short_reads_allowed(pw.slice().options.contains<query::partition_slice::option::allow_short_read>())
 {
 }
 
@@ -1705,7 +1707,13 @@ void mutation_querier::query_static_row(const row& r, tombstone current_tombston
             auto start = _static_cells_wr._out.size();
             get_compacted_row_slice(_schema, slice, column_kind::static_column,
                                     r, slice.static_columns, _static_cells_wr);
-            _memory_accounter.update_and_check(_static_cells_wr._out.size() - start);
+            _memory_accounter.update(_static_cells_wr._out.size() - start);
+        } else if (_short_reads_allowed) {
+            seastar::measuring_output_stream stream;
+            ser::qr_partition__static_row__cells<seastar::measuring_output_stream> out(stream, { });
+            get_compacted_row_slice(_schema, slice, column_kind::static_column,
+                                    r, slice.static_columns, _static_cells_wr);
+            _memory_accounter.update(stream.size());
         }
         if (_pw.requested_digest()) {
             ::feed_hash(_pw.digest(), current_tombstone);
@@ -1743,23 +1751,32 @@ stop_iteration mutation_querier::consume(clustering_row&& cr, tombstone current_
         _pw.last_modified() = std::max({_pw.last_modified(), current_tombstone.timestamp, t});
     }
 
-    auto stop = stop_iteration::no;
-    if (_pw.requested_result()) {
-        auto start = _rows_wr->_out.size();
+    auto write_row = [&] (auto& rows_writer) {
         auto cells_wr = [&] {
             if (slice.options.contains(query::partition_slice::option::send_clustering_key)) {
-                return _rows_wr->add().write_key(cr.key()).start_cells().start_cells();
+                return rows_writer.add().write_key(cr.key()).start_cells().start_cells();
             } else {
-                return _rows_wr->add().skip_key().start_cells().start_cells();
+                return rows_writer.add().skip_key().start_cells().start_cells();
             }
         }();
         get_compacted_row_slice(_schema, slice, column_kind::regular_column, cr.cells(), slice.regular_columns, cells_wr);
         std::move(cells_wr).end_cells().end_cells().end_qr_clustered_row();
+    };
+
+    auto stop = stop_iteration::no;
+    if (_pw.requested_result()) {
+        auto start = _rows_wr->_out.size();
+        write_row(*_rows_wr);
         stop = _memory_accounter.update_and_check(_rows_wr->_out.size() - start);
+    } else if (_short_reads_allowed) {
+        seastar::measuring_output_stream stream;
+        ser::qr_partition__rows<seastar::measuring_output_stream> out(stream, { });
+        write_row(out);
+        stop = _memory_accounter.update_and_check(stream.size());
     }
 
     _live_clustering_rows++;
-    return stop;
+    return stop && stop_iteration(_short_reads_allowed);
 }
 
 uint32_t mutation_querier::consume_end_of_stream() {
@@ -1819,7 +1836,7 @@ public:
 
     stop_iteration consume_end_of_partition() {
         auto live_rows_in_partition = _mutation_consumer->consume_end_of_stream();
-        if (live_rows_in_partition > 0 && !_stop) {
+        if (_short_read_allowed && live_rows_in_partition > 0 && !_stop) {
             _stop = _rb.memory_accounter().check();
         }
         if (_stop) {
@@ -1916,7 +1933,7 @@ public:
             // well. Next page fetch will ask for the next partition and if we
             // don't do that we could end up with an unbounded number of
             // partitions with only a static row.
-            _stop = _stop || _memory_accounter.check();
+            _stop = _stop || (_memory_accounter.check() && stop_iteration(_short_read_allowed));
         }
         _total_live_rows += _live_rows;
         _result.emplace_back(partition { _live_rows, _mutation_consumer->consume_end_of_stream() });
