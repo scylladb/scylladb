@@ -308,31 +308,48 @@ public:
         return *_ck;
     }
 
-    class less_compare {
-        bound_view::compare _cmp;
+    class tri_compare {
+        bound_view::tri_compare _cmp;
     private:
         template<typename T, typename U>
-        bool compare(const T& a, const U& b) const {
+        int compare(const T& a, const U& b) const {
             bool a_rt_weight = bool(a._ck);
             bool b_rt_weight = bool(b._ck);
             if (!a_rt_weight || !b_rt_weight) {
-                return a_rt_weight < b_rt_weight;
+                return a_rt_weight - b_rt_weight;
             }
             return _cmp(*a._ck, a._bound_weight, *b._ck, b._bound_weight);
         }
     public:
+        tri_compare(const schema& s) : _cmp(s) { }
+        int operator()(const position_in_partition& a, const position_in_partition& b) const {
+            return compare(a, b);
+        }
+        int operator()(const position_in_partition_view& a, const position_in_partition_view& b) const {
+            return compare(a, b);
+        }
+        int operator()(const position_in_partition& a, const position_in_partition_view& b) const {
+            return compare(a, b);
+        }
+        int operator()(const position_in_partition_view& a, const position_in_partition& b) const {
+            return compare(a, b);
+        }
+    };
+    class less_compare {
+        tri_compare _cmp;
+    public:
         less_compare(const schema& s) : _cmp(s) { }
         bool operator()(const position_in_partition& a, const position_in_partition& b) const {
-            return compare(a, b);
+            return _cmp(a, b) < 0;
         }
         bool operator()(const position_in_partition_view& a, const position_in_partition_view& b) const {
-            return compare(a, b);
+            return _cmp(a, b) < 0;
         }
         bool operator()(const position_in_partition& a, const position_in_partition_view& b) const {
-            return compare(a, b);
+            return _cmp(a, b) < 0;
         }
         bool operator()(const position_in_partition_view& a, const position_in_partition& b) const {
-            return compare(a, b);
+            return _cmp(a, b) < 0;
         }
     };
     class equal_compare {
