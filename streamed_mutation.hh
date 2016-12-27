@@ -75,6 +75,11 @@ public:
         _marker.apply(std::move(cr._marker));
         _cells.apply(s, column_kind::regular_column, std::move(cr._cells));
     }
+    void apply(const schema& s, const clustering_row& cr) {
+        _t.apply(cr._t);
+        _marker.apply(cr._marker);
+        _cells.apply(s, column_kind::regular_column, cr._cells);
+    }
     void set_cell(const column_definition& def, atomic_cell_or_collection&& value) {
         _cells.apply(def, std::move(value));
     }
