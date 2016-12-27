@@ -32,8 +32,7 @@ namespace stdx = std::experimental;
 // stream. They can represent:
 //  - a static row
 //  - a clustering row
-//  - start of range tombstone
-//  - end of range rombstone
+//  - a range tombstone
 //
 // There exists an ordering (implemented in position_in_partition class) between
 // mutation_fragment objects. It reflects the order in which content of
@@ -380,10 +379,6 @@ using mutation_fragment_opt = optimized_optional<mutation_fragment>;
 // then clustering rows and range tombstones are emitted according to the
 // lexicographical ordering of their clustering keys and bounds of the range
 // tombstones.
-//
-// Range tombstones are disjoint, i.e. after emitting
-// range_tombstone_begin it is guaranteed that there is going to be a single
-// range_tombstone_end before another range_tombstone_begin is emitted.
 //
 // The ordering of mutation_fragments also guarantees that by the time the
 // consumer sees a clustering row it has already received all relevant tombstones.
