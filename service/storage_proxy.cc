@@ -3618,7 +3618,7 @@ public:
         // merge batches with equal keys, and note if we need to sort afterwards
         for (auto&& key_value : _partitions) {
             auto&& key = key_value.first;
-            if (*_stop_after_key && key > *_stop_after_key) {
+            if (_stop_after_key && key > *_stop_after_key) {
                 break;
             }
             auto&& batch = key_value.second;
