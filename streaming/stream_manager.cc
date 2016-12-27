@@ -41,6 +41,7 @@
 #include "streaming/stream_result_future.hh"
 #include "log.hh"
 #include "streaming/stream_session_state.hh"
+#include <seastar/core/metrics.hh>
 
 namespace streaming {
 
@@ -48,26 +49,17 @@ extern logging::logger sslog;
 
 distributed<stream_manager> _the_stream_manager;
 
-stream_manager::stream_manager() {
-    _collectd_registrations = std::make_unique<scollectd::registrations>(setup_collectd());
-}
 
-scollectd::registrations
-stream_manager::setup_collectd() {
-    return {
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("streaming", scollectd::per_cpu_plugin_instance,
-                    "derive", "total_incoming_bytes"),
-            scollectd::make_typed(scollectd::data_type::DERIVE, [this] {
-                return this->get_progress_on_local_shard().bytes_received;
-            })),
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("streaming", scollectd::per_cpu_plugin_instance,
-                    "derive", "total_outgoing_bytes"),
-            scollectd::make_typed(scollectd::data_type::DERIVE, [this] {
-                return this->get_progress_on_local_shard().bytes_sent;
-            })),
-    };
+stream_manager::stream_manager() {
+    namespace sm = seastar::metrics;
+
+    _metrics.add_group("streaming", {
+        sm::make_derive("total_incoming_bytes", [this] { return get_progress_on_local_shard().bytes_received; },
+                        sm::description("This is a received bytes rate.")),
+
+        sm::make_derive("total_outgoing_bytes", [this] { return get_progress_on_local_shard().bytes_sent; },
+                        sm::description("This is a sent bytes rate.")),
+    });
 }
 
 void stream_manager::register_sending(shared_ptr<stream_result_future> result) {
