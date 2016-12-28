@@ -1457,6 +1457,10 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
         disk_string_view<uint32_t> cell_value { cell.value() };
 
         _c_stats.update_max_local_deletion_time(expiration);
+        // tombstone histogram is updated with expiration time because if ttl is longer
+        // than gc_grace_seconds for all data, sstable will be considered fully expired
+        // when actually nothing is expired.
+        _c_stats.tombstone_histogram.update(expiration);
 
         write(out, mask, ttl, expiration, timestamp, cell_value);
     } else {
