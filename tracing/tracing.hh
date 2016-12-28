@@ -43,6 +43,7 @@
 #include <vector>
 #include <atomic>
 #include <random>
+#include <seastar/core/scollectd.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/sstring.hh>
 #include "gc_clock.hh"
