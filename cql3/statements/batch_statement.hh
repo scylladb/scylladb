@@ -68,9 +68,7 @@ public:
     using type = raw::batch_statement::type;
 private:
     int _bound_terms;
-public:
     type _type;
-private:
     std::vector<shared_ptr<modification_statement>> _statements;
     std::unique_ptr<attributes> _attrs;
     bool _has_conditions;
