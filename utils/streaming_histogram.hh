@@ -41,7 +41,7 @@
 
 #pragma once
 
-#include <unordered_map>
+#include <map>
 
 namespace utils {
 
@@ -54,7 +54,7 @@ namespace utils {
  */
 struct streaming_histogram {
     // TreeMap to hold bins of histogram.
-    std::unordered_map<double, uint64_t> bin;
+    std::map<double, uint64_t> bin;
 
     // maximum bin size for this histogram
     uint32_t max_bin_size;
@@ -67,7 +67,7 @@ struct streaming_histogram {
         max_bin_size = max_bin_size_p;
     }
 
-    streaming_histogram(int max_bin_size_p, std::unordered_map<double, uint64_t>&& bin_p)
+    streaming_histogram(int max_bin_size_p, std::map<double, uint64_t>&& bin_p)
     {
         max_bin_size = max_bin_size_p;
         bin = std::move(bin_p);
@@ -116,8 +116,10 @@ struct streaming_histogram {
                     }
                 }
                 // merge those two
-                uint64_t k1 = bin.erase(q1);
-                uint64_t k2 = bin.erase(q2);
+                uint64_t k1 = bin.at(q1);
+                uint64_t k2 = bin.at(q2);
+                bin.erase(q1);
+                bin.erase(q2);
                 bin.insert({(q1 * k1 + q2 * k2) / (k1 + k2), k1 + k2});
             }
         }
