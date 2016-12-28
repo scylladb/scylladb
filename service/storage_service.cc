@@ -315,7 +315,11 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
 
 // Runs inside seastar::async context
 void storage_service::join_token_ring(int delay) {
-    _joined = true;
+    // This function only gets called on shard 0, but we want to set _joined
+    // on all shards, so this variable can be later read locally.
+    get_storage_service().invoke_on_all([] (auto&& ss) {
+        ss._joined = true;
+    }).get();
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
     // If we are a seed, or if the user manually sets auto_bootstrap to false,
     // we'll skip streaming data from other nodes and jump directly into the ring.
@@ -509,10 +513,10 @@ future<> storage_service::join_ring() {
     });
 }
 
-future<bool> storage_service::is_joined() {
-    return run_with_no_api_lock([] (storage_service& ss) {
-        return ss._joined && !ss._is_survey_mode;
-    });
+bool storage_service::is_joined() {
+    // Every time we set _joined, we do it on all shards, so we can read its
+    // value locally.
+    return _joined && !_is_survey_mode;
 }
 
 // Runs inside seastar::async context
