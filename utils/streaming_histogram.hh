@@ -141,43 +141,51 @@ struct streaming_histogram {
         }
     }
 
-    // FIXME: convert Java code below.
-#if 0
     /**
      * Calculates estimated number of points in interval [-inf,b].
      *
      * @param b upper bound of a interval to calculate sum
      * @return estimated number of points in a interval [-inf,b].
      */
-    public double sum(double b)
-    {
+    double sum(double b) const {
         double sum = 0;
         // find the points pi, pnext which satisfy pi <= b < pnext
-        Map.Entry<Double, Long> pnext = bin.higherEntry(b);
-        if (pnext == null)
-        {
+        auto pnext = bin.upper_bound(b);
+        if (pnext == bin.end()) {
             // if b is greater than any key in this histogram,
             // just count all appearance and return
-            for (Long value : bin.values())
-                sum += value;
+            for (auto& e : bin) {
+                sum += e.second;
+            }
         }
         else
         {
-            Map.Entry<Double, Long> pi = bin.floorEntry(b);
-            if (pi == null)
+            // return key-value mapping associated with the greatest key less than or equal to the given key
+            auto pi = bin.lower_bound(b);
+            if (pi == bin.end() || (pi == bin.begin() && b < pi->first)) {
                 return 0;
-            // calculate estimated count mb for point b
-            double weight = (b - pi.getKey()) / (pnext.getKey() - pi.getKey());
-            double mb = pi.getValue() + (pnext.getValue() - pi.getValue()) * weight;
-            sum += (pi.getValue() + mb) * weight / 2;
+            }
+            if (pi->first != b) {
+                --pi;
+            }
 
-            sum += pi.getValue() / 2.0;
-            for (Long value : bin.headMap(pi.getKey(), false).values())
-                sum += value;
+            // calculate estimated count mb for point b
+            double weight = (b - pi->first) / (pnext->first - pi->first);
+            double mb = pi->second + (int64_t(pnext->second) - int64_t(pi->second)) * weight;
+            sum += (pi->second + mb) * weight / 2;
+
+            sum += pi->second / 2.0;
+            // iterate through portion of map whose keys are less than pi->first
+            auto it_end = bin.lower_bound(pi->first);
+            for (auto it = bin.begin(); it != it_end; it++) {
+                sum += it->second;
+            }
         }
         return sum;
     }
 
+    // FIXME: convert Java code below.
+#if 0
     public Map<Double, Long> getAsMap()
     {
         return Collections.unmodifiableMap(bin);
