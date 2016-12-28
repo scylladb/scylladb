@@ -72,42 +72,42 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                         , "total_operations", "bad_column_family_errors")
                         , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.bad_column_family_errors))} {
 
-        _sessions_create_cql = sprint("CREATE TABLE %s.%s ("
-                                      "session_id uuid,"
-                                      "command text,"
-                                      "client inet,"
-                                      "coordinator inet,"
-                                      "duration int,"
-                                      "parameters map<text, text>,"
-                                      "request text,"
-                                      "started_at timestamp,"
-                                      "PRIMARY KEY ((session_id))) "
-                                      "WITH default_time_to_live = 86400", KEYSPACE_NAME, SESSIONS);
+    _sessions_create_cql = sprint("CREATE TABLE %s.%s ("
+                                  "session_id uuid,"
+                                  "command text,"
+                                  "client inet,"
+                                  "coordinator inet,"
+                                  "duration int,"
+                                  "parameters map<text, text>,"
+                                  "request text,"
+                                  "started_at timestamp,"
+                                  "PRIMARY KEY ((session_id))) "
+                                  "WITH default_time_to_live = 86400", KEYSPACE_NAME, SESSIONS);
 
-        _events_create_cql = sprint("CREATE TABLE %s.%s ("
-                                    "session_id uuid,"
-                                    "event_id timeuuid,"
-                                    "activity text,"
-                                    "source inet,"
-                                    "source_elapsed int,"
-                                    "thread text,"
-                                    "PRIMARY KEY ((session_id), event_id)) "
-                                    "WITH default_time_to_live = 86400", KEYSPACE_NAME, EVENTS);
+    _events_create_cql = sprint("CREATE TABLE %s.%s ("
+                                "session_id uuid,"
+                                "event_id timeuuid,"
+                                "activity text,"
+                                "source inet,"
+                                "source_elapsed int,"
+                                "thread text,"
+                                "PRIMARY KEY ((session_id), event_id)) "
+                                "WITH default_time_to_live = 86400", KEYSPACE_NAME, EVENTS);
 
-        _node_slow_query_log_cql = sprint("CREATE TABLE %s.%s ("
-                                    "node_ip inet,"
-                                    "shard int,"
-                                    "session_id uuid,"
-                                    "date timestamp,"
-                                    "start_time timeuuid,"
-                                    "command text,"
-                                    "duration int,"
-                                    "parameters map<text, text>,"
-                                    "source_ip inet,"
-                                    "table_names set<text>,"
-                                    "username text,"
-                                    "PRIMARY KEY (start_time, node_ip, shard)) "
-                                    "WITH default_time_to_live = 86400", KEYSPACE_NAME, NODE_SLOW_QUERY_LOG);
+    _node_slow_query_log_cql = sprint("CREATE TABLE %s.%s ("
+                                "node_ip inet,"
+                                "shard int,"
+                                "session_id uuid,"
+                                "date timestamp,"
+                                "start_time timeuuid,"
+                                "command text,"
+                                "duration int,"
+                                "parameters map<text, text>,"
+                                "source_ip inet,"
+                                "table_names set<text>,"
+                                "username text,"
+                                "PRIMARY KEY (start_time, node_ip, shard)) "
+                                "WITH default_time_to_live = 86400", KEYSPACE_NAME, NODE_SLOW_QUERY_LOG);
 }
 
 future<> trace_keyspace_helper::setup_table(const sstring& name, const sstring& cql) const {
