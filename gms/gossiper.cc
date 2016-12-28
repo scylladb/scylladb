@@ -55,7 +55,7 @@
 #include "log.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
-#include <seastar/core/scollectd.hh>
+#include <seastar/core/metrics.hh>
 #include <chrono>
 #include "dht/i_partitioner.hh"
 #include <boost/range/algorithm/set_algorithm.hpp>
@@ -117,24 +117,19 @@ gossiper::gossiper() {
     /* register with the Failure Detector for receiving Failure detector events */
     get_local_failure_detector().register_failure_detection_event_listener(this);
     // Register this instance with JMX
-    _collectd_registrations = std::make_unique<scollectd::registrations>(setup_collectd());
-}
-
-scollectd::registrations
-gossiper::setup_collectd() {
+    namespace sm = seastar::metrics;
     auto ep = get_broadcast_address();
-    return {
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("gossip", scollectd::per_cpu_plugin_instance,
-                    "derive", "heart_beat_version"),
-            scollectd::make_typed(scollectd::data_type::DERIVE, [ep, this] {
-                if (this->endpoint_state_map.count(ep)) {
-                    return this->endpoint_state_map.at(ep).get_heart_beat_state().get_heart_beat_version();
+    _metrics.add_group("gossip", {
+        sm::make_derive("heart_beat",
+            [ep, this] {
+                auto it = this->endpoint_state_map.find(ep);
+                if (it != this->endpoint_state_map.end()) {
+                    return it->second.get_heart_beat_state().get_heart_beat_version();
                 } else {
                     return 0;
                 }
-            })),
-    };
+            }, sm::description("Heart beat of the current Node.")),
+    });
 }
 
 void gossiper::set_last_processed_message_at() {

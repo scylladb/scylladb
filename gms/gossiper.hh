@@ -56,7 +56,7 @@
 #include <chrono>
 #include <set>
 #include <seastar/core/condition-variable.hh>
-#include <seastar/core/scollectd.hh>
+#include <seastar/core/metrics_registration.hh>
 
 namespace gms {
 
@@ -535,8 +535,7 @@ private:
     void unregister_feature(feature* f);
     void maybe_enable_features();
 private:
-    std::unique_ptr<scollectd::registrations> _collectd_registrations;
-    scollectd::registrations setup_collectd();
+    seastar::metrics::metric_groups _metrics;
 };
 
 extern distributed<gossiper> _the_gossiper;
