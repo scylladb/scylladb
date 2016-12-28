@@ -38,6 +38,7 @@
  * You should have received a copy of the GNU General Public License
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
+#include <seastar/core/metrics.hh>
 #include "tracing/tracing.hh"
 #include "utils/class_registrator.hh"
 #include "tracing/trace_state.hh"
@@ -59,42 +60,42 @@ tracing::tracing(sstring tracing_backend_helper_class_name)
         : _write_timer([this] { write_timer_callback(); })
         , _thread_name(seastar::format("shard {:d}", engine().cpu_id()))
         , _tracing_backend_helper_class_name(std::move(tracing_backend_helper_class_name))
-        , _registrations{
-            scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
-                    , scollectd::per_cpu_plugin_instance
-                    , "total_operations", "dropped_sessions")
-                    , scollectd::make_typed(scollectd::data_type::DERIVE, stats.dropped_sessions)),
-            scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
-                    , scollectd::per_cpu_plugin_instance
-                    , "total_operations", "dropped_records")
-                    , scollectd::make_typed(scollectd::data_type::DERIVE, stats.dropped_records)),
-            scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
-                    , scollectd::per_cpu_plugin_instance
-                    , "total_operations", "trace_records_count")
-                    , scollectd::make_typed(scollectd::data_type::DERIVE, stats.trace_records_count)),
-            scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
-                    , scollectd::per_cpu_plugin_instance
-                    , "total_operations", "trace_errors")
-                    , scollectd::make_typed(scollectd::data_type::DERIVE, stats.trace_errors)),
-            scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
-                    , scollectd::per_cpu_plugin_instance
-                    , "queue_length", "active_sessions")
-                    , scollectd::make_typed(scollectd::data_type::GAUGE, _active_sessions)),
-            scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
-                    , scollectd::per_cpu_plugin_instance
-                    , "queue_length", "cached_records")
-                    , scollectd::make_typed(scollectd::data_type::GAUGE, _cached_records)),
-            scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
-                    , scollectd::per_cpu_plugin_instance
-                    , "queue_length", "pending_for_write_records")
-                    , scollectd::make_typed(scollectd::data_type::GAUGE, _pending_for_write_records_count)),
-            scollectd::add_polled_metric(scollectd::type_instance_id("tracing"
-                    , scollectd::per_cpu_plugin_instance
-                    , "queue_length", "flushing_records")
-                    , scollectd::make_typed(scollectd::data_type::GAUGE, _flushing_records))}
         , _gen(std::random_device()())
         , _slow_query_duration_threshold(default_slow_query_duraion_threshold)
-        , _slow_query_record_ttl(default_slow_query_record_ttl) {}
+        , _slow_query_record_ttl(default_slow_query_record_ttl) {
+    namespace sm = seastar::metrics;
+
+    _metrics.add_group("tracing", {
+        sm::make_derive("dropped_sessions", stats.dropped_sessions,
+                        sm::description("Counts a number of dropped sessions due to too many pending sessions/records. "
+                                        "High value indicates that backend is saturated with the rate with which new tracing records are created.")),
+
+        sm::make_derive("dropped_records", stats.dropped_records,
+                        sm::description("Counts a number of dropped records due to too many pending records. "
+                                        "High value indicates that backend is saturated with the rate with which new tracing records are created.")),
+
+        sm::make_derive("trace_records_count", stats.trace_records_count,
+                        sm::description("This metric is a rate of tracing records generation.")),
+
+        sm::make_derive("trace_errors", stats.trace_errors,
+                        sm::description("Counts a number of trace records dropped due to an error (e.g. OOM).")),
+
+        sm::make_gauge("active_sessions", _active_sessions,
+                        sm::description("Holds a number of a currently active tracing sessions.")),
+
+        sm::make_gauge("cached_records", _cached_records,
+                        sm::description(seastar::format("Holds a number of tracing records cached in the tracing sessions that are not going to be written in the next write event. "
+                                                        "If sum of this metric, pending_for_write_records and flushing_records is close to {} we are likely to start dropping tracing records.", max_pending_trace_records + write_event_records_threshold))),
+
+        sm::make_gauge("pending_for_write_records", _pending_for_write_records_count,
+                        sm::description(seastar::format("Holds a number of tracing records that are going to be written in the next write event. "
+                                                        "If sum of this metric, cached_records and flushing_records is close to {} we are likely to start dropping tracing records.", max_pending_trace_records + write_event_records_threshold))),
+
+        sm::make_gauge("flushing_records", _flushing_records,
+                        sm::description(seastar::format("Holds a number of tracing records that currently being written to the I/O backend. "
+                                                        "If sum of this metric, cached_records and pending_for_write_records is close to {} we are likely to start dropping tracing records.", max_pending_trace_records + write_event_records_threshold))),
+    });
+}
 
 future<> tracing::create_tracing(sstring tracing_backend_class_name) {
     return tracing_instance().start(std::move(tracing_backend_class_name));

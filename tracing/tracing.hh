@@ -46,6 +46,7 @@
 #include <seastar/core/scollectd.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/core/metrics_registration.hh>
 #include "gc_clock.hh"
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
@@ -355,7 +356,7 @@ private:
     std::unique_ptr<i_tracing_backend_helper> _tracing_backend_helper_ptr;
     sstring _thread_name;
     sstring _tracing_backend_helper_class_name;
-    scollectd::registrations _registrations;
+    seastar::metrics::metric_groups _metrics;
     double _trace_probability = 0.0; // keep this one for querying purposes
     uint64_t _normalized_trace_probability = 0;
     std::ranlux48_base _gen;
