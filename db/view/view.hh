@@ -25,6 +25,7 @@
 #include "gc_clock.hh"
 #include "query-request.hh"
 #include "schema.hh"
+#include "streamed_mutation.hh"
 #include "stdx.hh"
 
 namespace cql3 {
@@ -113,6 +114,12 @@ private:
     bool clustering_prefix_matches(const ::schema& base, const partition_key& key, const clustering_key_prefix& ck) const;
     void set_base_non_pk_column_in_view_pk(const ::schema& base);
 };
+
+future<std::vector<mutation>> generate_view_updates(
+        const schema_ptr& base,
+        std::vector<lw_shared_ptr<view>>&& views_to_update,
+        streamed_mutation&& updates,
+        streamed_mutation&& existings);
 
 }
 
