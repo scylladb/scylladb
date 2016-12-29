@@ -134,6 +134,17 @@ bool view::matches_view_filter(const ::schema& base, const partition_key& key, c
                     });
 }
 
+void view::set_base_non_pk_column_in_view_pk(const ::schema& base) {
+    for (auto&& base_col : base.regular_columns()) {
+        auto view_col = _schema->get_column_definition(base_col.name());
+        if (view_col && view_col->is_primary_key()) {
+            _base_non_pk_column_in_view_pk = view_col;
+            return;
+        }
+    }
+    _base_non_pk_column_in_view_pk = nullptr;
+}
+
 } // namespace view
 } // namespace db
 

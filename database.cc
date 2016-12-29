@@ -3631,9 +3631,9 @@ void column_family::update_view_schemas() {
 }
 
 void column_family::add_or_update_view(view_ptr v) {
-    auto e = _views.emplace(v->cf_name(), make_lw_shared<db::view::view>(v));
+    auto e = _views.emplace(v->cf_name(), make_lw_shared<db::view::view>(v, *schema()));
     if (!e.second) {
-        e.first->second->update(v);
+        e.first->second->update(v, *schema());
     }
     update_view_schemas();
 }

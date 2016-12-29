@@ -42,20 +42,27 @@ class view final {
     mutable shared_ptr<cql3::statements::select_statement> _select_statement;
     mutable stdx::optional<query::partition_slice> _partition_slice;
     mutable stdx::optional<dht::partition_range_vector> _partition_ranges;
+    const column_definition* _base_non_pk_column_in_view_pk;
 public:
-    explicit view(view_ptr schema)
+    explicit view(view_ptr schema, const ::schema& base)
             : _schema(std::move(schema)) {
+        set_base_non_pk_column_in_view_pk(base);
     }
 
     view_ptr schema() const {
         return _schema;
     }
 
-    void update(view_ptr new_schema) {
+    void update(view_ptr new_schema, const ::schema& base) {
         _schema = new_schema;
         _select_statement = nullptr;
         _partition_slice = { };
         _partition_ranges = { };
+        set_base_non_pk_column_in_view_pk(base);
+    }
+
+    const column_definition* base_non_pk_column_in_view_pk() const {
+        return _base_non_pk_column_in_view_pk;
     }
 
     /**
@@ -104,6 +111,7 @@ private:
     const query::partition_slice& partition_slice() const;
     const dht::partition_range_vector& partition_ranges() const;
     bool clustering_prefix_matches(const ::schema& base, const partition_key& key, const clustering_key_prefix& ck) const;
+    void set_base_non_pk_column_in_view_pk(const ::schema& base);
 };
 
 }
