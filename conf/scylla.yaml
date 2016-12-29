@@ -217,6 +217,12 @@ batch_size_warn_threshold_in_kb: 5
 # that do not have vnodes enabled.
 # initial_token:
 
+# RPC address to broadcast to drivers and other Scylla nodes. This cannot
+# be set to 0.0.0.0. If left blank, this will be set to the value of
+# rpc_address. If rpc_address is set to 0.0.0.0, broadcast_rpc_address must
+# be set.
+# broadcast_rpc_address: 1.2.3.4
+
 ###################################################
 ## Not currently supported, reserved for future use
 ###################################################
@@ -483,13 +489,6 @@ commitlog_total_space_in_mb: -1
 
 # Whether to start the thrift rpc server.
 # start_rpc: true
-
-
-# RPC address to broadcast to drivers and other Scylla nodes. This cannot
-# be set to 0.0.0.0. If left blank, this will be set to the value of
-# rpc_address. If rpc_address is set to 0.0.0.0, broadcast_rpc_address must
-# be set.
-# broadcast_rpc_address: 1.2.3.4
 
 # enable or disable keepalive on rpc/native connections
 # rpc_keepalive: true
