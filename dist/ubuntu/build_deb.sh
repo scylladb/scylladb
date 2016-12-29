@@ -51,6 +51,9 @@ fi
 if [ ! -f /usr/bin/wget ]; then
     sudo apt-get -y install wget
 fi
+if [ ! -f /usr/bin/lsb_release ]; then
+    sudo apt-get -y install lsb-release
+fi
 
 DISTRIBUTION=`lsb_release -i|awk '{print $3}'`
 CODENAME=`lsb_release -c|awk '{print $2}'`
