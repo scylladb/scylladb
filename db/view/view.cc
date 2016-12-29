@@ -40,6 +40,7 @@
  */
 
 #include <boost/range/algorithm/transform.hpp>
+#include <boost/range/adaptors.hpp>
 
 #include "clustering_bounds_comparator.hh"
 #include "cql3/statements/select_statement.hh"
@@ -122,6 +123,15 @@ bool view::may_be_affected_by(const ::schema& base, const dht::decorated_key& ke
         return stop_iteration(affected);
     });
     return affected;
+}
+
+bool view::matches_view_filter(const ::schema& base, const partition_key& key, const clustering_row& update, gc_clock::time_point now) const {
+    return clustering_prefix_matches(base, key, update.key()) &&
+                boost::algorithm::all_of(
+                    select_statement().get_restrictions()->get_non_pk_restriction() | boost::adaptors::map_values,
+                    [&] (auto&& r) {
+                        return r->is_satisfied_by(base, key, update.key(), update.cells(), cql3::query_options({ }), now);
+                    });
 }
 
 } // namespace view
