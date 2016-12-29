@@ -823,6 +823,10 @@ public:
 private:
     void update_view_schemas();
     std::vector<lw_shared_ptr<db::view::view>> affected_views(const schema_ptr& base, const mutation& update) const;
+    future<std::vector<mutation>> generate_view_updates(const schema_ptr& base,
+            std::vector<lw_shared_ptr<db::view::view>>&& views,
+            streamed_mutation updates,
+            streamed_mutation existings) const;
 
     // One does not need to wait on this future if all we are interested in, is
     // initiating the write.  The writes initiated here will eventually

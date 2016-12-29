@@ -3655,3 +3655,27 @@ std::vector<lw_shared_ptr<db::view::view>> column_family::affected_views(const s
         return view->partition_key_matches(*base, update.decorated_key());
     }));
 }
+
+/**
+ * Given some updates on the base table and the existing values for the rows affected by that update, generates the
+ * mutations to be applied to the base table's views.
+ *
+ * @param base the base schema at a particular version.
+ * @param views the affected views which need to be updated.
+ * @param updates the base table updates being applied.
+ * @param existings the existing values for the rows affected by updates. This is used to decide if a view is
+ * obsoleted by the update and should be removed, gather the values for columns that may not be part of the update if
+ * a new view entry needs to be created, and compute the minimal updates to be applied if the view entry isn't changed
+ * but has simply some updated values.
+ * @return a future resolving to the mutations to apply to the views, which can be empty.
+ */
+future<std::vector<mutation>> column_family::generate_view_updates(const schema_ptr& base,
+        std::vector<lw_shared_ptr<db::view::view>>&& views,
+        streamed_mutation updates,
+        streamed_mutation existings) const {
+    // FIXME: Use the view_ptr which corresponds to the version of base. The current code
+    // just uses the most recent view_ptr, which is not correct. There should be a mapping between a base schema
+    // version and the corresponding view schema version. Note that the it might not be here that this FIXME
+    // is resolved.
+    return db::view::generate_view_updates(base, std::move(views), std::move(updates), std::move(existings));
+}
