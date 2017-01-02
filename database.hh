@@ -89,6 +89,10 @@ namespace service {
 class storage_proxy;
 }
 
+namespace netw {
+class messaging_service;
+}
+
 namespace sstables {
 
 class sstable;
@@ -869,6 +873,7 @@ public:
 
     void set_hit_rate(gms::inet_address addr, cache_temperature rate);
     cache_hit_rate get_hit_rate(gms::inet_address addr);
+    void drop_hit_rate(gms::inet_address addr);
 
     template<typename Func, typename Result = futurize_t<std::result_of_t<Func()>>>
     Result run_with_compaction_disabled(Func && func) {
@@ -1341,6 +1346,7 @@ public:
     semaphore& sstable_load_concurrency_sem() {
         return _sstable_load_concurrency_sem;
     }
+    void register_connection_drop_notifier(netw::messaging_service& ms);
 
     friend class distributed_loader;
 };

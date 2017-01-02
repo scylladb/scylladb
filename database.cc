@@ -59,6 +59,7 @@
 #include "core/do_with.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
+#include "message/messaging_service.hh"
 #include "mutation_query.hh"
 #include "sstable_mutation_readers.hh"
 #include <core/fstream.hh>
@@ -2862,6 +2863,15 @@ bool database::is_replacing() {
     return bool(get_replace_address());
 }
 
+void database::register_connection_drop_notifier(netw::messaging_service& ms) {
+    ms.register_connection_drop_notifier([this] (gms::inet_address ep) {
+        dblog.debug("Drop hit rate info for {} because of disconnect", ep);
+        for (auto&& cf : get_non_system_column_families()) {
+            cf->drop_hit_rate(ep);
+        }
+    });
+}
+
 std::ostream& operator<<(std::ostream& out, const atomic_cell_or_collection& c) {
     return out << to_hex(c._data);
 }
@@ -4073,4 +4083,8 @@ column_family::cache_hit_rate column_family::get_hit_rate(gms::inet_address addr
     } else {
         return it->second;
     }
+}
+
+void column_family::drop_hit_rate(gms::inet_address addr) {
+    _cluster_cache_hit_rates.erase(addr);
 }

@@ -540,6 +540,10 @@ int main(int ac, char** av) {
 
             supervisor::notify("loading sstables");
             distributed_loader::init_non_system_keyspaces(db, proxy).get();
+            // register connection drop notification to update cf's cache hit rate data
+            db.invoke_on_all([] (database& db) {
+                db.register_connection_drop_notifier(netw::get_local_messaging_service());
+            }).get();
             supervisor::notify("setting up system keyspace");
             db::system_keyspace::setup(db, qp).get();
             supervisor::notify("starting commit log");
