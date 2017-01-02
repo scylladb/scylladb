@@ -87,7 +87,7 @@ namespace date
 // durations
 
 using days = std::chrono::duration
-    <int, std::ratio_multiply<std::ratio<24>, std::chrono::hours::period>>;
+    <int64_t, std::ratio_multiply<std::ratio<24>, std::chrono::hours::period>>;
 
 using weeks = std::chrono::duration
     <int, std::ratio_multiply<std::ratio<7>, days::period>>;
@@ -307,11 +307,11 @@ operator<<(std::basic_ostream<CharT, Traits>& os, const month& m);
 
 class year
 {
-    short y_;
+    int64_t y_;
 
 public:
     year() = default;
-    explicit CONSTCD11 year(int y) NOEXCEPT;
+    explicit CONSTCD11 year(int64_t y) NOEXCEPT;
 
     CONSTCD14 year& operator++()    NOEXCEPT;
     CONSTCD14 year  operator++(int) NOEXCEPT;
@@ -326,7 +326,7 @@ public:
 
     CONSTCD11 bool is_leap() const NOEXCEPT;
 
-    CONSTCD11 explicit operator int() const NOEXCEPT;
+    CONSTCD11 explicit operator int64_t() const NOEXCEPT;
     CONSTCD11 bool ok() const NOEXCEPT;
 
     static CONSTCD11 year min() NOEXCEPT;
@@ -1376,7 +1376,7 @@ operator<<(std::basic_ostream<CharT, Traits>& os, const month& m)
 
 // year
 
-CONSTCD11 inline year::year(int y) NOEXCEPT : y_(static_cast<decltype(y_)>(y)) {}
+CONSTCD11 inline year::year(int64_t y) NOEXCEPT : y_(static_cast<decltype(y_)>(y)) {}
 CONSTCD14 inline year& year::operator++() NOEXCEPT {++y_; return *this;}
 CONSTCD14 inline year year::operator++(int) NOEXCEPT {auto tmp(*this); ++(*this); return tmp;}
 CONSTCD14 inline year& year::operator--() NOEXCEPT {--y_; return *this;}
@@ -1394,7 +1394,7 @@ year::is_leap() const NOEXCEPT
     return y_ % 4 == 0 && (y_ % 100 != 0 || y_ % 400 == 0);
 }
 
-CONSTCD11 inline year::operator int() const NOEXCEPT {return y_;}
+CONSTCD11 inline year::operator int64_t() const NOEXCEPT {return y_;}
 CONSTCD11 inline bool year::ok() const NOEXCEPT {return true;}
 
 CONSTCD11
@@ -1402,7 +1402,7 @@ inline
 year
 year::min() NOEXCEPT
 {
-    return year{std::numeric_limits<short>::min()};
+    return year{std::numeric_limits<int64_t>::min()};
 }
 
 CONSTCD11
@@ -1410,7 +1410,7 @@ inline
 year
 year::max() NOEXCEPT
 {
-    return year{std::numeric_limits<short>::max()};
+    return year{std::numeric_limits<int64_t>::max()};
 }
 
 CONSTCD11
@@ -1418,7 +1418,7 @@ inline
 bool
 operator==(const year& x, const year& y) NOEXCEPT
 {
-    return static_cast<int>(x) == static_cast<int>(y);
+    return static_cast<int64_t>(x) == static_cast<int64_t>(y);
 }
 
 CONSTCD11
@@ -1434,7 +1434,7 @@ inline
 bool
 operator<(const year& x, const year& y) NOEXCEPT
 {
-    return static_cast<int>(x) < static_cast<int>(y);
+    return static_cast<int64_t>(x) < static_cast<int64_t>(y);
 }
 
 CONSTCD11
@@ -1466,7 +1466,7 @@ inline
 years
 operator-(const year& x, const year& y) NOEXCEPT
 {
-    return years{static_cast<int>(x) - static_cast<int>(y)};
+    return years{static_cast<int64_t>(x) - static_cast<int64_t>(y)};
 }
 
 CONSTCD11
@@ -1474,7 +1474,7 @@ inline
 year
 operator+(const year& x, const years& y) NOEXCEPT
 {
-    return year{static_cast<int>(x) + y.count()};
+    return year{static_cast<int64_t>(x) + y.count()};
 }
 
 CONSTCD11
@@ -1490,7 +1490,7 @@ inline
 year
 operator-(const year& x, const years& y) NOEXCEPT
 {
-    return year{static_cast<int>(x) - y.count()};
+    return year{static_cast<int64_t>(x) - y.count()};
 }
 
 template<class CharT, class Traits>
@@ -1502,7 +1502,7 @@ operator<<(std::basic_ostream<CharT, Traits>& os, const year& y)
     os.fill('0');
     os.flags(std::ios::dec | std::ios::internal);
     os.width(4 + (y < year{0}));
-    os << static_cast<int>(y);
+    os << static_cast<int64_t>(y);
     return os;
 }
 
@@ -2497,14 +2497,14 @@ year_month_day::to_days() const NOEXCEPT
              "This algorithm has not been ported to a 16 bit unsigned integer");
     static_assert(std::numeric_limits<int>::digits >= 20,
              "This algorithm has not been ported to a 16 bit signed integer");
-    auto const y = static_cast<int>(y_) - (m_ <= feb);
+    auto const y = static_cast<int64_t>(y_) - (m_ <= feb);
     auto const m = static_cast<unsigned>(m_);
     auto const d = static_cast<unsigned>(d_);
     auto const era = (y >= 0 ? y : y-399) / 400;
     auto const yoe = static_cast<unsigned>(y - era * 400);       // [0, 399]
     auto const doy = (153*(m > 2 ? m-3 : m+9) + 2)/5 + d-1;      // [0, 365]
     auto const doe = yoe * 365 + yoe/4 - yoe/100 + doy;          // [0, 146096]
-    return days{era * 146097 + static_cast<int>(doe) - 719468};
+    return days{era * 146097 + static_cast<int64_t>(doe) - 719468};
 }
 
 CONSTCD14
