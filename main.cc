@@ -689,7 +689,10 @@ int main(int ac, char** av) {
                 pctx.prefix = cfg->prometheus_prefix();
                 prometheus_server.start().get();
                 prometheus::start(prometheus_server, pctx);
-                prometheus_server.listen(ipv4_addr{prom_addr.addresses[0].in.s_addr, pport}).get();
+                prometheus_server.listen(ipv4_addr{prom_addr.addresses[0].in.s_addr, pport}).handle_exception([pport, &cfg] (auto ep) {
+                    startlog.error("Could not start Prometheus API server on {}:{}: {}", cfg->prometheus_address(), pport, ep);
+                    return make_exception_future<>(ep);
+                }).get();
             }
             supervisor_notify("serving");
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
