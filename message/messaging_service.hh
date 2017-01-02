@@ -200,6 +200,8 @@ private:
     std::array<clients_map, 4> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
     bool _stopping = false;
+    std::list<std::function<void(gms::inet_address ep)>> _connection_drop_notifiers;
+
 public:
     using clock_type = lowres_clock;
 public:
@@ -339,12 +341,16 @@ public:
     void unregister_replication_finished();
     future<> send_replication_finished(msg_addr id, inet_address from);
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
+private:
+    bool remove_rpc_client_one(clients_map& clients, msg_addr id, bool dead_only);
 public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
     shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, msg_addr id);
-    void remove_rpc_client_one(clients_map& clients, msg_addr id, bool dead_only);
     void remove_error_rpc_client(messaging_verb verb, msg_addr id);
     void remove_rpc_client(msg_addr id);
+    using drop_notifier_handler = decltype(_connection_drop_notifiers)::iterator;
+    drop_notifier_handler register_connection_drop_notifier(std::function<void(gms::inet_address ep)> cb);
+    void unregister_connection_drop_notifier(drop_notifier_handler h);
     std::unique_ptr<rpc_protocol_wrapper>& rpc();
     static msg_addr get_source(const rpc::client_info& client);
 };
