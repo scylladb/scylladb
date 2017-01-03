@@ -157,7 +157,7 @@ public:
     }
 
     bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return abstract_restriction::uses_function(_value, ks_name, function_name);
+        return abstract_restriction::term_uses_function(_value, ks_name, function_name);
     }
 
     void merge_with(::shared_ptr<restriction>) override {
@@ -203,11 +203,11 @@ public:
     bool uses_function(const sstring& ks_name,
             const sstring& function_name) const override {
         return (_slice.has_bound(statements::bound::START)
-                && abstract_restriction::uses_function(
+                && abstract_restriction::term_uses_function(
                         _slice.bound(statements::bound::START), ks_name,
                         function_name))
                 || (_slice.has_bound(statements::bound::END)
-                        && abstract_restriction::uses_function(
+                        && abstract_restriction::term_uses_function(
                                 _slice.bound(statements::bound::END),
                                 ks_name, function_name));
     }
