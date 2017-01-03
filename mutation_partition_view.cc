@@ -27,6 +27,7 @@
 #include "utils/data_input.hh"
 #include "mutation_partition_serializer.hh"
 #include "mutation_partition.hh"
+#include "counters.hh"
 
 #include "utils/UUID.hh"
 #include "serializer.hh"
@@ -43,7 +44,12 @@ using namespace db;
 
 namespace {
 
-atomic_cell read_atomic_cell(boost::variant<ser::live_cell_view, ser::expiring_cell_view, ser::dead_cell_view, ser::unknown_variant_type> cv)
+using atomic_cell_variant = boost::variant<ser::live_cell_view,
+                                           ser::expiring_cell_view,
+                                           ser::dead_cell_view,
+                                           ser::unknown_variant_type>;
+
+atomic_cell read_atomic_cell(atomic_cell_variant cv)
 {
     struct atomic_cell_visitor : boost::static_visitor<atomic_cell> {
         atomic_cell operator()(ser::live_cell_view& lcv) const {
@@ -89,7 +95,7 @@ void read_and_visit_row(ser::row_view rv, const column_mapping& cm, column_kind 
             explicit atomic_cell_or_collection_visitor(Visitor& v, column_id id, const column_mapping_entry& col)
                 : _visitor(v), _id(id), _col(col) { }
 
-            void operator()(boost::variant<ser::live_cell_view, ser::expiring_cell_view, ser::dead_cell_view, ser::unknown_variant_type>& acv) const {
+            void operator()(atomic_cell_variant& acv) const {
                 if (!_col.type()->is_atomic()) {
                     throw std::runtime_error("A collection expected, got an atomic cell");
                 }
