@@ -2031,7 +2031,20 @@ future<> storage_service::start_native_transport() {
                 if (ceo.at("enabled") == "true") {
                     cred = std::make_shared<seastar::tls::credentials_builder>();
                     cred->set_dh_level(seastar::tls::dh_params::level::MEDIUM);
+
+                    if (ceo.count("priority_string")) {
+                        cred->set_priority_string(ceo.at("priority_string"));
+                    }
+                    if (ceo.count("require_client_auth") && ceo.at("require_client_auth") == "true") {
+                        cred->set_client_auth(seastar::tls::client_auth::REQUIRE);
+                    }
+
                     f = cred->set_x509_key_file(ceo.at("certificate"), ceo.at("keyfile"), seastar::tls::x509_crt_format::PEM);
+
+                    if (ceo.count("truststore")) {
+                        f = f.then([cred, f = ceo.at("truststore")] { return cred->set_x509_trust_file(f, seastar::tls::x509_crt_format::PEM); });
+                    }
+
                     logger.info("Enabling encrypted CQL connections between client and server");
                 }
                 return f.then([cserver, addr, cred = std::move(cred), keepalive] {

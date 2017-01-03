@@ -397,6 +397,7 @@ int main(int ac, char** av) {
                 ceo["enabled"] = "true";
                 ceo["certificate"] = get_or_default(ceo, "certificate", relative_conf_dir("scylla.crt").string());
                 ceo["keyfile"] = get_or_default(ceo, "keyfile", relative_conf_dir("scylla.key").string());
+                ceo["require_client_auth"] = is_true(get_or_default(ceo, "require_client_auth", "false")) ? "true" : "false";
             } else {
                 ceo["enabled"] = "false";
             }
@@ -479,7 +480,8 @@ int main(int ac, char** av) {
             auto trust_store = get_or_default(ssl_opts, "truststore");
             auto cert = get_or_default(ssl_opts, "certificate", relative_conf_dir("scylla.crt").string());
             auto key = get_or_default(ssl_opts, "keyfile", relative_conf_dir("scylla.key").string());
-
+            auto prio = get_or_default(ssl_opts, "priority_string", sstring());
+            auto clauth = is_true(get_or_default(ssl_opts, "require_client_auth", "false"));
             init_ms_fd_gossiper(listen_address
                     , storage_port
                     , ssl_storage_port
@@ -487,6 +489,8 @@ int main(int ac, char** av) {
                     , trust_store
                     , cert
                     , key
+                    , prio
+                    , clauth
                     , cfg->internode_compression()
                     , seed_provider
                     , cluster_name

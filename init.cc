@@ -47,6 +47,8 @@ void init_ms_fd_gossiper(sstring listen_address
                 , sstring ms_trust_store
                 , sstring ms_cert
                 , sstring ms_key
+                , sstring ms_tls_prio
+                , bool ms_client_auth
                 , sstring ms_compress
                 , db::seed_provider_type seed_provider
                 , sstring cluster_name
@@ -87,6 +89,13 @@ void init_ms_fd_gossiper(sstring listen_address
             creds->set_system_trust().get();
         } else {
             creds->set_x509_trust_file(ms_trust_store, x509_crt_format::PEM).get();
+        }
+
+        if (!ms_tls_prio.empty()) {
+            creds->set_priority_string(ms_tls_prio);
+        }
+        if (ms_client_auth) {
+            creds->set_client_auth(seastar::tls::client_auth::REQUIRE);
         }
     }
 
