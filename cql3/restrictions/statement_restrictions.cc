@@ -31,6 +31,8 @@
 #include "cql3/single_column_relation.hh"
 #include "cql3/constants.hh"
 
+#include "stdx.hh"
+
 namespace cql3 {
 namespace restrictions {
 
@@ -390,6 +392,227 @@ void statement_restrictions::validate_secondary_index_selections(bool selects_on
         throw exceptions::invalid_request_exception(
             "Queries using 2ndary indexes don't support selecting only static columns");
     }
+}
+
+bytes_view_opt single_column_restriction::get_value(const schema& schema,
+        const partition_key& key,
+        const clustering_key_prefix& ckey,
+        const row& cells,
+        gc_clock::time_point now) const {
+    switch(_column_def.kind) {
+    case column_kind::partition_key:
+        return key.get_component(schema, _column_def.component_index());
+    case column_kind::clustering_key:
+        return ckey.get_component(schema, _column_def.component_index());
+    default:
+        auto cell = cells.find_cell(_column_def.id);
+        if (!cell) {
+            return stdx::nullopt;
+        }
+        assert(_column_def.is_atomic());
+        auto c = cell->as_atomic_cell();
+        return c.is_dead(now) ? stdx::nullopt : bytes_view_opt(c.value());
+    }
+}
+
+bool single_column_restriction::EQ::is_satisfied_by(const schema& schema,
+        const partition_key& key,
+        const clustering_key_prefix& ckey,
+        const row& cells,
+        const query_options& options,
+        gc_clock::time_point now) const {
+    if (_column_def.type->is_counter()) {
+        fail(unimplemented::cause::COUNTERS);
+    }
+    auto operand = value(options);
+    if (operand) {
+        auto cell_value = get_value(schema, key, ckey, cells, now);
+        return cell_value && _column_def.type->compare(*operand, *cell_value) == 0;
+    }
+    return false;
+}
+
+bool single_column_restriction::IN::is_satisfied_by(const schema& schema,
+        const partition_key& key,
+        const clustering_key_prefix& ckey,
+        const row& cells,
+        const query_options& options,
+        gc_clock::time_point now) const {
+    if (_column_def.type->is_counter()) {
+        fail(unimplemented::cause::COUNTERS);
+    }
+    auto cell_value = get_value(schema, key, ckey, cells, now);
+    if (!cell_value) {
+        return false;
+    }
+    auto operands = values(options);
+    return std::any_of(operands.begin(), operands.end(), [&] (auto&& operand) {
+        return operand && _column_def.type->compare(*operand, *cell_value) == 0;
+    });
+}
+
+bool single_column_restriction::slice::is_satisfied_by(const schema& schema,
+        const partition_key& key,
+        const clustering_key_prefix& ckey,
+        const row& cells,
+        const query_options& options,
+        gc_clock::time_point now) const {
+    if (_column_def.type->is_counter()) {
+        fail(unimplemented::cause::COUNTERS);
+    }
+    auto cell_value = get_value(schema, key, ckey, cells, now);
+    if (!cell_value) {
+        return false;
+    }
+
+    using range_type = query::range<bytes_view>;
+    auto extract_bound = [&] (statements::bound bound) -> stdx::optional<range_type::bound> {
+        if (!_slice.has_bound(bound)) {
+            return { };
+        }
+        auto value = _slice.bound(bound)->bind_and_get(options);
+        if (!value) {
+            return { };
+        }
+        return { range_type::bound(*value, _slice.is_inclusive(bound)) };
+    };
+    auto range = range_type(
+            extract_bound(statements::bound::START),
+            extract_bound(statements::bound::END));
+    if  (_column_def.type->is_reversed()) {
+        range.reverse();
+    }
+
+    return range.contains(*cell_value, _column_def.type->as_tri_comparator());
+}
+
+bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
+        const partition_key& key,
+        const clustering_key_prefix& ckey,
+        const row& cells,
+        const query_options& options,
+        gc_clock::time_point now) const {
+    if (_column_def.type->is_counter()) {
+        fail(unimplemented::cause::COUNTERS);
+    }
+    if (!_column_def.type->is_collection()) {
+        return false;
+    }
+
+    auto col_type = static_pointer_cast<const collection_type_impl>(_column_def.type);
+    if ((!_keys.empty() || !_entry_keys.empty()) && !col_type->is_map()) {
+        return false;
+    }
+    assert(_entry_keys.size() == _entry_values.size());
+
+    auto&& map_key_type = col_type->name_comparator();
+    auto&& element_type = col_type->is_set() ? col_type->name_comparator() : col_type->value_comparator();
+    if (_column_def.type->is_multi_cell()) {
+        auto cell = cells.find_cell(_column_def.id);
+        auto&& elements = col_type->deserialize_mutation_form(cell->as_collection_mutation()).cells;
+        auto end = std::remove_if(elements.begin(), elements.end(), [now] (auto&& element) {
+            return element.second.is_dead(now);
+        });
+        for (auto&& value : _values) {
+            auto val = value->bind_and_get(options);
+            if (!val) {
+                continue;
+            }
+            auto found = std::find_if(elements.begin(), end, [&] (auto&& element) {
+                return element_type->compare(element.second.value(), *val) == 0;
+            });
+            if (found == end) {
+                return false;
+            }
+        }
+        for (auto&& key : _keys) {
+            auto k = key->bind_and_get(options);
+            if (!k) {
+                continue;
+            }
+            auto found = std::find_if(elements.begin(), end, [&] (auto&& element) {
+                return map_key_type->compare(element.first, *k) == 0;
+            });
+            if (found == end) {
+                return false;
+            }
+        }
+        for (uint32_t i = 0; i < _entry_keys.size(); ++i) {
+            auto map_key = _entry_keys[i]->bind_and_get(options);
+            auto map_value = _entry_values[i]->bind_and_get(options);
+            if (!map_key || !map_value) {
+                continue;
+            }
+            auto found = std::find_if(elements.begin(), end, [&] (auto&& element) {
+                return map_key_type->compare(element.first, *map_key) == 0;
+            });
+            if (found == end || element_type->compare(found->second.value(), *map_value) != 0) {
+                return false;
+            }
+        }
+    } else {
+        auto cell_value = get_value(schema, key, ckey, cells, now);
+        if (!cell_value) {
+            return false;
+        }
+        auto deserialized = _column_def.type->deserialize(*cell_value);
+        for (auto&& value : _values) {
+            auto val = value->bind_and_get(options);
+            if (!val) {
+                continue;
+            }
+            auto exists_in = [&](auto&& range) {
+                auto found = std::find_if(range.begin(), range.end(), [&] (auto&& element) {
+                    return element_type->compare(element.serialize(), *val) == 0;
+                });
+                return found != range.end();
+            };
+            if (col_type->is_list()) {
+                if (!exists_in(value_cast<list_type_impl::native_type>(deserialized))) {
+                    return false;
+                }
+            } else if (col_type->is_set()) {
+                if (!exists_in(value_cast<set_type_impl::native_type>(deserialized))) {
+                    return false;
+                }
+            } else {
+                auto data_map = value_cast<map_type_impl::native_type>(deserialized);
+                if (!exists_in(data_map | boost::adaptors::transformed([] (auto&& p) { return p.second; }))) {
+                    return false;
+                }
+            }
+        }
+        if (col_type->is_map()) {
+            auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
+            for (auto&& key : _keys) {
+                auto k = key->bind_and_get(options);
+                if (!k) {
+                    continue;
+                }
+                auto found = std::find_if(data_map.begin(), data_map.end(), [&] (auto&& element) {
+                    return map_key_type->compare(element.first.serialize(), *k) == 0;
+                });
+                if (found == data_map.end()) {
+                    return false;
+                }
+            }
+            for (uint32_t i = 0; i < _entry_keys.size(); ++i) {
+                auto map_key = _entry_keys[i]->bind_and_get(options);
+                auto map_value = _entry_values[i]->bind_and_get(options);
+                if (!map_key || !map_value) {
+                    continue;
+                }
+                auto found = std::find_if(data_map.begin(), data_map.end(), [&] (auto&& element) {
+                    return map_key_type->compare(element.first.serialize(), *map_key) == 0;
+                });
+                if (found == data_map.end() || element_type->compare(found->second.serialize(), *map_value) != 0) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
 }
 
 }
