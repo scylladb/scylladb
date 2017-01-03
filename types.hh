@@ -736,6 +736,8 @@ public:
     shared_ptr<cql3::column_specification> make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key) const;
     virtual bool is_collection() const override { return true; }
     bool is_map() const { return &_kind == &kind::map; }
+    bool is_set() const { return &_kind == &kind::set; }
+    bool is_list() const { return &_kind == &kind::list; }
     std::vector<atomic_cell> enforce_limit(std::vector<atomic_cell>, int version) const;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const = 0;
     bytes serialize_for_native_protocol(std::vector<atomic_cell> cells, int version) const;
