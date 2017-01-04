@@ -152,6 +152,21 @@ BOOST_AUTO_TEST_CASE(test_timeuuid_type_string_conversions) {
     test_parsing_fails(timeuuid_type, utils::make_random_uuid().to_sstring());
 }
 
+BOOST_AUTO_TEST_CASE(test_simple_date_type_string_conversions) {
+    BOOST_REQUIRE(simple_date_type->equal(simple_date_type->from_string("1970-01-01"), simple_date_type->decompose(int32_t(0x80000000))));
+    BOOST_REQUIRE_EQUAL(simple_date_type->to_string(simple_date_type->decompose(int32_t(0x80000000))), "1970-01-01");
+
+    BOOST_REQUIRE(simple_date_type->equal(simple_date_type->from_string("-5877641-06-23"), simple_date_type->decompose(int32_t(0x00000000))));
+    BOOST_REQUIRE_EQUAL(simple_date_type->to_string(simple_date_type->decompose(int32_t(0x00000000))), "-5877641-06-23");
+
+    BOOST_REQUIRE(simple_date_type->equal(simple_date_type->from_string("5881580-07-11"), simple_date_type->decompose(int32_t(0xffffffff))));
+    BOOST_REQUIRE_EQUAL(simple_date_type->to_string(simple_date_type->decompose(int32_t(0xffffffff))), "5881580-07-11");
+
+    test_parsing_fails(simple_date_type, "something");
+    test_parsing_fails(simple_date_type, "-5877641-06-22");
+    test_parsing_fails(simple_date_type, "5881580-07-12");
+}
+
 BOOST_AUTO_TEST_CASE(test_uuid_type_comparison) {
     auto uuid1 = uuid_type->decompose(utils::UUID(sstring("ad4d3770-7a50-11e6-ac4d-000000000003")));
     auto uuid2 = uuid_type->decompose(utils::UUID(sstring("c512ba10-7a50-11e6-ac4d-000000000003")));
