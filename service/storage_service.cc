@@ -468,6 +468,7 @@ void storage_service::join_token_ring(int delay) {
 #endif
 
     if (!_is_survey_mode) {
+        auth::auth::setup().get();
         // start participating in the ring.
         db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
         set_tokens(_bootstrap_tokens);
@@ -483,8 +484,6 @@ void storage_service::join_token_ring(int delay) {
             logger.error(err.c_str());
             throw std::runtime_error(err);
         }
-
-        auth::auth::setup().get();
     } else {
         logger.info("Startup complete, but write survey mode is active, not becoming an active ring member. Use JMX (StorageService->joinRing()) to finalize ring joining.");
     }
