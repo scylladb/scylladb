@@ -71,7 +71,7 @@ BOOST_AUTO_TEST_CASE(test_int32_type_string_conversions) {
     BOOST_REQUIRE_EQUAL(int32_type->to_string(int32_type->decompose((int32_t)-2147483648)), "-2147483648");
 
     BOOST_REQUIRE(int32_type->equal(int32_type->from_string("2147483647"), int32_type->decompose((int32_t)2147483647)));
-    BOOST_REQUIRE_EQUAL(int32_type->to_string(int32_type->decompose((int32_t)-2147483647)), "-2147483647");
+    BOOST_REQUIRE_EQUAL(int32_type->to_string(int32_type->decompose((int32_t)2147483647)), "2147483647");
 
     test_parsing_fails(int32_type, "asd");
     test_parsing_fails(int32_type, "-2147483649");
