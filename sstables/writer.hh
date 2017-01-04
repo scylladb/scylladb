@@ -42,11 +42,11 @@ public:
     virtual ~file_writer() = default;
     file_writer(file_writer&&) = default;
 
-    virtual future<> write(const char* buf, size_t n) {
+    future<> write(const char* buf, size_t n) {
         _offset += n;
         return _out.write(buf, n);
     }
-    virtual future<> write(const bytes& s) {
+    future<> write(const bytes& s) {
         _offset += s.size();
         return _out.write(s);
     }
