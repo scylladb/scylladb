@@ -14,7 +14,7 @@ if [ "`id -u`" -ne 0 ]; then
 fi
 
 print_usage() {
-    echo "scylla_setup --disks /dev/hda,/dev/hdb... --nic eth0 --ntp-domain centos --ami --setup-nic --developer-mode --no-kernel-check --no-verify-package --no-enable-service --no-selinux-setup --no-bootparam-setup --no-ntp-setup --no-raid-setup --no-coredump-setup --no-sysconfig-setup"
+    echo "scylla_setup --disks /dev/hda,/dev/hdb... --nic eth0 --ntp-domain centos --ami --setup-nic --developer-mode --no-kernel-check --no-verify-package --no-enable-service --no-selinux-setup --no-bootparam-setup --no-ntp-setup --no-raid-setup --no-coredump-setup --no-sysconfig-setup --no-cpuscaling-setup"
     echo "  --disks			specify disks for RAID"
     echo "  --nic				specify NIC"
     echo "  --ntp-domain			specify NTP domain"
@@ -33,6 +33,7 @@ print_usage() {
     echo "  --no-io-setup		skip IO configuration setup"
     echo "  --no-version-check		skip daily version check"
     echo "  --no-node-exporter        do not install the node exporter"
+    echo "  --no-cpuscaling-setup      skip cpu scalling setup"
     exit 1
 }
 
@@ -127,6 +128,7 @@ COREDUMP_SETUP=1
 SYSCONFIG_SETUP=1
 IO_SETUP=1
 NODE_EXPORTER=1
+CPUSCALING_SETUP=1
 
 if [ $# -ne 0 ]; then
     INTERACTIVE=0
@@ -206,6 +208,10 @@ while [ $# -gt 0 ]; do
             ;;
         "--no-node-exporter")
             NODE_EXPORTER=0
+            shift 1
+            ;;
+        "--no-cpuscaling-setup")
+            CPUSCALING_SETUP=0
             shift 1
             ;;
         "-h" | "--help")
@@ -416,6 +422,14 @@ fi
 
 if [ $DEV_MODE -eq 1 ]; then
     /usr/lib/scylla/scylla_dev_mode_setup --developer-mode 1
+fi
+
+if [ $INTERACTIVE -eq 1 ]; then
+    interactive_ask_service "Do you want to setup CPU scalling governor?" "Answer yes to  set CPU scalling governor to performance at boot time. Answer no to do nothing." "yes" &&:
+    CPUSCALING_SETUP=$?
+fi
+if [ $CPUSCALING_SETUP -eq 1 ]; then
+    run_setup_script "CPU Scalling" /usr/lib/scylla/scylla_cpuscaling_setup
 fi
 
 echo "ScyllaDB setup finished."

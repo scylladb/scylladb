@@ -1,0 +1,24 @@
+#!/bin/bash -e
+#
+#  Copyright (C) 2016 ScyllaDB
+
+. /usr/lib/scylla/scylla_lib.sh
+
+if is_debian_variant; then
+    apt-get install -y cpufrequtils
+    service cpufrequtils stop
+    echo 'GOVERNOR="performance"' > /etc/default/cpufrequtils
+    if is_systemd; then
+        systemctl enable cpufrequtils.service
+    fi
+    service cpufrequtils start
+else
+    yum install -y cpupowerutils || true
+    echo 'CPUPOWER_START_OPTS="frequency-set -g performance"' > /etc/sysconfig/cpupower
+    echo 'CPUPOWER_STOP_OPTS="frequency-set -g ondemand"' >> /etc/sysconfig/cpupower
+    if [ "`systemctl is-active cpupower.service`" = "active" ]; then
+        systemctl stop cpupower.service
+    fi
+    systemctl enable cpupower.service
+    systemctl start cpupower.service
+fi
