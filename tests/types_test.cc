@@ -51,6 +51,64 @@ BOOST_AUTO_TEST_CASE(test_bytes_type_string_conversions) {
     BOOST_REQUIRE(bytes_type->equal(bytes_type->from_string("616263646566"), bytes_type->decompose(data_value(bytes{"abcdef"}))));
 }
 
+BOOST_AUTO_TEST_CASE(test_byte_type_string_conversions) {
+    BOOST_REQUIRE(byte_type->equal(byte_type->from_string("123"), byte_type->decompose(int8_t(123))));
+    BOOST_REQUIRE_EQUAL(byte_type->to_string(byte_type->decompose(int8_t(123))), "123");
+
+    BOOST_REQUIRE(byte_type->equal(byte_type->from_string("12"), byte_type->decompose(int8_t(12))));
+    BOOST_REQUIRE(byte_type->equal(byte_type->from_string("0012"), byte_type->decompose(int8_t(12))));
+    BOOST_REQUIRE(byte_type->equal(byte_type->from_string("+12"), byte_type->decompose(int8_t(12))));
+    BOOST_REQUIRE_EQUAL(byte_type->to_string(byte_type->decompose(int8_t(12))), "12");
+    BOOST_REQUIRE(byte_type->equal(byte_type->from_string("-12"), byte_type->decompose(int8_t(-12))));
+    BOOST_REQUIRE_EQUAL(byte_type->to_string(byte_type->decompose(int8_t(-12))), "-12");
+
+    BOOST_REQUIRE(byte_type->equal(byte_type->from_string("0"), byte_type->decompose(int8_t(0))));
+    BOOST_REQUIRE(byte_type->equal(byte_type->from_string("-0"), byte_type->decompose(int8_t(0))));
+    BOOST_REQUIRE(byte_type->equal(byte_type->from_string("+0"), byte_type->decompose(int8_t(0))));
+    BOOST_REQUIRE_EQUAL(byte_type->to_string(byte_type->decompose(int8_t(0))), "0");
+
+    BOOST_REQUIRE(byte_type->equal(byte_type->from_string("-128"), byte_type->decompose(int8_t(-128))));
+    BOOST_REQUIRE_EQUAL(byte_type->to_string(byte_type->decompose((int8_t(-128)))), "-128");
+
+    BOOST_REQUIRE(byte_type->equal(byte_type->from_string("127"), byte_type->decompose(int8_t(127))));
+    BOOST_REQUIRE_EQUAL(byte_type->to_string(byte_type->decompose(int8_t(127))), "127");
+
+    test_parsing_fails(byte_type, "asd");
+    test_parsing_fails(byte_type, "-129");
+    test_parsing_fails(byte_type, "128");
+
+    BOOST_REQUIRE_EQUAL(byte_type->to_string(bytes()), "");
+}
+
+BOOST_AUTO_TEST_CASE(test_short_type_string_conversions) {
+    BOOST_REQUIRE(short_type->equal(short_type->from_string("12345"), short_type->decompose(int16_t(12345))));
+    BOOST_REQUIRE_EQUAL(short_type->to_string(short_type->decompose(int16_t(12345))), "12345");
+
+    BOOST_REQUIRE(short_type->equal(short_type->from_string("12"), short_type->decompose(int16_t(12))));
+    BOOST_REQUIRE(short_type->equal(short_type->from_string("0012"), short_type->decompose(int16_t(12))));
+    BOOST_REQUIRE(short_type->equal(short_type->from_string("+12"), short_type->decompose(int16_t(12))));
+    BOOST_REQUIRE_EQUAL(short_type->to_string(short_type->decompose(int16_t(12))), "12");
+    BOOST_REQUIRE(short_type->equal(short_type->from_string("-12"), short_type->decompose(int16_t(-12))));
+    BOOST_REQUIRE_EQUAL(short_type->to_string(short_type->decompose(int16_t(-12))), "-12");
+
+    BOOST_REQUIRE(short_type->equal(short_type->from_string("0"), short_type->decompose(int16_t(0))));
+    BOOST_REQUIRE(short_type->equal(short_type->from_string("-0"), short_type->decompose(int16_t(0))));
+    BOOST_REQUIRE(short_type->equal(short_type->from_string("+0"), short_type->decompose(int16_t(0))));
+    BOOST_REQUIRE_EQUAL(short_type->to_string(short_type->decompose(int16_t(0))), "0");
+
+    BOOST_REQUIRE(short_type->equal(short_type->from_string("-32768"), short_type->decompose(int16_t(-32768))));
+    BOOST_REQUIRE_EQUAL(short_type->to_string(short_type->decompose((int16_t(-32768)))), "-32768");
+
+    BOOST_REQUIRE(short_type->equal(short_type->from_string("32677"), short_type->decompose(int16_t(32677))));
+    BOOST_REQUIRE_EQUAL(short_type->to_string(short_type->decompose(int16_t(32677))), "32677");
+
+    test_parsing_fails(short_type, "asd");
+    test_parsing_fails(short_type, "-32769");
+    test_parsing_fails(short_type, "32768");
+
+    BOOST_REQUIRE_EQUAL(short_type->to_string(bytes()), "");
+}
+
 BOOST_AUTO_TEST_CASE(test_int32_type_string_conversions) {
     BOOST_REQUIRE(int32_type->equal(int32_type->from_string("1234567890"), int32_type->decompose(1234567890)));
     BOOST_REQUIRE_EQUAL(int32_type->to_string(int32_type->decompose(1234567890)), "1234567890");
