@@ -1,4 +1,4 @@
-scylla-server (@@VERSION@@-@@RELEASE@@-ubuntu1) @@CODENAME@@; urgency=medium
+scylla-server (@@VERSION@@-@@RELEASE@@-@@REVISION@@) @@CODENAME@@; urgency=medium
 
   * Initial release.
 
