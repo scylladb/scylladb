@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-
+#include "supervisor.hh"
 #include "database.hh"
 #include "core/app-template.hh"
 #include "core/distributed.hh"
@@ -84,7 +84,7 @@ try_notify_systemd(sstring msg, bool ready) {
 }
 
 void
-supervisor_notify(sstring msg, bool ready = false) {
+supervisor_notify(sstring msg, bool ready) {
     startlog.trace("{}", msg);
     if (try_notify_upstart(msg, ready) == true) {
         return;
@@ -658,8 +658,6 @@ int main(int ac, char** av) {
             engine().at_exit([lb = std::move(lb)] () mutable { return lb->stop_broadcasting(); });
             gms::get_local_gossiper().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx).get();
-            supervisor_notify("starting tracing");
-            tracing::tracing::start_tracing().get();
             supervisor_notify("starting native transport");
             service::get_local_storage_service().start_native_transport().get();
             if (start_thrift) {

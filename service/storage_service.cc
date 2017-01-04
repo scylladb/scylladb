@@ -70,6 +70,7 @@
 #include <seastar/net/tls.hh>
 #include "utils/exceptions.hh"
 #include "message/messaging_service.hh"
+#include "supervisor.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -468,7 +469,16 @@ void storage_service::join_token_ring(int delay) {
 #endif
 
     if (!_is_survey_mode) {
+        // We have to create the system_auth and system_traces keyspaces and
+        // their tables before Node moves to the NORMAL state so that other
+        // Nodes joining the newly created cluster and serializing on this event
+        // "see" these new objects and don't try to create them.
+        //
+        // Otherwise there is a high chance to hit the issue #420.
         auth::auth::setup().get();
+        supervisor_notify("starting tracing");
+        tracing::tracing::start_tracing().get();
+
         // start participating in the ring.
         db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
         set_tokens(_bootstrap_tokens);
