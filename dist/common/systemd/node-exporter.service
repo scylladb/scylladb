@@ -3,6 +3,8 @@ Description=Node Exporter
 
 [Service]
 Type=simple
+User=scylla
+Group=scylla
 ExecStart=/usr/bin/node_exporter
 
 [Install]
