@@ -1213,7 +1213,7 @@ SEASTAR_TEST_CASE(promoted_index_write) {
         for (char i = 'a'; i <= 'z'; i++) {
             for (char j = 'A'; j <= 'Z'; j++) {
                 for (int k = 0; k < 20; k++) {
-                    auto& row = m.partition().clustered_row(
+                    auto& row = m.partition().clustered_row(*s,
                             clustering_key::from_exploded(
                                     *s, {to_bytes(sprint("%d%c%c", k, i, j))}));
                     row.cells().apply(*col,

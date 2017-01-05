@@ -81,7 +81,7 @@ void update_statement::add_update_for_key(mutation& m, const exploded_clustering
         // case empty prefix can only refer to the static row.
         bool is_static_prefix = s->has_static_columns() && !prefix;
         if (type == statement_type::INSERT && !is_static_prefix && s->is_cql3_table()) {
-            auto& row = m.partition().clustered_row(clustering_key::from_clustering_prefix(*s, prefix));
+            auto& row = m.partition().clustered_row(*s, clustering_key::from_clustering_prefix(*s, prefix));
             row.apply(row_marker(params.timestamp(), params.ttl(), params.expiry()));
         }
     }
