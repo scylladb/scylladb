@@ -121,7 +121,7 @@ class result_memory_accounter {
     size_t _blocked_bytes = 0;
     size_t _used_memory = 0;
     size_t _total_used_memory = 0;
-    size_t _maximum_result_size;
+    size_t _maximum_result_size = 0;
     stop_iteration _stop_on_global_limit;
 private:
     // Mutation query accounter. Uses provided individual result size limit and
@@ -158,9 +158,12 @@ public:
     // the size of the result so far in range queries.
     class foreign_state {
         size_t _used_memory;
+        size_t _max_result_size;
     public:
-        explicit foreign_state(size_t used_mem) : _used_memory(used_mem) { }
+        foreign_state(size_t used_mem, size_t max_result_size)
+                : _used_memory(used_mem), _max_result_size(max_result_size) { }
         size_t used_memory() const { return _used_memory; }
+        size_t max_result_size() const { return _max_result_size; }
     };
 public:
     result_memory_accounter() = default;
@@ -174,6 +177,7 @@ public:
     result_memory_accounter(result_memory_limiter& limiter, foreign_state fstate) noexcept
         : _limiter(&limiter)
         , _total_used_memory(fstate.used_memory())
+        , _maximum_result_size(fstate.max_result_size())
     { }
 
     result_memory_accounter(result_memory_accounter&& other) noexcept
@@ -202,7 +206,7 @@ public:
     size_t used_memory() const { return _used_memory; }
 
     foreign_state state_for_another_shard() {
-        return foreign_state(_used_memory);
+        return foreign_state(_used_memory, _maximum_result_size);
     }
 
     // Consume n more bytes for the result. Returns stop_iteration::yes if
