@@ -91,7 +91,7 @@ public:
     }
 
     auto& get_components() {
-        return _sst->_components;
+        return _sst->_recognized_components;
     }
 
     template <typename T>
@@ -112,8 +112,8 @@ public:
     }
 
     future<> store() {
-        _sst->_components.erase(sstable::component_type::Index);
-        _sst->_components.erase(sstable::component_type::Data);
+        _sst->_recognized_components.erase(sstable::component_type::Index);
+        _sst->_recognized_components.erase(sstable::component_type::Data);
         return seastar::async([sst = _sst] {
             sst->write_toc(default_priority_class());
             sst->write_statistics(default_priority_class());

@@ -778,7 +778,7 @@ inline void write(file_writer& out, const utils::estimated_histogram& eh) {
 // This is small enough, and well-defined. Easier to just read it all
 // at once
 future<> sstable::read_toc() {
-    if (_components.size()) {
+    if (_recognized_components.size()) {
         return make_ready_future<>();
     }
 
@@ -810,13 +810,13 @@ future<> sstable::read_toc() {
                     continue;
                 }
                 try {
-                    _components.insert(reverse_map(c, _component_map));
+                    _recognized_components.insert(reverse_map(c, _component_map));
                 } catch (std::out_of_range& oor) {
                     _unrecognized_components.push_back(c);
                     sstlog.info("Unrecognized TOC component was found: {} in sstable {}", c, file_path);
                 }
             }
-            if (!_components.size()) {
+            if (!_recognized_components.size()) {
                 throw malformed_sstable_exception("Empty TOC", file_path);
             }
             return f.close().finally([f] {});
@@ -836,21 +836,21 @@ future<> sstable::read_toc() {
 
 void sstable::generate_toc(compressor c, double filter_fp_chance) {
     // Creating table of components.
-    _components.insert(component_type::TOC);
-    _components.insert(component_type::Statistics);
-    _components.insert(component_type::Digest);
-    _components.insert(component_type::Index);
-    _components.insert(component_type::Summary);
-    _components.insert(component_type::Data);
+    _recognized_components.insert(component_type::TOC);
+    _recognized_components.insert(component_type::Statistics);
+    _recognized_components.insert(component_type::Digest);
+    _recognized_components.insert(component_type::Index);
+    _recognized_components.insert(component_type::Summary);
+    _recognized_components.insert(component_type::Data);
     if (filter_fp_chance != 1.0) {
-        _components.insert(component_type::Filter);
+        _recognized_components.insert(component_type::Filter);
     }
     if (c == compressor::none) {
-        _components.insert(component_type::CRC);
+        _recognized_components.insert(component_type::CRC);
     } else {
-        _components.insert(component_type::CompressionInfo);
+        _recognized_components.insert(component_type::CompressionInfo);
     }
-    _components.insert(component_type::Scylla);
+    _recognized_components.insert(component_type::Scylla);
 }
 
 void sstable::write_toc(const io_priority_class& pc) {
@@ -878,7 +878,7 @@ void sstable::write_toc(const io_priority_class& pc) {
     options.io_priority_class = pc;
     auto w = file_writer(std::move(f), std::move(options));
 
-    for (auto&& key : _components) {
+    for (auto&& key : _recognized_components) {
             // new line character is appended to the end of each component name.
         auto value = _component_map[key] + "\n";
         bytes b = bytes(reinterpret_cast<const bytes::value_type *>(value.c_str()), value.size());
@@ -1164,7 +1164,7 @@ future<> sstable::open_data() {
 
             // Get disk usage for this sstable (includes all components).
             _bytes_on_disk = 0;
-            return do_for_each(_components, [this] (component_type c) {
+            return do_for_each(_recognized_components, [this] (component_type c) {
                 return this->sstable_write_io_check([&] {
                     return engine().file_size(this->filename(c));
                 }).then([this] (uint64_t bytes) {
@@ -2050,7 +2050,7 @@ uint64_t sstable::bytes_on_disk() {
 }
 
 const bool sstable::has_component(component_type f) const {
-    return _components.count(f);
+    return _recognized_components.count(f);
 }
 
 const sstring sstable::filename(component_type f) const {
@@ -2098,8 +2098,8 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
 
 std::vector<std::pair<sstable::component_type, sstring>> sstable::all_components() const {
     std::vector<std::pair<component_type, sstring>> all;
-    all.reserve(_components.size() + _unrecognized_components.size());
-    for (auto& c : _components) {
+    all.reserve(_recognized_components.size() + _unrecognized_components.size());
+    for (auto& c : _recognized_components) {
         all.push_back(std::make_pair(c, _component_map.at(c)));
     }
     for (auto& c : _unrecognized_components) {

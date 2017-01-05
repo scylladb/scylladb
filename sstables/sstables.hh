@@ -415,7 +415,7 @@ private:
     static std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
     static std::unordered_map<component_type, sstring, enum_hash<component_type>> _component_map;
 
-    std::unordered_set<component_type, enum_hash<component_type>> _components;
+    std::unordered_set<component_type, enum_hash<component_type>> _recognized_components;
     std::vector<sstring> _unrecognized_components;
 
     bool _shared = true;  // across shards; safe default
