@@ -290,8 +290,8 @@ public:
     future<> seal_sstable(bool backup);
 
     uint64_t get_estimated_key_count() const {
-        return ((uint64_t)_summary.header.size_at_full_sampling + 1) *
-                _summary.header.min_index_interval;
+        return ((uint64_t)_components->summary.header.size_at_full_sampling + 1) *
+                _components->summary.header.min_index_interval;
     }
 
     uint64_t estimated_keys_for_range(const dht::token_range& range);
@@ -339,7 +339,7 @@ public:
     }
 
     uint64_t filter_memory_size() const {
-        return _filter->memory_size();
+        return _components->filter->memory_size();
     }
 
     // Returns the total bytes of all components.
@@ -393,6 +393,15 @@ public:
     auto sstable_write_io_check(Func&& func, Args&&... args) const {
         return do_io_check(_write_error_handler, func, std::forward<Args>(args)...);
     }
+
+    // Immutable components that can be shared among shards.
+    struct shareable_components {
+        sstables::compression compression;
+        utils::filter_ptr filter;
+        sstables::summary summary;
+        sstables::statistics statistics;
+        stdx::optional<sstables::scylla_metadata> scylla_metadata;
+    };
 private:
     sstable(size_t wbuffer_size, schema_ptr schema, sstring dir, int64_t generation, version_types v, format_types f,
             gc_clock::time_point now = gc_clock::now(), io_error_handler_gen error_handler_gen = default_io_error_handler_gen())
@@ -418,12 +427,8 @@ private:
     std::unordered_set<component_type, enum_hash<component_type>> _recognized_components;
     std::vector<sstring> _unrecognized_components;
 
+    foreign_ptr<lw_shared_ptr<shareable_components>> _components = make_foreign(make_lw_shared<shareable_components>());
     bool _shared = true;  // across shards; safe default
-    compression _compression;
-    utils::filter_ptr _filter;
-    summary _summary;
-    stdx::optional<scylla_metadata> _scylla_metadata;
-    statistics _statistics;
     // NOTE: _collector and _c_stats are used to generation of statistics file
     // when writing a new sstable.
     metadata_collector _collector;
@@ -505,7 +510,7 @@ private:
     future<> read_summary(const io_priority_class& pc);
 
     void write_summary(const io_priority_class& pc) {
-        write_simple<component_type::Summary>(_summary, pc);
+        write_simple<component_type::Summary>(_components->summary, pc);
     }
 
     // To be called when we try to load an SSTable that lacks a Summary. Could
@@ -604,11 +609,11 @@ public:
     future<> read_toc();
 
     bool filter_has_key(const key& key) {
-        return _filter->is_present(bytes_view(key));
+        return _components->filter->is_present(bytes_view(key));
     }
 
     bool filter_has_key(utils::hashed_key key) {
-        return _filter->is_present(key);
+        return _components->filter->is_present(key);
     }
 
     bool filter_has_key(const schema& s, partition_key_view key) {
@@ -635,8 +640,8 @@ public:
     }
 
     const stats_metadata& get_stats_metadata() const {
-        auto entry = _statistics.contents.find(metadata_type::Stats);
-        if (entry == _statistics.contents.end()) {
+        auto entry = _components->statistics.contents.find(metadata_type::Stats);
+        if (entry == _components->statistics.contents.end()) {
             throw std::runtime_error("Stats metadata not available");
         }
         auto& p = entry->second;
@@ -647,8 +652,8 @@ public:
         return s;
     }
     const compaction_metadata& get_compaction_metadata() const {
-        auto entry = _statistics.contents.find(metadata_type::Compaction);
-        if (entry == _statistics.contents.end()) {
+        auto entry = _components->statistics.contents.find(metadata_type::Compaction);
+        if (entry == _components->statistics.contents.end()) {
             throw std::runtime_error("Compaction metadata not available");
         }
         auto& p = entry->second;
@@ -672,7 +677,7 @@ public:
     future<> mutate_sstable_level(uint32_t);
 
     const summary& get_summary() const {
-        return _summary;
+        return _components->summary;
     }
 
     // Return sstable key range as range<partition_key> reading only the summary component.

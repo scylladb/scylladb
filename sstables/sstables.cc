@@ -671,11 +671,11 @@ inline void write(file_writer& out, const summary& s) {
 
 future<summary_entry&> sstable::read_summary_entry(size_t i) {
     // The last one is the boundary marker
-    if (i >= (_summary.entries.size())) {
+    if (i >= (_components->summary.entries.size())) {
         throw std::out_of_range(sprint("Invalid Summary index: %ld", i));
     }
 
-    return make_ready_future<summary_entry&>(_summary.entries[i]);
+    return make_ready_future<summary_entry&>(_components->summary.entries[i]);
 }
 
 future<> parse(random_access_reader& in, deletion_time& d) {
@@ -1009,7 +1009,7 @@ future<> sstable::read_compression(const io_priority_class& pc) {
         return make_ready_future<>();
     }
 
-    return read_simple<component_type::CompressionInfo>(_compression, pc);
+    return read_simple<component_type::CompressionInfo>(_components->compression, pc);
 }
 
 void sstable::write_compression(const io_priority_class& pc) {
@@ -1017,12 +1017,12 @@ void sstable::write_compression(const io_priority_class& pc) {
         return;
     }
 
-    write_simple<component_type::CompressionInfo>(_compression, pc);
+    write_simple<component_type::CompressionInfo>(_components->compression, pc);
 }
 
 void sstable::validate_min_max_metadata() {
-    auto entry = _statistics.contents.find(metadata_type::Stats);
-    if (entry == _statistics.contents.end()) {
+    auto entry = _components->statistics.contents.find(metadata_type::Stats);
+    if (entry == _components->statistics.contents.end()) {
         throw std::runtime_error("Stats metadata not available");
     }
     auto& p = entry->second;
@@ -1099,11 +1099,11 @@ const std::vector<nonwrapping_range<bytes_view>>& sstable::clustering_components
 }
 
 future<> sstable::read_statistics(const io_priority_class& pc) {
-    return read_simple<component_type::Statistics>(_statistics, pc);
+    return read_simple<component_type::Statistics>(_components->statistics, pc);
 }
 
 void sstable::write_statistics(const io_priority_class& pc) {
-    write_simple<component_type::Statistics>(_statistics, pc);
+    write_simple<component_type::Statistics>(_components->statistics, pc);
 }
 
 void sstable::rewrite_statistics(const io_priority_class& pc) {
@@ -1115,7 +1115,7 @@ void sstable::rewrite_statistics(const io_priority_class& pc) {
     options.buffer_size = sstable_buffer_size;
     options.io_priority_class = pc;
     auto w = file_writer(std::move(f), std::move(options));
-    write(w, _statistics);
+    write(w, _components->statistics);
     w.flush().get();
     w.close().get();
     // rename() guarantees atomicity when renaming a file into place.
@@ -1123,7 +1123,7 @@ void sstable::rewrite_statistics(const io_priority_class& pc) {
 }
 
 future<> sstable::read_summary(const io_priority_class& pc) {
-    if (_summary) {
+    if (_components->summary) {
         return make_ready_future<>();
     }
 
@@ -1131,7 +1131,7 @@ future<> sstable::read_summary(const io_priority_class& pc) {
         // We'll try to keep the main code path exception free, but if an exception does happen
         // we can try to regenerate the Summary.
         if (has_component(sstable::component_type::Summary)) {
-            return read_simple<component_type::Summary>(_summary, pc).handle_exception([this, &pc] (auto ep) {
+            return read_simple<component_type::Summary>(_components->summary, pc).handle_exception([this, &pc] (auto ep) {
                 sstlog.warn("Couldn't read summary file {}: {}. Recreating it.", this->filename(component_type::Summary), ep);
                 return this->generate_summary(pc);
             });
@@ -1149,7 +1149,7 @@ future<> sstable::open_data() {
         _data_file  = std::get<file>(std::get<1>(files).get());
         return _data_file.stat().then([this] (struct stat st) {
             if (this->has_component(sstable::component_type::CompressionInfo)) {
-                _compression.update(st.st_size);
+                _components->compression.update(st.st_size);
             } else {
                 _data_file_size = st.st_size;
             }
@@ -1692,7 +1692,7 @@ static void seal_statistics(statistics& s, metadata_collector& collector,
 size_t components_writer::get_offset() {
     if (_sst.has_component(sstable::component_type::CompressionInfo)) {
         // Variable returned by compressed_file_length() is constantly updated by compressed output stream.
-        return _sst._compression.compressed_file_length();
+        return _sst._components->compression.compressed_file_length();
     } else {
         return _out.offset();
     }
@@ -1728,10 +1728,10 @@ components_writer::components_writer(sstable& sst, const schema& s, file_writer&
     , _max_sstable_size(max_sstable_size)
     , _tombstone_written(false)
 {
-    _sst._filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance());
+    _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance());
     _sst._pi_write.desired_block_size = get_config().column_index_size_in_kb() * 1024;
 
-    prepare_summary(_sst._summary, estimated_partitions, _schema.min_index_interval());
+    prepare_summary(_sst._components->summary, estimated_partitions, _schema.min_index_interval());
 
     // FIXME: we may need to set repaired_at stats at this point.
 }
@@ -1742,8 +1742,8 @@ void components_writer::consume_new_partition(const dht::decorated_key& dk) {
 
     _partition_key = key::from_partition_key(_schema, dk.key());
 
-    maybe_add_summary_entry(_sst._summary, bytes_view(*_partition_key), _index.offset());
-    _sst._filter->add(bytes_view(*_partition_key));
+    maybe_add_summary_entry(_sst._components->summary, bytes_view(*_partition_key), _index.offset());
+    _sst._components->filter->add(bytes_view(*_partition_key));
     _sst._collector.add_key(bytes_view(*_partition_key));
 
     auto p_key = disk_string_view<uint16_t>();
@@ -1852,16 +1852,16 @@ stop_iteration components_writer::consume_end_of_partition() {
 }
 
 void components_writer::consume_end_of_stream() {
-    seal_summary(_sst._summary, std::move(_first_key), std::move(_last_key)); // what if there is only one partition? what if it is empty?
+    seal_summary(_sst._components->summary, std::move(_first_key), std::move(_last_key)); // what if there is only one partition? what if it is empty?
 
     _index.close().get();
 
     if (_sst.has_component(sstable::component_type::CompressionInfo)) {
-        _sst._collector.add_compression_ratio(_sst._compression.compressed_file_length(), _sst._compression.uncompressed_file_length());
+        _sst._collector.add_compression_ratio(_sst._components->compression.compressed_file_length(), _sst._components->compression.uncompressed_file_length());
     }
 
     _sst.set_first_and_last_keys();
-    seal_statistics(_sst._statistics, _sst._collector, dht::global_partitioner().name(), _schema.bloom_filter_fp_chance(),
+    seal_statistics(_sst._components->statistics, _sst._collector, dht::global_partitioner().name(), _schema.bloom_filter_fp_chance(),
             _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key());
 }
 
@@ -1873,15 +1873,15 @@ future<> sstable::write_components(memtable& mt, bool backup, const io_priority_
 
 future<>
 sstable::read_scylla_metadata(const io_priority_class& pc) {
-    if (_scylla_metadata) {
+    if (_components->scylla_metadata) {
         return make_ready_future<>();
     }
     return read_toc().then([this, &pc] {
-        _scylla_metadata.emplace();  // engaged optional means we won't try to re-read this again
+        _components->scylla_metadata.emplace();  // engaged optional means we won't try to re-read this again
         if (!has_component(component_type::Scylla)) {
             return make_ready_future<>();
         }
-        return read_simple<component_type::Scylla>(*_scylla_metadata, pc);
+        return read_simple<component_type::Scylla>(*_components->scylla_metadata, pc);
     });
 }
 
@@ -1890,10 +1890,10 @@ sstable::write_scylla_metadata(const io_priority_class& pc) {
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
     auto sm = create_sharding_metadata(_schema, first_key, last_key);
-    _scylla_metadata.emplace();
-    _scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(sm));
+    _components->scylla_metadata.emplace();
+    _components->scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(sm));
 
-    write_simple<component_type::Scylla>(*_scylla_metadata, pc);
+    write_simple<component_type::Scylla>(*_components->scylla_metadata, pc);
 }
 
 void sstable_writer::prepare_file_writer()
@@ -1906,8 +1906,8 @@ void sstable_writer::prepare_file_writer()
     if (!_compression_enabled) {
         _writer = make_shared<checksummed_file_writer>(std::move(_sst._data_file), std::move(options), true);
     } else {
-        prepare_compression(_sst._compression, _schema);
-        _writer = make_shared<file_writer>(make_compressed_file_output_stream(std::move(_sst._data_file), std::move(options), &_sst._compression));
+        prepare_compression(_sst._components->compression, _schema);
+        _writer = make_shared<file_writer>(make_compressed_file_output_stream(std::move(_sst._data_file), std::move(options), &_sst._components->compression));
     }
 }
 
@@ -1920,7 +1920,7 @@ void sstable_writer::finish_file_writer()
         write_digest(_sst._write_error_handler, _sst.filename(sstable::component_type::Digest), chksum_wr->full_checksum());
         write_crc(_sst._write_error_handler, _sst.filename(sstable::component_type::CRC), chksum_wr->finalize_checksum());
     } else {
-        write_digest(_sst._write_error_handler, _sst.filename(sstable::component_type::Digest), _sst._compression.full_checksum());
+        write_digest(_sst._write_error_handler, _sst.filename(sstable::component_type::Digest), _sst._components->compression.full_checksum());
     }
 }
 
@@ -1984,7 +1984,7 @@ future<> sstable::write_components(::mutation_reader mr,
 }
 
 future<> sstable::generate_summary(const io_priority_class& pc) {
-    if (_summary) {
+    if (_components->summary) {
         return make_ready_future<>();
     }
 
@@ -2013,18 +2013,18 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
             return index_file.size().then([this, &pc, index_file] (auto size) {
                 // an upper bound. Surely to be less than this.
                 auto estimated_partitions = size / sizeof(uint64_t);
-                prepare_summary(_summary, estimated_partitions, _schema->min_index_interval());
+                prepare_summary(_components->summary, estimated_partitions, _schema->min_index_interval());
 
                 file_input_stream_options options;
                 options.buffer_size = sstable_buffer_size;
                 options.io_priority_class = pc;
                 auto stream = make_file_input_stream(index_file, 0, size, std::move(options));
-                return do_with(summary_generator(_summary), [this, &pc, stream = std::move(stream), size] (summary_generator& s) mutable {
+                return do_with(summary_generator(_components->summary), [this, &pc, stream = std::move(stream), size] (summary_generator& s) mutable {
                     auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(s, std::move(stream), 0, size);
                     return ctx->consume_input(*ctx).finally([ctx] {
                         return ctx->close();
                     }).then([this, ctx, &s] {
-                        seal_summary(_summary, std::move(s.first_key), std::move(s.last_key));
+                        seal_summary(_components->summary, std::move(s.first_key), std::move(s.last_key));
                     });
                 });
             }).then([index_file] () mutable {
@@ -2039,7 +2039,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
 
 uint64_t sstable::data_size() const {
     if (has_component(sstable::component_type::CompressionInfo)) {
-        return _compression.data_len;
+        return _components->compression.data_len;
     }
     return _data_file_size;
 }
@@ -2212,8 +2212,8 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_prior
     options.io_priority_class = pc;
     options.read_ahead = 4;
     options.dynamic_adjustments = std::move(history);
-    if (_compression) {
-        return make_compressed_file_input_stream(_data_file, &_compression,
+    if (_components->compression) {
+        return make_compressed_file_input_stream(_data_file, &_components->compression,
                 pos, len, std::move(options));
     } else {
         return make_file_input_stream(_data_file, pos, len, std::move(options));
@@ -2239,8 +2239,8 @@ void sstable::set_first_and_last_keys() {
         auto pk = key::from_bytes(value).to_partition_key(*_schema);
         return dht::global_partitioner().decorate_key(*_schema, std::move(pk));
     };
-    _first = decorate_key("first", _summary.first_key.value);
-    _last = decorate_key("last", _summary.last_key.value);
+    _first = decorate_key("first", _components->summary.first_key.value);
+    _last = decorate_key("last", _components->summary.last_key.value);
 }
 
 const partition_key& sstable::get_first_partition_key() const {
@@ -2271,15 +2271,15 @@ int sstable::compare_by_first_key(const sstable& other) const {
 
 double sstable::get_compression_ratio() const {
     if (this->has_component(sstable::component_type::CompressionInfo)) {
-        return (double) _compression.compressed_file_length() / _compression.uncompressed_file_length();
+        return double(_components->compression.compressed_file_length()) / _components->compression.uncompressed_file_length();
     } else {
         return metadata_collector::NO_COMPRESSION_RATIO;
     }
 }
 
 void sstable::set_sstable_level(uint32_t new_level) {
-    auto entry = _statistics.contents.find(metadata_type::Stats);
-    if (entry == _statistics.contents.end()) {
+    auto entry = _components->statistics.contents.find(metadata_type::Stats);
+    if (entry == _components->statistics.contents.end()) {
         return;
     }
     auto& p = entry->second;
@@ -2296,8 +2296,8 @@ future<> sstable::mutate_sstable_level(uint32_t new_level) {
         return make_ready_future<>();
     }
 
-    auto entry = _statistics.contents.find(metadata_type::Stats);
-    if (entry == _statistics.contents.end()) {
+    auto entry = _components->statistics.contents.find(metadata_type::Stats);
+    if (entry == _components->statistics.contents.end()) {
         return make_ready_future<>();
     }
 
@@ -2544,12 +2544,12 @@ void sstable::mark_sstable_for_deletion(const schema_ptr& schema, sstring dir, i
  * covered by the specified range, or a disengaged optional if no such pair exists.
  */
 stdx::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_range(const dht::token_range& range) {
-    auto entries_size = _summary.entries.size();
+    auto entries_size = _components->summary.entries.size();
     auto search = [this](bool before, const dht::token& token) {
         auto kind = before ? key::kind::before_all_keys : key::kind::after_all_keys;
         key k(kind);
         // Binary search will never returns positive values.
-        return uint64_t((binary_search(_summary.entries, k, token) + 1) * -1);
+        return uint64_t((binary_search(_components->summary.entries, k, token) + 1) * -1);
     };
     uint64_t left = 0;
     if (range.start()) {
@@ -2578,7 +2578,7 @@ std::vector<dht::decorated_key> sstable::get_key_samples(const schema& s, const 
     std::vector<dht::decorated_key> res;
     if (index_range) {
         for (auto idx = index_range->first; idx < index_range->second; ++idx) {
-            auto pkey = _summary.entries[idx].get_key().to_partition_key(s);
+            auto pkey = _components->summary.entries[idx].get_key().to_partition_key(s);
             res.push_back(dht::global_partitioner().decorate_key(s, std::move(pkey)));
         }
     }
@@ -2589,7 +2589,7 @@ uint64_t sstable::estimated_keys_for_range(const dht::token_range& range) {
     auto sample_index_range = get_sample_indexes_for_range(range);
     uint64_t sample_key_count = sample_index_range ? sample_index_range->second - sample_index_range->first : 0;
     // adjust for the current sampling level
-    uint64_t estimated_keys = sample_key_count * ((downsampling::BASE_SAMPLING_LEVEL * _summary.header.min_index_interval) / _summary.header.sampling_level);
+    uint64_t estimated_keys = sample_key_count * ((downsampling::BASE_SAMPLING_LEVEL * _components->summary.header.min_index_interval) / _components->summary.header.sampling_level);
     return std::max(uint64_t(1), estimated_keys);
 }
 
@@ -2597,8 +2597,8 @@ std::vector<unsigned>
 sstable::get_shards_for_this_sstable() const {
     std::unordered_set<unsigned> shards;
     dht::partition_range_vector token_ranges;
-    const auto* sm = _scylla_metadata
-            ? _scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>()
+    const auto* sm = _components->scylla_metadata
+            ? _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>()
             : nullptr;
     if (!sm) {
         token_ranges.push_back(dht::partition_range::make(
