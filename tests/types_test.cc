@@ -167,6 +167,34 @@ BOOST_AUTO_TEST_CASE(test_simple_date_type_string_conversions) {
     test_parsing_fails(simple_date_type, "5881580-07-12");
 }
 
+BOOST_AUTO_TEST_CASE(test_time_type_string_conversions) {
+    BOOST_REQUIRE(time_type->equal(time_type->from_string("12:34:56"), time_type->decompose(int64_t(45296000000000))));
+    BOOST_REQUIRE_EQUAL(time_type->to_string(time_type->decompose(int64_t(45296000000000))), "12:34:56.000000000");
+
+    BOOST_REQUIRE(time_type->equal(time_type->from_string("12:34:56.000000000"), time_type->decompose(int64_t(45296000000000))));
+    BOOST_REQUIRE_EQUAL(time_type->to_string(time_type->decompose(int64_t(45296000000000))), "12:34:56.000000000");
+
+    BOOST_REQUIRE(time_type->equal(time_type->from_string("12:34:56.123456789"), time_type->decompose(int64_t(45296123456789))));
+    BOOST_REQUIRE_EQUAL(time_type->to_string(time_type->decompose(int64_t(45296123456789))), "12:34:56.123456789");
+
+    BOOST_REQUIRE(time_type->equal(time_type->from_string("00:00:00.000000000"), time_type->decompose(int64_t(0x00000000))));
+    BOOST_REQUIRE_EQUAL(time_type->to_string(time_type->decompose(int64_t(0x00000000))), "00:00:00.000000000");
+
+    BOOST_REQUIRE(time_type->equal(time_type->from_string("23:59:59.999999999"), time_type->decompose(int64_t(86399999999999))));
+    BOOST_REQUIRE_EQUAL(time_type->to_string(time_type->decompose(int64_t(86399999999999))), "23:59:59.999999999");
+
+    BOOST_REQUIRE(time_type->equal(time_type->from_string("-00:00:00.000000000"), time_type->decompose(int64_t(0x00000000))));
+    BOOST_REQUIRE(time_type->equal(time_type->from_string("-00:00:00.000000001"), time_type->decompose(int64_t(0x00000001))));
+
+    test_parsing_fails(time_type, "something");
+    test_parsing_fails(time_type, "00:00");
+    test_parsing_fails(time_type, "24:00:00.000000000");
+    test_parsing_fails(time_type, "-01:00:00.0000000000");
+    test_parsing_fails(time_type, "00:-01:00.0000000000");
+    test_parsing_fails(time_type, "00:00:-10.0000000000");
+    test_parsing_fails(time_type, "00:00:00.-0000000001");
+}
+
 BOOST_AUTO_TEST_CASE(test_uuid_type_comparison) {
     auto uuid1 = uuid_type->decompose(utils::UUID(sstring("ad4d3770-7a50-11e6-ac4d-000000000003")));
     auto uuid2 = uuid_type->decompose(utils::UUID(sstring("c512ba10-7a50-11e6-ac4d-000000000003")));
