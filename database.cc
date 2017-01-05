@@ -1990,13 +1990,12 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
 
 future<>
 database::init_system_keyspace() {
-    bool durable = _cfg->data_file_directories().size() > 0;
-    db::system_keyspace::make(*this, durable, _cfg->volatile_system_keyspace_for_testing());
-
-    // FIXME support multiple directories
-    return io_check(touch_directory, _cfg->data_file_directories()[0] + "/" + db::system_keyspace::NAME).then([this] {
-        return populate_keyspace(_cfg->data_file_directories()[0], db::system_keyspace::NAME).then([this]() {
-            return init_commitlog();
+    return init_commitlog().then([this] {
+        bool durable = _cfg->data_file_directories().size() > 0;
+        db::system_keyspace::make(*this, durable, _cfg->volatile_system_keyspace_for_testing());
+        // FIXME support multiple directories
+        return io_check(touch_directory, _cfg->data_file_directories()[0] + "/" + db::system_keyspace::NAME).then([this] {
+            return populate_keyspace(_cfg->data_file_directories()[0], db::system_keyspace::NAME);
         });
     }).then([this] {
         auto& ks = find_keyspace(db::system_keyspace::NAME);
