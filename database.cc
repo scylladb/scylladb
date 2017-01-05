@@ -2788,40 +2788,40 @@ column_family::as_mutation_source() const {
 
 static thread_local auto data_query_stage = seastar::make_execution_stage("data_query", &column_family::query);
 
-future<lw_shared_ptr<query::result>>
+future<lw_shared_ptr<query::result>, cache_temperature>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state,
                 uint64_t max_result_size) {
     column_family& cf = find_column_family(cmd.cf_id);
     return data_query_stage(&cf, std::move(s), seastar::cref(cmd), request, seastar::cref(ranges),
                             std::move(trace_state), seastar::ref(get_result_memory_limiter()),
-                            max_result_size).then_wrapped([this, s = _stats] (auto f) {
+                            max_result_size).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
+            return make_exception_future<lw_shared_ptr<query::result>, cache_temperature>(f.get_exception());
         } else {
             ++s->total_reads;
             auto result = f.get0();
             s->short_data_queries += bool(result->is_short_read());
-            return make_ready_future<lw_shared_ptr<query::result>>(std::move(result));
+            return make_ready_future<lw_shared_ptr<query::result>, cache_temperature>(std::move(result), hit_rate);
         }
-        return f;
     });
 }
 
-future<reconcilable_result>
+future<reconcilable_result, cache_temperature>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const dht::partition_range& range,
                           query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state) {
     column_family& cf = find_column_family(cmd.cf_id);
     return mutation_query(std::move(s), cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.partition_limit,
-            cmd.timestamp, std::move(accounter), std::move(trace_state)).then_wrapped([this, s = _stats] (auto f) {
+            cmd.timestamp, std::move(accounter), std::move(trace_state)).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
+            return make_exception_future<reconcilable_result, cache_temperature>(f.get_exception());
         } else {
             ++s->total_reads;
             auto result = f.get0();
             s->short_mutation_queries += bool(result.is_short_read());
-            return make_ready_future<reconcilable_result>(std::move(result));
+            return make_ready_future<reconcilable_result, cache_temperature>(std::move(result), hit_rate);
         }
-        return f;
     });
 }
 
