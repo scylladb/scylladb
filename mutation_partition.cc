@@ -606,6 +606,22 @@ void write_cell(RowWriter& w, const query::partition_slice& slice, const data_ty
         .end_qr_cell();
 }
 
+template<typename RowWriter>
+void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell_view c) {
+    assert(c.is_live());
+    auto wr = w.add().write();
+    [&, wr = std::move(wr)] () mutable {
+        if (slice.options.contains<query::partition_slice::option::send_timestamp>()) {
+            return std::move(wr).write_timestamp(c.timestamp());
+        } else {
+            return std::move(wr).skip_timestamp();
+        }
+    }().skip_expiry()
+            .write_value(counter_cell_view::total_value_type()->decompose(counter_cell_view(c).total_value()))
+            .skip_ttl()
+            .end_qr_cell();
+}
+
 // returns the timestamp of a latest update to the row
 static api::timestamp_type hash_row_slice(md5_hasher& hasher,
     const schema& s,
@@ -652,6 +668,8 @@ static void get_compacted_row_slice(const schema& s,
                 auto c = cell->as_atomic_cell();
                 if (!c.is_live()) {
                     writer.add().skip();
+                } else if (def.is_counter()) {
+                    write_counter_cell(writer, slice, cell->as_atomic_cell());
                 } else {
                     write_cell(writer, slice, cell->as_atomic_cell());
                 }
