@@ -622,11 +622,11 @@ static api::timestamp_type hash_row_slice(md5_hasher& hasher,
         feed_hash(hasher, id);
         auto&& def = s.column_at(kind, id);
         if (def.is_atomic()) {
-            feed_hash(hasher, cell->as_atomic_cell());
+            feed_hash(hasher, cell->as_atomic_cell(), def);
             max = std::max(max, cell->as_atomic_cell().timestamp());
         } else {
             auto&& cm = cell->as_collection_mutation();
-            feed_hash(hasher, cm);
+            feed_hash(hasher, cm, def);
             auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
             max = std::max(max, ctype->last_update(cm));
         }

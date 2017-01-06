@@ -26,6 +26,7 @@
 #include "schema.hh"
 #include "atomic_cell_hash.hh"
 #include "keys.hh"
+#include "counters.hh"
 
 // Calculates a hash of a mutation_partition which is consistent with
 // mutation equality. For any equal mutations, no matter which schema
@@ -48,14 +49,14 @@ public:
         auto&& col = _s.static_column_at(id);
         feed_hash(_h, col.name());
         feed_hash(_h, col.type->name());
-        feed_hash(_h, cell);
+        feed_hash(_h, cell, col);
     }
 
     virtual void accept_static_cell(column_id id, collection_mutation_view cell) {
         auto&& col = _s.static_column_at(id);
         feed_hash(_h, col.name());
         feed_hash(_h, col.type->name());
-        feed_hash(_h, cell);
+        feed_hash(_h, cell, col);
     }
 
     virtual void accept_row_tombstone(const range_tombstone& rt) {
@@ -72,13 +73,13 @@ public:
         auto&& col = _s.regular_column_at(id);
         feed_hash(_h, col.name());
         feed_hash(_h, col.type->name());
-        feed_hash(_h, cell);
+        feed_hash(_h, cell, col);
     }
 
     virtual void accept_row_cell(column_id id, collection_mutation_view cell) {
         auto&& col = _s.regular_column_at(id);
         feed_hash(_h, col.name());
         feed_hash(_h, col.type->name());
-        feed_hash(_h, cell);
+        feed_hash(_h, cell, col);
     }
 };

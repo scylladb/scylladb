@@ -608,11 +608,7 @@ private:
     void consume_cell(const column_definition& col, const atomic_cell_or_collection& cell) {
         feed_hash(_hasher, col.name());
         feed_hash(_hasher, col.type->name());
-        if (col.is_atomic()) {
-            feed_hash(_hasher, cell.as_atomic_cell());
-        } else {
-            feed_hash(_hasher, cell.as_collection_mutation());
-        }
+        cell.feed_hash(_hasher, col);
     }
 
     void consume_range_tombstone_start(const range_tombstone& rt) {
