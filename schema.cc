@@ -362,7 +362,14 @@ index_info::index_info(::index_type idx_type,
 {}
 
 column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, index_info idx, api::timestamp_type dropped_at)
-        : _name(std::move(name)), _dropped_at(dropped_at), _is_atomic(type->is_atomic()), type(std::move(type)), id(component_index), kind(kind), idx_info(std::move(idx))
+        : _name(std::move(name))
+        , _dropped_at(dropped_at)
+        , _is_atomic(type->is_atomic())
+        , _is_counter(type->is_counter())
+        , type(std::move(type))
+        , id(component_index)
+        , kind(kind)
+        , idx_info(std::move(idx))
 {}
 
 std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
