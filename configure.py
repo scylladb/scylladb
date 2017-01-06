@@ -229,6 +229,7 @@ scylla_tests = [
     'tests/sstable_atomic_deletion_test',
     'tests/virtual_reader_test',
     'tests/view_schema_test',
+    'tests/counter_test',
 ]
 
 apps = [
