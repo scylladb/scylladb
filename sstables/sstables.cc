@@ -1147,32 +1147,35 @@ future<> sstable::open_data() {
                     .then([this] (auto files) {
         _index_file = std::get<file>(std::get<0>(files).get());
         _data_file  = std::get<file>(std::get<1>(files).get());
-        return _data_file.stat().then([this] (struct stat st) {
-            if (this->has_component(sstable::component_type::CompressionInfo)) {
-                _components->compression.update(st.st_size);
-            } else {
-                _data_file_size = st.st_size;
-            }
-            _data_file_write_time = db_clock::from_time_t(st.st_mtime);
-        }).then([this] {
-            return _index_file.size().then([this] (auto size) {
-              _index_file_size = size;
-            });
-        }).then([this] {
-            this->set_clustering_components_ranges();
-            this->set_first_and_last_keys();
+        return this->update_info_for_opened_data();
+    });
+}
 
-            // Get disk usage for this sstable (includes all components).
-            _bytes_on_disk = 0;
-            return do_for_each(_recognized_components, [this] (component_type c) {
-                return this->sstable_write_io_check([&] {
-                    return engine().file_size(this->filename(c));
-                }).then([this] (uint64_t bytes) {
-                    _bytes_on_disk += bytes;
-                });
+future<> sstable::update_info_for_opened_data() {
+    return _data_file.stat().then([this] (struct stat st) {
+        if (this->has_component(sstable::component_type::CompressionInfo)) {
+            _components->compression.update(st.st_size);
+        } else {
+            _data_file_size = st.st_size;
+        }
+        _data_file_write_time = db_clock::from_time_t(st.st_mtime);
+    }).then([this] {
+        return _index_file.size().then([this] (auto size) {
+            _index_file_size = size;
+        });
+    }).then([this] {
+        this->set_clustering_components_ranges();
+        this->set_first_and_last_keys();
+
+        // Get disk usage for this sstable (includes all components).
+        _bytes_on_disk = 0;
+        return do_for_each(_recognized_components, [this] (component_type c) {
+            return this->sstable_write_io_check([&] {
+                return engine().file_size(this->filename(c));
+            }).then([this] (uint64_t bytes) {
+                _bytes_on_disk += bytes;
             });
         });
-
     });
 }
 
@@ -1209,6 +1212,26 @@ future<> sstable::load() {
         return read_summary(default_priority_class());
     }).then([this] {
         return open_data();
+    });
+}
+
+future<> sstable::load(sstables::foreign_sstable_open_info info) {
+    return read_toc().then([this, info = std::move(info)] () mutable {
+        _components = std::move(info.components);
+        _data_file = make_checked_file(_read_error_handler, info.data.to_file());
+        _index_file = make_checked_file(_read_error_handler, info.index.to_file());
+        validate_min_max_metadata();
+        return update_info_for_opened_data();
+    });
+}
+
+future<sstable_open_info> sstable::load_shared_components(const schema_ptr& s, sstring dir, int generation, version_types v, format_types f) {
+    auto sst = make_lw_shared<sstables::sstable>(s, dir, generation, v, f);
+    return sst->load().then([sst] () mutable {
+        auto shards = sst->get_shards_for_this_sstable();
+        auto info = sstable_open_info{make_lw_shared<shareable_components>(std::move(*sst->_components)),
+            std::move(shards), std::move(sst->_data_file), std::move(sst->_index_file)};
+        return make_ready_future<sstable_open_info>(std::move(info));
     });
 }
 

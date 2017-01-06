@@ -483,6 +483,11 @@ private:
     // have not been deleted yet, so must not GC any tombstones in other sstables
     // that may delete data in these sstables:
     std::vector<sstables::shared_sstable> _sstables_compacted_but_not_deleted;
+    // sstables that have been opened but not loaded yet, that's because refresh
+    // needs to load all opened sstables atomically, and now, we open a sstable
+    // in all shards at the same time, which makes it hard to store all sstables
+    // we need to load later on for all shards.
+    std::vector<sstables::shared_sstable> _sstables_opened_but_not_loaded;
     // sstables that are shared between several shards so we want to rewrite
     // them (split the data belonging to this shard to a separate sstable),
     // but for correct compaction we need to start the compaction only after
@@ -522,8 +527,8 @@ private:
     // Doesn't trigger compaction.
     void add_sstable(lw_shared_ptr<sstables::sstable> sstable);
     // returns an empty pointer if sstable doesn't belong to current shard.
-    future<lw_shared_ptr<sstables::sstable>> open_sstable(sstring dir, int64_t generation,
-        sstables::sstable::version_types v, sstables::sstable::format_types f);
+    future<lw_shared_ptr<sstables::sstable>> open_sstable(sstables::foreign_sstable_open_info info, sstring dir,
+        int64_t generation, sstables::sstable::version_types v, sstables::sstable::format_types f);
     void load_sstable(lw_shared_ptr<sstables::sstable>& sstable, bool reset_level = false);
     lw_shared_ptr<memtable> new_memtable();
     lw_shared_ptr<memtable> new_streaming_memtable();
@@ -544,6 +549,12 @@ private:
         // FIXME: better way of ensuring we don't attempt to
         // overwrite an existing table.
         return (*_sstable_generation)++ * smp::count + engine().cpu_id();
+    }
+
+    // inverse of calculate_generation_for_new_table(), used to determine which
+    // shard a sstable should be opened at.
+    static int64_t calculate_shard_from_sstable_generation(int64_t sstable_generation) {
+        return sstable_generation % smp::count;
     }
 
     // Rebuild existing _sstables with new_sstables added to it and sstables_to_remove removed from it.
@@ -663,8 +674,6 @@ public:
         query::result_memory_limiter& memory_limiter,
         uint64_t max_result_size);
 
-    future<> populate(sstring datadir);
-
     void start();
     future<> stop();
     future<> flush();
@@ -746,7 +755,6 @@ public:
 
     future<bool> snapshot_exists(sstring name);
 
-    future<> load_new_sstables(std::vector<sstables::entry_descriptor> new_tables);
     future<> snapshot(sstring name);
     future<> clear_snapshot(sstring name);
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
@@ -863,7 +871,6 @@ private:
     // Func signature: bool (const decorated_key& dk, const mutation_partition& mp)
     template <typename Func>
     future<bool> for_all_partitions(schema_ptr, Func&& func) const;
-    future<sstables::entry_descriptor> probe_file(sstring sstdir, sstring fname);
     void check_valid_rp(const db::replay_position&) const;
 public:
     void start_rewrite();
@@ -874,6 +881,8 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const column_family& cf);
     // Testing purposes.
     friend class column_family_test;
+
+    friend class distributed_loader;
 };
 
 class user_types_metadata {
@@ -1099,8 +1108,6 @@ private:
 
     future<> init_commitlog();
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position, timeout_clock::time_point timeout);
-    future<> populate(sstring datadir);
-    future<> populate_keyspace(sstring datadir, sstring ks_name);
 
 private:
     // Unless you are an earlier boostraper or the database itself, you should
@@ -1142,9 +1149,6 @@ public:
     const compaction_manager& get_compaction_manager() const {
         return _compaction_manager;
     }
-
-    future<> init_system_keyspace();
-    future<> load_sstables(distributed<service::storage_proxy>& p); // after init_system_keyspace()
 
     void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);
     future<> add_column_family_and_make_directory(schema_ptr schema);
@@ -1245,11 +1249,25 @@ public:
     semaphore& system_keyspace_read_concurrency_sem() {
         return _system_read_concurrency_sem;
     }
+
+    friend class distributed_loader;
 };
 
 // FIXME: stub
 class secondary_index_manager {};
 
 future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy);
+
+class distributed_loader {
+public:
+    static future<> open_sstable(distributed<database>& db, sstables::entry_descriptor comps,
+        std::function<future<> (column_family&, sstables::foreign_sstable_open_info)> func);
+    static future<> load_new_sstables(distributed<database>& db, sstring ks, sstring cf, std::vector<sstables::entry_descriptor> new_tables);
+    static future<sstables::entry_descriptor> probe_file(distributed<database>& db, sstring sstdir, sstring fname);
+    static future<> populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf);
+    static future<> populate_keyspace(distributed<database>& db, sstring datadir, sstring ks_name);
+    static future<> init_system_keyspace(distributed<database>& db);
+    static future<> init_non_system_keyspaces(distributed<database>& db, distributed<service::storage_proxy>& proxy);
+};
 
 #endif /* DATABASE_HH_ */

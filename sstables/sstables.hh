@@ -114,6 +114,8 @@ public:
 
 class key;
 class sstable_writer;
+struct foreign_sstable_open_info;
+struct sstable_open_info;
 
 using index_list = std::vector<index_entry>;
 class index_reader;
@@ -235,8 +237,14 @@ public:
     static future<> remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64_t generation,
                                                  version_types v, format_types f);
 
+    // load sstable using components shared by a shard
+    future<> load(foreign_sstable_open_info info);
+    // load all components from disk
+    // this variant will be useful for testing purposes and also when loading
+    // a new sstable from scratch for sharing its components.
     future<> load();
     future<> open_data();
+    future<> update_info_for_opened_data();
 
     future<> set_generation(int64_t generation);
 
@@ -693,6 +701,9 @@ public:
     // relevant to the current shard, thus can be deleted by the deletion manager.
     static void mark_sstable_for_deletion(const schema_ptr& schema, sstring dir, int64_t generation, version_types v, format_types f);
 
+    // returns all info needed for a sstable to be shared with other shards.
+    static future<sstable_open_info> load_shared_components(const schema_ptr& s, sstring dir, int generation, version_types v, format_types f);
+
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
     // will then re-export as public every method it needs.
@@ -807,6 +818,23 @@ public:
     stop_iteration consume(range_tombstone&& rt) { return _components_writer->consume(std::move(rt)); }
     stop_iteration consume_end_of_partition() { return _components_writer->consume_end_of_partition(); }
     void consume_end_of_stream();
+};
+
+// contains data for loading a sstable using components shared by a single shard;
+// can be moved across shards
+struct foreign_sstable_open_info {
+    foreign_ptr<lw_shared_ptr<sstable::shareable_components>> components;
+    std::vector<shard_id> owners;
+    seastar::file_handle data;
+    seastar::file_handle index;
+};
+
+// can only be used locally
+struct sstable_open_info {
+    lw_shared_ptr<sstable::shareable_components> components;
+    std::vector<shard_id> owners;
+    file data;
+    file index;
 };
 
 }

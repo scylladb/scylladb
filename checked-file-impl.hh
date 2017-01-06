@@ -117,7 +117,7 @@ private:
     file _file;
 };
 
-inline file make_checked_file(const io_error_handler& error_handler, file& f)
+inline file make_checked_file(const io_error_handler& error_handler, file f)
 {
     return file(::make_shared<checked_file_impl>(error_handler, f));
 }

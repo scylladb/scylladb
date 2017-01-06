@@ -309,9 +309,7 @@ public:
             bm.start(std::ref(qp)).get();
             auto stop_bm = defer([&bm] { bm.stop().get(); });
 
-            db->invoke_on_all([] (database& db) {
-                return db.init_system_keyspace();
-            }).get();
+            distributed_loader::init_system_keyspace(*db).get();
 
             auto& ks = db->local().find_keyspace(db::system_keyspace::NAME);
             parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
