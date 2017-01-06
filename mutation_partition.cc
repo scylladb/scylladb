@@ -33,6 +33,7 @@
 #include "service/priority_manager.hh"
 #include "mutation_compactor.hh"
 #include "intrusive_set_external_comparator.hh"
+#include "counters.hh"
 
 template<bool reversed>
 struct reversal_traits;
@@ -912,11 +913,16 @@ apply_reversibly(const column_definition& def, atomic_cell_or_collection& dst,  
     // provided via an upper layer
     if (def.is_atomic()) {
         auto&& src_ac = src.as_atomic_cell_ref();
-        if (compare_atomic_cell_for_merge(dst.as_atomic_cell(), src.as_atomic_cell()) < 0) {
-            std::swap(dst, src);
-            src_ac.set_revert(true);
+        if (def.is_counter()) {
+            auto did_apply = counter_cell_view::apply_reversibly(dst, src);
+            src_ac.set_revert(did_apply);
         } else {
-            src_ac.set_revert(false);
+            if (compare_atomic_cell_for_merge(dst.as_atomic_cell(), src.as_atomic_cell()) < 0) {
+                std::swap(dst, src);
+                src_ac.set_revert(true);
+            } else {
+                src_ac.set_revert(false);
+            }
         }
     } else {
         auto ct = static_pointer_cast<const collection_type_impl>(def.type);
@@ -934,7 +940,11 @@ revert(const column_definition& def, atomic_cell_or_collection& dst, atomic_cell
         auto&& ac = src.as_atomic_cell_ref();
         if (ac.is_revert_set()) {
             ac.set_revert(false);
-            std::swap(dst, src);
+            if (def.is_counter()) {
+                counter_cell_view::revert_apply(dst, src);
+            } else {
+                std::swap(dst, src);
+            }
         }
     } else {
         std::swap(dst, src);
