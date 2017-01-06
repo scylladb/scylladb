@@ -408,6 +408,11 @@ public:
         return proceed::yes;
     }
 
+    virtual proceed consume_counter_cell(bytes_view col_name, bytes_view value, int64_t timestamp) override {
+        BOOST_FAIL("counter cell wasn't expected");
+        abort(); // BOOST_FAIL is not marked as [[noreturn]].
+    }
+
     virtual proceed consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
         count_deleted_cell++;
         return proceed::yes;
@@ -510,6 +515,10 @@ public:
     }
     virtual proceed consume_cell(bytes_view col_name, bytes_view value,
             int64_t timestamp, int32_t ttl, int32_t expiration) override {
+        count_cell++;
+        return proceed::yes;
+    }
+    virtual proceed consume_counter_cell(bytes_view col_name, bytes_view value, int64_t timestamp) override {
         count_cell++;
         return proceed::yes;
     }

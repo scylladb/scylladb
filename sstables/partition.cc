@@ -30,6 +30,8 @@
 #include "dht/i_partitioner.hh"
 #include <seastar/core/byteorder.hh>
 #include "index_reader.hh"
+#include "counters.hh"
+#include "utils/data_input.hh"
 
 namespace sstables {
 
@@ -419,16 +421,41 @@ public:
         return flush_if_needed(false, position_in_partition(position_in_partition::clustering_row_tag_t(), std::move(ck)));
     }
 
-    atomic_cell make_atomic_cell(uint64_t timestamp, bytes_view value, uint32_t ttl, uint32_t expiration) {
-        if (ttl) {
-            return atomic_cell::make_live(timestamp, value,
-                gc_clock::time_point(gc_clock::duration(expiration)), gc_clock::duration(ttl));
-        } else {
-            return atomic_cell::make_live(timestamp, value);
+    atomic_cell make_counter_cell(int64_t timestamp, bytes_view value) {
+        static constexpr size_t shard_size = 32;
+
+        data_input in(value);
+
+        auto header_size = in.read<int16_t>();
+        for (auto i = 0; i < header_size; i++) {
+            auto idx = in.read<int16_t>();
+            if (idx >= 0) {
+                throw marshal_exception("encountered a local shard in a counter cell");
+            }
         }
+        auto shard_count = value.size() / shard_size;
+        if (shard_count != size_t(header_size)) {
+            throw marshal_exception("encountered remote shards in a counter cell");
+        }
+
+        std::vector<counter_shard> shards;
+        shards.reserve(shard_count);
+        counter_cell_builder ccb(shard_count);
+        for (auto i = 0u; i < shard_count; i++) {
+            auto id_hi = in.read<int64_t>();
+            auto id_lo = in.read<int64_t>();
+            auto clock = in.read<int64_t>();
+            auto value = in.read<int64_t>();
+            ccb.add_shard(counter_shard(counter_id(utils::UUID(id_hi, id_lo)), value, clock));
+        }
+        return ccb.build(timestamp);
     }
 
-    virtual proceed consume_cell(bytes_view col_name, bytes_view value, int64_t timestamp, int32_t ttl, int32_t expiration) override {
+    template<typename CreateCell>
+    //requires requires(CreateCell create_cell, column col) {
+    //    { create_cell(col) } -> void;
+    //}
+    proceed do_consume_cell(bytes_view col_name, int64_t timestamp, int32_t ttl, int32_t expiration, CreateCell&& create_cell) {
         if (_skip_partition) {
             return proceed::yes;
         }
@@ -451,23 +478,50 @@ public:
             return ret;
         }
 
-        auto ac = make_atomic_cell(timestamp, value, ttl, expiration);
-
-        bool is_multi_cell = col.collection_extra_data.size();
-        if (is_multi_cell != col.cdef->type->is_multi_cell()) {
-            return ret;
-        }
-        if (is_multi_cell) {
-            update_pending_collection(col.cdef, std::move(col.collection_extra_data), std::move(ac));
-            return ret;
-        }
-
-        if (col.is_static) {
-            _in_progress->as_static_row().set_cell(*(col.cdef), std::move(ac));
-            return ret;
-        }
-        _in_progress->as_clustering_row().set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
+        create_cell(std::move(col));
         return ret;
+    }
+
+    virtual proceed consume_counter_cell(bytes_view col_name, bytes_view value, int64_t timestamp) override {
+        return do_consume_cell(col_name, timestamp, 0, 0, [&] (auto&& col) {
+            auto ac = make_counter_cell(timestamp, value);
+
+            if (col.is_static) {
+                _in_progress->as_static_row().set_cell(*(col.cdef), std::move(ac));
+            } else {
+                _in_progress->as_clustering_row().set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
+            }
+        });
+    }
+
+    atomic_cell make_atomic_cell(uint64_t timestamp, bytes_view value, uint32_t ttl, uint32_t expiration) {
+        if (ttl) {
+            return atomic_cell::make_live(timestamp, value,
+                gc_clock::time_point(gc_clock::duration(expiration)), gc_clock::duration(ttl));
+        } else {
+            return atomic_cell::make_live(timestamp, value);
+        }
+    }
+
+    virtual proceed consume_cell(bytes_view col_name, bytes_view value, int64_t timestamp, int32_t ttl, int32_t expiration) override {
+        return do_consume_cell(col_name, timestamp, ttl, expiration, [&] (auto&& col) {
+            auto ac = make_atomic_cell(timestamp, value, ttl, expiration);
+
+            bool is_multi_cell = col.collection_extra_data.size();
+            if (is_multi_cell != col.cdef->type->is_multi_cell()) {
+                return;
+            }
+            if (is_multi_cell) {
+                update_pending_collection(col.cdef, std::move(col.collection_extra_data), std::move(ac));
+                return;
+            }
+
+            if (col.is_static) {
+                _in_progress->as_static_row().set_cell(*(col.cdef), std::move(ac));
+                return;
+            }
+            _in_progress->as_clustering_row().set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
+        });
     }
 
     virtual proceed consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
