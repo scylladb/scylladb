@@ -19,6 +19,29 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+class counter_id final {
+    utils::UUID to_uuid();
+};
+
+class counter_shard final {
+    counter_id id();
+    int64_t value();
+    int64_t logical_clock();
+};
+
+class counter_cell_full final stub [[writable]] {
+    std::vector<counter_shard> shards;
+};
+
+class counter_cell_update final stub [[writable]] {
+    int64_t delta;
+};
+
+class counter_cell stub [[writable]] {
+    api::timestamp_type created_at;
+    boost::variant<counter_cell_full, counter_cell_update> value;
+};
+
 class tombstone [[writable]] {
     api::timestamp_type timestamp;
     gc_clock::time_point deletion_time;
@@ -52,7 +75,7 @@ class collection_cell stub [[writable]] {
 
 class column stub [[writable]] {
     uint32_t id;
-    boost::variant<boost::variant<live_cell, expiring_cell, dead_cell>, collection_cell> c;
+    boost::variant<boost::variant<live_cell, expiring_cell, dead_cell, counter_cell>, collection_cell> c;
 };
 
 class row stub [[writable]] {

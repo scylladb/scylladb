@@ -23,6 +23,7 @@
 #include "mutation_partition_serializer.hh"
 #include "mutation_partition.hh"
 
+#include "counters.hh"
 #include "utils/UUID.hh"
 #include "serializer.hh"
 #include "idl/uuid.dist.hh"
@@ -46,6 +47,28 @@ auto write_live_cell(Writer&& writer, const atomic_cell& c)
     return std::move(writer).write_created_at(c.timestamp())
                             .write_value(c.value())
                         .end_live_cell();
+}
+
+template<typename Writer>
+auto write_counter_cell(Writer&& writer, const atomic_cell& c)
+{
+    auto value = std::move(writer).write_created_at(c.timestamp());
+    return [&c, value = std::move(value)] () mutable {
+        if (c.is_counter_update()) {
+            auto delta = value_cast<int64_t>(long_type->deserialize_value(c.value()));
+            return std::move(value).start_value_counter_cell_update()
+                                   .write_delta(delta)
+                                   .end_counter_cell_update();
+        } else {
+            counter_cell_view ccv(c);
+            auto shards = std::move(value).start_value_counter_cell_full()
+                                          .start_shards();
+            for (auto csv : ccv.shards()) {
+                shards.add_shards(counter_shard(csv));
+            }
+            return std::move(shards).end_shards().end_counter_cell_full();
+        }
+    }().end_counter_cell();
 }
 
 template<typename Writer>
@@ -101,6 +124,8 @@ auto write_row_cells(Writer&& writer, const row& r, const schema& s, column_kind
             auto cell_writer = std::move(cell_or_collection_writer).start_c_variant();
             if (!c.is_live()) {
                 write_dead_cell(std::move(cell_writer).start_variant_dead_cell(), c).end_variant().end_column();
+            } else if (def.is_counter()) {
+                write_counter_cell(std::move(cell_writer).start_variant_counter_cell(), c).end_variant().end_column();
             } else if (c.is_live_and_has_ttl()) {
                 write_expiring_cell(std::move(cell_writer).start_variant_expiring_cell(), c).end_variant().end_column();
             } else {

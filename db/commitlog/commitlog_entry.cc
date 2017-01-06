@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "counters.hh"
 #include "commitlog_entry.hh"
 #include "idl/uuid.dist.hh"
 #include "idl/keys.dist.hh"

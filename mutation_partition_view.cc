@@ -47,6 +47,7 @@ namespace {
 using atomic_cell_variant = boost::variant<ser::live_cell_view,
                                            ser::expiring_cell_view,
                                            ser::dead_cell_view,
+                                           ser::counter_cell_view,
                                            ser::unknown_variant_type>;
 
 atomic_cell read_atomic_cell(atomic_cell_variant cv)
@@ -60,6 +61,31 @@ atomic_cell read_atomic_cell(atomic_cell_variant cv)
         }
         atomic_cell operator()(ser::dead_cell_view& dcv) const {
             return atomic_cell::make_dead(dcv.tomb().timestamp(), dcv.tomb().deletion_time());
+        }
+        atomic_cell operator()(ser::counter_cell_view& ccv) const {
+            class counter_cell_visitor : public boost::static_visitor<atomic_cell> {
+                api::timestamp_type _created_at;
+            public:
+                explicit counter_cell_visitor(api::timestamp_type ts)
+                    : _created_at(ts) { }
+
+                atomic_cell operator()(ser::counter_cell_full_view& ccv) const {
+                    // TODO: a lot of copying for something called view
+                    counter_cell_builder ccb; // we know the final number of shards
+                    for (auto csv : ccv.shards()) {
+                        ccb.add_shard(counter_shard(csv));
+                    }
+                    return ccb.build(_created_at);
+                }
+                atomic_cell operator()(ser::counter_cell_update_view& ccv) const {
+                    return atomic_cell::make_live_counter_update(_created_at, long_type->decompose(ccv.delta()));
+                }
+                atomic_cell operator()(ser::unknown_variant_type&) const {
+                    throw std::runtime_error("Trying to deserialize counter cell in unknown state");
+                }
+            };
+            auto v = ccv.value();
+            return boost::apply_visitor(counter_cell_visitor(ccv.created_at()), v);
         }
         atomic_cell operator()(ser::unknown_variant_type&) const {
             throw std::runtime_error("Trying to deserialize cell in unknown state");
