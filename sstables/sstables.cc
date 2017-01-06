@@ -54,6 +54,7 @@
 #include <core/align.hh>
 #include "utils/phased_barrier.hh"
 #include "range_tombstone_list.hh"
+#include "counters.hh"
 
 #include "checked-file-impl.hh"
 #include "service/storage_service.hh"
@@ -1374,9 +1375,7 @@ static inline void update_cell_stats(column_stats& c_stats, uint64_t timestamp) 
 }
 
 // Intended to write all cell components that follow column name.
-void sstable::write_cell(file_writer& out, atomic_cell_view cell) {
-    // FIXME: counter cell isn't supported yet.
-
+void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_definition& cdef) {
     uint64_t timestamp = cell.timestamp();
 
     update_cell_stats(_c_stats, timestamp);
@@ -1392,6 +1391,32 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell) {
         _c_stats.tombstone_histogram.update(deletion_time);
 
         write(out, mask, timestamp, deletion_time_size, deletion_time);
+    } else if (cdef.is_counter()) {
+        // counter cell
+        assert(!cell.is_counter_update());
+
+        column_mask mask = column_mask::counter;
+        write(out, mask, int64_t(0), timestamp);
+
+        counter_cell_view ccv(cell);
+        auto shard_count = ccv.shard_count();
+
+        static constexpr auto header_entry_size = sizeof(int16_t);
+        static constexpr auto counter_shard_size = 32u; // counter_id: 16 + clock: 8 + value: 8
+        auto total_size = sizeof(int16_t) + shard_count * (header_entry_size + counter_shard_size);
+
+        write(out, int32_t(total_size), int16_t(shard_count));
+        for (auto i = 0u; i < shard_count; i++) {
+            write<int16_t>(out, std::numeric_limits<int16_t>::min() + i);
+        }
+        for (auto&& s : ccv.shards()) {
+            auto uuid = s.id().to_uuid();
+            write(out, int64_t(uuid.get_most_significant_bits()),
+                  int64_t(uuid.get_least_significant_bits()),
+                  int64_t(s.logical_clock()), int64_t(s.value()));
+        }
+
+        _c_stats.update_max_local_deletion_time(std::numeric_limits<int>::max());
     } else if (cell.is_live_and_has_ttl()) {
         // expiring cell
 
@@ -1486,7 +1511,7 @@ void sstable::write_collection(file_writer& out, const composite& clustering_key
     for (auto& cp: mview.cells) {
         maybe_flush_pi_block(out, clustering_key, { column_name, cp.first });
         write_column_name(out, clustering_key, { column_name, cp.first });
-        write_cell(out, cp.second);
+        write_cell(out, cp.second, cdef);
     }
 }
 
@@ -1549,7 +1574,7 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
                 write_column_name(out, bytes_view(column_name));
             }
         }
-        write_cell(out, cell);
+        write_cell(out, cell, column_definition);
     });
 }
 
@@ -1566,7 +1591,7 @@ void sstable::write_static_row(file_writer& out, const schema& schema, const row
         auto sp = composite::static_prefix(schema);
         maybe_flush_pi_block(out, sp, { bytes_view(column_definition.name()) });
         write_column_name(out, sp, { bytes_view(column_definition.name()) });
-        write_cell(out, cell);
+        write_cell(out, cell, column_definition);
     });
 }
 
