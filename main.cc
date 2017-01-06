@@ -53,45 +53,8 @@
 #include "core/prometheus.hh"
 #include "message/messaging_service.hh"
 
-#ifdef HAVE_LIBSYSTEMD
-#include <systemd/sd-daemon.h>
-#endif
-
-logging::logger startlog("init");
-
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
-
-static bool
-try_notify_upstart(sstring msg, bool ready) {
-    static const char *upstart_job = getenv("UPSTART_JOB");
-    static const sstring upstart_job_str(!upstart_job ? "" : upstart_job);
-    if (upstart_job_str != "scylla-server") {
-        return false;
-    }
-    if (ready) {
-        raise(SIGSTOP);
-    }
-    return true;
-}
-
-static void
-try_notify_systemd(sstring msg, bool ready) {
-#ifdef HAVE_LIBSYSTEMD
-    auto ready_msg = ready ? "READY=1\n" : "";
-    sd_notify(0, sprint("%sSTATUS=%s\n", ready_msg, msg).c_str());
-#endif
-}
-
-void
-supervisor_notify(sstring msg, bool ready) {
-    startlog.trace("{}", msg);
-    if (try_notify_upstart(msg, ready) == true) {
-        return;
-    } else {
-        try_notify_systemd(msg, ready);
-    }
-}
 
 namespace bpo = boost::program_options;
 
@@ -446,23 +409,23 @@ int main(int ac, char** av) {
             if (opts.count("developer-mode")) {
                 smp::invoke_on_all([] { engine().set_strict_dma(false); }).get();
             }
-            supervisor_notify("creating tracing");
+            supervisor::notify("creating tracing");
             tracing::tracing::create_tracing("trace_keyspace_helper").get();
-            supervisor_notify("creating snitch");
+            supervisor::notify("creating snitch");
             i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).get();
             // #293 - do not stop anything
             // engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
-            supervisor_notify("determining DNS name");
+            supervisor::notify("determining DNS name");
             dns::hostent e = dns::gethostbyname(api_address).get0();
-            supervisor_notify("starting API server");
+            supervisor::notify("starting API server");
             auto ip = e.addresses[0].in.s_addr;
             ctx.http_server.start().get();
             api::set_server_init(ctx).get();
             ctx.http_server.listen(ipv4_addr{ip, api_port}).get();
             startlog.info("Scylla API server listening on {}:{} ...", api_address, api_port);
-            supervisor_notify("initializing storage service");
+            supervisor::notify("initializing storage service");
             init_storage_service(db);
-            supervisor_notify("starting per-shard database core");
+            supervisor::notify("starting per-shard database core");
             // Note: changed from using a move here, because we want the config object intact.
             db.start(std::ref(*cfg)).get();
             engine().at_exit([&db, &return_value] {
@@ -482,11 +445,11 @@ int main(int ac, char** av) {
                 });
             });
             verify_seastar_io_scheduler(opts.count("max-io-requests"), db.local().get_config().developer_mode()).get();
-            supervisor_notify("creating data directories");
+            supervisor::notify("creating data directories");
             dirs.touch_and_lock(db.local().get_config().data_file_directories()).get();
-            supervisor_notify("creating commitlog directory");
+            supervisor::notify("creating commitlog directory");
             dirs.touch_and_lock(db.local().get_config().commitlog_directory()).get();
-            supervisor_notify("verifying data and commitlog directories");
+            supervisor::notify("verifying data and commitlog directories");
             std::unordered_set<sstring> directories;
             directories.insert(db.local().get_config().data_file_directories().cbegin(),
                     db.local().get_config().data_file_directories().cend());
@@ -515,7 +478,7 @@ int main(int ac, char** av) {
                 }
                 return db.init_system_keyspace();
             }).get();
-            supervisor_notify("starting gossip");
+            supervisor::notify("starting gossip");
             // Moved local parameters here, esp since with the
             // ssl stuff it gets to be a lot.
             uint16_t storage_port = cfg->storage_port();
@@ -542,30 +505,30 @@ int main(int ac, char** av) {
                     , cluster_name
                     , phi
                     , cfg->listen_on_broadcast_address());
-            supervisor_notify("starting messaging service");
-            supervisor_notify("starting storage proxy");
+            supervisor::notify("starting messaging service");
+            supervisor::notify("starting storage proxy");
             proxy.start(std::ref(db)).get();
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
-            supervisor_notify("starting migration manager");
+            supervisor::notify("starting migration manager");
             mm.start().get();
             // #293 - do not stop anything
             // engine().at_exit([&mm] { return mm.stop(); });
-            supervisor_notify("starting query processor");
+            supervisor::notify("starting query processor");
             qp.start(std::ref(proxy), std::ref(db)).get();
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
-            supervisor_notify("initializing batchlog manager");
+            supervisor::notify("initializing batchlog manager");
             db::get_batchlog_manager().start(std::ref(qp)).get();
             // #293 - do not stop anything
             // engine().at_exit([] { return db::get_batchlog_manager().stop(); });
-            supervisor_notify("loading sstables");
+            supervisor::notify("loading sstables");
             auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);
             parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
                 auto cfm = pair.second;
                 return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
             }).get();
-            supervisor_notify("loading sstables");
+            supervisor::notify("loading sstables");
             // See comment on top of our call to init_system_keyspace as per why we invoke
             // on Shard0 first. Scylla's Github Issue #1014 for details
             db.invoke_on(0, [&proxy] (database& db) { return db.load_sstables(proxy); }).get();
@@ -575,21 +538,21 @@ int main(int ac, char** av) {
                 }
                 return db.load_sstables(proxy);
             }).get();
-            supervisor_notify("setting up system keyspace");
+            supervisor::notify("setting up system keyspace");
             db::system_keyspace::setup(db, qp).get();
-            supervisor_notify("starting commit log");
+            supervisor::notify("starting commit log");
             auto cl = db.local().commitlog();
             if (cl != nullptr) {
                 auto paths = cl->get_segments_to_replay();
                 if (!paths.empty()) {
-                    supervisor_notify("replaying commit log");
+                    supervisor::notify("replaying commit log");
                     auto rp = db::commitlog_replayer::create_replayer(qp).get0();
                     rp.recover(paths).get();
-                    supervisor_notify("replaying commit log - flushing memtables");
+                    supervisor::notify("replaying commit log - flushing memtables");
                     db.invoke_on_all([] (database& db) {
                         return db.flush_all_memtables();
                     }).get();
-                    supervisor_notify("replaying commit log - removing old commitlog segments");
+                    supervisor::notify("replaying commit log - removing old commitlog segments");
                     for (auto& path : paths) {
                         ::unlink(path.c_str());
                     }
@@ -619,15 +582,15 @@ int main(int ac, char** av) {
             api::set_server_snitch(ctx).get();
             api::set_server_storage_proxy(ctx).get();
             api::set_server_load_sstable(ctx).get();
-            supervisor_notify("initializing migration manager RPC verbs");
+            supervisor::notify("initializing migration manager RPC verbs");
             service::get_migration_manager().invoke_on_all([] (auto& mm) {
                 mm.init_messaging_service();
             }).get();
-            supervisor_notify("initializing storage proxy RPC verbs");
+            supervisor::notify("initializing storage proxy RPC verbs");
             proxy.invoke_on_all([] (service::storage_proxy& p) {
                 p.init_messaging_service();
             }).get();
-            supervisor_notify("starting streaming service");
+            supervisor::notify("starting streaming service");
             streaming::stream_session::init_streaming_service(db).get();
             api::set_server_stream_manager(ctx).get();
             // Start handling REPAIR_CHECKSUM_RANGE messages
@@ -640,16 +603,16 @@ int main(int ac, char** av) {
                     });
                 });
             }).get();
-            supervisor_notify("starting storage service", true);
+            supervisor::notify("starting storage service", true);
             auto& ss = service::get_local_storage_service();
             ss.init_server().get();
             api::set_server_messaging_service(ctx).get();
             api::set_server_storage_service(ctx).get();
-            supervisor_notify("starting batchlog manager");
+            supervisor::notify("starting batchlog manager");
             db::get_batchlog_manager().invoke_on_all([] (db::batchlog_manager& b) {
                 return b.start();
             }).get();
-            supervisor_notify("starting load broadcaster");
+            supervisor::notify("starting load broadcaster");
             // should be unique_ptr, but then lambda passed to at_exit will be non copieable and
             // casting to std::function<> will fail to compile
             auto lb = make_shared<service::load_broadcaster>(db, gms::get_local_gossiper());
@@ -658,7 +621,7 @@ int main(int ac, char** av) {
             engine().at_exit([lb = std::move(lb)] () mutable { return lb->stop_broadcasting(); });
             gms::get_local_gossiper().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx).get();
-            supervisor_notify("starting native transport");
+            supervisor::notify("starting native transport");
             service::get_local_storage_service().start_native_transport().get();
             if (start_thrift) {
                 service::get_local_storage_service().start_rpc_server().get();
@@ -680,7 +643,7 @@ int main(int ac, char** av) {
             }
             api::set_server_done(ctx).get();
             dns::hostent prom_addr = dns::gethostbyname(cfg->prometheus_address()).get0();
-            supervisor_notify("starting prometheus API server");
+            supervisor::notify("starting prometheus API server");
             uint16_t pport = cfg->prometheus_port();
             if (pport) {
                 pctx.metric_help = "Scylla server statistics";
@@ -692,7 +655,7 @@ int main(int ac, char** av) {
                     return make_exception_future<>(ep);
                 }).get();
             }
-            supervisor_notify("serving");
+            supervisor::notify("serving");
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
             engine().at_exit([] {
                 return repair_shutdown(service::get_local_storage_service().db());

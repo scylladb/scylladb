@@ -25,6 +25,9 @@
 #include <seastar/core/distributed.hh>
 #include "db/config.hh"
 #include "database.hh"
+#include "log.hh"
+
+extern logging::logger startlog;
 
 void init_storage_service(distributed<database>& db);
 void init_ms_fd_gossiper(sstring listen_address

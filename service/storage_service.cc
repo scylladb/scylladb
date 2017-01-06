@@ -476,7 +476,7 @@ void storage_service::join_token_ring(int delay) {
         //
         // Otherwise there is a high chance to hit the issue #420.
         auth::auth::setup().get();
-        supervisor_notify("starting tracing");
+        supervisor::notify("starting tracing");
         tracing::tracing::start_tracing().get();
 
         // start participating in the ring.

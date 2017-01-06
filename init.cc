@@ -27,6 +27,8 @@
 #include "to_string.hh"
 #include "gms/inet_address.hh"
 
+logging::logger startlog("init");
+
 //
 // NOTE: there functions are (temporarily)
 // duplicated in cql_test_env.cc
