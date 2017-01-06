@@ -1569,8 +1569,14 @@ row row::difference(const schema& s, column_kind kind, const row& other) const
             while (it != other_range.end() && it->first < c.first) {
                 ++it;
             }
+            auto& cdef = s.column_at(kind, c.first);
             if (it == other_range.end() || it->first != c.first) {
                 r.append_cell(c.first, c.second);
+            } else if (cdef.is_counter()) {
+                auto cell = counter_cell_view::difference(c.second.as_atomic_cell(), it->second.as_atomic_cell());
+                if (cell) {
+                    r.append_cell(c.first, std::move(*cell));
+                }
             } else if (s.column_at(kind, c.first).is_atomic()) {
                 if (compare_atomic_cell_for_merge(c.second.as_atomic_cell(), it->second.as_atomic_cell()) > 0) {
                     r.append_cell(c.first, c.second);
