@@ -822,7 +822,7 @@ with open(buildfile, 'w') as f:
         f.write(textwrap.dedent('''\
             cxxflags_{mode} = -I. -I $builddir/{mode}/gen -I seastar -I seastar/build/{mode}/gen
             rule cxx.{mode}
-              command = $cxx -MMD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} -c -o $out $in
+              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} -c -o $out $in
               description = CXX $out
               depfile = $out.d
             rule link.{mode}
