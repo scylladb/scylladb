@@ -30,6 +30,7 @@ import ConfigParser
 import os
 import sys
 import subprocess
+import uuid
 from pkg_resources import parse_version
 
 VERSION = "1.0"
@@ -64,6 +65,10 @@ def get_api(path):
 def version_compare(a, b):
     return parse_version(a) < parse_version(b)
 
+def create_uuid_file(fl):
+    with open(args.uuid_file, 'w') as myfile:
+        myfile.write(str(uuid.uuid1()) + "\n")
+
 def check_version(ar):
     if config and (not config.has_option("housekeeping", "check-version") or not config.getboolean("housekeeping", "check-version")):
         return
@@ -80,8 +85,8 @@ def check_version(ar):
             # mode would accept any string.
             # use i for install, c (default) for running from the command line
             params = params + "&sts=" + ar.mode
-        if uuid:
-            params = params + "&uu=" + uuid
+        if uid:
+            params = params + "&uu=" + uid
         latest_version = get_json_from_url(version_url + params)["version"]
     except:
         traceln("Unable to retrieve version information")
@@ -112,10 +117,12 @@ if args.config != "":
         sys.exit(0)
     config = ConfigParser.SafeConfigParser()
     config.read(args.config)
-uuid = None
+uid = None
 if args.uuid != "":
-    uuid = args.uuid
-if args.uuid_file != "" and os.path.exists(args.uuid_file):
+    uid = args.uuid
+if args.uuid_file != "":
+    if not os.path.exists(args.uuid_file):
+        create_uuid_file(args.uuid_file)
     with open(args.uuid_file, 'r') as myfile:
-        uuid = myfile.read().replace('\n', '')
+        uid = myfile.read().replace('\n', '')
 args.func(args)
