@@ -3614,7 +3614,7 @@ public:
             stdx::optional<dht::decorated_key> last; // set if we had a short read
         };
         auto merged = std::map<unsigned, partitions_and_last_key>();
-        auto short_read = query::short_read::no;
+        auto short_read = query::short_read(this->short_read());
         // merge batches with equal keys, and note if we need to sort afterwards
         for (auto&& key_value : _partitions) {
             auto&& key = key_value.first;
