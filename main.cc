@@ -262,9 +262,7 @@ verify_seastar_io_scheduler(bool has_max_io_requests, bool developer_mode) {
 static
 void
 verify_adequate_memory_per_shard(bool developer_mode) {
-    auto mem = memory::stats().total_memory();
-    auto shards = smp::count;
-    auto shard_mem = mem / shards;
+    auto shard_mem = memory::stats().total_memory();
     if (shard_mem >= (1 << 30)) {
         return;
     }
