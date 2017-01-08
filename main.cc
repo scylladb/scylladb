@@ -273,7 +273,7 @@ verify_adequate_memory_per_shard(bool developer_mode) {
                 " continuing since running in developer mode", shard_mem >> 20);
     } else {
         startlog.error("Only {} MiB per shard; this is below the recommended minimum of 1 GiB/shard; terminating."
-                "Configure more memory (--memory option) or decrease shard count (--smp option).");
+                "Configure more memory (--memory option) or decrease shard count (--smp option).", shard_mem >> 20);
         throw std::runtime_error("configuration (memory per shard too low)");
     }
 }
