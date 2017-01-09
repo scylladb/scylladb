@@ -35,7 +35,7 @@ using cql_protocol_version_type = uint8_t;
 class cql_serialization_format {
     cql_protocol_version_type _version;
 public:
-    static constexpr cql_protocol_version_type latest_version = 3;
+    static constexpr cql_protocol_version_type latest_version = 4;
     explicit cql_serialization_format(cql_protocol_version_type version) : _version(version) {}
     static cql_serialization_format latest() { return cql_serialization_format{latest_version}; }
     static cql_serialization_format internal() { return latest(); }

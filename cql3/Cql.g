@@ -1465,12 +1465,16 @@ native_type returns [shared_ptr<cql3_type> t]
     | K_FLOAT     { $t = cql3_type::float_; }
     | K_INET      { $t = cql3_type::inet; }
     | K_INT       { $t = cql3_type::int_; }
+    | K_SMALLINT  { $t = cql3_type::smallint; }
     | K_TEXT      { $t = cql3_type::text; }
     | K_TIMESTAMP { $t = cql3_type::timestamp; }
+    | K_TINYINT   { $t = cql3_type::tinyint; }
     | K_UUID      { $t = cql3_type::uuid; }
     | K_VARCHAR   { $t = cql3_type::varchar; }
     | K_VARINT    { $t = cql3_type::varint; }
     | K_TIMEUUID  { $t = cql3_type::timeuuid; }
+    | K_DATE      { $t = cql3_type::date; }
+    | K_TIME      { $t = cql3_type::time; }
     ;
 
 collection_type returns [shared_ptr<cql3::cql3_type::raw> pt]
@@ -1644,6 +1648,8 @@ K_DOUBLE:      D O U B L E;
 K_FLOAT:       F L O A T;
 K_INET:        I N E T;
 K_INT:         I N T;
+K_SMALLINT:    S M A L L I N T;
+K_TINYINT:     T I N Y I N T;
 K_TEXT:        T E X T;
 K_UUID:        U U I D;
 K_VARCHAR:     V A R C H A R;
@@ -1651,6 +1657,8 @@ K_VARINT:      V A R I N T;
 K_TIMEUUID:    T I M E U U I D;
 K_TOKEN:       T O K E N;
 K_WRITETIME:   W R I T E T I M E;
+K_DATE:        D A T E;
+K_TIME:        T I M E;
 
 K_NULL:        N U L L;
 K_NOT:         N O T;

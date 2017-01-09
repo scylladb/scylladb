@@ -1724,6 +1724,10 @@ private:
         VARINT    = 0x000E,
         TIMEUUID  = 0x000F,
         INET      = 0x0010,
+        DATE      = 0x0011,
+        TIME      = 0x0012,
+        SMALLINT  = 0x0013,
+        TINYINT   = 0x0014,
         LIST      = 0x0020,
         MAP       = 0x0021,
         SET       = 0x0022,
@@ -1809,11 +1813,15 @@ thread_local const type_codec::type_id_to_type_type type_codec::type_id_to_type 
     (type_id::DOUBLE    , double_type)
     (type_id::FLOAT     , float_type)
     (type_id::INT       , int32_type)
+    (type_id::TINYINT   , byte_type)
+    (type_id::SMALLINT  , short_type)
     (type_id::TIMESTAMP , timestamp_type)
     (type_id::UUID      , uuid_type)
     (type_id::VARCHAR   , utf8_type)
     (type_id::VARINT    , varint_type)
     (type_id::TIMEUUID  , timeuuid_type)
+    (type_id::DATE      , simple_date_type)
+    (type_id::TIME      , time_type)
     (type_id::INET      , inet_addr_type);
 
 void cql_server::response::write(const cql3::metadata& m) {

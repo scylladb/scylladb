@@ -310,6 +310,8 @@ public:
     data_value(sstring);
     data_value(const char*);
     data_value(bool);
+    data_value(int8_t);
+    data_value(int16_t);
     data_value(int32_t);
     data_value(int64_t);
     data_value(utils::UUID);
@@ -1082,6 +1084,8 @@ abstract_type::as_tri_comparator() const {
 using key_compare = serialized_compare;
 
 // Remember to update type_codec in transport/server.cc and cql3/cql3_type.cc
+extern thread_local const shared_ptr<const abstract_type> byte_type;
+extern thread_local const shared_ptr<const abstract_type> short_type;
 extern thread_local const shared_ptr<const abstract_type> int32_type;
 extern thread_local const shared_ptr<const abstract_type> long_type;
 extern thread_local const shared_ptr<const abstract_type> ascii_type;
@@ -1091,6 +1095,8 @@ extern thread_local const shared_ptr<const abstract_type> boolean_type;
 extern thread_local const shared_ptr<const abstract_type> date_type;
 extern thread_local const shared_ptr<const abstract_type> timeuuid_type;
 extern thread_local const shared_ptr<const abstract_type> timestamp_type;
+extern thread_local const shared_ptr<const abstract_type> simple_date_type;
+extern thread_local const shared_ptr<const abstract_type> time_type;
 extern thread_local const shared_ptr<const abstract_type> uuid_type;
 extern thread_local const shared_ptr<const abstract_type> inet_addr_type;
 extern thread_local const shared_ptr<const abstract_type> float_type;
@@ -1099,6 +1105,18 @@ extern thread_local const shared_ptr<const abstract_type> varint_type;
 extern thread_local const shared_ptr<const abstract_type> decimal_type;
 extern thread_local const shared_ptr<const abstract_type> counter_type;
 extern thread_local const data_type empty_type;
+
+template <>
+inline
+shared_ptr<const abstract_type> data_type_for<int8_t>() {
+    return byte_type;
+}
+
+template <>
+inline
+shared_ptr<const abstract_type> data_type_for<int16_t>() {
+    return short_type;
+}
 
 template <>
 inline
