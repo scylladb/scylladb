@@ -114,6 +114,8 @@ public:
 
 class key;
 class sstable_writer;
+struct foreign_sstable_open_info;
+struct sstable_open_info;
 
 using index_list = std::vector<index_entry>;
 class index_reader;
@@ -235,8 +237,14 @@ public:
     static future<> remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64_t generation,
                                                  version_types v, format_types f);
 
+    // load sstable using components shared by a shard
+    future<> load(foreign_sstable_open_info info);
+    // load all components from disk
+    // this variant will be useful for testing purposes and also when loading
+    // a new sstable from scratch for sharing its components.
     future<> load();
     future<> open_data();
+    future<> update_info_for_opened_data();
 
     future<> set_generation(int64_t generation);
 
@@ -290,8 +298,8 @@ public:
     future<> seal_sstable(bool backup);
 
     uint64_t get_estimated_key_count() const {
-        return ((uint64_t)_summary.header.size_at_full_sampling + 1) *
-                _summary.header.min_index_interval;
+        return ((uint64_t)_components->summary.header.size_at_full_sampling + 1) *
+                _components->summary.header.min_index_interval;
     }
 
     uint64_t estimated_keys_for_range(const dht::token_range& range);
@@ -339,7 +347,7 @@ public:
     }
 
     uint64_t filter_memory_size() const {
-        return _filter->memory_size();
+        return _components->filter->memory_size();
     }
 
     // Returns the total bytes of all components.
@@ -393,6 +401,15 @@ public:
     auto sstable_write_io_check(Func&& func, Args&&... args) const {
         return do_io_check(_write_error_handler, func, std::forward<Args>(args)...);
     }
+
+    // Immutable components that can be shared among shards.
+    struct shareable_components {
+        sstables::compression compression;
+        utils::filter_ptr filter;
+        sstables::summary summary;
+        sstables::statistics statistics;
+        stdx::optional<sstables::scylla_metadata> scylla_metadata;
+    };
 private:
     sstable(size_t wbuffer_size, schema_ptr schema, sstring dir, int64_t generation, version_types v, format_types f,
             gc_clock::time_point now = gc_clock::now(), io_error_handler_gen error_handler_gen = default_io_error_handler_gen())
@@ -415,15 +432,11 @@ private:
     static std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
     static std::unordered_map<component_type, sstring, enum_hash<component_type>> _component_map;
 
-    std::unordered_set<component_type, enum_hash<component_type>> _components;
+    std::unordered_set<component_type, enum_hash<component_type>> _recognized_components;
     std::vector<sstring> _unrecognized_components;
 
+    foreign_ptr<lw_shared_ptr<shareable_components>> _components = make_foreign(make_lw_shared<shareable_components>());
     bool _shared = true;  // across shards; safe default
-    compression _compression;
-    utils::filter_ptr _filter;
-    summary _summary;
-    stdx::optional<scylla_metadata> _scylla_metadata;
-    statistics _statistics;
     // NOTE: _collector and _c_stats are used to generation of statistics file
     // when writing a new sstable.
     metadata_collector _collector;
@@ -505,7 +518,7 @@ private:
     future<> read_summary(const io_priority_class& pc);
 
     void write_summary(const io_priority_class& pc) {
-        write_simple<component_type::Summary>(_summary, pc);
+        write_simple<component_type::Summary>(_components->summary, pc);
     }
 
     // To be called when we try to load an SSTable that lacks a Summary. Could
@@ -604,11 +617,11 @@ public:
     future<> read_toc();
 
     bool filter_has_key(const key& key) {
-        return _filter->is_present(bytes_view(key));
+        return _components->filter->is_present(bytes_view(key));
     }
 
     bool filter_has_key(utils::hashed_key key) {
-        return _filter->is_present(key);
+        return _components->filter->is_present(key);
     }
 
     bool filter_has_key(const schema& s, partition_key_view key) {
@@ -635,8 +648,8 @@ public:
     }
 
     const stats_metadata& get_stats_metadata() const {
-        auto entry = _statistics.contents.find(metadata_type::Stats);
-        if (entry == _statistics.contents.end()) {
+        auto entry = _components->statistics.contents.find(metadata_type::Stats);
+        if (entry == _components->statistics.contents.end()) {
             throw std::runtime_error("Stats metadata not available");
         }
         auto& p = entry->second;
@@ -647,8 +660,8 @@ public:
         return s;
     }
     const compaction_metadata& get_compaction_metadata() const {
-        auto entry = _statistics.contents.find(metadata_type::Compaction);
-        if (entry == _statistics.contents.end()) {
+        auto entry = _components->statistics.contents.find(metadata_type::Compaction);
+        if (entry == _components->statistics.contents.end()) {
             throw std::runtime_error("Compaction metadata not available");
         }
         auto& p = entry->second;
@@ -672,7 +685,7 @@ public:
     future<> mutate_sstable_level(uint32_t);
 
     const summary& get_summary() const {
-        return _summary;
+        return _components->summary;
     }
 
     // Return sstable key range as range<partition_key> reading only the summary component.
@@ -687,6 +700,9 @@ public:
     // It doesn't mean that the sstable will be deleted, but that the sstable is not
     // relevant to the current shard, thus can be deleted by the deletion manager.
     static void mark_sstable_for_deletion(const schema_ptr& schema, sstring dir, int64_t generation, version_types v, format_types f);
+
+    // returns all info needed for a sstable to be shared with other shards.
+    static future<sstable_open_info> load_shared_components(const schema_ptr& s, sstring dir, int generation, version_types v, format_types f);
 
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
@@ -802,6 +818,23 @@ public:
     stop_iteration consume(range_tombstone&& rt) { return _components_writer->consume(std::move(rt)); }
     stop_iteration consume_end_of_partition() { return _components_writer->consume_end_of_partition(); }
     void consume_end_of_stream();
+};
+
+// contains data for loading a sstable using components shared by a single shard;
+// can be moved across shards
+struct foreign_sstable_open_info {
+    foreign_ptr<lw_shared_ptr<sstable::shareable_components>> components;
+    std::vector<shard_id> owners;
+    seastar::file_handle data;
+    seastar::file_handle index;
+};
+
+// can only be used locally
+struct sstable_open_info {
+    lw_shared_ptr<sstable::shareable_components> components;
+    std::vector<shard_id> owners;
+    file data;
+    file index;
 };
 
 }

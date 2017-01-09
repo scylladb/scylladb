@@ -456,26 +456,15 @@ int main(int ac, char** av) {
                 return disk_sanity(pathname, db.local().get_config().developer_mode());
             }).get();
 
-            // Deletion of previous stale, temporary SSTables is done by Shard0. Therefore,
-            // let's run Shard0 first. Technically, we could just have all shards agree on
-            // the deletion and just delete it later, but that is prone to races.
-            //
-            // Those races are not supposed to happen during normal operation, but if we have
-            // bugs, they can. Scylla's Github Issue #1014 is an example of a situation where
-            // that can happen, making existing problems worse. So running a single shard first
-            // and getting making sure that all temporary tables are deleted provides extra
-            // protection against such situations.
-            //
-            // We also need to init commitlog on shard0 before it is inited on other shards
-            // because it obtains the list of pre-existing segments for replay, which must
-            // not include reserve segments created by active commitlogs.
-            db.invoke_on(0, [] (database& db) { return db.init_system_keyspace(); }).get();
-            db.invoke_on_all([] (database& db) {
-                if (engine().cpu_id() == 0) {
-                    return make_ready_future<>();
-                }
-                return db.init_system_keyspace();
-            }).get();
+            // Initialization of a keyspace is done by shard 0 only. For system
+            // keyspace, the procedure  will go through the hardcoded column
+            // families, and in each of them, it will load the sstables for all
+            // shards using distributed database object.
+            // Iteration through column family directory for sstable loading is
+            // done only by shard 0, so we'll no longer face race conditions as
+            // described here: https://github.com/scylladb/scylla/issues/1014
+            distributed_loader::init_system_keyspace(db).get();
+
             supervisor::notify("starting gossip");
             // Moved local parameters here, esp since with the
             // ssl stuff it gets to be a lot.
@@ -527,15 +516,7 @@ int main(int ac, char** av) {
                 return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
             }).get();
             supervisor::notify("loading sstables");
-            // See comment on top of our call to init_system_keyspace as per why we invoke
-            // on Shard0 first. Scylla's Github Issue #1014 for details
-            db.invoke_on(0, [&proxy] (database& db) { return db.load_sstables(proxy); }).get();
-            db.invoke_on_all([&proxy] (database& db) {
-                if (engine().cpu_id() == 0) {
-                    return make_ready_future<>();
-                }
-                return db.load_sstables(proxy);
-            }).get();
+            distributed_loader::init_non_system_keyspaces(db, proxy).get();
             supervisor::notify("setting up system keyspace");
             db::system_keyspace::setup(db, qp).get();
             supervisor::notify("starting commit log");

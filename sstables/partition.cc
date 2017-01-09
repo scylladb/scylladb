@@ -777,7 +777,7 @@ future<uint64_t> sstables::sstable::data_end_position(uint64_t summary_idx, cons
     // We should only go to the end of the file if we are in the last summary group.
     // Otherwise, we will determine the end position of the current data read by looking
     // at the first index in the next summary group.
-    if (size_t(summary_idx + 1) >= _summary.entries.size()) {
+    if (size_t(summary_idx + 1) >= _components->summary.entries.size()) {
         return make_ready_future<uint64_t>(data_size());
     }
 
@@ -855,11 +855,11 @@ sstables::sstable::find_disk_ranges(
     auto& partitioner = dht::global_partitioner();
     auto token = partitioner.get_token(key_view(key));
 
-    if (token < partitioner.get_token(key_view(_summary.first_key.value))
-            || token > partitioner.get_token(key_view(_summary.last_key.value))) {
+    if (token < partitioner.get_token(key_view(_components->summary.first_key.value))
+            || token > partitioner.get_token(key_view(_components->summary.last_key.value))) {
         return make_ready_future<disk_read_range>();
     }
-    auto summary_idx = adjust_binary_search_index(binary_search(_summary.entries, key, token));
+    auto summary_idx = adjust_binary_search_index(binary_search(_components->summary.entries, key, token));
     if (summary_idx < 0) {
         return make_ready_future<disk_read_range>();
     }

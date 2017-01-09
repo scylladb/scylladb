@@ -56,7 +56,7 @@ public:
     test(sstable_ptr s) : _sst(s) {}
 
     summary& _summary() {
-        return _sst->_summary;
+        return _sst->_components->summary;
     }
 
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len) {
@@ -71,7 +71,7 @@ public:
     }
 
     statistics& get_statistics() {
-        return _sst->_statistics;
+        return _sst->_components->statistics;
     }
 
     future<> read_summary() {
@@ -83,7 +83,7 @@ public:
     }
 
     summary& get_summary() {
-        return _sst->_summary;
+        return _sst->_components->summary;
     }
 
     future<> read_toc() {
@@ -91,7 +91,7 @@ public:
     }
 
     auto& get_components() {
-        return _sst->_components;
+        return _sst->_recognized_components;
     }
 
     template <typename T>
@@ -112,8 +112,8 @@ public:
     }
 
     future<> store() {
-        _sst->_components.erase(sstable::component_type::Index);
-        _sst->_components.erase(sstable::component_type::Data);
+        _sst->_recognized_components.erase(sstable::component_type::Index);
+        _sst->_recognized_components.erase(sstable::component_type::Data);
         return seastar::async([sst = _sst] {
             sst->write_toc(default_priority_class());
             sst->write_statistics(default_priority_class());
@@ -138,16 +138,16 @@ public:
         // leveled strategy sorts sstables by age using max_timestamp, let's set it to 0.
         stats.max_timestamp = max_timestamp;
         stats.sstable_level = sstable_level;
-        _sst->_statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
-        _sst->_summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
-        _sst->_summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
+        _sst->_components->statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
+        _sst->_components->summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
+        _sst->_components->summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
         _sst->set_first_and_last_keys();
     }
 
     void set_values(sstring first_key, sstring last_key, stats_metadata stats) {
-        _sst->_statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
-        _sst->_summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
-        _sst->_summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
+        _sst->_components->statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
+        _sst->_components->summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
+        _sst->_components->summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
         _sst->set_first_and_last_keys();
     }
 };

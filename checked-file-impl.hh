@@ -100,6 +100,12 @@ public:
         });
     }
 
+    // returns a handle for plain file, so make_checked_file() should be called
+    // on file returned by handle.
+    virtual std::unique_ptr<seastar::file_handle_impl> dup() override {
+        return get_file_impl(_file)->dup();
+    }
+
     virtual subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) override {
         return do_io_check(_error_handler, [&] {
             return get_file_impl(_file)->list_directory(next);
@@ -111,7 +117,7 @@ private:
     file _file;
 };
 
-inline file make_checked_file(const io_error_handler& error_handler, file& f)
+inline file make_checked_file(const io_error_handler& error_handler, file f)
 {
     return file(::make_shared<checked_file_impl>(error_handler, f));
 }

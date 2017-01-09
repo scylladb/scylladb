@@ -2829,11 +2829,8 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
             return make_ready_future<std::vector<sstables::entry_descriptor>>(std::move(new_tables));
         });
     }).then([this, ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables) {
-        return _db.invoke_on_all([ks_name = std::move(ks_name), cf_name = std::move(cf_name), new_tables = std::move(new_tables)] (database& db) {
-            auto& cf = db.find_column_family(ks_name, cf_name);
-            return cf.load_new_sstables(new_tables).then([ks_name = std::move(ks_name), cf_name = std::move(cf_name)] {
-                logger.info("Done loading new SSTables for {}.{}", ks_name, cf_name);
-            });
+        return distributed_loader::load_new_sstables(_db, ks_name, cf_name, std::move(new_tables)).then([ks_name, cf_name] {
+            logger.info("Done loading new SSTables for {}.{} for all shards", ks_name, cf_name);
         });
     }).finally([this] {
         _loading_new_sstables = false;

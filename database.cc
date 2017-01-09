@@ -779,17 +779,16 @@ static bool belongs_to_other_shard(const std::vector<shard_id>& shards) {
 }
 
 future<sstables::shared_sstable>
-column_family::open_sstable(sstring dir, int64_t generation, sstables::sstable::version_types v, sstables::sstable::format_types f) {
+column_family::open_sstable(sstables::foreign_sstable_open_info info, sstring dir, int64_t generation,
+        sstables::sstable::version_types v, sstables::sstable::format_types f) {
     auto sst = make_lw_shared<sstables::sstable>(_schema, dir, generation, v, f);
-    return sst->get_owning_shards_from_unloaded().then([this, sst] (std::vector<shard_id> shards) mutable {
-        if (!belongs_to_current_shard(shards)) {
-            dblog.debug("sstable {} not relevant for this shard, ignoring", sst->get_filename());
-            sst->mark_for_deletion();
-            return make_ready_future<sstables::shared_sstable>();
-        }
-        return sst->load().then([sst] () mutable {
-            return make_ready_future<sstables::shared_sstable>(std::move(sst));
-        });
+    if (!belongs_to_current_shard(info.owners)) {
+        dblog.debug("sstable {} not relevant for this shard, ignoring", sst->get_filename());
+        sst->mark_for_deletion();
+        return make_ready_future<sstables::shared_sstable>();
+    }
+    return sst->load(std::move(info)).then([sst] () mutable {
+        return make_ready_future<sstables::shared_sstable>(std::move(sst));
     });
 }
 
@@ -832,50 +831,6 @@ void column_family::start_rewrite() {
         _compaction_manager.submit_sstable_rewrite(this, sst);
     }
     _sstables_need_rewrite.clear();
-}
-
-future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sstring fname) {
-
-    using namespace sstables;
-
-    entry_descriptor comps = entry_descriptor::make_descriptor(fname);
-
-    // Every table will have a TOC. Using a specific file as a criteria, as
-    // opposed to, say verifying _sstables.count() to be zero is more robust
-    // against parallel loading of the directory contents.
-    if (comps.component != sstable::component_type::TOC) {
-        return make_ready_future<entry_descriptor>(std::move(comps));
-    }
-
-    update_sstables_known_generation(comps.generation);
-
-    {
-        auto i = boost::range::find_if(*_sstables->all(), [gen = comps.generation] (sstables::shared_sstable sst) { return sst->generation() == gen; });
-        if (i != _sstables->all()->end()) {
-            auto new_toc = sstdir + "/" + fname;
-            throw std::runtime_error(sprint("Attempted to add sstable generation %d twice: new=%s existing=%s",
-                                            comps.generation, new_toc, (*i)->toc_filename()));
-        }
-    }
-
-    return open_sstable(sstdir, comps.generation, comps.version, comps.format).then([this] (sstables::shared_sstable sst) mutable {
-        if (sst) {
-            load_sstable(sst);
-        }
-        return make_ready_future<>();
-    }).then_wrapped([fname, comps] (future<> f) {
-        try {
-            f.get();
-        } catch (malformed_sstable_exception& e) {
-            dblog.error("malformed sstable {}: {}. Refusing to boot", fname, e.what());
-            throw;
-        } catch(...) {
-            dblog.error("Unrecognized error while processing {}: {}. Refusing to boot",
-                    fname, std::current_exception());
-            throw;
-        }
-        return make_ready_future<entry_descriptor>(std::move(comps));
-    });
 }
 
 void column_family::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable) {
@@ -1411,30 +1366,6 @@ future<> column_family::cleanup_sstables(sstables::compaction_descriptor descrip
     });
 }
 
-future<>
-column_family::load_new_sstables(std::vector<sstables::entry_descriptor> new_tables) {
-    return do_with(std::vector<sstables::shared_sstable>(), [this, new_tables = std::move(new_tables)] (auto& sstables) {
-        return parallel_for_each(new_tables, [this, &sstables] (auto comps) {
-            return this->open_sstable(_config.datadir, comps.generation, comps.version, comps.format).then([&sstables] (sstables::shared_sstable sst) {
-                if (sst) {
-                    sstables.push_back(std::move(sst));
-                }
-                return make_ready_future<>();
-            });
-        }).then([this, &sstables] {
-            // atomically load all preloaded sstables into column family.
-            for (auto& sst : sstables) {
-                this->load_sstable(sst, true);
-            }
-            this->start_rewrite();
-            this->trigger_compaction();
-            // Drop entire cache for this column family because it may be populated
-            // with stale data.
-            return this->get_row_cache().clear();
-        });
-    });
-}
-
 // FIXME: this is just an example, should be changed to something more general
 // Note: We assume that the column_family does not get destroyed during compaction.
 future<>
@@ -1550,7 +1481,119 @@ inline bool column_family::manifest_json_filter(const sstring& fname) {
     return true;
 }
 
-future<> column_family::populate(sstring sstdir) {
+// TODO: possibly move it to seastar
+template <typename Service, typename PtrType, typename Func>
+static future<> invoke_all_with_ptr(distributed<Service>& s, PtrType ptr, Func&& func) {
+    return parallel_for_each(smp::all_cpus(), [&s, &func, ptr] (unsigned id) {
+        return s.invoke_on(id, [func, foreign = make_foreign(ptr)] (Service& s) mutable {
+            return func(s, std::move(foreign));
+        });
+    });
+}
+
+future<> distributed_loader::open_sstable(distributed<database>& db, sstables::entry_descriptor comps,
+        std::function<future<> (column_family&, sstables::foreign_sstable_open_info)> func) {
+    // loads components of a sstable from shard S and share it with all other
+    // shards. Which shard a sstable will be opened at is decided using
+    // calculate_shard_from_sstable_generation(), which is the inverse of
+    // calculate_generation_for_new_table(). That ensures every sstable is
+    // shard-local if reshard wasn't performed. This approach is also expected
+    // to distribute evenly the resource usage among all shards.
+
+    return db.invoke_on(column_family::calculate_shard_from_sstable_generation(comps.generation),
+            [&db, comps = std::move(comps), func = std::move(func)] (database& local) {
+        auto& cf = local.find_column_family(comps.ks, comps.cf);
+
+        auto f = sstables::sstable::load_shared_components(cf.schema(), cf._config.datadir, comps.generation, comps.version, comps.format);
+        return f.then([&db, comps = std::move(comps), func = std::move(func)] (sstables::sstable_open_info info) {
+            // shared components loaded, now opening sstable in all shards with shared components
+            return do_with(std::move(info), [&db, comps = std::move(comps), func = std::move(func)] (auto& info) {
+                return invoke_all_with_ptr(db, std::move(info.components),
+                        [owners = info.owners, data = info.data.dup(), index = info.index.dup(), comps, func] (database& db, auto components) {
+                    auto& cf = db.find_column_family(comps.ks, comps.cf);
+                    return func(cf, sstables::foreign_sstable_open_info{std::move(components), owners, data, index});
+                });
+            });
+        });
+    });
+}
+
+future<> distributed_loader::load_new_sstables(distributed<database>& db, sstring ks, sstring cf, std::vector<sstables::entry_descriptor> new_tables) {
+    return parallel_for_each(new_tables, [&db] (auto comps) {
+        auto cf_sstable_open = [comps] (column_family& cf, sstables::foreign_sstable_open_info info) {
+            auto f = cf.open_sstable(std::move(info), cf._config.datadir, comps.generation, comps.version, comps.format);
+            return f.then([&cf] (sstables::shared_sstable sst) mutable {
+                if (sst) {
+                    cf._sstables_opened_but_not_loaded.push_back(sst);
+                }
+                return make_ready_future<>();
+            });
+        };
+        return distributed_loader::open_sstable(db, comps, cf_sstable_open);
+    }).then([&db, ks = std::move(ks), cf = std::move(cf)] {
+        return db.invoke_on_all([ks = std::move(ks), cfname = std::move(cf)] (database& db) {
+            auto& cf = db.find_column_family(ks, cfname);
+            // atomically load all opened sstables into column family.
+            for (auto& sst : cf._sstables_opened_but_not_loaded) {
+                cf.load_sstable(sst, true);
+            }
+            cf._sstables_opened_but_not_loaded.clear();
+            cf.start_rewrite();
+            cf.trigger_compaction();
+            // Drop entire cache for this column family because it may be populated
+            // with stale data.
+            return cf.get_row_cache().clear();
+        });
+    });
+}
+
+future<sstables::entry_descriptor> distributed_loader::probe_file(distributed<database>& db, sstring sstdir, sstring fname) {
+    using namespace sstables;
+
+    entry_descriptor comps = entry_descriptor::make_descriptor(fname);
+
+    // Every table will have a TOC. Using a specific file as a criteria, as
+    // opposed to, say verifying _sstables.count() to be zero is more robust
+    // against parallel loading of the directory contents.
+    if (comps.component != sstable::component_type::TOC) {
+        return make_ready_future<entry_descriptor>(std::move(comps));
+    }
+    auto cf_sstable_open = [sstdir, comps, fname] (column_family& cf, sstables::foreign_sstable_open_info info) {
+        cf.update_sstables_known_generation(comps.generation);
+        {
+            auto i = boost::range::find_if(*cf._sstables->all(), [gen = comps.generation] (sstables::shared_sstable sst) { return sst->generation() == gen; });
+            if (i != cf._sstables->all()->end()) {
+                auto new_toc = sstdir + "/" + fname;
+                throw std::runtime_error(sprint("Attempted to add sstable generation %d twice: new=%s existing=%s",
+                                                comps.generation, new_toc, (*i)->toc_filename()));
+            }
+        }
+        return cf.open_sstable(std::move(info), sstdir, comps.generation, comps.version, comps.format).then([&cf] (sstables::shared_sstable sst) mutable {
+            if (sst) {
+                cf.load_sstable(sst);
+            }
+            return make_ready_future<>();
+        });
+    };
+
+    return distributed_loader::open_sstable(db, comps, cf_sstable_open).then_wrapped([fname] (future<> f) {
+        try {
+            f.get();
+        } catch (malformed_sstable_exception& e) {
+            dblog.error("malformed sstable {}: {}. Refusing to boot", fname, e.what());
+            throw;
+        } catch(...) {
+            dblog.error("Unrecognized error while processing {}: {}. Refusing to boot",
+                fname, std::current_exception());
+            throw;
+        }
+        return make_ready_future<>();
+    }).then([comps] () mutable {
+        return make_ready_future<entry_descriptor>(std::move(comps));
+    });
+}
+
+future<> distributed_loader::populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf) {
     // We can catch most errors when we try to load an sstable. But if the TOC
     // file is the one missing, we won't try to load the sstable at all. This
     // case is still an invalid case, but it is way easier for us to treat it
@@ -1570,10 +1613,10 @@ future<> column_family::populate(sstring sstdir) {
     auto verifier = make_lw_shared<std::unordered_map<unsigned long, status>>();
     auto descriptor = make_lw_shared<sstable_descriptor>();
 
-    return do_with(std::vector<future<>>(), [this, sstdir, verifier, descriptor] (std::vector<future<>>& futures) {
-        return lister::scan_dir(sstdir, { directory_entry_type::regular }, [this, sstdir, verifier, descriptor, &futures] (directory_entry de) {
+    return do_with(std::vector<future<>>(), [&db, sstdir, verifier, descriptor, ks, cf] (std::vector<future<>>& futures) {
+        return lister::scan_dir(sstdir, { directory_entry_type::regular }, [&db, sstdir, verifier, descriptor, &futures] (directory_entry de) {
             // FIXME: The secondary indexes are in this level, but with a directory type, (starting with ".")
-            auto f = probe_file(sstdir, de.name).then([verifier, descriptor, sstdir, de] (auto entry) {
+            auto f = distributed_loader::probe_file(db, sstdir, de.name).then([verifier, descriptor, sstdir, de] (auto entry) {
                 auto filename = sstdir + "/" + de.name;
                 if (entry.component == sstables::sstable::component_type::TemporaryStatistics) {
                     return remove_file(sstables::sstable::filename(sstdir, entry.ks, entry.cf, entry.version, entry.generation,
@@ -1618,7 +1661,7 @@ future<> column_family::populate(sstring sstdir) {
             futures.push_back(std::move(f));
 
             return make_ready_future<>();
-        }, &manifest_json_filter).then([&futures] {
+        }, &column_family::manifest_json_filter).then([&futures] {
             return when_all(futures.begin(), futures.end()).then([] (std::vector<future<>> ret) {
                 std::exception_ptr eptr;
 
@@ -1639,8 +1682,8 @@ future<> column_family::populate(sstring sstdir) {
                 }
                 return make_ready_future<>();
             });
-        }).then([verifier, sstdir, descriptor, this] {
-            return parallel_for_each(*verifier, [sstdir = std::move(sstdir), descriptor, this] (auto v) {
+        }).then([verifier, sstdir, descriptor, ks = std::move(ks), cf = std::move(cf)] {
+            return parallel_for_each(*verifier, [sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf), descriptor] (auto v) {
                 if (v.second == status::has_temporary_toc_file) {
                     unsigned long gen = v.first;
                     assert(descriptor->version);
@@ -1653,17 +1696,21 @@ future<> column_family::populate(sstring sstdir) {
                         return make_ready_future<>();
                     }
                     // shard 0 is the responsible for removing a partial sstable.
-                    return sstables::sstable::remove_sstable_with_temp_toc(_schema->ks_name(), _schema->cf_name(), sstdir, gen, version, format);
+                    return sstables::sstable::remove_sstable_with_temp_toc(ks, cf, sstdir, gen, version, format);
                 } else if (v.second != status::has_toc_file) {
                     throw sstables::malformed_sstable_exception(sprint("At directory: %s: no TOC found for SSTable with generation %d!. Refusing to boot", sstdir, v.first));
                 }
                 return make_ready_future<>();
             });
         });
-    }).then([this] {
-        // Make sure this is called even if CF is empty
-        mark_ready_for_writes();
+    }).then([&db, ks, cf] {
+        return db.invoke_on_all([ks = std::move(ks), cfname = std::move(cf)] (database& db) {
+            auto& cf = db.find_column_family(ks, cfname);
+            // Make sure this is called even if CF is empty
+            cf.mark_ready_for_writes();
+        });
     });
+
 }
 
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
@@ -1893,24 +1940,27 @@ const utils::UUID& database::get_version() const {
     return _version;
 }
 
-future<> database::populate_keyspace(sstring datadir, sstring ks_name) {
+future<> distributed_loader::populate_keyspace(distributed<database>& db, sstring datadir, sstring ks_name) {
     auto ksdir = datadir + "/" + ks_name;
-    auto i = _keyspaces.find(ks_name);
-    if (i == _keyspaces.end()) {
+    auto& keyspaces = db.local().get_keyspaces();
+    auto i = keyspaces.find(ks_name);
+    if (i == keyspaces.end()) {
         dblog.warn("Skipping undefined keyspace: {}", ks_name);
         return make_ready_future<>();
     } else {
         dblog.info("Populating Keyspace {}", ks_name);
         auto& ks = i->second;
+        auto& column_families = db.local().get_column_families();
+
         return parallel_for_each(ks.metadata()->cf_meta_data() | boost::adaptors::map_values,
-            [ks_name, &ks, this] (schema_ptr s) {
+            [ks_name, &ks, &column_families, &db] (schema_ptr s) {
                 utils::UUID uuid = s->id();
-                lw_shared_ptr<column_family> cf = _column_families[uuid];
+                lw_shared_ptr<column_family> cf = column_families[uuid];
                 sstring cfname = cf->schema()->cf_name();
                 auto sstdir = ks.column_family_directory(cfname, uuid);
                 dblog.info("Keyspace {}: Reading CF {} ", ks_name, cfname);
-                return ks.make_directory_for_column_family(cfname, uuid).then([cf, sstdir] {
-                    return cf->populate(sstdir);
+                return ks.make_directory_for_column_family(cfname, uuid).then([&db, sstdir, uuid, ks_name, cfname] {
+                    return distributed_loader::populate_column_family(db, sstdir, ks_name, cfname);
                 }).handle_exception([ks_name, cfname, sstdir](std::exception_ptr eptr) {
                     std::string msg =
                         sprint("Exception while populating keyspace '%s' with column family '%s' from file '%s': %s",
@@ -1923,13 +1973,13 @@ future<> database::populate_keyspace(sstring datadir, sstring ks_name) {
     }
 }
 
-future<> database::populate(sstring datadir) {
-    return lister::scan_dir(datadir, { directory_entry_type::directory }, [this, datadir] (directory_entry de) {
+static future<> populate(distributed<database>& db, sstring datadir) {
+    return lister::scan_dir(datadir, { directory_entry_type::directory }, [&db, datadir] (directory_entry de) {
         auto& ks_name = de.name;
         if (ks_name == "system") {
             return make_ready_future<>();
         }
-        return populate_keyspace(datadir, ks_name);
+        return distributed_loader::populate_keyspace(db, datadir, ks_name);
     });
 }
 
@@ -2003,31 +2053,54 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     });
 }
 
-future<>
-database::init_system_keyspace() {
-    return init_commitlog().then([this] {
-        bool durable = _cfg->data_file_directories().size() > 0;
-        db::system_keyspace::make(*this, durable, _cfg->volatile_system_keyspace_for_testing());
-        // FIXME support multiple directories
-        return io_check(touch_directory, _cfg->data_file_directories()[0] + "/" + db::system_keyspace::NAME).then([this] {
-            return populate_keyspace(_cfg->data_file_directories()[0], db::system_keyspace::NAME);
-        });
-    }).then([this] {
-        auto& ks = find_keyspace(db::system_keyspace::NAME);
-        return parallel_for_each(ks.metadata()->cf_meta_data(), [this] (auto& pair) {
-            auto cfm = pair.second;
-            auto& cf = this->find_column_family(cfm);
-            cf.mark_ready_for_writes();
-            return make_ready_future<>();
-        });
-    });
-}
+future<> distributed_loader::init_system_keyspace(distributed<database>& db) {
+    return seastar::async([&db] {
+        // We need to init commitlog on shard0 before it is inited on other shards
+        // because it obtains the list of pre-existing segments for replay, which must
+        // not include reserve segments created by active commitlogs.
+        db.invoke_on(0, [] (database& db) {
+            return db.init_commitlog();
+        }).get();
+        db.invoke_on_all([] (database& db) {
+            if (engine().cpu_id() == 0) {
+                return make_ready_future<>();
+            }
+            return db.init_commitlog();
+        }).get();
 
-future<>
-database::load_sstables(distributed<service::storage_proxy>& proxy) {
-	return parse_system_tables(proxy).then([this] {
-		return populate(_cfg->data_file_directories()[0]);
-	});
+        db.invoke_on_all([] (database& db) {
+            auto& cfg = db.get_config();
+            bool durable = cfg.data_file_directories().size() > 0;
+            db::system_keyspace::make(db, durable, cfg.volatile_system_keyspace_for_testing());
+        }).get();
+
+        // FIXME support multiple directories
+        const auto& cfg = db.local().get_config();
+        auto data_dir = cfg.data_file_directories()[0];
+        io_check(touch_directory, data_dir + "/" + db::system_keyspace::NAME).get();
+        distributed_loader::populate_keyspace(db, data_dir, db::system_keyspace::NAME).get();
+
+        db.invoke_on_all([] (database& db) {
+            auto& ks = db.find_keyspace(db::system_keyspace::NAME);
+            for (auto& pair : ks.metadata()->cf_meta_data()) {
+                auto cfm = pair.second;
+                auto& cf = db.find_column_family(cfm);
+                cf.mark_ready_for_writes();
+            }
+            return make_ready_future<>();
+        }).get();
+    });
+ }
+
+future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db, distributed<service::storage_proxy>& proxy) {
+    return seastar::async([&db, &proxy] {
+        db.invoke_on_all([&proxy] (database& db) {
+            return db.parse_system_tables(proxy);
+        }).get();
+
+        const auto& cfg = db.local().get_config();
+        populate(db, cfg.data_file_directories()[0]).get();
+    });
 }
 
 future<>
