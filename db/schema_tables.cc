@@ -115,7 +115,7 @@ static void merge_views(distributed<service::storage_proxy>& proxy,
     std::map<qualified_name, schema_mutations>&& before,
     std::map<qualified_name, schema_mutations>&& after);
 
-std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USERTYPES, VIEWS, /* not present in 2.1.8: FUNCTIONS, AGGREGATES */ };
+std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USERTYPES, VIEWS, FUNCTIONS, AGGREGATES };
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
