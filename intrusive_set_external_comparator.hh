@@ -29,6 +29,7 @@
 #pragma once
 
 #include <boost/intrusive/set.hpp>
+#include <iterator>
 
 namespace bi = boost::intrusive;
 
@@ -53,8 +54,8 @@ public:
     typedef Elem value_type;
     typedef typename bi::tree_iterator<value_traits, false> iterator;
     typedef typename bi::tree_iterator<value_traits, true> const_iterator;
-    typedef typename bi::reverse_iterator<iterator> reverse_iterator;
-    typedef typename bi::reverse_iterator<const_iterator> const_reverse_iterator;
+    typedef typename std::reverse_iterator<iterator> reverse_iterator;
+    typedef typename std::reverse_iterator<const_iterator> const_reverse_iterator;
 
 private:
     intrusive_set_external_comparator_member_hook _header;
@@ -87,7 +88,7 @@ private:
         }
     };
 
-    typedef typename bi::value_traits_pointers<value_traits>::const_value_traits_ptr const_value_traits_ptr;
+    using const_value_traits_ptr = typename std::pointer_traits<typename value_traits::node_ptr>::template rebind<const value_traits>;
 
     const_value_traits_ptr priv_value_traits_ptr() const {
         return bi::pointer_traits<const_value_traits_ptr>::pointer_to(_value_traits);
