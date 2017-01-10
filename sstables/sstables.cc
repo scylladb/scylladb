@@ -111,8 +111,7 @@ public:
     }
     bool eof() { return _in.eof(); }
     virtual future<> close() {
-        return make_ready_future<>();
-        // FIXME: return _in.close();
+        return _in.close();
     }
     virtual ~random_access_reader() { }
 };
