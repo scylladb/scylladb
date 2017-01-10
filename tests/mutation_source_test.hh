@@ -45,7 +45,7 @@ public:
     ~random_mutation_generator();
     mutation operator()(bool range_deletes);
     mutation operator()(){
-        return (*this)(false);
+        return (*this)(true);
     }
     schema_ptr schema() const;
 };
