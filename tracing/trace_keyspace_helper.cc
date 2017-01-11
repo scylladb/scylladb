@@ -118,11 +118,27 @@ future<> trace_keyspace_helper::setup_table(const sstring& name, const sstring& 
         return make_ready_future<>();
     }
 
+    ::shared_ptr<cql3::statements::raw::cf_statement> parsed = static_pointer_cast<
+                    cql3::statements::raw::cf_statement>(cql3::query_processor::parse_statement(cql));
+    parsed->prepare_keyspace(KEYSPACE_NAME);
+    ::shared_ptr<cql3::statements::create_table_statement> statement =
+                    static_pointer_cast<cql3::statements::create_table_statement>(
+                                    parsed->prepare(db, qp.get_cql_stats())->statement);
+    auto schema = statement->get_cf_meta_data();
+
+    // Generate the CF UUID based on its KF names. This is needed to ensure that
+    // all Nodes that create it would create it with the same UUID and we don't
+    // hit the #420 issue.
+    auto uuid = generate_legacy_id(schema->ks_name(), schema->cf_name());
+
+    schema_builder b(schema);
+    b.set_uuid(uuid);
+
     // We don't care it it fails really - this may happen due to concurrent
     // "CREATE TABLE" invocation on different Nodes.
     // The important thing is that it will converge eventually (some traces may
     // be lost in a process but that's ok).
-    return qp.process(cql, db::consistency_level::ONE).discard_result().handle_exception([this] (auto ep) {});
+    return service::get_local_migration_manager().announce_new_column_family(b.build(), false).discard_result().handle_exception([this] (auto ep) {});;
 }
 
 bool trace_keyspace_helper::cache_sessions_table_handles(const schema_ptr& schema) {
