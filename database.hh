@@ -711,17 +711,6 @@ public:
         return std::chrono::steady_clock::now() - _sstable_writes_disabled_at;
     }
 
-    // This function will iterate through upload directory in column family,
-    // and will do the following for each sstable found:
-    // 1) Mutate sstable level to 0.
-    // 2) Create hard links to its components in column family dir.
-    // 3) Remove all of its components in upload directory.
-    // At the end, it's expected that upload dir is empty and all of its
-    // previous content was moved to column family dir.
-    //
-    // Return a vector containing descriptor of sstables to be loaded.
-    future<std::vector<sstables::entry_descriptor>> flush_upload_dir();
-
     // Make sure the generation numbers are sequential, starting from "start".
     // Generations before "start" are left untouched.
     //
@@ -1263,6 +1252,7 @@ public:
     static future<> open_sstable(distributed<database>& db, sstables::entry_descriptor comps,
         std::function<future<> (column_family&, sstables::foreign_sstable_open_info)> func);
     static future<> load_new_sstables(distributed<database>& db, sstring ks, sstring cf, std::vector<sstables::entry_descriptor> new_tables);
+    static future<std::vector<sstables::entry_descriptor>> flush_upload_dir(distributed<database>& db, sstring ks_name, sstring cf_name);
     static future<sstables::entry_descriptor> probe_file(distributed<database>& db, sstring sstdir, sstring fname);
     static future<> populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf);
     static future<> populate_keyspace(distributed<database>& db, sstring datadir, sstring ks_name);

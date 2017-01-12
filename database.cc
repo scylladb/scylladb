@@ -1112,44 +1112,60 @@ static io_error_handler error_handler_for_upload_dir() {
     };
 }
 
-future<std::vector<sstables::entry_descriptor>> column_family::flush_upload_dir() {
+// This function will iterate through upload directory in column family,
+// and will do the following for each sstable found:
+// 1) Mutate sstable level to 0.
+// 2) Create hard links to its components in column family dir.
+// 3) Remove all of its components in upload directory.
+// At the end, it's expected that upload dir is empty and all of its
+// previous content was moved to column family dir.
+//
+// Return a vector containing descriptor of sstables to be loaded.
+future<std::vector<sstables::entry_descriptor>>
+distributed_loader::flush_upload_dir(distributed<database>& db, sstring ks_name, sstring cf_name) {
     struct work {
-        std::map<int64_t, sstables::shared_sstable> sstables;
         std::unordered_map<int64_t, sstables::entry_descriptor> descriptors;
         std::vector<sstables::entry_descriptor> flushed;
     };
 
-    return do_with(work(), [this] (work& work) {
-        return lister::scan_dir(_config.datadir + "/upload/", { directory_entry_type::regular },
-                [this, &work] (directory_entry de) {
+    return do_with(work(), [&db, ks_name = std::move(ks_name), cf_name = std::move(cf_name)] (work& work) {
+        auto& cf = db.local().find_column_family(ks_name, cf_name);
+
+        return lister::scan_dir(cf._config.datadir + "/upload/", { directory_entry_type::regular },
+                [&work] (directory_entry de) {
             auto comps = sstables::entry_descriptor::make_descriptor(de.name);
             if (comps.component != sstables::sstable::component_type::TOC) {
                 return make_ready_future<>();
             }
-            auto sst = make_lw_shared<sstables::sstable>(_schema, _config.datadir + "/upload", comps.generation,
-                comps.version, comps.format, gc_clock::now(),
-                [] (disk_error_signal_type&) { return error_handler_for_upload_dir(); });
-            work.sstables.emplace(comps.generation, std::move(sst));
             work.descriptors.emplace(comps.generation, std::move(comps));
             return make_ready_future<>();
-        }, &manifest_json_filter).then([this, &work] {
+        }, &column_family::manifest_json_filter).then([&db, ks_name = std::move(ks_name), cf_name = std::move(cf_name), &work] {
             work.flushed.reserve(work.descriptors.size());
 
-            return do_for_each(work.sstables, [this, &work] (auto& pair) {
-                auto gen = this->calculate_generation_for_new_table();
-                auto& sst = pair.second;
+            return do_for_each(work.descriptors, [&db, ks_name, cf_name, &work] (auto& pair) {
+                return db.invoke_on(column_family::calculate_shard_from_sstable_generation(pair.first),
+                        [ks_name, cf_name, comps = pair.second] (database& db) {
+                    auto& cf = db.find_column_family(ks_name, cf_name);
 
-                auto&& comps = std::move(work.descriptors.at(pair.first));
-                comps.generation = gen;
-                work.flushed.push_back(std::move(comps));
+                    auto sst = make_lw_shared<sstables::sstable>(cf.schema(), cf._config.datadir + "/upload", comps.generation,
+                        comps.version, comps.format, gc_clock::now(),
+                        [] (disk_error_signal_type&) { return error_handler_for_upload_dir(); });
+                    auto gen = cf.calculate_generation_for_new_table();
 
-                // Read toc content as it will be needed for moving and deleting a sstable.
-                return sst->read_toc().then([&sst] {
-                    return sst->mutate_sstable_level(0);
-                }).then([this, &sst, gen] {
-                    return sst->create_links(_config.datadir, gen);
-                }).then([&sst] {
-                    return sstables::remove_by_toc_name(sst->toc_filename(), error_handler_for_upload_dir());
+                    // Read toc content as it will be needed for moving and deleting a sstable.
+                    return sst->read_toc().then([sst] {
+                        return sst->mutate_sstable_level(0);
+                    }).then([&cf, sst, gen] {
+                        return sst->create_links(cf._config.datadir, gen);
+                    }).then([sst] {
+                        return sstables::remove_by_toc_name(sst->toc_filename(), error_handler_for_upload_dir());
+                    }).then([sst, gen] {
+                        return make_ready_future<int64_t>(gen);
+                    });
+                }).then([&work, comps = pair.second] (auto gen) mutable {
+                    comps.generation = gen;
+                    work.flushed.push_back(std::move(comps));
+                    return make_ready_future<>();
                 });
             });
         }).then([&work] {

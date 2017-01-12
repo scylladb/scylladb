@@ -2821,11 +2821,8 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
             return make_ready_future<std::vector<sstables::entry_descriptor>>(std::move(new_tables));
         });
     }).then([this, ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables) {
-        auto shard = std::hash<sstring>()(cf_name) % smp::count;
-        return _db.invoke_on(shard, [ks_name, cf_name] (database& db) {
-            auto& cf = db.find_column_family(ks_name, cf_name);
-            return cf.flush_upload_dir();
-        }).then([new_tables = std::move(new_tables), ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables_from_upload) mutable {
+        auto f = distributed_loader::flush_upload_dir(_db, ks_name, cf_name);
+        return f.then([new_tables = std::move(new_tables), ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables_from_upload) mutable {
             if (new_tables.empty() && new_tables_from_upload.empty()) {
                 logger.info("No new SSTables were found for {}.{}", ks_name, cf_name);
             }
