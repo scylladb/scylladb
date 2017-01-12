@@ -532,6 +532,16 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
 
         sm::make_total_operations("forwarding_errors", _stats.forwarding_errors,
                        sm::description("number of errors during forwarding mutations to other replica Nodes")),
+
+        sm::make_total_operations("data_reads", _stats.replica_data_reads,
+                       sm::description("number of remote data read requests this Node received")),
+
+        sm::make_total_operations("mutation_data_reads", _stats.replica_mutation_data_reads,
+                       sm::description("number of remote mutation data read requests this Node received")),
+
+        sm::make_total_operations("digest_reads", _stats.replica_digest_reads,
+                       sm::description("number of remote digest read requests this Node received")),
+
     });
 }
 
@@ -3468,6 +3478,7 @@ void storage_proxy::init_messaging_service() {
         auto da = oda.value_or(query::digest_algorithm::MD5);
         auto max_size = cinfo.retrieve_auxiliary<uint64_t>("max_result_size");
         return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, max_size] (compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+            p->_stats.replica_data_reads++;
             auto src_ip = src_addr.addr;
             return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, da, &pr, &p, &trace_state_ptr, max_size] (schema_ptr s) {
                 auto pr2 = compat::unwrap(std::move(pr), *s);
@@ -3500,6 +3511,7 @@ void storage_proxy::init_messaging_service() {
         }
         auto max_size = cinfo.retrieve_auxiliary<uint64_t>("max_result_size");
         return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), max_size] (compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+            p->_stats.replica_mutation_data_reads++;
             auto src_ip = src_addr.addr;
             return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr, max_size] (schema_ptr s) mutable {
                 return p->query_mutations_locally(std::move(s), cmd, compat::unwrap(std::move(pr), *s), trace_state_ptr, max_size);
@@ -3518,6 +3530,7 @@ void storage_proxy::init_messaging_service() {
         }
         auto max_size = cinfo.retrieve_auxiliary<uint64_t>("max_result_size");
         return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), max_size] (compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+            p->_stats.replica_digest_reads++;
             auto src_ip = src_addr.addr;
             return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr, max_size] (schema_ptr s) {
                 auto pr2 = compat::unwrap(std::move(pr), *s);

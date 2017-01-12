@@ -156,6 +156,11 @@ public:
         uint64_t forwarded_mutations = 0;
         uint64_t forwarding_errors = 0;
 
+        // number of read requests received as a replica
+        uint64_t replica_data_reads = 0;
+        uint64_t replica_digest_reads = 0;
+        uint64_t replica_mutation_data_reads = 0;
+
         utils::timed_rate_moving_average_and_histogram read;
         utils::timed_rate_moving_average_and_histogram write;
         utils::timed_rate_moving_average_and_histogram range;
