@@ -75,8 +75,8 @@ if [ $SET_NIC = "yes" ]; then
    fi
 fi
 
-ETHDRV=`/usr/lib/scylla/dpdk_nic_bind.py --status | grep if=$NIC | sed -e "s/^.*drv=//" -e "s/ .*$//"`
-ETHPCIID=`/usr/lib/scylla/dpdk_nic_bind.py --status | grep if=$NIC | awk '{print $1}'`
+ETHDRV=`/usr/lib/scylla/dpdk-devbind.py --status | grep if=$NIC | sed -e "s/^.*drv=//" -e "s/ .*$//"`
+ETHPCIID=`/usr/lib/scylla/dpdk-devbind.py --status | grep if=$NIC | awk '{print $1}'`
 sed -e s#^NETWORK_MODE=.*#NETWORK_MODE=$NETWORK_MODE# \
     -e s#^IFNAME=.*#IFNAME=$NIC# \
     -e s#^ETHDRV=.*#ETHDRV=$ETHDRV# \

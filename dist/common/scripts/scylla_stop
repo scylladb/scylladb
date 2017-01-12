@@ -5,6 +5,6 @@
 if [ "$NETWORK_MODE" = "virtio" ]; then
     ip tuntap del mode tap dev $TAP
 elif [ "$NETWORK_MODE" = "dpdk" ]; then
-    /usr/lib/scylla/dpdk_nic_bind.py -u $ETHPCIID
-    /usr/lib/scylla/dpdk_nic_bind.py -b $ETHDRV $ETHPCIID
+    /usr/lib/scylla/dpdk-devbind.py -u $ETHPCIID
+    /usr/lib/scylla/dpdk-devbind.py -b $ETHDRV $ETHPCIID
 fi
