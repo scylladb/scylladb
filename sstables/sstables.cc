@@ -132,7 +132,7 @@ public:
         seek(0);
     }
     virtual future<> close() override {
-        return random_access_reader::close().then([this] {
+        return random_access_reader::close().finally([this] {
             return _file.close().handle_exception([save = _file] (auto ep) {
                 sstlog.warn("sstable close failed: {}", ep);
                 general_disk_error();
