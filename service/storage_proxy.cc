@@ -3510,11 +3510,20 @@ void storage_proxy::init_messaging_service() {
             tracing::trace(trace_state_ptr, "read_mutation_data: message received from /{}", src_addr.addr);
         }
         auto max_size = cinfo.retrieve_auxiliary<uint64_t>("max_result_size");
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), max_size] (compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+        return do_with(std::move(pr),
+                       get_local_shared_storage_proxy(),
+                       std::move(trace_state_ptr),
+                       compat::one_or_two_partition_ranges({}),
+                       [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), max_size] (
+                               compat::wrapping_partition_range& pr,
+                               shared_ptr<storage_proxy>& p,
+                               tracing::trace_state_ptr& trace_state_ptr,
+                               compat::one_or_two_partition_ranges& unwrapped) mutable {
             p->_stats.replica_mutation_data_reads++;
             auto src_ip = src_addr.addr;
-            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr, max_size] (schema_ptr s) mutable {
-                return p->query_mutations_locally(std::move(s), cmd, compat::unwrap(std::move(pr), *s), trace_state_ptr, max_size);
+            return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr, max_size, &unwrapped] (schema_ptr s) mutable {
+                unwrapped = compat::unwrap(std::move(pr), *s);
+                return p->query_mutations_locally(std::move(s), std::move(cmd), unwrapped, trace_state_ptr, max_size);
             }).finally([&trace_state_ptr, src_ip] () mutable {
                 tracing::trace(trace_state_ptr, "read_mutation_data handling is done, sending a response to /{}", src_ip);
             });
