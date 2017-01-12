@@ -72,6 +72,7 @@
 #include "sstables/sstable_set.hh"
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/shared_future.hh>
+#include <seastar/core/metrics_registration.hh>
 #include "tracing/trace_state.hh"
 #include <boost/intrusive/parent_from_member.hpp>
 #include "db/view/view.hh"
@@ -151,7 +152,7 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
         return over_soft_limit();
     }
 
-    std::vector<scollectd::registration> _collectd;
+    seastar::metrics::metric_groups _metrics;
 public:
     void setup_collectd(sstring namestr);
 
@@ -1103,7 +1104,7 @@ private:
     utils::UUID _version;
     // compaction_manager object is referenced by all column families of a database.
     compaction_manager _compaction_manager;
-    std::vector<scollectd::registration> _collectd;
+    seastar::metrics::metric_groups _metrics;
     bool _enable_incremental_backups = false;
 
     future<> init_commitlog();
@@ -1115,7 +1116,7 @@ private:
     void add_keyspace(sstring name, keyspace k);
     void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
     friend void db::system_keyspace::make(database& db, bool durable, bool volatile_testing_only);
-    void setup_collectd();
+    void setup_metrics();
 
     future<> do_apply(schema_ptr, const frozen_mutation&, timeout_clock::time_point timeout);
 

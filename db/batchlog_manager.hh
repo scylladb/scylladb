@@ -46,6 +46,7 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/metrics_registration.hh>
 
 #include "cql3/query_processor.hh"
 #include "gms/inet_address.hh"
@@ -64,7 +65,7 @@ private:
         uint64_t write_attempts = 0;
     } _stats;
 
-    std::vector<scollectd::registration> _collectd_registrations;
+    seastar::metrics::metric_groups _metrics;
 
     size_t _total_batches_replayed = 0;
     cql3::query_processor& _qp;

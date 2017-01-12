@@ -23,7 +23,7 @@
 #include "handler.hh"
 #include "core/future-util.hh"
 #include "core/circular_buffer.hh"
-#include "core/scollectd.hh"
+#include <seastar/core/metrics.hh>
 #include "net/byteorder.hh"
 #include "core/scattered_message.hh"
 #include "log.hh"
@@ -51,7 +51,7 @@ using namespace apache::thrift::async;
 using namespace org::apache::cassandra;
 
 class thrift_stats {
-    scollectd::registrations _regs;
+    seastar::metrics::metric_groups _metrics;
 public:
     thrift_stats(thrift_server& server);
 };
@@ -217,23 +217,18 @@ thrift_server::requests_served() const {
     return _requests_served;
 }
 
-thrift_stats::thrift_stats(thrift_server& server)
-        : _regs{
-            scollectd::add_polled_metric(
-                scollectd::type_instance_id("thrift", scollectd::per_cpu_plugin_instance,
-                        "connections", "thrift-connections"),
-                scollectd::make_typed(scollectd::data_type::DERIVE,
-                        [&server] { return server.total_connections(); })),
-            scollectd::add_polled_metric(
-                scollectd::type_instance_id("thrift", scollectd::per_cpu_plugin_instance,
-                        "current_connections", "current"),
-                scollectd::make_typed(scollectd::data_type::GAUGE,
-                        [&server] { return server.current_connections(); })),
-            scollectd::add_polled_metric(
-                scollectd::type_instance_id("thrift", scollectd::per_cpu_plugin_instance,
-                        "total_requests", "served"),
-                scollectd::make_typed(scollectd::data_type::DERIVE,
-                        [&server] { return server.requests_served(); })),
-        } {
+thrift_stats::thrift_stats(thrift_server& server) {
+    namespace sm = seastar::metrics;
+
+    _metrics.add_group("thrift", {
+        sm::make_derive("thrift-connections", [&server] { return server.total_connections(); },
+                        sm::description("Rate of creation of new Thrift connections.")),
+
+        sm::make_gauge("current_connections", [&server] { return server.current_connections(); },
+                        sm::description("Holds a current number of opened Thrift connections.")),
+
+        sm::make_derive("served", [&server] { return server.requests_served(); },
+                        sm::description("Rate of serving Thrift requests.")),
+    });
 }
 

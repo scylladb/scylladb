@@ -42,6 +42,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/metrics.hh>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/sliced.hpp>
 
@@ -76,11 +77,13 @@ const uint32_t db::batchlog_manager::page_size;
 db::batchlog_manager::batchlog_manager(cql3::query_processor& qp)
         : _qp(qp)
         , _e1(_rd()) {
-    _collectd_registrations.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("batchlog_manager"
-            , scollectd::per_cpu_plugin_instance
-            , "total_operations", "total write replay attempts")
-            , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.write_attempts)));
+    namespace sm = seastar::metrics;
+
+    _metrics.add_group("batchlog_manager", {
+        sm::make_derive("total_write_replay_attempts", _stats.write_attempts,
+                        sm::description("Counts write operations issued in a batchlog replay flow. "
+                                        "The high value of this metric indicates that we have a long batch replay list.")),
+    });
 }
 
 future<> db::batchlog_manager::do_batch_log_replay() {

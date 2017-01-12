@@ -21,7 +21,7 @@
 
 #include "compaction_manager.hh"
 #include "database.hh"
-#include "core/scollectd.hh"
+#include <seastar/core/metrics.hh>
 #include "exceptions.hh"
 #include <cmath>
 
@@ -286,21 +286,19 @@ compaction_manager::~compaction_manager() {
     assert(_stopped == true);
 }
 
-void compaction_manager::register_collectd_metrics() {
-    auto add = [this] (auto type_name, auto name, auto data_type, auto func) {
-        _registrations.push_back(
-            scollectd::add_polled_metric(scollectd::type_instance_id("compaction_manager",
-                scollectd::per_cpu_plugin_instance,
-                type_name, name),
-                scollectd::make_typed(data_type, func)));
-    };
+void compaction_manager::register_metrics() {
+    namespace sm = seastar::metrics;
 
-    add("objects", "compactions", scollectd::data_type::GAUGE, [&] { return _stats.active_tasks; });
+    _metrics.add_group("compaction_manager", {
+        sm::make_gauge("compactions", [this] { return _stats.active_tasks; },
+                       sm::description("Holds the number of currently active compactions. "
+                                       "Too high number of concurrent compactions may overwhelm the disk.")),
+    });
 }
 
 void compaction_manager::start() {
     _stopped = false;
-    register_collectd_metrics();
+    register_metrics();
 }
 
 future<> compaction_manager::stop() {
@@ -309,7 +307,8 @@ future<> compaction_manager::stop() {
         return make_ready_future<>();
     }
     _stopped = true;
-    _registrations.clear();
+    // Reset the metrics registry
+    _metrics.clear();
     // Stop all ongoing compaction.
     for (auto& info : _compactions) {
         info->stop("shutdown");

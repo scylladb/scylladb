@@ -26,6 +26,7 @@
 #include "core/shared_ptr.hh"
 #include "core/gate.hh"
 #include "core/shared_future.hh"
+#include <seastar/core/metrics_registration.hh>
 #include "log.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include <vector>
@@ -63,7 +64,7 @@ private:
     bool _stopped = true;
 
     stats _stats;
-    std::vector<scollectd::registration> _registrations;
+    seastar::metrics::metric_groups _metrics;
 
     std::list<lw_shared_ptr<sstables::compaction_info>> _compactions;
 
@@ -108,7 +109,7 @@ public:
     compaction_manager();
     ~compaction_manager();
 
-    void register_collectd_metrics();
+    void register_metrics();
 
     // Start compaction manager.
     void start();

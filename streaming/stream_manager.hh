@@ -46,7 +46,7 @@
 #include "gms/endpoint_state.hh"
 #include "gms/application_state.hh"
 #include <seastar/core/semaphore.hh>
-#include <seastar/core/scollectd.hh>
+#include <seastar/core/metrics_registration.hh>
 #include <map>
 
 namespace streaming {
@@ -95,10 +95,7 @@ private:
     std::unordered_map<UUID, shared_ptr<stream_result_future>> _receiving_streams;
     std::unordered_map<UUID, std::unordered_map<gms::inet_address, stream_bytes>> _stream_bytes;
     semaphore _mutation_send_limiter{256};
-    std::unique_ptr<scollectd::registrations> _collectd_registrations;
-
-private:
-    scollectd::registrations setup_collectd();
+    seastar::metrics::metric_groups _metrics;
 
 public:
     stream_manager();

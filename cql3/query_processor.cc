@@ -38,6 +38,7 @@
  * You should have received a copy of the GNU General Public License
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
+#include <seastar/core/metrics.hh>
 
 #include "cql3/query_processor.hh"
 #include "cql3/CqlParser.hpp"
@@ -93,33 +94,32 @@ query_processor::query_processor(distributed<service::storage_proxy>& proxy,
     : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
     , _proxy(proxy)
     , _db(db)
-    , _collectd_regs{
-        scollectd::add_polled_metric(scollectd::type_instance_id("query_processor"
-            , scollectd::per_cpu_plugin_instance
-            , "total_operations", "statements_prepared")
-            , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.prepare_invocations)),
-        scollectd::add_polled_metric(scollectd::type_instance_id("cql"
-            , scollectd::per_cpu_plugin_instance
-            , "total_operations", "reads")
-            , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.reads)),
-        scollectd::add_polled_metric(scollectd::type_instance_id("cql"
-            , scollectd::per_cpu_plugin_instance
-            , "total_operations", "inserts")
-            , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.inserts)),
-        scollectd::add_polled_metric(scollectd::type_instance_id("cql"
-            , scollectd::per_cpu_plugin_instance
-            , "total_operations", "updates")
-            , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.updates)),
-        scollectd::add_polled_metric(scollectd::type_instance_id("cql"
-            , scollectd::per_cpu_plugin_instance
-            , "total_operations", "deletes")
-            , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.deletes)),
-        scollectd::add_polled_metric(scollectd::type_instance_id("cql"
-            , scollectd::per_cpu_plugin_instance
-            , "total_operations", "batches")
-            , scollectd::make_typed(scollectd::data_type::DERIVE, _cql_stats.batches))}
     , _internal_state(new internal_state())
 {
+    namespace sm = seastar::metrics;
+
+    _metrics.add_group("query_processor", {
+        sm::make_derive("statements_prepared", _stats.prepare_invocations,
+                        sm::description("Counts a total number of parsed CQL requests.")),
+    });
+
+    _metrics.add_group("cql", {
+        sm::make_derive("reads", _cql_stats.reads,
+                        sm::description("Counts a total number of CQL read requests.")),
+
+        sm::make_derive("inserts", _cql_stats.inserts,
+                        sm::description("Counts a total number of CQL INSERT requests.")),
+
+        sm::make_derive("updates", _cql_stats.updates,
+                        sm::description("Counts a total number of CQL UPDATE requests.")),
+
+        sm::make_derive("deletes", _cql_stats.deletes,
+                        sm::description("Counts a total number of CQL DELETE requests.")),
+
+        sm::make_derive("batches", _cql_stats.batches,
+                        sm::description("Counts a total number of CQL BATCH requests.")),
+    });
+
     service::get_local_migration_manager().register_listener(_migration_subscriber.get());
 }
 

@@ -32,6 +32,7 @@
 #include <seastar/core/memory.hh>
 #include <seastar/core/align.hh>
 #include <seastar/core/print.hh>
+#include <seastar/core/metrics.hh>
 
 #include "utils/logalloc.hh"
 #include "log.hh"
@@ -53,7 +54,7 @@ using clock = std::chrono::steady_clock;
 
 class tracker::impl {
     std::vector<region::impl*> _regions;
-    scollectd::registrations _collectd_registrations;
+    seastar::metrics::metric_groups _metrics;
     bool _reclaiming_enabled = true;
     size_t _reclamation_step = 1;
     bool _abort_on_bad_alloc = false;
@@ -74,12 +75,9 @@ private:
             _ref._reclaiming_enabled = _prev;
         }
     };
-    void register_collectd_metrics();
     friend class tracker_reclaimer_lock;
 public:
-    impl() {
-        register_collectd_metrics();
-    }
+    impl();
     ~impl();
     void register_region(region::impl*);
     void unregister_region(region::impl*);
@@ -2010,54 +2008,45 @@ void tracker::impl::unregister_region(region::impl* r) {
     _regions.erase(std::remove(_regions.begin(), _regions.end(), r));
 }
 
-void tracker::impl::register_collectd_metrics() {
-    _collectd_registrations = scollectd::registrations({
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "total_space"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return region_occupancy().total_space(); })
-        ),
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "used_space"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return region_occupancy().used_space(); })
-        ),
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "small_objects_total_space"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return region_occupancy().total_space() - shard_segment_pool.non_lsa_memory_in_use(); })
-        ),
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "small_objects_used_space"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return region_occupancy().used_space() - shard_segment_pool.non_lsa_memory_in_use(); })
-        ),
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "large_objects_total_space"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, [] { return shard_segment_pool.non_lsa_memory_in_use(); })
-        ),
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "non_lsa_used_space"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
+tracker::impl::impl() {
+    namespace sm = seastar::metrics;
+
+    _metrics.add_group("lsa", {
+        sm::make_gauge("total_space_bytes", [this] { return region_occupancy().total_space(); },
+                       sm::description("Holds a current size of allocated memory in bytes.")),
+
+        sm::make_gauge("used_space_bytes", [this] { return region_occupancy().used_space(); },
+                       sm::description("Holds a current amount of used memory in bytes.")),
+
+        sm::make_gauge("small_objects_total_space_bytes", [this] { return region_occupancy().total_space() - shard_segment_pool.non_lsa_memory_in_use(); },
+                       sm::description("Holds a current size of \"small objects\" memory region in bytes.")),
+
+        sm::make_gauge("small_objects_used_space_bytes", [this] { return region_occupancy().used_space() - shard_segment_pool.non_lsa_memory_in_use(); },
+                       sm::description("Holds a current amount of used \"small objects\" memory in bytes.")),
+
+        sm::make_gauge("large_objects_total_space_bytes", [this] { return shard_segment_pool.non_lsa_memory_in_use(); },
+                       sm::description("Holds a current size of allocated non-LSA memory.")),
+
+        sm::make_gauge("non_lsa_used_space_bytes",
+            [this] {
                 auto free_space_in_zones = shard_segment_pool.free_segments_in_zones() * segment_size;
-                return memory::stats().allocated_memory() - region_occupancy().total_space() - free_space_in_zones; })
-        ),
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "free_space_in_zones"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, [] { return shard_segment_pool.free_segments_in_zones() * segment_size; })
-        ),
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "percent", "occupancy"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return region_occupancy().used_fraction() * 100; })
-        ),
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "objects", "zones"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, [] { return shard_segment_pool.zone_count(); })
-        ),
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "operations", "segments_migrated"),
-            scollectd::make_typed(scollectd::data_type::DERIVE, [] { return shard_segment_pool.statistics().segments_migrated; })
-        ),
-        scollectd::add_polled_metric(
-            scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "operations", "segments_compacted"),
-            scollectd::make_typed(scollectd::data_type::DERIVE, [] { return shard_segment_pool.statistics().segments_compacted; })
-        ),
+                return memory::stats().allocated_memory() - region_occupancy().total_space() - free_space_in_zones;
+            }, sm::description("Holds a current amount of used non-LSA memory.")),
+
+        sm::make_gauge("free_space_in_zones", [this] { return shard_segment_pool.free_segments_in_zones() * segment_size; },
+                       sm::description("Holds a current amount of free memory in zones.")),
+
+        sm::make_gauge("occupancy", [this] { return region_occupancy().used_fraction() * 100; },
+                       sm::description("Holds a current portion (in percents) of the used memory.")),
+
+        sm::make_gauge("zones", [this] { return shard_segment_pool.zone_count(); },
+                       sm::description("Holds a current number of zones.")),
+
+        sm::make_derive("segments_migrated", [this] { return shard_segment_pool.statistics().segments_migrated; },
+                        sm::description("Counts a number of migrated segments.")),
+
+        sm::make_derive("segments_compacted", [this] { return shard_segment_pool.statistics().segments_compacted; },
+                        sm::description("Counts a number of compacted segments.")),
     });
 }
 

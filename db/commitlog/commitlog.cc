@@ -50,7 +50,7 @@
 
 #include <core/align.hh>
 #include <core/reactor.hh>
-#include <core/scollectd.hh>
+#include <seastar/core/metrics.hh>
 #include <core/future-util.hh>
 #include <core/file.hh>
 #include <core/rwlock.hh>
@@ -176,7 +176,7 @@ public:
 
     basic_semaphore<timeout_exception_factory> _flush_semaphore;
 
-    scollectd::registrations _regs;
+    seastar::metrics::metric_groups _metrics;
 
     // TODO: verify that we're ok with not-so-great granularity
     using clock_type = lowres_clock;
@@ -262,7 +262,7 @@ public:
     future<> sync_all_segments(bool shutdown = false);
     future<> shutdown();
 
-    scollectd::registrations create_counters();
+    void create_counters();
 
     future<> orphan_all();
 
@@ -933,7 +933,7 @@ db::commitlog::segment_manager::segment_manager(config c)
             cfg.commit_log_location, max_disk_size / (1024 * 1024),
             smp::count);
 
-    _regs = create_counters();
+    create_counters();
 }
 
 size_t db::commitlog::segment_manager::max_request_controller_units() const {
@@ -1041,88 +1041,62 @@ future<> db::commitlog::segment_manager::init() {
     });
 }
 
-scollectd::registrations db::commitlog::segment_manager::create_counters() {
-    using scollectd::add_polled_metric;
-    using scollectd::make_typed;
-    using scollectd::type_instance_id;
-    using scollectd::per_cpu_plugin_instance;
-    using scollectd::data_type;
+void db::commitlog::segment_manager::create_counters() {
+    namespace sm = seastar::metrics;
 
-    return {
-        add_polled_metric(type_instance_id("commitlog"
-                        , per_cpu_plugin_instance, "queue_length", "segments")
-                , make_typed(data_type::GAUGE
-                        , std::bind(&decltype(_segments)::size, &_segments))
-        ),
-        add_polled_metric(type_instance_id("commitlog"
-                        , per_cpu_plugin_instance, "queue_length", "allocating_segments")
-                , make_typed(data_type::GAUGE
-                        , [this]() {
-                            return std::count_if(_segments.begin(), _segments.end(), [](const sseg_ptr & s) {
-                                        return s->is_still_allocating();
-                                    });
-                        })
-        ),
-        add_polled_metric(type_instance_id("commitlog"
-                        , per_cpu_plugin_instance, "queue_length", "unused_segments")
-                , make_typed(data_type::GAUGE
-                        , [this]() {
-                            return std::count_if(_segments.begin(), _segments.end(), [](const sseg_ptr & s) {
-                                        return s->is_unused();
-                                    });
-                        })
-        ),
-        add_polled_metric(type_instance_id("commitlog"
-                        , per_cpu_plugin_instance, "total_operations", "alloc")
-                , make_typed(data_type::DERIVE, totals.allocation_count)
-        ),
-        add_polled_metric(type_instance_id("commitlog"
-                        , per_cpu_plugin_instance, "total_operations", "cycle")
-                , make_typed(data_type::DERIVE, totals.cycle_count)
-        ),
-        add_polled_metric(type_instance_id("commitlog"
-                        , per_cpu_plugin_instance, "total_operations", "flush")
-                , make_typed(data_type::DERIVE, totals.flush_count)
-        ),
+    _metrics.add_group("commitlog", {
+        sm::make_gauge("segments", [this] { return _segments.size(); },
+                       sm::description("Holds the current number of segments.")),
 
-        add_polled_metric(type_instance_id("commitlog"
-                        , per_cpu_plugin_instance, "total_bytes", "written")
-                , make_typed(data_type::DERIVE, totals.bytes_written)
-        ),
-        add_polled_metric(type_instance_id("commitlog"
-                        , per_cpu_plugin_instance, "total_bytes", "slack")
-                , make_typed(data_type::DERIVE, totals.bytes_slack)
-        ),
+        sm::make_gauge("allocating_segments", [this] { return std::count_if(_segments.begin(), _segments.end(), [] (const sseg_ptr & s) { return s->is_still_allocating(); }); },
+                       sm::description("Holds the number of not closed segments that still have some free space. "
+                                       "This value should not get too high.")),
 
-        add_polled_metric(type_instance_id("commitlog"
-                        , per_cpu_plugin_instance, "queue_length", "pending_flushes")
-                , make_typed(data_type::GAUGE, totals.pending_flushes)
-        ),
+        sm::make_gauge("unused_segments", [this] { return std::count_if(_segments.begin(), _segments.end(), [] (const sseg_ptr & s) { return s->is_unused(); }); },
+                       sm::description("Holds the current number of unused segments. "
+                                       "A non-zero value indicates that the disk write path became temporary slow.")),
 
-        add_polled_metric(type_instance_id("commitlog"
-                        , per_cpu_plugin_instance, "queue_length", "pending_allocations")
-                , make_typed(data_type::GAUGE, [this] { return pending_allocations(); })
-        ),
+        sm::make_derive("alloc", totals.allocation_count,
+                       sm::description("Counts a number of times a new mutation has been added to a segment. "
+                                       "Divide bytes_written by this value to get the average number of bytes per mutation written to the disk.")),
 
-        add_polled_metric(type_instance_id("commitlog"
-                        , per_cpu_plugin_instance, "total_operations", "requests_blocked_memory")
-                , make_typed(data_type::DERIVE, totals.requests_blocked_memory)
-        ),
+        sm::make_derive("cycle", totals.cycle_count,
+                       sm::description("Counts a number of commitlog write cycles - when the data is written from the internal memory buffer to the disk.")),
 
-        add_polled_metric(type_instance_id("commitlog"
-                        , per_cpu_plugin_instance, "total_operations", "flush_limit_exceeded")
-                , make_typed(data_type::DERIVE, totals.flush_limit_exceeded)
-        ),
+        sm::make_derive("flush", totals.flush_count,
+                       sm::description("Counts a number of times the flush() method was called for a file.")),
 
-        add_polled_metric(type_instance_id("commitlog"
-                        , per_cpu_plugin_instance, "memory", "total_size")
-                , make_typed(data_type::GAUGE, totals.total_size)
-        ),
-        add_polled_metric(type_instance_id("commitlog"
-                        , per_cpu_plugin_instance, "memory", "buffer_list_bytes")
-                , make_typed(data_type::GAUGE, totals.buffer_list_bytes)
-        ),
-    };
+        sm::make_derive("bytes_written", totals.bytes_written,
+                       sm::description("Counts a number of bytes written to the disk. "
+                                       "Divide this value by \"alloc\" to get the average number of bytes per mutation written to the disk.")),
+
+        sm::make_derive("slack", totals.bytes_slack,
+                       sm::description("Counts a number of unused bytes written to the disk due to disk segment alignment.")),
+
+        sm::make_gauge("pending_flushes", totals.pending_flushes,
+                       sm::description("Holds a number of currently pending flushes. See the related flush_limit_exceeded metric.")),
+
+        sm::make_gauge("pending_allocations", [this] { return pending_allocations(); },
+                       sm::description("Holds a number of currently pending allocations. "
+                                       "A non-zero value indicates that we have a bottleneck in the disk write flow.")),
+
+        sm::make_derive("requests_blocked_memory", totals.requests_blocked_memory,
+                       sm::description("Counts a number of requests blocked due to memory pressure. "
+                                       "A non-zero value indicates that the commitlog memory quota is not enough to serve the required amount of requests.")),
+
+        sm::make_derive("flush_limit_exceeded", totals.flush_limit_exceeded,
+                       sm::description(
+                           seastar::format("Counts a number of times a flush limit was exceeded. "
+                                           "A non-zero value indicates that there are too many pending flush operations (see pending_flushes) and some of "
+                                           "them will be blocked till the total amount of pending flush operaitions drops below {}.", cfg.max_active_flushes))),
+
+        sm::make_gauge("disk_total_bytes", totals.total_size,
+                       sm::description("Holds a size of disk space in bytes used for data so far. "
+                                       "A too high value indicates that we have some bottleneck in the writting to sstables path.")),
+
+        sm::make_gauge("memory_buffer_bytes", totals.buffer_list_bytes,
+                       sm::description("Holds the total number of bytes in internal memory buffers.")),
+    });
 }
 
 void db::commitlog::segment_manager::flush_segments(bool force) {
