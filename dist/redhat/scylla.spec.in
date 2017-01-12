@@ -101,6 +101,7 @@ install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/
 install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/data
 install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/commitlog
 install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/coredump
+install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla-housekeeping
 install -d -m755 $RPM_BUILD_ROOT%{_prefix}/lib/scylla/swagger-ui
 cp -r swagger-ui/dist $RPM_BUILD_ROOT%{_prefix}/lib/scylla/swagger-ui
 install -d -m755 $RPM_BUILD_ROOT%{_prefix}/lib/scylla/api
@@ -193,6 +194,7 @@ rm -rf $RPM_BUILD_ROOT
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/data
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/commitlog
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/coredump
+%attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla-housekeeping
 
 %package conf
 Group:          Applications/Databases

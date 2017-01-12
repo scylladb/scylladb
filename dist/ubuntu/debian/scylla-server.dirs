@@ -4,3 +4,4 @@ var/lib/scylla
 var/lib/scylla/data
 var/lib/scylla/commitlog
 var/lib/scylla/coredump
+var/lib/scylla-housekeeping

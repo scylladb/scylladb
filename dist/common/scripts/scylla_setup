@@ -276,7 +276,7 @@ fi
 
 CUR_VERSION=`scylla --version` || true
 if [ "$CUR_VERSION" != "" ] && [ "$UUID" != "" ]; then
-    NEW_VERSION=`/usr/lib/scylla/scylla-housekeeping --uuid-file /etc/scylla.d/housekeeping.uuid version --version $CUR_VERSION --mode i` || true
+    NEW_VERSION=`sudo -u scylla /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid version --version $CUR_VERSION --mode i` || true
     if [ "$NEW_VERSION" != "" ]; then
        echo $NEW_VERSION
     fi

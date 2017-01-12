@@ -10,6 +10,7 @@ if [ "$1" = configure ]; then
             --disabled-password \
             --group scylla
     chown -R scylla:scylla /var/lib/scylla
+    chown -R scylla:scylla /var/lib/scylla-housekeeping
 fi
 
 ln -sfT /etc/scylla /var/lib/scylla/conf
