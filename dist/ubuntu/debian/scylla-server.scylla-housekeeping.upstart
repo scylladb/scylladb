@@ -23,13 +23,16 @@ description "A timer job file for running scylla-housekeeping"
 start on started scylla-server
 stop on stopping scylla-server
 
+setuid scylla
+setgid scylla
+
 script
  # make sure scylla is up before checking for the version
   sleep 5
-  /usr/lib/scylla/scylla-housekeeping --uuid-file /etc/scylla.d/housekeeping.uuid -c /etc/scylla.d/housekeeping.cfg  -q version --mode r || true
+  /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid -c /etc/scylla.d/housekeeping.cfg  -q version --mode r || true
   while [ 1 ]
   do
     sleep 1d
-    /usr/lib/scylla/scylla-housekeeping --uuid-file /etc/scylla.d/housekeeping.uuid -c /etc/scylla.d/housekeeping.cfg  -q version --mode d || true
+    /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid -c /etc/scylla.d/housekeeping.cfg  -q version --mode d || true
   done
 end script
