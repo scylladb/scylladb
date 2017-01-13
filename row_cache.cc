@@ -704,10 +704,11 @@ row_cache::make_reader(schema_ptr s,
                 if (e.wide_partition()) {
                     reader = _underlying(s, range, slice, pc, std::move(trace_state));
                     _tracker.on_uncached_wide_partition();
+                    on_miss();
                 } else {
                     reader = make_reader_returning(e.read(*this, s, slice));
+                    on_hit();
                 }
-                on_hit();
                 return reader;
             } else {
                 auto reader = make_mutation_reader<single_partition_populating_reader>(s, *this, _underlying,
