@@ -436,6 +436,7 @@ private:
     lw_shared_ptr<compound_type<allow_prefixes::no>> _partition_key_type;
     lw_shared_ptr<compound_type<allow_prefixes::yes>> _clustering_key_type;
     column_mapping _column_mapping;
+    bool _is_counter = false;
     friend class schema_builder;
 public:
     using row_column_ids_are_ordered_by_name = std::true_type;
@@ -506,7 +507,7 @@ public:
         return _raw._comment;
     }
     bool is_counter() const {
-        return false;
+        return _is_counter;
     }
 
     const cf_type type() const {

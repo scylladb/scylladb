@@ -30,6 +30,7 @@
 #include "version.hh"
 #include "schema_registry.hh"
 #include <boost/range/algorithm.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -180,6 +181,7 @@ schema::schema(const raw_schema& raw)
         };
     }())
     , _regular_columns_by_name(serialized_compare(_raw._regular_column_name_type))
+    , _is_counter(_raw._default_validator->is_counter())
 {
     struct name_compare {
         data_type type;
@@ -288,6 +290,7 @@ schema::schema(const schema& o)
     : _raw(o._raw)
     , _offsets(o._offsets)
     , _regular_columns_by_name(serialized_compare(_raw._regular_column_name_type))
+    , _is_counter(o._is_counter)
 {
     rebuild();
 }
@@ -610,6 +613,8 @@ schema_builder& schema_builder::with_column(bytes name, data_type type, index_in
     _raw._columns.emplace_back(name, type, kind, component_index, info);
     if (type->is_multi_cell()) {
         with_collection(name, type);
+    } else if (type->is_counter()) {
+        set_default_validator(counter_type);
     }
     return *this;
 }
