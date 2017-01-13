@@ -3589,7 +3589,8 @@ class mutation_result_merger {
 public:
     explicit mutation_result_merger(schema_ptr schema, lw_shared_ptr<const query::read_command> cmd)
             : _schema(std::move(schema))
-            , _cmd(std::move(cmd)) {
+            , _cmd(std::move(cmd))
+            , _short_read_allowed(_cmd->slice.options.contains(query::partition_slice::option::allow_short_read)) {
     }
     query::result_memory_accounter& memory() {
         return _memory_accounter;
