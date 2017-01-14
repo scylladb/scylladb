@@ -74,11 +74,13 @@ public:
         _t.apply(cr._t);
         _marker.apply(std::move(cr._marker));
         _cells.apply(s, column_kind::regular_column, std::move(cr._cells));
+        maybe_shadow_deletion(s);
     }
     void apply(const schema& s, const clustering_row& cr) {
         _t.apply(cr._t);
         _marker.apply(cr._marker);
         _cells.apply(s, column_kind::regular_column, cr._cells);
+        maybe_shadow_deletion(s);
     }
     void set_cell(const column_definition& def, atomic_cell_or_collection&& value) {
         _cells.apply(def, std::move(value));
@@ -90,6 +92,7 @@ public:
         _t.apply(r.row().deleted_at());
         _marker.apply(r.row().marker());
         _cells.apply(s, column_kind::regular_column, r.row().cells());
+        maybe_shadow_deletion(s);
     }
 
     position_in_partition_view position() const;
@@ -103,6 +106,13 @@ public:
     }
 
     friend std::ostream& operator<<(std::ostream& os, const clustering_row& row);
+
+private:
+    void maybe_shadow_deletion(const schema& s) {
+        if (row_tombstone_is_shadowed(s, _t, _marker)) {
+            _t = tombstone();
+        }
+    }
 };
 
 class static_row {

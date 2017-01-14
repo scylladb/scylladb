@@ -725,3 +725,15 @@ private:
     template<typename Func>
     void for_each_row(const schema& schema, const query::clustering_range& row_range, bool reversed, Func&& func) const;
 };
+
+// A shadowable row tombstone is valid only if the row has no live marker. In other words,
+// the row tombstone is only valid as long as no newer insert is done (thus setting a
+// live row marker; note that if the row timestamp set is lower than the tombstone's,
+// then the tombstone remains in effect as usual). If a row has a shadowable tombstone
+// with timestamp Ti and that row is updated with a timestamp Tj, such that Tj > Ti
+// (and that update sets the row marker), then the shadowable tombstone is shadowed by
+// that update. A concrete consequence is that if the update has cells with timestamp
+// lower than Ti, then those cells are preserved (since the deletion is removed), and
+// this is contrary to a regular, non-shadowable row tombstone where the tombstone is
+// preserved and such cells are removed.
+bool row_tombstone_is_shadowed(const schema& schema, const tombstone& row_tombstone, const row_marker& marker);
