@@ -145,6 +145,34 @@ void view::set_base_non_pk_column_in_view_pk(const ::schema& base) {
     _base_non_pk_column_in_view_pk = nullptr;
 }
 
+class view_updates final {
+    lw_shared_ptr<const db::view::view> _view;
+    schema_ptr _base;
+    std::unordered_map<partition_key, mutation_partition, partition_key::hashing, partition_key::equality> _updates;
+public:
+    explicit view_updates(lw_shared_ptr<const db::view::view> view, schema_ptr base)
+            : _view(std::move(view))
+            , _base(std::move(base))
+            , _updates(8, partition_key::hashing(*_base), partition_key::equality(*_base)) {
+    }
+
+    void move_to(std::vector<mutation>& mutations) && {
+        auto& partitioner = dht::global_partitioner();
+        std::transform(_updates.begin(), _updates.end(), std::back_inserter(mutations), [&, this] (auto&& m) {
+            return mutation(_view->schema(), partitioner.decorate_key(*_base, std::move(m.first)), std::move(m.second));
+        });
+    }
+
+private:
+    mutation_partition& partition_for(partition_key&& key) {
+        auto it = _updates.find(key);
+        if (it != _updates.end()) {
+            return it->second;
+        }
+        return _updates.emplace(std::move(key), mutation_partition(_view->schema())).first->second;
+    }
+};
+
 } // namespace view
 } // namespace db
 
