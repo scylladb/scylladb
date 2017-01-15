@@ -171,7 +171,70 @@ private:
         }
         return _updates.emplace(std::move(key), mutation_partition(_view->schema())).first->second;
     }
+    row_marker compute_row_marker(const clustering_row& base_row) const;
 };
+
+row_marker view_updates::compute_row_marker(const clustering_row& base_row) const {
+    /*
+     * We need to compute both the timestamp and expiration.
+     *
+     * For the timestamp, it makes sense to use the bigger timestamp for all view PK columns.
+     *
+     * This is more complex for the expiration. We want to maintain consistency between the base and the view, so the
+     * entry should only exist as long as the base row exists _and_ has non-null values for all the columns that are part
+     * of the view PK.
+     * Which means we really have 2 cases:
+     *   1) There is a column that is not in the base PK but is in the view PK. In that case, as long as that column
+     *      lives, the view entry does too, but as soon as it expires (or is deleted for that matter) the entry also
+     *      should expire. So the expiration for the view is the one of that column, regardless of any other expiration.
+     *      To take an example of that case, if you have:
+     *        CREATE TABLE t (a int, b int, c int, PRIMARY KEY (a, b))
+     *        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t WHERE c IS NOT NULL AND a IS NOT NULL AND b IS NOT NULL PRIMARY KEY (c, a, b)
+     *        INSERT INTO t(a, b) VALUES (0, 0) USING TTL 3;
+     *        UPDATE t SET c = 0 WHERE a = 0 AND b = 0;
+     *      then even after 3 seconds elapsed, the row will still exist (it just won't have a "row marker" anymore) and so
+     *      the MV should still have a corresponding entry.
+     *   2) The columns for the base and view PKs are exactly the same. In that case, the view entry should live
+     *      as long as the base row lives. This means the view entry should only expire once *everything* in the
+     *      base row has expired. So, the row TTL should be the max of any other TTL. This is particularly important
+     *      in the case where the base row has a TTL, but a column *absent* from the view holds a greater TTL.
+     */
+
+    auto marker = base_row.marker();
+    auto* col = _view->base_non_pk_column_in_view_pk();
+    if (col) {
+        // Note: multi-cell columns can't be part of the primary key.
+        auto cell = base_row.cells().cell_at(col->id).as_atomic_cell();
+        auto timestamp = std::max(marker.timestamp(), cell.timestamp());
+        return cell.is_live_and_has_ttl() ? row_marker(timestamp, cell.ttl(), cell.expiry()) : row_marker(timestamp);
+    }
+
+    if (!marker.is_expiring()) {
+        return marker;
+    }
+
+    auto ttl = marker.ttl();
+    auto expiry = marker.expiry();
+    auto maybe_update_expiry_and_ttl = [&] (atomic_cell_view&& cell) {
+        // Note: Cassandra compares cell.ttl() here, but that seems very wrong.
+        // See CASSANDRA-13127.
+        if (cell.is_live_and_has_ttl() && cell.expiry() > expiry) {
+            expiry = cell.expiry();
+            ttl = cell.ttl();
+        }
+    };
+
+    base_row.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
+        auto& def = _base->regular_column_at(id);
+        if (def.is_atomic()) {
+            maybe_update_expiry_and_ttl(c.as_atomic_cell());
+        } else {
+            static_pointer_cast<const collection_type_impl>(def.type)->for_each_cell(c.as_collection_mutation(), maybe_update_expiry_and_ttl);
+        }
+    });
+
+    return row_marker(marker.timestamp(), ttl, expiry);
+}
 
 } // namespace view
 } // namespace db
