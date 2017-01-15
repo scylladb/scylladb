@@ -177,6 +177,10 @@ private:
     void delete_old_entry(const partition_key& base_key, const clustering_row& existing, gc_clock::time_point now);
     void do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, gc_clock::time_point now);
     void update_entry(const partition_key& base_key, const clustering_row& update, const clustering_row& existing, gc_clock::time_point now);
+    void replace_entry(const partition_key& base_key, const clustering_row& update, const clustering_row& existing, gc_clock::time_point now) {
+        create_entry(base_key, update, now);
+        delete_old_entry(base_key, existing, now);
+    }
 };
 
 row_marker view_updates::compute_row_marker(const clustering_row& base_row) const {
