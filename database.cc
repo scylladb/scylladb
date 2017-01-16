@@ -2985,16 +2985,14 @@ namespace db {
 
 std::ostream& operator<<(std::ostream& os, const write_type& t) {
     switch(t) {
-        case write_type::SIMPLE: os << "SIMPLE"; break;
-        case write_type::BATCH: os << "BATCH"; break;
-        case write_type::UNLOGGED_BATCH: os << "UNLOGGED_BATCH"; break;
-        case write_type::COUNTER: os << "COUNTER"; break;
-        case write_type::BATCH_LOG: os << "BATCH_LOG"; break;
-        case write_type::CAS: os << "CAS"; break;
-        default:
-            assert(false);
+        case write_type::SIMPLE: return os << "SIMPLE";
+        case write_type::BATCH: return os << "BATCH";
+        case write_type::UNLOGGED_BATCH: return os << "UNLOGGED_BATCH";
+        case write_type::COUNTER: return os << "COUNTER";
+        case write_type::BATCH_LOG: return os << "BATCH_LOG";
+        case write_type::CAS: return os << "CAS";
     }
-    return os;
+    abort();
 }
 
 std::ostream& operator<<(std::ostream& os, db::consistency_level cl) {
