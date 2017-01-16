@@ -121,6 +121,9 @@ future<std::vector<mutation>> generate_view_updates(
         streamed_mutation&& updates,
         streamed_mutation&& existings);
 
+void mutate_MV(const dht::token& base_token,
+        std::vector<mutation> mutations);
+
 }
 
 }
