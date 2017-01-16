@@ -263,6 +263,12 @@ private:
     gms::feature _materialized_views_feature;
 
 public:
+    void enable_all_features() {
+        _range_tombstones_feature.enable();
+        _large_partitions_feature.enable();
+        _materialized_views_feature.enable();
+    }
+
     void finish_bootstrapping() {
         _is_bootstrap_mode = false;
     }

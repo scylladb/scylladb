@@ -35,6 +35,9 @@ public:
         assert(thread);
         net::get_messaging_service().start(gms::inet_address("127.0.0.1")).get();
         service::get_storage_service().start(std::ref(_db)).get();
+        service::get_storage_service().invoke_on_all([] (auto& ss) {
+            ss.enable_all_features();
+        }).get();
     }
     ~storage_service_for_tests() {
         service::get_storage_service().stop().get();
