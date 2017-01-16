@@ -334,6 +334,12 @@ public:
     */
     future<> mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state);
 
+    // Send a mutation to one specific remote target.
+    // Inspired by Cassandra's StorageProxy.sendToHintedEndpoints but without
+    // hinted handoff support, and just one target. See also
+    // send_to_live_endpoints() - another take on the same original function.
+    future<> send_to_endpoint(mutation m, gms::inet_address target, db::write_type type);
+
     /**
      * Performs the truncate operatoin, which effectively deletes all data from
      * the column family cfname

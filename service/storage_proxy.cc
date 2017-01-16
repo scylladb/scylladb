@@ -1409,6 +1409,15 @@ bool storage_proxy::cannot_hint(gms::inet_address target) {
             && (get_hints_in_progress_for(target) > 0 && should_hint(target));
 }
 
+future<> storage_proxy::send_to_endpoint(mutation m, gms::inet_address target, db::write_type type) {
+    return mutate_prepare(std::array<mutation, 1>{std::move(m)}, db::consistency_level::ONE, type,
+        [this, target] (const mutation& m, db::consistency_level cl, db::write_type type) {
+            return create_write_response_handler({{target, m}}, cl, type, {});
+        }).then([this] (std::vector<unique_response_handler> ids) {
+            return mutate_begin(std::move(ids), db::consistency_level::ONE);
+        });
+}
+
 /**
  * Send the mutations to the right targets, write it locally if it corresponds or writes a hint when the node
  * is not available.
