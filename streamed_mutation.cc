@@ -170,13 +170,17 @@ streamed_mutation streamed_mutation_from_mutation(mutation m)
             , _mutation(std::move(m))
             , _cmp(*_mutation.schema())
         {
+            auto mutation_destroyer = defer([this] { destroy_mutation(); });
+
             prepare_next_clustering_row();
             prepare_next_range_tombstone();
 
             do_fill_buffer();
+
+            mutation_destroyer.cancel();
         }
 
-        ~reader() {
+        void destroy_mutation() noexcept {
             // After unlink_leftmost_without_rebalance() was called on a bi::set
             // we need to complete destroying the tree using that function.
             // clear_and_dispose() used by mutation_partition destructor won't
@@ -195,6 +199,10 @@ streamed_mutation streamed_mutation_from_mutation(mutation m)
                 current_deleter<range_tombstone>()(rt);
                 rt = rts.unlink_leftmost_without_rebalance();
             }
+        }
+
+        ~reader() {
+            destroy_mutation();
         }
 
         virtual future<> fill_buffer() override {
