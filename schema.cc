@@ -739,7 +739,8 @@ static constexpr auto _composite_str = "org.apache.cassandra.db.marshal.Composit
 static constexpr auto _collection_str = "org.apache.cassandra.db.marshal.ColumnToCollectionType";
 
 static bool always_include_default() {
-    static thread_local bool def = version::version::current() < version::version(2, 2);
+    // Java driver says so...
+    static thread_local bool def = version::version::current() < version::version(3, 0);
     return def;
 };
 
