@@ -41,6 +41,7 @@
 #pragma once
 
 #include <assert.h>
+#include <cstdint>
 
 namespace db {
 
