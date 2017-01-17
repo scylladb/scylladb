@@ -22,7 +22,6 @@
 #pragma once
 
 #include <memory>
-#include <seastar/core/scollectd.hh>
 #include <seastar/core/memory.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/shared_ptr.hh>

@@ -73,6 +73,7 @@
 #include "schema_registry.hh"
 #include "utils/joinpoint.hh"
 #include <seastar/util/lazy.hh>
+#include "core/metrics.hh"
 
 namespace service {
 
