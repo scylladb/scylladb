@@ -738,12 +738,6 @@ namespace cell_comparator {
 static constexpr auto _composite_str = "org.apache.cassandra.db.marshal.CompositeType";
 static constexpr auto _collection_str = "org.apache.cassandra.db.marshal.ColumnToCollectionType";
 
-static bool always_include_default() {
-    // Java driver says so...
-    static thread_local bool def = version::version::current() < version::version(3, 0);
-    return def;
-};
-
 static sstring compound_name(const schema& s) {
     sstring compound(_composite_str);
 
@@ -753,7 +747,8 @@ static sstring compound_name(const schema& s) {
             compound += t.type->name() + ",";
         }
     }
-    if (always_include_default() || (s.clustering_key_size() == 0)) {
+
+    if (!s.is_dense()) {
         compound += s.regular_column_name_type()->name() + ",";
     }
 
@@ -773,10 +768,13 @@ static sstring compound_name(const schema& s) {
 }
 
 sstring to_sstring(const schema& s) {
-    if (!s.is_compound()) {
-        return s.regular_column_name_type()->name();
-    } else {
+    if (s.is_compound()) {
         return compound_name(s);
+    } else if (s.clustering_key_size() == 1) {
+        assert(s.is_dense());
+        return s.clustering_key_columns().front().type->name();
+    } else {
+        return s.regular_column_name_type()->name();
     }
 }
 
