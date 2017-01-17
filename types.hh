@@ -23,7 +23,7 @@
 
 #include <experimental/optional>
 #include <boost/functional/hash.hpp>
-#include <iostream>
+#include <iosfwd>
 #include <sstream>
 
 #include "core/sstring.hh"

@@ -25,7 +25,7 @@
 #include "latency.hh"
 #include <cmath>
 #include "core/timer.hh"
-#include <iostream>
+#include <iosfwd>
 namespace utils {
 /**
  * An exponentially-weighted moving average.

@@ -22,7 +22,7 @@
 #pragma once
 
 #include "types.hh"
-#include <iostream>
+#include <iosfwd>
 #include <algorithm>
 #include <vector>
 #include <boost/range/iterator_range.hpp>

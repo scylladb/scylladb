@@ -43,7 +43,7 @@
 
 #include "core/sstring.hh"
 #include "db/system_keyspace.hh"
-#include <iostream>
+#include <iosfwd>
 #include <functional>
 
 namespace cql3 {

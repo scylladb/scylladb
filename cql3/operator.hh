@@ -42,7 +42,7 @@
 #pragma once
 
 #include <cstddef>
-#include <iostream>
+#include <iosfwd>
 #include "core/sstring.hh"
 
 namespace cql3 {

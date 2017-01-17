@@ -26,7 +26,7 @@
 #include <stdint.h>
 #include <cassert>
 #include <array>
-#include <iostream>
+#include <iosfwd>
 
 #include "core/sstring.hh"
 #include "core/print.hh"

@@ -44,7 +44,7 @@
 #include "core/distributed.hh"
 #include "utils/bounded_stats_deque.hh"
 #include "gms/i_failure_detector.hh"
-#include <iostream>
+#include <iosfwd>
 #include <cmath>
 #include <list>
 #include <map>

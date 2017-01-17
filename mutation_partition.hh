@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include <iostream>
+#include <iosfwd>
 #include <map>
 #include <boost/intrusive/set.hpp>
 #include <boost/range/iterator_range.hpp>

@@ -24,7 +24,7 @@
 #include "stdx.hh"
 #include <list>
 #include <experimental/optional>
-#include <iostream>
+#include <iosfwd>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/adaptor/sliced.hpp>
 #include <boost/range/adaptor/transformed.hpp>

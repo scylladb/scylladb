@@ -43,7 +43,7 @@
 #include "core/sstring.hh"
 #include "net/byteorder.hh"
 #include "bytes.hh"
-#include <iostream>
+#include <iosfwd>
 
 
 class UTFDataFormatException { };

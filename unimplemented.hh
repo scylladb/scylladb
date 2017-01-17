@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include <iostream>
+#include <iosfwd>
 #include "core/print.hh"
 #include "core/sstring.hh"
 #include "core/enum.hh"

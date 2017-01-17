@@ -26,7 +26,7 @@
 #include "core/distributed.hh"
 
 #include <chrono>
-#include <iostream>
+#include <iosfwd>
 #include <boost/range/irange.hpp>
 
 template <typename Func>

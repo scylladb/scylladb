@@ -39,7 +39,7 @@
 #include <unordered_map>
 #include <map>
 #include <set>
-#include <iostream>
+#include <iosfwd>
 #include <boost/functional/hash.hpp>
 #include <boost/range/algorithm/find.hpp>
 #include <experimental/optional>

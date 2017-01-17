@@ -28,7 +28,7 @@
 #include "utils/managed_bytes.hh"
 #include "net/byteorder.hh"
 #include <cstdint>
-#include <iostream>
+#include <iosfwd>
 
 template<typename T>
 static inline

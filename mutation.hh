@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include <iostream>
+#include <iosfwd>
 
 #include "mutation_partition.hh"
 #include "keys.hh"

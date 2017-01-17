@@ -49,7 +49,7 @@
 #include "gms/inet_address.hh"
 #include "database.hh"
 
-#include <iostream>
+#include <iosfwd>
 #include <vector>
 
 namespace db {

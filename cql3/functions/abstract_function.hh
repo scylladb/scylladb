@@ -43,7 +43,7 @@
 
 #include "types.hh"
 #include <vector>
-#include <iostream>
+#include <iosfwd>
 #include <boost/functional/hash.hpp>
 
 namespace cql3 {
