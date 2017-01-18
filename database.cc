@@ -3626,14 +3626,14 @@ void column_family::set_schema(schema_ptr s) {
 
 void column_family::update_view_schemas() {
     _view_schemas = boost::copy_range<std::vector<view_ptr>>(_views | boost::adaptors::map_values | boost::adaptors::transformed([] (auto&& s) {
-        return view_ptr(s.schema());
+        return view_ptr(s->schema());
     }));
 }
 
 void column_family::add_or_update_view(view_ptr v) {
-    auto e = _views.emplace(v->cf_name(), v);
+    auto e = _views.emplace(v->cf_name(), make_lw_shared<db::view::view>(v));
     if (!e.second) {
-        e.first->second.update(v);
+        e.first->second->update(v);
     }
     update_view_schemas();
 }

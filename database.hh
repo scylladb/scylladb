@@ -525,7 +525,7 @@ private:
     // Last but not least, we seldom need to guarantee any ordering here: as long
     // as all data is waited for, we're good.
     seastar::gate _streaming_flush_gate;
-    std::unordered_map<sstring, db::view::view> _views;
+    std::unordered_map<sstring, lw_shared_ptr<db::view::view>> _views;
     std::vector<view_ptr> _view_schemas;
     semaphore _cache_update_sem{1};
 
