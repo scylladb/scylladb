@@ -820,6 +820,7 @@ public:
     void add_or_update_view(view_ptr v);
     void remove_view(view_ptr v);
     const std::vector<view_ptr>& views() const;
+    future<> push_view_replica_updates(const schema_ptr& base, mutation&& m) const;
 private:
     void update_view_schemas();
     std::vector<lw_shared_ptr<db::view::view>> affected_views(const schema_ptr& base, const mutation& update) const;

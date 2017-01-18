@@ -3678,3 +3678,23 @@ future<std::vector<mutation>> column_family::generate_view_updates(const schema_
     // is resolved.
     return db::view::generate_view_updates(base, std::move(views), std::move(updates), std::move(existings));
 }
+
+/**
+ * Given an update for the base table, calculates the set of potentially affected views,
+ * generates the relevant updates, and sends them to the paired view replicas.
+ */
+future<> column_family::push_view_replica_updates(const schema_ptr& base, mutation&& m) const {
+    auto views = affected_views(base, m);
+    if (views.empty()) {
+        return make_ready_future<>();
+    }
+    //FIXME: Read existing mutations
+    auto existing = streamed_mutation_from_mutation(mutation(m.decorated_key(), _schema));
+    auto base_token = m.token();
+    return generate_view_updates(base,
+                std::move(views),
+                streamed_mutation_from_mutation(std::move(m)),
+                std::move(existing)).then([base_token = std::move(base_token)] (auto&& updates) {
+        db::view::mutate_MV(std::move(base_token), std::move(updates));
+    });
+}
