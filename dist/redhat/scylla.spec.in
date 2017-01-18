@@ -88,7 +88,7 @@ install -m755 dist/common/bin/scyllatop $RPM_BUILD_ROOT%{_bindir}
 install -m755 scylla-blocktune $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 scylla-housekeeping $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 if @@HOUSEKEEPING_CONF@@; then
-    install -m644 conf/housekeeping.cfg $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
+    install -m644 conf/housekeeping.cfg $RPM_BUILD_ROOT%{_sysconfdir}/scylla.d/
 fi
 install -d -m755 $RPM_BUILD_ROOT%{_docdir}/scylla
 install -m644 README.md $RPM_BUILD_ROOT%{_docdir}/scylla/
@@ -219,7 +219,7 @@ mv /tmp/scylla.yaml /etc/scylla/scylla.yaml
 %config(noreplace) %{_sysconfdir}/scylla/scylla.yaml
 %config(noreplace) %{_sysconfdir}/scylla/cassandra-rackdc.properties
 %if %is_housekeeping_conf
-%config(noreplace) %{_sysconfdir}/scylla/housekeeping.cfg
+%config(noreplace) %{_sysconfdir}/scylla.d/housekeeping.cfg
 %endif
 
 
