@@ -162,6 +162,11 @@ cache_tracker::setup_collectd() {
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("cache"
                 , scollectd::per_cpu_plugin_instance
+                , "total_operations", "wide_partition_mispopulations")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _wide_partition_mispopulations)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
+                , scollectd::per_cpu_plugin_instance
                 , "total_operations", "removals")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _removals)
         ),
@@ -249,6 +254,10 @@ void cache_tracker::on_uncached_wide_partition() {
     ++_uncached_wide_partitions;
 }
 
+void cache_tracker::on_wide_partition_mispopulation() {
+    ++_wide_partition_mispopulations;
+}
+
 allocation_strategy& cache_tracker::allocator() {
     return _region.allocator();
 }
@@ -306,6 +315,7 @@ public:
                         return make_ready_future<streamed_mutation_opt>(streamed_mutation_opt());
                     } else {
                         _cache.on_uncached_wide_partition();
+                        _cache._tracker.on_wide_partition_mispopulation();
                         _cache.mark_partition_as_wide(dk);
                         _large_partition_range = dht::partition_range::make_singular(std::move(dk));
                         _large_partition_reader = _underlying(_schema, _large_partition_range, _slice, _pc, _trace_state);
@@ -455,6 +465,7 @@ private:
 
     future<streamed_mutation_opt> handle_large_partition(dht::decorated_key&& dk) {
         _cache.on_uncached_wide_partition();
+        _cache._tracker.on_wide_partition_mispopulation();
         _cache.mark_partition_as_wide(dk, &_last_key);
         _last_key.reset(dk, _populate_phase);
 

@@ -194,6 +194,7 @@ private:
     uint64_t _hits = 0;
     uint64_t _misses = 0;
     uint64_t _uncached_wide_partitions = 0;
+    uint64_t _wide_partition_mispopulations = 0;
     uint64_t _insertions = 0;
     uint64_t _concurrent_misses_same_key = 0;
     uint64_t _merges = 0;
@@ -222,6 +223,7 @@ public:
     void on_miss();
     void on_miss_already_populated();
     void on_uncached_wide_partition();
+    void on_wide_partition_mispopulation();
     allocation_strategy& allocator();
     logalloc::region& region();
     const logalloc::region& region() const;
