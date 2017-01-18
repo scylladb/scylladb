@@ -3102,6 +3102,15 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
             .fast_forward_to(dht::partition_range::make(dht::ring_position(keys[9]), dht::ring_position(keys[9])))
             .produces(keys[9])
             .produces_end_of_stream();
+
+        pr = dht::partition_range::make({ dht::ring_position(keys[0]), false }, { dht::ring_position(keys[1]), false});
+        assert_that(sstable_reader(sst, s, pr))
+            .produces_end_of_stream()
+            .fast_forward_to(dht::partition_range::make(dht::ring_position(keys[6]), dht::ring_position(keys[6])))
+            .produces(keys[6])
+            .produces_end_of_stream()
+            .fast_forward_to(dht::partition_range::make({ dht::ring_position(keys[8]), false }, { dht::ring_position(keys[9]), false }))
+            .produces_end_of_stream();
     });
 }
 

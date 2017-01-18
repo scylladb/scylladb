@@ -992,6 +992,7 @@ sstables::sstable::find_disk_ranges(
 
 class mutation_reader::impl {
 private:
+    bool _read_enabled = true;
     const io_priority_class& _pc;
     schema_ptr _schema;
     lw_shared_ptr<sstable_data_source> _ds;
@@ -1029,17 +1030,20 @@ public:
             auto index = std::make_unique<index_reader>(sst->get_index_reader(_pc));
             auto f = index->get_disk_read_range(*_schema, pr);
             return f.then([this, index = std::move(index), sst = std::move(sst)] (sstable::disk_read_range drr) mutable {
+                if (!drr.found_row()) {
+                    _read_enabled = false;
+                }
                 return make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), std::move(drr), std::move(index));
             });
         }) { }
-    impl() : _pc(default_priority_class()), _get_data_source() { }
+    impl() : _read_enabled(false), _pc(default_priority_class()), _get_data_source() { }
 
     // Reference to _consumer is passed to data_consume_rows() in the constructor so we must not allow move/copy
     impl(impl&&) = delete;
     impl(const impl&) = delete;
 
     future<streamed_mutation_opt> read() {
-        if (!_get_data_source) {
+        if (!_read_enabled) {
             // empty mutation reader returns EOF immediately
             return make_ready_future<streamed_mutation_opt>();
         }
@@ -1048,14 +1052,25 @@ public:
             return do_read();
         }
         return (_get_data_source)().then([this] (lw_shared_ptr<sstable_data_source> ds) {
+            // We must get the sstable_data_source and backup it in case we enable read
+            // again in the future.
             _ds = std::move(ds);
+            if (!_read_enabled) {
+                return make_ready_future<streamed_mutation_opt>();
+            }
             return do_read();
         });
     }
     future<> fast_forward_to(const dht::partition_range& pr) {
         assert(_ds->_index);
         return _ds->_index->get_disk_read_range(*_schema, pr).then([this] (sstable::disk_read_range drr) {
-            return _ds->_context.fast_forward_to(drr.start, drr.end);
+            if (drr.found_row()) {
+                _read_enabled = true;
+                return _ds->_context.fast_forward_to(drr.start, drr.end);
+            }
+            _read_enabled = false;
+            // Do not return return make_ready_future<>() here
+	    // because fast_forward_to return void
         });
     }
 private:
