@@ -102,7 +102,7 @@ SEASTAR_TEST_CASE(test_compaction_with_multiple_regions) {
         std::vector<managed_ref<int>> allocated1;
         std::vector<managed_ref<int>> allocated2;
 
-        int count = 32 * 1024 * 4;
+        int count = 32 * 1024 * 4 * 2;
         
         with_allocator(reg1.allocator(), [&] {
             for (int i = 0; i < count; i++) {

@@ -1253,6 +1253,12 @@ private:
         }
     };
 
+    bool is_compactible(float max_occupancy) const {
+        return _reclaiming_enabled
+               && (_closed_occupancy.free_space() >= 2 * segment::size)
+               && (_segments.top()->occupancy().used_fraction() < max_occupancy)
+               && (_segments.top()->occupancy().free_space() >= max_managed_object_size);
+    }
 public:
     explicit region_impl(region* region, region_group* group = nullptr)
         : _region(region), _group(group), _id(next_id())
@@ -1318,17 +1324,11 @@ public:
     //    while (is_compactible()) { compact(); }
     //
     bool is_compactible() const {
-        return _reclaiming_enabled
-            && (_closed_occupancy.free_space() >= 2 * segment::size)
-            && (_closed_occupancy.used_fraction() < max_occupancy_for_compaction)
-            && (_segments.top()->occupancy().free_space() >= max_managed_object_size);
+        return is_compactible(max_occupancy_for_compaction);
     }
 
     bool is_idle_compactible() {
-        return _reclaiming_enabled
-            && (_closed_occupancy.free_space() >= 2 * segment::size)
-            && (_closed_occupancy.used_fraction() < max_occupancy_for_compaction_on_idle)
-            && (_segments.top()->occupancy().free_space() >= max_managed_object_size);
+        return is_compactible(max_occupancy_for_compaction_on_idle);
     }
 
     virtual void* alloc(allocation_strategy::migrate_fn migrator, size_t size, size_t alignment) override {
@@ -1447,21 +1447,6 @@ public:
         return _segments.top()->occupancy();
     }
 
-    // Tries to release one full segment back to the segment pool.
-    void compact() {
-        if (!is_compactible()) {
-            return;
-        }
-
-        compaction_lock _(*this);
-
-        auto in_use = shard_segment_pool.segments_in_use();
-
-        while (shard_segment_pool.segments_in_use() >= in_use) {
-            compact_single_segment_locked();
-        }
-    }
-
     void compact_single_segment_locked() {
         segment* seg = _segments.top();
         logger.debug("Compacting segment {} from region {}, {}", seg, id(), seg->occupancy());
@@ -1471,8 +1456,8 @@ public:
         shard_segment_pool.on_segment_compaction();
     }
 
-    // Compacts only a single segment
-    void compact_on_idle() {
+    // Compacts a single segment
+    void compact() {
         compaction_lock _(*this);
         compact_single_segment_locked();
     }
@@ -1720,31 +1705,22 @@ void tracker::impl::full_compaction() {
 }
 
 static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use) {
-    while (true) {
-        auto deficit = shard_segment_pool.total_memory_in_use() - target_mem_in_use;
-        auto occupancy = r.occupancy();
-        auto used = occupancy.used_space();
-        if (used == 0) {
-            break;
-        }
-        auto used_target = used - std::min(used, deficit - std::min(deficit, occupancy.free_space()));
-        logger.debug("Evicting {} bytes from region {}, occupancy={}", used - used_target, r.id(), r.occupancy());
-        while (r.occupancy().used_space() > used_target || !r.is_compactible()) {
-            if (r.evict_some() == memory::reclaiming_result::reclaimed_nothing) {
-                logger.debug("Unable to evict more, evicted {} bytes", used - r.occupancy().used_space());
-                return;
-            }
-            if (shard_segment_pool.total_memory_in_use() <= target_mem_in_use) {
-                logger.debug("Target met after evicting {} bytes", used - r.occupancy().used_space());
-                return;
-            }
-            if (r.empty()) {
+    size_t used;
+
+    do {
+        used = r.occupancy().used_space();
+        logger.debug("Evicting {} from region {}, occupancy={}", r.id(), r.occupancy());
+        while (!r.is_compactible()) {
+            if (r.empty() || r.evict_some() == memory::reclaiming_result::reclaimed_nothing) {
+                logger.debug("Still not compactible but unable to evict more, evicted {} bytes", used - r.occupancy().used_space());
                 return;
             }
         }
         logger.debug("Compacting after evicting {} bytes", used - r.occupancy().used_space());
         r.compact();
-    }
+    } while (shard_segment_pool.total_memory_in_use() > target_mem_in_use);
+
+    logger.debug("Target met after evicting {} bytes", used - r.occupancy().used_space());
 }
 
 struct reclaim_timer {
@@ -1804,7 +1780,7 @@ reactor::idle_cpu_handler_result tracker::impl::compact_on_idle(reactor::work_wa
             return reactor::idle_cpu_handler_result::no_more_work;
         }
 
-        r->compact_on_idle();
+        r->compact();
 
         boost::range::push_heap(_regions, cmp);
     }
