@@ -521,12 +521,11 @@ private:
     std::vector<view_ptr> _view_schemas;
     semaphore _cache_update_sem{1};
 private:
-    void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable);
-    void add_sstable(sstables::sstable&& sstable);
+    void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, std::vector<unsigned>&& shards_for_the_sstable);
     // Adds new sstable to the set of sstables
     // Doesn't update the cache.
     // Doesn't trigger compaction.
-    void add_sstable(lw_shared_ptr<sstables::sstable> sstable);
+    void add_sstable(lw_shared_ptr<sstables::sstable> sstable, std::vector<unsigned>&& shards_for_the_sstable);
     // returns an empty pointer if sstable doesn't belong to current shard.
     future<lw_shared_ptr<sstables::sstable>> open_sstable(sstables::foreign_sstable_open_info info, sstring dir,
         int64_t generation, sstables::sstable::version_types v, sstables::sstable::format_types f);
