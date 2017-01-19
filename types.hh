@@ -760,6 +760,15 @@ public:
     static collection_mutation serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now);
     collection_mutation merge(collection_mutation_view a, collection_mutation_view b) const;
     collection_mutation difference(collection_mutation_view a, collection_mutation_view b) const;
+    // Calls Func(atomic_cell_view) for each cell in this collection.
+    // noexcept if Func doesn't throw.
+    template<typename Func>
+    void for_each_cell(collection_mutation_view c, Func&& func) const {
+        auto m_view = deserialize_mutation_form(std::move(c));
+        for (auto&& c : m_view.cells) {
+            func(std::move(c.second));
+        }
+    }
     virtual void serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const = 0;
     virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const = 0;
     data_value deserialize_value(bytes_view v, cql_serialization_format sf) const {
