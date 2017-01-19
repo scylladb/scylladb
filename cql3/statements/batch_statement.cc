@@ -41,6 +41,25 @@
 #include "raw/batch_statement.hh"
 #include "db/config.hh"
 
+namespace {
+
+struct mutation_equals_by_key {
+    bool operator()(const mutation& m1, const mutation& m2) const {
+        return m1.schema() == m2.schema()
+                && m1.decorated_key().equal(*m1.schema(), m2.decorated_key());
+    }
+};
+
+struct mutation_hash_by_key {
+    size_t operator()(const mutation& m) const {
+        auto dk_hash = std::hash<dht::decorated_key>();
+        return dk_hash(m.decorated_key());
+    }
+};
+
+}
+
+
 namespace cql3 {
 
 namespace statements {
@@ -146,7 +165,9 @@ const std::vector<shared_ptr<modification_statement>>& batch_statement::get_stat
 
 future<std::vector<mutation>> batch_statement::get_mutations(distributed<service::storage_proxy>& storage, const query_options& options, bool local, api::timestamp_type now, tracing::trace_state_ptr trace_state) {
     // Do not process in parallel because operations like list append/prepend depend on execution order.
-    return do_with(std::vector<mutation>(), [this, &storage, &options, now, local, trace_state] (auto&& result) {
+    using mutation_set_type = std::unordered_set<mutation, mutation_hash_by_key, mutation_equals_by_key>;
+    return do_with(mutation_set_type(), [this, &storage, &options, now, local, trace_state] (auto& result) {
+        result.reserve(_statements.size());
         return do_for_each(boost::make_counting_iterator<size_t>(0),
                            boost::make_counting_iterator<size_t>(_statements.size()),
                            [this, &storage, &options, now, local, &result, trace_state] (size_t i) {
@@ -155,10 +176,24 @@ future<std::vector<mutation>> batch_statement::get_mutations(distributed<service
             auto&& statement_options = options.for_statement(i);
             auto timestamp = _attrs->get_timestamp(now, statement_options);
             return statement->get_mutations(storage, statement_options, local, timestamp, trace_state).then([&result] (auto&& more) {
-                std::move(more.begin(), more.end(), std::back_inserter(result));
+                for (auto&& m : more) {
+                    // We want unordered_set::try_emplace(), but we don't have it
+                    auto pos = result.find(m);
+                    if (pos == result.end()) {
+                        result.emplace(std::move(m));
+                    } else {
+                        const_cast<mutation&>(*pos).apply(std::move(m)); // Won't change key
+                    }
+                }
             });
         }).then([&result] {
-            return std::move(result);
+            // can't use range adaptors, because we want to move
+            auto vresult = std::vector<mutation>();
+            vresult.reserve(result.size());
+            for (auto&& m : result) {
+                vresult.push_back(std::move(m));
+            }
+            return vresult;
         });
     });
 }
