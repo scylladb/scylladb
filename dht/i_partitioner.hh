@@ -500,7 +500,19 @@ namespace std {
 template<>
 struct hash<dht::token> {
     size_t operator()(const dht::token& t) const {
-        return (t._kind == dht::token::kind::key) ? std::hash<decltype(t._data)>()(t._data) : 0;
+        size_t ret = 0;
+        const auto& b = t._data;
+        if (b.size() <= sizeof(ret)) { // practically always
+            std::copy_n(b.data(), b.size(), reinterpret_cast<int8_t*>(&ret));
+        } else {
+            ret = hash_large_token(b);
+        }
+        return ret;
     }
+private:
+    size_t hash_large_token(const managed_bytes& b) const;
 };
+
+
 }
+
