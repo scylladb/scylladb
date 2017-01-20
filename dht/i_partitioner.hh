@@ -167,6 +167,16 @@ public:
     }
 };
 
+
+class decorated_key_equals_comparator {
+    const schema& _schema;
+public:
+    explicit decorated_key_equals_comparator(const schema& schema) : _schema(schema) {}
+    bool operator()(const dht::decorated_key& k1, const dht::decorated_key& k2) const {
+        return k1.equal(_schema, k2);
+    }
+};
+
 using decorated_key_opt = std::experimental::optional<decorated_key>;
 
 class i_partitioner {
@@ -500,7 +510,28 @@ namespace std {
 template<>
 struct hash<dht::token> {
     size_t operator()(const dht::token& t) const {
-        return (t._kind == dht::token::kind::key) ? std::hash<decltype(t._data)>()(t._data) : 0;
+        size_t ret = 0;
+        const auto& b = t._data;
+        if (b.size() <= sizeof(ret)) { // practically always
+            std::copy_n(b.data(), b.size(), reinterpret_cast<int8_t*>(&ret));
+        } else {
+            ret = hash_large_token(b);
+        }
+        return ret;
+    }
+private:
+    size_t hash_large_token(const managed_bytes& b) const;
+};
+
+template <>
+struct hash<dht::decorated_key> {
+    size_t operator()(const dht::decorated_key& k) const {
+        auto h_token = hash<dht::token>();
+        return h_token(k.token());
     }
 };
+
+
 }
+
+

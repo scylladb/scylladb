@@ -24,7 +24,10 @@
 #include "murmur3_partitioner.hh"
 #include "utils/class_registrator.hh"
 #include "types.hh"
+#include "utils/murmur_hash.hh"
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/irange.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 
 namespace dht {
 
@@ -372,6 +375,19 @@ split_ranges_to_shards(const dht::token_range_vector& ranges, const schema& s) {
         }
     }
     return ret;
+}
+
+}
+
+namespace std {
+
+size_t
+hash<dht::token>::hash_large_token(const managed_bytes& b) const {
+    auto read_bytes = boost::irange<size_t>(0, b.size())
+            | boost::adaptors::transformed([&b] (size_t idx) { return b[idx]; });
+    std::array<uint64_t, 2> result;
+    utils::murmur_hash::hash3_x64_128(read_bytes.begin(), b.size(), 0, result);
+    return result[0];
 }
 
 }
