@@ -168,6 +168,7 @@ future<std::vector<mutation>> batch_statement::get_mutations(distributed<service
     using mutation_set_type = std::unordered_set<mutation, mutation_hash_by_key, mutation_equals_by_key>;
     return do_with(mutation_set_type(), [this, &storage, &options, now, local, trace_state] (auto& result) {
         result.reserve(_statements.size());
+        _stats.statements_in_batches += _statements.size();
         return do_for_each(boost::make_counting_iterator<size_t>(0),
                            boost::make_counting_iterator<size_t>(_statements.size()),
                            [this, &storage, &options, now, local, &result, trace_state] (size_t i) {
@@ -289,7 +290,18 @@ future<> batch_statement::execute_without_conditions(
 #endif
     verify_batch_size(mutations);
 
-    bool mutate_atomic = _type == type::LOGGED && mutations.size() > 1;
+    bool mutate_atomic = true;
+    if (_type == type::UNLOGGED) {
+        _stats.batches_pure_unlogged += 1;
+        mutate_atomic = false;
+    } else {
+        if (mutations.size() > 1) {
+            _stats.batches_pure_logged += 1;
+        } else {
+            _stats.batches_unlogged_from_logged += 1;
+            mutate_atomic = false;
+        }
+    }
     return storage.local().mutate_with_triggers(std::move(mutations), cl, mutate_atomic, std::move(tr_state));
 }
 

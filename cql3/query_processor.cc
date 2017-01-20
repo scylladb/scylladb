@@ -118,6 +118,18 @@ query_processor::query_processor(distributed<service::storage_proxy>& proxy,
 
         sm::make_derive("batches", _cql_stats.batches,
                         sm::description("Counts a total number of CQL BATCH requests.")),
+
+        sm::make_derive("statements_in_batches", _cql_stats.statements_in_batches,
+                        sm::description("Counts a total number of sub-statements in CQL BATCH requests.")),
+
+        sm::make_derive("batches_pure_logged", _cql_stats.batches_pure_logged,
+                        sm::description("Counts a total number of LOGGED batches that were executed as LOGGED batches.")),
+
+        sm::make_derive("batches_pure_unlogged", _cql_stats.batches_pure_unlogged,
+                        sm::description("Counts a total number of UNLOGGED batches that were executed as UNLOGGED batches.")),
+
+        sm::make_derive("batches_unlogged_from_logged", _cql_stats.batches_unlogged_from_logged,
+                        sm::description("Counts a total number of LOGGED batches that were executed as UNLOGGED batches.")),
     });
 
     service::get_local_migration_manager().register_listener(_migration_subscriber.get());
