@@ -214,7 +214,7 @@ private:
 
         auto& summary = _sstable->get_summary();
         if (summary_idx >= summary.header.size) {
-            return close().then([this] {
+            return close_reader().finally([this] {
                 _reader = stdx::nullopt;
             });
         }
@@ -230,9 +230,17 @@ private:
             end = summary.entries[summary_idx + 1].position;
         }
 
-        _reader.emplace(_sstable, _pc, position, end, quantity);
-        _reader->_current_summary_idx = summary_idx;
-        return _reader->_context.consume_input(_reader->_context);
+        return close_reader().then_wrapped([this, position, end, quantity, summary_idx] (auto&& f) {
+            try {
+                f.get();
+                _reader.emplace(_sstable, _pc, position, end, quantity);
+            } catch (...) {
+                _reader = stdx::nullopt;
+                throw;
+            }
+            _reader->_current_summary_idx = summary_idx;
+            return _reader->_context.consume_input(_reader->_context);
+        });
     }
 
     future<uint64_t> data_end_position(uint64_t summary_idx) {
@@ -335,6 +343,12 @@ private:
     future<uint64_t> upper_bound(const schema& s, const dht::ring_position& pos) {
         return find_bound<bound_kind::upper>(s, pos);
     }
+    future<> close_reader() {
+        if (_reader) {
+            return _reader->_context.close();
+        }
+        return make_ready_future<>();
+    }
 public:
     future<sstable::disk_read_range> get_disk_read_range(const schema& s, const dht::partition_range& range) {
         return start_position(s, range).then([this, &s, &range] (uint64_t start) {
@@ -345,10 +359,7 @@ public:
     }
 
     future<> close() {
-        if (_reader) {
-            return _reader->_context.close();
-        }
-        return make_ready_future<>();
+        return close_reader();
     }
 };
 
