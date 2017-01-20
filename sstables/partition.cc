@@ -1069,8 +1069,7 @@ public:
                 return _ds->_context.fast_forward_to(drr.start, drr.end);
             }
             _read_enabled = false;
-            // Do not return return make_ready_future<>() here
-	    // because fast_forward_to return void
+            return make_ready_future<>();
         });
     }
 private:

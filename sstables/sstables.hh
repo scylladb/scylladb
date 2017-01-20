@@ -76,7 +76,7 @@ class data_consume_context {
     friend class sstable;
 public:
     future<> read();
-    void fast_forward_to(uint64_t begin, uint64_t end);
+    future<> fast_forward_to(uint64_t begin, uint64_t end);
     // Define (as defaults) the destructor and move operations in the source
     // file, so here we don't need to know the incomplete impl type.
     ~data_consume_context();

@@ -404,8 +404,8 @@ public:
     future<> read() {
         return _ctx->consume_input(*_ctx);
     }
-    void fast_forward_to(uint64_t begin, uint64_t end) {
-        _ctx->fast_forward_to(begin, end);
+    future<> fast_forward_to(uint64_t begin, uint64_t end) {
+        return _ctx->fast_forward_to(begin, end);
     }
 };
 
@@ -421,7 +421,7 @@ data_consume_context::data_consume_context(std::unique_ptr<impl> p) : _pimpl(std
 future<> data_consume_context::read() {
     return _pimpl->read();
 }
-void data_consume_context::fast_forward_to(uint64_t begin, uint64_t end) {
+future<> data_consume_context::fast_forward_to(uint64_t begin, uint64_t end) {
     return _pimpl->fast_forward_to(begin, end);
 }
 
