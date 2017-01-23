@@ -209,17 +209,54 @@ tombstone range_tombstone_list::search_tombstone_covering(const schema& s, const
 range_tombstone_list range_tombstone_list::difference(const schema& s, const range_tombstone_list& other) const {
     range_tombstone_list diff(s);
     bound_view::compare cmp_rt(s);
-    auto it_rt = other.begin();
-    for (auto&& rt : _tombstones) {
-        while (it_rt != other.end() && cmp_rt(it_rt->start_bound(), rt.start_bound())) {
-            ++it_rt;
+    auto other_rt = other.begin();
+    auto this_rt = begin();
+    if (this_rt == end()) {
+        return diff;
+    }
+    bound_view cur_start = this_rt->start_bound();
+    bound_view cur_end = this_rt->end_bound();
+    auto advance_this_rt = [&] () {
+        if (++this_rt != end()) {
+            cur_start = this_rt->start_bound();
+            cur_end = this_rt->end_bound();
         }
-        if (it_rt == other.end()
-                || !it_rt->start_bound().equal(s, rt.start_bound())
-                || !it_rt->end_bound().equal(s, rt.end_bound())
-                || rt.tomb > it_rt->tomb) {
-            diff.apply(s, rt);
+    };
+    while (this_rt != end() && other_rt != other.end()) {
+        if (cmp_rt(cur_end, other_rt->start_bound())) {
+            diff.apply(s, cur_start, cur_end, this_rt->tomb);
+            advance_this_rt();
+            continue;
         }
+        if (cmp_rt(other_rt->end_bound(), cur_start)) {
+            ++other_rt;
+            continue;
+        }
+        auto new_end = bound_view(other_rt->start_bound().prefix, invert_kind(other_rt->start_bound().kind));
+        if (cmp_rt(cur_start, new_end)) {
+            diff.apply(s, cur_start, new_end, this_rt->tomb);
+            cur_start = other_rt->start_bound();
+        }
+        if (cmp_rt(cur_end, other_rt->end_bound())) {
+            if (this_rt->tomb > other_rt->tomb) {
+                diff.apply(s, cur_start, cur_end, this_rt->tomb);
+            }
+            advance_this_rt();
+        } else {
+            auto end = other_rt->end_bound();
+            if (this_rt->tomb > other_rt->tomb) {
+                diff.apply(s, cur_start, end, this_rt->tomb);
+            }
+            cur_start = bound_view(end.prefix, invert_kind(end.kind));
+            ++other_rt;
+            if (cmp_rt(cur_end, cur_start)) {
+                advance_this_rt();
+            }
+        }
+    }
+    while (this_rt != end()) {
+        diff.apply(s, cur_start, cur_end, this_rt->tomb);
+        advance_this_rt();
     }
     return diff;
 }
