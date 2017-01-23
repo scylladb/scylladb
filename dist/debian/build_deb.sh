@@ -26,7 +26,7 @@ while [ $# -gt 0 ]; do
 done
 
 
-if [ ! -e dist/ubuntu/build_deb.sh ]; then
+if [ ! -e dist/debian/build_deb.sh ]; then
     echo "run build_deb.sh in top of scylla dir"
     exit 1
 fi
@@ -57,7 +57,7 @@ fi
 
 DISTRIBUTION=`lsb_release -i|awk '{print $3}'`
 CODENAME=`lsb_release -c|awk '{print $2}'`
-if [ `grep -c $VERSION_ID dist/ubuntu/supported_release` -lt 1 ]; then
+if [ `grep -c $VERSION_ID dist/debian/supported_release` -lt 1 ]; then
     echo "Unsupported release: $VERSION_ID"
     echo "Pless any key to continue..."
     read input
@@ -69,15 +69,15 @@ SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
 echo $VERSION > version
 ./scripts/git-archive-all --extra version --force-submodules --prefix scylla-server ../scylla-server_$SCYLLA_VERSION-$SCYLLA_RELEASE.orig.tar.gz 
 
-cp -a dist/ubuntu/debian debian
+cp -a dist/debian/debian debian
 cp dist/common/sysconfig/scylla-server debian/scylla-server.default
-cp dist/ubuntu/changelog.in debian/changelog
+cp dist/debian/changelog.in debian/changelog
 sed -i -e "s/@@VERSION@@/$SCYLLA_VERSION/g" debian/changelog
 sed -i -e "s/@@RELEASE@@/$SCYLLA_RELEASE/g" debian/changelog
 sed -i -e "s/@@CODENAME@@/$CODENAME/g" debian/changelog
-cp dist/ubuntu/rules.in debian/rules
-cp dist/ubuntu/control.in debian/control
-cp dist/ubuntu/scylla-server.install.in debian/scylla-server.install
+cp dist/debian/rules.in debian/rules
+cp dist/debian/control.in debian/control
+cp dist/debian/scylla-server.install.in debian/scylla-server.install
 if [ "$DISTRIBUTION" = "Debian" ]; then
     sed -i -e "s/@@REVISION@@/1/g" debian/changelog
     sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
@@ -85,15 +85,15 @@ if [ "$DISTRIBUTION" = "Debian" ]; then
     sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++-5, libunwind-dev/g" debian/control
     sed -i -e "s#@@INSTALL@@##g" debian/scylla-server.install
     sed -i -e "s#@@HKDOTTIMER@@#dist/common/systemd/scylla-housekeeping.timer /lib/systemd/system#g" debian/scylla-server.install
-    sed -i -e "s#@@SYSCTL@@#dist/ubuntu/sysctl.d/99-scylla.conf etc/sysctl.d#g" debian/scylla-server.install
+    sed -i -e "s#@@SYSCTL@@#dist/debian/sysctl.d/99-scylla.conf etc/sysctl.d#g" debian/scylla-server.install
 elif [ "$VERSION_ID" = "14.04" ]; then
     sed -i -e "s/@@REVISION@@/0ubuntu1/g" debian/changelog
     sed -i -e "s/@@DH_INSTALLINIT@@/--upstart-only/g" debian/rules
     sed -i -e "s/@@COMPILER@@/g++-5/g" debian/rules
     sed -i -e "s/@@BUILD_DEPENDS@@/g++-5, libunwind8-dev/g" debian/control
-    sed -i -e "s#@@INSTALL@@#dist/ubuntu/sudoers.d/scylla etc/sudoers.d#g" debian/scylla-server.install
+    sed -i -e "s#@@INSTALL@@#dist/debian/sudoers.d/scylla etc/sudoers.d#g" debian/scylla-server.install
     sed -i -e "s#@@HKDOTTIMER@@##g" debian/scylla-server.install
-    sed -i -e "s#@@SYSCTL@@#dist/ubuntu/sysctl.d/99-scylla.conf etc/sysctl.d#g" debian/scylla-server.install
+    sed -i -e "s#@@SYSCTL@@#dist/debian/sysctl.d/99-scylla.conf etc/sysctl.d#g" debian/scylla-server.install
 else
     sed -i -e "s/@@REVISION@@/0ubuntu1/g" debian/changelog
     sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
@@ -128,7 +128,7 @@ if [ "$VERSION_ID" = "14.04" ] && [ $REBUILD -eq 0 ]; then
     sudo apt-get -y update
     sudo apt-get -y --allow-unauthenticated install antlr3 antlr3-c++-dev libthrift-dev libthrift0 thrift-compiler
 else
-    ./dist/ubuntu/dep/build_dependency.sh
+    ./dist/debian/dep/build_dependency.sh
 fi
 
 if [ "$VERSION_ID" = "14.04" ]; then

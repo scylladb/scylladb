@@ -104,7 +104,7 @@ if [ $LOCALRPM -eq 1 ]; then
             cd build
             git clone --depth 1 https://github.com/scylladb/scylla-jmx.git
             cd scylla-jmx
-            sh -x -e dist/ubuntu/build_deb.sh $*
+            sh -x -e dist/debian/build_deb.sh $*
             cd ../..
             cp build/scylla-jmx_`cat build/scylla-jmx/build/SCYLLA-VERSION-FILE | sed 's/\.rc/~rc/'`-`cat build/scylla-jmx/build/SCYLLA-RELEASE-FILE`-ubuntu1_all.deb dist/ami/files/scylla-jmx_all.deb
         fi
@@ -112,7 +112,7 @@ if [ $LOCALRPM -eq 1 ]; then
             cd build
             git clone --depth 1 https://github.com/scylladb/scylla-tools-java.git
             cd scylla-tools-java
-            sh -x -e dist/ubuntu/build_deb.sh $*
+            sh -x -e dist/debian/build_deb.sh $*
             cd ../..
             cp build/scylla-tools_`cat build/scylla-tools-java/build/SCYLLA-VERSION-FILE | sed 's/\.rc/~rc/'`-`cat build/scylla-tools-java/build/SCYLLA-RELEASE-FILE`-ubuntu1_all.deb dist/ami/files/scylla-tools_all.deb
         fi

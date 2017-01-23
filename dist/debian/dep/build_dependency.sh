@@ -8,7 +8,7 @@ if [ "$VERSION_ID" = "14.04" ] || [ "$DISTRIBUTION" = "Debian" ]; then
     if [ ! -f build/antlr3_*.deb ]; then
         rm -rf build/antlr3-3.5.2
         mkdir -p build/antlr3-3.5.2
-        cp -a dist/ubuntu/dep/antlr3-3.5.2/* build/antlr3-3.5.2
+        cp -a dist/debian/dep/antlr3-3.5.2/* build/antlr3-3.5.2
         cd build/antlr3-3.5.2
         wget -nv http://www.antlr3.org/download/antlr-3.5.2-complete-no-st3.jar
         echo Y | sudo mk-build-deps -i -r
@@ -38,7 +38,7 @@ if [ "$VERSION_ID" = "14.04" ] || [ "$DISTRIBUTION" = "Debian" ]; then
         mv gdb_7.11.orig.tar.xz scylla-gdb_7.11.orig.tar.xz
         cd -
         cd build/gdb-7.11
-        patch -p0 < ../../dist/ubuntu/dep/gdb.diff
+        patch -p0 < ../../dist/debian/dep/gdb.diff
         echo Y | sudo mk-build-deps -i -r
         debuild -r fakeroot --no-tgz-check -us -uc
         cd -
@@ -54,7 +54,7 @@ if [ ! -f build/antlr3-c++-dev_*.deb ]; then
     tar xpf 3.5.2.tar.gz
     mv antlr3-3.5.2 antlr3-c++-dev-3.5.2
     cd -
-    cp -a dist/ubuntu/dep/antlr3-c++-dev-3.5.2/debian build/antlr3-c++-dev-3.5.2
+    cp -a dist/debian/dep/antlr3-c++-dev-3.5.2/debian build/antlr3-c++-dev-3.5.2
     cd build/antlr3-c++-dev-3.5.2
     echo Y | sudo mk-build-deps -i -r
     debuild -r fakeroot --no-tgz-check -us -uc
@@ -69,7 +69,7 @@ if [ ! -f build/libthrift0_*.deb ]; then
     cd build
     tar xpf thrift-0.9.3.tar.gz
     cd thrift-0.9.3
-    patch -p0 < ../../dist/ubuntu/dep/thrift.diff
+    patch -p0 < ../../dist/debian/dep/thrift.diff
     echo Y | sudo mk-build-deps -i -r
     debuild -r fakeroot --no-tgz-check -us -uc
     cd ../..
@@ -77,14 +77,14 @@ fi
 
 if [ "$DISTRIBUTION" = "Debian" ] && [ "$VERSION_ID" = "8" ]; then
     if [ ! -f build/gcc-5_*.deb ]; then
-        sudo cp dist/ubuntu/dep/debian-stretch-source.list /etc/apt/sources.list.d/
+        sudo cp dist/debian/dep/debian-stretch-source.list /etc/apt/sources.list.d/
         sudo apt-get update
         cd build
         apt-get source gcc-5/stretch=5.4.1-2
         cd gcc-5-5.4.1
         # resolve build time dependencies manually, since mk-build-deps doesn't works for gcc package
         sudo apt-get install -y g++-multilib libc6-dev-i386 lib32gcc1 libc6-dev-x32 libx32gcc1 libc6-dbg m4 libtool autoconf2.64 autogen gawk zlib1g-dev systemtap-sdt-dev gperf bison flex gdb texinfo locales sharutils libantlr-java libffi-dev gnat-4.9 libisl-dev libmpc-dev libmpfr-dev libgmp-dev dejagnu realpath chrpath quilt doxygen graphviz ghostscript texlive-latex-base xsltproc libxml2-utils docbook-xsl-ns
-        patch -p0 < ../../dist/ubuntu/dep/debian-gcc-5-jessie.diff
+        patch -p0 < ../../dist/debian/dep/debian-gcc-5-jessie.diff
         ./debian/rules control
         debuild -r fakeroot -us -uc
         cd ../..
