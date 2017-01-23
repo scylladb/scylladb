@@ -2886,9 +2886,11 @@ template<typename... Args>
 void column_family::do_apply(db::rp_handle&& h, Args&&... args) {
     utils::latency_counter lc;
     _stats.writes.set_latency(lc);
-    check_valid_rp(h);
+    db::replay_position rp = h;
+    check_valid_rp(rp);
     try {
         _memtables->active_memtable().apply(std::forward<Args>(args)..., std::move(h));
+        _highest_rp = std::max(_highest_rp, rp);
     } catch (...) {
         _failed_counter_applies_to_memtable++;
         throw;
@@ -2986,10 +2988,16 @@ void column_family::apply_streaming_big_mutation(schema_ptr m_schema, utils::UUI
 
 void
 column_family::check_valid_rp(const db::replay_position& rp) const {
-    if (rp != db::replay_position() && rp < _highest_flushed_rp) {
+    if (rp != db::replay_position() && rp < _lowest_allowed_rp) {
         throw replay_position_reordered_exception();
     }
 }
+
+db::replay_position column_family::set_low_replay_position_mark() {
+    _lowest_allowed_rp = _highest_rp;
+    return _lowest_allowed_rp;
+}
+
 
 future<> dirty_memory_manager::shutdown() {
     _db_shutdown_requested = true;
@@ -3395,6 +3403,13 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
     const auto durable = ks.metadata()->durable_writes();
     const auto auto_snapshot = get_config().auto_snapshot();
 
+    // Force mutations coming in to re-acquire higher rp:s
+    // This creates a "soft" ordering, in that we will guarantee that
+    // any sstable written _after_ we issue the flush below will
+    // only have higher rp:s than we will get from the discard_sstable
+    // call.
+    auto low_mark = cf.set_low_replay_position_mark();
+
     future<> f = make_ready_future<>();
     if (durable || auto_snapshot) {
         // TODO:
@@ -3405,20 +3420,21 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
         f = cf.clear();
     }
 
-    return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, tsf = std::move(tsf)]() mutable {
-        return f.then([&cf, auto_snapshot, tsf = std::move(tsf)] {
+    return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
+        return f.then([&cf, auto_snapshot, tsf = std::move(tsf), low_mark] {
             dblog.debug("Discarding sstable data for truncated CF + indexes");
             // TODO: notify truncation
 
-            return tsf().then([&cf, auto_snapshot](db_clock::time_point truncated_at) {
+            return tsf().then([&cf, auto_snapshot, low_mark](db_clock::time_point truncated_at) {
                 future<> f = make_ready_future<>();
                 if (auto_snapshot) {
                     auto name = sprint("%d-%s", truncated_at.time_since_epoch().count(), cf.schema()->cf_name());
                     f = cf.snapshot(name);
                 }
-                return f.then([&cf, truncated_at] {
-                    return cf.discard_sstables(truncated_at).then([&cf, truncated_at](db::replay_position rp) {
+                return f.then([&cf, truncated_at, low_mark] {
+                    return cf.discard_sstables(truncated_at).then([&cf, truncated_at, low_mark](db::replay_position rp) {
                         // TODO: indexes.
+                        assert(low_mark <= rp);
                         return db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
                     });
                 });

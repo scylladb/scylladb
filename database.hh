@@ -513,6 +513,9 @@ private:
     std::experimental::optional<int64_t> _sstable_generation = {};
 
     db::replay_position _highest_flushed_rp;
+    db::replay_position _highest_rp;
+    db::replay_position _lowest_allowed_rp;
+
     // Provided by the database that owns this commitlog
     db::commitlog* _commitlog;
     compaction_manager& _compaction_manager;
@@ -775,6 +778,8 @@ public:
     future<> cleanup_sstables(sstables::compaction_descriptor descriptor);
 
     future<bool> snapshot_exists(sstring name);
+
+    db::replay_position set_low_replay_position_mark();
 
     future<> snapshot(sstring name);
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
