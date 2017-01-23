@@ -68,6 +68,10 @@ static range_tombstone rtei(int32_t start, int32_t end, api::timestamp_type time
     return range_tombstone(key({start}), bound_kind::excl_start, key({end}), bound_kind::incl_end, {timestamp, gc_now});
 }
 
+static range_tombstone rtee(int32_t start, int32_t end, api::timestamp_type timestamp) {
+    return range_tombstone(key({start}), bound_kind::excl_start, key({end}), bound_kind::excl_end, {timestamp, gc_now});
+}
+
 static range_tombstone at_least(int32_t start, api::timestamp_type timestamp) {
     return range_tombstone(bound_view(key({start}), bound_kind::incl_start), bound_view::top(), {timestamp, gc_now});
 }
@@ -589,4 +593,58 @@ BOOST_AUTO_TEST_CASE(test_range_tombstone_to_prefix_tombstone_converter) {
             ++it;
         }
     }
+}
+
+BOOST_AUTO_TEST_CASE(test_difference_with_self) {
+    range_tombstone_list l(*s);
+    l.apply(*s, rt(1, 1, 7));
+    l.apply(*s, rt(3, 3, 8));
+
+    BOOST_REQUIRE(l.difference(*s, l).empty());
+}
+
+BOOST_AUTO_TEST_CASE(test_difference_with_bigger_tombstone) {
+    range_tombstone_list l1(*s);
+    l1.apply(*s, rt(1, 2, 3));
+    l1.apply(*s, rt(5, 7, 3));
+    l1.apply(*s, rt(8, 11, 3));
+    l1.apply(*s, rt(12, 14, 3));
+
+    range_tombstone_list l2(*s);
+    l2.apply(*s, rt(3, 4, 2));
+    l2.apply(*s, rt(6, 9, 2));
+    l2.apply(*s, rt(10, 13, 2));
+
+    auto diff = l1.difference(*s, l2);
+    auto it = diff.begin();
+    assert_rt(rt(1, 2, 3), *it++);
+    assert_rt(rtie(5, 6, 3), *it++);
+    assert_rt(rt(6, 7, 3), *it++);
+    assert_rt(rt(8, 9, 3), *it++);
+    assert_rt(rtee(9, 10, 3), *it++);
+    assert_rt(rt(10, 11, 3), *it++);
+    assert_rt(rt(12, 13, 3), *it++);
+    assert_rt(rtei(13, 14, 3), *it++);
+    BOOST_REQUIRE(it == diff.end());
+}
+
+BOOST_AUTO_TEST_CASE(test_difference_with_smaller_tombstone) {
+    range_tombstone_list l1(*s);
+    l1.apply(*s, rt(1, 2, 1));
+    l1.apply(*s, rt(5, 7, 1));
+    l1.apply(*s, rt(8, 11, 1));
+    l1.apply(*s, rt(12, 14, 1));
+
+    range_tombstone_list l2(*s);
+    l2.apply(*s, rt(3, 4, 2));
+    l2.apply(*s, rt(6, 9, 2));
+    l2.apply(*s, rt(10, 13, 2));
+
+    auto diff = l1.difference(*s, l2);
+    auto it = diff.begin();
+    assert_rt(rt(1, 2, 1), *it++);
+    assert_rt(rtie(5, 6, 1), *it++);
+    assert_rt(rtee(9, 10, 1), *it++);
+    assert_rt(rtei(13, 14, 1), *it++);
+    BOOST_REQUIRE(it == diff.end());
 }
