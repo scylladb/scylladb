@@ -227,7 +227,12 @@ class mutation_merger final : public streamed_mutation::impl {
 private:
     void read_next() {
         if (_readers.empty()) {
-            _end_of_stream = true;
+            auto rt = _deferred_tombstones.get_next();
+            if (rt) {
+                push_mutation_fragment(std::move(*rt));
+            } else {
+                _end_of_stream = true;
+            }
             return;
         }
 
@@ -302,9 +307,6 @@ private:
     }
 protected:
     virtual future<> fill_buffer() override  {
-        if (_next_readers.empty()) {
-            return make_ready_future<>();
-        }
         while (!is_end_of_stream() && !is_buffer_full()) {
             std::vector<future<>> more_data;
             for (auto& rd : _next_readers) {
