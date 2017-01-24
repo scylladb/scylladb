@@ -428,12 +428,6 @@ int32_t result_set_builder::ttl_of(size_t idx) {
 }
 
 bytes_opt result_set_builder::get_value(data_type t, query::result_atomic_cell_view c) {
-    if (t->is_counter()) {
-        fail(unimplemented::cause::COUNTERS);
-#if 0
-                ByteBufferUtil.bytes(CounterContext.instance().total(c.value()))
-#endif
-    }
     return {to_bytes(c.value())};
 }
 
