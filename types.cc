@@ -1508,7 +1508,7 @@ public:
         return true;
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        fail(unimplemented::cause::COUNTERS);
+        return cql3::cql3_type::counter;
     }
     virtual size_t native_value_size() const override {
         fail(unimplemented::cause::COUNTERS);
