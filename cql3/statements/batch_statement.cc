@@ -291,7 +291,7 @@ future<> batch_statement::execute_without_conditions(
     verify_batch_size(mutations);
 
     bool mutate_atomic = true;
-    if (_type == type::UNLOGGED) {
+    if (_type != type::LOGGED) {
         _stats.batches_pure_unlogged += 1;
         mutate_atomic = false;
     } else {

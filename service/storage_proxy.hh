@@ -273,10 +273,14 @@ private:
     void unthrottle();
     void handle_read_error(std::exception_ptr eptr, bool range);
     template<typename Range>
-    future<> mutate_internal(Range mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state);
+    future<> mutate_internal(Range mutations, db::consistency_level cl, bool counter_write, tracing::trace_state_ptr tr_state);
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_nonsingular_mutations_locally(
             schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector& pr, tracing::trace_state_ptr trace_state, uint64_t max_size);
 
+    future<> mutate_counters_on_leader(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout);
+    future<mutation> mutate_counter_on_leader(const mutation& m, clock_type::time_point timeout);
+
+    gms::inet_address find_leader_for_counter_update(const mutation& m, db::consistency_level cl);
 public:
     storage_proxy(distributed<database>& db);
     ~storage_proxy();
@@ -310,8 +314,13 @@ public:
     */
     future<> mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state);
 
+    future<> replicate_counters_from_leader(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state);
+
+    template<typename Range>
+    future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state);
+
     future<> mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl,
-        bool should_mutate_atomically, tracing::trace_state_ptr tr_state);
+                                  bool should_mutate_atomically, tracing::trace_state_ptr tr_state);
 
     /**
     * See mutate. Adds additional steps before and after writing a batch.
