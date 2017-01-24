@@ -856,7 +856,7 @@ class test_reclaimer: public region_group_reclaimer {
     std::vector<size_t> _reclaim_sizes;
     bool _shutdown = false;
 public:
-    virtual void start_reclaiming() override {
+    virtual void start_reclaiming() noexcept override {
         while (this->under_pressure()) {
             size_t reclaimed = test_async_reclaim_region::from_region(_rg.get_largest_region()).evict();
             _result_accumulator->_reclaim_sizes.push_back(reclaimed);

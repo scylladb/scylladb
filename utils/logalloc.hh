@@ -64,8 +64,20 @@ protected:
     size_t _soft_limit;
     bool _under_pressure = false;
     bool _under_soft_pressure = false;
-    virtual void start_reclaiming() {}
-    virtual void stop_reclaiming() {}
+    // The following restrictions apply to implementations of start_reclaiming() and stop_reclaiming():
+    //
+    //  - must not use any region or region_group objects, because they're invoked synchronously
+    //    with operations on those.
+    //
+    //  - must be noexcept, because they're called on the free path.
+    //
+    //  - the implementation may be called synchronously with any operation
+    //    which allocates memory, because these are called by memory reclaimer.
+    //    In particular, the implementation should not depend on memory allocation
+    //    because that may fail when in reclaiming context.
+    //
+    virtual void start_reclaiming() noexcept {}
+    virtual void stop_reclaiming() noexcept {}
 public:
     bool under_pressure() const {
         return _under_pressure;
@@ -75,28 +87,28 @@ public:
         return _under_soft_pressure;
     }
 
-    void notify_soft_pressure() {
+    void notify_soft_pressure() noexcept {
         if (!_under_soft_pressure) {
             _under_soft_pressure = true;
             start_reclaiming();
         }
     }
 
-    void notify_soft_relief() {
+    void notify_soft_relief() noexcept {
         if (_under_soft_pressure) {
             _under_soft_pressure = false;
             stop_reclaiming();
         }
     }
 
-    void notify_pressure() {
+    void notify_pressure() noexcept {
         if (!_under_pressure) {
             _under_pressure = true;
             start_reclaiming();
         }
     }
 
-    void notify_relief() {
+    void notify_relief() noexcept {
         if (_under_pressure) {
             _under_pressure = false;
             stop_reclaiming();

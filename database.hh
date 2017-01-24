@@ -146,7 +146,7 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
     std::unordered_map<const logalloc::region*, flush_permit> _flush_manager;
 
     future<> _waiting_flush;
-    virtual void start_reclaiming() override;
+    virtual void start_reclaiming() noexcept override;
 
     bool has_pressure() const {
         return over_soft_limit();
