@@ -50,6 +50,7 @@
 #include "cql3/statements/prepared_statement.hh"
 
 #include "schema_builder.hh"
+#include "service/storage_service.hh"
 
 namespace cql3 {
 
@@ -190,9 +191,8 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
     for (auto&& entry : _definitions) {
         ::shared_ptr<column_identifier> id = entry.first;
         ::shared_ptr<cql3_type> pt = entry.second->prepare(db, keyspace());
-        // FIXME: remove this check once we support counters
-        if (pt->is_counter()) {
-            fail(unimplemented::cause::COUNTERS);
+        if (pt->is_counter() && !service::get_local_storage_service().cluster_supports_counters()) {
+            throw exceptions::invalid_request_exception("Counter support is not enabled");
         }
         if (pt->is_collection() && pt->get_type()->is_multi_cell()) {
             if (!defined_multi_cell_collections) {
