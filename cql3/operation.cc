@@ -88,13 +88,10 @@ operation::addition::prepare(database& db, const sstring& keyspace, const column
 
     auto ctype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!ctype) {
-        fail(unimplemented::cause::COUNTERS);
-        // FIXME: implelement
-#if 0
-        if (!(receiver.type instanceof CounterColumnType))
-            throw new InvalidRequestException(String.format("Invalid operation (%s) for non counter column %s", toString(receiver), receiver.name));
-        return new Constants.Adder(receiver, v);
-#endif
+        if (!receiver.is_counter()) {
+            throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for non counter column %s", receiver, receiver.name()));
+        }
+        return make_shared<constants::adder>(receiver, v);
     } else if (!ctype->is_multi_cell()) {
         throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for frozen collection column %s", receiver, receiver.name()));
     }
@@ -119,12 +116,11 @@ shared_ptr<operation>
 operation::subtraction::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
     auto ctype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!ctype) {
-        fail(unimplemented::cause::COUNTERS);
-#if 0
-        if (!(receiver.type instanceof CounterColumnType))
-            throw new InvalidRequestException(String.format("Invalid operation (%s) for non counter column %s", toString(receiver), receiver.name));
-        return new Constants.Substracter(receiver, value.prepare(keyspace, receiver));
-#endif
+        if (!receiver.is_counter()) {
+            throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for non counter column %s", receiver, receiver.name()));
+        }
+        auto v = _value->prepare(db, keyspace, receiver.column_specification);
+        return make_shared<constants::subtracter>(receiver, v);
     }
     if (!ctype->is_multi_cell()) {
         throw exceptions::invalid_request_exception(

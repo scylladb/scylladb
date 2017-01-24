@@ -207,47 +207,38 @@ public:
         }
     };
 
-#if 0
-    public static class Adder extends Operation
-    {
-        public Adder(ColumnDefinition column, Term t)
-        {
-            super(column, t);
+    struct adder final : operation {
+        using operation::operation;
+
+        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override {
+            auto value = _t->bind_and_get(params._options);
+            if (value.is_null()) {
+                throw exceptions::invalid_request_exception("Invalid null value for counter increment");
+            } else if (value.is_unset_value()) {
+                return;
+            }
+            auto increment = value_cast<int64_t>(long_type->deserialize_value(*value));
+            m.set_cell(prefix, column, make_counter_update_cell(increment, params));
         }
+    };
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            ByteBuffer bytes = t.bindAndGet(params.options);
-            if (bytes == null)
-                throw new InvalidRequestException("Invalid null value for counter increment");
-            long increment = ByteBufferUtil.toLong(bytes);
-            CellName cname = cf.getComparator().create(prefix, column);
-            cf.addColumn(params.makeCounter(cname, increment));
+    struct subtracter final : operation {
+        using operation::operation;
+
+        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override {
+            auto value = _t->bind_and_get(params._options);
+            if (value.is_null()) {
+                throw exceptions::invalid_request_exception("Invalid null value for counter increment");
+            } else if (value.is_unset_value()) {
+                return;
+            }
+            auto increment = value_cast<int64_t>(long_type->deserialize_value(*value));
+            if (increment == std::numeric_limits<int64_t>::min()) {
+                throw exceptions::invalid_request_exception(sprint("The negation of %d overflows supported counter precision (signed 8 bytes integer)", increment));
+            }
+            m.set_cell(prefix, column, make_counter_update_cell(-increment, params));
         }
-    }
-
-    public static class Substracter extends Operation
-    {
-        public Substracter(ColumnDefinition column, Term t)
-        {
-            super(column, t);
-        }
-
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            ByteBuffer bytes = t.bindAndGet(params.options);
-            if (bytes == null)
-                throw new InvalidRequestException("Invalid null value for counter increment");
-
-            long increment = ByteBufferUtil.toLong(bytes);
-            if (increment == Long.MIN_VALUE)
-                throw new InvalidRequestException("The negation of " + increment + " overflows supported counter precision (signed 8 bytes integer)");
-
-            CellName cname = cf.getComparator().create(prefix, column);
-            cf.addColumn(params.makeCounter(cname, -increment));
-        }
-    }
-#endif
+    };
 
     class deleter : public operation {
     public:

@@ -146,13 +146,10 @@ public:
         }
     };
 
-#if 0
-     public Cell makeCounter(CellName name, long delta) throws InvalidRequestException
-     {
-         QueryProcessor.validateCellName(name, metadata.comparator);
-         return new BufferCounterUpdateCell(name, delta, FBUtilities.timestampMicros());
-     }
-#endif
+    atomic_cell make_counter_update_cell(int64_t delta) const {
+        // FIXME: create directly from int64_t to avoid allocation
+        return atomic_cell::make_live_counter_update(_timestamp, long_type->decompose(delta));
+    }
 
     tombstone make_tombstone() const {
         return {_timestamp, _local_deletion_time};

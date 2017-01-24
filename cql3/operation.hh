@@ -95,6 +95,10 @@ public:
         return params.make_cell(value);
     }
 
+    atomic_cell make_counter_update_cell(int64_t delta, const update_parameters& params) const {
+        return params.make_counter_update_cell(delta);
+    }
+
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const {
         return _t && _t->uses_function(ks_name, function_name);
     }
