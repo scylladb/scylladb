@@ -2207,7 +2207,10 @@ public:
     }
 private:
     void do_isolate_on_error(disk_error type);
+    utils::UUID _local_host_id;
 public:
+    utils::UUID get_local_id() { return _local_host_id; }
+
     static sstring get_config_supported_features();
 
     bool cluster_supports_range_tombstones() {

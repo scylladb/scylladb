@@ -285,6 +285,9 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     // (we won't be part of the storage ring though until we add a counterId to our state, below.)
     // Seed the host ID-to-endpoint map with our own ID.
     auto local_host_id = db::system_keyspace::get_local_host_id().get0();
+    get_storage_service().invoke_on_all([local_host_id] (auto& ss) {
+        ss._local_host_id = local_host_id;
+    }).get();
     auto features = get_config_supported_features();
     _token_metadata.update_host_id(local_host_id, get_broadcast_address());
     auto broadcast_rpc_address = utils::fb_utilities::get_broadcast_rpc_address();
