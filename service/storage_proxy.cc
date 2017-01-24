@@ -436,6 +436,8 @@ storage_proxy::split_stats::split_stats(const sstring& category, const sstring& 
     });
 }
 
+seastar::metrics::label storage_proxy::split_stats::datacenter_label("datacenter");
+
 storage_proxy::stats::stats()
         : writes_attempts(COORDINATOR_STATS_CATEGORY, "total_write_attempts", "total number of write requests")
         , writes_errors(COORDINATOR_STATS_CATEGORY, "write_errors", "number of write requests that failed")
@@ -463,8 +465,8 @@ inline uint64_t& storage_proxy::split_stats::get_ep_stat(gms::inet_address ep) {
         namespace sm = seastar::metrics;
 
         _metrics.add_group(_category, {
-            sm::make_derive(seastar::format("{}_{}", _short_description_prefix, dc), [this, dc] { return _dc_stats[dc].val; },
-                            sm::description(seastar::format("{} when communicating with external Nodes in DC {}", _long_description_prefix, dc)))
+            sm::make_derive(_short_description_prefix, [this, dc] { return _dc_stats[dc].val; },
+                            sm::description(seastar::format("{} when communicating with external Nodes in DC {}", _long_description_prefix, dc)), {datacenter_label(dc)})
         });
     }
     return _dc_stats[dc].val;

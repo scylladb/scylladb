@@ -51,7 +51,7 @@
 #include "utils/histogram.hh"
 #include "utils/estimated_histogram.hh"
 #include "tracing/trace_state.hh"
-#include <seastar/core/metrics_registration.hh>
+#include <seastar/core/metrics.hh>
 
 namespace compat {
 
@@ -93,6 +93,7 @@ private:
 public:
     // split statistics counters
     struct split_stats {
+        static seastar::metrics::label datacenter_label;
     private:
         struct stats_counter {
             uint64_t val = 0;
