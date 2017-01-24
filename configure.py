@@ -561,6 +561,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/idl_test.idl.hh',
         'idl/commitlog.idl.hh',
         'idl/tracing.idl.hh',
+        'idl/consistency_level.idl.hh',
         ]
 
 scylla_tests_dependencies = scylla_core + api + idls + [
