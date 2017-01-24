@@ -38,6 +38,7 @@
 #include "frozen_schema.hh"
 #include "repair/repair.hh"
 #include "digest_algorithm.hh"
+#include "idl/consistency_level.dist.hh"
 #include "idl/tracing.dist.hh"
 #include "idl/result.dist.hh"
 #include "idl/reconcilable_result.dist.hh"
@@ -55,6 +56,7 @@
 #include "idl/query.dist.hh"
 #include "serializer_impl.hh"
 #include "serialization_visitors.hh"
+#include "idl/consistency_level.dist.impl.hh"
 #include "idl/tracing.dist.impl.hh"
 #include "idl/result.dist.impl.hh"
 #include "idl/reconcilable_result.dist.impl.hh"
@@ -820,6 +822,16 @@ future<> messaging_service::send_mutation(msg_addr id, clock_type::time_point ti
     inet_address reply_to, unsigned shard, response_id_type response_id, std::experimental::optional<tracing::trace_info> trace_info) {
     return send_message_oneway_timeout(this, timeout, messaging_verb::MUTATION, std::move(id), fm, std::move(forward),
         std::move(reply_to), std::move(shard), std::move(response_id), std::move(trace_info));
+}
+
+void messaging_service::register_counter_mutation(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, std::vector<frozen_mutation> fms, db::consistency_level cl, stdx::optional<tracing::trace_info> trace_info)>&& func) {
+    register_handler(this, net::messaging_verb::COUNTER_MUTATION, std::move(func));
+}
+void messaging_service::unregister_counter_mutation() {
+    _rpc->unregister_handler(net::messaging_verb::COUNTER_MUTATION);
+}
+future<> messaging_service::send_counter_mutation(msg_addr id, clock_type::time_point timeout, std::vector<frozen_mutation> fms, db::consistency_level cl, stdx::optional<tracing::trace_info> trace_info) {
+    return send_message_timeout<void>(this, messaging_verb::COUNTER_MUTATION, std::move(id), timeout, std::move(fms), cl, std::move(trace_info));
 }
 
 void messaging_service::register_mutation_done(std::function<future<rpc::no_wait_type> (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id)>&& func) {

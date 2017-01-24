@@ -107,7 +107,8 @@ enum class messaging_verb : int32_t {
     REPAIR_CHECKSUM_RANGE = 20,
     GET_SCHEMA_VERSION = 21,
     SCHEMA_CHECK = 22,
-    LAST = 23,
+    COUNTER_MUTATION = 23,
+    LAST = 24,
 };
 
 } // namespace net
@@ -291,6 +292,11 @@ public:
     void unregister_mutation();
     future<> send_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id, std::experimental::optional<tracing::trace_info> trace_info = std::experimental::nullopt);
+
+    // Wrapper for COUNTER_MUTATION
+    void register_counter_mutation(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, std::vector<frozen_mutation> fms, db::consistency_level cl, stdx::optional<tracing::trace_info> trace_info)>&& func);
+    void unregister_counter_mutation();
+    future<> send_counter_mutation(msg_addr id, clock_type::time_point timeout, std::vector<frozen_mutation> fms, db::consistency_level cl, stdx::optional<tracing::trace_info> trace_info = std::experimental::nullopt);
 
     // Wrapper for MUTATION_DONE
     void register_mutation_done(std::function<future<rpc::no_wait_type> (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id)>&& func);
