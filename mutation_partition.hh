@@ -194,7 +194,17 @@ public:
     // Calls Func(column_id, atomic_cell_or_collection&) for each cell in this row.
     // noexcept if Func doesn't throw.
     template<typename Func>
-    void for_each_cell(Func&&);
+    void for_each_cell(Func&& func) {
+        if (_type == storage_type::vector) {
+            for (auto i : bitsets::for_each_set(_storage.vector.present)) {
+                func(i, _storage.vector.v[i]);
+            }
+        } else {
+            for (auto& cell : _storage.set) {
+                func(cell.id(), cell.cell());
+            }
+        }
+    }
 
     template<typename Func>
     void for_each_cell(Func&& func) const {

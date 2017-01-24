@@ -1019,19 +1019,6 @@ void row::for_each_cell(Func&& func, Rollback&& rollback) {
     }
 }
 
-template<typename Func>
-void row::for_each_cell(Func&& func) {
-    if (_type == storage_type::vector) {
-        for (auto i : bitsets::for_each_set(_storage.vector.present)) {
-            func(i, _storage.vector.v[i]);
-        }
-    } else {
-        for (auto& cell : _storage.set) {
-            func(cell.id(), cell.cell());
-        }
-    }
-}
-
 void
 row::apply_reversibly(const column_definition& column, atomic_cell_or_collection& value) {
     static_assert(std::is_nothrow_move_constructible<atomic_cell_or_collection>::value
