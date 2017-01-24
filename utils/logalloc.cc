@@ -2078,7 +2078,6 @@ void region_group::release_requests() noexcept {
     // alive until we are done with the whole execution - only until later is successfully executed.
     tracker_reclaimer_lock rl;
 
-    _reclaimer.notify_relief();
     if (_descendant_blocked_requests) {
         _descendant_blocked_requests->set_value();
     }

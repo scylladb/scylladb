@@ -114,7 +114,9 @@ public:
     region_group_reclaimer(size_t threshold)
         : _threshold(threshold), _soft_limit(threshold) {}
     region_group_reclaimer(size_t threshold, size_t soft)
-        : _threshold(threshold), _soft_limit(soft) {}
+        : _threshold(threshold), _soft_limit(soft) {
+        assert(_soft_limit <= _threshold);
+    }
 
     virtual ~region_group_reclaimer() {}
 
@@ -271,17 +273,23 @@ public:
         do_for_each_parent(this, [delta] (auto rg) mutable {
             rg->update_maximal_rg();
             rg->_total_memory += delta;
-            // It is okay to call release_requests for a region_group that can't allow execution.
-            // But that can generate various spurious messages to groups waiting on us that will be
-            // then woken up just so they can go to wait again. So let's filter that.
-            if (rg->execution_permitted()) {
-                rg->release_requests();
-            }
+
             if (rg->_total_memory >= rg->_reclaimer.soft_limit_threshold()) {
                 rg->_reclaimer.notify_soft_pressure();
-            } else if (rg->_total_memory < rg->_reclaimer.soft_limit_threshold()) {
+            } else {
                 rg->_reclaimer.notify_soft_relief();
             }
+
+            if (!rg->execution_permitted()) {
+                rg->_reclaimer.notify_pressure();
+            } else {
+                rg->_reclaimer.notify_relief();
+                // It is okay to call release_requests for a region_group that can't allow execution.
+                // But that can generate various spurious messages to groups waiting on us that will be
+                // then woken up just so they can go to wait again. So let's filter that.
+                rg->release_requests();
+            }
+
             return stop_iteration::no;
         });
     }
@@ -343,23 +351,6 @@ public:
         _blocked_requests.push_back(std::move(fn), timeout);
         ++_blocked_requests_counter;
 
-        // This is called here, and not at update(), for two reasons: the first, is that things that
-        // are done during the free() path should be done carefuly, in the sense that they can
-        // trigger another update call and put us in a loop. Not to mention we would like to keep
-        // those from having exceptions. We solve that for release_requests by using later(), but in
-        // here we can do away with that need altogether.
-        //
-        // Second and most important, until we actually block a request, the pressure condition may
-        // very well be transient. There are opportunities for compactions, the condition can go
-        // away on its own, etc.
-        //
-        // The reason we check execution permitted(), is that we'll still block requests if we have
-        // free memory but existing requests in the queue. That is so we can keep our FIFO ordering
-        // guarantee. So we need to distinguish here the case in which we're blocking merely to
-        // serialize requests, so that the caller does not evict more than it should.
-        if (!blocked_at->execution_permitted()) {
-            blocked_at->_reclaimer.notify_pressure();
-        }
         return fut;
     }
 
