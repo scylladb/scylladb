@@ -67,10 +67,11 @@ static std::vector<relation_ptr> where_clause_to_relations(const sstring_view& w
 }
 
 inline sstring rename_column_in_where_clause(const sstring_view& where_clause, column_identifier::raw from, column_identifier::raw to) {
-    auto new_relations = where_clause_to_relations(where_clause) | boost::adaptors::transformed([&] (auto&& rel) {
+    auto relations = where_clause_to_relations(where_clause);
+    auto new_relations = relations | boost::adaptors::transformed([&] (auto&& rel) {
         return rel->maybe_rename_identifier(from, to);
     });
-    return relations_to_where_clause(new_relations);
+    return relations_to_where_clause(std::move(new_relations));
 }
 
 shared_ptr<cql3::statements::raw::select_statement> build_select_statement(
