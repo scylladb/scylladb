@@ -247,11 +247,7 @@ public:
     // the total memory for the region group (and all of its parents) is lower or equal to the
     // region_group's throttle_treshold (and respectively for its parents).
     region_group(region_group_reclaimer& reclaimer = no_reclaimer) : region_group(nullptr, reclaimer) {}
-    region_group(region_group* parent, region_group_reclaimer& reclaimer = no_reclaimer) : _parent(parent), _reclaimer(reclaimer) {
-        if (_parent) {
-            _parent->add(this);
-        }
-    }
+    region_group(region_group* parent, region_group_reclaimer& reclaimer = no_reclaimer);
     region_group(region_group&& o) = delete;
     region_group(const region_group&) = delete;
     ~region_group() {
@@ -269,30 +265,7 @@ public:
     size_t memory_used() const {
         return _total_memory;
     }
-    void update(ssize_t delta) {
-        do_for_each_parent(this, [delta] (auto rg) mutable {
-            rg->update_maximal_rg();
-            rg->_total_memory += delta;
-
-            if (rg->_total_memory >= rg->_reclaimer.soft_limit_threshold()) {
-                rg->_reclaimer.notify_soft_pressure();
-            } else {
-                rg->_reclaimer.notify_soft_relief();
-            }
-
-            if (!rg->execution_permitted()) {
-                rg->_reclaimer.notify_pressure();
-            } else {
-                rg->_reclaimer.notify_relief();
-                // It is okay to call release_requests for a region_group that can't allow execution.
-                // But that can generate various spurious messages to groups waiting on us that will be
-                // then woken up just so they can go to wait again. So let's filter that.
-                rg->release_requests();
-            }
-
-            return stop_iteration::no;
-        });
-    }
+    void update(ssize_t delta);
 
     // It would be easier to call update, but it is unfortunately broken in boost versions up to at
     // least 1.59.

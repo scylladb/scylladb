@@ -2147,6 +2147,40 @@ region_group::del(region_impl* child) {
     update(-child->occupancy().total_space());
 }
 
+region_group::region_group(region_group *parent, region_group_reclaimer& reclaimer)
+    : _parent(parent)
+    , _reclaimer(reclaimer)
+{
+    if (_parent) {
+        _parent->add(this);
+    }
+}
+
+void region_group::update(ssize_t delta) {
+    do_for_each_parent(this, [delta] (auto rg) mutable {
+        rg->update_maximal_rg();
+        rg->_total_memory += delta;
+
+        if (rg->_total_memory >= rg->_reclaimer.soft_limit_threshold()) {
+            rg->_reclaimer.notify_soft_pressure();
+        } else {
+            rg->_reclaimer.notify_soft_relief();
+        }
+
+        if (!rg->execution_permitted()) {
+            rg->_reclaimer.notify_pressure();
+        } else {
+            rg->_reclaimer.notify_relief();
+            // It is okay to call release_requests for a region_group that can't allow execution.
+            // But that can generate various spurious messages to groups waiting on us that will be
+            // then woken up just so they can go to wait again. So let's filter that.
+            rg->release_requests();
+        }
+
+        return stop_iteration::no;
+    });
+}
+
 allocating_section::guard::guard()
     : _prev(shard_segment_pool.emergency_reserve_max())
 { }
