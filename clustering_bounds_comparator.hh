@@ -62,10 +62,7 @@ public:
         : prefix(prefix)
         , kind(kind)
     { }
-    bound_view(const bound_view& other) noexcept
-        : prefix(other.prefix)
-        , kind(other.kind)
-    { }
+    bound_view(const bound_view& other) noexcept = default;
     bound_view& operator=(const bound_view& other) noexcept {
         if (this != &other) {
             this->~bound_view();
