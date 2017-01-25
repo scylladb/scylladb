@@ -43,10 +43,7 @@ class random_mutation_generator {
 public:
     random_mutation_generator();
     ~random_mutation_generator();
-    mutation operator()(bool range_deletes);
-    mutation operator()(){
-        return (*this)(true);
-    }
+    mutation operator()();
     schema_ptr schema() const;
 };
 
