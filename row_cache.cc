@@ -29,6 +29,7 @@
 #include <chrono>
 #include "utils/move.hh"
 #include <boost/version.hpp>
+#include <sys/sdt.h>
 
 using namespace std::chrono_literals;
 
@@ -811,6 +812,7 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
     _tracker.region().merge(m); // Now all data in memtable belongs to cache
     auto attr = seastar::thread_attributes();
     attr.scheduling_group = &_update_thread_scheduling_group;
+    STAP_PROBE(scylla, row_cache_update_start);
     auto t = seastar::thread(attr, [this, &m, presence_checker = std::move(presence_checker)] {
         auto cleanup = defer([&] {
             with_allocator(_tracker.allocator(), [&m, this] () {
@@ -843,7 +845,10 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                 {
                     _update_section(_tracker.region(), [&] {
                         auto i = m.partitions.begin();
+                        STAP_PROBE(scylla, row_cache_update_one_batch_start);
+                        unsigned quota_before = quota;
                         while (i != m.partitions.end() && quota) {
+                          STAP_PROBE(scylla, row_cache_update_partition_start);
                           with_linearized_managed_bytes([&] {
                            {
                             memtable_entry& mem_e = *i;
@@ -874,7 +879,9 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                             --quota;
                            }
                           });
+                          STAP_PROBE(scylla, row_cache_update_partition_end);
                         }
+                        STAP_PROBE1(scylla, row_cache_update_one_batch_end, quota_before - quota);
                     });
                     if (quota == 0 && seastar::thread::should_yield()) {
                         return;
@@ -884,6 +891,7 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
             seastar::thread::yield();
         }
     });
+    STAP_PROBE(scylla, row_cache_update_end);
     return do_with(std::move(t), [] (seastar::thread& t) {
         return t.join();
     });
