@@ -1444,7 +1444,16 @@ void cql_server::connection::read_value_view_list(bytes_view& buf, std::vector<c
 cql3::raw_value cql_server::connection::read_value(bytes_view& buf) {
     auto len = read_int(buf);
     if (len < 0) {
-        return cql3::raw_value::make_null();
+        if (_version < 4) {
+            return cql3::raw_value::make_null();
+        }
+        if (len == -1) {
+            return cql3::raw_value::make_null();
+        } else if (len == -2) {
+            return cql3::raw_value::make_unset_value();
+        } else {
+            throw exceptions::protocol_exception(sprint("invalid value length: %d", len));
+        }
     }
     check_room(buf, len);
     bytes b(reinterpret_cast<const int8_t*>(buf.begin()), len);
@@ -1455,7 +1464,16 @@ cql3::raw_value cql_server::connection::read_value(bytes_view& buf) {
 cql3::raw_value_view cql_server::connection::read_value_view(bytes_view& buf) {
     auto len = read_int(buf);
     if (len < 0) {
-        return cql3::raw_value_view::make_null();
+        if (_version < 4) {
+            return cql3::raw_value_view::make_null();
+        }
+        if (len == -1) {
+            return cql3::raw_value_view::make_null();
+        } else if (len == -2) {
+            return cql3::raw_value_view::make_unset_value();
+        } else {
+            throw exceptions::protocol_exception(sprint("invalid value length: %d", len));
+        }
     }
     check_room(buf, len);
     bytes_view bv(reinterpret_cast<const int8_t*>(buf.begin()), len);
