@@ -942,7 +942,7 @@ struct time_type_impl : public simple_type_impl<int64_t> {
                 throw marshal_exception("Nanosecond out of bounds.");
             }
         }
-        std::chrono::nanoseconds result;
+        std::chrono::nanoseconds result{};
         result += std::chrono::hours(hours);
         result += std::chrono::minutes(minutes);
         result += std::chrono::seconds(seconds);
