@@ -900,7 +900,7 @@ public:
             if (compression != Compression::type::NONE) {
                 throw make_exception<InvalidRequestException>("Compressed query strings are not supported");
             }
-            auto opts = std::make_unique<cql3::query_options>(cl_from_thrift(consistency), stdx::nullopt, std::vector<bytes_view_opt>(),
+            auto opts = std::make_unique<cql3::query_options>(cl_from_thrift(consistency), stdx::nullopt, std::vector<cql3::raw_value_view>(),
                             false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
             auto f = _query_processor.local().process(query, _query_state, *opts);
             return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {
@@ -967,9 +967,9 @@ public:
             if (stmt->get_bound_terms() != values.size()) {
                 throw make_exception<InvalidRequestException>("Wrong number of values specified. Expected %d, got %d.", stmt->get_bound_terms(), values.size());
             }
-            std::vector<bytes_opt> bytes_values;
+            std::vector<cql3::raw_value> bytes_values;
             std::transform(values.begin(), values.end(), std::back_inserter(bytes_values), [](auto&& s) {
-                return to_bytes(s);
+                return cql3::raw_value::make_value(to_bytes(s));
             });
             auto opts = std::make_unique<cql3::query_options>(cl_from_thrift(consistency), stdx::nullopt, std::move(bytes_values),
                             false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());

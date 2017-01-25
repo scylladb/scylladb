@@ -26,6 +26,7 @@
 #include "service/migration_listener.hh"
 #include "service/storage_proxy.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/values.hh"
 #include "auth/authenticator.hh"
 #include "core/distributed.hh"
 #include <seastar/core/semaphore.hh>
@@ -201,12 +202,13 @@ private:
         sstring read_string(bytes_view& buf);
         sstring_view read_string_view(bytes_view& buf);
         sstring_view read_long_string_view(bytes_view& buf);
+        bytes_opt read_bytes(bytes_view& buf);
         bytes read_short_bytes(bytes_view& buf);
-        bytes_opt read_value(bytes_view& buf);
-        bytes_view_opt read_value_view(bytes_view& buf);
-        void read_name_and_value_list(bytes_view& buf, std::vector<sstring_view>& names, std::vector<bytes_view_opt>& values);
+        cql3::raw_value read_value(bytes_view& buf);
+        cql3::raw_value_view read_value_view(bytes_view& buf);
+        void read_name_and_value_list(bytes_view& buf, std::vector<sstring_view>& names, std::vector<cql3::raw_value_view>& values);
         void read_string_list(bytes_view& buf, std::vector<sstring>& strings);
-        void read_value_view_list(bytes_view& buf, std::vector<bytes_view_opt>& values);
+        void read_value_view_list(bytes_view& buf, std::vector<cql3::raw_value_view>& values);
         db::consistency_level read_consistency(bytes_view& buf);
         std::unordered_map<sstring, sstring> read_string_map(bytes_view& buf);
         std::unique_ptr<cql3::query_options> read_options(bytes_view& buf);

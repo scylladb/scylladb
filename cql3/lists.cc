@@ -133,9 +133,9 @@ lists::value::from_serialized(bytes_view v, list_type type, cql_serialization_fo
     }
 }
 
-bytes_opt
+cql3::raw_value
 lists::value::get(const query_options& options) {
-    return get_with_protocol_version(options.get_cql_serialization_format());
+    return cql3::raw_value::make_value(get_with_protocol_version(options.get_cql_serialization_format()));
 }
 
 bytes

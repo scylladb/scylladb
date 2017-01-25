@@ -348,15 +348,15 @@ query_options query_processor::make_internal_options(::shared_ptr<statements::pr
         throw std::invalid_argument(sprint("Invalid number of values. Expecting %d but got %d", p->bound_names.size(), values.size()));
     }
     auto ni = p->bound_names.begin();
-    std::vector<bytes_opt> bound_values;
+    std::vector<cql3::raw_value> bound_values;
     for (auto& v : values) {
         auto& n = *ni++;
         if (v.type() == bytes_type) {
-            bound_values.push_back({value_cast<bytes>(v)});
+            bound_values.push_back(cql3::raw_value::make_value(value_cast<bytes>(v)));
         } else if (v.is_null()) {
-            bound_values.push_back({});
+            bound_values.push_back(cql3::raw_value::make_null());
         } else {
-            bound_values.push_back({n->type->decompose(v)});
+            bound_values.push_back(cql3::raw_value::make_value(n->type->decompose(v)));
         }
     }
     return query_options(cl, bound_values);

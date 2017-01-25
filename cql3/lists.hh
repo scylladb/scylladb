@@ -80,7 +80,7 @@ public:
             : _elements(std::move(elements)) {
         }
         static value from_serialized(bytes_view v, list_type type, cql_serialization_format sf);
-        virtual bytes_opt get(const query_options& options) override;
+        virtual cql3::raw_value get(const query_options& options) override;
         virtual bytes get_with_protocol_version(cql_serialization_format sf) override;
         bool equals(shared_ptr<list_type_impl> lt, const value& v);
         virtual std::vector<bytes_opt> get_elements() override;

@@ -169,9 +169,9 @@ maps::value::from_serialized(bytes_view value, map_type type, cql_serialization_
     }
 }
 
-bytes_opt
+cql3::raw_value
 maps::value::get(const query_options& options) {
-    return get_with_protocol_version(options.get_cql_serialization_format());
+    return cql3::raw_value::make_value(get_with_protocol_version(options.get_cql_serialization_format()));
 }
 
 bytes

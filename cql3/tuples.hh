@@ -162,8 +162,8 @@ public:
         static value from_serialized(bytes_view buffer, tuple_type type) {
             return value(type->split(buffer));
         }
-        virtual bytes_opt get(const query_options& options) override {
-            return tuple_type_impl::build_value(_elements);
+        virtual cql3::raw_value get(const query_options& options) override {
+            return cql3::raw_value::make_value(tuple_type_impl::build_value(_elements));
         }
 
         virtual std::vector<bytes_opt> get_elements() override {
@@ -220,9 +220,9 @@ public:
             return ::make_shared<value>(bind_internal(options));
         }
 
-        virtual bytes_view_opt bind_and_get(const query_options& options) override {
+        virtual cql3::raw_value_view bind_and_get(const query_options& options) override {
             // We don't "need" that override but it saves us the allocation of a Value object if used
-            return options.make_temporary(_type->build_value(bind_internal(options)));
+            return options.make_temporary(cql3::raw_value::make_value(_type->build_value(bind_internal(options))));
         }
     };
 
@@ -266,7 +266,7 @@ public:
             }
         }
 
-        virtual bytes_opt get(const query_options& options) override {
+        virtual cql3::raw_value get(const query_options& options) override {
             throw exceptions::unsupported_operation_exception();
         }
 

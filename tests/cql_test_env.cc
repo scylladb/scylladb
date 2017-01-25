@@ -131,7 +131,7 @@ public:
 
     virtual future<::shared_ptr<transport::messages::result_message>> execute_prepared(
         bytes id,
-        std::vector<bytes_opt> values) override
+        std::vector<cql3::raw_value> values) override
     {
         auto prepared = local_qp().get_prepared(id);
         if (!prepared) {

@@ -48,6 +48,7 @@
 #include "service/pager/paging_state.hh"
 #include "cql3/column_specification.hh"
 #include "cql3/column_identifier.hh"
+#include "cql3/values.hh"
 #include "cql_serialization_format.hh"
 
 namespace cql3 {
@@ -69,8 +70,8 @@ public:
 private:
     const db::consistency_level _consistency;
     const std::experimental::optional<std::vector<sstring_view>> _names;
-    std::vector<bytes_opt> _values;
-    std::vector<bytes_view_opt> _value_views;
+    std::vector<cql3::raw_value> _values;
+    std::vector<cql3::raw_value_view> _value_views;
     mutable std::vector<std::vector<int8_t>> _temporaries;
     const bool _skip_metadata;
     const specific_options _options;
@@ -82,30 +83,30 @@ public:
 
     explicit query_options(db::consistency_level consistency,
                            std::experimental::optional<std::vector<sstring_view>> names,
-                           std::vector<bytes_opt> values,
+                           std::vector<cql3::raw_value> values,
                            bool skip_metadata,
                            specific_options options,
                            cql_serialization_format sf);
     explicit query_options(db::consistency_level consistency,
                            std::experimental::optional<std::vector<sstring_view>> names,
-                           std::vector<bytes_view_opt> value_views,
+                           std::vector<cql3::raw_value_view> value_views,
                            bool skip_metadata,
                            specific_options options,
                            cql_serialization_format sf);
 
     // Batch query_options constructor
-    explicit query_options(query_options&&, std::vector<std::vector<bytes_view_opt>> value_views);
+    explicit query_options(query_options&&, std::vector<std::vector<cql3::raw_value_view>> value_views);
 
     // It can't be const because of prepare()
     static thread_local query_options DEFAULT;
 
     // forInternalUse
-    explicit query_options(std::vector<bytes_opt> values);
-    explicit query_options(db::consistency_level, std::vector<bytes_opt> values);
+    explicit query_options(std::vector<cql3::raw_value> values);
+    explicit query_options(db::consistency_level, std::vector<cql3::raw_value> values);
 
     db::consistency_level get_consistency() const;
-    bytes_view_opt get_value_at(size_t idx) const;
-    bytes_view_opt make_temporary(bytes_opt value) const;
+    cql3::raw_value_view get_value_at(size_t idx) const;
+    cql3::raw_value_view make_temporary(cql3::raw_value value) const;
     size_t get_values_count() const;
     bool skip_metadata() const;
     /**  The pageSize for this query. Will be <= 0 if not relevant for the query.  */

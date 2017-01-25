@@ -160,27 +160,28 @@ void user_types::delayed_value::collect_marker_specification(shared_ptr<variable
     }
 }
 
-std::vector<bytes_opt> user_types::delayed_value::bind_internal(const query_options& options) {
+std::vector<cql3::raw_value> user_types::delayed_value::bind_internal(const query_options& options) {
     auto sf = options.get_cql_serialization_format();
-    std::vector<bytes_opt> buffers;
+    std::vector<cql3::raw_value> buffers;
     for (size_t i = 0; i < _type->size(); ++i) {
-        buffers.push_back(to_bytes_opt(_values[i]->bind_and_get(options)));
+        buffers.push_back(cql3::raw_value::make_value(_values[i]->bind_and_get(options)));
         // Inside UDT values, we must force the serialization of collections to v3 whatever protocol
         // version is in use since we're going to store directly that serialized value.
         if (!sf.collection_format_unchanged() && _type->field_type(i)->is_collection() && buffers.back()) {
             auto&& ctype = static_pointer_cast<const collection_type_impl>(_type->field_type(i));
-            buffers.back() = ctype->reserialize(sf, cql_serialization_format::latest(), bytes_view(*buffers.back()));
+            buffers.back() = cql3::raw_value::make_value(
+                    ctype->reserialize(sf, cql_serialization_format::latest(), bytes_view(*buffers.back())));
         }
     }
     return buffers;
 }
 
 shared_ptr<terminal> user_types::delayed_value::bind(const query_options& options) {
-    return ::make_shared<constants::value>(to_bytes_opt(bind_and_get(options)));
+    return ::make_shared<constants::value>(cql3::raw_value::make_value((bind_and_get(options))));
 }
 
-bytes_view_opt user_types::delayed_value::bind_and_get(const query_options& options) {
-    return options.make_temporary(user_type_impl::build_value(bind_internal(options)));
+cql3::raw_value_view user_types::delayed_value::bind_and_get(const query_options& options) {
+    return options.make_temporary(cql3::raw_value::make_value(user_type_impl::build_value(bind_internal(options))));
 }
 
 }
