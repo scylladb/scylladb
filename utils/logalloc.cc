@@ -1490,6 +1490,10 @@ public:
         _eviction_fn = std::move(fn);
     }
 
+    const eviction_fn& evictor() const {
+        return _eviction_fn;
+    }
+
     uint64_t reclaim_counter() const {
         return _reclaim_counter;
     }
@@ -1603,6 +1607,10 @@ memory::reclaiming_result region::evict_some() {
 
 void region::make_evictable(eviction_fn fn) {
     _impl->make_evictable(std::move(fn));
+}
+
+const eviction_fn& region::evictor() const {
+    return _impl->evictor();
 }
 
 allocation_strategy& region::allocator() {
