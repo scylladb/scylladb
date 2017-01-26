@@ -199,7 +199,11 @@ public:
             std::vector<bytes_opt> buffers;
             buffers.resize(_elements.size());
             for (size_t i = 0; i < _elements.size(); ++i) {
-                buffers[i] = to_bytes_opt(_elements[i]->bind_and_get(options));
+                const auto& value = _elements[i]->bind_and_get(options);
+                if (value.is_unset_value()) {
+                    throw exceptions::invalid_request_exception(sprint("Invalid unset value for tuple field number %d", i));
+                }
+                buffers[i] = to_bytes_opt(value);
                 // Inside tuples, we must force the serialization of collections to v3 whatever protocol
                 // version is in use since we're going to store directly that serialized value.
                 if (options.get_cql_serialization_format() != cql_serialization_format::internal()
@@ -382,8 +386,10 @@ public:
 
         virtual shared_ptr<terminal> bind(const query_options& options) override {
             const auto& value = options.get_value_at(_bind_index);
-            if (!value) {
+            if (value.is_null()) {
                 return nullptr;
+            } else if (value.is_unset_value()) {
+                throw exceptions::invalid_request_exception(sprint("Invalid unset value for tuple %s", _receiver->name->text()));
             } else {
                 auto as_tuple_type = static_pointer_cast<const tuple_type_impl>(_receiver->type);
                 return make_shared(value::from_serialized(*value, as_tuple_type));
@@ -404,8 +410,10 @@ public:
 
         virtual shared_ptr<terminal> bind(const query_options& options) override {
             const auto& value = options.get_value_at(_bind_index);
-            if (!value) {
+            if (value.is_null()) {
                 return nullptr;
+            } else if (value.is_unset_value()) {
+                throw exceptions::invalid_request_exception(sprint("Invalid unset value for tuple %s", _receiver->name->text()));
             } else {
                 auto as_list_type = static_pointer_cast<const list_type_impl>(_receiver->type);
                 return make_shared(in_value::from_serialized(*value, as_list_type, options));
