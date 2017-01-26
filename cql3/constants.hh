@@ -197,8 +197,11 @@ public:
 
         virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override {
             auto value = _t->bind_and_get(params._options);
-            auto cell = value ? make_cell(*value, params) : make_dead_cell(params);
-            m.set_cell(prefix, column, std::move(cell));
+            if (value.is_null()) {
+                m.set_cell(prefix, column, std::move(make_dead_cell(params)));
+            } else if (value.is_value()) {
+                m.set_cell(prefix, column, std::move(make_cell(*value, params)));
+            }
         }
     };
 
