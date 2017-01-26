@@ -71,10 +71,12 @@ int64_t attributes::get_timestamp(int64_t now, const query_options& options) {
     }
 
     auto tval = _timestamp->bind_and_get(options);
-    if (!tval) {
+    if (tval.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value of timestamp");
     }
-
+    if (tval.is_unset_value()) {
+        return now;
+    }
     try {
         data_type_for<int64_t>()->validate(*tval);
     } catch (marshal_exception e) {
@@ -88,10 +90,12 @@ int32_t attributes::get_time_to_live(const query_options& options) {
         return 0;
 
     auto tval = _time_to_live->bind_and_get(options);
-    if (!tval) {
+    if (tval.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value of TTL");
     }
-
+    if (tval.is_unset_value()) {
+        return 0;
+    }
     try {
         data_type_for<int32_t>()->validate(*tval);
     }
