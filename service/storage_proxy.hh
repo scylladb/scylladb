@@ -94,6 +94,7 @@ public:
     // split statistics counters
     struct split_stats {
         static seastar::metrics::label datacenter_label;
+        static seastar::metrics::label op_type_label;
     private:
         struct stats_counter {
             uint64_t val = 0;
@@ -110,6 +111,8 @@ public:
         sstring _long_description_prefix;
         // a statistics category, e.g. "client" or "replica"
         sstring _category;
+        // type of operation (data/digest/mutation_data)
+        sstring _op_type;
 
     public:
         /**
@@ -117,7 +120,7 @@ public:
          * @param short_description_prefix a short description prefix
          * @param long_description_prefix a long description prefix
          */
-        split_stats(const sstring& category, const sstring& short_description_prefix, const sstring& long_description_prefix);
+        split_stats(const sstring& category, const sstring& short_description_prefix, const sstring& long_description_prefix, const sstring& op_type);
 
         /**
          * Get a reference to the statistics counter corresponding to the given

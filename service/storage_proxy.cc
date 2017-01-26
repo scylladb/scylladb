@@ -423,34 +423,36 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(key
     return register_response_handler(std::move(h));
 }
 
-storage_proxy::split_stats::split_stats(const sstring& category, const sstring& short_description_prefix, const sstring& long_description_prefix)
+seastar::metrics::label storage_proxy::split_stats::datacenter_label("datacenter");
+seastar::metrics::label storage_proxy::split_stats::op_type_label("op_type");
+
+storage_proxy::split_stats::split_stats(const sstring& category, const sstring& short_description_prefix, const sstring& long_description_prefix, const sstring& op_type)
         : _short_description_prefix(short_description_prefix)
         , _long_description_prefix(long_description_prefix)
-        , _category(category) {
+        , _category(category)
+        , _op_type(op_type) {
     // register a local Node counter to begin with...
     namespace sm = seastar::metrics;
 
     _metrics.add_group(_category, {
         sm::make_derive(_short_description_prefix + sstring("_local_node"), [this] { return _local.val; },
-                       sm::description(_long_description_prefix + "on a local Node"))
+                       sm::description(_long_description_prefix + "on a local Node"), {op_type_label(_op_type)})
     });
 }
 
-seastar::metrics::label storage_proxy::split_stats::datacenter_label("datacenter");
-
 storage_proxy::stats::stats()
-        : writes_attempts(COORDINATOR_STATS_CATEGORY, "total_write_attempts", "total number of write requests")
-        , writes_errors(COORDINATOR_STATS_CATEGORY, "write_errors", "number of write requests that failed")
-        , read_repair_write_attempts(COORDINATOR_STATS_CATEGORY, "read_repair_write_attempts", "number of write operations in a read repair context")
-        , data_read_attempts(COORDINATOR_STATS_CATEGORY, "data_reads", "number of data read requests")
-        , data_read_completed(COORDINATOR_STATS_CATEGORY, "completed_data_reads", "number of data read requests that completed")
-        , data_read_errors(COORDINATOR_STATS_CATEGORY, "data_read_errors", "number of data read requests that failed")
-        , digest_read_attempts(COORDINATOR_STATS_CATEGORY, "digest_reads", "number of digest read requests")
-        , digest_read_completed(COORDINATOR_STATS_CATEGORY, "completed_digest_reads", "number of digest read requests that completed")
-        , digest_read_errors(COORDINATOR_STATS_CATEGORY, "digest_read_errors", "number of digest read requests that failed")
-        , mutation_data_read_attempts(COORDINATOR_STATS_CATEGORY, "mutation_data_reads", "number of mutation data read requests")
-        , mutation_data_read_completed(COORDINATOR_STATS_CATEGORY, "completed_mutation_data_reads", "number of mutation data read requests that completed")
-        , mutation_data_read_errors(COORDINATOR_STATS_CATEGORY, "mutation_data_read_errors", "number of mutation data read requests that failed") {}
+        : writes_attempts(COORDINATOR_STATS_CATEGORY, "total_write_attempts", "total number of write requests", "mutation_data")
+        , writes_errors(COORDINATOR_STATS_CATEGORY, "write_errors", "number of write requests that failed", "mutation_data")
+        , read_repair_write_attempts(COORDINATOR_STATS_CATEGORY, "read_repair_write_attempts", "number of write operations in a read repair context", "mutation_data")
+        , data_read_attempts(COORDINATOR_STATS_CATEGORY, "reads", "number of data read requests", "data")
+        , data_read_completed(COORDINATOR_STATS_CATEGORY, "completed_reads", "number of data read requests that completed", "data")
+        , data_read_errors(COORDINATOR_STATS_CATEGORY, "read_errors", "number of data read requests that failed", "data")
+        , digest_read_attempts(COORDINATOR_STATS_CATEGORY, "reads", "number of digest read requests", "digest")
+        , digest_read_completed(COORDINATOR_STATS_CATEGORY, "completed_reads", "number of digest read requests that completed", "digest")
+        , digest_read_errors(COORDINATOR_STATS_CATEGORY, "read_errors", "number of digest read requests that failed", "digest")
+        , mutation_data_read_attempts(COORDINATOR_STATS_CATEGORY, "reads", "number of mutation data read requests", "mutation_data")
+        , mutation_data_read_completed(COORDINATOR_STATS_CATEGORY, "completed_reads", "number of mutation data read requests that completed", "mutation_data")
+        , mutation_data_read_errors(COORDINATOR_STATS_CATEGORY, "read_errors", "number of mutation data read requests that failed", "mutation_data") {}
 
 inline uint64_t& storage_proxy::split_stats::get_ep_stat(gms::inet_address ep) {
     if (is_me(ep)) {
@@ -465,8 +467,8 @@ inline uint64_t& storage_proxy::split_stats::get_ep_stat(gms::inet_address ep) {
         namespace sm = seastar::metrics;
 
         _metrics.add_group(_category, {
-            sm::make_derive(_short_description_prefix, [this, dc] { return _dc_stats[dc].val; },
-                            sm::description(seastar::format("{} when communicating with external Nodes in DC {}", _long_description_prefix, dc)), {datacenter_label(dc)})
+            sm::make_derive(_short_description_prefix + sstring("_remote_node"), [this, dc] { return _dc_stats[dc].val; },
+                            sm::description(seastar::format("{} when communicating with external Nodes in DC {}", _long_description_prefix, dc)), {datacenter_label(dc), op_type_label(_op_type)})
         });
     }
     return _dc_stats[dc].val;
@@ -536,14 +538,14 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
         sm::make_total_operations("forwarding_errors", _stats.forwarding_errors,
                        sm::description("number of errors during forwarding mutations to other replica Nodes")),
 
-        sm::make_total_operations("data_reads", _stats.replica_data_reads,
-                       sm::description("number of remote data read requests this Node received")),
+        sm::make_total_operations("reads", _stats.replica_data_reads,
+                       sm::description("number of remote data read requests this Node received"), {storage_proxy::split_stats::op_type_label("data")}),
 
-        sm::make_total_operations("mutation_data_reads", _stats.replica_mutation_data_reads,
-                       sm::description("number of remote mutation data read requests this Node received")),
+        sm::make_total_operations("reads", _stats.replica_mutation_data_reads,
+                       sm::description("number of remote mutation data read requests this Node received"), {storage_proxy::split_stats::op_type_label("mutation_data")}),
 
-        sm::make_total_operations("digest_reads", _stats.replica_digest_reads,
-                       sm::description("number of remote digest read requests this Node received")),
+        sm::make_total_operations("reads", _stats.replica_digest_reads,
+                       sm::description("number of remote digest read requests this Node received"), {storage_proxy::split_stats::op_type_label("digest")}),
 
     });
 }
