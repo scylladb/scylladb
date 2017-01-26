@@ -1496,6 +1496,7 @@ public:
     const bytes _name;
 private:
     std::vector<bytes> _field_names;
+    std::vector<sstring> _string_field_names;
 public:
     using native_type = std::vector<data_value>;
     user_type_impl(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types)
@@ -1503,6 +1504,9 @@ public:
             , _keyspace(keyspace)
             , _name(name)
             , _field_names(field_names) {
+        for (const auto& field_name : _field_names) {
+            _string_field_names.emplace_back(utf8_type->to_string(field_name));
+        }
     }
     static shared_ptr<user_type_impl> get_instance(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types) {
         return ::make_shared<user_type_impl>(std::move(keyspace), std::move(name), std::move(field_names), std::move(field_types));
@@ -1510,6 +1514,7 @@ public:
     data_type field_type(size_t i) const { return type(i); }
     const std::vector<data_type>& field_types() const { return _types; }
     bytes_view field_name(size_t i) const { return _field_names[i]; }
+    sstring field_name_as_string(size_t i) const { return _string_field_names[i]; }
     const std::vector<bytes>& field_names() const { return _field_names; }
     sstring get_name_as_string() const;
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override;
