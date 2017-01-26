@@ -191,10 +191,12 @@ sets::delayed_value::bind(const query_options& options) {
     for (auto&& t : _elements) {
         auto b = t->bind_and_get(options);
 
-        if (!b) {
+        if (b.is_null()) {
             throw exceptions::invalid_request_exception("null is not supported inside collections");
         }
-
+        if (b.is_unset_value()) {
+            return constants::UNSET_VALUE;
+        }
         // We don't support value > 64K because the serialization format encode the length as an unsigned short.
         if (b->size() > std::numeric_limits<uint16_t>::max()) {
             throw exceptions::invalid_request_exception(sprint("Set value is too long. Set values are limited to %d bytes but %d bytes value provided",
@@ -211,8 +213,10 @@ sets::delayed_value::bind(const query_options& options) {
 ::shared_ptr<terminal>
 sets::marker::bind(const query_options& options) {
     const auto& value = options.get_value_at(_bind_index);
-    if (!value) {
+    if (value.is_null()) {
         return nullptr;
+    } else if (value.is_unset_value()) {
+        return constants::UNSET_VALUE;
     } else {
         auto as_set_type = static_pointer_cast<const set_type_impl>(_receiver->type);
         return make_shared(value::from_serialized(*value, as_set_type, options.get_cql_serialization_format()));
@@ -221,6 +225,10 @@ sets::marker::bind(const query_options& options) {
 
 void
 sets::setter::execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) {
+    const auto& value = _t->bind(params._options);
+    if (value == constants::UNSET_VALUE) {
+        return;
+    }
     if (column.type->is_multi_cell()) {
         // delete + add
         collection_type_impl::mutation mut;
@@ -229,19 +237,22 @@ sets::setter::execute(mutation& m, const exploded_clustering_prefix& row_key, co
         auto col_mut = ctype->serialize_mutation_form(std::move(mut));
         m.set_cell(row_key, column, std::move(col_mut));
     }
-    adder::do_add(m, row_key, params, _t, column);
+    adder::do_add(m, row_key, params, value, column);
 }
 
 void
 sets::adder::execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) {
+    const auto& value = _t->bind(params._options);
+    if (value == constants::UNSET_VALUE) {
+        return;
+    }
     assert(column.type->is_multi_cell()); // "Attempted to add items to a frozen set";
-    do_add(m, row_key, params, _t, column);
+    do_add(m, row_key, params, value, column);
 }
 
 void
 sets::adder::do_add(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params,
-        shared_ptr<term> t, const column_definition& column) {
-    auto&& value = t->bind(params._options);
+        shared_ptr<term> value, const column_definition& column) {
     auto set_value = dynamic_pointer_cast<sets::value>(std::move(value));
     auto set_type = dynamic_pointer_cast<const set_type_impl>(column.type);
     if (column.type->is_multi_cell()) {
