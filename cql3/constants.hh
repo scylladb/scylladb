@@ -75,6 +75,8 @@ public:
         virtual sstring to_string() const override { return to_hex(*_bytes); }
     };
 
+    static thread_local const ::shared_ptr<value> UNSET_VALUE;
+
     class null_literal final : public term::raw {
     private:
         class null_value final : public value {
