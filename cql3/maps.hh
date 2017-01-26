@@ -138,7 +138,7 @@ public:
     };
 
     static void do_put(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params,
-            shared_ptr<term> t, const column_definition& column);
+            shared_ptr<term> value, const column_definition& column);
 
     class discarder_by_key : public operation {
     public:
