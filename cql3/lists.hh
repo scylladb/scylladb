@@ -176,7 +176,7 @@ public:
         virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
     };
 
-    static void do_append(shared_ptr<term> t,
+    static void do_append(shared_ptr<term> value,
             mutation& m,
             const exploded_clustering_prefix& prefix,
             const column_definition& column,

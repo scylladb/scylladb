@@ -196,10 +196,12 @@ lists::delayed_value::bind(const query_options& options) {
     for (auto&& t : _elements) {
         auto bo = t->bind_and_get(options);
 
-        if (!bo) {
+        if (bo.is_null()) {
             throw exceptions::invalid_request_exception("null is not supported inside collections");
         }
-
+        if (bo.is_unset_value()) {
+            return constants::UNSET_VALUE;
+        }
         // We don't support value > 64K because the serialization format encode the length as an unsigned short.
         if (bo->size() > std::numeric_limits<uint16_t>::max()) {
             throw exceptions::invalid_request_exception(sprint("List value is too long. List values are limited to %d bytes but %d bytes value provided",
@@ -216,8 +218,10 @@ lists::delayed_value::bind(const query_options& options) {
 lists::marker::bind(const query_options& options) {
     const auto& value = options.get_value_at(_bind_index);
     auto ltype = static_pointer_cast<const list_type_impl>(_receiver->type);
-    if (!value) {
+    if (value.is_null()) {
         return nullptr;
+    } else if (value.is_unset_value()) {
+        return constants::UNSET_VALUE;
     } else {
         return make_shared(value::from_serialized(*value, std::move(ltype), options.get_cql_serialization_format()));
     }
@@ -239,6 +243,10 @@ lists::precision_time::get_next(db_clock::time_point millis) {
 
 void
 lists::setter::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+    const auto& value = _t->bind(params._options);
+    if (value == constants::UNSET_VALUE) {
+        return;
+    }
     if (column.type->is_multi_cell()) {
         // delete + append
         collection_type_impl::mutation mut;
@@ -247,7 +255,7 @@ lists::setter::execute(mutation& m, const exploded_clustering_prefix& prefix, co
         auto col_mut = ctype->serialize_mutation_form(std::move(mut));
         m.set_cell(prefix, column, std::move(col_mut));
     }
-    do_append(_t, m, prefix, column, params);
+    do_append(value, m, prefix, column, params);
 }
 
 bool
@@ -272,10 +280,15 @@ lists::setter_by_index::execute(mutation& m, const exploded_clustering_prefix& p
     }
 
     auto index = _idx->bind_and_get(params._options);
-    auto value = _t->bind_and_get(params._options);
-
-    if (!index) {
+    if (index.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value for list index");
+    }
+    if (index.is_unset_value()) {
+        throw exceptions::invalid_request_exception("Invalid unset value for list index");
+    }
+    auto value = _t->bind_and_get(params._options);
+    if (value.is_unset_value()) {
+        return;
     }
 
     auto idx = net::ntoh(int32_t(*unaligned_cast<int32_t>(index->begin())));
@@ -343,23 +356,26 @@ lists::setter_by_uuid::execute(mutation& m, const exploded_clustering_prefix& pr
 
 void
 lists::appender::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+    const auto& value = _t->bind(params._options);
+    if (value == constants::UNSET_VALUE) {
+        return;
+    }
     assert(column.type->is_multi_cell()); // "Attempted to append to a frozen list";
-    do_append(_t, m, prefix, column, params);
+    do_append(value, m, prefix, column, params);
 }
 
 void
-lists::do_append(shared_ptr<term> t,
+lists::do_append(shared_ptr<term> value,
         mutation& m,
         const exploded_clustering_prefix& prefix,
         const column_definition& column,
         const update_parameters& params) {
-    auto&& value = t->bind(params._options);
     auto&& list_value = dynamic_pointer_cast<lists::value>(value);
     auto&& ltype = dynamic_pointer_cast<const list_type_impl>(column.type);
     if (column.type->is_multi_cell()) {
         // If we append null, do nothing. Note that for Setter, we've
         // already removed the previous value so we're good here too
-        if (!value) {
+        if (!value || value == constants::UNSET_VALUE) {
             return;
         }
 
@@ -388,7 +404,7 @@ void
 lists::prepender::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to prepend to a frozen list";
     auto&& value = _t->bind(params._options);
-    if (!value) {
+    if (!value || value == constants::UNSET_VALUE) {
         return;
     }
 
@@ -441,7 +457,7 @@ lists::discarder::execute(mutation& m, const exploded_clustering_prefix& prefix,
         return;
     }
 
-    if (!value) {
+    if (!value || value == constants::UNSET_VALUE) {
         return;
     }
 
@@ -479,6 +495,9 @@ lists::discarder_by_index::execute(mutation& m, const exploded_clustering_prefix
     auto&& index = _t->bind(params._options);
     if (!index) {
         throw exceptions::invalid_request_exception("Invalid null value for list index");
+    }
+    if (index == constants::UNSET_VALUE) {
+        return;
     }
 
     auto ltype = static_pointer_cast<const list_type_impl>(column.type);
