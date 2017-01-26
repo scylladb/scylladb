@@ -1,5 +1,6 @@
 import gdb, gdb.printing, uuid, argparse
 from operator import attrgetter
+from collections import defaultdict
 
 def template_arguments(gdb_type):
     n = 0
@@ -867,6 +868,75 @@ class scylla_threads(gdb.Command):
             for t in seastar_threads_on_current_shard():
                 gdb.write('[shard %2d] (seastar::thread_context*) 0x%x\n' % (shard, t.address))
 
+class circular_buffer(object):
+    def __init__(self, ref):
+        self.ref = ref
+    def __iter__(self):
+        impl = self.ref['_impl']
+        st = impl['storage']
+        cap = impl['capacity']
+        i = impl['begin']
+        end = impl['end']
+        while i < end:
+            yield st[i % cap]
+            i += 1
+
+# Prints histogram of task types in reactor's pending task queue.
+#
+# Example:
+# (gdb) scylla task-stats
+#    16243: 0x18904f0 vtable for lambda_task<later()::{lambda()#1}> + 16
+#    16091: 0x197fc60 _ZTV12continuationIZN6futureIJEE12then_wrappedIZNS1_16handle_exception...
+#    16090: 0x19bab50 _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZN7s...
+#    14280: 0x1b36940 _ZTV12continuationIZN6futureIJEE12then_wrappedIZN17smp_message_queue15...
+#
+#    ^      ^         ^
+#    |      |         '-- symbol name for vtable pointer
+#    |      '------------ vtable pointer for the object pointed to by task*
+#    '------------------- task count
+#
+class scylla_task_stats(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla task-stats', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+    def invoke(self, arg, for_tty):
+        vptr_count = defaultdict(int)
+        vptr_type = gdb.lookup_type('uintptr_t').pointer()
+        for t in circular_buffer(gdb.parse_and_eval('local_engine._pending_tasks')):
+            vptr = int(t['_M_t']['_M_head_impl'].reinterpret_cast(vptr_type).dereference())
+            vptr_count[vptr] += 1
+        for vptr, count in sorted(vptr_count.items(), key=lambda e: -e[1]):
+            gdb.write('%10d: 0x%x %s\n' % (count, vptr, resolve(vptr)))
+
+
+# Prints contents of reactor pending tasks queue.
+#
+# Example:
+# (gdb) scylla tasks
+# (task*) 0x60017d8c7f88  _ZTV12continuationIZN6futureIJEE12then_wrappedIZN17smp_message_queu...
+# (task*) 0x60019a391730  _ZTV12continuationIZN6futureIJEE12then_wrappedIZNS1_16handle_except...
+# (task*) 0x60018fac2208  vtable for lambda_task<later()::{lambda()#1}> + 16
+# (task*) 0x60016e8b7428  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
+# (task*) 0x60017e5bece8  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
+# (task*) 0x60017e7f8aa0  _ZTV12continuationIZN6futureIJEE12then_wrappedIZNS1_16handle_except...
+# (task*) 0x60018fac21e0  vtable for lambda_task<later()::{lambda()#1}> + 16
+# (task*) 0x60016e8b7540  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
+# (task*) 0x600174c34d58  _ZTV12continuationIZN6futureIJEE12then_wrappedINS1_12finally_bodyIZ...
+#
+#         ^               ^
+#         |               |
+#         |               '------------ symbol name for task's vtable pointer
+#         '---------------------------- task pointer
+#
+class scylla_tasks(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla tasks', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+    def invoke(self, arg, for_tty):
+        vptr_type = gdb.lookup_type('uintptr_t').pointer()
+        for t in circular_buffer(gdb.parse_and_eval('local_engine._pending_tasks')):
+            ptr = t['_M_t']['_M_head_impl']
+            vptr = int(ptr.reinterpret_cast(vptr_type).dereference())
+            gdb.write('(task*) 0x%x  %s\n' % (ptr, resolve(vptr)))
+
 scylla()
 scylla_databases()
 scylla_keyspaces()
@@ -886,3 +956,5 @@ scylla_shard()
 scylla_thread()
 scylla_unthread()
 scylla_threads()
+scylla_task_stats()
+scylla_tasks()
