@@ -35,10 +35,10 @@ namespace utils {
  * when all func+post-ops for lower valued keys (T) are
  * completed.
  */
-template<typename T, typename Comp = std::less<T>>
+template<typename T, typename Comp = std::less<T>, typename Clock = steady_clock_type>
 class flush_queue {
 public:
-    using timeout_clock = steady_clock_type;
+    using timeout_clock = Clock;
     using time_point = typename timeout_clock::time_point;
     using promise_type = shared_promise<with_clock<timeout_clock>>;
 private:

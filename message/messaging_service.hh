@@ -200,7 +200,7 @@ private:
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
     bool _stopping = false;
 public:
-    using clock_type = std::chrono::steady_clock;
+    using clock_type = lowres_clock;
 public:
     messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"),
             uint16_t port = 7000, bool listen_now = true);

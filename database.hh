@@ -1055,7 +1055,7 @@ public:
 
 class database {
 public:
-    using timeout_clock = std::chrono::steady_clock;
+    using timeout_clock = lowres_clock;
 private:
     ::cf_stats _cf_stats;
     static constexpr size_t max_concurrent_reads() { return 100; }

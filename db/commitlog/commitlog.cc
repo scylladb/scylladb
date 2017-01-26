@@ -183,8 +183,8 @@ public:
     using time_point = clock_type::time_point;
     using sseg_ptr = lw_shared_ptr<segment>;
 
-    using request_controller_type = basic_semaphore<timeout_exception_factory>;
-    using request_controller_units = semaphore_units<timeout_exception_factory>;
+    using request_controller_type = basic_semaphore<timeout_exception_factory, commitlog::timeout_clock>;
+    using request_controller_units = semaphore_units<timeout_exception_factory, commitlog::timeout_clock>;
     request_controller_type _request_controller;
 
     stdx::optional<shared_future<with_clock<commitlog::timeout_clock>>> _segment_allocating;
@@ -382,7 +382,7 @@ class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
     time_point _sync_time;
     seastar::gate _gate;
     uint64_t _write_waiters = 0;
-    utils::flush_queue<replay_position> _pending_ops;
+    utils::flush_queue<replay_position, std::less<replay_position>, clock_type> _pending_ops;
 
     uint64_t _num_allocs = 0;
 

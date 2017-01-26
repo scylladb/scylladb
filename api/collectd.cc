@@ -40,13 +40,13 @@ static auto transformer(const std::vector<collectd_value>& values) {
     for (auto v: values) {
         switch (v._type) {
         case scollectd::data_type::GAUGE:
-            collected_value.values.push(v.u._d);
+            collected_value.values.push(v.d());
             break;
         case scollectd::data_type::DERIVE:
-            collected_value.values.push(v.u._i);
+            collected_value.values.push(v.i());
             break;
         default:
-            collected_value.values.push(v.u._ui);
+            collected_value.values.push(v.ui());
             break;
         }
     }

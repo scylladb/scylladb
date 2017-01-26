@@ -122,7 +122,7 @@ public:
 
 // Groups regions for the purpose of statistics.  Can be nested.
 class region_group {
-    using timeout_clock = std::chrono::steady_clock;
+    using timeout_clock = lowres_clock;
 
     static region_group_reclaimer no_reclaimer;
 

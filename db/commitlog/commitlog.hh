@@ -94,7 +94,7 @@ using cf_id_type = utils::UUID;
  */
 class commitlog {
 public:
-    using timeout_clock = std::chrono::steady_clock;
+    using timeout_clock = lowres_clock;
 
     class segment_manager;
     class segment;
