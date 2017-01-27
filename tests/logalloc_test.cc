@@ -529,11 +529,7 @@ inline void quiesce(FutureType&& fut) {
     // a request may be broken into many continuations. While we could just yield many times, the
     // exact amount needed to guarantee execution would be dependent on the internals of the
     // implementation, we want to avoid that.
-    timer<> tmr;
-    tmr.set_callback([] { BOOST_FAIL("The future we were waiting for took too long to get ready"); });
-    tmr.arm(2s);
-    fut.get();
-    tmr.cancel();
+    with_timeout(lowres_clock::now() + 2s, std::move(fut)).get();
 }
 
 // Simple RAII structure that wraps around a region_group
