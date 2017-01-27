@@ -847,7 +847,10 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                         auto i = m.partitions.begin();
                         STAP_PROBE(scylla, row_cache_update_one_batch_start);
                         unsigned quota_before = quota;
-                        while (i != m.partitions.end() && quota) {
+                        // FIXME: we should really be checking should_yield() here instead of
+                        // need_preempt() + quota. However, should_yield() is currently quite
+                        // expensive and we need to amortize it somehow.
+                        while (i != m.partitions.end() && quota && !need_preempt()) {
                           STAP_PROBE(scylla, row_cache_update_partition_start);
                           with_linearized_managed_bytes([&] {
                            {
