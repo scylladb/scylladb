@@ -31,6 +31,7 @@
 
 #include "transport/messages/result_message_base.hh"
 #include "cql3/query_options_fwd.hh"
+#include "cql3/values.hh"
 #include "bytes.hh"
 #include "schema.hh"
 
@@ -61,7 +62,7 @@ public:
     virtual future<bytes> prepare(sstring query) = 0;
 
     virtual future<::shared_ptr<transport::messages::result_message>> execute_prepared(
-        bytes id, std::vector<bytes_opt> values) = 0;
+        bytes id, std::vector<cql3::raw_value> values) = 0;
 
     virtual future<> create_table(std::function<schema(const sstring&)> schema_maker) = 0;
 

@@ -84,7 +84,7 @@ future<> test_read(cql_test_env& env, test_config& cfg) {
     }).then([&env, &cfg](auto id) {
         return time_parallel([&env, &cfg, id] {
             bytes key = make_key(cfg.query_single_key ? 0 : std::rand() % cfg.partitions);
-            return env.execute_prepared(id, {{std::move(key)}}).discard_result();
+            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
         }, cfg.concurrency, cfg.duration_in_seconds);
     });
 }
@@ -100,7 +100,7 @@ future<> test_write(cql_test_env& env, test_config& cfg) {
         .then([&env, &cfg](auto id) {
             return time_parallel([&env, &cfg, id] {
                 bytes key = make_key(cfg.query_single_key ? 0 : std::rand() % cfg.partitions);
-                return env.execute_prepared(id, {{std::move(key)}}).discard_result();
+                return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
             }, cfg.concurrency, cfg.duration_in_seconds);
         });
 }

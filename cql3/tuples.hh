@@ -162,8 +162,8 @@ public:
         static value from_serialized(bytes_view buffer, tuple_type type) {
             return value(type->split(buffer));
         }
-        virtual bytes_opt get(const query_options& options) override {
-            return tuple_type_impl::build_value(_elements);
+        virtual cql3::raw_value get(const query_options& options) override {
+            return cql3::raw_value::make_value(tuple_type_impl::build_value(_elements));
         }
 
         virtual std::vector<bytes_opt> get_elements() override {
@@ -199,7 +199,11 @@ public:
             std::vector<bytes_opt> buffers;
             buffers.resize(_elements.size());
             for (size_t i = 0; i < _elements.size(); ++i) {
-                buffers[i] = to_bytes_opt(_elements[i]->bind_and_get(options));
+                const auto& value = _elements[i]->bind_and_get(options);
+                if (value.is_unset_value()) {
+                    throw exceptions::invalid_request_exception(sprint("Invalid unset value for tuple field number %d", i));
+                }
+                buffers[i] = to_bytes_opt(value);
                 // Inside tuples, we must force the serialization of collections to v3 whatever protocol
                 // version is in use since we're going to store directly that serialized value.
                 if (options.get_cql_serialization_format() != cql_serialization_format::internal()
@@ -220,9 +224,9 @@ public:
             return ::make_shared<value>(bind_internal(options));
         }
 
-        virtual bytes_view_opt bind_and_get(const query_options& options) override {
+        virtual cql3::raw_value_view bind_and_get(const query_options& options) override {
             // We don't "need" that override but it saves us the allocation of a Value object if used
-            return options.make_temporary(_type->build_value(bind_internal(options)));
+            return options.make_temporary(cql3::raw_value::make_value(_type->build_value(bind_internal(options))));
         }
     };
 
@@ -266,7 +270,7 @@ public:
             }
         }
 
-        virtual bytes_opt get(const query_options& options) override {
+        virtual cql3::raw_value get(const query_options& options) override {
             throw exceptions::unsupported_operation_exception();
         }
 
@@ -382,8 +386,10 @@ public:
 
         virtual shared_ptr<terminal> bind(const query_options& options) override {
             const auto& value = options.get_value_at(_bind_index);
-            if (!value) {
+            if (value.is_null()) {
                 return nullptr;
+            } else if (value.is_unset_value()) {
+                throw exceptions::invalid_request_exception(sprint("Invalid unset value for tuple %s", _receiver->name->text()));
             } else {
                 auto as_tuple_type = static_pointer_cast<const tuple_type_impl>(_receiver->type);
                 return make_shared(value::from_serialized(*value, as_tuple_type));
@@ -404,8 +410,10 @@ public:
 
         virtual shared_ptr<terminal> bind(const query_options& options) override {
             const auto& value = options.get_value_at(_bind_index);
-            if (!value) {
+            if (value.is_null()) {
                 return nullptr;
+            } else if (value.is_unset_value()) {
+                throw exceptions::invalid_request_exception(sprint("Invalid unset value for tuple %s", _receiver->name->text()));
             } else {
                 auto as_list_type = static_pointer_cast<const list_type_impl>(_receiver->type);
                 return make_shared(in_value::from_serialized(*value, as_list_type, options));

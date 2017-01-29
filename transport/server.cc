@@ -861,7 +861,7 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
     auto q_state = std::make_unique<cql_query_state>(client_state);
     auto& query_state = q_state->query_state;
     if (_version == 1) {
-        std::vector<bytes_view_opt> values;
+        std::vector<cql3::raw_value_view> values;
         read_value_view_list(buf, values);
         auto consistency = read_consistency(buf);
         q_state->options = std::make_unique<cql3::query_options>(consistency, std::experimental::nullopt, values, false,
@@ -907,7 +907,7 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
     const unsigned n = read_short(buf);
 
     std::vector<shared_ptr<cql3::statements::modification_statement>> modifications;
-    std::vector<std::vector<bytes_view_opt>> values;
+    std::vector<std::vector<cql3::raw_value_view>> values;
 
     modifications.reserve(n);
     values.reserve(n);
@@ -948,7 +948,7 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
 
         modifications.emplace_back(std::move(modif_statement_ptr));
 
-        std::vector<bytes_view_opt> tmp;
+        std::vector<cql3::raw_value_view> tmp;
         read_value_view_list(buf, tmp);
 
         auto stmt = ps->statement;
@@ -1255,6 +1255,17 @@ uint16_t cql_server::connection::read_short(bytes_view& buf)
     return n;
 }
 
+bytes_opt cql_server::connection::read_bytes(bytes_view& buf) {
+    auto len = read_int(buf);
+    if (len < 0) {
+        return {};
+    }
+    check_room(buf, len);
+    bytes b(reinterpret_cast<const int8_t*>(buf.begin()), len);
+    buf.remove_prefix(len);
+    return {std::move(b)};
+}
+
 bytes cql_server::connection::read_short_bytes(bytes_view& buf)
 {
     auto n = read_short(buf);
@@ -1345,14 +1356,14 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(bytes_
 {
     auto consistency = read_consistency(buf);
     if (version == 1) {
-        return std::make_unique<cql3::query_options>(consistency, std::experimental::nullopt, std::vector<bytes_view_opt>{},
+        return std::make_unique<cql3::query_options>(consistency, std::experimental::nullopt, std::vector<cql3::raw_value_view>{},
             false, cql3::query_options::specific_options::DEFAULT, _cql_serialization_format);
     }
 
     assert(version >= 2);
 
     auto flags = enum_set<options_flag_enum>::from_mask(read_byte(buf));
-    std::vector<bytes_view_opt> values;
+    std::vector<cql3::raw_value_view> values;
     std::vector<sstring_view> names;
 
     if (flags.contains<options_flag::VALUES>()) {
@@ -1372,7 +1383,7 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(bytes_
         ::shared_ptr<service::pager::paging_state> paging_state;
         int32_t page_size = flags.contains<options_flag::PAGE_SIZE>() ? read_int(buf) : -1;
         if (flags.contains<options_flag::PAGING_STATE>()) {
-            paging_state = service::pager::paging_state::deserialize(read_value(buf));
+            paging_state = service::pager::paging_state::deserialize(read_bytes(buf));
         }
 
         db::consistency_level serial_consistency = db::consistency_level::SERIAL;
@@ -1404,7 +1415,7 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(bytes_
     return std::move(options);
 }
 
-void cql_server::connection::read_name_and_value_list(bytes_view& buf, std::vector<sstring_view>& names, std::vector<bytes_view_opt>& values) {
+void cql_server::connection::read_name_and_value_list(bytes_view& buf, std::vector<sstring_view>& names, std::vector<cql3::raw_value_view>& values) {
     uint16_t size = read_short(buf);
     names.reserve(size);
     values.reserve(size);
@@ -1422,7 +1433,7 @@ void cql_server::connection::read_string_list(bytes_view& buf, std::vector<sstri
     }
 }
 
-void cql_server::connection::read_value_view_list(bytes_view& buf, std::vector<bytes_view_opt>& values) {
+void cql_server::connection::read_value_view_list(bytes_view& buf, std::vector<cql3::raw_value_view>& values) {
     uint16_t size = read_short(buf);
     values.reserve(size);
     for (uint16_t i = 0; i < size; i++) {
@@ -1430,26 +1441,44 @@ void cql_server::connection::read_value_view_list(bytes_view& buf, std::vector<b
     }
 }
 
-bytes_opt cql_server::connection::read_value(bytes_view& buf) {
+cql3::raw_value cql_server::connection::read_value(bytes_view& buf) {
     auto len = read_int(buf);
     if (len < 0) {
-        return {};
+        if (_version < 4) {
+            return cql3::raw_value::make_null();
+        }
+        if (len == -1) {
+            return cql3::raw_value::make_null();
+        } else if (len == -2) {
+            return cql3::raw_value::make_unset_value();
+        } else {
+            throw exceptions::protocol_exception(sprint("invalid value length: %d", len));
+        }
     }
     check_room(buf, len);
     bytes b(reinterpret_cast<const int8_t*>(buf.begin()), len);
     buf.remove_prefix(len);
-    return {std::move(b)};
+    return cql3::raw_value::make_value(std::move(b));
 }
 
-bytes_view_opt cql_server::connection::read_value_view(bytes_view& buf) {
+cql3::raw_value_view cql_server::connection::read_value_view(bytes_view& buf) {
     auto len = read_int(buf);
     if (len < 0) {
-        return {};
+        if (_version < 4) {
+            return cql3::raw_value_view::make_null();
+        }
+        if (len == -1) {
+            return cql3::raw_value_view::make_null();
+        } else if (len == -2) {
+            return cql3::raw_value_view::make_unset_value();
+        } else {
+            throw exceptions::protocol_exception(sprint("invalid value length: %d", len));
+        }
     }
     check_room(buf, len);
     bytes_view bv(reinterpret_cast<const int8_t*>(buf.begin()), len);
     buf.remove_prefix(len);
-    return {std::move(bv)};
+    return cql3::raw_value_view::make_value(std::move(bv));
 }
 
 scattered_message<char> cql_server::response::make_message(uint8_t version) {

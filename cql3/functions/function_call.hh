@@ -59,13 +59,13 @@ public:
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
     virtual void collect_marker_specification(shared_ptr<variable_specifications> bound_names) override;
     virtual shared_ptr<terminal> bind(const query_options& options) override;
-    virtual bytes_view_opt bind_and_get(const query_options& options) override;
+    virtual cql3::raw_value_view bind_and_get(const query_options& options) override;
 private:
     static bytes_opt execute_internal(cql_serialization_format sf, scalar_function& fun, std::vector<bytes_opt> params);
 public:
     virtual bool contains_bind_marker() const override;
 private:
-    static shared_ptr<terminal> make_terminal(shared_ptr<function> fun, bytes_opt result, cql_serialization_format sf);
+    static shared_ptr<terminal> make_terminal(shared_ptr<function> fun, cql3::raw_value result, cql_serialization_format sf);
 public:
     class raw : public term::raw {
         function_name _name;

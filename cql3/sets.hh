@@ -79,7 +79,7 @@ public:
                 : _elements(std::move(elements)) {
         }
         static value from_serialized(bytes_view v, set_type type, cql_serialization_format sf);
-        virtual bytes_opt get(const query_options& options) override;
+        virtual cql3::raw_value get(const query_options& options) override;
         virtual bytes get_with_protocol_version(cql_serialization_format sf) override;
         bool equals(set_type st, const value& v);
         virtual sstring to_string() const override;
@@ -122,7 +122,7 @@ public:
         }
         virtual void execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) override;
         static void do_add(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params,
-                shared_ptr<term> t, const column_definition& column);
+                shared_ptr<term> value, const column_definition& column);
     };
 
     // Note that this is reused for Map subtraction too (we subtract a set from a map)

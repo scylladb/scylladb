@@ -82,7 +82,7 @@ public:
             : map(std::move(map)) {
         }
         static value from_serialized(bytes_view value, map_type type, cql_serialization_format sf);
-        virtual bytes_opt get(const query_options& options) override;
+        virtual cql3::raw_value get(const query_options& options) override;
         virtual bytes get_with_protocol_version(cql_serialization_format sf);
         bool equals(map_type mt, const value& v);
         virtual sstring to_string() const;
@@ -138,7 +138,7 @@ public:
     };
 
     static void do_put(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params,
-            shared_ptr<term> t, const column_definition& column);
+            shared_ptr<term> value, const column_definition& column);
 
     class discarder_by_key : public operation {
     public:

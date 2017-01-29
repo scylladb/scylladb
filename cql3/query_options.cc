@@ -47,11 +47,11 @@ namespace cql3 {
 thread_local const query_options::specific_options query_options::specific_options::DEFAULT{-1, {}, {}, api::missing_timestamp};
 
 thread_local query_options query_options::DEFAULT{db::consistency_level::ONE, std::experimental::nullopt,
-    std::vector<bytes_view_opt>(), false, query_options::specific_options::DEFAULT, cql_serialization_format::latest()};
+    std::vector<cql3::raw_value_view>(), false, query_options::specific_options::DEFAULT, cql_serialization_format::latest()};
 
 query_options::query_options(db::consistency_level consistency,
                              std::experimental::optional<std::vector<sstring_view>> names,
-                             std::vector<bytes_opt> values,
+                             std::vector<cql3::raw_value> values,
                              bool skip_metadata,
                              specific_options options,
                              cql_serialization_format sf)
@@ -68,7 +68,7 @@ query_options::query_options(db::consistency_level consistency,
 
 query_options::query_options(db::consistency_level consistency,
                              std::experimental::optional<std::vector<sstring_view>> names,
-                             std::vector<bytes_view_opt> value_views,
+                             std::vector<cql3::raw_value_view> value_views,
                              bool skip_metadata,
                              specific_options options,
                              cql_serialization_format sf)
@@ -82,7 +82,7 @@ query_options::query_options(db::consistency_level consistency,
 {
 }
 
-query_options::query_options(query_options&& o, std::vector<std::vector<bytes_view_opt>> value_views)
+query_options::query_options(query_options&& o, std::vector<std::vector<cql3::raw_value_view>> value_views)
     : query_options(std::move(o))
 {
     std::vector<query_options> tmp;
@@ -93,7 +93,7 @@ query_options::query_options(query_options&& o, std::vector<std::vector<bytes_vi
     _batch_options = std::move(tmp);
 }
 
-query_options::query_options(db::consistency_level cl, std::vector<bytes_opt> values)
+query_options::query_options(db::consistency_level cl, std::vector<cql3::raw_value> values)
     : query_options(
           cl,
           {},
@@ -105,7 +105,7 @@ query_options::query_options(db::consistency_level cl, std::vector<bytes_opt> va
 {
 }
 
-query_options::query_options(std::vector<bytes_opt> values)
+query_options::query_options(std::vector<cql3::raw_value> values)
     : query_options(
           db::consistency_level::ONE, std::move(values))
 {}
@@ -115,7 +115,7 @@ db::consistency_level query_options::get_consistency() const
     return _consistency;
 }
 
-bytes_view_opt query_options::get_value_at(size_t idx) const
+cql3::raw_value_view query_options::get_value_at(size_t idx) const
 {
     return _value_views.at(idx);
 }
@@ -125,14 +125,14 @@ size_t query_options::get_values_count() const
     return _value_views.size();
 }
 
-bytes_view_opt query_options::make_temporary(bytes_opt value) const
+cql3::raw_value_view query_options::make_temporary(cql3::raw_value value) const
 {
     if (value) {
         _temporaries.emplace_back(value->begin(), value->end());
         auto& temporary = _temporaries.back();
-        return bytes_view{temporary.data(), temporary.size()};
+        return cql3::raw_value_view::make_value(bytes_view{temporary.data(), temporary.size()});
     }
-    return std::experimental::nullopt;
+    return cql3::raw_value_view::make_null();
 }
 
 bool query_options::skip_metadata() const
@@ -192,7 +192,7 @@ void query_options::prepare(const std::vector<::shared_ptr<column_specification>
     }
 
     auto& names = *_names;
-    std::vector<bytes_opt> ordered_values;
+    std::vector<cql3::raw_value> ordered_values;
     ordered_values.reserve(specs.size());
     for (auto&& spec : specs) {
         auto& spec_name = spec->name->text();
@@ -211,9 +211,9 @@ void query_options::fill_value_views()
 {
     for (auto&& value : _values) {
         if (value) {
-            _value_views.emplace_back(bytes_view{*value});
+            _value_views.emplace_back(cql3::raw_value_view::make_value(bytes_view{*value}));
         } else {
-            _value_views.emplace_back(std::experimental::nullopt);
+            _value_views.emplace_back(cql3::raw_value_view::make_null());
         }
     }
 }

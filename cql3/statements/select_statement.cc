@@ -203,10 +203,12 @@ int32_t select_statement::get_limit(const query_options& options) const {
     }
 
     auto val = _limit->bind_and_get(options);
-    if (!val) {
+    if (val.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value of limit");
     }
-
+    if (val.is_unset_value()) {
+        return std::numeric_limits<int32_t>::max();
+    }
     try {
         int32_type->validate(*val);
         auto l = value_cast<int32_t>(int32_type->deserialize(*val));

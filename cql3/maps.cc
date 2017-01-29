@@ -169,9 +169,9 @@ maps::value::from_serialized(bytes_view value, map_type type, cql_serialization_
     }
 }
 
-bytes_opt
+cql3::raw_value
 maps::value::get(const query_options& options) {
-    return get_with_protocol_version(options.get_cql_serialization_format());
+    return cql3::raw_value::make_value(get_with_protocol_version(options.get_cql_serialization_format()));
 }
 
 bytes
@@ -227,8 +227,11 @@ maps::delayed_value::bind(const query_options& options) {
 
         // We don't support values > 64K because the serialization format encode the length as an unsigned short.
         auto key_bytes = key->bind_and_get(options);
-        if (!key_bytes) {
+        if (key_bytes.is_null()) {
             throw exceptions::invalid_request_exception("null is not supported inside collections");
+        }
+        if (key_bytes.is_unset_value()) {
+            throw exceptions::invalid_request_exception("unset value is not supported inside collections");
         }
         if (key_bytes->size() > std::numeric_limits<uint16_t>::max()) {
             throw exceptions::invalid_request_exception(sprint("Map key is too long. Map keys are limited to %d bytes but %d bytes keys provided",
@@ -236,8 +239,11 @@ maps::delayed_value::bind(const query_options& options) {
                                                    key_bytes->size()));
         }
         auto value_bytes = value->bind_and_get(options);
-        if (!value_bytes) {
+        if (value_bytes.is_null()) {
             throw exceptions::invalid_request_exception("null is not supported inside collections");\
+        }
+        if (value_bytes.is_unset_value()) {
+            return constants::UNSET_VALUE;
         }
         if (value_bytes->size() > std::numeric_limits<uint16_t>::max()) {
             throw exceptions::invalid_request_exception(sprint("Map value is too long. Map values are limited to %d bytes but %d bytes value provided",
@@ -252,17 +258,22 @@ maps::delayed_value::bind(const query_options& options) {
 ::shared_ptr<terminal>
 maps::marker::bind(const query_options& options) {
     auto val = options.get_value_at(_bind_index);
-    return val ?
-            ::make_shared<maps::value>(
-                    maps::value::from_serialized(*val,
-                            static_pointer_cast<const map_type_impl>(
-                                    _receiver->type),
-                            options.get_cql_serialization_format())) :
-            nullptr;
+    if (val.is_null()) {
+        return nullptr;
+    }
+    if (val.is_unset_value()) {
+        return constants::UNSET_VALUE;
+    }
+    return ::make_shared<maps::value>(maps::value::from_serialized(*val, static_pointer_cast<const map_type_impl>(_receiver->type),
+                                      options.get_cql_serialization_format()));
 }
 
 void
 maps::setter::execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) {
+    auto value = _t->bind(params._options);
+    if (value == constants::UNSET_VALUE) {
+        return;
+    }
     if (column.type->is_multi_cell()) {
         // delete + put
         collection_type_impl::mutation mut;
@@ -271,7 +282,7 @@ maps::setter::execute(mutation& m, const exploded_clustering_prefix& row_key, co
         auto col_mut = ctype->serialize_mutation_form(std::move(mut));
         m.set_cell(row_key, column, std::move(col_mut));
     }
-    do_put(m, row_key, params, _t, column);
+    do_put(m, row_key, params, value, column);
 }
 
 void
@@ -306,13 +317,15 @@ maps::setter_by_key::execute(mutation& m, const exploded_clustering_prefix& pref
 void
 maps::putter::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to add items to a frozen map";
-    do_put(m, prefix, params, _t, column);
+    auto value = _t->bind(params._options);
+    if (value != constants::UNSET_VALUE) {
+        do_put(m, prefix, params, value, column);
+    }
 }
 
 void
 maps::do_put(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params,
-        shared_ptr<term> t, const column_definition& column) {
-    auto value = t->bind(params._options);
+        shared_ptr<term> value, const column_definition& column) {
     auto map_value = dynamic_pointer_cast<maps::value>(value);
     if (column.type->is_multi_cell()) {
         collection_type_impl::mutation mut;
@@ -345,6 +358,9 @@ maps::discarder_by_key::execute(mutation& m, const exploded_clustering_prefix& p
     auto&& key = _t->bind(params._options);
     if (!key) {
         throw exceptions::invalid_request_exception("Invalid null map key");
+    }
+    if (key == constants::UNSET_VALUE) {
+        throw exceptions::invalid_request_exception("Invalid unset map key");
     }
     collection_type_impl::mutation mut;
     mut.cells.emplace_back(*key->get(params._options), params.make_dead_cell());
