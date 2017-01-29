@@ -480,7 +480,7 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
 
     _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
         sm::make_queue_length("foreground_writes", [this] { return _stats.writes - _stats.background_writes; },
-                       sm::description("number of currently pending forground write requests")),
+                       sm::description("number of currently pending foreground write requests")),
 
         sm::make_queue_length("background_writes", [this] { return _stats.background_writes; },
                        sm::description("number of currently pending background write requests")),
@@ -497,8 +497,8 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
         sm::make_current_bytes("background_write_bytes", [this] { return _stats.background_write_bytes; },
                        sm::description("number of bytes in pending background write requests")),
 
-        sm::make_queue_length("reads", [this] { return _stats.reads; },
-                       sm::description("number of currently pending read requests")),
+        sm::make_queue_length("foreground_reads", [this] { return _stats.reads - _stats.background_reads; },
+                       sm::description("number of currently pending foreground read requests")),
 
         sm::make_queue_length("background_reads", [this] { return _stats.background_reads; },
                        sm::description("number of currently pending background read requests")),
