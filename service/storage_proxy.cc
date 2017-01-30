@@ -2989,11 +2989,16 @@ storage_proxy::do_query(schema_ptr s,
     }
 #endif
 
-std::vector<gms::inet_address> storage_proxy::get_live_sorted_endpoints(keyspace& ks, const dht::token& token) {
+std::vector<gms::inet_address> storage_proxy::get_live_endpoints(keyspace& ks, const dht::token& token) {
     auto& rs = ks.get_replication_strategy();
     std::vector<gms::inet_address> eps = rs.get_natural_endpoints(token);
     auto itend = boost::range::remove_if(eps, std::not1(std::bind1st(std::mem_fn(&gms::failure_detector::is_alive), &gms::get_local_failure_detector())));
     eps.erase(itend, eps.end());
+    return std::move(eps);
+}
+
+std::vector<gms::inet_address> storage_proxy::get_live_sorted_endpoints(keyspace& ks, const dht::token& token) {
+    auto eps = get_live_endpoints(ks, token);
     locator::i_endpoint_snitch::get_local_snitch_ptr()->sort_by_proximity(utils::fb_utilities::get_broadcast_address(), eps);
     // FIXME: before dynamic snitch is implement put local address (if present) at the beginning
     auto it = boost::range::find(eps, utils::fb_utilities::get_broadcast_address());

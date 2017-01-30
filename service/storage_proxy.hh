@@ -239,6 +239,7 @@ private:
     size_t get_hints_in_progress_for(gms::inet_address target);
     bool should_hint(gms::inet_address ep) noexcept;
     bool submit_hint(std::unique_ptr<mutation_holder>& mh, gms::inet_address target);
+    std::vector<gms::inet_address> get_live_endpoints(keyspace& ks, const dht::token& token);
     std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token);
     db::read_repair_decision new_read_repair_decision(const schema& s);
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, tracing::trace_state_ptr trace_state);
