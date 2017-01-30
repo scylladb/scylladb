@@ -170,11 +170,11 @@ public:
     bool is_live() const {
         return atomic_cell_type::is_live(_data);
     }
-    bool is_live(tombstone t) const {
-        return is_live() && !is_covered_by(t);
+    bool is_live(tombstone t, bool is_counter) const {
+        return is_live() && !is_covered_by(t, is_counter);
     }
-    bool is_live(tombstone t, gc_clock::time_point now) const {
-        return is_live() && !is_covered_by(t) && !has_expired(now);
+    bool is_live(tombstone t, gc_clock::time_point now, bool is_counter) const {
+        return is_live() && !is_covered_by(t, is_counter) && !has_expired(now);
     }
     bool is_live_and_has_ttl() const {
         return atomic_cell_type::is_live_and_has_ttl(_data);
@@ -182,8 +182,8 @@ public:
     bool is_dead(gc_clock::time_point now) const {
         return atomic_cell_type::is_dead(_data) || has_expired(now);
     }
-    bool is_covered_by(tombstone t) const {
-        return timestamp() <= t.timestamp;
+    bool is_covered_by(tombstone t, bool is_counter) const {
+        return timestamp() <= t.timestamp || (is_counter && t.timestamp != api::missing_timestamp);
     }
     // Can be called on live and dead cells
     api::timestamp_type timestamp() const {

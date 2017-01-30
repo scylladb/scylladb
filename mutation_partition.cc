@@ -693,7 +693,7 @@ bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tomb
         const column_definition& def = s.column_at(kind, id);
         if (def.is_atomic()) {
             auto&& c = cell_or_collection.as_atomic_cell();
-            if (c.is_live(tomb, now)) {
+            if (c.is_live(tomb, now, def.is_counter())) {
                 any_live = true;
                 return stop_iteration::yes;
             }
@@ -1539,7 +1539,7 @@ bool row::compact_and_expire(const schema& s, column_kind kind, tombstone tomb, 
         const column_definition& def = s.column_at(kind, id);
         if (def.is_atomic()) {
             atomic_cell_view cell = c.as_atomic_cell();
-            if (cell.is_covered_by(tomb)) {
+            if (cell.is_covered_by(tomb, def.is_counter())) {
                 erase = true;
             } else if (cell.has_expired(query_time)) {
                 c = atomic_cell::make_dead(cell.timestamp(), cell.deletion_time());
