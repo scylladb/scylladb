@@ -30,6 +30,8 @@
 
 class mutation;
 
+class mutation;
+
 class counter_id {
     int64_t _least_significant;
     int64_t _most_significant;
@@ -298,6 +300,11 @@ public:
 
     friend std::ostream& operator<<(std::ostream& os, counter_cell_view ccv);
 };
+
+// Transforms mutation dst from counter updates to counter shards using state
+// stored in current_state.
+// If current_state is present it has to be in the same schema as dst.
+void transform_counter_updates_to_shards(mutation& dst, const mutation* current_state, uint64_t clock_offset);
 
 template<>
 struct appending_hash<counter_shard_view> {
