@@ -309,6 +309,10 @@ public:
             }
         }
 
+    bool is_static_row() const { return !_ck; }
+    bool is_clustering_row() const { return _ck && !_bound_weight; }
+    bool is_range_tombstone() const { return _bound_weight; }
+
     clustering_key_prefix& key() {
         return *_ck;
     }
