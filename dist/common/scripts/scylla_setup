@@ -110,7 +110,9 @@ run_setup_script() {
     if [ $? -ne 0 ] && [ $INTERACTIVE -eq 1 ]; then
         printf "${RED}$name setup failed. press any key to continue...${NO_COLOR}\n"
         read
+        return 1
     fi
+    return 0
 }
 
 AMI=0
@@ -129,6 +131,7 @@ SYSCONFIG_SETUP=1
 IO_SETUP=1
 NODE_EXPORTER=1
 CPUSCALING_SETUP=1
+SELINUX_REBOOT_REQUIRED=0
 
 if [ $# -ne 0 ]; then
     INTERACTIVE=0
@@ -287,12 +290,19 @@ if [ "$CUR_VERSION" != "" ] && [ "$UUID" != "" ]; then
        echo $NEW_VERSION
     fi
 fi
-if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to disable SELinux?" "Answer yes to disable SELinux and improve performance; answer no to keep it activated." "yes" &&:
-    SELINUX_SETUP=$?
-fi
-if [ $SELINUX_SETUP -eq 1 ]; then
-    run_setup_script "SELinux" /usr/lib/scylla/scylla_selinux_setup
+
+# scylla_selinux_setup only supports Red Hat variants
+if ! is_debian_variant; then
+    if [ $INTERACTIVE -eq 1 ]; then
+        interactive_ask_service "Do you want to disable SELinux?" "Answer yes to disable SELinux and improve performance; answer no to keep it activated." "yes" &&:
+        SELINUX_SETUP=$?
+    fi
+    if [ $SELINUX_SETUP -eq 1 ]; then
+        run_setup_script "SELinux" /usr/lib/scylla/scylla_selinux_setup &&:
+        if [ $? -eq 0 ]; then
+            SELINUX_REBOOT_REQUIRED=1
+        fi
+    fi
 fi
 
 if [ $AMI -eq 1 ]; then
@@ -435,3 +445,7 @@ if [ $CPUSCALING_SETUP -eq 1 ]; then
 fi
 
 echo "ScyllaDB setup finished."
+if [ $SELINUX_REBOOT_REQUIRED -eq 1 ]; then
+    echo "Please restart machine before using ScyllaDB, since you have disabled"
+    echo " SELinux."
+fi
