@@ -295,12 +295,14 @@ if [ $SELINUX_SETUP -eq 1 ]; then
     run_setup_script "SELinux" /usr/lib/scylla/scylla_selinux_setup
 fi
 
-if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to setup bootloader options?" "Answer yes to enable hugepages at boot time and improve performance. Answer no to skip this step." "yes" &&:
-    BOOTPARAM_SETUP=$?
-fi
-if [ $BOOTPARAM_SETUP -eq 1 ]; then
-    run_setup_script "boot parameter" /usr/lib/scylla/scylla_bootparam_setup
+if [ $AMI -eq 1 ]; then
+    if [ $INTERACTIVE -eq 1 ]; then
+        interactive_ask_service "Do you want to setup bootloader options?" "Answer yes to enable hugepages at boot time and improve performance. Answer no to skip this step." "yes" &&:
+        BOOTPARAM_SETUP=$?
+    fi
+    if [ $BOOTPARAM_SETUP -eq 1 ]; then
+        run_setup_script "boot parameter" /usr/lib/scylla/scylla_bootparam_setup --ami
+    fi
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
@@ -433,7 +435,3 @@ if [ $CPUSCALING_SETUP -eq 1 ]; then
 fi
 
 echo "ScyllaDB setup finished."
-if [ $BOOTPARAM_SETUP -eq 1 ]; then
-    echo "Please restart machine before using ScyllaDB, since you have changed "
-    echo "boot parameters."
-fi
