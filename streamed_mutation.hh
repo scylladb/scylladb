@@ -101,6 +101,8 @@ public:
     size_t memory_usage() const {
         return sizeof(clustering_row) + external_memory_usage();
     }
+
+    friend std::ostream& operator<<(std::ostream& os, const clustering_row& row);
 };
 
 class static_row {
@@ -136,6 +138,8 @@ public:
     size_t memory_usage() const {
         return sizeof(static_row) + external_memory_usage();
     }
+
+    friend std::ostream& operator<<(std::ostream& is, const static_row& row);
 };
 
 class mutation_fragment {
@@ -257,9 +261,13 @@ public:
     size_t memory_usage() const {
         return sizeof(data) + visit([] (auto& mf) { return mf.external_memory_usage(); });
     }
+
+    friend std::ostream& operator<<(std::ostream&, const mutation_fragment& mf);
 };
 
 std::ostream& operator<<(std::ostream&, mutation_fragment::kind);
+
+std::ostream& operator<<(std::ostream&, const mutation_fragment& mf);
 
 class position_in_partition;
 

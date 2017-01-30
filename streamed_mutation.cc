@@ -27,6 +27,16 @@
 #include "streamed_mutation.hh"
 #include "utils/move.hh"
 
+std::ostream&
+operator<<(std::ostream& os, const clustering_row& row) {
+    return os << "{clustering_row: ck " << row._ck << " t " << row._t << " row_marker " << row._marker << " cells " << row._cells << "}";
+}
+
+std::ostream&
+operator<<(std::ostream& os, const static_row& row) {
+    return os << "{static_row: "<< row._cells << "}";
+}
+
 mutation_fragment::mutation_fragment(static_row&& r)
     : _kind(kind::static_row), _data(std::make_unique<data>())
 {
@@ -108,6 +118,15 @@ std::ostream& operator<<(std::ostream& os, mutation_fragment::kind k)
     case mutation_fragment::kind::range_tombstone: return os << "range tombstone";
     }
     abort();
+}
+
+std::ostream& operator<<(std::ostream& os, const mutation_fragment& mf) {
+    os << "{mutation_fragment: " << mf._kind << " ";
+    mf.visit([&os] (const auto& what) {
+       os << what;
+    });
+    os << "}";
+    return os;
 }
 
 streamed_mutation streamed_mutation_from_mutation(mutation m)
