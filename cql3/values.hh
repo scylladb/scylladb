@@ -181,5 +181,5 @@ inline bytes_opt to_bytes_opt(const cql3::raw_value_view& view) {
 }
 
 inline bytes_opt to_bytes_opt(const cql3::raw_value& value) {
-    return to_bytes_opt(value.data());
+    return value.data();
 }
