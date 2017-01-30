@@ -237,9 +237,13 @@ class region_group {
     // a different ancestor)
     std::experimental::optional<shared_promise<>> _descendant_blocked_requests = {};
 
-    region_group* _waiting_on_ancestor = nullptr;
-    seastar::gate _asynchronous_gate;
+    condition_variable _relief;
+    future<> _releaser;
     bool _shutdown_requested = false;
+
+    bool reclaimer_can_block() const;
+    future<> start_releaser();
+    void notify_relief();
 public:
     // When creating a region_group, one can specify an optional throttle_threshold parameter. This
     // parameter won't affect normal allocations, but an API is provided, through the region_group's
@@ -253,7 +257,7 @@ public:
     ~region_group() {
         // If we set a throttle threshold, we'd be postponing many operations. So shutdown must be
         // called.
-        if (_reclaimer.throttle_threshold() != std::numeric_limits<size_t>::max()) {
+        if (reclaimer_can_block()) {
             assert(_shutdown_requested);
         }
         if (_parent) {
@@ -311,13 +315,12 @@ public:
         using futurator = futurize<std::result_of_t<Func()>>;
 
         auto blocked_at = do_for_each_parent(this, [] (auto rg) {
-            return (rg->_blocked_requests.empty() && rg->execution_permitted()) ? stop_iteration::no : stop_iteration::yes;
+            return (rg->_blocked_requests.empty() && !rg->under_pressure()) ? stop_iteration::no : stop_iteration::yes;
         });
 
         if (!blocked_at) {
             return futurator::apply(func);
         }
-        subscribe_for_ancestor_available_memory_notification(blocked_at);
 
         auto fn = std::make_unique<concrete_allocating_function<Func>>(std::forward<Func>(func));
         auto fut = fn->get_future();
@@ -333,9 +336,11 @@ public:
     region* get_largest_region();
 
     // Shutdown is mandatory for every user who has set a threshold
+    // Can be called at most once.
     future<> shutdown() {
         _shutdown_requested = true;
-        return _asynchronous_gate.close();
+        _relief.signal();
+        return std::move(_releaser);
     }
 
     size_t blocked_requests() {
@@ -346,43 +351,9 @@ public:
         return _blocked_requests_counter;
     }
 private:
-    // Make sure we get a notification and can call release_requests when one of our ancestors that
-    // used to block us is no longer under memory pressure.
-    void subscribe_for_ancestor_available_memory_notification(region_group *ancestor) {
-        if ((this == ancestor) || (_waiting_on_ancestor)) {
-            return; // already subscribed, or no need to
-        }
-
-        _waiting_on_ancestor = ancestor;
-
-        with_gate(_asynchronous_gate, [this] {
-            // We reevaluate _waiting_on_ancestor here so we make sure there is no deferring point
-            // between determining the ancestor and registering with it for a notification. We start
-            // with _waiting_on_ancestor set to the initial value, and after we are notified, we
-            // will set _waiting_on_ancestor to nullptr to force this lambda to reevaluate it.
-            auto evaluate_ancestor_and_stop = [this] {
-                if (!_waiting_on_ancestor) {
-                    auto new_blocking_point = do_for_each_parent(this, [] (auto rg) {
-                        return (rg->execution_permitted()) ? stop_iteration::no : stop_iteration::yes;
-                    });
-                    if (!new_blocking_point) {
-                        release_requests();
-                    }
-                    _waiting_on_ancestor = (new_blocking_point == this) ? nullptr : new_blocking_point;
-                }
-                return _waiting_on_ancestor == nullptr;
-            };
-
-            return do_until(evaluate_ancestor_and_stop, [this] {
-                if (!_waiting_on_ancestor->_descendant_blocked_requests) {
-                    _waiting_on_ancestor->_descendant_blocked_requests = shared_promise<>();
-                }
-                return _waiting_on_ancestor->_descendant_blocked_requests->get_shared_future().then([this] {
-                    _waiting_on_ancestor = nullptr;
-                });
-            });
-        });
-    }
+    // Returns true if and only if constraints of this group are not violated.
+    // That's taking into account any constraints imposed by enclosing (parent) groups.
+    bool execution_permitted() noexcept;
 
     // Executes the function func for each region_group upwards in the hierarchy, starting with the
     // parameter node. The function func may return stop_iteration::no, in which case it proceeds to
@@ -402,11 +373,10 @@ private:
         }
         return nullptr;
     }
-    inline bool execution_permitted() const {
-        return _total_memory <= _reclaimer.throttle_threshold();
-    }
 
-    void release_requests() noexcept;
+    inline bool under_pressure() const {
+        return _reclaimer.under_pressure();
+    }
 
     uint64_t top_region_evictable_space() const;
 
