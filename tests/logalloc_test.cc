@@ -29,7 +29,9 @@
 #include <seastar/core/timer.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/tests/test-utils.hh>
+#include <seastar/util/defer.hh>
 #include <deque>
+#include "utils/phased_barrier.hh"
 
 #include "utils/logalloc.hh"
 #include "utils/managed_ref.hh"
@@ -1053,5 +1055,59 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_no_double_r
 
         BOOST_REQUIRE_EQUAL(root.reclaim_sizes().size(), 1);
         BOOST_REQUIRE_EQUAL(root.reclaim_sizes()[0], logalloc::segment_size);
+    });
+}
+
+// Reproduces issue #2021
+SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_region_group_size) {
+    return seastar::async([] {
+#ifndef DEFAULT_ALLOCATOR // Because we need memory::stats().free_memory();
+        logging::logger_registry().set_logger_level("lsa", seastar::log_level::debug);
+
+        auto free_space = memory::stats().free_memory();
+        size_t threshold = size_t(0.75 * free_space);
+        region_group_reclaimer recl(threshold, threshold);
+        region_group gr(recl);
+        auto close_gr = defer([&gr] { gr.shutdown().get(); });
+        region r(gr);
+
+        with_allocator(r.allocator(), [&] {
+            std::vector<managed_bytes> objs;
+
+            r.make_evictable([&] {
+                if (objs.empty()) {
+                    return memory::reclaiming_result::reclaimed_nothing;
+                }
+                with_allocator(r.allocator(), [&] {
+                    objs.pop_back();
+                });
+                return memory::reclaiming_result::reclaimed_something;
+            });
+
+            auto fill_to_pressure = [&] {
+                while (!recl.under_pressure()) {
+                    objs.emplace_back(managed_bytes(managed_bytes::initialized_later(), 1024));
+                }
+            };
+
+            utils::phased_barrier request_barrier;
+            auto wait_for_requests = defer([&] { request_barrier.advance_and_await().get(); });
+
+            for (int i = 0; i < 1000000; ++i) {
+                fill_to_pressure();
+                future<> f = gr.run_when_memory_available([&, op = request_barrier.start()] {
+                    // Trigger group size change (Refs issue #2021)
+                    gr.update(-10);
+                    gr.update(+10);
+                });
+                BOOST_REQUIRE(!f.available());
+            }
+
+            // Release
+            while (recl.under_pressure()) {
+                objs.pop_back();
+            }
+        });
+#endif
     });
 }
