@@ -313,6 +313,17 @@ public:
     bool is_clustering_row() const { return _ck && !_bound_weight; }
     bool is_range_tombstone() const { return _bound_weight; }
 
+    template<typename Hasher>
+    void feed_hash(Hasher& hasher, const schema& s) const {
+        ::feed_hash(hasher, _bound_weight);
+        if (_ck) {
+            ::feed_hash(hasher, true);
+            _ck->feed_hash(hasher, s);
+        } else {
+            ::feed_hash(hasher, false);
+        }
+    }
+
     clustering_key_prefix& key() {
         return *_ck;
     }
