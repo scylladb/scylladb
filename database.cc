@@ -3086,6 +3086,11 @@ database::stop() {
             return val_pair.second->stop();
         });
     }).then([this] {
+        if (_commitlog != nullptr) {
+            return _commitlog->release();
+        }
+        return make_ready_future<>();
+    }).then([this] {
         return _system_dirty_memory_manager.shutdown();
     }).then([this] {
         return _dirty_memory_manager.shutdown();

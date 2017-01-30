@@ -312,6 +312,11 @@ public:
      * incoming writes to throw exceptions
      */
     future<> shutdown();
+    /**
+     * Ensure segments are released, even if we don't free the
+     * commitlog proper. (hint, our shutdown is "partial")
+     */
+    future<> release();
 
     future<std::vector<descriptor>> list_existing_descriptors() const;
     future<std::vector<descriptor>> list_existing_descriptors(const sstring& dir) const;

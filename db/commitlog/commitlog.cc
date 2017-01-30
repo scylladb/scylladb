@@ -1257,7 +1257,7 @@ future<> db::commitlog::segment_manager::clear_reserve_segments() {
 }
 
 future<> db::commitlog::segment_manager::sync_all_segments(bool shutdown) {
-    logger.debug("Issuing sync for all segments");
+    logger.debug("Issuing sync for all segments ({})", shutdown ? "shutdown" : "active");
     return parallel_for_each(_segments, [this, shutdown](sseg_ptr s) {
         return s->sync(shutdown).then([](sseg_ptr s) {
             logger.debug("Synced segment {}", *s);
@@ -1526,6 +1526,10 @@ future<> db::commitlog::sync_all_segments() {
 
 future<> db::commitlog::shutdown() {
     return _segment_manager->shutdown();
+}
+
+future<> db::commitlog::release() {
+    return _segment_manager->orphan_all();
 }
 
 size_t db::commitlog::max_record_size() const {
