@@ -224,7 +224,7 @@ public:
         return _range_tombstones;
     }
 
-    void apply(const range_tombstone& rt);
+    void apply(range_tombstone rt);
 
     void clear();
 };
