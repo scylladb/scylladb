@@ -950,7 +950,7 @@ column_family::seal_active_memtable(memtable_list::flush_behavior ignored) {
       });
     }, [old, this] {
         if (_commitlog) {
-            _commitlog->discard_completed_segments(_schema->id(), old->replay_position());
+            _commitlog->discard_completed_segments(_schema->id(), old->rp_set());
         }
     });
     // FIXME: release commit log
@@ -2290,7 +2290,7 @@ database::init_commitlog() {
         _commitlog->add_flush_handler([this](db::cf_id_type id, db::replay_position pos) {
             if (_column_families.count(id) == 0) {
                 // the CF has been removed.
-                _commitlog->discard_completed_segments(id, pos);
+                _commitlog->discard_completed_segments(id);
                 return;
             }
             _column_families[id]->flush(pos);
@@ -2883,12 +2883,12 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
 }
 
 template<typename... Args>
-void column_family::do_apply(const db::replay_position& rp, Args&&... args) {
+void column_family::do_apply(db::rp_handle&& h, Args&&... args) {
     utils::latency_counter lc;
     _stats.writes.set_latency(lc);
-    check_valid_rp(rp);
+    check_valid_rp(h);
     try {
-        _memtables->active_memtable().apply(std::forward<Args>(args)..., rp);
+        _memtables->active_memtable().apply(std::forward<Args>(args)..., std::move(h));
     } catch (...) {
         _failed_counter_applies_to_memtable++;
         throw;
@@ -2900,13 +2900,13 @@ void column_family::do_apply(const db::replay_position& rp, Args&&... args) {
 }
 
 void
-column_family::apply(const mutation& m, const db::replay_position& rp) {
-    do_apply(rp, m);
+column_family::apply(const mutation& m, db::rp_handle&& h) {
+    do_apply(std::move(h), m);
 }
 
 void
-column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& rp) {
-    do_apply(rp, m, m_schema);
+column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h) {
+    do_apply(std::move(h), m, m_schema);
 }
 
 future<mutation> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema,
@@ -3100,20 +3100,20 @@ void dirty_memory_manager::start_reclaiming() noexcept {
     _should_flush.signal();
 }
 
-future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position rp, timeout_clock::time_point timeout) {
-    return _dirty_memory_manager.region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), rp = std::move(rp)] {
+future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, timeout_clock::time_point timeout) {
+    return _dirty_memory_manager.region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h)]() mutable {
         try {
             auto& cf = find_column_family(m.column_family_id());
-            cf.apply(m, m_schema, rp);
+            cf.apply(m, m_schema, std::move(h));
         } catch (no_such_column_family&) {
             dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
         }
     }, timeout);
 }
 
-future<> database::apply_in_memory(const mutation& m, column_family& cf, db::replay_position rp, timeout_clock::time_point timeout) {
-    return _dirty_memory_manager.region_group().run_when_memory_available([this, &m, &cf, rp = std::move(rp)] {
-        cf.apply(m, rp);
+future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&& h, timeout_clock::time_point timeout) {
+    return _dirty_memory_manager.region_group().run_when_memory_available([this, &m, &cf, h = std::move(h)]() mutable {
+        cf.apply(m, std::move(h));
     }, timeout);
 }
 
@@ -3136,8 +3136,8 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, ti
         return do_with(freeze(m), [this, &m, &cf, timeout] (frozen_mutation& fm) {
             commitlog_entry_writer cew(m.schema(), fm);
             return cf.commitlog()->add_entry(m.schema()->id(), cew, timeout);
-        }).then([this, &m, &cf, timeout] (db::replay_position rp) {
-            return apply_in_memory(m, cf, rp, timeout).handle_exception([this, &cf, &m, timeout] (auto ep) {
+        }).then([this, &m, &cf, timeout] (db::rp_handle h) {
+            return apply_in_memory(m, cf, std::move(h), timeout).handle_exception([this, &cf, &m, timeout] (auto ep) {
                 try {
                     std::rethrow_exception(ep);
                 } catch (replay_position_reordered_exception&) {
@@ -3152,14 +3152,15 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, ti
             });
         });
     }
-    return apply_in_memory(m, cf, db::replay_position(), timeout);
+    return apply_in_memory(m, cf, {}, timeout);
 }
 
 future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::UUID uuid, const frozen_mutation& m, timeout_clock::time_point timeout) {
-    if (cf.commitlog() != nullptr) {
+    auto cl = cf.commitlog();
+    if (cl != nullptr) {
         commitlog_entry_writer cew(s, m);
-        return cf.commitlog()->add_entry(std::move(uuid), cew, timeout).then([&m, this, s, timeout](auto rp) {
-            return this->apply_in_memory(m, s, rp, timeout).handle_exception([this, s, &m, timeout] (auto ep) {
+        return cf.commitlog()->add_entry(uuid, cew, timeout).then([&m, this, s, timeout, cl](db::rp_handle h) {
+            return this->apply_in_memory(m, s, std::move(h), timeout).handle_exception([this, s, &m, timeout] (auto ep) {
                 try {
                     std::rethrow_exception(ep);
                 } catch (replay_position_reordered_exception&) {
@@ -3174,7 +3175,7 @@ future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::
             });
         });
     }
-    return apply_in_memory(m, std::move(s), db::replay_position(), timeout);
+    return apply_in_memory(m, std::move(s), {}, timeout);
 }
 
 future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
@@ -3809,6 +3810,9 @@ future<> column_family::fail_streaming_mutations(utils::UUID plan_id) {
 }
 
 future<> column_family::clear() {
+    if (_commitlog) {
+        _commitlog->discard_completed_segments(_schema->id());
+    }
     _memtables->clear();
     _memtables->add_memtable();
     _streaming_memtables->clear();

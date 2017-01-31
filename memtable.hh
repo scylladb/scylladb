@@ -28,6 +28,7 @@
 #include "schema.hh"
 #include "mutation_reader.hh"
 #include "db/commitlog/replay_position.hh"
+#include "db/commitlog/rp_set.hh"
 #include "utils/logalloc.hh"
 #include "partition_version.hh"
 
@@ -109,6 +110,7 @@ private:
     logalloc::allocating_section _allocating_section;
     partitions_type partitions;
     db::replay_position _replay_position;
+    db::rp_set _rp_set;
     // mutation source to which reads fall-back after mark_flushed()
     // so that memtable contents can be moved away while there are
     // still active readers. This is needed for this mutation_source
@@ -117,7 +119,7 @@ private:
     // monotonic. That combined source in this case is cache + memtable.
     mutation_source_opt _underlying;
     uint64_t _flushed_memory = 0;
-    void update(const db::replay_position&);
+    void update(db::rp_handle&&);
     friend class row_cache;
     friend class memtable_entry;
     friend class flush_reader;
@@ -144,9 +146,9 @@ public:
     future<> apply(memtable&);
     // Applies mutation to this memtable.
     // The mutation is upgraded to current schema.
-    void apply(const mutation& m, const db::replay_position& = db::replay_position());
+    void apply(const mutation& m, db::rp_handle&& = {});
     // The mutation is upgraded to current schema.
-    void apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& = db::replay_position());
+    void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& = {});
 
     static memtable& from_region(logalloc::region& r) {
         return static_cast<memtable&>(r);
@@ -196,6 +198,8 @@ public:
     const db::replay_position& replay_position() const {
         return _replay_position;
     }
-
+    const db::rp_set& rp_set() const {
+        return _rp_set;
+    }
     friend class iterator_reader;
 };

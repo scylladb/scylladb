@@ -65,6 +65,7 @@
 #include "seastarx.hh"
 
 #include "commitlog.hh"
+#include "rp_set.hh"
 #include "db/config.hh"
 #include "utils/data_input.hh"
 #include "utils/crc.hh"
@@ -103,6 +104,12 @@ public:
     void process_bytes(const char* data, size_t size) {
         return _c.process(reinterpret_cast<const uint8_t*>(data), size);
     }
+};
+
+class db::cf_holder {
+public:
+    virtual ~cf_holder() {};
+    virtual void release_cf_count(const cf_id_type&) = 0;
 };
 
 db::commitlog::config::config(const db::config& cfg)
@@ -183,7 +190,7 @@ public:
     // TODO: verify that we're ok with not-so-great granularity
     using clock_type = lowres_clock;
     using time_point = clock_type::time_point;
-    using sseg_ptr = lw_shared_ptr<segment>;
+    using sseg_ptr = ::shared_ptr<segment>;
 
     using request_controller_type = basic_semaphore<timeout_exception_factory, commitlog::timeout_clock>;
     using request_controller_units = semaphore_units<timeout_exception_factory, commitlog::timeout_clock>;
@@ -199,7 +206,7 @@ public:
         _request_controller.signal(size);
     }
 
-    future<db::replay_position>
+    future<rp_handle>
     allocate_when_possible(const cf_id_type& id, shared_ptr<entry_writer> writer, commitlog::timeout_clock::time_point timeout);
 
     struct stats {
@@ -269,8 +276,8 @@ public:
     future<> orphan_all();
 
     void discard_unused_segments();
-    void discard_completed_segments(const cf_id_type& id,
-            const replay_position& pos);
+    void discard_completed_segments(const cf_id_type&);
+    void discard_completed_segments(const cf_id_type&, const rp_set&);
     void on_timer();
     void sync();
     void arm(uint32_t extra = 0) {
@@ -362,7 +369,9 @@ private:
  *
  */
 
-class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
+class db::commitlog::segment : public enable_shared_from_this<segment>, public cf_holder {
+    friend class rp_handle;
+
     ::shared_ptr<segment_manager> _segment_manager;
 
     descriptor _desc;
@@ -380,7 +389,7 @@ class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
     using time_point = segment_manager::time_point;
 
     buffer_type _buffer;
-    std::unordered_map<cf_id_type, position_type> _cf_dirty;
+    std::unordered_map<cf_id_type, uint64_t> _cf_dirty;
     time_point _sync_time;
     seastar::gate _gate;
     uint64_t _write_waiters = 0;
@@ -458,6 +467,13 @@ public:
         _known_schema_versions.clear();
     }
 
+    void release_cf_count(const cf_id_type& cf) override {
+        mark_clean(cf, 1);
+        if (can_delete()) {
+            _segment_manager->discard_unused_segments();
+        }
+    }
+
     bool must_sync() {
         if (_segment_manager->cfg.mode == sync_mode::BATCH) {
             return false;
@@ -511,7 +527,7 @@ public:
     // See class comment for info
     future<sseg_ptr> flush(uint64_t pos = 0) {
         auto me = shared_from_this();
-        assert(!me.owned());
+        assert(me.use_count() > 1);
         if (pos == 0) {
             pos = _file_pos;
         }
@@ -614,7 +630,7 @@ public:
         _num_allocs = 0;
 
         auto me = shared_from_this();
-        assert(!me.owned());
+        assert(me.use_count() > 1);
 
         auto * p = buf.get_write();
         assert(std::count(p, p + 2 * sizeof(uint32_t), 0) == 2 * sizeof(uint32_t));
@@ -730,7 +746,7 @@ public:
     /**
      * Add a "mutation" to the segment.
      */
-    future<replay_position> allocate(const cf_id_type& id, shared_ptr<entry_writer> writer, segment_manager::request_controller_units permit, commitlog::timeout_clock::time_point timeout) {
+    future<rp_handle> allocate(const cf_id_type& id, shared_ptr<entry_writer> writer, segment_manager::request_controller_units permit, commitlog::timeout_clock::time_point timeout) {
         if (must_sync()) {
             return with_timeout(timeout, sync()).then([this, id, writer = std::move(writer), permit = std::move(permit), timeout] (auto s) mutable {
                 return s->allocate(id, std::move(writer), std::move(permit), timeout);
@@ -741,7 +757,7 @@ public:
         const auto s = size + entry_overhead_size; // total size
         auto ep = _segment_manager->sanity_check_size(s);
         if (ep) {
-            return make_exception_future<replay_position>(std::move(ep));
+            return make_exception_future<rp_handle>(std::move(ep));
         }
 
 
@@ -778,7 +794,9 @@ public:
         replay_position rp(_desc.id, position());
         auto pos = _buf_pos;
         _buf_pos += s;
-        _cf_dirty[id] = rp.pos;
+        _cf_dirty[id]++; // increase use count for cf.
+
+        rp_handle h(static_pointer_cast<cf_holder>(shared_from_this()), std::move(id), rp);
 
         auto * p = _buffer.get_write() + pos;
         auto * e = _buffer.get_write() + pos + s - sizeof(uint32_t);
@@ -804,8 +822,8 @@ public:
         _gate.leave();
 
         if (_segment_manager->cfg.mode == sync_mode::BATCH) {
-            return batch_cycle(timeout).then([rp](auto s) {
-                return make_ready_future<replay_position>(rp);
+            return batch_cycle(timeout).then([h = std::move(h)](auto s) mutable {
+                return make_ready_future<rp_handle>(std::move(h));
             });
         } else {
             // If this buffer alone is too big, potentially bigger than the maximum allowed size,
@@ -816,7 +834,7 @@ public:
                     clogger.error("Failed to flush commits to disk: {}", ex);
                 });
             }
-            return make_ready_future<replay_position>(rp);
+            return make_ready_future<rp_handle>(std::move(h));
         }
     }
 
@@ -838,18 +856,18 @@ public:
         _segment_manager->account_memory_usage(size - _buf_pos);
         return size;
     }
-    void mark_clean(const cf_id_type& id, position_type pos) {
+    void mark_clean(const cf_id_type& id, uint64_t count) {
         auto i = _cf_dirty.find(id);
-        if (i != _cf_dirty.end() && i->second <= pos) {
-            _cf_dirty.erase(i);
+        if (i != _cf_dirty.end()) {
+            assert(i->second >= count);
+            i->second -= count;
+            if (i->second == 0) {
+                _cf_dirty.erase(i);
+            }
         }
     }
-    void mark_clean(const cf_id_type& id, const replay_position& pos) {
-        if (pos.id == _desc.id) {
-            mark_clean(id, pos.pos);
-        } else if (pos.id > _desc.id) {
-            mark_clean(id, std::numeric_limits<position_type>::max());
-        }
+    void mark_clean(const cf_id_type& id) {
+        _cf_dirty.erase(id);
     }
     void mark_clean() {
         _cf_dirty.clear();
@@ -877,7 +895,7 @@ public:
     }
 };
 
-future<db::replay_position>
+future<db::rp_handle>
 db::commitlog::segment_manager::allocate_when_possible(const cf_id_type& id, shared_ptr<entry_writer> writer, commitlog::timeout_clock::time_point timeout) {
     auto size = writer->size();
     // If this is already too big now, we should throw early. It's also a correctness issue, since
@@ -885,7 +903,7 @@ db::commitlog::segment_manager::allocate_when_possible(const cf_id_type& id, sha
     // point.
     auto ep = sanity_check_size(size);
     if (ep) {
-        return make_exception_future<replay_position>(std::move(ep));
+        return make_exception_future<rp_handle>(std::move(ep));
     }
 
     auto fut = get_units(_request_controller, size, timeout);
@@ -1152,7 +1170,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     return open_checked_file_dma(commit_error_handler, cfg.commit_log_location + "/" + d.filename(), open_flags::wo | open_flags::create, opt).then([this, d, active](file f) {
         // xfs doesn't like files extended betond eof, so enlarge the file
         return f.truncate(max_size).then([this, d, active, f] () mutable {
-            auto s = make_lw_shared<segment>(this->shared_from_this(), d, std::move(f), active);
+            auto s = make_shared<segment>(this->shared_from_this(), d, std::move(f), active);
             return make_ready_future<sseg_ptr>(s);
         });
     });
@@ -1207,11 +1225,24 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
  * go through all segments, clear id up to pos. if segment becomes clean and unused by this,
  * it is discarded.
  */
-void db::commitlog::segment_manager::discard_completed_segments(
-        const cf_id_type& id, const replay_position& pos) {
-    clogger.debug("Discard completed segments for {}, table {}", pos, id);
+void db::commitlog::segment_manager::discard_completed_segments(const cf_id_type& id, const rp_set& used) {
+    auto& usage = used.usage();
+
+    clogger.debug("Discarding {}: {}", id, usage);
+
     for (auto&s : _segments) {
-        s->mark_clean(id, pos);
+        auto i = usage.find(s->_desc.id);
+        if (i != usage.end()) {
+            s->mark_clean(id, i->second);
+        }
+    }
+    discard_unused_segments();
+}
+
+void db::commitlog::segment_manager::discard_completed_segments(const cf_id_type& id) {
+    clogger.debug("Discard all data for {}", id);
+    for (auto&s : _segments) {
+        s->mark_clean(id);
     }
     discard_unused_segments();
 }
@@ -1422,7 +1453,7 @@ void db::commitlog::segment_manager::release_buffer(buffer_type&& b) {
 /**
  * Add mutation.
  */
-future<db::replay_position> db::commitlog::add(const cf_id_type& id,
+future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
         size_t size, commitlog::timeout_clock::time_point timeout, serializer_func func) {
     class serializer_func_entry_writer final : public entry_writer {
         serializer_func _func;
@@ -1441,7 +1472,7 @@ future<db::replay_position> db::commitlog::add(const cf_id_type& id,
     return _segment_manager->allocate_when_possible(id, writer, timeout);
 }
 
-future<db::replay_position> db::commitlog::add_entry(const cf_id_type& id, const commitlog_entry_writer& cew, timeout_clock::time_point timeout)
+future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commitlog_entry_writer& cew, timeout_clock::time_point timeout)
 {
     class cl_entry_writer final : public entry_writer {
         commitlog_entry_writer _writer;
@@ -1522,9 +1553,12 @@ void db::commitlog::remove_flush_handler(flush_handler_id id) {
     _segment_manager->remove_flush_handler(id);
 }
 
-void db::commitlog::discard_completed_segments(const cf_id_type& id,
-        const replay_position& pos) {
-    _segment_manager->discard_completed_segments(id, pos);
+void db::commitlog::discard_completed_segments(const cf_id_type& id, const rp_set& used) {
+    _segment_manager->discard_completed_segments(id, used);
+}
+
+void db::commitlog::discard_completed_segments(const cf_id_type& id) {
+    _segment_manager->discard_completed_segments(id);
 }
 
 future<> db::commitlog::sync_all_segments() {
@@ -1880,4 +1914,33 @@ future<std::vector<sstring>> db::commitlog::list_existing_segments(const sstring
 
 std::vector<sstring> db::commitlog::get_segments_to_replay() {
     return std::move(_segment_manager->_segments_to_replay);
+}
+
+db::rp_handle::rp_handle() noexcept
+{}
+
+db::rp_handle::rp_handle(shared_ptr<cf_holder> h, cf_id_type cf, replay_position rp) noexcept
+    : _h(std::move(h)), _cf(cf), _rp(rp)
+{}
+
+db::rp_handle::rp_handle(rp_handle&& v) noexcept
+    : _h(std::move(v._h)), _cf(v._cf), _rp(std::exchange(v._rp, {}))
+{}
+
+db::rp_handle& db::rp_handle::operator=(rp_handle&& v) noexcept {
+    if (this != &v) {
+        this->~rp_handle();
+        new (this) rp_handle(std::move(v));
+    }
+    return *this;
+}
+
+db::rp_handle::~rp_handle() {
+    if (_rp != replay_position() && _h) {
+        _h->release_cf_count(_cf);
+    }
+}
+
+db::replay_position db::rp_handle::release() {
+    return std::exchange(_rp, {});
 }
