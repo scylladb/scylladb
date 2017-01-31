@@ -214,6 +214,10 @@ public:
         return _partition_tombstone;
     }
 
+    tombstone current_tombstone() const {
+        return _current_tombstone;
+    }
+
     tombstone tombstone_for_row(const clustering_key_prefix& ck) {
         drop_unneeded_tombstones(ck);
         return _current_tombstone;
