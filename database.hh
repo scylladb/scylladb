@@ -1129,6 +1129,7 @@ private:
     void setup_metrics();
 
     future<> do_apply(schema_ptr, const frozen_mutation&, timeout_clock::time_point timeout);
+    future<> apply_with_commitlog(schema_ptr, column_family&, utils::UUID, const frozen_mutation&, timeout_clock::time_point timeout);
 
     query::result_memory_limiter _result_memory_limiter;
 

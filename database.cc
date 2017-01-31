@@ -2883,19 +2883,10 @@ future<frozen_mutation> database::apply_counter_update(schema_ptr s, const froze
     }
 }
 
-future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
-    // I'm doing a nullcheck here since the init code path for db etc
-    // is a little in flux and commitlog is created only when db is
-    // initied from datadir.
-    auto uuid = m.column_family_id();
-    auto& cf = find_column_family(uuid);
-    if (!s->is_synced()) {
-        throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
-                                 s->ks_name(), s->cf_name(), s->version()));
-    }
+future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::UUID uuid, const frozen_mutation& m, timeout_clock::time_point timeout) {
     if (cf.commitlog() != nullptr) {
         commitlog_entry_writer cew(s, m);
-        return cf.commitlog()->add_entry(uuid, cew, timeout).then([&m, this, s, timeout](auto rp) {
+        return cf.commitlog()->add_entry(std::move(uuid), cew, timeout).then([&m, this, s, timeout](auto rp) {
             return this->apply_in_memory(m, s, rp, timeout).handle_exception([this, s, &m, timeout] (auto ep) {
                 try {
                     std::rethrow_exception(ep);
@@ -2911,7 +2902,28 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_cloc
             });
         });
     }
-    return apply_in_memory(m, s, db::replay_position(), timeout);
+    return apply_in_memory(m, std::move(s), db::replay_position(), timeout);
+}
+
+future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
+    // I'm doing a nullcheck here since the init code path for db etc
+    // is a little in flux and commitlog is created only when db is
+    // initied from datadir.
+    auto uuid = m.column_family_id();
+    auto& cf = find_column_family(uuid);
+    if (!s->is_synced()) {
+        throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
+                                 s->ks_name(), s->cf_name(), s->version()));
+    }
+    if (cf.views().empty()) {
+        return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout);
+    }
+    //FIXME: Avoid unfreezing here.
+    auto f = cf.push_view_replica_updates(s, m.unfreeze(s));
+    return f.then([this, s = std::move(s), uuid = std::move(uuid), &m, timeout] {
+        auto& cf = find_column_family(uuid);
+        return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout);
+    });
 }
 
 future<> database::apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
