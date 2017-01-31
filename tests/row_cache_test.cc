@@ -1194,7 +1194,7 @@ SEASTAR_TEST_CASE(test_mvcc) {
             auto m12 = m1;
             m12.apply(m2);
 
-            cache.update(*mt1, make_default_partition_presence_checker());
+            cache.update(*mt1, make_default_partition_presence_checker()).get();
             auto sm3 = cache.make_reader(s)().get0();
             BOOST_REQUIRE(sm3);
             BOOST_REQUIRE(eq(sm3->key(), pk));
