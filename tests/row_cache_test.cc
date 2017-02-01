@@ -1158,18 +1158,8 @@ SEASTAR_TEST_CASE(test_mvcc) {
                 && m2.partition().difference(m1.schema(), m1.partition()).empty();
         };
 
-        for_each_mutation_pair([&] (const mutation& m1, const mutation& m2_, are_equal) {
-            if (m1.schema() != m2_.schema()) {
-                return;
-            }
-            if (m1.partition().empty() || m2_.partition().empty()) {
-                return;
-            }
-
+        auto test = [&no_difference] (const mutation& m1, const mutation& m2, bool with_active_memtable_reader) {
             auto s = m1.schema();
-
-            auto m2 = mutation(m1.decorated_key(), s);
-            m2.partition().apply(*s, m2_.partition(), *s);
 
             auto mt = make_lw_shared<memtable>(s);
             partition_key::equality eq(*s);
@@ -1193,6 +1183,14 @@ SEASTAR_TEST_CASE(test_mvcc) {
 
             auto m12 = m1;
             m12.apply(m2);
+
+            stdx::optional<mutation_reader> mt1_reader_opt;
+            stdx::optional<streamed_mutation_opt> mt1_reader_sm_opt;
+            if (with_active_memtable_reader) {
+                mt1_reader_opt = mt1->make_reader(s);
+                mt1_reader_sm_opt = (*mt1_reader_opt)().get0();
+                BOOST_REQUIRE(*mt1_reader_sm_opt);
+            }
 
             cache.update(*mt1, make_default_partition_presence_checker()).get();
             auto sm3 = cache.make_reader(s)().get0();
@@ -1219,6 +1217,13 @@ SEASTAR_TEST_CASE(test_mvcc) {
             }
             sm3 = { };
 
+            if (with_active_memtable_reader) {
+                assert(mt1_reader_sm_opt);
+                auto mt1_reader_mutation = mutation_from_streamed_mutation(std::move(*mt1_reader_sm_opt)).get0();
+                BOOST_REQUIRE(mt1_reader_mutation);
+                BOOST_REQUIRE(no_difference(m2, *mt1_reader_mutation));
+            }
+
             auto m_4 = mutation_from_streamed_mutation(std::move(sm4)).get0();
             BOOST_REQUIRE(no_difference(m12, *m_4));
 
@@ -1232,6 +1237,22 @@ SEASTAR_TEST_CASE(test_mvcc) {
 
             auto m_5 = mutation_from_streamed_mutation(std::move(sm5)).get0();
             BOOST_REQUIRE(no_difference(m12, *m_5));
+        };
+
+        for_each_mutation_pair([&] (const mutation& m1, const mutation& m2_, are_equal) {
+            if (m1.schema() != m2_.schema()) {
+                return;
+            }
+            if (m1.partition().empty() || m2_.partition().empty()) {
+                return;
+            }
+            auto s = m1.schema();
+
+            auto m2 = mutation(m1.decorated_key(), m1.schema());
+            m2.partition().apply(*s, m2_.partition(), *s);
+
+            test(m1, m2, false);
+            test(m1, m2, true);
         });
     });
 }
