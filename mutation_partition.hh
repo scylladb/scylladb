@@ -444,10 +444,10 @@ class rows_entry {
     deletable_row _row;
     friend class mutation_partition;
 public:
-    rows_entry(clustering_key&& key)
+    explicit rows_entry(clustering_key&& key)
         : _key(std::move(key))
     { }
-    rows_entry(const clustering_key& key)
+    explicit rows_entry(const clustering_key& key)
         : _key(key)
     { }
     rows_entry(const clustering_key& key, deletable_row&& row)
