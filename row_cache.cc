@@ -844,13 +844,13 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                 auto cmp = cache_entry::compare(_schema);
                 {
                     _update_section(_tracker.region(), [&] {
-                        auto i = m.partitions.begin();
                         STAP_PROBE(scylla, row_cache_update_one_batch_start);
                         unsigned quota_before = quota;
                         // FIXME: we should really be checking should_yield() here instead of
                         // need_preempt() + quota. However, should_yield() is currently quite
                         // expensive and we need to amortize it somehow.
-                        while (i != m.partitions.end() && quota && !need_preempt()) {
+                        do {
+                          auto i = m.partitions.begin();
                           STAP_PROBE(scylla, row_cache_update_partition_start);
                           with_linearized_managed_bytes([&] {
                            {
@@ -883,7 +883,7 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                            }
                           });
                           STAP_PROBE(scylla, row_cache_update_partition_end);
-                        }
+                        } while (!m.partitions.empty() && quota && !need_preempt());
                         STAP_PROBE1(scylla, row_cache_update_one_batch_end, quota_before - quota);
                     });
                     if (quota == 0 && seastar::thread::should_yield()) {
