@@ -102,17 +102,11 @@ public:
     }
 
     void notify_pressure() noexcept {
-        if (!_under_pressure) {
-            _under_pressure = true;
-            start_reclaiming();
-        }
+        _under_pressure = true;
     }
 
     void notify_relief() noexcept {
-        if (_under_pressure) {
-            _under_pressure = false;
-            stop_reclaiming();
-        }
+        _under_pressure = false;
     }
 
     region_group_reclaimer()
