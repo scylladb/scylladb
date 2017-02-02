@@ -2714,7 +2714,7 @@ future<> dirty_memory_manager::flush_when_needed() {
     });
 }
 
-void dirty_memory_manager::start_reclaiming() {
+void dirty_memory_manager::start_reclaiming() noexcept {
     _should_flush.signal();
 }
 

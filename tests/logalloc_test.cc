@@ -29,7 +29,9 @@
 #include <seastar/core/timer.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/tests/test-utils.hh>
+#include <seastar/util/defer.hh>
 #include <deque>
+#include "utils/phased_barrier.hh"
 
 #include "utils/logalloc.hh"
 #include "utils/managed_ref.hh"
@@ -529,11 +531,7 @@ inline void quiesce(FutureType&& fut) {
     // a request may be broken into many continuations. While we could just yield many times, the
     // exact amount needed to guarantee execution would be dependent on the internals of the
     // implementation, we want to avoid that.
-    timer<> tmr;
-    tmr.set_callback([] { BOOST_FAIL("The future we were waiting for took too long to get ready"); });
-    tmr.arm(2s);
-    fut.get();
-    tmr.cancel();
+    with_timeout(lowres_clock::now() + 2s, std::move(fut)).get();
 }
 
 // Simple RAII structure that wraps around a region_group
@@ -859,15 +857,22 @@ class test_reclaimer: public region_group_reclaimer {
     region_group _rg;
     std::vector<size_t> _reclaim_sizes;
     bool _shutdown = false;
+    shared_promise<> _unleash_reclaimer;
+    seastar::gate _reclaimers_done;
 public:
-    virtual void start_reclaiming() override {
-        while (this->under_pressure()) {
-            size_t reclaimed = test_async_reclaim_region::from_region(_rg.get_largest_region()).evict();
-            _result_accumulator->_reclaim_sizes.push_back(reclaimed);
-        }
+    virtual void start_reclaiming() noexcept override {
+        with_gate(_reclaimers_done, [this] {
+            return _unleash_reclaimer.get_shared_future().then([this] {
+                while (this->under_pressure()) {
+                    size_t reclaimed = test_async_reclaim_region::from_region(_rg.get_largest_region()).evict();
+                    _result_accumulator->_reclaim_sizes.push_back(reclaimed);
+                }
+            });
+        });
     }
 
     ~test_reclaimer() {
+        _reclaimers_done.close().get();
         _rg.shutdown().get();
     }
 
@@ -881,6 +886,10 @@ public:
 
     test_reclaimer(size_t threshold) : region_group_reclaimer(threshold), _result_accumulator(this), _rg(*this) {}
     test_reclaimer(test_reclaimer& parent, size_t threshold) : region_group_reclaimer(threshold), _result_accumulator(&parent), _rg(&parent._rg, *this) {}
+
+    void unleash() {
+        _unleash_reclaimer.set_value();
+    }
 };
 
 SEASTAR_TEST_CASE(test_region_groups_basic_throttling_simple_active_reclaim) {
@@ -888,6 +897,7 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_simple_active_reclaim) {
         // allocate a single region to exhaustion, and make sure active reclaim is activated.
         test_reclaimer simple(logalloc::segment_size);
         test_async_reclaim_region simple_region(simple.rg(), logalloc::segment_size);
+        simple.unleash();
 
         // Can't run this function until we have reclaimed something
         auto fut = simple.rg().run_when_memory_available([] {});
@@ -912,6 +922,7 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_worst_offen
         test_async_reclaim_region small_region(simple.rg(), logalloc::segment_size);
         test_async_reclaim_region medium_region(simple.rg(), 2 * logalloc::segment_size);
         test_async_reclaim_region big_region(simple.rg(), 3 * logalloc::segment_size);
+        simple.unleash();
 
         // Can't run this function until we have reclaimed
         auto fut = simple.rg().run_when_memory_available([&simple] {
@@ -941,6 +952,9 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_leaf_offend
         test_async_reclaim_region small_region(small_leaf.rg(), logalloc::segment_size);
         test_async_reclaim_region medium_region(root.rg(), 2 * logalloc::segment_size);
         test_async_reclaim_region big_region(large_leaf.rg(), 3 * logalloc::segment_size);
+        root.unleash();
+        large_leaf.unleash();
+        small_leaf.unleash();
 
         // Can't run this function until we have reclaimed. Try at the root, and we'll make sure
         // that the leaves are forced correctly.
@@ -967,6 +981,8 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_ancestor_bl
         test_reclaimer leaf(root, logalloc::segment_size);
 
         test_async_reclaim_region root_region(root.rg(), logalloc::segment_size);
+        root.unleash();
+        leaf.unleash();
 
         // Can't run this function until we have reclaimed. Try at the leaf, and we'll make sure
         // that the root reclaims
@@ -992,6 +1008,8 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_big_region_
         test_async_reclaim_region root_region(root.rg(), 4 * logalloc::segment_size);
         test_async_reclaim_region big_leaf_region(leaf.rg(), 3 * logalloc::segment_size);
         test_async_reclaim_region small_leaf_region(leaf.rg(), 2 * logalloc::segment_size);
+        root.unleash();
+        leaf.unleash();
 
         auto fut = root.rg().run_when_memory_available([&root] {
             BOOST_REQUIRE_EQUAL(root.reclaim_sizes().size(), 3);
@@ -1018,6 +1036,8 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_no_double_r
         test_reclaimer leaf(root, logalloc::segment_size);
 
         test_async_reclaim_region leaf_region(leaf.rg(), logalloc::segment_size);
+        root.unleash();
+        leaf.unleash();
 
         auto fut_root = root.rg().run_when_memory_available([&root] {
             BOOST_REQUIRE_EQUAL(root.reclaim_sizes().size(), 1);
@@ -1035,5 +1055,119 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_no_double_r
 
         BOOST_REQUIRE_EQUAL(root.reclaim_sizes().size(), 1);
         BOOST_REQUIRE_EQUAL(root.reclaim_sizes()[0], logalloc::segment_size);
+    });
+}
+
+// Reproduces issue #2021
+SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_region_group_size) {
+    return seastar::async([] {
+#ifndef DEFAULT_ALLOCATOR // Because we need memory::stats().free_memory();
+        logging::logger_registry().set_logger_level("lsa", seastar::log_level::debug);
+
+        auto free_space = memory::stats().free_memory();
+        size_t threshold = size_t(0.75 * free_space);
+        region_group_reclaimer recl(threshold, threshold);
+        region_group gr(recl);
+        auto close_gr = defer([&gr] { gr.shutdown().get(); });
+        region r(gr);
+
+        with_allocator(r.allocator(), [&] {
+            std::vector<managed_bytes> objs;
+
+            r.make_evictable([&] {
+                if (objs.empty()) {
+                    return memory::reclaiming_result::reclaimed_nothing;
+                }
+                with_allocator(r.allocator(), [&] {
+                    objs.pop_back();
+                });
+                return memory::reclaiming_result::reclaimed_something;
+            });
+
+            auto fill_to_pressure = [&] {
+                while (!recl.under_pressure()) {
+                    objs.emplace_back(managed_bytes(managed_bytes::initialized_later(), 1024));
+                }
+            };
+
+            utils::phased_barrier request_barrier;
+            auto wait_for_requests = defer([&] { request_barrier.advance_and_await().get(); });
+
+            for (int i = 0; i < 1000000; ++i) {
+                fill_to_pressure();
+                future<> f = gr.run_when_memory_available([&, op = request_barrier.start()] {
+                    // Trigger group size change (Refs issue #2021)
+                    gr.update(-10);
+                    gr.update(+10);
+                });
+                BOOST_REQUIRE(!f.available());
+            }
+
+            // Release
+            while (recl.under_pressure()) {
+                objs.pop_back();
+            }
+        });
+#endif
+    });
+}
+
+SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
+    return seastar::async([] {
+        size_t hard_threshold = logalloc::segment_size * 8;
+        size_t soft_threshold = hard_threshold / 2;
+
+        class reclaimer : public region_group_reclaimer {
+            bool _reclaim = false;
+        protected:
+            void start_reclaiming() noexcept override {
+                _reclaim = true;
+            }
+
+            void stop_reclaiming() noexcept override {
+                _reclaim = false;
+            }
+        public:
+            reclaimer(size_t hard_threshold, size_t soft_threshold)
+                : region_group_reclaimer(hard_threshold, soft_threshold)
+            { }
+            bool reclaiming() const { return _reclaim; };
+        };
+
+        reclaimer recl(hard_threshold, soft_threshold);
+        region_group gr(recl);
+        auto close_gr = defer([&gr] { gr.shutdown().get(); });
+        region r(gr);
+
+        with_allocator(r.allocator(), [&] {
+            std::vector<managed_bytes> objs;
+
+            BOOST_REQUIRE(!recl.reclaiming());
+
+            while (!recl.over_soft_limit()) {
+                objs.emplace_back(managed_bytes(managed_bytes::initialized_later(), logalloc::segment_size));
+            }
+
+            BOOST_REQUIRE(recl.reclaiming());
+
+            while (!recl.under_pressure()) {
+                objs.emplace_back(managed_bytes(managed_bytes::initialized_later(), logalloc::segment_size));
+            }
+
+            BOOST_REQUIRE(recl.reclaiming());
+
+            while (recl.under_pressure()) {
+                objs.pop_back();
+            }
+
+            BOOST_REQUIRE(recl.over_soft_limit());
+            BOOST_REQUIRE(recl.reclaiming());
+
+            while (recl.over_soft_limit()) {
+                objs.pop_back();
+            }
+
+            BOOST_REQUIRE(!recl.reclaiming());
+        });
     });
 }

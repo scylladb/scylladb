@@ -2076,56 +2076,6 @@ uint64_t region_group::top_region_evictable_space() const {
     return _regions.empty() ? 0 : _regions.top()->evictable_occupancy().total_space();
 }
 
-void region_group::release_requests() noexcept {
-    // The later() statement is here  to avoid executing the function in update() context. But
-    // also guarantees that we won't dominate the CPU if we have many requests to release.
-    //
-    // However, both with_gate() and later() can ultimately call to schedule() and consequently
-    // allocate memory, which (if that allocation triggers a compaction - that frees memory) would
-    // defeat the very purpose of not executing this on update() context. Allocations should be rare
-    // on those but can happen, so we need to at least make sure they will not reclaim.
-    //
-    // Whatever comes after later() is already in a safe context, so we don't need to keep the lock
-    // alive until we are done with the whole execution - only until later is successfully executed.
-    tracker_reclaimer_lock rl;
-
-    _reclaimer.notify_relief();
-    if (_descendant_blocked_requests) {
-        _descendant_blocked_requests->set_value();
-    }
-    _descendant_blocked_requests = {};
-
-    if (_blocked_requests.empty()) {
-        return;
-    }
-
-    with_gate(_asynchronous_gate, [this, rl = std::move(rl)] () mutable {
-        return later().then([this] {
-            // Check again, we may have executed release_requests() in this mean time from another entry
-            // point (for instance, a descendant notification)
-            if (_blocked_requests.empty()) {
-                return;
-            }
-
-            auto blocked_at = do_for_each_parent(this, [] (auto rg) {
-                return rg->execution_permitted() ? stop_iteration::no : stop_iteration::yes;
-            });
-
-            if (!blocked_at) {
-                auto req = std::move(_blocked_requests.front());
-                _blocked_requests.pop_front();
-                req->allocate();
-                release_requests();
-            } else {
-                // If someone blocked us in the mean time then we can't execute. We need to make
-                // sure that we are listening to notifications, though. It could be that we used to
-                // be blocked on ourselves and now we are blocking on an ancestor
-                subscribe_for_ancestor_available_memory_notification(blocked_at);
-            }
-        });
-    });
-}
-
 region* region_group::get_largest_region() {
     if (!_maximal_rg || _maximal_rg->_regions.empty()) {
         return nullptr;
@@ -2157,6 +2107,88 @@ region_group::del(region_impl* child) {
     _regions.erase(child->_heap_handle);
     region_group_binomial_group_sanity_check(_regions);
     update(-child->occupancy().total_space());
+}
+
+bool
+region_group::execution_permitted() noexcept {
+    return do_for_each_parent(this, [] (auto rg) {
+        return rg->under_pressure() ? stop_iteration::yes : stop_iteration::no;
+    }) == nullptr;
+}
+
+future<>
+region_group::start_releaser() {
+    return later().then([this] {
+        return repeat([this] () noexcept {
+            if (_shutdown_requested) {
+                return make_ready_future<stop_iteration>(stop_iteration::yes);
+            }
+
+            if (!_blocked_requests.empty() && execution_permitted()) {
+                auto req = std::move(_blocked_requests.front());
+                _blocked_requests.pop_front();
+                req->allocate();
+                return make_ready_future<stop_iteration>(stop_iteration::no);
+            } else {
+                // Block reclaiming to prevent signal() from being called by reclaimer inside wait()
+                // FIXME: handle allocation failures (not very likely) like allocating_section does
+                tracker_reclaimer_lock rl;
+                return _relief.wait().then([] {
+                    return stop_iteration::no;
+                });
+            }
+        });
+    });
+}
+
+region_group::region_group(region_group *parent, region_group_reclaimer& reclaimer)
+    : _parent(parent)
+    , _reclaimer(reclaimer)
+    , _releaser(reclaimer_can_block() ? start_releaser() : make_ready_future<>())
+{
+    if (_parent) {
+        _parent->add(this);
+    }
+}
+
+bool region_group::reclaimer_can_block() const {
+    return _reclaimer.throttle_threshold() != std::numeric_limits<size_t>::max();
+}
+
+void region_group::notify_relief() {
+    _relief.signal();
+    for (region_group* child : _subgroups) {
+        child->notify_relief();
+    }
+}
+
+void region_group::update(ssize_t delta) {
+    // Most-enclosing group which was relieved.
+    region_group* top_relief = nullptr;
+
+    do_for_each_parent(this, [&top_relief, delta] (region_group* rg) mutable {
+        rg->update_maximal_rg();
+        rg->_total_memory += delta;
+
+        if (rg->_total_memory >= rg->_reclaimer.soft_limit_threshold()) {
+            rg->_reclaimer.notify_soft_pressure();
+        } else {
+            rg->_reclaimer.notify_soft_relief();
+        }
+
+        if (rg->_total_memory > rg->_reclaimer.throttle_threshold()) {
+            rg->_reclaimer.notify_pressure();
+        } else if (rg->_reclaimer.under_pressure()) {
+            rg->_reclaimer.notify_relief();
+            top_relief = rg;
+        }
+
+        return stop_iteration::no;
+    });
+
+    if (top_relief) {
+        top_relief->notify_relief();
+    }
 }
 
 allocating_section::guard::guard()
