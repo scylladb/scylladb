@@ -104,7 +104,7 @@ stdx::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, at
     if (!b.is_live()) {
         return { };
     } else if (!a.is_live()) {
-        return a;
+        return atomic_cell(a);
     }
 
     auto a_shards = counter_cell_view(a).shards();
