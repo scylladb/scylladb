@@ -154,7 +154,7 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
     std::unordered_map<const logalloc::region*, flush_token> _flush_manager;
 
     future<> _waiting_flush;
-    virtual void start_reclaiming() override;
+    virtual void start_reclaiming() noexcept override;
 
     std::vector<scollectd::registration> _collectd;
 public:
