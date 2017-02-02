@@ -286,10 +286,9 @@ class cell_locker {
         };
 
         class equal_compare {
-            schema_ptr _schema;
             dht::decorated_key_equals_comparator _cmp;
         public:
-            explicit equal_compare(const schema s) : _cmp(s) { }
+            explicit equal_compare(const schema& s) : _cmp(s) { }
             bool operator()(const dht::decorated_key& dk, const partition_entry& pe) {
                 return _cmp(dk, pe._key);
             }
