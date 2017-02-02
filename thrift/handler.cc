@@ -258,6 +258,11 @@ public:
                         cl_from_thrift(consistency_level),
                         nullptr).then([schema, cmd, cell_limit](auto result) {
                     return query::result_view::do_with(*result, [schema, cmd, cell_limit](query::result_view v) {
+                        if (schema->is_counter()) {
+                            counter_column_aggregator aggregator(*schema, cmd->slice, cell_limit);
+                            v.consume(cmd->slice, aggregator);
+                            return aggregator.release_as_map();
+                        }
                         column_aggregator aggregator(*schema, cmd->slice, cell_limit);
                         v.consume(cmd->slice, aggregator);
                         return aggregator.release_as_map();
@@ -464,9 +469,17 @@ public:
     }
 
     void add(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnParent& column_parent, const CounterColumn& column, const ConsistencyLevel::type consistency_level) {
-        warn(unimplemented::cause::COUNTERS);
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        with_schema(std::move(cob), std::move(exn_cob), column_parent.column_family, [&](schema_ptr schema) {
+            if (column_parent.__isset.super_column) {
+                fail(unimplemented::cause::SUPER);
+            }
+
+            mutation m_to_apply(key_from_thrift(*schema, to_bytes_view(key)), schema);
+            add_to_mutation(*schema, column, m_to_apply);
+            return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY).then([m_to_apply = std::move(m_to_apply), consistency_level] {
+                return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), nullptr);
+            });
+        });
     }
 
     void cas(tcxx::function<void(CASResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const std::string& column_family, const std::vector<Column> & expected, const std::vector<Column> & updates, const ConsistencyLevel::type serial_consistency_level, const ConsistencyLevel::type commit_consistency_level) {
@@ -503,10 +516,29 @@ public:
         });
     }
 
-    void remove_counter(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnPath& path, const ConsistencyLevel::type consistency_level) {
-        warn(unimplemented::cause::COUNTERS);
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+    void remove_counter(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnPath& column_path, const ConsistencyLevel::type consistency_level) {
+        with_schema(std::move(cob), std::move(exn_cob), column_path.column_family, [&](schema_ptr schema) {
+            mutation m_to_apply(key_from_thrift(*schema, to_bytes_view(key)), schema);
+
+            auto timestamp = api::new_timestamp();
+            if (column_path.__isset.super_column) {
+                fail(unimplemented::cause::SUPER);
+            } else if (column_path.__isset.column) {
+                Deletion d;
+                d.__set_timestamp(timestamp);
+                d.__set_predicate(column_path_to_slice_predicate(column_path));
+                Mutation m;
+                m.__set_deletion(d);
+                add_to_mutation(*schema, m, m_to_apply);
+            } else {
+                m_to_apply.partition().apply(tombstone(timestamp, gc_clock::now()));
+            }
+
+            return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY).then([m_to_apply = std::move(m_to_apply), consistency_level] {
+                // This mutation contains only counter tombstones so it can be applied like non-counter mutations.
+                return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), nullptr);
+            });
+        });
     }
 
     void batch_mutate(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::map<std::string, std::map<std::string, std::vector<Mutation> > > & mutation_map, const ConsistencyLevel::type consistency_level) {
@@ -1362,8 +1394,10 @@ private:
     }
     static query::partition_slice::option_set query_opts(const schema& s) {
         query::partition_slice::option_set opts;
-        opts.set(query::partition_slice::option::send_timestamp);
-        opts.set(query::partition_slice::option::send_ttl);
+        if (!s.is_counter()) {
+            opts.set(query::partition_slice::option::send_timestamp);
+            opts.set(query::partition_slice::option::send_ttl);
+        }
         if (s.thrift().is_dynamic()) {
             opts.set(query::partition_slice::option::send_clustering_key);
         }
@@ -1461,6 +1495,20 @@ private:
     static ColumnOrSuperColumn make_column_or_supercolumn(const bytes& col, const query::result_atomic_cell_view& cell) {
         return column_to_column_or_supercolumn(make_column(col, cell));
     }
+    static CounterColumn make_counter_column(const bytes& col, const query::result_atomic_cell_view& cell) {
+        CounterColumn ret;
+        ret.__set_name(bytes_to_string(col));
+        ret.__set_value(value_cast<int64_t>(long_type->deserialize_value(cell.value())));
+        return ret;
+    }
+    static ColumnOrSuperColumn counter_column_to_column_or_supercolumn(CounterColumn&& col) {
+        ColumnOrSuperColumn ret;
+        ret.__set_counter_column(std::move(col));
+        return ret;
+    }
+    static ColumnOrSuperColumn make_counter_column_or_supercolumn(const bytes& col, const query::result_atomic_cell_view& cell) {
+        return counter_column_to_column_or_supercolumn(make_counter_column(col, cell));
+    }
     static std::string partition_key_to_string(const schema& s, const partition_key& key) {
         return bytes_to_string(to_legacy(*s.partition_key_type(), key));
     }
@@ -1530,6 +1578,13 @@ private:
         }
     };
     using column_aggregator = column_visitor<column_or_supercolumn_builder>;
+    struct counter_column_or_supercolumn_builder {
+        using type = std::vector<ColumnOrSuperColumn>;
+        void on_column(std::vector<ColumnOrSuperColumn>* current_cols, const bytes& name, const query::result_atomic_cell_view& cell) {
+            current_cols->emplace_back(make_counter_column_or_supercolumn(name, cell));
+        }
+    };
+    using counter_column_aggregator = column_visitor<counter_column_or_supercolumn_builder>;
     struct counter {
         using type = int32_t;
         void on_column(int32_t* current_cols, const bytes_view& name, const query::result_atomic_cell_view& cell) {
@@ -1705,6 +1760,28 @@ private:
         auto cell = atomic_cell::make_live(col.timestamp, to_bytes_view(col.value), maybe_ttl(s, col));
         m_to_apply.set_clustered_cell(std::move(ckey), def, std::move(cell));
     }
+    static void add_live_cell(const schema& s, const CounterColumn& col, const column_definition& def, clustering_key_prefix ckey, mutation& m_to_apply) {
+        //thrift_validation::validate_column(col, def);
+        auto cell = atomic_cell::make_live_counter_update(api::new_timestamp(), long_type->decompose(col.value));
+        m_to_apply.set_clustered_cell(std::move(ckey), def, std::move(cell));
+    }
+    static void add_to_mutation(const schema& s, const CounterColumn& col, mutation& m_to_apply) {
+        thrift_validation::validate_column_name(col.name);
+        if (s.thrift().is_dynamic()) {
+            auto&& value_col = s.regular_begin();
+            add_live_cell(s, col, *value_col, make_clustering_prefix(s, to_bytes_view(col.name)), m_to_apply);
+        } else {
+            auto def = s.get_column_definition(to_bytes(col.name));
+            if (def) {
+                if (def->kind != column_kind::regular_column) {
+                    throw make_exception<InvalidRequestException>("Column %s is not settable", col.name);
+                }
+                add_live_cell(s, col, *def, clustering_key_prefix::make_empty(s), m_to_apply);
+            } else {
+                fail(unimplemented::cause::MIXED_CF);
+            }
+        }
+    }
     static void add_to_mutation(const schema& s, const Column& col, mutation& m_to_apply) {
         thrift_validation::validate_column_name(col.name);
         if (s.thrift().is_dynamic()) {
@@ -1736,15 +1813,13 @@ private:
             } else if (cosc.__isset.super_column) {
                 fail(unimplemented::cause::SUPER);
             } else if (cosc.__isset.counter_column) {
-                fail(unimplemented::cause::COUNTERS);
+                add_to_mutation(s, cosc.counter_column, m_to_apply);
             } else if (cosc.__isset.counter_super_column) {
                 fail(unimplemented::cause::SUPER);
             }
         } else if (m.__isset.deletion) {
             auto&& del = m.deletion;
-            if (!del.__isset.timestamp) {
-                fail(unimplemented::cause::COUNTERS);
-            } else if (del.__isset.super_column) {
+            if (del.__isset.super_column) {
                 fail(unimplemented::cause::SUPER);
             } else if (del.__isset.predicate) {
                 apply_delete(s, del.predicate, del.timestamp, m_to_apply);

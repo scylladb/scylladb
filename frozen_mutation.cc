@@ -22,6 +22,7 @@
 #include "frozen_mutation.hh"
 #include "mutation_partition.hh"
 #include "mutation.hh"
+#include "counters.hh"
 #include "partition_builder.hh"
 #include "mutation_partition_serializer.hh"
 #include "utils/UUID.hh"

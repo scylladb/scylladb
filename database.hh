@@ -77,6 +77,9 @@
 #include <boost/intrusive/parent_from_member.hpp>
 #include "db/view/view.hh"
 
+class cell_locker;
+class locked_cell;
+
 class frozen_mutation;
 class reconcilable_result;
 
@@ -432,6 +435,11 @@ private:
     config _config;
     mutable stats _stats;
 
+    uint64_t _failed_counter_applies_to_memtable = 0;
+
+    template<typename... Args>
+    void do_apply(Args&&... args);
+
     lw_shared_ptr<memtable_list> _memtables;
 
     // In older incarnations, we simply commited the mutations to memtables.
@@ -520,6 +528,8 @@ private:
     std::unordered_map<sstring, db::view::view> _views;
     std::vector<view_ptr> _view_schemas;
     semaphore _cache_update_sem{1};
+
+    std::unique_ptr<cell_locker> _counter_cell_locks;
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, std::vector<unsigned>&& shards_for_the_sstable);
     // Adds new sstable to the set of sstables
@@ -579,6 +589,10 @@ private:
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
     void do_trigger_compaction();
 public:
+    uint64_t failed_counter_applies_to_memtable() const {
+        return _failed_counter_applies_to_memtable;
+    }
+
     // This function should be called when this column family is ready for writes, IOW,
     // to produce SSTables. Extensive details about why this is important can be found
     // in Scylla's Github Issue #1014
@@ -643,6 +657,8 @@ public:
     row_cache& get_row_cache() {
         return _cache;
     }
+
+    future<std::vector<locked_cell>> lock_counter_cells(const mutation& m);
 
     logalloc::occupancy_stats occupancy() const;
 private:
@@ -1109,6 +1125,8 @@ private:
     future<> do_apply(schema_ptr, const frozen_mutation&, timeout_clock::time_point timeout);
 
     query::result_memory_limiter _result_memory_limiter;
+
+    future<frozen_mutation> do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema);
 public:
     static utils::UUID empty_version;
 
@@ -1183,6 +1201,7 @@ public:
     // Throws timed_out_error when timeout is reached.
     future<> apply(schema_ptr, const frozen_mutation&, timeout_clock::time_point timeout = timeout_clock::time_point::max());
     future<> apply_streaming_mutation(schema_ptr, utils::UUID plan_id, const frozen_mutation&, bool fragmented);
+    future<frozen_mutation> apply_counter_update(schema_ptr, const frozen_mutation& m, timeout_clock::time_point timeout = timeout_clock::time_point::max());
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
     const sstring& get_snitch_name() const;
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names);

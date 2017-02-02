@@ -33,6 +33,7 @@
 #include "service/priority_manager.hh"
 #include "mutation_compactor.hh"
 #include "intrusive_set_external_comparator.hh"
+#include "counters.hh"
 
 template<bool reversed>
 struct reversal_traits;
@@ -605,6 +606,22 @@ void write_cell(RowWriter& w, const query::partition_slice& slice, const data_ty
         .end_qr_cell();
 }
 
+template<typename RowWriter>
+void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell_view c) {
+    assert(c.is_live());
+    auto wr = w.add().write();
+    [&, wr = std::move(wr)] () mutable {
+        if (slice.options.contains<query::partition_slice::option::send_timestamp>()) {
+            return std::move(wr).write_timestamp(c.timestamp());
+        } else {
+            return std::move(wr).skip_timestamp();
+        }
+    }().skip_expiry()
+            .write_value(counter_cell_view::total_value_type()->decompose(counter_cell_view(c).total_value()))
+            .skip_ttl()
+            .end_qr_cell();
+}
+
 // returns the timestamp of a latest update to the row
 static api::timestamp_type hash_row_slice(md5_hasher& hasher,
     const schema& s,
@@ -621,11 +638,11 @@ static api::timestamp_type hash_row_slice(md5_hasher& hasher,
         feed_hash(hasher, id);
         auto&& def = s.column_at(kind, id);
         if (def.is_atomic()) {
-            feed_hash(hasher, cell->as_atomic_cell());
+            feed_hash(hasher, cell->as_atomic_cell(), def);
             max = std::max(max, cell->as_atomic_cell().timestamp());
         } else {
             auto&& cm = cell->as_collection_mutation();
-            feed_hash(hasher, cm);
+            feed_hash(hasher, cm, def);
             auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
             max = std::max(max, ctype->last_update(cm));
         }
@@ -651,6 +668,8 @@ static void get_compacted_row_slice(const schema& s,
                 auto c = cell->as_atomic_cell();
                 if (!c.is_live()) {
                     writer.add().skip();
+                } else if (def.is_counter()) {
+                    write_counter_cell(writer, slice, cell->as_atomic_cell());
                 } else {
                     write_cell(writer, slice, cell->as_atomic_cell());
                 }
@@ -674,7 +693,7 @@ bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tomb
         const column_definition& def = s.column_at(kind, id);
         if (def.is_atomic()) {
             auto&& c = cell_or_collection.as_atomic_cell();
-            if (c.is_live(tomb, now)) {
+            if (c.is_live(tomb, now, def.is_counter())) {
                 any_live = true;
                 return stop_iteration::yes;
             }
@@ -912,11 +931,16 @@ apply_reversibly(const column_definition& def, atomic_cell_or_collection& dst,  
     // provided via an upper layer
     if (def.is_atomic()) {
         auto&& src_ac = src.as_atomic_cell_ref();
-        if (compare_atomic_cell_for_merge(dst.as_atomic_cell(), src.as_atomic_cell()) < 0) {
-            std::swap(dst, src);
-            src_ac.set_revert(true);
+        if (def.is_counter()) {
+            auto did_apply = counter_cell_view::apply_reversibly(dst, src);
+            src_ac.set_revert(did_apply);
         } else {
-            src_ac.set_revert(false);
+            if (compare_atomic_cell_for_merge(dst.as_atomic_cell(), src.as_atomic_cell()) < 0) {
+                std::swap(dst, src);
+                src_ac.set_revert(true);
+            } else {
+                src_ac.set_revert(false);
+            }
         }
     } else {
         auto ct = static_pointer_cast<const collection_type_impl>(def.type);
@@ -934,7 +958,11 @@ revert(const column_definition& def, atomic_cell_or_collection& dst, atomic_cell
         auto&& ac = src.as_atomic_cell_ref();
         if (ac.is_revert_set()) {
             ac.set_revert(false);
-            std::swap(dst, src);
+            if (def.is_counter()) {
+                counter_cell_view::revert_apply(dst, src);
+            } else {
+                std::swap(dst, src);
+            }
         }
     } else {
         std::swap(dst, src);
@@ -987,19 +1015,6 @@ void row::for_each_cell(Func&& func, Rollback&& rollback) {
                 rollback(i->id(), i->cell());
             }
             throw;
-        }
-    }
-}
-
-template<typename Func>
-void row::for_each_cell(Func&& func) {
-    if (_type == storage_type::vector) {
-        for (auto i : bitsets::for_each_set(_storage.vector.present)) {
-            func(i, _storage.vector.v[i]);
-        }
-    } else {
-        for (auto& cell : _storage.set) {
-            func(cell.id(), cell.cell());
         }
     }
 }
@@ -1511,7 +1526,7 @@ bool row::compact_and_expire(const schema& s, column_kind kind, tombstone tomb, 
         const column_definition& def = s.column_at(kind, id);
         if (def.is_atomic()) {
             atomic_cell_view cell = c.as_atomic_cell();
-            if (cell.is_covered_by(tomb)) {
+            if (cell.is_covered_by(tomb, def.is_counter())) {
                 erase = true;
             } else if (cell.has_expired(query_time)) {
                 c = atomic_cell::make_dead(cell.timestamp(), cell.deletion_time());
@@ -1559,8 +1574,14 @@ row row::difference(const schema& s, column_kind kind, const row& other) const
             while (it != other_range.end() && it->first < c.first) {
                 ++it;
             }
+            auto& cdef = s.column_at(kind, c.first);
             if (it == other_range.end() || it->first != c.first) {
                 r.append_cell(c.first, c.second);
+            } else if (cdef.is_counter()) {
+                auto cell = counter_cell_view::difference(c.second.as_atomic_cell(), it->second.as_atomic_cell());
+                if (cell) {
+                    r.append_cell(c.first, std::move(*cell));
+                }
             } else if (s.column_at(kind, c.first).is_atomic()) {
                 if (compare_atomic_cell_for_merge(c.second.as_atomic_cell(), it->second.as_atomic_cell()) > 0) {
                     r.append_cell(c.first, c.second);

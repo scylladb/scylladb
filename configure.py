@@ -229,6 +229,7 @@ scylla_tests = [
     'tests/sstable_atomic_deletion_test',
     'tests/virtual_reader_test',
     'tests/view_schema_test',
+    'tests/counter_test',
 ]
 
 apps = [
@@ -310,6 +311,7 @@ scylla_core = (['database.cc',
                  'mutation_reader.cc',
                  'mutation_query.cc',
                  'keys.cc',
+                 'counters.cc',
                  'sstables/sstables.cc',
                  'sstables/compress.cc',
                  'sstables/row.cc',
@@ -559,6 +561,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/idl_test.idl.hh',
         'idl/commitlog.idl.hh',
         'idl/tracing.idl.hh',
+        'idl/consistency_level.idl.hh',
         ]
 
 scylla_tests_dependencies = scylla_core + api + idls + [

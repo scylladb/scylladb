@@ -309,6 +309,21 @@ public:
             }
         }
 
+    bool is_static_row() const { return !_ck; }
+    bool is_clustering_row() const { return _ck && !_bound_weight; }
+    bool is_range_tombstone() const { return _bound_weight; }
+
+    template<typename Hasher>
+    void feed_hash(Hasher& hasher, const schema& s) const {
+        ::feed_hash(hasher, _bound_weight);
+        if (_ck) {
+            ::feed_hash(hasher, true);
+            _ck->feed_hash(hasher, s);
+        } else {
+            ::feed_hash(hasher, false);
+        }
+    }
+
     clustering_key_prefix& key() {
         return *_ck;
     }
@@ -608,11 +623,7 @@ private:
     void consume_cell(const column_definition& col, const atomic_cell_or_collection& cell) {
         feed_hash(_hasher, col.name());
         feed_hash(_hasher, col.type->name());
-        if (col.is_atomic()) {
-            feed_hash(_hasher, cell.as_atomic_cell());
-        } else {
-            feed_hash(_hasher, cell.as_collection_mutation());
-        }
+        cell.feed_hash(_hasher, col);
     }
 
     void consume_range_tombstone_start(const range_tombstone& rt) {

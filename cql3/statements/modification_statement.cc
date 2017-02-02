@@ -489,7 +489,7 @@ modification_statement::execute_without_condition(distributed<service::storage_p
         db::validate_for_write(s->ks_name(), cl);
     }
 
-    return get_mutations(proxy, options, false, options.get_timestamp(qs), qs.get_trace_state()).then([cl, &proxy, &qs] (auto mutations) {
+    return get_mutations(proxy, options, false, options.get_timestamp(qs), qs.get_trace_state()).then([this, cl, &proxy, &qs] (auto mutations) {
         if (mutations.empty()) {
             return now();
         }

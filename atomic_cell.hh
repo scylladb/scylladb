@@ -57,6 +57,7 @@ private:
     static constexpr int8_t LIVE_FLAG = 0x01;
     static constexpr int8_t EXPIRY_FLAG = 0x02; // When present, expiry field is present. Set only for live cells
     static constexpr int8_t REVERT_FLAG = 0x04; // transient flag used to efficiently implement ReversiblyMergeable for atomic cells.
+    static constexpr int8_t COUNTER_UPDATE_FLAG = 0x08; // Cell is a counter update.
     static constexpr unsigned flags_size = 1;
     static constexpr unsigned timestamp_offset = flags_size;
     static constexpr unsigned timestamp_size = 8;
@@ -67,6 +68,9 @@ private:
     static constexpr unsigned ttl_offset = expiry_offset + expiry_size;
     static constexpr unsigned ttl_size = 4;
 private:
+    static bool is_counter_update(bytes_view cell) {
+        return cell[0] & COUNTER_UPDATE_FLAG;
+    }
     static bool is_revert_set(bytes_view cell) {
         return cell[0] & REVERT_FLAG;
     }
@@ -126,6 +130,14 @@ private:
         std::copy_n(value.begin(), value.size(), b.begin() + value_offset);
         return b;
     }
+    static managed_bytes make_live_counter_update(api::timestamp_type timestamp, bytes_view value) {
+        auto value_offset = flags_size + timestamp_size;
+        managed_bytes b(managed_bytes::initialized_later(), value_offset + value.size());
+        b[0] = LIVE_FLAG | COUNTER_UPDATE_FLAG;
+        set_field(b, timestamp_offset, timestamp);
+        std::copy_n(value.begin(), value.size(), b.begin() + value_offset);
+        return b;
+    }
     static managed_bytes make_live(api::timestamp_type timestamp, bytes_view value, gc_clock::time_point expiry, gc_clock::duration ttl) {
         auto value_offset = flags_size + timestamp_size + expiry_size + ttl_size;
         managed_bytes b(managed_bytes::initialized_later(), value_offset + value.size());
@@ -149,17 +161,20 @@ protected:
     atomic_cell_base(ByteContainer&& data) : _data(std::forward<ByteContainer>(data)) { }
     friend class atomic_cell_or_collection;
 public:
+    bool is_counter_update() const {
+        return atomic_cell_type::is_counter_update(_data);
+    }
     bool is_revert_set() const {
         return atomic_cell_type::is_revert_set(_data);
     }
     bool is_live() const {
         return atomic_cell_type::is_live(_data);
     }
-    bool is_live(tombstone t) const {
-        return is_live() && !is_covered_by(t);
+    bool is_live(tombstone t, bool is_counter) const {
+        return is_live() && !is_covered_by(t, is_counter);
     }
-    bool is_live(tombstone t, gc_clock::time_point now) const {
-        return is_live() && !is_covered_by(t) && !has_expired(now);
+    bool is_live(tombstone t, gc_clock::time_point now, bool is_counter) const {
+        return is_live() && !is_covered_by(t, is_counter) && !has_expired(now);
     }
     bool is_live_and_has_ttl() const {
         return atomic_cell_type::is_live_and_has_ttl(_data);
@@ -167,8 +182,8 @@ public:
     bool is_dead(gc_clock::time_point now) const {
         return atomic_cell_type::is_dead(_data) || has_expired(now);
     }
-    bool is_covered_by(tombstone t) const {
-        return timestamp() <= t.timestamp;
+    bool is_covered_by(tombstone t, bool is_counter) const {
+        return timestamp() <= t.timestamp || (is_counter && t.timestamp != api::missing_timestamp);
     }
     // Can be called on live and dead cells
     api::timestamp_type timestamp() const {
@@ -238,6 +253,12 @@ public:
     }
     static atomic_cell make_live(api::timestamp_type timestamp, const bytes& value) {
         return make_live(timestamp, bytes_view(value));
+    }
+    static atomic_cell make_live_counter_update(api::timestamp_type timestamp, bytes_view value) {
+        return atomic_cell_type::make_live_counter_update(timestamp, value);
+    }
+    static atomic_cell make_live_counter_update(api::timestamp_type timestamp, const bytes& value) {
+        return atomic_cell_type::make_live_counter_update(timestamp, bytes_view(value));
     }
     static atomic_cell make_live(api::timestamp_type timestamp, bytes_view value,
         gc_clock::time_point expiry, gc_clock::duration ttl)

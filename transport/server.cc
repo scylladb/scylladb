@@ -1769,6 +1769,8 @@ public:
         // For compatibility sake, we still return DateType as the timestamp type in resultSet metadata (#5723)
         if (type == date_type) {
             type = timestamp_type;
+        } else if (type == counter_type) {
+            type = long_type;
         }
 
         auto i = type_id_to_type.right.find(type);

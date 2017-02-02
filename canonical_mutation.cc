@@ -22,6 +22,7 @@
 #include "canonical_mutation.hh"
 #include "mutation.hh"
 #include "mutation_partition_serializer.hh"
+#include "counters.hh"
 #include "converting_mutation_partition_applier.hh"
 #include "hashing_partition_visitor.hh"
 #include "utils/UUID.hh"

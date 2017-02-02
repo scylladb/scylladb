@@ -39,6 +39,8 @@ private:
         ATOM_NAME_BYTES,
         ATOM_MASK,
         ATOM_MASK_2,
+        COUNTER_CELL,
+        COUNTER_CELL_2,
         EXPIRING_CELL,
         EXPIRING_CELL_2,
         EXPIRING_CELL_3,
@@ -61,6 +63,7 @@ private:
 
     // state for reading a cell
     bool _deleted;
+    bool _counter;
     uint32_t _ttl, _expiration;
 
     bool _read_partial_row = false;
@@ -72,6 +75,7 @@ public:
                 || (_state == state::ATOM_START_2)
                 || (_state == state::ATOM_MASK_2)
                 || (_state == state::STOP_THEN_ATOM_START)
+                || (_state == state::COUNTER_CELL_2)
                 || (_state == state::EXPIRING_CELL_3)) && (_prestate == prestate::NONE));
     }
 
@@ -187,10 +191,12 @@ public:
             if (mask & RANGE_TOMBSTONE_MASK) {
                 _state = state::RANGE_TOMBSTONE;
             } else if (mask & COUNTER_MASK) {
-                // FIXME: see ColumnSerializer.java:deserializeColumnBody
-                throw malformed_sstable_exception("FIXME COUNTER_MASK");
+                _deleted = false;
+                _counter = true;
+                _state = state::COUNTER_CELL;
             } else if (mask & EXPIRATION_MASK) {
                 _deleted = false;
+                _counter = false;
                 _state = state::EXPIRING_CELL;
             } else {
                 // FIXME: see ColumnSerializer.java:deserializeColumnBody
@@ -199,10 +205,21 @@ public:
                 }
                 _ttl = _expiration = 0;
                 _deleted = mask & DELETION_MASK;
+                _counter = false;
                 _state = state::CELL;
             }
             break;
         }
+        case state::COUNTER_CELL:
+            if (read_64(data) != read_status::ready) {
+                _state = state::COUNTER_CELL_2;
+                break;
+            }
+            // fallthrough
+        case state::COUNTER_CELL_2:
+            // _timestamp_of_last_deletion = _u64;
+            _state = state::CELL;
+            goto state_CELL;
         case state::EXPIRING_CELL:
             if (read_32(data) != read_status::ready) {
                 _state = state::EXPIRING_CELL_2;
@@ -219,6 +236,7 @@ public:
         case state::EXPIRING_CELL_3:
             _expiration = _u32;
             _state = state::CELL;
+        state_CELL:
         case state::CELL: {
             if (read_64(data) != read_status::ready) {
                 _state = state::CELL_2;
@@ -245,6 +263,9 @@ public:
                     del.local_deletion_time = consume_be<uint32_t>(_val);
                     del.marked_for_delete_at = _u64;
                     ret = _consumer.consume_deleted_cell(to_bytes_view(_key), del);
+                } else if (_counter) {
+                    ret = _consumer.consume_counter_cell(to_bytes_view(_key),
+                            to_bytes_view(_val), _u64);
                 } else {
                     ret = _consumer.consume_cell(to_bytes_view(_key),
                             to_bytes_view(_val), _u64, _ttl, _expiration);
@@ -272,6 +293,9 @@ public:
                 del.local_deletion_time = consume_be<uint32_t>(_val);
                 del.marked_for_delete_at = _u64;
                 ret = _consumer.consume_deleted_cell(to_bytes_view(_key), del);
+            } else if (_counter) {
+                ret = _consumer.consume_counter_cell(to_bytes_view(_key),
+                        to_bytes_view(_val), _u64);
             } else {
                 ret = _consumer.consume_cell(to_bytes_view(_key),
                         to_bytes_view(_val), _u64, _ttl, _expiration);

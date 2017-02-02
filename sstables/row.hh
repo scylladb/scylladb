@@ -66,6 +66,10 @@ public:
             int64_t timestamp,
             int32_t ttl, int32_t expiration) = 0;
 
+    // Consume one counter cell. Column name and value are serialized, and need
+    // to be deserialized according to the schema.
+    virtual proceed consume_counter_cell(bytes_view col_name, bytes_view value,
+            int64_t timestamp) = 0;
 
     // Consume a deleted cell (i.e., a cell tombstone).
     virtual proceed consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) = 0;

@@ -43,6 +43,7 @@
 #include "sstables/date_tiered_compaction_strategy.hh"
 #include "mutation_assertions.hh"
 #include "mutation_reader_assertions.hh"
+#include "counters.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -1641,6 +1642,57 @@ SEASTAR_TEST_CASE(datafile_generation_47) {
     });
 }
 
+SEASTAR_TEST_CASE(test_counter_write) {
+    return test_setup::do_with_test_directory([] {
+        return seastar::async([] {
+            auto s = schema_builder(some_keyspace, some_column_family)
+                    .with_column("p1", utf8_type, column_kind::partition_key)
+                    .with_column("c1", utf8_type, column_kind::clustering_key)
+                    .with_column("r1", counter_type)
+                    .with_column("r2", counter_type)
+                    .build();
+            auto mt = make_lw_shared<memtable>(s);
+
+            auto& r1_col = *s->get_column_definition("r1");
+            auto& r2_col = *s->get_column_definition("r2");
+
+            auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+            auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
+            auto c_key2 = clustering_key::from_exploded(*s, {to_bytes("c2")});
+
+            mutation m(key, s);
+
+            std::vector<counter_id> ids;
+            std::generate_n(std::back_inserter(ids), 3, counter_id::generate_random);
+            boost::range::sort(ids);
+
+            counter_cell_builder b1;
+            b1.add_shard(counter_shard(ids[0], 5, 1));
+            b1.add_shard(counter_shard(ids[1], -4, 1));
+            b1.add_shard(counter_shard(ids[2], 9, 1));
+            auto ts = api::new_timestamp();
+            m.set_clustered_cell(c_key, r1_col, b1.build(ts));
+
+            counter_cell_builder b2;
+            b2.add_shard(counter_shard(ids[1], -1, 1));
+            b2.add_shard(counter_shard(ids[2], 2, 1));
+            m.set_clustered_cell(c_key, r2_col, b2.build(ts));
+
+            m.set_clustered_cell(c_key2, r1_col, make_dead_atomic_cell(1));
+
+            mt->apply(m);
+
+            auto sst = make_lw_shared<sstable>(s, "tests/sstables/tests-temporary", 900, la, big);
+            sst->write_components(*mt).get();
+
+            auto sstp = reusable_sst(s, "tests/sstables/tests-temporary", 900).get0();
+            assert_that(sstable_reader(sstp, s))
+                .produces(m)
+                .produces_end_of_stream();
+        });
+    });
+}
+
 // Leveled compaction strategy tests
 
 static dht::token create_token_from_key(sstring key) {
@@ -2557,6 +2609,101 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
         smopt = reader().get0();
         BOOST_REQUIRE(!smopt);
     });
+}
+
+SEASTAR_TEST_CASE(test_counter_read) {
+        // create table counter_test (
+        //      pk int,
+        //      ck int,
+        //      c1 counter,
+        //      c2 counter,
+        //      primary key (pk, ck)
+        // );
+        //
+        // Node 1:
+        // update counter_test set c1 = c1 + 8 where pk = 0 and ck = 0;
+        // update counter_test set c2 = c2 - 99 where pk = 0 and ck = 0;
+        // update counter_test set c1 = c1 + 3 where pk = 0 and ck = 0;
+        // update counter_test set c1 = c1 + 42 where pk = 0 and ck = 1;
+        //
+        // Node 2:
+        // update counter_test set c2 = c2 + 7 where pk = 0 and ck = 0;
+        // update counter_test set c1 = c1 + 2 where pk = 0 and ck = 0;
+        // delete c1 from counter_test where pk = 0 and ck = 1;
+        //
+        // select * from counter_test;
+        // pk | ck | c1 | c2
+        // ----+----+----+-----
+        //  0 |  0 | 13 | -92
+
+        using namespace stdx::literals;
+
+        return seastar::async([] {
+            auto s = schema_builder("ks", "counter_test")
+                    .with_column("pk", int32_type, column_kind::partition_key)
+                    .with_column("ck", int32_type, column_kind::clustering_key)
+                    .with_column("c1", counter_type)
+                    .with_column("c2", counter_type)
+                    .build();
+
+            auto node1 = counter_id(utils::UUID("8379ab99-4507-4ab1-805d-ac85a863092b"sv));
+            auto node2 = counter_id(utils::UUID("b8a6c3f3-e222-433f-9ce9-de56a8466e07"sv));
+
+            auto sst = make_lw_shared<sstable>(s, "tests/sstables/counter_test", 5, sstables::sstable::version_types::ka, big);
+            sst->load().get();
+            auto reader = sstable_reader(sst, s);
+
+            auto smopt = reader().get0();
+            BOOST_REQUIRE(smopt);
+            auto& sm = *smopt;
+
+            auto mfopt = sm().get0();
+            BOOST_REQUIRE(mfopt);
+            BOOST_REQUIRE(mfopt->is_clustering_row());
+            const clustering_row* cr = &mfopt->as_clustering_row();
+            cr->cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
+                counter_cell_view ccv { c.as_atomic_cell() };
+                auto& col = s->column_at(column_kind::regular_column, id);
+                if (col.name_as_text() == "c1") {
+                    BOOST_REQUIRE_EQUAL(ccv.total_value(), 13);
+                    BOOST_REQUIRE_EQUAL(ccv.shard_count(), 2);
+
+                    auto it = ccv.shards().begin();
+                    auto shard = *it++;
+                    BOOST_REQUIRE_EQUAL(shard.id(), node1);
+                    BOOST_REQUIRE_EQUAL(shard.value(), 11);
+                    BOOST_REQUIRE_EQUAL(shard.logical_clock(), 2);
+
+                    shard = *it++;
+                    BOOST_REQUIRE_EQUAL(shard.id(), node2);
+                    BOOST_REQUIRE_EQUAL(shard.value(), 2);
+                    BOOST_REQUIRE_EQUAL(shard.logical_clock(), 1);
+                } else if (col.name_as_text() == "c2") {
+                    BOOST_REQUIRE_EQUAL(ccv.total_value(), -92);
+                } else {
+                    BOOST_FAIL(sprint("Unexpected column \'%s\'", col.name_as_text()));
+                }
+            });
+
+            mfopt = sm().get0();
+            BOOST_REQUIRE(mfopt);
+            BOOST_REQUIRE(mfopt->is_clustering_row());
+            cr = &mfopt->as_clustering_row();
+            cr->cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
+                auto& col = s->column_at(column_kind::regular_column, id);
+                if (col.name_as_text() == "c1") {
+                    BOOST_REQUIRE(!c.as_atomic_cell().is_live());
+                } else {
+                    BOOST_FAIL(sprint("Unexpected column \'%s\'", col.name_as_text()));
+                }
+            });
+
+            mfopt = sm().get0();
+            BOOST_REQUIRE(!mfopt);
+
+            smopt = reader().get0();
+            BOOST_REQUIRE(!smopt);
+        });
 }
 
 SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time) {

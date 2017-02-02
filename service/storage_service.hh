@@ -261,12 +261,14 @@ private:
     gms::feature _range_tombstones_feature;
     gms::feature _large_partitions_feature;
     gms::feature _materialized_views_feature;
+    gms::feature _counters_feature;
 
 public:
     void enable_all_features() {
         _range_tombstones_feature.enable();
         _large_partitions_feature.enable();
         _materialized_views_feature.enable();
+        _counters_feature.enable();
     }
 
     void finish_bootstrapping() {
@@ -2207,7 +2209,10 @@ public:
     }
 private:
     void do_isolate_on_error(disk_error type);
+    utils::UUID _local_host_id;
 public:
+    utils::UUID get_local_id() { return _local_host_id; }
+
     static sstring get_config_supported_features();
 
     bool cluster_supports_range_tombstones() {
@@ -2220,6 +2225,10 @@ public:
 
     bool cluster_supports_materialized_views() const {
         return bool(_materialized_views_feature);
+    }
+
+    bool cluster_supports_counters() const {
+        return bool(_counters_feature);
     }
 };
 

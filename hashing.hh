@@ -48,10 +48,10 @@ struct Hasher {
 template<typename T, typename Enable = void>
 struct appending_hash;
 
-template<typename Hasher, typename T>
+template<typename Hasher, typename T, typename... Args>
 inline
-void feed_hash(Hasher& h, const T& value) {
-    appending_hash<T>()(h, value);
+void feed_hash(Hasher& h, const T& value, Args&&... args) {
+    appending_hash<T>()(h, value, std::forward<Args>(args)...);
 };
 
 template<typename T>

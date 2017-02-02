@@ -1508,7 +1508,7 @@ public:
         return true;
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        fail(unimplemented::cause::COUNTERS);
+        return cql3::cql3_type::counter;
     }
     virtual size_t native_value_size() const override {
         fail(unimplemented::cause::COUNTERS);
@@ -1989,7 +1989,7 @@ map_type_impl::to_value(mutation_view mut, cql_serialization_format sf) const {
     std::vector<bytes_view> tmp;
     tmp.reserve(mut.cells.size() * 2);
     for (auto&& e : mut.cells) {
-        if (e.second.is_live(mut.tomb)) {
+        if (e.second.is_live(mut.tomb, false)) {
             tmp.emplace_back(e.first);
             tmp.emplace_back(e.second.value());
         }
@@ -2083,7 +2083,7 @@ bool collection_type_impl::is_any_live(collection_mutation_view cm, tombstone to
         in.remove_prefix(ksize);
         auto vsize = read_simple<uint32_t>(in);
         auto value = atomic_cell_view::from_bytes(read_simple_bytes(in, vsize));
-        if (value.is_live(tomb, now)) {
+        if (value.is_live(tomb, now, false)) {
             return true;
         }
     }
@@ -2152,7 +2152,7 @@ bool collection_type_impl::mutation::compact_and_expire(tombstone base_tomb, gc_
     std::vector<std::pair<bytes, atomic_cell>> survivors;
     for (auto&& name_and_cell : cells) {
         atomic_cell& cell = name_and_cell.second;
-        if (cell.is_covered_by(tomb)) {
+        if (cell.is_covered_by(tomb, false)) {
             continue;
         }
         if (cell.has_expired(query_time)) {
@@ -2187,7 +2187,7 @@ collection_type_impl::serialize_mutation_form(mutation_view mut) {
 collection_mutation
 collection_type_impl::serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) {
     return do_serialize_mutation_form(mut.tomb, mut.cells | boost::adaptors::filtered([t = mut.tomb, now] (auto&& e) {
-        return e.second.is_live(t, now);
+        return e.second.is_live(t, now, false);
     }));
 }
 
@@ -2469,7 +2469,7 @@ set_type_impl::to_value(mutation_view mut, cql_serialization_format sf) const {
     std::vector<bytes_view> tmp;
     tmp.reserve(mut.cells.size());
     for (auto&& e : mut.cells) {
-        if (e.second.is_live(mut.tomb)) {
+        if (e.second.is_live(mut.tomb, false)) {
             tmp.emplace_back(e.first);
         }
     }
@@ -2658,7 +2658,7 @@ list_type_impl::to_value(mutation_view mut, cql_serialization_format sf) const {
     std::vector<bytes_view> tmp;
     tmp.reserve(mut.cells.size());
     for (auto&& e : mut.cells) {
-        if (e.second.is_live(mut.tomb)) {
+        if (e.second.is_live(mut.tomb, false)) {
             tmp.emplace_back(e.second.value());
         }
     }
