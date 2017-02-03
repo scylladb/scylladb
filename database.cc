@@ -723,13 +723,13 @@ public:
             : _f(std::move(f))
             , _walker(std::move(walker))
             , _filter([] (const sstring& fname) { return true; })
-            , _expected_type(type)
+            , _expected_type(std::move(type))
             , _listing(_f.list_directory([this] (directory_entry de) { return _visit(de); }))
             , _dirname(dirname) {
     }
 
     lister(file f, dir_entry_types type, walker_type walker, filter_type filter, sstring dirname)
-            : lister(std::move(f), type, std::move(walker), dirname) {
+            : lister(std::move(f), std::move(type), std::move(walker), std::move(dirname)) {
         _filter = std::move(filter);
     }
 
@@ -748,7 +748,7 @@ protected:
                 return make_ready_future<>();
             }
 
-            return _walker(de);
+            return _walker(std::move(de));
         });
 
     }
@@ -773,8 +773,8 @@ private:
 
 
 future<> lister::scan_dir(sstring name, lister::dir_entry_types type, walker_type walker, filter_type filter) {
-    return open_checked_directory(general_disk_error_handler, name).then([type, walker = std::move(walker), filter = std::move(filter), name] (file f) {
-            auto l = make_lw_shared<lister>(std::move(f), type, walker, filter, name);
+    return open_checked_directory(general_disk_error_handler, name).then([type = std::move(type), walker = std::move(walker), filter = std::move(filter), name] (file f) {
+            auto l = make_lw_shared<lister>(std::move(f), std::move(type), std::move(walker), std::move(filter), std::move(name));
             return l->done().then([l] { });
     });
 }
