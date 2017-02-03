@@ -500,10 +500,13 @@ class random_mutation_generator::impl {
     friend class random_mutation_generator;
     generate_counters _generate_counters;
     const size_t _external_blob_size = 128; // Should be enough to force use of external bytes storage
+    const size_t n_blobs = 1024;
     const column_id column_count = row::max_vector_size * 2;
     std::mt19937 _gen;
     schema_ptr _schema;
     std::vector<bytes> _blobs;
+    std::normal_distribution<> _ck_index_dist{n_blobs / 2.0, 1.5};
+    std::uniform_int_distribution<int> _bool_dist{0, 1};
 
     static gc_clock::time_point expiry_dist(auto& gen) {
         static thread_local std::uniform_int_distribution<int> dist(0, 2);
@@ -539,7 +542,7 @@ public:
     explicit impl(generate_counters counters) : _generate_counters(counters) {
         _schema = make_schema();
 
-        for (int i = 0; i < 1024; ++i) {
+        for (size_t i = 0; i < n_blobs; ++i) {
             _blobs.emplace_back(make_blob(_external_blob_size));
         }
 
@@ -550,12 +553,75 @@ public:
         _gen = std::mt19937(seed);
     }
 
+    bytes random_blob() {
+        return _blobs[std::min(_blobs.size() - 1, static_cast<size_t>(std::max(0.0, _ck_index_dist(_gen))))];
+    }
+
+    clustering_key make_random_key() {
+        return clustering_key::from_exploded(*_schema, { random_blob(), random_blob() });
+    }
+
+    clustering_key_prefix make_random_prefix() {
+        std::vector<bytes> components = { random_blob() };
+        if (_bool_dist(_gen)) {
+            components.push_back(random_blob());
+        }
+        return clustering_key_prefix::from_exploded(*_schema, std::move(components));
+    }
+
+    std::vector<query::clustering_range> make_random_ranges(unsigned n_ranges) {
+        std::vector<query::clustering_range> ranges;
+
+        if (n_ranges == 0) {
+            return ranges;
+        }
+
+        auto keys = std::set<clustering_key, clustering_key::less_compare>{clustering_key::less_compare(*_schema)};
+        while (keys.size() < n_ranges * 2) {
+            keys.insert(make_random_key());
+        }
+
+        auto i = keys.begin();
+
+        bool open_start = _bool_dist(_gen);
+        bool open_end = _bool_dist(_gen);
+
+        if (open_start && open_end && n_ranges == 1) {
+            ranges.push_back(query::clustering_range::make_open_ended_both_sides());
+            return ranges;
+        }
+
+        if (open_start) {
+            ranges.push_back(query::clustering_range(
+                { }, { query::clustering_range::bound(*i++, _bool_dist(_gen)) }
+            ));
+        }
+
+        n_ranges -= unsigned(open_start);
+        n_ranges -= unsigned(open_end);
+
+        while (n_ranges--) {
+            auto start_key = *i++;
+            auto end_key = *i++;
+            ranges.push_back(query::clustering_range(
+                { query::clustering_range::bound(start_key, _bool_dist(_gen)) },
+                { query::clustering_range::bound(end_key, _bool_dist(_gen)) }
+            ));
+        }
+
+        if (open_end) {
+            ranges.push_back(query::clustering_range(
+                { query::clustering_range::bound(*i++, _bool_dist(_gen)) }, { }
+            ));
+        }
+
+        return ranges;
+    }
+
     mutation operator()() {
         std::uniform_int_distribution<column_id> column_count_dist(1, column_count);
         std::uniform_int_distribution<column_id> column_id_dist(0, column_count - 1);
         std::uniform_int_distribution<size_t> value_blob_index_dist(0, 2);
-        std::normal_distribution<> ck_index_dist(_blobs.size() / 2, 1.5);
-        std::uniform_int_distribution<int> bool_dist(0, 1);
 
         std::uniform_int_distribution<api::timestamp_type> timestamp_dist(api::min_timestamp, api::min_timestamp + 2); // 3 values
 
@@ -603,7 +669,7 @@ public:
                     }
                 };
                 // FIXME: generate expiring cells
-                auto cell = bool_dist(_gen)
+                auto cell = _bool_dist(_gen)
                             ? get_live_cell()
                             : atomic_cell::make_dead(timestamp_dist(_gen), expiry_dist(_gen));
                 r.apply(_schema->column_at(kind, cid), std::move(cell));
@@ -625,15 +691,11 @@ public:
             }
         };
 
-        if (bool_dist(_gen)) {
+        if (_bool_dist(_gen)) {
             m.partition().apply(random_tombstone());
         }
 
         set_random_cells(m.partition().static_row(), column_kind::static_column);
-
-        auto random_blob = [&] {
-            return _blobs[std::min(_blobs.size() - 1, static_cast<size_t>(std::max(0.0, ck_index_dist(_gen))))];
-        };
 
         auto row_count_dist = [&] (auto& gen) {
             static thread_local std::normal_distribution<> dist(32, 1.5);
@@ -642,7 +704,7 @@ public:
 
         size_t row_count = row_count_dist(_gen);
         for (size_t i = 0; i < row_count; ++i) {
-            auto ckey = clustering_key::from_exploded(*_schema, {random_blob(), random_blob()});
+            auto ckey = make_random_key();
             deletable_row& row = m.partition().clustered_row(*_schema, ckey);
             set_random_cells(row.cells(), column_kind::regular_column);
             row.marker() = random_row_marker();
@@ -650,9 +712,9 @@ public:
 
         size_t range_tombstone_count = row_count_dist(_gen);
         for (size_t i = 0; i < range_tombstone_count; ++i) {
-            auto&& start = clustering_key::from_exploded(*_schema, {random_blob()});
+            auto start = make_random_prefix();
+            auto end = make_random_prefix();
             clustering_key_prefix::less_compare less(*_schema);
-            auto end = clustering_key::from_exploded(*_schema, {random_blob()});
             if (less(end, start)) {
                 std::swap(start, end);
             }
@@ -675,4 +737,12 @@ mutation random_mutation_generator::operator()() {
 
 schema_ptr random_mutation_generator::schema() const {
     return _impl->_schema;
+}
+
+clustering_key random_mutation_generator::make_random_key() {
+    return _impl->make_random_key();
+}
+
+std::vector<query::clustering_range> random_mutation_generator::make_random_ranges(unsigned n_ranges) {
+    return _impl->make_random_ranges(n_ranges);
 }
