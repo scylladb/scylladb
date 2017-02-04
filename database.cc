@@ -710,6 +710,9 @@ public:
     using dir_entry_types = std::unordered_set<directory_entry_type, enum_hash<directory_entry_type>>;
     using walker_type = std::function<future<> (directory_entry)>;
     using filter_type = std::function<bool (const sstring&)>;
+
+    struct show_hidden_tag {};
+    using show_hidden = bool_class<show_hidden_tag>;
 private:
     file _f;
     walker_type _walker;
@@ -717,29 +720,40 @@ private:
     dir_entry_types _expected_type;
     subscription<directory_entry> _listing;
     sstring _dirname;
+    show_hidden _show_hidden;
 
 public:
-    lister(file f, dir_entry_types type, walker_type walker, sstring dirname)
+    lister(file f, dir_entry_types type, walker_type walker, sstring dirname, show_hidden do_show_hidden)
             : _f(std::move(f))
             , _walker(std::move(walker))
             , _filter([] (const sstring& fname) { return true; })
             , _expected_type(std::move(type))
             , _listing(_f.list_directory([this] (directory_entry de) { return _visit(de); }))
-            , _dirname(dirname) {
+            , _dirname(dirname)
+            , _show_hidden(do_show_hidden) {
     }
 
-    lister(file f, dir_entry_types type, walker_type walker, filter_type filter, sstring dirname)
-            : lister(std::move(f), std::move(type), std::move(walker), std::move(dirname)) {
+    lister(file f, dir_entry_types type, walker_type walker, filter_type filter, sstring dirname, show_hidden do_show_hidden)
+            : lister(std::move(f), std::move(type), std::move(walker), std::move(dirname), do_show_hidden) {
         _filter = std::move(filter);
     }
 
-    static future<> scan_dir(sstring name, dir_entry_types type, walker_type walker, filter_type filter = [] (const sstring& fname) { return true; });
+    static future<> scan_dir(sstring name, dir_entry_types type, show_hidden do_show_hidden, walker_type walker, filter_type filter);
+    static future<> scan_dir(sstring name, dir_entry_types type, walker_type walker, filter_type filter) {
+        return scan_dir(std::move(name), std::move(type), show_hidden::no, std::move(walker), std::move(filter));
+    }
+    static future<> scan_dir(sstring name, dir_entry_types type, walker_type walker) {
+        return scan_dir(std::move(name), std::move(type), show_hidden::no, std::move(walker), [] (const sstring& entry) { return true; });
+    }
+    static future<> scan_dir(sstring name, dir_entry_types type, show_hidden do_show_hidden, walker_type walker) {
+        return scan_dir(std::move(name), std::move(type), do_show_hidden, std::move(walker), [] (const sstring& entry) { return true; });
+    }
 protected:
     future<> _visit(directory_entry de) {
 
         return guarantee_type(std::move(de)).then([this] (directory_entry de) {
             // Hide all synthetic directories and hidden files.
-            if ((!_expected_type.empty() && !_expected_type.count(*(de.type))) || (de.name[0] == '.')) {
+            if ((!_expected_type.empty() && !_expected_type.count(*(de.type))) || (!_show_hidden && de.name[0] == '.')) {
                 return make_ready_future<>();
             }
 
@@ -776,9 +790,9 @@ private:
 };
 
 
-future<> lister::scan_dir(sstring name, lister::dir_entry_types type, walker_type walker, filter_type filter) {
-    return open_checked_directory(general_disk_error_handler, name).then([type = std::move(type), walker = std::move(walker), filter = std::move(filter), name] (file f) {
-            auto l = make_lw_shared<lister>(std::move(f), std::move(type), std::move(walker), std::move(filter), std::move(name));
+future<> lister::scan_dir(sstring name, lister::dir_entry_types type, lister::show_hidden do_show_hidden, walker_type walker, filter_type filter) {
+    return open_checked_directory(general_disk_error_handler, name).then([type = std::move(type), walker = std::move(walker), filter = std::move(filter), name, do_show_hidden] (file f) {
+            auto l = make_lw_shared<lister>(std::move(f), std::move(type), std::move(walker), std::move(filter), std::move(name), do_show_hidden);
             return l->done().then([l] { });
     });
 }
