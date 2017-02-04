@@ -270,15 +270,18 @@ if [ $ENABLE_SERVICE -eq 1 ]; then
            printf "[housekeeping]\ncheck-version: True\n" > /etc/scylla.d/housekeeping.cfg
         fi
         if is_systemd; then
-            systemctl unmask scylla-housekeeping.timer
+            systemctl unmask scylla-housekeeping-daily.timer
+            systemctl unmask scylla-housekeeping-restart.timer
         fi
     else
         if [ ! -f /etc/scylla.d/housekeeping.cfg ]; then
            printf "[housekeeping]\ncheck-version: False\n" > /etc/scylla.d/housekeeping.cfg
         fi
         if is_systemd; then
-            systemctl mask scylla-housekeeping.timer
-            systemctl stop scylla-housekeeping.timer || true
+            systemctl mask scylla-housekeeping-daily.timer
+            systemctl mask scylla-housekeeping-restart.timer
+            systemctl stop scylla-housekeeping-daily.timer || true
+            systemctl stop scylla-housekeeping-restart.timer || true
         fi
     fi
 fi

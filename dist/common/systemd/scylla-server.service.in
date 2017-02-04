@@ -2,7 +2,8 @@
 Description=Scylla Server
 After=network.target
 Wants=scylla-jmx.service
-Wants=scylla-housekeeping.timer
+Wants=scylla-housekeeping-restart.timer
+Wants=scylla-housekeeping-daily.timer
 
 [Service]
 PermissionsStartOnly=true

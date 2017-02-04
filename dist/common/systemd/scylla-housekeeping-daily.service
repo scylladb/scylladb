@@ -1,5 +1,5 @@
 [Unit]
-Description=Scylla Housekeeping
+Description=Scylla Housekeeping daily mode
 After=network.target
 
 [Service]
