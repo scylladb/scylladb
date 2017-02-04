@@ -151,10 +151,8 @@ rm -rf $RPM_BUILD_ROOT
 %{_docdir}/scylla/NOTICE.txt
 %{_docdir}/scylla/ORIGIN
 %{_docdir}/scylla/licenses/
-%{_unitdir}/scylla-server.service
-%{_unitdir}/scylla-housekeeping.service
-%{_unitdir}/scylla-housekeeping.timer
-%{_unitdir}/node-exporter.service
+%{_unitdir}/*.service
+%{_unitdir}/*.timer
 %{_bindir}/scylla
 %{_bindir}/iotune
 %{_bindir}/scyllatop
