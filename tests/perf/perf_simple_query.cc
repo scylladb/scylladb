@@ -68,6 +68,7 @@ struct test_config {
     bool query_single_key;
     unsigned duration_in_seconds;
     bool counters;
+    unsigned operations_per_shard = 0;
 };
 
 std::ostream& operator<<(std::ostream& os, const test_config::run_mode& m) {
@@ -101,7 +102,7 @@ future<> test_read(cql_test_env& env, test_config& cfg) {
         return time_parallel([&env, &cfg, id] {
             bytes key = make_key(cfg.query_single_key ? 0 : std::rand() % cfg.partitions);
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
-        }, cfg.concurrency, cfg.duration_in_seconds);
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
     });
 }
 
@@ -117,7 +118,7 @@ future<> test_write(cql_test_env& env, test_config& cfg) {
             return time_parallel([&env, &cfg, id] {
                 bytes key = make_key(cfg.query_single_key ? 0 : std::rand() % cfg.partitions);
                 return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
-            }, cfg.concurrency, cfg.duration_in_seconds);
+            }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
         });
 }
 
@@ -133,7 +134,7 @@ future<> test_counter_update(cql_test_env& env, test_config& cfg) {
             return time_parallel([&env, &cfg, id] {
                 bytes key = make_key(cfg.query_single_key ? 0 : std::rand() % cfg.partitions);
                 return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
-            }, cfg.concurrency, cfg.duration_in_seconds);
+            }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
         });
 }
 
@@ -184,6 +185,7 @@ int main(int argc, char** argv) {
         ("duration", bpo::value<unsigned>()->default_value(5), "test duration in seconds")
         ("query-single-key", "test write path instead of read path")
         ("concurrency", bpo::value<unsigned>()->default_value(100), "workers per core")
+        ("operations-per-shard", bpo::value<unsigned>(), "run this many operations per shard (overrides duration)")
         ("counters", "test counters");
 
     return app.run(argc, argv, [&app] {
@@ -195,6 +197,9 @@ int main(int argc, char** argv) {
             cfg->mode = app.configuration().count("write") ? test_config::run_mode::write : test_config::run_mode::read;
             cfg->query_single_key = app.configuration().count("query-single-key");
             cfg->counters = app.configuration().count("counters");
+            if (app.configuration().count("operations-per-shard")) {
+                cfg->operations_per_shard = app.configuration()["operations-per-shard"].as<unsigned>();
+            }
             return do_test(env, *cfg).finally([cfg] {});
         });
     });
