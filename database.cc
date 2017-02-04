@@ -739,7 +739,7 @@ protected:
 
         return guarantee_type(std::move(de)).then([this] (directory_entry de) {
             // Hide all synthetic directories and hidden files.
-            if ((!_expected_type.count(*(de.type))) || (de.name[0] == '.')) {
+            if ((!_expected_type.empty() && !_expected_type.count(*(de.type))) || (de.name[0] == '.')) {
                 return make_ready_future<>();
             }
 
