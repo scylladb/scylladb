@@ -706,17 +706,16 @@ public:
     {
         return "Manifest@" + hashCode();
     }
-
-    public int getLevelCount()
-    {
-        for (int i = generations.length - 1; i >= 0; i--)
-        {
-            if (getLevel(i).size() > 0)
+#endif
+    uint32_t get_level_count() {
+        for (int i = _generations.size() - 1; i >= 0; i--) {
+            if (get_level(i).size() > 0) {
                 return i;
+            }
         }
         return 0;
     }
-
+#if 0
     public synchronized SortedSet<SSTableReader> getLevelSorted(int level, Comparator<SSTableReader> comparator)
     {
         return ImmutableSortedSet.copyOf(comparator, getLevel(level));
