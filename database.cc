@@ -780,6 +780,7 @@ public:
     static future<> scan_dir(sstring dir, dir_entry_types type, show_hidden do_show_hidden, walker_type walker) {
         return scan_dir(path(std::move(dir)), std::move(type), do_show_hidden, std::move(walker), [] (const path& parent_dir, const directory_entry& entry) { return true; });
     }
+    static future<> rmdir(path dir);
 protected:
     future<> _visit(directory_entry de) {
 
@@ -3191,6 +3192,22 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
 
 const sstring& database::get_snitch_name() const {
     return _cfg->endpoint_snitch();
+}
+
+future<> lister::rmdir(lister::path dir) {
+    // first, kill the contents of the directory
+    return lister::scan_dir(dir, {}, show_hidden::yes, [] (lister::path parent_dir, directory_entry de) mutable {
+        path current_entry_path(parent_dir / de.name.c_str());
+
+        if (de.type.value() == directory_entry_type::directory) {
+            return rmdir(std::move(current_entry_path));
+        } else {
+            return io_check(remove_file, current_entry_path.native());
+        }
+    }).then([dir] {
+        // ...then kill the directory itself
+        return io_check(remove_file, dir.native());
+    });
 }
 
 // For the filesystem operations, this code will assume that all keyspaces are visible in all shards
