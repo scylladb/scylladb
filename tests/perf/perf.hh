@@ -73,21 +73,23 @@ template <typename Func>
 class executor {
     const Func _func;
     const lowres_clock::time_point _end_at;
+    const uint64_t _end_at_count;
     const unsigned _n_workers;
     uint64_t _count;
 private:
     future<> run_worker() {
         return do_until([this] {
-            return lowres_clock::now() >= _end_at;
+            return _end_at_count ? _count == _end_at_count : lowres_clock::now() >= _end_at;
         }, [this] () mutable {
             ++_count;
             return _func();
         });
     }
 public:
-    executor(unsigned n_workers, Func func, lowres_clock::time_point end_at)
+    executor(unsigned n_workers, Func func, lowres_clock::time_point end_at, uint64_t end_at_count = 0)
             : _func(std::move(func))
             , _end_at(end_at)
+            , _end_at_count(end_at_count)
             , _n_workers(n_workers)
             , _count(0)
     { }
@@ -115,13 +117,16 @@ public:
  */
 template <typename Func>
 static
-future<> time_parallel(Func func, unsigned concurrency_per_core, int iterations = 5) {
+future<> time_parallel(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0) {
     using clk = std::chrono::steady_clock;
-    return do_n_times(iterations, [func, concurrency_per_core] {
+    if (operations_per_shard) {
+        iterations = 1;
+    }
+    return do_n_times(iterations, [func, concurrency_per_core, operations_per_shard] {
         auto start = clk::now();
         auto end_at = lowres_clock::now() + std::chrono::seconds(1);
         auto exec = ::make_shared<distributed<executor<Func>>>();
-        return exec->start(concurrency_per_core, func, std::move(end_at)).then([exec] {
+        return exec->start(concurrency_per_core, func, std::move(end_at), operations_per_shard).then([exec] {
             return exec->map_reduce(adder<uint64_t>(), [] (auto& oc) { return oc.run(); });
         }).then([start] (auto total) {
             auto end = clk::now();
