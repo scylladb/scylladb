@@ -20,6 +20,7 @@
  */
 
 #include "log.hh"
+#include "lister.hh"
 #include "database.hh"
 #include "unimplemented.hh"
 #include "core/future-util.hh"
@@ -703,130 +704,6 @@ column_family::for_all_partitions(schema_ptr s, Func&& func) const {
 future<bool>
 column_family::for_all_partitions_slow(schema_ptr s, std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const {
     return for_all_partitions(std::move(s), std::move(func));
-}
-
-class lister {
-public:
-    /**
-     * Types of entries to list. If empty - list all present entries except for
-     * hidden if not requested to.
-     */
-    using dir_entry_types = std::unordered_set<directory_entry_type, enum_hash<directory_entry_type>>;
-
-    using path = boost::filesystem::path;
-
-    /**
-     * This callback is going to be called for each entry in the given directory
-     * that has the corresponding type and meets the filter demands.
-     *
-     * First parameter is a boost::filesystem::path object for the
-     * base directory.
-     *
-     * Second parameter is a directory_entry object of the file for which this
-     * callback is being called.
-     *
-     * The first parameter of the callback represents a parent directory of
-     * each entry defined by the second parameter.
-     */
-    using walker_type = std::function<future<> (path, directory_entry)>;
-    using filter_type = std::function<bool (const path&, const directory_entry&)>;
-
-    struct show_hidden_tag {};
-    using show_hidden = bool_class<show_hidden_tag>;
-private:
-    file _f;
-    walker_type _walker;
-    filter_type _filter;
-    dir_entry_types _expected_type;
-    subscription<directory_entry> _listing;
-    path _dir;
-    show_hidden _show_hidden;
-
-public:
-    lister(file f, dir_entry_types type, walker_type walker, path dir, show_hidden do_show_hidden)
-            : _f(std::move(f))
-            , _walker(std::move(walker))
-            , _filter([] (const path& parent_dir, const directory_entry& de) { return true; })
-            , _expected_type(std::move(type))
-            , _listing(_f.list_directory([this] (directory_entry de) { return _visit(de); }))
-            , _dir(std::move(dir))
-            , _show_hidden(do_show_hidden) {
-    }
-
-    lister(file f, dir_entry_types type, walker_type walker, filter_type filter, path dir, show_hidden do_show_hidden)
-            : lister(std::move(f), std::move(type), std::move(walker), std::move(dir), do_show_hidden) {
-        _filter = std::move(filter);
-    }
-
-    static future<> scan_dir(path dir, dir_entry_types type, show_hidden do_show_hidden, walker_type walker, filter_type filter);
-    static future<> scan_dir(path dir, dir_entry_types type, walker_type walker, filter_type filter) {
-        return scan_dir(std::move(dir), std::move(type), show_hidden::no, std::move(walker), std::move(filter));
-    }
-    static future<> scan_dir(path dir, dir_entry_types type, walker_type walker) {
-        return scan_dir(std::move(dir), std::move(type), show_hidden::no, std::move(walker), [] (const path& parent_dir, const directory_entry& entry) { return true; });
-    }
-    static future<> scan_dir(path dir, dir_entry_types type, show_hidden do_show_hidden, walker_type walker) {
-        return scan_dir(std::move(dir), std::move(type), do_show_hidden, std::move(walker), [] (const path& parent_dir, const directory_entry& entry) { return true; });
-    }
-    static future<> scan_dir(sstring dir, dir_entry_types type, show_hidden do_show_hidden, walker_type walker, filter_type filter) {
-        return scan_dir(path(std::move(dir)), std::move(type), do_show_hidden, std::move(walker), std::move(filter));
-    }
-    static future<> scan_dir(sstring dir, dir_entry_types type, walker_type walker, filter_type filter) {
-        return scan_dir(path(std::move(dir)), std::move(type), show_hidden::no, std::move(walker), std::move(filter));
-    }
-    static future<> scan_dir(sstring dir, dir_entry_types type, walker_type walker) {
-        return scan_dir(path(std::move(dir)), std::move(type), show_hidden::no, std::move(walker), [] (const path& parent_dir, const directory_entry& entry) { return true; });
-    }
-    static future<> scan_dir(sstring dir, dir_entry_types type, show_hidden do_show_hidden, walker_type walker) {
-        return scan_dir(path(std::move(dir)), std::move(type), do_show_hidden, std::move(walker), [] (const path& parent_dir, const directory_entry& entry) { return true; });
-    }
-    static future<> rmdir(path dir);
-protected:
-    future<> _visit(directory_entry de) {
-
-        return guarantee_type(std::move(de)).then([this] (directory_entry de) {
-            // Hide all synthetic directories and hidden files.
-            if ((!_expected_type.empty() && !_expected_type.count(*(de.type))) || (!_show_hidden && de.name[0] == '.')) {
-                return make_ready_future<>();
-            }
-
-            // apply a filter
-            if (!_filter(_dir, de)) {
-                return make_ready_future<>();
-            }
-
-            return _walker(_dir, std::move(de));
-        });
-
-    }
-    future<> done() {
-        return _listing.done().then([this] {
-            return _f.close();
-        });
-    }
-private:
-    future<directory_entry> guarantee_type(directory_entry de) {
-        if (de.type) {
-            return make_ready_future<directory_entry>(std::move(de));
-        } else {
-            auto f = engine().file_type((_dir / de.name.c_str()).native());
-            return f.then([dir = _dir, de = std::move(de)] (std::experimental::optional<directory_entry_type> t) mutable {
-                // If some FS error occures - return an exceptional future
-                if (!t) {
-                    return make_exception_future<directory_entry>(std::runtime_error(sprint("Failed to get %s type.", (dir / de.name.c_str()).native())));
-                }
-                de.type = t;
-                return make_ready_future<directory_entry>(std::move(de));
-            });
-        }
-    }
-};
-
-future<> lister::scan_dir(lister::path dir, lister::dir_entry_types type, lister::show_hidden do_show_hidden, walker_type walker, filter_type filter) {
-    return open_checked_directory(general_disk_error_handler, dir.native()).then([type = std::move(type), walker = std::move(walker), filter = std::move(filter), dir, do_show_hidden] (file f) {
-        auto l = make_lw_shared<lister>(std::move(f), std::move(type), std::move(walker), std::move(filter), std::move(dir), do_show_hidden);
-        return l->done().then([l] { });
-    });
 }
 
 static bool belongs_to_current_shard(const std::vector<shard_id>& shards) {
@@ -1562,7 +1439,7 @@ const std::vector<sstables::shared_sstable>& column_family::compacted_undeleted_
     return _sstables_compacted_but_not_deleted;
 }
 
-inline bool column_family::manifest_json_filter(const boost::filesystem::path&, const directory_entry& entry) {
+inline bool column_family::manifest_json_filter(const lister::path&, const directory_entry& entry) {
     // Filter out directories. If type of the entry is unknown - check its name.
     if (entry.type.value_or(directory_entry_type::regular) != directory_entry_type::directory && entry.name == "manifest.json") {
         return false;
@@ -3192,22 +3069,6 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
 
 const sstring& database::get_snitch_name() const {
     return _cfg->endpoint_snitch();
-}
-
-future<> lister::rmdir(lister::path dir) {
-    // first, kill the contents of the directory
-    return lister::scan_dir(dir, {}, show_hidden::yes, [] (lister::path parent_dir, directory_entry de) mutable {
-        path current_entry_path(parent_dir / de.name.c_str());
-
-        if (de.type.value() == directory_entry_type::directory) {
-            return rmdir(std::move(current_entry_path));
-        } else {
-            return io_check(remove_file, current_entry_path.native());
-        }
-    }).then([dir] {
-        // ...then kill the directory itself
-        return io_check(remove_file, dir.native());
-    });
 }
 
 // For the filesystem operations, this code will assume that all keyspaces are visible in all shards
