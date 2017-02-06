@@ -598,6 +598,10 @@ public:
         return bool(_sstables_need_rewrite.size());
     }
 
+    sstring dir() const {
+        return _config.datadir;
+    }
+
     uint64_t failed_counter_applies_to_memtable() const {
         return _failed_counter_applies_to_memtable;
     }
