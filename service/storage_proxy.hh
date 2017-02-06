@@ -71,7 +71,7 @@ public:
 private:
     struct rh_entry {
         ::shared_ptr<abstract_write_response_handler> handler;
-        timer<lowres_clock> expire_timer;
+        timer<clock_type> expire_timer;
         rh_entry(::shared_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb);
     };
 
@@ -253,7 +253,7 @@ private:
     dht::partition_range_vector get_restricted_ranges(keyspace& ks, const schema& s, dht::partition_range range);
     float estimate_result_rows_per_range(lw_shared_ptr<query::read_command> cmd, keyspace& ks);
     static std::vector<gms::inet_address> intersection(const std::vector<gms::inet_address>& l1, const std::vector<gms::inet_address>& l2);
-    future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>> query_partition_key_range_concurrent(lowres_clock::time_point timeout,
+    future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>> query_partition_key_range_concurrent(clock_type::time_point timeout,
             std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results, lw_shared_ptr<query::read_command> cmd, db::consistency_level cl, dht::partition_range_vector::iterator&& i,
             dht::partition_range_vector&& ranges, int concurrency_factor, tracing::trace_state_ptr trace_state,
             uint32_t remaining_row_count, uint32_t remaining_partition_count);
