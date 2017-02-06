@@ -2535,8 +2535,8 @@ column_family::query(schema_ptr s, const query::read_command& cmd, query::result
         auto& qs = *qs_ptr;
         return do_until(std::bind(&query_state::done, &qs), [this, &qs, trace_state = std::move(trace_state)] {
             auto&& range = *qs.current_partition_range++;
-            return data_query(qs.schema, as_mutation_source(trace_state), range, qs.cmd.slice, qs.remaining_rows(),
-                              qs.remaining_partitions(), qs.cmd.timestamp, qs.builder);
+            return data_query(qs.schema, as_mutation_source(), range, qs.cmd.slice, qs.remaining_rows(),
+                              qs.remaining_partitions(), qs.cmd.timestamp, qs.builder, trace_state);
         }).then([qs_ptr = std::move(qs_ptr), &qs] {
             return make_ready_future<lw_shared_ptr<query::result>>(
                     make_lw_shared<query::result>(qs.builder.build()));
@@ -2550,11 +2550,12 @@ column_family::query(schema_ptr s, const query::read_command& cmd, query::result
 }
 
 mutation_source
-column_family::as_mutation_source(tracing::trace_state_ptr trace_state) const {
-    return mutation_source([this, trace_state = std::move(trace_state)] (schema_ptr s,
+column_family::as_mutation_source() const {
+    return mutation_source([this] (schema_ptr s,
                                    const dht::partition_range& range,
                                    const query::partition_slice& slice,
-                                   const io_priority_class& pc) {
+                                   const io_priority_class& pc,
+                                   tracing::trace_state_ptr trace_state) {
         return this->make_reader(std::move(s), range, slice, pc, std::move(trace_state));
     });
 }
@@ -2580,8 +2581,8 @@ future<reconcilable_result>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const dht::partition_range& range,
                           query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return mutation_query(std::move(s), cf.as_mutation_source(std::move(trace_state)), range, cmd.slice, cmd.row_limit, cmd.partition_limit,
-            cmd.timestamp, std::move(accounter)).then_wrapped([this, s = _stats] (auto f) {
+    return mutation_query(std::move(s), cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.partition_limit,
+            cmd.timestamp, std::move(accounter), std::move(trace_state)).then_wrapped([this, s = _stats] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
         } else {
@@ -2718,7 +2719,7 @@ future<frozen_mutation> database::do_apply_counter_update(column_family& cf, con
             // counter state for each modified cell...
 
             // FIXME: tracing
-            return mutation_query(m_schema, cf.as_mutation_source({}),
+            return mutation_query(m_schema, cf.as_mutation_source(),
                                   dht::partition_range::make_singular(m.decorated_key()),
                                   slice, query::max_rows, query::max_partitions,
                                   gc_clock::now(), { }).then([this, &cf, &m, &fm, m_schema] (auto result) {

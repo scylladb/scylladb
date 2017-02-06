@@ -639,7 +639,7 @@ public:
     mutation_reader make_streaming_reader(schema_ptr schema,
             const dht::partition_range_vector& ranges) const;
 
-    mutation_source as_mutation_source(tracing::trace_state_ptr trace_state) const;
+    mutation_source as_mutation_source() const;
 
     void set_virtual_reader(virtual_reader_type virtual_reader) {
         _virtual_reader = std::move(virtual_reader);
