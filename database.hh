@@ -764,7 +764,6 @@ public:
     future<bool> snapshot_exists(sstring name);
 
     future<> snapshot(sstring name);
-    future<> clear_snapshot(sstring name);
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
 
     const bool incremental_backups_enabled() const {

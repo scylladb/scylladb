@@ -3213,30 +3213,62 @@ future<> lister::rmdir(lister::path dir) {
 // For the filesystem operations, this code will assume that all keyspaces are visible in all shards
 // (as we have been doing for a lot of the other operations, like the snapshot itself).
 future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names) {
-    std::vector<std::reference_wrapper<keyspace>> keyspaces;
+    namespace bf = boost::filesystem;
 
-    if (keyspace_names.empty()) {
-        // if keyspace names are not given - apply to all existing local keyspaces
-        for (auto& ks: _keyspaces) {
-            keyspaces.push_back(std::reference_wrapper<keyspace>(ks.second));
-        }
-    } else {
-        for (auto& ksname: keyspace_names) {
-            try {
-                keyspaces.push_back(std::reference_wrapper<keyspace>(find_keyspace(ksname)));
-            } catch (no_such_keyspace& e) {
-                return make_exception_future(std::current_exception());
-            }
-        }
-    }
+    std::vector<sstring> data_dirs = _cfg->data_file_directories();
+    lw_shared_ptr<lister::dir_entry_types> dirs_only_entries_ptr = make_lw_shared<lister::dir_entry_types>({ directory_entry_type::directory });
+    lw_shared_ptr<sstring> tag_ptr = make_lw_shared<sstring>(std::move(tag));
+    std::unordered_set<sstring> ks_names_set(keyspace_names.begin(), keyspace_names.end());
 
-    return parallel_for_each(keyspaces, [this, tag] (auto& ks) {
-        return parallel_for_each(ks.get().metadata()->cf_meta_data(), [this, tag] (auto& pair) {
-            auto& cf = this->find_column_family(pair.second);
-            return cf.clear_snapshot(tag);
-         }).then_wrapped([] (future<> f) {
-            dblog.debug("Cleared out snapshot directories");
-         });
+    return parallel_for_each(data_dirs, [this, tag_ptr, ks_names_set = std::move(ks_names_set), dirs_only_entries_ptr] (const sstring& parent_dir) {
+        std::unique_ptr<lister::filter_type> filter = std::make_unique<lister::filter_type>([] (const lister::path& parent_dir, const directory_entry& dir_entry) { return true; });
+
+        // if specific keyspaces names were given - filter only these keyspaces directories
+        if (!ks_names_set.empty()) {
+            filter = std::make_unique<lister::filter_type>([ks_names_set = std::move(ks_names_set)] (const lister::path& parent_dir, const directory_entry& dir_entry) {
+                return ks_names_set.find(dir_entry.name) != ks_names_set.end();
+            });
+        }
+
+        //
+        // The keyspace data directories and their snapshots are arranged as follows:
+        //
+        //  <data dir>
+        //  |- <keyspace name1>
+        //  |  |- <column family name1>
+        //  |     |- snapshots
+        //  |        |- <snapshot name1>
+        //  |          |- <snapshot file1>
+        //  |          |- <snapshot file2>
+        //  |          |- ...
+        //  |        |- <snapshot name2>
+        //  |        |- ...
+        //  |  |- <column family name2>
+        //  |  |- ...
+        //  |- <keyspace name2>
+        //  |- ...
+        //
+        return lister::scan_dir(parent_dir, *dirs_only_entries_ptr, [this, tag_ptr, dirs_only_entries_ptr] (lister::path parent_dir, directory_entry de) {
+            // KS directory
+            return lister::scan_dir(parent_dir / de.name.c_str(), *dirs_only_entries_ptr, [this, tag_ptr, dirs_only_entries_ptr] (lister::path parent_dir, directory_entry de) mutable {
+                // CF directory
+                return lister::scan_dir(parent_dir / de.name.c_str(), *dirs_only_entries_ptr, [this, tag_ptr, dirs_only_entries_ptr] (lister::path parent_dir, directory_entry de) mutable {
+                    // "snapshots" directory
+                    lister::path snapshots_dir(parent_dir / de.name.c_str());
+                    if (tag_ptr->empty()) {
+                        dblog.info("Removing {}", snapshots_dir.native());
+                        // kill the whole "snapshots" subdirectory
+                        return lister::rmdir(std::move(snapshots_dir));
+                    } else {
+                        return lister::scan_dir(std::move(snapshots_dir), *dirs_only_entries_ptr, [this, tag_ptr] (lister::path parent_dir, directory_entry de) {
+                            lister::path snapshot_dir(parent_dir / de.name.c_str());
+                            dblog.info("Removing {}", snapshot_dir.native());
+                            return lister::rmdir(std::move(snapshot_dir));
+                        }, [tag_ptr] (const lister::path& parent_dir, const directory_entry& dir_entry) { return dir_entry.name == *tag_ptr; });
+                    }
+                 }, [] (const lister::path& parent_dir, const directory_entry& dir_entry) { return dir_entry.name == "snapshots"; });
+            });
+        }, *filter);
     });
 }
 
@@ -3403,64 +3435,6 @@ future<bool> column_family::snapshot_exists(sstring tag) {
             }
             return make_ready_future<bool>(false);
         }
-    });
-}
-
-enum class missing { no, yes };
-static missing
-file_missing(future<> f) {
-    try {
-        f.get();
-        return missing::no;
-    } catch (std::system_error& e) {
-        if (e.code() != std::error_code(ENOENT, std::system_category())) {
-            throw;
-        }
-        return missing::yes;
-    }
-}
-
-future<> column_family::clear_snapshot(sstring tag) {
-    lister::path jsondir(lister::path(_config.datadir) / "snapshots");
-    lister::path parent(_config.datadir);
-    if (!tag.empty()) {
-        jsondir /= tag;
-        parent /= "snapshots";
-    }
-
-    lister::dir_entry_types dir_and_files = { directory_entry_type::regular, directory_entry_type::directory };
-    return lister::scan_dir(jsondir, dir_and_files, [this, dir_and_files, tag] (lister::path curr_dir, directory_entry de) {
-        // FIXME: We really need a better directory walker. This should eventually be part of the seastar infrastructure.
-        // It's hard to write this in a fully recursive manner because we need to keep information about the parent directory,
-        // so we can remove the file. For now, we'll take advantage of the fact that we will at most visit 2 levels and keep
-        // it ugly but simple.
-        auto recurse = make_ready_future<>();
-        if (de.type == directory_entry_type::directory) {
-            // Should only recurse when tag is empty, meaning delete all snapshots
-            if (!tag.empty()) {
-                throw std::runtime_error(sprint("Unexpected directory %s found at %s! Aborting", de.name, curr_dir.native()));
-            }
-            recurse = lister::scan_dir(curr_dir / de.name.c_str(), dir_and_files, [this] (lister::path curr_dir, directory_entry de) {
-                return io_check(remove_file, (curr_dir / de.name.c_str()).native());
-            });
-        }
-        return recurse.then([fname = curr_dir / de.name.c_str()] {
-            return io_check(remove_file, fname.native());
-        });
-    }).then_wrapped([jsondir] (future<> f) {
-        // Fine if directory does not exist. If it did, we delete it
-        if (file_missing(std::move(f)) == missing::no) {
-            return io_check(remove_file, jsondir.native());
-        }
-        return make_ready_future<>();
-    }).then([parent] {
-        return io_check(sync_directory, parent.native()).then_wrapped([] (future<> f) {
-            // Should always exist for empty tags, but may not exist for a single tag if we never took
-            // snapshots. We will check this here just to mask out the exception, without silencing
-            // unexpected ones.
-            file_missing(std::move(f));
-            return make_ready_future<>();
-        });
     });
 }
 
