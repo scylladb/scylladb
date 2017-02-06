@@ -113,7 +113,7 @@ protected:
      * @param function_name the function name
      * @return <code>true</code> if the specified term is using the specified function, <code>false</code> otherwise.
      */
-    static bool uses_function(::shared_ptr<term> term, const sstring& ks_name, const sstring& function_name) {
+    static bool term_uses_function(::shared_ptr<term> term, const sstring& ks_name, const sstring& function_name) {
         return bool(term) && term->uses_function(ks_name, function_name);
     }
 
@@ -125,9 +125,9 @@ protected:
      * @param function_name the function name
      * @return <code>true</code> if one of the specified term is using the specified function, <code>false</code> otherwise.
      */
-    static bool uses_function(const std::vector<::shared_ptr<term>>& terms, const sstring& ks_name, const sstring& function_name) {
+    static bool term_uses_function(const std::vector<::shared_ptr<term>>& terms, const sstring& ks_name, const sstring& function_name) {
         for (auto&& value : terms) {
-            if (uses_function(value, ks_name, function_name)) {
+            if (term_uses_function(value, ks_name, function_name)) {
                 return true;
             }
         }

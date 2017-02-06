@@ -2883,19 +2883,10 @@ future<frozen_mutation> database::apply_counter_update(schema_ptr s, const froze
     }
 }
 
-future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
-    // I'm doing a nullcheck here since the init code path for db etc
-    // is a little in flux and commitlog is created only when db is
-    // initied from datadir.
-    auto uuid = m.column_family_id();
-    auto& cf = find_column_family(uuid);
-    if (!s->is_synced()) {
-        throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
-                                 s->ks_name(), s->cf_name(), s->version()));
-    }
+future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::UUID uuid, const frozen_mutation& m, timeout_clock::time_point timeout) {
     if (cf.commitlog() != nullptr) {
         commitlog_entry_writer cew(s, m);
-        return cf.commitlog()->add_entry(uuid, cew, timeout).then([&m, this, s, timeout](auto rp) {
+        return cf.commitlog()->add_entry(std::move(uuid), cew, timeout).then([&m, this, s, timeout](auto rp) {
             return this->apply_in_memory(m, s, rp, timeout).handle_exception([this, s, &m, timeout] (auto ep) {
                 try {
                     std::rethrow_exception(ep);
@@ -2911,7 +2902,28 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_cloc
             });
         });
     }
-    return apply_in_memory(m, s, db::replay_position(), timeout);
+    return apply_in_memory(m, std::move(s), db::replay_position(), timeout);
+}
+
+future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
+    // I'm doing a nullcheck here since the init code path for db etc
+    // is a little in flux and commitlog is created only when db is
+    // initied from datadir.
+    auto uuid = m.column_family_id();
+    auto& cf = find_column_family(uuid);
+    if (!s->is_synced()) {
+        throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
+                                 s->ks_name(), s->cf_name(), s->version()));
+    }
+    if (cf.views().empty()) {
+        return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout);
+    }
+    //FIXME: Avoid unfreezing here.
+    auto f = cf.push_view_replica_updates(s, m.unfreeze(s));
+    return f.then([this, s = std::move(s), uuid = std::move(uuid), &m, timeout] {
+        auto& cf = find_column_family(uuid);
+        return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout);
+    });
 }
 
 future<> database::apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
@@ -2985,16 +2997,15 @@ namespace db {
 
 std::ostream& operator<<(std::ostream& os, const write_type& t) {
     switch(t) {
-        case write_type::SIMPLE: os << "SIMPLE"; break;
-        case write_type::BATCH: os << "BATCH"; break;
-        case write_type::UNLOGGED_BATCH: os << "UNLOGGED_BATCH"; break;
-        case write_type::COUNTER: os << "COUNTER"; break;
-        case write_type::BATCH_LOG: os << "BATCH_LOG"; break;
-        case write_type::CAS: os << "CAS"; break;
-        default:
-            assert(false);
+        case write_type::SIMPLE: return os << "SIMPLE";
+        case write_type::BATCH: return os << "BATCH";
+        case write_type::UNLOGGED_BATCH: return os << "UNLOGGED_BATCH";
+        case write_type::COUNTER: return os << "COUNTER";
+        case write_type::BATCH_LOG: return os << "BATCH_LOG";
+        case write_type::CAS: return os << "CAS";
+        case write_type::VIEW: return os << "VIEW";
     }
-    return os;
+    abort();
 }
 
 std::ostream& operator<<(std::ostream& os, db::consistency_level cl) {
@@ -3626,14 +3637,14 @@ void column_family::set_schema(schema_ptr s) {
 
 void column_family::update_view_schemas() {
     _view_schemas = boost::copy_range<std::vector<view_ptr>>(_views | boost::adaptors::map_values | boost::adaptors::transformed([] (auto&& s) {
-        return view_ptr(s.schema());
+        return view_ptr(s->schema());
     }));
 }
 
 void column_family::add_or_update_view(view_ptr v) {
-    auto e = _views.emplace(v->cf_name(), v);
+    auto e = _views.emplace(v->cf_name(), make_lw_shared<db::view::view>(v, *schema()));
     if (!e.second) {
-        e.first->second.update(v);
+        e.first->second->update(v, *schema());
     }
     update_view_schemas();
 }
@@ -3645,4 +3656,57 @@ void column_family::remove_view(view_ptr v) {
 
 const std::vector<view_ptr>& column_family::views() const {
     return _view_schemas;
+}
+
+std::vector<lw_shared_ptr<db::view::view>> column_family::affected_views(const schema_ptr& base, const mutation& update) const {
+    //FIXME: Avoid allocating a vector here; consider returning the boost iterator.
+    return boost::copy_range<std::vector<lw_shared_ptr<db::view::view>>>(_views
+            | boost::adaptors::map_values
+            | boost::adaptors::filtered([&, this] (auto&& view) {
+        return view->partition_key_matches(*base, update.decorated_key());
+    }));
+}
+
+/**
+ * Given some updates on the base table and the existing values for the rows affected by that update, generates the
+ * mutations to be applied to the base table's views.
+ *
+ * @param base the base schema at a particular version.
+ * @param views the affected views which need to be updated.
+ * @param updates the base table updates being applied.
+ * @param existings the existing values for the rows affected by updates. This is used to decide if a view is
+ * obsoleted by the update and should be removed, gather the values for columns that may not be part of the update if
+ * a new view entry needs to be created, and compute the minimal updates to be applied if the view entry isn't changed
+ * but has simply some updated values.
+ * @return a future resolving to the mutations to apply to the views, which can be empty.
+ */
+future<std::vector<mutation>> column_family::generate_view_updates(const schema_ptr& base,
+        std::vector<lw_shared_ptr<db::view::view>>&& views,
+        streamed_mutation updates,
+        streamed_mutation existings) const {
+    // FIXME: Use the view_ptr which corresponds to the version of base. The current code
+    // just uses the most recent view_ptr, which is not correct. There should be a mapping between a base schema
+    // version and the corresponding view schema version. Note that the it might not be here that this FIXME
+    // is resolved.
+    return db::view::generate_view_updates(base, std::move(views), std::move(updates), std::move(existings));
+}
+
+/**
+ * Given an update for the base table, calculates the set of potentially affected views,
+ * generates the relevant updates, and sends them to the paired view replicas.
+ */
+future<> column_family::push_view_replica_updates(const schema_ptr& base, mutation&& m) const {
+    auto views = affected_views(base, m);
+    if (views.empty()) {
+        return make_ready_future<>();
+    }
+    //FIXME: Read existing mutations
+    auto existing = streamed_mutation_from_mutation(mutation(m.decorated_key(), _schema));
+    auto base_token = m.token();
+    return generate_view_updates(base,
+                std::move(views),
+                streamed_mutation_from_mutation(std::move(m)),
+                std::move(existing)).then([base_token = std::move(base_token)] (auto&& updates) {
+        db::view::mutate_MV(std::move(base_token), std::move(updates));
+    });
 }

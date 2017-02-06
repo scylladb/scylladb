@@ -879,6 +879,9 @@ void deletable_row::apply_reversibly(const schema& s, deletable_row& src) {
     _cells.apply_reversibly(s, column_kind::regular_column, src._cells);
     _deleted_at.apply_reversibly(src._deleted_at); // noexcept
     _marker.apply_reversibly(src._marker); // noexcept
+    if (row_tombstone_is_shadowed(s, _deleted_at, _marker)) {
+        remove_tombstone();
+    }
 }
 
 void deletable_row::revert(const schema& s, deletable_row& src) {
@@ -1979,4 +1982,8 @@ mutation_query(schema_ptr s,
 
     auto reader = source(s, range, slice, service::get_local_sstable_query_read_priority());
     return consume_flattened(std::move(reader), std::move(cfq), is_reversed);
+}
+
+bool row_tombstone_is_shadowed(const schema& schema, const tombstone& row_tombstone, const row_marker& marker) {
+    return schema.is_view() && marker.timestamp() > row_tombstone.timestamp;
 }

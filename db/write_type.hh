@@ -52,6 +52,7 @@ enum class write_type : uint8_t {
     COUNTER,
     BATCH_LOG,
     CAS,
+    VIEW,
 };
 
 std::ostream& operator<<(std::ostream& os, const write_type& t);

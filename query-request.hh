@@ -124,6 +124,8 @@ public:
     partition_slice(partition_slice&&);
     ~partition_slice();
 
+    partition_slice& operator=(partition_slice&& other) noexcept;
+
     const clustering_row_ranges& row_ranges(const schema&, const partition_key&) const;
     void set_range(const schema&, const partition_key&, clustering_row_ranges);
     void clear_range(const schema&, const partition_key&);

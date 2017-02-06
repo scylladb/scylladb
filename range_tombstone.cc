@@ -70,7 +70,7 @@ void range_tombstone_accumulator::drop_unneeded_tombstones(const clustering_key_
     update_current_tombstone();
 }
 
-void range_tombstone_accumulator::apply(const range_tombstone& rt) {
+void range_tombstone_accumulator::apply(range_tombstone rt) {
     drop_unneeded_tombstones(rt.start, weight(rt.start_kind));
     _current_tombstone.apply(rt.tomb);
 

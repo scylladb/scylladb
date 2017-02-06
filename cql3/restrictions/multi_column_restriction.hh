@@ -155,7 +155,7 @@ public:
     { }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return abstract_restriction::uses_function(_value, ks_name, function_name);
+        return abstract_restriction::term_uses_function(_value, ks_name, function_name);
     }
 
     virtual sstring to_string() const override {
@@ -304,7 +304,7 @@ public:
     { }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override  {
-        return abstract_restriction::uses_function(_values, ks_name, function_name);
+        return abstract_restriction::term_uses_function(_values, ks_name, function_name);
     }
 
     virtual sstring to_string() const override  {
@@ -428,8 +428,8 @@ public:
     }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return (_slice.has_bound(statements::bound::START) && abstract_restriction::uses_function(_slice.bound(statements::bound::START), ks_name, function_name))
-                || (_slice.has_bound(statements::bound::END) && abstract_restriction::uses_function(_slice.bound(statements::bound::END), ks_name, function_name));
+        return (_slice.has_bound(statements::bound::START) && abstract_restriction::term_uses_function(_slice.bound(statements::bound::START), ks_name, function_name))
+                || (_slice.has_bound(statements::bound::END) && abstract_restriction::term_uses_function(_slice.bound(statements::bound::END), ks_name, function_name));
     }
 
     virtual bool is_inclusive(statements::bound b) const override {

@@ -49,6 +49,8 @@
 #include "schema.hh"
 #include "to_string.hh"
 #include "exceptions/exceptions.hh"
+#include "keys.hh"
+#include "mutation_partition.hh"
 
 namespace cql3 {
 
@@ -68,6 +70,26 @@ public:
     const column_definition& get_column_def() const {
         return _column_def;
     }
+
+    /**
+     * Whether the specified row satisfied this restriction.
+     * Assumes the row is live, but not all cells. If a cell
+     * isn't live and there's a restriction on its column,
+     * then the function returns false.
+     *
+     * @param schema the schema the row belongs to
+     * @param key the partition key
+     * @param ckey the clustering key
+     * @param cells the remaining row columns
+     * @return the restriction resulting of the merge
+     * @throws InvalidRequestException if the restrictions cannot be merged
+     */
+    virtual bool is_satisfied_by(const schema& schema,
+                                 const partition_key& key,
+                                 const clustering_key_prefix& ckey,
+                                 const row& cells,
+                                 const query_options& options,
+                                 gc_clock::time_point now) const = 0;
 
 #if 0
     @Override
@@ -105,6 +127,13 @@ public:
 
     class slice;
     class contains;
+
+protected:
+    bytes_view_opt get_value(const schema& schema,
+            const partition_key& key,
+            const clustering_key_prefix& ckey,
+            const row& cells,
+            gc_clock::time_point now) const;
 };
 
 class single_column_restriction::EQ final : public single_column_restriction {
@@ -117,7 +146,7 @@ public:
     { }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return abstract_restriction::uses_function(_value, ks_name, function_name);
+        return abstract_restriction::term_uses_function(_value, ks_name, function_name);
     }
 
     virtual bool is_EQ() const override {
@@ -143,6 +172,13 @@ public:
             "%s cannot be restricted by more than one relation if it includes an Equal", _column_def.name_as_text()));
     }
 
+    virtual bool is_satisfied_by(const schema& schema,
+                                 const partition_key& key,
+                                 const clustering_key_prefix& ckey,
+                                 const row& cells,
+                                 const query_options& options,
+                                 gc_clock::time_point now) const override;
+
 #if 0
         @Override
         protected boolean isSupportedBy(SecondaryIndex index)
@@ -167,6 +203,13 @@ public:
             "%s cannot be restricted by more than one relation if it includes a IN", _column_def.name_as_text()));
     }
 
+    virtual bool is_satisfied_by(const schema& schema,
+                                 const partition_key& key,
+                                 const clustering_key_prefix& ckey,
+                                 const row& cells,
+                                 const query_options& options,
+                                 gc_clock::time_point now) const override;
+
 #if 0
     @Override
     protected final boolean isSupportedBy(SecondaryIndex index)
@@ -186,7 +229,7 @@ public:
     { }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return abstract_restriction::uses_function(_values, ks_name, function_name);
+        return abstract_restriction::term_uses_function(_values, ks_name, function_name);
     }
 
     virtual std::vector<bytes_opt> values(const query_options& options) const override {
@@ -237,8 +280,8 @@ public:
     { }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return (_slice.has_bound(statements::bound::START) && abstract_restriction::uses_function(_slice.bound(statements::bound::START), ks_name, function_name))
-                || (_slice.has_bound(statements::bound::END) && abstract_restriction::uses_function(_slice.bound(statements::bound::END), ks_name, function_name));
+        return (_slice.has_bound(statements::bound::START) && abstract_restriction::term_uses_function(_slice.bound(statements::bound::START), ks_name, function_name))
+                || (_slice.has_bound(statements::bound::END) && abstract_restriction::term_uses_function(_slice.bound(statements::bound::END), ks_name, function_name));
     }
 
     virtual bool is_slice() const override {
@@ -310,6 +353,13 @@ public:
     virtual sstring to_string() const override {
         return sprint("SLICE%s", _slice);
     }
+
+    virtual bool is_satisfied_by(const schema& schema,
+                                 const partition_key& key,
+                                 const clustering_key_prefix& ckey,
+                                 const row& cells,
+                                 const query_options& options,
+                                 gc_clock::time_point now) const override;
 };
 
 // This holds CONTAINS, CONTAINS_KEY, and map[key] = value restrictions because we might want to have any combination of them.
@@ -403,10 +453,10 @@ public:
     }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return abstract_restriction::uses_function(_values, ks_name, function_name)
-            || abstract_restriction::uses_function(_keys, ks_name, function_name)
-            || abstract_restriction::uses_function(_entry_keys, ks_name, function_name)
-            || abstract_restriction::uses_function(_entry_values, ks_name, function_name);
+        return abstract_restriction::term_uses_function(_values, ks_name, function_name)
+            || abstract_restriction::term_uses_function(_keys, ks_name, function_name)
+            || abstract_restriction::term_uses_function(_entry_keys, ks_name, function_name)
+            || abstract_restriction::term_uses_function(_entry_values, ks_name, function_name);
     }
 
     virtual sstring to_string() const override {
@@ -425,6 +475,13 @@ public:
     virtual bool is_inclusive(statements::bound b) const override {
         throw exceptions::unsupported_operation_exception();
     }
+
+    virtual bool is_satisfied_by(const schema& schema,
+                                 const partition_key& key,
+                                 const clustering_key_prefix& ckey,
+                                 const row& cells,
+                                 const query_options& options,
+                                 gc_clock::time_point now) const override;
 
 #if 0
         private List<ByteBuffer> keys(const query_options& options) {

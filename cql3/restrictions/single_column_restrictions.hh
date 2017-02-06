@@ -75,7 +75,7 @@ private:
      * The _restrictions per column.
      */
 public:
-    using restrictions_map = std::map<const column_definition*, ::shared_ptr<restriction>, column_definition_comparator>;
+    using restrictions_map = std::map<const column_definition*, ::shared_ptr<single_column_restriction>, column_definition_comparator>;
 private:
     restrictions_map _restrictions;
     bool _is_all_eq = true;

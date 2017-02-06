@@ -90,6 +90,8 @@ partition_slice::partition_slice(clustering_row_ranges row_ranges,
 
 partition_slice::partition_slice(partition_slice&&) = default;
 
+partition_slice& partition_slice::operator=(partition_slice&& other) noexcept = default;
+
 // Only needed because selection_statement::execute does copies of its read_command
 // in the map-reduce op.
 partition_slice::partition_slice(const partition_slice& s)

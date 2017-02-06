@@ -378,6 +378,13 @@ public:
         auto&& restricted = get_restrictions(cdef->kind).get()->get_column_defs();
         return std::find(restricted.begin(), restricted.end(), cdef) != restricted.end();
     }
+
+     /**
+      * @return the non-primary key restrictions.
+      */
+    const single_column_restrictions::restrictions_map& get_non_pk_restriction() const {
+        return _nonprimary_key_restrictions->restrictions();
+    }
 };
 
 }
