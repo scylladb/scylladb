@@ -709,7 +709,7 @@ class lister {
 public:
     using dir_entry_types = std::unordered_set<directory_entry_type, enum_hash<directory_entry_type>>;
     using walker_type = std::function<future<> (directory_entry)>;
-    using filter_type = std::function<bool (const sstring&)>;
+    using filter_type = std::function<bool (const directory_entry&)>;
 
     struct show_hidden_tag {};
     using show_hidden = bool_class<show_hidden_tag>;
@@ -726,7 +726,7 @@ public:
     lister(file f, dir_entry_types type, walker_type walker, sstring dirname, show_hidden do_show_hidden)
             : _f(std::move(f))
             , _walker(std::move(walker))
-            , _filter([] (const sstring& fname) { return true; })
+            , _filter([] (const directory_entry& de) { return true; })
             , _expected_type(std::move(type))
             , _listing(_f.list_directory([this] (directory_entry de) { return _visit(de); }))
             , _dirname(dirname)
@@ -743,10 +743,10 @@ public:
         return scan_dir(std::move(name), std::move(type), show_hidden::no, std::move(walker), std::move(filter));
     }
     static future<> scan_dir(sstring name, dir_entry_types type, walker_type walker) {
-        return scan_dir(std::move(name), std::move(type), show_hidden::no, std::move(walker), [] (const sstring& entry) { return true; });
+        return scan_dir(std::move(name), std::move(type), show_hidden::no, std::move(walker), [] (const directory_entry& entry) { return true; });
     }
     static future<> scan_dir(sstring name, dir_entry_types type, show_hidden do_show_hidden, walker_type walker) {
-        return scan_dir(std::move(name), std::move(type), do_show_hidden, std::move(walker), [] (const sstring& entry) { return true; });
+        return scan_dir(std::move(name), std::move(type), do_show_hidden, std::move(walker), [] (const directory_entry& entry) { return true; });
     }
 protected:
     future<> _visit(directory_entry de) {
@@ -758,7 +758,7 @@ protected:
             }
 
             // apply a filter
-            if (!_filter(_dirname + "/" + de.name)) {
+            if (!_filter(de)) {
                 return make_ready_future<>();
             }
 
@@ -1530,11 +1530,9 @@ const std::vector<sstables::shared_sstable>& column_family::compacted_undeleted_
     return _sstables_compacted_but_not_deleted;
 }
 
-inline bool column_family::manifest_json_filter(const sstring& fname) {
-    using namespace boost::filesystem;
-
-    path entry_path(fname);
-    if (!is_directory(status(entry_path)) && entry_path.filename() == path("manifest.json")) {
+inline bool column_family::manifest_json_filter(const directory_entry& entry) {
+    // Filter out directories. If type of the entry is unknown - check its name.
+    if (entry.type.value_or(directory_entry_type::regular) != directory_entry_type::directory && entry.name == "manifest.json") {
         return false;
     }
 

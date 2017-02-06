@@ -877,7 +877,7 @@ private:
     }
 
     // filter manifest.json files out
-    static bool manifest_json_filter(const sstring& fname);
+    static bool manifest_json_filter(const directory_entry& entry);
 
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
