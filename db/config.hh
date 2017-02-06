@@ -691,6 +691,11 @@ public:
             "certificate : (Default: conf/scylla.crt) The location of a PEM-encoded x509 certificate used to identify and encrypt the internode communication.\n"    \
             "keyfile : (Default: conf/scylla.key) PEM Key file associated with certificate.\n"  \
             "truststore : (Default: <system truststore> ) Location of the truststore containing the trusted certificate for authenticating remote servers.\n"    \
+            "\n"    \
+            "The advanced settings are:\n"  \
+            "\n"    \
+            "\tpriority_string : GnuTLS priority string controlling TLS algorithms used/allowed.\n"   \
+            "\trequire_client_auth : (Default: false ) Enables or disables certificate authentication.\n" \
             "Related information: Node-to-node encryption"  \
     )   \
     val(client_encryption_options, string_map, /*none*/, Used,     \
@@ -699,6 +704,12 @@ public:
             "\tenabled : (Default: false ) To enable, set to true.\n"    \
             "\tcertificate: (Default: conf/scylla.crt) The location of a PEM-encoded x509 certificate used to identify and encrypt the client/server communication.\n"   \
             "\tkeyfile: (Default: conf/scylla.key) PEM Key file associated with certificate.\n"   \
+            "truststore : (Default: <system truststore> ) Location of the truststore containing the trusted certificate for authenticating remote servers.\n"    \
+            "\n"    \
+            "The advanced settings are:\n"  \
+            "\n"    \
+            "\tpriority_string : GnuTLS priority string controlling TLS algorithms used/allowed.\n"   \
+            "\trequire_client_auth : (Default: false ) Enables or disables certificate authentication.\n" \
             "Related information: Client-to-node encryption"    \
     )   \
     val(ssl_storage_port, uint32_t, 7001, Used,     \

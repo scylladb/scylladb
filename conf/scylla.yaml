@@ -727,22 +727,17 @@ commitlog_total_space_in_mb: -1
 #    certificate: conf/scylla.crt
 #    keyfile: conf/scylla.key
 #    truststore: <none, use system trust>
+#    require_client_auth: False
+#    priority_string: <none, use default>
 
 # enable or disable client/server encryption.
 # client_encryption_options:
 #    enabled: false
 #    certificate: conf/scylla.crt
 #    keyfile: conf/scylla.key
-
-    # require_client_auth: false
-    # Set trustore and truststore_password if require_client_auth is true
-    # truststore: conf/.truststore
-    # truststore_password: cassandra
-    # More advanced defaults below:
-    # protocol: TLS
-    # algorithm: SunX509
-    # store_type: JKS
-    # cipher_suites: [TLS_RSA_WITH_AES_128_CBC_SHA,TLS_RSA_WITH_AES_256_CBC_SHA,TLS_DHE_RSA_WITH_AES_128_CBC_SHA,TLS_DHE_RSA_WITH_AES_256_CBC_SHA,TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA]
+#    truststore: <none, use system trust>
+#    require_client_auth: False
+#    priority_string: <none, use default>
 
 # internode_compression controls whether traffic between nodes is
 # compressed.

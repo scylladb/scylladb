@@ -37,6 +37,8 @@ void init_ms_fd_gossiper(sstring listen_address
                 , sstring ms_trust_store
                 , sstring ms_cert
                 , sstring ms_key
+                , sstring ms_tls_prio
+                , bool ms_client_auth
                 , sstring ms_compress
                 , db::seed_provider_type seed_provider
                 , sstring cluster_name = "Test Cluster"

@@ -38,7 +38,6 @@
 #include "db/commitlog/commitlog_replayer.hh"
 #include "utils/runtime.hh"
 #include "utils/file_lock.hh"
-#include "dns.hh"
 #include "log.hh"
 #include "debug.hh"
 #include "init.hh"
@@ -52,6 +51,7 @@
 #include "tracing/tracing.hh"
 #include "core/prometheus.hh"
 #include "message/messaging_service.hh"
+#include <seastar/net/dns.hh>
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
@@ -355,14 +355,14 @@ int main(int ac, char** av) {
 
             if (!broadcast_address.empty()) {
                 try {
-                    utils::fb_utilities::set_broadcast_address(broadcast_address);
+                    utils::fb_utilities::set_broadcast_address(gms::inet_address::lookup(broadcast_address).get0());
                 } catch (...) {
                     startlog.error("Bad configuration: invalid 'broadcast_address': {}: {}", broadcast_address, std::current_exception());
                     throw bad_configuration_error();
                 }
             } else if (!listen_address.empty()) {
                 try {
-                    utils::fb_utilities::set_broadcast_address(listen_address);
+                    utils::fb_utilities::set_broadcast_address(gms::inet_address::lookup(listen_address).get0());
                 } catch (...) {
                     startlog.error("Bad configuration: invalid 'listen_address': {}: {}", listen_address, std::current_exception());
                     throw bad_configuration_error();
@@ -373,13 +373,13 @@ int main(int ac, char** av) {
             }
 
             if (!broadcast_rpc_address.empty()) {
-                utils::fb_utilities::set_broadcast_rpc_address(broadcast_rpc_address);
+                utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address::lookup(broadcast_rpc_address).get0());
             } else {
                 if (rpc_address == "0.0.0.0") {
                     startlog.error("If rpc_address is set to a wildcard address {}, then you must set broadcast_rpc_address to a value other than {}", rpc_address, rpc_address);
                     throw bad_configuration_error();
                 }
-                utils::fb_utilities::set_broadcast_rpc_address(rpc_address);
+                utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address::lookup(rpc_address).get0());
             }
 
             // TODO: lib.
@@ -397,6 +397,7 @@ int main(int ac, char** av) {
                 ceo["enabled"] = "true";
                 ceo["certificate"] = get_or_default(ceo, "certificate", relative_conf_dir("scylla.crt").string());
                 ceo["keyfile"] = get_or_default(ceo, "keyfile", relative_conf_dir("scylla.key").string());
+                ceo["require_client_auth"] = is_true(get_or_default(ceo, "require_client_auth", "false")) ? "true" : "false";
             } else {
                 ceo["enabled"] = "false";
             }
@@ -414,9 +415,9 @@ int main(int ac, char** av) {
             // #293 - do not stop anything
             // engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
             supervisor::notify("determining DNS name");
-            dns::hostent e = dns::gethostbyname(api_address).get0();
+            auto e = seastar::net::dns::get_host_by_name(api_address).get0();
             supervisor::notify("starting API server");
-            auto ip = e.addresses[0].in.s_addr;
+            auto ip = e.addr_list.front();
             ctx.http_server.start().get();
             api::set_server_init(ctx).get();
             ctx.http_server.listen(ipv4_addr{ip, api_port}).get();
@@ -479,7 +480,8 @@ int main(int ac, char** av) {
             auto trust_store = get_or_default(ssl_opts, "truststore");
             auto cert = get_or_default(ssl_opts, "certificate", relative_conf_dir("scylla.crt").string());
             auto key = get_or_default(ssl_opts, "keyfile", relative_conf_dir("scylla.key").string());
-
+            auto prio = get_or_default(ssl_opts, "priority_string", sstring());
+            auto clauth = is_true(get_or_default(ssl_opts, "require_client_auth", "false"));
             init_ms_fd_gossiper(listen_address
                     , storage_port
                     , ssl_storage_port
@@ -487,6 +489,8 @@ int main(int ac, char** av) {
                     , trust_store
                     , cert
                     , key
+                    , prio
+                    , clauth
                     , cfg->internode_compression()
                     , seed_provider
                     , cluster_name
@@ -621,7 +625,7 @@ int main(int ac, char** av) {
                 }).get();
             }
             api::set_server_done(ctx).get();
-            dns::hostent prom_addr = dns::gethostbyname(cfg->prometheus_address()).get0();
+            auto prom_addr = seastar::net::dns::get_host_by_name(cfg->prometheus_address()).get0();
             supervisor::notify("starting prometheus API server");
             uint16_t pport = cfg->prometheus_port();
             if (pport) {
@@ -629,7 +633,7 @@ int main(int ac, char** av) {
                 pctx.prefix = cfg->prometheus_prefix();
                 prometheus_server.start().get();
                 prometheus::start(prometheus_server, pctx);
-                prometheus_server.listen(ipv4_addr{prom_addr.addresses[0].in.s_addr, pport}).handle_exception([pport, &cfg] (auto ep) {
+                prometheus_server.listen(ipv4_addr{prom_addr.addr_list.front(), pport}).handle_exception([pport, &cfg] (auto ep) {
                     startlog.error("Could not start Prometheus API server on {}:{}: {}", cfg->prometheus_address(), pport, ep);
                     return make_exception_future<>(ep);
                 }).get();

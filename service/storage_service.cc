@@ -62,12 +62,12 @@
 #include "service/load_broadcaster.hh"
 #include "thrift/server.hh"
 #include "transport/server.hh"
-#include "dns.hh"
 #include <seastar/core/rwlock.hh>
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
 #include "auth/auth.hh"
 #include <seastar/net/tls.hh>
+#include <seastar/net/dns.hh>
 #include "utils/exceptions.hh"
 #include "message/messaging_service.hh"
 #include "supervisor.hh"
@@ -1961,8 +1961,7 @@ future<> storage_service::start_rpc_server() {
         auto port = cfg.rpc_port();
         auto addr = cfg.rpc_address();
         auto keepalive = cfg.rpc_keepalive();
-        return dns::gethostbyname(addr).then([&ss, tserver, addr, port, keepalive] (dns::hostent e) {
-            auto ip = e.addresses[0].in.s_addr;
+        return seastar::net::dns::resolve_name(addr).then([&ss, tserver, addr, port, keepalive] (seastar::net::inet_address ip) {
             return tserver->start(std::ref(ss._db), std::ref(cql3::get_query_processor())).then([tserver, port, addr, ip, keepalive] {
                 // #293 - do not stop anything
                 //engine().at_exit([tserver] {
@@ -2015,8 +2014,7 @@ future<> storage_service::start_native_transport() {
         auto ceo = cfg.client_encryption_options();
         auto keepalive = cfg.rpc_keepalive();
         transport::cql_load_balance lb = transport::parse_load_balance(cfg.load_balance());
-        return dns::gethostbyname(addr).then([cserver, addr, port, lb, keepalive, ceo = std::move(ceo)] (dns::hostent e) {
-            auto ip = e.addresses[0].in.s_addr;
+        return seastar::net::dns::resolve_name(addr).then([cserver, addr, port, lb, keepalive, ceo = std::move(ceo)] (seastar::net::inet_address ip) {
             return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), lb).then([cserver, port, addr, ip, ceo, keepalive]() {
                 // #293 - do not stop anything
                 //engine().at_exit([cserver] {
@@ -2031,7 +2029,20 @@ future<> storage_service::start_native_transport() {
                 if (ceo.at("enabled") == "true") {
                     cred = std::make_shared<seastar::tls::credentials_builder>();
                     cred->set_dh_level(seastar::tls::dh_params::level::MEDIUM);
+
+                    if (ceo.count("priority_string")) {
+                        cred->set_priority_string(ceo.at("priority_string"));
+                    }
+                    if (ceo.count("require_client_auth") && ceo.at("require_client_auth") == "true") {
+                        cred->set_client_auth(seastar::tls::client_auth::REQUIRE);
+                    }
+
                     f = cred->set_x509_key_file(ceo.at("certificate"), ceo.at("keyfile"), seastar::tls::x509_crt_format::PEM);
+
+                    if (ceo.count("truststore")) {
+                        f = f.then([cred, f = ceo.at("truststore")] { return cred->set_x509_trust_file(f, seastar::tls::x509_crt_format::PEM); });
+                    }
+
                     logger.info("Enabling encrypted CQL connections between client and server");
                 }
                 return f.then([cserver, addr, cred = std::move(cred), keepalive] {
