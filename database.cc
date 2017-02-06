@@ -707,9 +707,29 @@ column_family::for_all_partitions_slow(schema_ptr s, std::function<bool (const d
 
 class lister {
 public:
+    /**
+     * Types of entries to list. If empty - list all present entries except for
+     * hidden if not requested to.
+     */
     using dir_entry_types = std::unordered_set<directory_entry_type, enum_hash<directory_entry_type>>;
-    using walker_type = std::function<future<> (directory_entry)>;
-    using filter_type = std::function<bool (const directory_entry&)>;
+
+    using path = boost::filesystem::path;
+
+    /**
+     * This callback is going to be called for each entry in the given directory
+     * that has the corresponding type and meets the filter demands.
+     *
+     * First parameter is a boost::filesystem::path object for the
+     * base directory.
+     *
+     * Second parameter is a directory_entry object of the file for which this
+     * callback is being called.
+     *
+     * The first parameter of the callback represents a parent directory of
+     * each entry defined by the second parameter.
+     */
+    using walker_type = std::function<future<> (path, directory_entry)>;
+    using filter_type = std::function<bool (const path&, const directory_entry&)>;
 
     struct show_hidden_tag {};
     using show_hidden = bool_class<show_hidden_tag>;
@@ -719,34 +739,46 @@ private:
     filter_type _filter;
     dir_entry_types _expected_type;
     subscription<directory_entry> _listing;
-    sstring _dirname;
+    path _dir;
     show_hidden _show_hidden;
 
 public:
-    lister(file f, dir_entry_types type, walker_type walker, sstring dirname, show_hidden do_show_hidden)
+    lister(file f, dir_entry_types type, walker_type walker, path dir, show_hidden do_show_hidden)
             : _f(std::move(f))
             , _walker(std::move(walker))
-            , _filter([] (const directory_entry& de) { return true; })
+            , _filter([] (const path& parent_dir, const directory_entry& de) { return true; })
             , _expected_type(std::move(type))
             , _listing(_f.list_directory([this] (directory_entry de) { return _visit(de); }))
-            , _dirname(dirname)
+            , _dir(std::move(dir))
             , _show_hidden(do_show_hidden) {
     }
 
-    lister(file f, dir_entry_types type, walker_type walker, filter_type filter, sstring dirname, show_hidden do_show_hidden)
-            : lister(std::move(f), std::move(type), std::move(walker), std::move(dirname), do_show_hidden) {
+    lister(file f, dir_entry_types type, walker_type walker, filter_type filter, path dir, show_hidden do_show_hidden)
+            : lister(std::move(f), std::move(type), std::move(walker), std::move(dir), do_show_hidden) {
         _filter = std::move(filter);
     }
 
-    static future<> scan_dir(sstring name, dir_entry_types type, show_hidden do_show_hidden, walker_type walker, filter_type filter);
-    static future<> scan_dir(sstring name, dir_entry_types type, walker_type walker, filter_type filter) {
-        return scan_dir(std::move(name), std::move(type), show_hidden::no, std::move(walker), std::move(filter));
+    static future<> scan_dir(path dir, dir_entry_types type, show_hidden do_show_hidden, walker_type walker, filter_type filter);
+    static future<> scan_dir(path dir, dir_entry_types type, walker_type walker, filter_type filter) {
+        return scan_dir(std::move(dir), std::move(type), show_hidden::no, std::move(walker), std::move(filter));
     }
-    static future<> scan_dir(sstring name, dir_entry_types type, walker_type walker) {
-        return scan_dir(std::move(name), std::move(type), show_hidden::no, std::move(walker), [] (const directory_entry& entry) { return true; });
+    static future<> scan_dir(path dir, dir_entry_types type, walker_type walker) {
+        return scan_dir(std::move(dir), std::move(type), show_hidden::no, std::move(walker), [] (const path& parent_dir, const directory_entry& entry) { return true; });
     }
-    static future<> scan_dir(sstring name, dir_entry_types type, show_hidden do_show_hidden, walker_type walker) {
-        return scan_dir(std::move(name), std::move(type), do_show_hidden, std::move(walker), [] (const directory_entry& entry) { return true; });
+    static future<> scan_dir(path dir, dir_entry_types type, show_hidden do_show_hidden, walker_type walker) {
+        return scan_dir(std::move(dir), std::move(type), do_show_hidden, std::move(walker), [] (const path& parent_dir, const directory_entry& entry) { return true; });
+    }
+    static future<> scan_dir(sstring dir, dir_entry_types type, show_hidden do_show_hidden, walker_type walker, filter_type filter) {
+        return scan_dir(path(std::move(dir)), std::move(type), do_show_hidden, std::move(walker), std::move(filter));
+    }
+    static future<> scan_dir(sstring dir, dir_entry_types type, walker_type walker, filter_type filter) {
+        return scan_dir(path(std::move(dir)), std::move(type), show_hidden::no, std::move(walker), std::move(filter));
+    }
+    static future<> scan_dir(sstring dir, dir_entry_types type, walker_type walker) {
+        return scan_dir(path(std::move(dir)), std::move(type), show_hidden::no, std::move(walker), [] (const path& parent_dir, const directory_entry& entry) { return true; });
+    }
+    static future<> scan_dir(sstring dir, dir_entry_types type, show_hidden do_show_hidden, walker_type walker) {
+        return scan_dir(path(std::move(dir)), std::move(type), do_show_hidden, std::move(walker), [] (const path& parent_dir, const directory_entry& entry) { return true; });
     }
 protected:
     future<> _visit(directory_entry de) {
@@ -758,11 +790,11 @@ protected:
             }
 
             // apply a filter
-            if (!_filter(de)) {
+            if (!_filter(_dir, de)) {
                 return make_ready_future<>();
             }
 
-            return _walker(std::move(de));
+            return _walker(_dir, std::move(de));
         });
 
     }
@@ -776,11 +808,11 @@ private:
         if (de.type) {
             return make_ready_future<directory_entry>(std::move(de));
         } else {
-            auto f = engine().file_type(_dirname + "/" + de.name);
-            return f.then([dirname = _dirname, de = std::move(de)] (std::experimental::optional<directory_entry_type> t) mutable {
+            auto f = engine().file_type((_dir / de.name.c_str()).native());
+            return f.then([dir = _dir, de = std::move(de)] (std::experimental::optional<directory_entry_type> t) mutable {
                 // If some FS error occures - return an exceptional future
                 if (!t) {
-                    return make_exception_future<directory_entry>(std::runtime_error(sprint("Failed to get %s type.", dirname + "/" + de.name)));
+                    return make_exception_future<directory_entry>(std::runtime_error(sprint("Failed to get %s type.", (dir / de.name.c_str()).native())));
                 }
                 de.type = t;
                 return make_ready_future<directory_entry>(std::move(de));
@@ -789,11 +821,10 @@ private:
     }
 };
 
-
-future<> lister::scan_dir(sstring name, lister::dir_entry_types type, lister::show_hidden do_show_hidden, walker_type walker, filter_type filter) {
-    return open_checked_directory(general_disk_error_handler, name).then([type = std::move(type), walker = std::move(walker), filter = std::move(filter), name, do_show_hidden] (file f) {
-            auto l = make_lw_shared<lister>(std::move(f), std::move(type), std::move(walker), std::move(filter), std::move(name), do_show_hidden);
-            return l->done().then([l] { });
+future<> lister::scan_dir(lister::path dir, lister::dir_entry_types type, lister::show_hidden do_show_hidden, walker_type walker, filter_type filter) {
+    return open_checked_directory(general_disk_error_handler, dir.native()).then([type = std::move(type), walker = std::move(walker), filter = std::move(filter), dir, do_show_hidden] (file f) {
+        auto l = make_lw_shared<lister>(std::move(f), std::move(type), std::move(walker), std::move(filter), std::move(dir), do_show_hidden);
+        return l->done().then([l] { });
     });
 }
 
@@ -1157,8 +1188,8 @@ distributed_loader::flush_upload_dir(distributed<database>& db, sstring ks_name,
     return do_with(work(), [&db, ks_name = std::move(ks_name), cf_name = std::move(cf_name)] (work& work) {
         auto& cf = db.local().find_column_family(ks_name, cf_name);
 
-        return lister::scan_dir(cf._config.datadir + "/upload/", { directory_entry_type::regular },
-                [&work] (directory_entry de) {
+        return lister::scan_dir(lister::path(cf._config.datadir) / "upload", { directory_entry_type::regular },
+                [&work] (lister::path parent_dir, directory_entry de) {
             auto comps = sstables::entry_descriptor::make_descriptor(de.name);
             if (comps.component != sstables::sstable::component_type::TOC) {
                 return make_ready_future<>();
@@ -1214,7 +1245,7 @@ column_family::reshuffle_sstables(std::set<int64_t> all_generations, int64_t sta
     };
 
     return do_with(work(start, std::move(all_generations)), [this] (work& work) {
-        return lister::scan_dir(_config.datadir, { directory_entry_type::regular }, [this, &work] (directory_entry de) {
+        return lister::scan_dir(_config.datadir, { directory_entry_type::regular }, [this, &work] (lister::path parent_dir, directory_entry de) {
             auto comps = sstables::entry_descriptor::make_descriptor(de.name);
             if (comps.component != sstables::sstable::component_type::TOC) {
                 return make_ready_future<>();
@@ -1530,7 +1561,7 @@ const std::vector<sstables::shared_sstable>& column_family::compacted_undeleted_
     return _sstables_compacted_but_not_deleted;
 }
 
-inline bool column_family::manifest_json_filter(const directory_entry& entry) {
+inline bool column_family::manifest_json_filter(const boost::filesystem::path&, const directory_entry& entry) {
     // Filter out directories. If type of the entry is unknown - check its name.
     if (entry.type.value_or(directory_entry_type::regular) != directory_entry_type::directory && entry.name == "manifest.json") {
         return false;
@@ -1671,22 +1702,22 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
     auto verifier = make_lw_shared<std::unordered_map<unsigned long, status>>();
     auto descriptor = make_lw_shared<sstable_descriptor>();
 
-    return do_with(std::vector<future<>>(), [&db, sstdir, verifier, descriptor, ks, cf] (std::vector<future<>>& futures) {
-        return lister::scan_dir(sstdir, { directory_entry_type::regular }, [&db, sstdir, verifier, descriptor, &futures] (directory_entry de) {
+    return do_with(std::vector<future<>>(), [&db, sstdir = std::move(sstdir), verifier, descriptor, ks, cf] (std::vector<future<>>& futures) {
+        return lister::scan_dir(sstdir, { directory_entry_type::regular }, [&db, verifier, descriptor, &futures] (lister::path sstdir, directory_entry de) {
             // FIXME: The secondary indexes are in this level, but with a directory type, (starting with ".")
-            auto f = distributed_loader::probe_file(db, sstdir, de.name).then([verifier, descriptor, sstdir, de] (auto entry) {
-                auto filename = sstdir + "/" + de.name;
+            auto f = distributed_loader::probe_file(db, sstdir.native(), de.name).then([verifier, descriptor, sstdir, de] (auto entry) {
                 if (entry.component == sstables::sstable::component_type::TemporaryStatistics) {
-                    return remove_file(sstables::sstable::filename(sstdir, entry.ks, entry.cf, entry.version, entry.generation,
+                    return remove_file(sstables::sstable::filename(sstdir.native(), entry.ks, entry.cf, entry.version, entry.generation,
                         entry.format, sstables::sstable::component_type::TemporaryStatistics));
                 }
 
                 if (verifier->count(entry.generation)) {
                     if (verifier->at(entry.generation) == status::has_toc_file) {
+                        lister::path file_path(sstdir / de.name.c_str());
                         if (entry.component == sstables::sstable::component_type::TOC) {
-                            throw sstables::malformed_sstable_exception("Invalid State encountered. TOC file already processed", filename);
+                            throw sstables::malformed_sstable_exception("Invalid State encountered. TOC file already processed", file_path.native());
                         } else if (entry.component == sstables::sstable::component_type::TemporaryTOC) {
-                            throw sstables::malformed_sstable_exception("Invalid State encountered. Temporary TOC file found after TOC file was processed", filename);
+                            throw sstables::malformed_sstable_exception("Invalid State encountered. Temporary TOC file found after TOC file was processed", file_path.native());
                         }
                     } else if (entry.component == sstables::sstable::component_type::TOC) {
                         verifier->at(entry.generation) = status::has_toc_file;
@@ -1953,12 +1984,12 @@ future<> distributed_loader::populate_keyspace(distributed<database>& db, sstrin
 }
 
 static future<> populate(distributed<database>& db, sstring datadir) {
-    return lister::scan_dir(datadir, { directory_entry_type::directory }, [&db, datadir] (directory_entry de) {
+    return lister::scan_dir(datadir, { directory_entry_type::directory }, [&db] (lister::path datadir, directory_entry de) {
         auto& ks_name = de.name;
         if (ks_name == "system") {
             return make_ready_future<>();
         }
-        return distributed_loader::populate_keyspace(db, datadir, ks_name);
+        return distributed_loader::populate_keyspace(db, datadir.native(), ks_name);
     });
 }
 
@@ -3373,15 +3404,15 @@ file_missing(future<> f) {
 }
 
 future<> column_family::clear_snapshot(sstring tag) {
-    sstring jsondir = _config.datadir + "/snapshots/";
-    sstring parent = _config.datadir;
+    lister::path jsondir(lister::path(_config.datadir) / "snapshots");
+    lister::path parent(_config.datadir);
     if (!tag.empty()) {
-        jsondir += tag;
-        parent += "/snapshots/";
+        jsondir /= tag;
+        parent /= "snapshots";
     }
 
     lister::dir_entry_types dir_and_files = { directory_entry_type::regular, directory_entry_type::directory };
-    return lister::scan_dir(jsondir, dir_and_files, [this, curr_dir = jsondir, dir_and_files, tag] (directory_entry de) {
+    return lister::scan_dir(jsondir, dir_and_files, [this, dir_and_files, tag] (lister::path curr_dir, directory_entry de) {
         // FIXME: We really need a better directory walker. This should eventually be part of the seastar infrastructure.
         // It's hard to write this in a fully recursive manner because we need to keep information about the parent directory,
         // so we can remove the file. For now, we'll take advantage of the fact that we will at most visit 2 levels and keep
@@ -3390,24 +3421,23 @@ future<> column_family::clear_snapshot(sstring tag) {
         if (de.type == directory_entry_type::directory) {
             // Should only recurse when tag is empty, meaning delete all snapshots
             if (!tag.empty()) {
-                throw std::runtime_error(sprint("Unexpected directory %s found at %s! Aborting", de.name, curr_dir));
+                throw std::runtime_error(sprint("Unexpected directory %s found at %s! Aborting", de.name, curr_dir.native()));
             }
-            auto newdir = curr_dir + "/" + de.name;
-            recurse = lister::scan_dir(newdir, dir_and_files, [this, curr_dir = newdir] (directory_entry de) {
-                return io_check(remove_file, curr_dir + "/" + de.name);
+            recurse = lister::scan_dir(curr_dir / de.name.c_str(), dir_and_files, [this] (lister::path curr_dir, directory_entry de) {
+                return io_check(remove_file, (curr_dir / de.name.c_str()).native());
             });
         }
-        return recurse.then([fname = curr_dir + "/" + de.name] {
-            return io_check(remove_file, fname);
+        return recurse.then([fname = curr_dir / de.name.c_str()] {
+            return io_check(remove_file, fname.native());
         });
     }).then_wrapped([jsondir] (future<> f) {
         // Fine if directory does not exist. If it did, we delete it
         if (file_missing(std::move(f)) == missing::no) {
-            return io_check(remove_file, jsondir);
+            return io_check(remove_file, jsondir.native());
         }
         return make_ready_future<>();
     }).then([parent] {
-        return io_check(sync_directory, parent).then_wrapped([] (future<> f) {
+        return io_check(sync_directory, parent.native()).then_wrapped([] (future<> f) {
             // Should always exist for empty tags, but may not exist for a single tag if we never took
             // snapshots. We will check this here just to mask out the exception, without silencing
             // unexpected ones.
@@ -3419,17 +3449,16 @@ future<> column_family::clear_snapshot(sstring tag) {
 
 future<std::unordered_map<sstring, column_family::snapshot_details>> column_family::get_snapshot_details() {
     std::unordered_map<sstring, snapshot_details> all_snapshots;
-    return do_with(std::move(all_snapshots), [this] (auto& all_snapshots) {
-        return io_check([&] { return engine().file_exists(_config.datadir + "/snapshots"); }).then([this, &all_snapshots](bool file_exists) {
+    return do_with(std::move(all_snapshots), lister::path(_config.datadir) / "snapshots", [this] (auto& all_snapshots, const lister::path& snapshots_dir) {
+        return io_check([&] { return engine().file_exists(snapshots_dir.native()); }).then([this, &all_snapshots, &snapshots_dir](bool file_exists) {
             if (!file_exists) {
                 return make_ready_future<>();
             }
-            return lister::scan_dir(_config.datadir + "/snapshots",  { directory_entry_type::directory }, [this, &all_snapshots] (directory_entry de) {
+            return lister::scan_dir(snapshots_dir,  { directory_entry_type::directory }, [this, &all_snapshots] (lister::path snapshots_dir, directory_entry de) {
             auto snapshot_name = de.name;
-            auto snapshot = _config.datadir + "/snapshots/" + snapshot_name;
             all_snapshots.emplace(snapshot_name, snapshot_details());
-            return lister::scan_dir(snapshot,  { directory_entry_type::regular }, [this, &all_snapshots, snapshot, snapshot_name] (directory_entry de) {
-                return io_check(file_size, snapshot + "/" + de.name).then([this, &all_snapshots, snapshot_name, name = de.name] (auto size) {
+            return lister::scan_dir(snapshots_dir / snapshot_name.c_str(),  { directory_entry_type::regular }, [this, &all_snapshots, snapshot_name = std::move(snapshot_name)] (lister::path snapshot_dir, directory_entry de) {
+                return io_check(file_size, (snapshot_dir / de.name.c_str()).native()).then([this, &all_snapshots, snapshot_name, name = de.name] (auto size) {
                     // The manifest is the only file expected to be in this directory not belonging to the SSTable.
                     // For it, we account the total size, but zero it for the true size calculation.
                     //
@@ -3445,7 +3474,7 @@ future<std::unordered_map<sstring, column_family::snapshot_details>> column_fami
                 }).then([this, &all_snapshots, snapshot_name, name = de.name] (auto size) {
                     // FIXME: When we support multiple data directories, the file may not necessarily
                     // live in this same location. May have to test others as well.
-                    return io_check(file_size, _config.datadir + "/" + name).then_wrapped([&all_snapshots, snapshot_name, size] (auto fut) {
+                    return io_check(file_size, (lister::path(_config.datadir) / name.c_str()).native()).then_wrapped([&all_snapshots, snapshot_name, size] (auto fut) {
                         try {
                             // File exists in the main SSTable directory. Snapshots are not contributing to size
                             fut.get0();

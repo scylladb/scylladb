@@ -76,6 +76,7 @@
 #include "tracing/trace_state.hh"
 #include <boost/intrusive/parent_from_member.hpp>
 #include "db/view/view.hh"
+#include <boost/filesystem.hpp>
 
 class cell_locker;
 class locked_cell;
@@ -877,7 +878,7 @@ private:
     }
 
     // filter manifest.json files out
-    static bool manifest_json_filter(const directory_entry& entry);
+    static bool manifest_json_filter(const boost::filesystem::path&, const directory_entry& entry);
 
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
