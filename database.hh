@@ -594,6 +594,10 @@ private:
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
     void do_trigger_compaction();
 public:
+    bool has_shared_sstables() const {
+        return bool(_sstables_need_rewrite.size());
+    }
+
     uint64_t failed_counter_applies_to_memtable() const {
         return _failed_counter_applies_to_memtable;
     }
