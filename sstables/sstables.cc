@@ -2339,6 +2339,11 @@ double sstable::get_compression_ratio() const {
     }
 }
 
+std::unordered_set<uint64_t> sstable::ancestors() const {
+    const compaction_metadata& cm = get_compaction_metadata();
+    return boost::copy_range<std::unordered_set<uint64_t>>(cm.ancestors.elements);
+}
+
 void sstable::set_sstable_level(uint32_t new_level) {
     auto entry = _components->statistics.contents.find(metadata_type::Stats);
     if (entry == _components->statistics.contents.end()) {
