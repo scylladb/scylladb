@@ -411,7 +411,8 @@ mutation_reader
 memtable::make_reader(schema_ptr s,
                       const dht::partition_range& range,
                       const query::partition_slice& slice,
-                      const io_priority_class& pc) {
+                      const io_priority_class& pc,
+                      tracing::trace_state_ptr trace_state_ptr) {
     if (query::is_single_partition(range)) {
         const query::ring_position& pos = range.start()->value();
         return _read_section(*this, [&] {
@@ -491,7 +492,7 @@ mutation_source memtable::as_data_source() {
             const query::partition_slice& slice,
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_state) {
-        return mt->make_reader(std::move(s), range, slice, pc);
+        return mt->make_reader(std::move(s), range, slice, pc, std::move(trace_state));
     });
 }
 

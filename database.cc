@@ -630,7 +630,7 @@ column_family::make_streaming_reader(schema_ptr s,
     readers.reserve(_memtables->size() + 1);
 
     for (auto&& mt : *_memtables) {
-        readers.emplace_back(mt->make_reader(s, range, slice, pc));
+        readers.emplace_back(mt->make_reader(s, range, slice, pc, nullptr));
     }
 
     readers.emplace_back(make_sstable_reader(s, range, slice, pc, nullptr));
@@ -649,7 +649,7 @@ column_family::make_streaming_reader(schema_ptr s,
         std::vector<mutation_reader> readers;
         readers.reserve(_memtables->size() + 1);
         for (auto&& mt : *_memtables) {
-            readers.emplace_back(mt->make_reader(s, range, slice, pc));
+            readers.emplace_back(mt->make_reader(s, range, slice, pc, trace_state));
         }
         readers.emplace_back(make_sstable_reader(s, range, slice, pc, std::move(trace_state)));
         return make_combined_reader(std::move(readers));

@@ -173,7 +173,8 @@ public:
     mutation_reader make_reader(schema_ptr,
                                 const dht::partition_range& range = query::full_partition_range,
                                 const query::partition_slice& slice = query::full_slice,
-                                const io_priority_class& pc = default_priority_class());
+                                const io_priority_class& pc = default_priority_class(),
+                                tracing::trace_state_ptr trace_state_ptr = nullptr);
 
 
     mutation_reader make_flush_reader(schema_ptr, const io_priority_class& pc);
