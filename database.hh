@@ -530,6 +530,8 @@ private:
     semaphore _cache_update_sem{1};
 
     std::unique_ptr<cell_locker> _counter_cell_locks;
+    void set_metrics();
+    seastar::metrics::metric_groups _metrics;
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, std::vector<unsigned>&& shards_for_the_sstable);
     // Adds new sstable to the set of sstables
@@ -665,9 +667,9 @@ private:
     column_family(schema_ptr schema, config cfg, db::commitlog* cl, compaction_manager&);
 public:
     column_family(schema_ptr schema, config cfg, db::commitlog& cl, compaction_manager& cm)
-        : column_family(schema, std::move(cfg), &cl, cm) {}
+        : column_family(schema, std::move(cfg), &cl, cm) {set_metrics();}
     column_family(schema_ptr schema, config cfg, no_commitlog, compaction_manager& cm)
-        : column_family(schema, std::move(cfg), nullptr, cm) {}
+        : column_family(schema, std::move(cfg), nullptr, cm) {set_metrics();}
     column_family(column_family&&) = delete; // 'this' is being captured during construction
     ~column_family();
     const schema_ptr& schema() const { return _schema; }

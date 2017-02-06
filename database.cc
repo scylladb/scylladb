@@ -139,6 +139,7 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog* cl
     if (!_config.enable_disk_writes) {
         dblog.warn("Writes disabled, column family no durable.");
     }
+    set_metrics();
 }
 
 partition_presence_checker
@@ -1236,6 +1237,24 @@ column_family::reshuffle_sstables(std::set<int64_t> all_generations, int64_t sta
         }).then([&work] {
             return make_ready_future<std::vector<sstables::entry_descriptor>>(std::move(work.reshuffled));
         });
+    });
+}
+
+seastar::metrics::label column_family_label("cf");
+seastar::metrics::label keyspace_label("ks");
+void column_family::set_metrics() {
+    auto cf = column_family_label(_schema->cf_name());
+    auto ks = keyspace_label(_schema->ks_name());
+    namespace ms = seastar::metrics;
+    _metrics.add_group("column_family", {
+            ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return _stats.estimated_read.get_histogram();})(cf)(ks),
+            ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return _stats.estimated_write.get_histogram();})(cf)(ks),
+            ms::make_derive("memtable_switch", ms::description("Number of times flush has resulted in the memtable being switched out"), _stats.memtable_switch_count)(cf)(ks),
+            ms::make_gauge("pending_taks", ms::description("Estimated number of tasks pending for this column family"), _stats.pending_flushes)(cf)(ks),
+            ms::make_gauge("live_disk_space", ms::description("Live disk space used"), _stats.live_disk_space_used)(cf)(ks),
+            ms::make_gauge("total_disk_space", ms::description("Total disk space used"), _stats.total_disk_space_used)(cf)(ks),
+            ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks),
+            ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks)
     });
 }
 
