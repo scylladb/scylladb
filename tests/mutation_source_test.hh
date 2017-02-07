@@ -46,7 +46,10 @@ class random_mutation_generator {
     class impl;
     std::unique_ptr<impl> _impl;
 public:
-    random_mutation_generator();
+    struct generate_counters_tag { };
+    using generate_counters = bool_class<generate_counters_tag>;
+
+    explicit random_mutation_generator(generate_counters);
     ~random_mutation_generator();
     mutation operator()();
     schema_ptr schema() const;
