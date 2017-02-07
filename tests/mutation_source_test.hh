@@ -37,11 +37,19 @@ void for_each_mutation_pair(std::function<void(const mutation&, const mutation&,
 // Calls the provided function on mutations. Is supposed to exercise as many differences as possible.
 void for_each_mutation(std::function<void(const mutation&)>);
 
+// Returns true if mutations in schema s1 can be upgraded to s2.
+inline bool can_upgrade_schema(schema_ptr from, schema_ptr to) {
+    return from->is_counter() == to->is_counter();
+}
+
 class random_mutation_generator {
     class impl;
     std::unique_ptr<impl> _impl;
 public:
-    random_mutation_generator();
+    struct generate_counters_tag { };
+    using generate_counters = bool_class<generate_counters_tag>;
+
+    explicit random_mutation_generator(generate_counters);
     ~random_mutation_generator();
     mutation operator()();
     schema_ptr schema() const;
