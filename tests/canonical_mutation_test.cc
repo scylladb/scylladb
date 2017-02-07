@@ -55,13 +55,13 @@ SEASTAR_TEST_CASE(test_reading_with_different_schemas) {
             canonical_mutation cm1(m1);
             canonical_mutation cm2(m2);
 
-            {
+            if (can_upgrade_schema(m1.schema(), m2.schema())) {
                 auto m = cm1.to_mutation(m1.schema());
                 m.upgrade(m2.schema());
                 assert_that(cm1.to_mutation(m2.schema())).is_equal_to(m);
             }
 
-            {
+            if (can_upgrade_schema(m2.schema(), m1.schema())) {
                 auto m = cm2.to_mutation(m2.schema());
                 m.upgrade(m1.schema());
                 assert_that(cm2.to_mutation(m1.schema())).is_equal_to(m);

@@ -795,8 +795,7 @@ public:
 };
 
 SEASTAR_TEST_CASE(test_apply_is_atomic_in_case_of_allocation_failures) {
-    random_mutation_generator gen;
-
+  auto do_test = [] (auto&& gen) {
     failure_injecting_allocation_strategy alloc(standard_allocator());
     with_allocator(alloc, [&] {
         auto target = gen();
@@ -857,7 +856,10 @@ SEASTAR_TEST_CASE(test_apply_is_atomic_in_case_of_allocation_failures) {
             }
         }
     });
+  };
 
+    do_test(random_mutation_generator(random_mutation_generator::generate_counters::no));
+    do_test(random_mutation_generator(random_mutation_generator::generate_counters::yes));
     return make_ready_future<>();
 }
 

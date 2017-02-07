@@ -191,7 +191,6 @@ static mutation_sets generate_mutation_sets() {
                 .with_column("ck_col_2", bytes_type, column_kind::clustering_key)
                 .with_column("regular_col_1", bytes_type)
                 .with_column("regular_col_2", bytes_type)
-                .with_column("regular_counter_col_1", counter_type)
                 .with_column("static_col_1", bytes_type, column_kind::static_column)
                 .with_column("static_col_2", bytes_type, column_kind::static_column);
 
@@ -300,9 +299,20 @@ static mutation_sets generate_mutation_sets() {
         }
     }
 
+    static constexpr auto rmg_iterations = 10;
+
     {
-        random_mutation_generator gen;
-        for (int i = 0; i < 10; ++i) {
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        for (int i = 0; i < rmg_iterations; ++i) {
+            auto m = gen();
+            result.unequal.emplace_back(mutations{m, gen()}); // collision unlikely
+            result.equal.emplace_back(mutations{m, m});
+        }
+    }
+
+    {
+        random_mutation_generator gen(random_mutation_generator::generate_counters::yes);
+        for (int i = 0; i < rmg_iterations; ++i) {
             auto m = gen();
             result.unequal.emplace_back(mutations{m, gen()}); // collision unlikely
             result.equal.emplace_back(mutations{m, m});
@@ -364,6 +374,7 @@ bytes make_blob(size_t blob_size) {
 
 class random_mutation_generator::impl {
     friend class random_mutation_generator;
+    generate_counters _generate_counters;
     const size_t _external_blob_size = 128; // Should be enough to force use of external bytes storage
     const column_id column_count = row::max_vector_size * 2;
     std::mt19937 _gen;
@@ -375,30 +386,33 @@ class random_mutation_generator::impl {
         return gc_clock::time_point() + std::chrono::seconds(dist(gen));
     }
 
-public:
-    schema_ptr make_schema() {
+    schema_ptr do_make_schema(data_type type) {
         auto builder = schema_builder("ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("ck1", bytes_type, column_kind::clustering_key)
-                .with_column("ck2", bytes_type, column_kind::clustering_key)
-                .with_column("c1", counter_type);
+                .with_column("ck2", bytes_type, column_kind::clustering_key);
 
         // Create enough columns so that row can overflow its vector storage
         for (column_id i = 0; i < column_count; ++i) {
             {
                 auto column_name = sprint("v%d", i);
-                builder.with_column(to_bytes(column_name), bytes_type, column_kind::regular_column);
+                builder.with_column(to_bytes(column_name), type, column_kind::regular_column);
             }
             {
                 auto column_name = sprint("s%d", i);
-                builder.with_column(to_bytes(column_name), bytes_type, column_kind::static_column);
+                builder.with_column(to_bytes(column_name), type, column_kind::static_column);
             }
         }
 
         return builder.build();
     }
 
-    impl() {
+    schema_ptr make_schema() {
+        return _generate_counters ? do_make_schema(counter_type)
+                                  : do_make_schema(bytes_type);
+    }
+public:
+    explicit impl(generate_counters counters) : _generate_counters(counters) {
         _schema = make_schema();
 
         for (int i = 0; i < 1024; ++i) {
@@ -423,8 +437,6 @@ public:
 
         auto pkey = partition_key::from_single_value(*_schema, _blobs[0]);
         mutation m(pkey, _schema);
-
-        auto& counter_column = *_schema->get_column_definition(utf8_type->decompose(sstring("c1")));
 
         std::map<counter_id, std::set<int64_t>> counter_used_clock_values;
         std::vector<counter_id> counter_ids;
@@ -459,16 +471,16 @@ public:
             auto columns_to_set = column_count_dist(_gen);
             for (column_id i = 0; i < columns_to_set; ++i) {
                 auto cid = column_id_dist(_gen);
-                if (kind == column_kind::regular_column && cid == counter_column.id) {
-                    auto cell = bool_dist(_gen)
-                                ? random_counter_cell()
-                                : atomic_cell::make_dead(timestamp_dist(_gen), expiry_dist(_gen));
-                    r.apply(_schema->column_at(kind, cid), std::move(cell));
-                    continue;
-                }
+                auto get_live_cell = [&] {
+                    if (_generate_counters) {
+                        return random_counter_cell();
+                    } else {
+                        return atomic_cell::make_live(timestamp_dist(_gen), _blobs[value_blob_index_dist(_gen)]);
+                    }
+                };
                 // FIXME: generate expiring cells
                 auto cell = bool_dist(_gen)
-                            ? atomic_cell::make_live(timestamp_dist(_gen), _blobs[value_blob_index_dist(_gen)])
+                            ? get_live_cell()
                             : atomic_cell::make_dead(timestamp_dist(_gen), expiry_dist(_gen));
                 r.apply(_schema->column_at(kind, cid), std::move(cell));
             }
@@ -529,8 +541,8 @@ public:
 
 random_mutation_generator::~random_mutation_generator() {}
 
-random_mutation_generator::random_mutation_generator()
-    : _impl(std::make_unique<random_mutation_generator::impl>())
+random_mutation_generator::random_mutation_generator(generate_counters counters)
+    : _impl(std::make_unique<random_mutation_generator::impl>(counters))
 { }
 
 mutation random_mutation_generator::operator()() {

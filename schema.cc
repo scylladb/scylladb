@@ -145,6 +145,20 @@ void schema::rebuild() {
 
     thrift()._compound = is_compound();
     thrift()._is_dynamic = clustering_key_size() > 0;
+
+    if (default_validator()->is_counter()) {
+        for (auto&& cdef : boost::range::join(static_columns(), regular_columns())) {
+            if (!cdef.type->is_counter()) {
+                throw exceptions::configuration_exception(sprint("Cannot add a non counter column (%s) in a counter column family", cdef.name_as_text()));
+            }
+        }
+    } else {
+        for (auto&& cdef : all_columns()) {
+            if (cdef.second->type->is_counter()) {
+                throw exceptions::configuration_exception(sprint("Cannot add a counter column (%s) in a non counter column family", cdef.second->name_as_text()));
+            }
+        }
+    }
 }
 
 const column_mapping& schema::get_column_mapping() const {
