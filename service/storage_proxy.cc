@@ -1412,11 +1412,17 @@ bool storage_proxy::cannot_hint(gms::inet_address target) {
 }
 
 future<> storage_proxy::send_to_endpoint(mutation m, gms::inet_address target, db::write_type type) {
+    utils::latency_counter lc;
+    lc.start();
+
     return mutate_prepare(std::array<mutation, 1>{std::move(m)}, db::consistency_level::ONE, type,
         [this, target] (const mutation& m, db::consistency_level cl, db::write_type type) {
-            return create_write_response_handler({{target, m}}, cl, type, {});
+            auto& ks = _db.local().find_keyspace(m.schema()->ks_name());
+            return create_write_response_handler(ks, cl, type, std::make_unique<shared_mutation>(m), {target}, {}, {}, nullptr);
         }).then([this] (std::vector<unique_response_handler> ids) {
             return mutate_begin(std::move(ids), db::consistency_level::ONE);
+        }).then_wrapped([p = shared_from_this(), lc] (future<>&& f) {
+            return p->mutate_end(std::move(f), lc, nullptr);
         });
 }
 
