@@ -763,7 +763,11 @@ private:
             return make_ready_future<directory_entry>(std::move(de));
         } else {
             auto f = engine().file_type(_dirname + "/" + de.name);
-            return f.then([de = std::move(de)] (std::experimental::optional<directory_entry_type> t) mutable {
+            return f.then([dirname = _dirname, de = std::move(de)] (std::experimental::optional<directory_entry_type> t) mutable {
+                // If some FS error occures - return an exceptional future
+                if (!t) {
+                    return make_exception_future<directory_entry>(std::runtime_error(sprint("Failed to get %s type.", dirname + "/" + de.name)));
+                }
                 de.type = t;
                 return make_ready_future<directory_entry>(std::move(de));
             });
