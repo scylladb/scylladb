@@ -160,13 +160,16 @@ public:
         range_tombstone,
     };
 private:
-    union data {
+    struct data {
         data() { }
         ~data() { }
 
-        static_row _static_row;
-        clustering_row _clustering_row;
-        range_tombstone _range_tombstone;
+        stdx::optional<size_t> _size_in_bytes;
+        union {
+            static_row _static_row;
+            clustering_row _clustering_row;
+            range_tombstone _range_tombstone;
+        };
     };
 private:
     kind _kind;
@@ -211,13 +214,26 @@ public:
     bool is_clustering_row() const { return _kind == kind::clustering_row; }
     bool is_range_tombstone() const { return _kind == kind::range_tombstone; }
 
-    static_row& as_static_row() { return _data->_static_row; }
-    clustering_row& as_clustering_row() { return _data->_clustering_row; }
-    range_tombstone& as_range_tombstone() { return _data->_range_tombstone; }
+    static_row& as_mutable_static_row() {
+        _data->_size_in_bytes = stdx::nullopt;
+        return _data->_static_row;
+    }
+    clustering_row& as_mutable_clustering_row() {
+        _data->_size_in_bytes = stdx::nullopt;
+        return _data->_clustering_row;
+    }
+    range_tombstone& as_mutable_range_tombstone() {
+        _data->_size_in_bytes = stdx::nullopt;
+        return _data->_range_tombstone;
+    }
 
-    const static_row& as_static_row() const { return _data->_static_row; }
-    const clustering_row& as_clustering_row() const { return _data->_clustering_row; }
-    const range_tombstone& as_range_tombstone() const { return _data->_range_tombstone; }
+    static_row&& as_static_row() && { return std::move(_data->_static_row); }
+    clustering_row&& as_clustering_row() && { return std::move(_data->_clustering_row); }
+    range_tombstone&& as_range_tombstone() && { return std::move(_data->_range_tombstone); }
+
+    const static_row& as_static_row() const & { return _data->_static_row; }
+    const clustering_row& as_clustering_row() const & { return _data->_clustering_row; }
+    const range_tombstone& as_range_tombstone() const & { return _data->_range_tombstone; }
 
     // Requirements: mutation_fragment_kind() == mf.mutation_fragment_kind() && !is_range_tombstone()
     void apply(const schema& s, mutation_fragment&& mf);
@@ -269,7 +285,10 @@ public:
     }
 
     size_t memory_usage() const {
-        return sizeof(data) + visit([] (auto& mf) { return mf.external_memory_usage(); });
+        if (!_data->_size_in_bytes) {
+            _data->_size_in_bytes = sizeof(data) + visit([] (auto& mf) { return mf.external_memory_usage(); });
+        }
+        return *_data->_size_in_bytes;
     }
 
     friend std::ostream& operator<<(std::ostream&, const mutation_fragment& mf);
@@ -447,9 +466,9 @@ public:
     // or end of stream is encountered.
     class impl {
         circular_buffer<mutation_fragment> _buffer;
+        size_t _buffer_size = 0;
     protected:
-        // FIXME: use size in bytes of the mutation_fragments
-        static constexpr size_t buffer_size = 16;
+        static constexpr size_t max_buffer_size_in_bytes = 8 * 1024;
 
         schema_ptr _schema;
         dht::decorated_key _key;
@@ -461,25 +480,26 @@ public:
     protected:
         template<typename... Args>
         void push_mutation_fragment(Args&&... args) {
-            _buffer.emplace_back(std::forward<Args>(args)...);
+            auto mf = mutation_fragment(std::forward<Args>(args)...);
+            _buffer_size += mf.memory_usage();
+            _buffer.emplace_back(std::move(mf));
         }
     public:
         explicit impl(schema_ptr s, dht::decorated_key dk, tombstone pt)
             : _schema(std::move(s)), _key(std::move(dk)), _partition_tombstone(pt)
-        {
-            _buffer.reserve(buffer_size);
-        }
+        { }
 
         virtual ~impl() { }
         virtual future<> fill_buffer() = 0;
 
         bool is_end_of_stream() const { return _end_of_stream; }
         bool is_buffer_empty() const { return _buffer.empty(); }
-        bool is_buffer_full() const { return _buffer.size() >= buffer_size; }
+        bool is_buffer_full() const { return _buffer_size >= max_buffer_size_in_bytes; }
 
         mutation_fragment pop_mutation_fragment() {
             auto mf = std::move(_buffer.front());
             _buffer.pop_front();
+            _buffer_size -= mf.memory_usage();
             return mf;
         }
 
