@@ -466,9 +466,9 @@ public:
     // or end of stream is encountered.
     class impl {
         circular_buffer<mutation_fragment> _buffer;
+        size_t _buffer_size = 0;
     protected:
-        // FIXME: use size in bytes of the mutation_fragments
-        static constexpr size_t buffer_size = 16;
+        static constexpr size_t max_buffer_size_in_bytes = 8 * 1024;
 
         schema_ptr _schema;
         dht::decorated_key _key;
@@ -480,25 +480,26 @@ public:
     protected:
         template<typename... Args>
         void push_mutation_fragment(Args&&... args) {
-            _buffer.emplace_back(std::forward<Args>(args)...);
+            auto mf = mutation_fragment(std::forward<Args>(args)...);
+            _buffer_size += mf.memory_usage();
+            _buffer.emplace_back(std::move(mf));
         }
     public:
         explicit impl(schema_ptr s, dht::decorated_key dk, tombstone pt)
             : _schema(std::move(s)), _key(std::move(dk)), _partition_tombstone(pt)
-        {
-            _buffer.reserve(buffer_size);
-        }
+        { }
 
         virtual ~impl() { }
         virtual future<> fill_buffer() = 0;
 
         bool is_end_of_stream() const { return _end_of_stream; }
         bool is_buffer_empty() const { return _buffer.empty(); }
-        bool is_buffer_full() const { return _buffer.size() >= buffer_size; }
+        bool is_buffer_full() const { return _buffer_size >= max_buffer_size_in_bytes; }
 
         mutation_fragment pop_mutation_fragment() {
             auto mf = std::move(_buffer.front());
             _buffer.pop_front();
+            _buffer_size -= mf.memory_usage();
             return mf;
         }
 
