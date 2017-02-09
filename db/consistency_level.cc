@@ -43,6 +43,7 @@
 
 #include <boost/range/algorithm/stable_partition.hpp>
 #include <boost/range/algorithm/find.hpp>
+#include <boost/range/algorithm/transform.hpp>
 #include "exceptions/exceptions.hh"
 #include "core/sstring.hh"
 #include "schema.hh"
@@ -52,6 +53,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/network_topology_strategy.hh"
 #include "utils/fb_utilities.hh"
+#include "heat_load_balance.hh"
 
 namespace db {
 
@@ -155,47 +157,77 @@ std::vector<gms::inet_address>
 filter_for_query(consistency_level cl,
                  keyspace& ks,
                  std::vector<gms::inet_address> live_endpoints,
-                 read_repair_decision read_repair, gms::inet_address* extra) {
-    size_t local_ep_count = live_endpoints.size();
-    size_t bf;
+                 read_repair_decision read_repair, gms::inet_address* extra, column_family* cf) {
+    size_t local_count;
 
-    /*
-     * Endpoints are expected to be restricted to live replicas, sorted by
-     * snitch preference. For LOCAL_QUORUM, move local-DC replicas in front
-     * first as we need them there whether we do read repair (since the first
-     * replica gets the data read) or not (since we'll take the block_for first
-     * ones).
-     */
-    if (is_datacenter_local(cl) || read_repair == read_repair_decision::DC_LOCAL) {
+    if (read_repair == read_repair_decision::GLOBAL) { // take RRD.GLOBAL out of the way
+        return std::move(live_endpoints);
+    }
+
+    if (read_repair == read_repair_decision::DC_LOCAL || is_datacenter_local(cl)) {
         auto it = boost::range::stable_partition(live_endpoints, is_local);
-        local_ep_count = std::distance(live_endpoints.begin(), it);
+        local_count = std::distance(live_endpoints.begin(), it);
+        if (is_datacenter_local(cl)) {
+            live_endpoints.erase(it, live_endpoints.end());
+        }
     }
 
-    switch (read_repair) {
-    case read_repair_decision::NONE:
-        bf = block_for(ks, cl);
-        break;
-    case read_repair_decision::DC_LOCAL:
-        bf = std::max(block_for(ks, cl), local_ep_count);
-        break;
-    case read_repair_decision::GLOBAL:
-        bf = live_endpoints.size();
-        break;
-    default:
-        throw std::runtime_error("Unknown read repair type");
+    size_t bf = block_for(ks, cl);
+
+    if (read_repair == read_repair_decision::DC_LOCAL) {
+        bf = std::max(block_for(ks, cl), local_count);
     }
 
-    if (extra && bf < live_endpoints.size()) {
+    if (bf >= live_endpoints.size()) { // RRD.DC_LOCAL + CL.LOCAL or CL.ALL
+        return std::move(live_endpoints);
+    }
+
+    if (cf) {
+        auto get_hit_rate = [cf] (gms::inet_address ep) -> float {
+            constexpr float max_hit_rate = 0.999;
+            auto ht = cf->get_hit_rate(ep);
+            if (float(ht.rate) < 0) {
+                return float(ht.rate);
+            } else if (lowres_clock::now() - ht.last_updated > std::chrono::milliseconds(1000)) {
+                // if a cache entry is not updates for a while try to send traffic there
+                // to get more up to date data, mark it updated to not send to much traffic there
+                cf->set_hit_rate(ep, ht.rate);
+                return max_hit_rate;
+            } else {
+                return std::min(float(ht.rate), max_hit_rate); // calculation below cannot work with hit rate 1
+            }
+        };
+
+        float ht_max = 0;
+        float ht_min = 1;
+        bool old_node = false;
+
+        auto epi = boost::copy_range<std::vector<std::pair<gms::inet_address, float>>>(live_endpoints | boost::adaptors::transformed([&] (gms::inet_address ep) {
+            auto ht = get_hit_rate(ep);
+            old_node = old_node || ht < 0;
+            ht_max = std::max(ht_max, ht);
+            ht_min = std::min(ht_min, ht);
+            return std::make_pair(ep, ht);
+        }));
+
+        if (!old_node && ht_max - ht_min > 0.01) { // if there is old node or hit rates are close skip calculations
+            // local node is always first if present (see storage_proxy::get_live_sorted_endpoints)
+            unsigned local_idx = epi[0].first == utils::fb_utilities::get_broadcast_address() ? 0 : epi.size() + 1;
+            live_endpoints = miss_equalizing_combination(epi, local_idx, bf, bool(extra));
+        }
+    }
+
+    if (extra) {
         *extra = live_endpoints[bf]; // extra replica for speculation
     }
 
-    live_endpoints.erase(live_endpoints.begin() + std::min(live_endpoints.size(), bf), live_endpoints.end());
+    live_endpoints.erase(live_endpoints.begin() + bf, live_endpoints.end());
 
     return std::move(live_endpoints);
 }
 
-std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& ks, std::vector<gms::inet_address>& live_endpoints) {
-    return filter_for_query(cl, ks, live_endpoints, read_repair_decision::NONE, nullptr);
+std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& ks, std::vector<gms::inet_address>& live_endpoints, column_family* cf) {
+    return filter_for_query(cl, ks, live_endpoints, read_repair_decision::NONE, nullptr, cf);
 }
 
 bool

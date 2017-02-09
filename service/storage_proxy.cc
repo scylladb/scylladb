@@ -69,6 +69,8 @@
 #include <boost/range/numeric.hpp>
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/empty.hpp>
+#include <boost/range/algorithm/min_element.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 #include "utils/latency.hh"
 #include "schema.hh"
 #include "schema_registry.hh"
@@ -2412,10 +2414,10 @@ protected:
     lw_shared_ptr<column_family> _cf;
 
 public:
-    abstract_read_executor(schema_ptr s, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
+    abstract_read_executor(schema_ptr s, lw_shared_ptr<column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
             std::vector<gms::inet_address> targets, tracing::trace_state_ptr trace_state) :
-                           _schema(std::move(s)), _proxy(std::move(proxy)), _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)) {
-        _cf = _proxy->_db.local().find_column_family(_schema).shared_from_this();
+                           _schema(std::move(s)), _proxy(std::move(proxy)), _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)),
+                           _cf(std::move(cf)) {
         _proxy->_stats.reads++;
     }
     virtual ~abstract_read_executor() {
@@ -2737,8 +2739,8 @@ public:
 
 class range_slice_read_executor : public abstract_read_executor {
 public:
-    range_slice_read_executor(schema_ptr s, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, std::vector<gms::inet_address> targets, tracing::trace_state_ptr trace_state) :
-                                    abstract_read_executor(std::move(s), std::move(proxy), std::move(cmd), std::move(pr), cl, targets.size(), std::move(targets), std::move(trace_state)) {}
+    range_slice_read_executor(schema_ptr s, lw_shared_ptr<column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, std::vector<gms::inet_address> targets, tracing::trace_state_ptr trace_state) :
+                                    abstract_read_executor(std::move(s), std::move(cf), std::move(proxy), std::move(cmd), std::move(pr), cl, targets.size(), std::move(targets), std::move(trace_state)) {}
     virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(storage_proxy::clock_type::time_point timeout) override {
         reconcile(_cl, timeout);
         return _result_promise.get_future();
@@ -2767,8 +2769,10 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
 
     std::vector<gms::inet_address> all_replicas = get_live_sorted_endpoints(ks, token);
     db::read_repair_decision repair_decision = new_read_repair_decision(*schema);
+    auto cf = _db.local().find_column_family(schema).shared_from_this();
     std::vector<gms::inet_address> target_replicas = db::filter_for_query(cl, ks, all_replicas, repair_decision,
-            retry_type == speculative_retry::type::NONE ? nullptr : &extra_replica);
+            retry_type == speculative_retry::type::NONE ? nullptr : &extra_replica,
+            _db.local().get_config().cache_hit_rate_read_balancing() ? &*cf : nullptr);
 
     slogger.trace("creating read executor for token {} with all: {} targets: {} rp decision: {}", token, all_replicas, target_replicas, repair_decision);
     tracing::trace(trace_state, "Creating read executor for token {} with all: {} targets: {} repair decision: {}", token, all_replicas, target_replicas, repair_decision);
@@ -2795,21 +2799,21 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     // Speculative retry is disabled *OR* there are simply no extra replicas to speculate.
     if (retry_type == speculative_retry::type::NONE || block_for == all_replicas.size()
             || (repair_decision == db::read_repair_decision::DC_LOCAL && is_datacenter_local(cl) && block_for == target_replicas.size())) {
-        return ::make_shared<never_speculating_read_executor>(schema, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
+        return ::make_shared<never_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
     }
 
     if (target_replicas.size() == all_replicas.size()) {
         // CL.ALL, RRD.GLOBAL or RRD.DC_LOCAL and a single-DC.
         // We are going to contact every node anyway, so ask for 2 full data requests instead of 1, for redundancy
         // (same amount of requests in total, but we turn 1 digest request into a full blown data request).
-        return ::make_shared<always_speculating_read_executor>(schema, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
+        return ::make_shared<always_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
     }
 
     // RRD.NONE or RRD.DC_LOCAL w/ multiple DCs.
     if (target_replicas.size() == block_for) { // If RRD.DC_LOCAL extra replica may already be present
         if (is_datacenter_local(cl) && !db::is_local(extra_replica)) {
             slogger.trace("read executor no extra target to speculate");
-            return ::make_shared<never_speculating_read_executor>(schema, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
+            return ::make_shared<never_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
         } else {
             target_replicas.push_back(extra_replica);
             slogger.trace("creating read executor with extra target {}", extra_replica);
@@ -2817,9 +2821,9 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     }
 
     if (retry_type == speculative_retry::type::ALWAYS) {
-        return ::make_shared<always_speculating_read_executor>(schema, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
+        return ::make_shared<always_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
     } else {// PERCENTILE or CUSTOM.
-        return ::make_shared<speculating_read_executor>(schema, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
+        return ::make_shared<speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
     }
 }
 
@@ -2892,11 +2896,14 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     std::vector<::shared_ptr<abstract_read_executor>> exec;
     auto concurrent_fetch_starting_index = i;
     auto p = shared_from_this();
+    auto& cf= _db.local().find_column_family(schema);
+    auto pcf = _db.local().get_config().cache_hit_rate_read_balancing() ? &cf : nullptr;
+
 
     while (i != ranges.end() && std::distance(concurrent_fetch_starting_index, i) < concurrency_factor) {
         dht::partition_range& range = *i;
         std::vector<gms::inet_address> live_endpoints = get_live_sorted_endpoints(ks, end_token(range));
-        std::vector<gms::inet_address> filtered_endpoints = filter_for_query(cl, ks, live_endpoints);
+        std::vector<gms::inet_address> filtered_endpoints = filter_for_query(cl, ks, live_endpoints, pcf);
         ++i;
 
         // getRestrictedRange has broken the queried range into per-[vnode] token ranges, but this doesn't take
@@ -2906,7 +2913,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         {
             dht::partition_range& next_range = *i;
             std::vector<gms::inet_address> next_endpoints = get_live_sorted_endpoints(ks, end_token(next_range));
-            std::vector<gms::inet_address> next_filtered_endpoints = filter_for_query(cl, ks, next_endpoints);
+            std::vector<gms::inet_address> next_filtered_endpoints = filter_for_query(cl, ks, next_endpoints, pcf);
 
             // Origin has this to say here:
             // *  If the current range right is the min token, we should stop merging because CFS.getRangeSlice
@@ -2926,11 +2933,25 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 break;
             }
 
-            std::vector<gms::inet_address> filtered_merged = filter_for_query(cl, ks, merged);
+            std::vector<gms::inet_address> filtered_merged = filter_for_query(cl, ks, merged, pcf);
 
             // Estimate whether merging will be a win or not
             if (!locator::i_endpoint_snitch::get_local_snitch_ptr()->is_worth_merging_for_range_query(filtered_merged, filtered_endpoints, next_filtered_endpoints)) {
                 break;
+            } else if (pcf) {
+                // check that merged set hit rate is not to low
+                auto find_min = [pcf] (const std::vector<gms::inet_address>& range) {
+                    auto ep_to_hr = [pcf] (gms::inet_address ep) -> float { return float(pcf->get_hit_rate(ep).rate); };
+                    return *boost::range::min_element(range | boost::adaptors::transformed(std::ref(ep_to_hr)));
+                };
+                auto merged = find_min(filtered_merged) * 1.2; // give merged set 20% boost
+                if (merged < find_min(filtered_endpoints) && merged < find_min(next_filtered_endpoints)) {
+                    // if lowest cache hits rate of a merged set is smaller than lowest cache hit
+                    // rate of un-merged sets then do not merge. The idea is that we better issue
+                    // two different range reads with highest chance of hitting a cache then one read that
+                    // will cause more IO on contacted nodes
+                    break;
+                }
             }
 
             // If we get there, merge this range and the next one
@@ -2948,7 +2969,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             throw;
         }
 
-        exec.push_back(::make_shared<range_slice_read_executor>(schema, p, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state));
+        exec.push_back(::make_shared<range_slice_read_executor>(schema, cf.shared_from_this(), p, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state));
     }
 
     query::result_merger merger(cmd->row_limit, cmd->partition_limit);

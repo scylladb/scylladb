@@ -601,6 +601,9 @@ public:
             "\t         Note: When selecting this option, you must change the default value (unlimited) of rpc_max_threads.\n"   \
             "\tYour own RPC server: You must provide a fully-qualified class name of an o.a.c.t.TServerFactory that can create a server instance."  \
     )   \
+    val(cache_hit_rate_read_balancing, bool, true, Used, \
+            "This boolean controls whether the replicas for read query will be choosen based on cache hit ratio"\
+    ) \
     /* Advanced fault detection settings */ \
     /* Settings to handle poorly performing or failing nodes. */    \
     val(dynamic_snitch_badness_threshold, double, 0, Unused,     \
