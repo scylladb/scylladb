@@ -58,12 +58,10 @@ bool counter_cell_view::apply_reversibly(atomic_cell_or_collection& dst, atomic_
     }
 
     if (dst_ac.is_counter_update() && src_ac.is_counter_update()) {
-        // FIXME: store deltas just as a normal int64_t and get rid of these calls
-        // to long_type
-        auto src_v = value_cast<int64_t>(long_type->deserialize_value(src_ac.value()));
-        auto dst_v = value_cast<int64_t>(long_type->deserialize_value(dst_ac.value()));
+        auto src_v = src_ac.counter_update_value();
+        auto dst_v = dst_ac.counter_update_value();
         dst = atomic_cell::make_live_counter_update(std::max(dst_ac.timestamp(), src_ac.timestamp()),
-                                                    long_type->decompose(src_v + dst_v));
+                                                    src_v + dst_v);
         return true;
     }
 
@@ -87,8 +85,8 @@ bool counter_cell_view::apply_reversibly(atomic_cell_or_collection& dst, atomic_
 void counter_cell_view::revert_apply(atomic_cell_or_collection& dst, atomic_cell_or_collection& src)
 {
     if (dst.as_atomic_cell().is_counter_update()) {
-        auto src_v = value_cast<int64_t>(long_type->deserialize_value(src.as_atomic_cell().value()));
-        auto dst_v = value_cast<int64_t>(long_type->deserialize_value(dst.as_atomic_cell().value()));
+        auto src_v = src.as_atomic_cell().counter_update_value();
+        auto dst_v = dst.as_atomic_cell().counter_update_value();
         dst = atomic_cell::make_live(dst.as_atomic_cell().timestamp(),
                                      long_type->decompose(dst_v - src_v));
     } else {
@@ -145,7 +143,7 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
             if (!acv.is_live()) {
                 return; // continue -- we are in lambda
             }
-            auto delta = value_cast<int64_t>(long_type->deserialize_value(acv.value()));
+            auto delta = acv.counter_update_value();
             counter_cell_builder ccb;
             ccb.add_shard(counter_shard(counter_id::local(), delta, clock_offset + 1));
             ac_o_c = ccb.build(acv.timestamp());
@@ -203,7 +201,7 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
                 shards.pop_front();
             }
 
-            auto delta = value_cast<int64_t>(long_type->deserialize_value(acv.value()));
+            auto delta = acv.counter_update_value();
 
             counter_cell_builder ccb;
             if (shards.empty() || shards.front().first > id) {

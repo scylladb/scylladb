@@ -55,7 +55,7 @@ auto write_counter_cell(Writer&& writer, atomic_cell_view c)
     auto value = std::move(writer).write_created_at(c.timestamp());
     return [&c, value = std::move(value)] () mutable {
         if (c.is_counter_update()) {
-            auto delta = value_cast<int64_t>(long_type->deserialize_value(c.value()));
+            auto delta = c.counter_update_value();
             return std::move(value).start_value_counter_cell_update()
                                    .write_delta(delta)
                                    .end_counter_cell_update();

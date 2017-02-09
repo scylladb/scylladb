@@ -98,6 +98,10 @@ private:
         cell.remove_prefix(value_offset);
         return cell;
     }
+    // Can be called on live counter update cells only
+    static int64_t counter_update_value(bytes_view cell) {
+        return get_field<int64_t>(cell, flags_size + timestamp_size);
+    }
     // Can be called only when is_dead() is true.
     static gc_clock::time_point deletion_time(const bytes_view& cell) {
         assert(is_dead(cell));
@@ -130,12 +134,12 @@ private:
         std::copy_n(value.begin(), value.size(), b.begin() + value_offset);
         return b;
     }
-    static managed_bytes make_live_counter_update(api::timestamp_type timestamp, bytes_view value) {
+    static managed_bytes make_live_counter_update(api::timestamp_type timestamp, int64_t value) {
         auto value_offset = flags_size + timestamp_size;
-        managed_bytes b(managed_bytes::initialized_later(), value_offset + value.size());
+        managed_bytes b(managed_bytes::initialized_later(), value_offset + sizeof(value));
         b[0] = LIVE_FLAG | COUNTER_UPDATE_FLAG;
         set_field(b, timestamp_offset, timestamp);
-        std::copy_n(value.begin(), value.size(), b.begin() + value_offset);
+        set_field(b, value_offset, value);
         return b;
     }
     static managed_bytes make_live(api::timestamp_type timestamp, bytes_view value, gc_clock::time_point expiry, gc_clock::duration ttl) {
@@ -192,6 +196,10 @@ public:
     // Can be called on live cells only
     bytes_view value() const {
         return atomic_cell_type::value(_data);
+    }
+    // Can be called on live counter update cells only
+    int64_t counter_update_value() const {
+        return atomic_cell_type::counter_update_value(_data);
     }
     // Can be called only when is_dead(gc_clock::time_point)
     gc_clock::time_point deletion_time() const {
@@ -254,11 +262,8 @@ public:
     static atomic_cell make_live(api::timestamp_type timestamp, const bytes& value) {
         return make_live(timestamp, bytes_view(value));
     }
-    static atomic_cell make_live_counter_update(api::timestamp_type timestamp, bytes_view value) {
+    static atomic_cell make_live_counter_update(api::timestamp_type timestamp, int64_t value) {
         return atomic_cell_type::make_live_counter_update(timestamp, value);
-    }
-    static atomic_cell make_live_counter_update(api::timestamp_type timestamp, const bytes& value) {
-        return atomic_cell_type::make_live_counter_update(timestamp, bytes_view(value));
     }
     static atomic_cell make_live(api::timestamp_type timestamp, bytes_view value,
         gc_clock::time_point expiry, gc_clock::duration ttl)

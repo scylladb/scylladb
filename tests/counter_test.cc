@@ -207,11 +207,11 @@ SEASTAR_TEST_CASE(test_counter_update_mutations) {
         auto ck = clustering_key::from_single_value(*s, int32_type->decompose(0));
         auto& col = *s->get_column_definition(utf8_type->decompose(sstring("c1")));
 
-        auto c1 = atomic_cell::make_live_counter_update(api::new_timestamp(), long_type->decompose(int64_t(5)));
+        auto c1 = atomic_cell::make_live_counter_update(api::new_timestamp(), 5);
         mutation m1(pk, s);
         m1.set_clustered_cell(ck, col, c1);
 
-        auto c2 = atomic_cell::make_live_counter_update(api::new_timestamp(), long_type->decompose(int64_t(9)));
+        auto c2 = atomic_cell::make_live_counter_update(api::new_timestamp(), 9);
         mutation m2(pk, s);
         m2.set_clustered_cell(ck, col, c2);
 
@@ -219,16 +219,12 @@ SEASTAR_TEST_CASE(test_counter_update_mutations) {
         mutation m3(pk, s);
         m3.set_clustered_cell(ck, col, c3);
 
-        auto counter_update_value = [&] (atomic_cell_view acv) {
-            return value_cast<int64_t>(long_type->deserialize_value(acv.value()));
-        };
-
         auto m12 = m1;
         m12.apply(m2);
         auto ac = get_counter_cell(m12);
         BOOST_REQUIRE(ac.is_live());
         BOOST_REQUIRE(ac.is_counter_update());
-        BOOST_REQUIRE_EQUAL(counter_update_value(ac), 14);
+        BOOST_REQUIRE_EQUAL(ac.counter_update_value(), 14);
 
         auto m123 = m12;
         m123.apply(m3);
