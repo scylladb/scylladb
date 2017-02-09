@@ -2694,7 +2694,7 @@ column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const
     do_apply(rp, m, m_schema);
 }
 
-future<frozen_mutation> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema) {
+future<mutation> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema) {
     auto m = fm.unfreeze(m_schema);
     m.upgrade(cf.schema());
 
@@ -2748,8 +2748,8 @@ future<frozen_mutation> database::do_apply_counter_update(column_family& cf, con
                 // FIXME: timeout
                 fm = freeze(m);
                 return this->do_apply(m_schema, *fm, { });
-            }).then([&fm] {
-                return std::move(*fm);
+            }).then([&m] {
+                return std::move(m);
             });
         });
     });
@@ -2900,7 +2900,7 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
     }, timeout);
 }
 
-future<frozen_mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
+future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
     if (!s->is_synced()) {
         throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
                                         s->ks_name(), s->cf_name(), s->version()));

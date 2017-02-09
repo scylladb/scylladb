@@ -52,6 +52,7 @@
 #include "utils/estimated_histogram.hh"
 #include "tracing/trace_state.hh"
 #include <seastar/core/metrics.hh>
+#include "frozen_mutation.hh"
 
 namespace compat {
 
@@ -277,8 +278,12 @@ private:
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_nonsingular_mutations_locally(
             schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector& pr, tracing::trace_state_ptr trace_state, uint64_t max_size);
 
-    future<> mutate_counters_on_leader(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout);
-    future<mutation> mutate_counter_on_leader(const mutation& m, clock_type::time_point timeout);
+    struct frozen_mutation_and_schema {
+        frozen_mutation fm;
+        schema_ptr s;
+    };
+    future<> mutate_counters_on_leader(std::vector<frozen_mutation_and_schema> mutations, db::consistency_level cl, clock_type::time_point timeout);
+    future<> mutate_counter_on_leader_and_replicate(const schema_ptr& s, frozen_mutation m, db::consistency_level cl, clock_type::time_point timeout);
 
     gms::inet_address find_leader_for_counter_update(const mutation& m, db::consistency_level cl);
 public:
@@ -314,7 +319,7 @@ public:
     */
     future<> mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, bool raw_counters = false);
 
-    future<> replicate_counters_from_leader(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state);
+    future<> replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state);
 
     template<typename Range>
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state);
