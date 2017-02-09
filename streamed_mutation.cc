@@ -85,6 +85,7 @@ void mutation_fragment::apply(const schema& s, mutation_fragment&& mf)
 {
     assert(_kind == mf._kind);
     assert(!is_range_tombstone());
+    _data->_size_in_bytes = stdx::nullopt;
     switch (_kind) {
     case kind::static_row:
         _data->_static_row.apply(s, std::move(mf._data->_static_row));

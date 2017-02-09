@@ -160,13 +160,16 @@ public:
         range_tombstone,
     };
 private:
-    union data {
+    struct data {
         data() { }
         ~data() { }
 
-        static_row _static_row;
-        clustering_row _clustering_row;
-        range_tombstone _range_tombstone;
+        stdx::optional<size_t> _size_in_bytes;
+        union {
+            static_row _static_row;
+            clustering_row _clustering_row;
+            range_tombstone _range_tombstone;
+        };
     };
 private:
     kind _kind;
@@ -211,9 +214,18 @@ public:
     bool is_clustering_row() const { return _kind == kind::clustering_row; }
     bool is_range_tombstone() const { return _kind == kind::range_tombstone; }
 
-    static_row& as_mutable_static_row() { return _data->_static_row; }
-    clustering_row& as_mutable_clustering_row() { return _data->_clustering_row; }
-    range_tombstone& as_mutable_range_tombstone() { return _data->_range_tombstone; }
+    static_row& as_mutable_static_row() {
+        _data->_size_in_bytes = stdx::nullopt;
+        return _data->_static_row;
+    }
+    clustering_row& as_mutable_clustering_row() {
+        _data->_size_in_bytes = stdx::nullopt;
+        return _data->_clustering_row;
+    }
+    range_tombstone& as_mutable_range_tombstone() {
+        _data->_size_in_bytes = stdx::nullopt;
+        return _data->_range_tombstone;
+    }
 
     static_row&& as_static_row() && { return std::move(_data->_static_row); }
     clustering_row&& as_clustering_row() && { return std::move(_data->_clustering_row); }
@@ -273,7 +285,10 @@ public:
     }
 
     size_t memory_usage() const {
-        return sizeof(data) + visit([] (auto& mf) { return mf.external_memory_usage(); });
+        if (!_data->_size_in_bytes) {
+            _data->_size_in_bytes = sizeof(data) + visit([] (auto& mf) { return mf.external_memory_usage(); });
+        }
+        return *_data->_size_in_bytes;
     }
 
     friend std::ostream& operator<<(std::ostream&, const mutation_fragment& mf);
