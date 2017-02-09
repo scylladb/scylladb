@@ -45,6 +45,7 @@
 #include <algorithm>
 #include <vector>
 #include <chrono>
+#include "core/metrics_types.hh"
 
 namespace utils {
 
@@ -74,6 +75,18 @@ struct estimated_histogram {
         new_offsets(bucket_count);
         buckets.resize(bucket_offsets.size() + 1, 0);
     }
+
+    seastar::metrics::histogram get_histogram() const {
+        seastar::metrics::histogram res;
+        res.buckets.resize(bucket_offsets.size());
+        for (size_t i = 0; i < bucket_offsets.size(); i++ ) {
+            res.buckets[i].count = buckets[i];
+            res.buckets[i].upper_bound = bucket_offsets[i];
+        }
+        res.sample_count = _count;
+        return res;
+    }
+
 
     // FIXME: convert Java code below.
 #if 0
