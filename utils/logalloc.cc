@@ -84,6 +84,7 @@ public:
     size_t reclaim(size_t bytes);
     reactor::idle_cpu_handler_result compact_on_idle(reactor::work_waiting_on_reactor check_for_work);
     size_t compact_and_evict(size_t bytes);
+    size_t compact_and_evict_locked(size_t bytes);
     void full_compaction();
     void reclaim_all_free_segments();
     occupancy_stats region_occupancy();
@@ -1819,6 +1820,8 @@ size_t tracker::impl::reclaim(size_t memory_to_release) {
     if (!_reclaiming_enabled) {
         return 0;
     }
+    reclaiming_lock rl(*this);
+    reclaim_timer timing_guard;
 
     size_t mem_released;
     {
@@ -1831,10 +1834,19 @@ size_t tracker::impl::reclaim(size_t memory_to_release) {
             return memory_to_release;
         }
     }
-    return compact_and_evict(memory_to_release - mem_released) + mem_released;
+    return compact_and_evict_locked(memory_to_release - mem_released) + mem_released;
 }
 
 size_t tracker::impl::compact_and_evict(size_t memory_to_release) {
+    if (!_reclaiming_enabled) {
+        return 0;
+    }
+    reclaiming_lock rl(*this);
+    reclaim_timer timing_guard;
+    return compact_and_evict_locked(memory_to_release);
+}
+
+size_t tracker::impl::compact_and_evict_locked(size_t memory_to_release) {
     //
     // Algorithm outline.
     //
@@ -1854,11 +1866,6 @@ size_t tracker::impl::compact_and_evict(size_t memory_to_release) {
     // operation. Having it is still valuable during testing and in most cases
     // should work just fine even if allocates.
 
-    if (!_reclaiming_enabled) {
-        return 0;
-    }
-    reclaiming_lock rl(*this);
-
     size_t mem_released = 0;
 
     size_t released_from_reserve = shard_segment_pool.trim_emergency_reserve_to_max() * segment::size;
@@ -1866,8 +1873,6 @@ size_t tracker::impl::compact_and_evict(size_t memory_to_release) {
     if (mem_released >= memory_to_release) {
         return mem_released;
     }
-
-    reclaim_timer timing_guard;
 
     size_t mem_in_use = shard_segment_pool.total_memory_in_use();
     auto target_mem = mem_in_use - std::min(mem_in_use, memory_to_release - mem_released);
@@ -1927,8 +1932,6 @@ size_t tracker::impl::compact_and_evict(size_t memory_to_release) {
 
     logger.debug("Released {} bytes (wanted {}), {} during compaction, {} from reserve",
         mem_released, memory_to_release, released_during_compaction, released_from_reserve);
-
-    timing_guard.stop(mem_released);
 
     return mem_released;
 }
