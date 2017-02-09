@@ -242,9 +242,9 @@ private:
             auto ctype = static_pointer_cast<const collection_type_impl>(_cdef->type);
             auto ac = atomic_cell_or_collection::from_collection_mutation(ctype->serialize_mutation_form(cm));
             if (_cdef->is_static()) {
-                mf.as_static_row().set_cell(*_cdef, std::move(ac));
+                mf.as_mutable_static_row().set_cell(*_cdef, std::move(ac));
             } else {
-                mf.as_clustering_row().set_cell(*_cdef, std::move(ac));
+                mf.as_mutable_clustering_row().set_cell(*_cdef, std::move(ac));
             }
         }
     };
@@ -470,7 +470,7 @@ public:
 
         if (col.cell.size() == 0) {
             row_marker rm(timestamp, gc_clock::duration(ttl), gc_clock::time_point(gc_clock::duration(expiration)));
-            _in_progress->as_clustering_row().apply(std::move(rm));
+            _in_progress->as_mutable_clustering_row().apply(std::move(rm));
             return ret;
         }
 
@@ -487,9 +487,9 @@ public:
             auto ac = make_counter_cell(timestamp, value);
 
             if (col.is_static) {
-                _in_progress->as_static_row().set_cell(*(col.cdef), std::move(ac));
+                _in_progress->as_mutable_static_row().set_cell(*(col.cdef), std::move(ac));
             } else {
-                _in_progress->as_clustering_row().set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
+                _in_progress->as_mutable_clustering_row().set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
             }
         });
     }
@@ -517,10 +517,10 @@ public:
             }
 
             if (col.is_static) {
-                _in_progress->as_static_row().set_cell(*(col.cdef), std::move(ac));
+                _in_progress->as_mutable_static_row().set_cell(*(col.cdef), std::move(ac));
                 return;
             }
-            _in_progress->as_clustering_row().set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
+            _in_progress->as_mutable_clustering_row().set_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
         });
     }
 
@@ -545,7 +545,7 @@ public:
 
         if (col.cell.size() == 0) {
             row_marker rm(tombstone(timestamp, ttl));
-            _in_progress->as_clustering_row().apply(rm);
+            _in_progress->as_mutable_clustering_row().apply(rm);
             return ret;
         }
         if (!col.is_present) {
@@ -562,9 +562,9 @@ public:
         if (is_multi_cell) {
             update_pending_collection(col.cdef, std::move(col.collection_extra_data), std::move(ac));
         } else if (col.is_static) {
-            _in_progress->as_static_row().set_cell(*col.cdef, atomic_cell_or_collection(std::move(ac)));
+            _in_progress->as_mutable_static_row().set_cell(*col.cdef, atomic_cell_or_collection(std::move(ac)));
         } else {
-            _in_progress->as_clustering_row().set_cell(*col.cdef, atomic_cell_or_collection(std::move(ac)));
+            _in_progress->as_mutable_clustering_row().set_cell(*col.cdef, atomic_cell_or_collection(std::move(ac)));
         }
         return ret;
     }
@@ -629,7 +629,7 @@ public:
             if (range_tombstone::is_single_clustering_row_tombstone(*_schema, start_ck, start_kind, end, end_kind)) {
                 auto ret = flush_if_needed(std::move(start_ck));
                 if (!_skip_clustering_row) {
-                    _in_progress->as_clustering_row().apply(tombstone(deltime));
+                    _in_progress->as_mutable_clustering_row().apply(tombstone(deltime));
                 }
                 return ret;
             } else {
@@ -757,7 +757,7 @@ private:
                     // that mutation fragment are produced in ascending order.
                     if (!_last_position || !_cmp(mf->position(), *_last_position)) {
                         _last_position = position_in_partition(mf->position());
-                        _range_tombstones.apply(std::move(mf->as_range_tombstone()));
+                        _range_tombstones.apply(std::move(*mf).as_range_tombstone());
                     }
                 } else {
                     // mp_row_consumer may produce mutation_fragments in parts if they are

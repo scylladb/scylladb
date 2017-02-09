@@ -211,13 +211,17 @@ public:
     bool is_clustering_row() const { return _kind == kind::clustering_row; }
     bool is_range_tombstone() const { return _kind == kind::range_tombstone; }
 
-    static_row& as_static_row() { return _data->_static_row; }
-    clustering_row& as_clustering_row() { return _data->_clustering_row; }
-    range_tombstone& as_range_tombstone() { return _data->_range_tombstone; }
+    static_row& as_mutable_static_row() { return _data->_static_row; }
+    clustering_row& as_mutable_clustering_row() { return _data->_clustering_row; }
+    range_tombstone& as_mutable_range_tombstone() { return _data->_range_tombstone; }
 
-    const static_row& as_static_row() const { return _data->_static_row; }
-    const clustering_row& as_clustering_row() const { return _data->_clustering_row; }
-    const range_tombstone& as_range_tombstone() const { return _data->_range_tombstone; }
+    static_row&& as_static_row() && { return std::move(_data->_static_row); }
+    clustering_row&& as_clustering_row() && { return std::move(_data->_clustering_row); }
+    range_tombstone&& as_range_tombstone() && { return std::move(_data->_range_tombstone); }
+
+    const static_row& as_static_row() const & { return _data->_static_row; }
+    const clustering_row& as_clustering_row() const & { return _data->_clustering_row; }
+    const range_tombstone& as_range_tombstone() const & { return _data->_range_tombstone; }
 
     // Requirements: mutation_fragment_kind() == mf.mutation_fragment_kind() && !is_range_tombstone()
     void apply(const schema& s, mutation_fragment&& mf);

@@ -383,7 +383,7 @@ private:
                 if (!sr) {
                     sr = mutation_fragment(static_row(v.partition().static_row()));
                 } else {
-                    sr->as_static_row().apply(*_schema, v.partition().static_row());
+                    sr->as_mutable_static_row().apply(*_schema, v.partition().static_row());
                 }
             }
         }

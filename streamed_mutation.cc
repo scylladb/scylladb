@@ -276,7 +276,7 @@ private:
             }
             boost::range::pop_heap(_readers, heap_compare);
             if (result.is_range_tombstone()) {
-                auto remainder = result.as_range_tombstone().apply(*_schema, std::move(_readers.back().row.as_range_tombstone()));
+                auto remainder = result.as_mutable_range_tombstone().apply(*_schema, std::move(_readers.back().row).as_range_tombstone());
                 if (remainder) {
                     _deferred_tombstones.apply(std::move(*remainder));
                 }
@@ -409,7 +409,7 @@ streamed_mutation reverse_streamed_mutation(streamed_mutation sm) {
                         _static_row = std::move(mf);
                     } else {
                         if (mf->is_range_tombstone()) {
-                            mf->as_range_tombstone().flip();
+                            mf->as_mutable_range_tombstone().flip();
                         }
                         _mutation_fragments.emplace(std::move(*mf));
                     }
