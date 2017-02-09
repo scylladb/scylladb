@@ -109,7 +109,6 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying) {
         assert_that(cache.make_reader(s, query::full_partition_range))
             .produces(m)
             .produces_end_of_stream();
-        assert(tracker.uncached_wide_partitions() == 0);
     });
 }
 
@@ -155,56 +154,6 @@ public:
 
 mutation_reader make_counting_reader(mutation_reader mr, int& counter) {
     return make_mutation_reader<partition_counting_reader>(std::move(mr), counter);
-}
-
-SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_for_wide_partition_full_range) {
-    return seastar::async([] {
-        auto s = make_schema();
-        auto m = make_new_mutation(s);
-        int secondary_calls_count = 0;
-        cache_tracker tracker;
-        row_cache cache(s, mutation_source([&secondary_calls_count, &m] (schema_ptr s, const dht::partition_range& range) {
-            return make_counting_reader(make_reader_returning(m), secondary_calls_count);
-        }), tracker, 0);
-
-        assert_that(cache.make_reader(s, query::full_partition_range))
-            .produces(m)
-            .produces_end_of_stream();
-        // 2 from cache reader (m & eos) + 1 from large partition read
-        BOOST_REQUIRE_EQUAL(secondary_calls_count, 3);
-        BOOST_REQUIRE_EQUAL(tracker.uncached_wide_partitions(), 1);
-        assert_that(cache.make_reader(s, query::full_partition_range))
-            .produces(m)
-            .produces_end_of_stream();
-        // previous 3 + 1 from large partition read
-        BOOST_REQUIRE_EQUAL(secondary_calls_count, 4);
-        BOOST_REQUIRE_EQUAL(tracker.uncached_wide_partitions(), 2);
-    });
-}
-
-SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_for_wide_partition_single_partition) {
-    return seastar::async([] {
-        auto s = make_schema();
-        auto m = make_new_mutation(s);
-        int secondary_calls_count = 0;
-        cache_tracker tracker;
-        row_cache cache(s, mutation_source([&secondary_calls_count, &m] (schema_ptr s, const dht::partition_range& range) {
-            return make_counting_reader(make_reader_returning(m), secondary_calls_count);
-        }), tracker, 0);
-
-        auto singular_range = dht::partition_range::make_singular(query::ring_position(m.decorated_key()));
-
-        assert_that(cache.make_reader(s, singular_range))
-            .produces(m)
-            .produces_end_of_stream();
-        BOOST_REQUIRE_EQUAL(secondary_calls_count, 3);
-        BOOST_REQUIRE_EQUAL(tracker.uncached_wide_partitions(), 1);
-        assert_that(cache.make_reader(s, singular_range))
-            .produces(m)
-            .produces_end_of_stream();
-        BOOST_REQUIRE_EQUAL(secondary_calls_count, 5);
-        BOOST_REQUIRE_EQUAL(tracker.uncached_wide_partitions(), 2);
-    });
 }
 
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_full_range) {

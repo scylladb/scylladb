@@ -206,37 +206,14 @@ mutation& mutation::operator+=(mutation&& other) {
     return *this;
 }
 
-enum class limit_mutation_size { yes, no };
-
-template <limit_mutation_size with_limit>
 class mutation_rebuilder {
     mutation _m;
     streamed_mutation& _sm;
     size_t _remaining_limit;
 
-    template <typename T> bool check_remaining_limit(const T& e) {
-        if (with_limit == limit_mutation_size::no) {
-            return true;
-        }
-        size_t size = e.memory_usage();
-        if (_remaining_limit <= size) {
-            _remaining_limit = 0;
-        } else {
-            _remaining_limit -= size;
-        }
-        return _remaining_limit > 0;
-    }
 public:
     mutation_rebuilder(streamed_mutation& sm)
         : _m(sm.decorated_key(), sm.schema()), _sm(sm), _remaining_limit(0) {
-        static_assert(with_limit == limit_mutation_size::no,
-                     "This constructor should be used only for mutation_rebuildeer with no limit");
-    }
-    mutation_rebuilder(streamed_mutation& sm, size_t limit)
-        : _m(sm.decorated_key(), sm.schema()), _sm(sm), _remaining_limit(limit) {
-        static_assert(with_limit == limit_mutation_size::yes,
-                      "This constructor should be used only for mutation_rebuildeer with limit");
-        check_remaining_limit(_m.key());
     }
 
     stop_iteration consume(tombstone t) {
@@ -245,25 +222,16 @@ public:
     }
 
     stop_iteration consume(range_tombstone&& rt) {
-        if (!check_remaining_limit(rt)) {
-            return stop_iteration::yes;
-        }
         _m.partition().apply_row_tombstone(*_m.schema(), std::move(rt));
         return stop_iteration::no;
     }
 
     stop_iteration consume(static_row&& sr) {
-        if (!check_remaining_limit(sr)) {
-            return stop_iteration::yes;
-        }
         _m.partition().static_row().apply(*_m.schema(), column_kind::static_column, std::move(sr.cells()));
         return stop_iteration::no;
     }
 
     stop_iteration consume(clustering_row&& cr) {
-        if (!check_remaining_limit(cr)) {
-            return stop_iteration::yes;
-        }
         auto& dr = _m.partition().clustered_row(*_m.schema(), std::move(cr.key()));
         dr.apply(cr.tomb());
         dr.apply(cr.marker());
@@ -272,29 +240,21 @@ public:
     }
 
     mutation_opt consume_end_of_stream() {
-        return with_limit == limit_mutation_size::yes && _remaining_limit == 0 ? mutation_opt()
-                                                                               : mutation_opt(std::move(_m));
+        return mutation_opt(std::move(_m));
     }
 };
-
-future<mutation_opt>
-mutation_from_streamed_mutation_with_limit(streamed_mutation sm, size_t limit) {
-    return do_with(std::move(sm), [limit] (auto& sm) {
-        return consume(sm, mutation_rebuilder<limit_mutation_size::yes>(sm, limit));
-    });
-}
 
 future<mutation_opt> mutation_from_streamed_mutation(streamed_mutation_opt sm) {
     if (!sm) {
         return make_ready_future<mutation_opt>();
     }
     return do_with(std::move(*sm), [] (auto& sm) {
-        return consume(sm, mutation_rebuilder<limit_mutation_size::no>(sm));
+        return consume(sm, mutation_rebuilder(sm));
     });
 }
 
 future<mutation> mutation_from_streamed_mutation(streamed_mutation& sm) {
-    return consume(sm, mutation_rebuilder<limit_mutation_size::no>(sm)).then([] (mutation_opt&& mo) {
+    return consume(sm, mutation_rebuilder(sm)).then([] (mutation_opt&& mo) {
         return std::move(*mo);
     });
 }

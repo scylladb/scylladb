@@ -429,7 +429,6 @@ public:
         restricted_mutation_reader_config read_concurrency_config;
         restricted_mutation_reader_config streaming_read_concurrency_config;
         ::cf_stats* cf_stats = nullptr;
-        uint64_t max_cached_partition_size_in_bytes;
     };
     struct no_commitlog {};
     struct stats {

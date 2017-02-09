@@ -60,7 +60,6 @@ class cache_entry {
     // True when we know that there is nothing between this entry and the next one in cache
     struct {
         bool _continuous : 1;
-        bool _wide_partition : 1;
         bool _dummy_entry : 1;
     } _flags{};
     lru_link_type _lru_link;
@@ -75,15 +74,6 @@ public:
         : _key{dht::token(), partition_key::make_empty()}
     {
         _flags._dummy_entry = true;
-    }
-
-    struct wide_partition_tag{};
-
-    cache_entry(schema_ptr s, const dht::decorated_key& key, wide_partition_tag)
-        : _schema(std::move(s))
-        , _key(key)
-    {
-        _flags._wide_partition = true;
     }
 
     cache_entry(schema_ptr s, const dht::decorated_key& key, const mutation_partition& p)
@@ -112,19 +102,10 @@ public:
     partition_entry& partition() { return _pe; }
     const schema_ptr& schema() const { return _schema; }
     schema_ptr& schema() { return _schema; }
-    // Requires: !wide_partition()
     streamed_mutation read(row_cache&, const schema_ptr&, streamed_mutation::forwarding);
-    // Requires: !wide_partition()
     streamed_mutation read(row_cache&, const schema_ptr&, const query::partition_slice&, streamed_mutation::forwarding);
-    // May return disengaged optional if the partition is empty.
-    future<streamed_mutation_opt> read_wide(row_cache&, schema_ptr, const query::partition_slice&, const io_priority_class&, streamed_mutation::forwarding);
     bool continuous() const { return _flags._continuous; }
     void set_continuous(bool value) { _flags._continuous = value; }
-    bool wide_partition() const { return _flags._wide_partition; }
-    void set_wide_partition() {
-        _flags._wide_partition = true;
-        _pe = {};
-    }
 
     bool is_dummy_entry() const { return _flags._dummy_entry; }
 
@@ -190,13 +171,10 @@ public:
     struct stats {
         uint64_t hits;
         uint64_t misses;
-        uint64_t uncached_wide_partitions;
-        uint64_t wide_partition_mispopulations;
         uint64_t insertions;
         uint64_t concurrent_misses_same_key;
         uint64_t merges;
         uint64_t evictions;
-        uint64_t wide_partition_evictions;
         uint64_t removals;
         uint64_t partitions;
         uint64_t modification_count;
@@ -206,7 +184,6 @@ private:
     seastar::metrics::metric_groups _metrics;
     logalloc::region _region;
     lru_type _lru;
-    lru_type _wide_partition_lru;
 private:
     void setup_metrics();
 public:
@@ -215,21 +192,17 @@ public:
     void clear();
     void touch(cache_entry&);
     void insert(cache_entry&);
-    void mark_wide(cache_entry&);
     void clear_continuity(cache_entry& ce);
     void on_erase();
     void on_merge();
     void on_hit();
     void on_miss();
     void on_miss_already_populated();
-    void on_uncached_wide_partition();
-    void on_wide_partition_mispopulation();
     allocation_strategy& allocator();
     logalloc::region& region();
     const logalloc::region& region() const;
     uint64_t modification_count() const { return _stats.modification_count; }
     uint64_t partitions() const { return _stats.partitions; }
-    uint64_t uncached_wide_partitions() const { return _stats.uncached_wide_partitions; }
     const stats& get_stats() const { return _stats; }
 };
 
@@ -266,7 +239,6 @@ private:
     schema_ptr _schema;
     partitions_type _partitions; // Cached partitions are complete.
     mutation_source _underlying;
-    uint64_t _max_cached_partition_size_in_bytes;
 
     // Synchronizes populating reads with updates of underlying data source to ensure that cache
     // remains consistent across flushes with the underlying data source.
@@ -290,7 +262,6 @@ private:
                                          mutation_reader::forwarding);
     void on_hit();
     void on_miss();
-    void on_uncached_wide_partition();
     void upgrade_entry(cache_entry&);
     void invalidate_locked(const dht::decorated_key&);
     void invalidate_unwrapped(const dht::partition_range&);
@@ -325,7 +296,7 @@ private:
     }
 public:
     ~row_cache();
-    row_cache(schema_ptr, mutation_source underlying, cache_tracker&, uint64_t _max_cached_partition_size_in_bytes = 10 * 1024 * 1024);
+    row_cache(schema_ptr, mutation_source underlying, cache_tracker&);
     row_cache(row_cache&&) = default;
     row_cache(const row_cache&) = delete;
     row_cache& operator=(row_cache&&) = default;
@@ -347,9 +318,6 @@ public:
     // Populate cache from given mutation. The mutation must contain all
     // information there is for its partition in the underlying data sources.
     void populate(const mutation& m, const previous_entry_pointer* previous = nullptr);
-
-    // Caches an information that a partition with a given key is wide.
-    void mark_partition_as_wide(const dht::decorated_key& key, const previous_entry_pointer* previous = nullptr);
 
     // Clears the cache.
     // Guarantees that cache will not be populated using readers created
