@@ -2730,18 +2730,11 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
             // counter state for each modified cell...
 
             // FIXME: tracing
-            return mutation_query(m_schema, cf.as_mutation_source(),
-                                  dht::partition_range::make_singular(m.decorated_key()),
-                                  slice, query::max_rows, query::max_partitions,
-                                  gc_clock::now(), { }).then([this, &cf, &m, &fm, m_schema] (auto result) {
-
+            return counter_write_query(m_schema, cf.as_mutation_source(), m.decorated_key(), slice, {})
+                    .then([this, &cf, &m, &fm, m_schema] (auto mopt) {
                 // ...now, that we got existing state of all affected counter
                 // cells we can look for our shard in each of them, increment
                 // its clock and apply the delta.
-
-                auto& partitions = result.partitions();
-                mutation_opt mopt = partitions.empty() ? mutation_opt()
-                                                       : partitions[0].mut().unfreeze(m_schema);
                 transform_counter_updates_to_shards(m, mopt ? &*mopt : nullptr, cf.failed_counter_applies_to_memtable());
 
                 // FIXME: oh dear, another freeze
