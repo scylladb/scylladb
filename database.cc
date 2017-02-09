@@ -2719,9 +2719,8 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
         boost::copy_range<std::vector<column_id>>(regular_columns), { }, { },
         cql_serialization_format::internal(), query::max_rows);
 
-    return do_with(std::move(slice), std::move(m), std::vector<locked_cell>(), stdx::optional<frozen_mutation>(),
-                   [this, &cf] (const query::partition_slice& slice, mutation& m, std::vector<locked_cell>& locks,
-                               stdx::optional<frozen_mutation>& fm) mutable {
+    return do_with(std::move(slice), std::move(m), std::vector<locked_cell>(),
+                   [this, &cf] (const query::partition_slice& slice, mutation& m, std::vector<locked_cell>& locks) mutable {
         return cf.lock_counter_cells(m).then([&, m_schema = cf.schema(), this] (std::vector<locked_cell> lcs) {
             locks = std::move(lcs);
 
@@ -2731,16 +2730,14 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
 
             // FIXME: tracing
             return counter_write_query(m_schema, cf.as_mutation_source(), m.decorated_key(), slice, {})
-                    .then([this, &cf, &m, &fm, m_schema] (auto mopt) {
+                    .then([this, &cf, &m, m_schema] (auto mopt) {
                 // ...now, that we got existing state of all affected counter
                 // cells we can look for our shard in each of them, increment
                 // its clock and apply the delta.
                 transform_counter_updates_to_shards(m, mopt ? &*mopt : nullptr, cf.failed_counter_applies_to_memtable());
 
-                // FIXME: oh dear, another freeze
                 // FIXME: timeout
-                fm = freeze(m);
-                return this->do_apply(m_schema, *fm, { });
+                return this->apply_with_commitlog(cf, m, { });
             }).then([&m] {
                 return std::move(m);
             });
@@ -2893,6 +2890,12 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
     }, timeout);
 }
 
+future<> database::apply_in_memory(const mutation& m, column_family& cf, db::replay_position rp, timeout_clock::time_point timeout) {
+    return _dirty_memory_manager.region_group().run_when_memory_available([this, &m, &cf, rp = std::move(rp)] {
+        cf.apply(m, rp);
+    }, timeout);
+}
+
 future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
     if (!s->is_synced()) {
         throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
@@ -2905,6 +2908,30 @@ future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutat
         dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
         throw;
     }
+}
+
+future<> database::apply_with_commitlog(column_family& cf, const mutation& m, timeout_clock::time_point timeout) {
+    if (cf.commitlog() != nullptr) {
+        return do_with(freeze(m), [this, &m, &cf, timeout] (frozen_mutation& fm) {
+            commitlog_entry_writer cew(m.schema(), fm);
+            return cf.commitlog()->add_entry(m.schema()->id(), cew, timeout);
+        }).then([this, &m, &cf, timeout] (db::replay_position rp) {
+            return apply_in_memory(m, cf, rp, timeout).handle_exception([this, &cf, &m, timeout] (auto ep) {
+                try {
+                    std::rethrow_exception(ep);
+                } catch (replay_position_reordered_exception&) {
+                    // expensive, but we're assuming this is super rare.
+                    // if we failed to apply the mutation due to future re-ordering
+                    // (which should be the ever only reason for rp mismatch in CF)
+                    // let's just try again, add the mutation to the CL once more,
+                    // and assume success in inevitable eventually.
+                    dblog.debug("replay_position reordering detected");
+                    return this->apply_with_commitlog(cf, m, timeout);
+                }
+            });
+        });
+    }
+    return apply_in_memory(m, cf, db::replay_position(), timeout);
 }
 
 future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::UUID uuid, const frozen_mutation& m, timeout_clock::time_point timeout) {

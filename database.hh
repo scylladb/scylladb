@@ -1122,7 +1122,7 @@ private:
 
     future<> init_commitlog();
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position, timeout_clock::time_point timeout);
-
+    future<> apply_in_memory(const mutation& m, column_family& cf, db::replay_position rp, timeout_clock::time_point timeout);
 private:
     // Unless you are an earlier boostraper or the database itself, you should
     // not be using this directly.  Go for the public create_keyspace instead.
@@ -1133,6 +1133,7 @@ private:
 
     future<> do_apply(schema_ptr, const frozen_mutation&, timeout_clock::time_point timeout);
     future<> apply_with_commitlog(schema_ptr, column_family&, utils::UUID, const frozen_mutation&, timeout_clock::time_point timeout);
+    future<> apply_with_commitlog(column_family& cf, const mutation& m, timeout_clock::time_point timeout);
 
     query::result_memory_limiter _result_memory_limiter;
 
