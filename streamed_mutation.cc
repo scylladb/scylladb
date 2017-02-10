@@ -136,7 +136,7 @@ std::ostream& operator<<(std::ostream& os, mutation_fragment::kind k)
 }
 
 std::ostream& operator<<(std::ostream& os, const mutation_fragment& mf) {
-    os << "{mutation_fragment: " << mf._kind << " ";
+    os << "{mutation_fragment: " << mf._kind << " " << mf.position() << " ";
     mf.visit([&os] (const auto& what) {
        os << what;
     });
