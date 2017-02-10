@@ -305,6 +305,11 @@ class position_in_partition_view {
 
     int _bound_weight = 0;
     const clustering_key_prefix* _ck; // nullptr for static row
+private:
+    position_in_partition_view(int bound_weight, const clustering_key_prefix* ck)
+        : _bound_weight(bound_weight)
+        , _ck(ck)
+    { }
 public:
     struct static_row_tag_t { };
     struct clustering_row_tag_t { };
@@ -359,6 +364,9 @@ public:
     }
     const clustering_key_prefix& key() const {
         return *_ck;
+    }
+    explicit operator position_in_partition_view() const {
+        return { _bound_weight, _ck ? &*_ck : nullptr };
     }
 
     class tri_compare {
