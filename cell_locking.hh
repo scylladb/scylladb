@@ -236,14 +236,14 @@ class cell_locker {
                                              bi::hash<cell_entry::hasher>,
                                              bi::constant_time_size<false>>;
 
-        static constexpr size_t initial_bucket_count = 64;
+        static constexpr size_t initial_bucket_count = 16;
         using max_load_factor = std::ratio<3, 4>;
-
         dht::decorated_key _key;
         cell_locker& _parent;
         size_t _rehash_at_size = compute_rehash_at_size(initial_bucket_count);
         std::unique_ptr<cells_type::bucket_type[]> _buckets; // TODO: start with internal storage?
         size_t _cell_count = 0; // cells_type::empty() is not O(1) if the hook is auto-unlink
+        cells_type::bucket_type _internal_buckets[initial_bucket_count];
         cells_type _cells;
         schema_ptr _schema;
 
@@ -267,8 +267,7 @@ class cell_locker {
         partition_entry(schema_ptr s, cell_locker& parent, const dht::decorated_key& dk)
             : _key(dk)
             , _parent(parent)
-            , _buckets(std::make_unique<cells_type::bucket_type[]>(initial_bucket_count))
-            , _cells(cells_type::bucket_traits(_buckets.get(), initial_bucket_count),
+            , _cells(cells_type::bucket_traits(_internal_buckets, initial_bucket_count),
                      cell_entry::hasher(*s), cell_entry::equal_compare(*s))
             , _schema(s)
         { }
