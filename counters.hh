@@ -81,7 +81,7 @@ private:
     template<typename T>
     T read(offset off) const {
         T value;
-        std::copy_n(_base + static_cast<unsigned>(off), sizeof(T), reinterpret_cast<char*>(&value));
+        std::copy_n(_base + static_cast<unsigned>(off), sizeof(T), reinterpret_cast<signed char*>(&value));
         return value;
     }
 public:
@@ -94,6 +94,22 @@ public:
     counter_id id() const { return read<counter_id>(offset::id); }
     int64_t value() const { return read<int64_t>(offset::value); }
     int64_t logical_clock() const { return read<int64_t>(offset::logical_clock); }
+
+    void swap_value_and_clock(basic_counter_shard_view& other) noexcept {
+        static constexpr size_t off = size_t(offset::value);
+        static constexpr size_t size = size_t(offset::total_size) - off;
+
+        typename View::value_type tmp[size];
+        std::copy_n(_base + off, size, tmp);
+        std::copy_n(other._base + off, size, _base + off);
+        std::copy_n(tmp, size, other._base + off);
+    }
+
+    void set_value_and_clock(const basic_counter_shard_view& other) noexcept {
+        static constexpr size_t off = size_t(offset::value);
+        static constexpr size_t size = size_t(offset::total_size) - off;
+        std::copy_n(other._base + off, size, _base + off);
+    }
 
     bool operator==(const basic_counter_shard_view& other) const {
         return id() == other.id() && value() == other.value()
@@ -121,7 +137,7 @@ class counter_shard {
 private:
     template<typename T>
     static void write(const T& value, bytes::iterator& out) {
-        out = std::copy_n(reinterpret_cast<const char*>(&value), sizeof(T), out);
+        out = std::copy_n(reinterpret_cast<const signed char*>(&value), sizeof(T), out);
     }
 public:
     counter_shard(counter_id id, int64_t value, int64_t logical_clock) noexcept
@@ -339,6 +355,8 @@ struct counter_cell_view : basic_counter_cell_view<bytes_view> {
 
 struct counter_cell_mutable_view : basic_counter_cell_view<bytes_mutable_view> {
     using basic_counter_cell_view::basic_counter_cell_view;
+
+    void set_timestamp(api::timestamp_type ts) { _cell.set_timestamp(ts); }
 };
 
 // Transforms mutation dst from counter updates to counter shards using state
