@@ -92,7 +92,9 @@ public:
     const bound_view end_bound() const {
         return bound_view(end, end_kind);
     }
+    // Range tombstone covers all rows with positions p such that: position() <= p < end_position()
     position_in_partition_view position() const;
+    position_in_partition_view end_position() const;
     bool empty() const {
         return !bool(tomb);
     }
