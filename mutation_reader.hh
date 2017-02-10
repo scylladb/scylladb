@@ -253,14 +253,19 @@ future<> consume(mutation_reader& reader, Consumer consumer) {
 class mutation_source {
     using partition_range = const dht::partition_range&;
     using io_priority = const io_priority_class&;
-    std::function<mutation_reader(schema_ptr, partition_range, const query::partition_slice&, io_priority, tracing::trace_state_ptr)> _fn;
+    using func_type = std::function<mutation_reader(schema_ptr,
+        partition_range,
+        const query::partition_slice&,
+        io_priority,
+        tracing::trace_state_ptr
+    )>;
+    func_type _fn;
 private:
     mutation_source() = default;
     explicit operator bool() const { return bool(_fn); }
     friend class optimized_optional<mutation_source>;
 public:
-    mutation_source(std::function<mutation_reader(schema_ptr, partition_range, const query::partition_slice&, io_priority, tracing::trace_state_ptr)> fn)
-            : _fn(std::move(fn)) {}
+    mutation_source(func_type fn) : _fn(std::move(fn)) {}
     mutation_source(std::function<mutation_reader(schema_ptr, partition_range, const query::partition_slice&, io_priority)> fn)
         : _fn([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr) {
             return fn(s, range, slice, pc);
@@ -274,17 +279,13 @@ public:
             return fn(s, range);
         }) {}
 
-    mutation_reader operator()(schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr trace_state) const {
-        return _fn(std::move(s), range, slice, pc, std::move(trace_state));
-    }
-    mutation_reader operator()(schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc) const {
-        return _fn(std::move(s), range, slice, pc, nullptr);
-    }
-    mutation_reader operator()(schema_ptr s, partition_range range, const query::partition_slice& slice) const {
-        return _fn(std::move(s), range, slice, default_priority_class(), nullptr);
-    }
-    mutation_reader operator()(schema_ptr s, partition_range range) const {
-        return _fn(std::move(s), range, query::full_slice, default_priority_class(), nullptr);
+    mutation_reader operator()(schema_ptr s,
+        partition_range range = query::full_partition_range,
+        const query::partition_slice& slice = query::full_slice,
+        io_priority pc = default_priority_class(),
+        tracing::trace_state_ptr trace_state = nullptr) const
+    {
+        return _fn(std::move(s), range, slice, pc, std::move(trace_state), fwd);
     }
 };
 
