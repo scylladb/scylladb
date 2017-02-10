@@ -279,6 +279,10 @@ public:
             return fn(s, range);
         }) {}
 
+    // Creates a new reader.
+    //
+    // All parameters captured by reference must remain live as long as returned
+    // mutation_reader or streamed_mutation obtained through it are alive.
     mutation_reader operator()(schema_ptr s,
         partition_range range = query::full_partition_range,
         const query::partition_slice& slice = query::full_slice,
