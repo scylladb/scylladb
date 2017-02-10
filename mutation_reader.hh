@@ -254,6 +254,10 @@ class mutation_source {
     using partition_range = const dht::partition_range&;
     using io_priority = const io_priority_class&;
     std::function<mutation_reader(schema_ptr, partition_range, const query::partition_slice&, io_priority, tracing::trace_state_ptr)> _fn;
+private:
+    mutation_source() = default;
+    explicit operator bool() const { return bool(_fn); }
+    friend class optimized_optional<mutation_source>;
 public:
     mutation_source(std::function<mutation_reader(schema_ptr, partition_range, const query::partition_slice&, io_priority, tracing::trace_state_ptr)> fn)
             : _fn(std::move(fn)) {}
@@ -283,6 +287,13 @@ public:
         return _fn(std::move(s), range, query::full_slice, default_priority_class(), nullptr);
     }
 };
+
+template<>
+struct move_constructor_disengages<mutation_source> {
+    enum { value = true };
+};
+using mutation_source_opt = optimized_optional<mutation_source>;
+
 
 /// A partition_presence_checker quickly returns whether a key is known not to exist
 /// in a data source (it may return false positives, but not false negatives).

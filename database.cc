@@ -581,7 +581,7 @@ column_family::make_reader(schema_ptr s,
                            const io_priority_class& pc,
                            tracing::trace_state_ptr trace_state) const {
     if (_virtual_reader) {
-        return _virtual_reader(s, range, slice, pc, trace_state);
+        return (*_virtual_reader)(s, range, slice, pc, trace_state);
     }
 
     std::vector<mutation_reader> readers;
