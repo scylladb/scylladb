@@ -782,7 +782,7 @@ class random_mutation_generator::impl {
     std::mt19937 _gen;
     schema_ptr _schema;
     std::vector<bytes> _blobs;
-    std::normal_distribution<> _ck_index_dist{n_blobs / 2.0, 1.5};
+    std::uniform_int_distribution<size_t> _ck_index_dist{0, n_blobs - 1};
     std::uniform_int_distribution<int> _bool_dist{0, 1};
 
     static gc_clock::time_point expiry_dist(auto& gen) {
@@ -833,7 +833,7 @@ public:
     }
 
     bytes random_blob() {
-        return _blobs[std::min(_blobs.size() - 1, static_cast<size_t>(std::max(0.0, _ck_index_dist(_gen))))];
+        return _blobs[std::min(_blobs.size() - 1, std::max<size_t>(0, _ck_index_dist(_gen)))];
     }
 
     clustering_key make_random_key() {
