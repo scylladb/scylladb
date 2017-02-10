@@ -36,6 +36,11 @@ static void require_no_token_duplicates(const std::vector<mutation>& partitions)
     }
 }
 
+static api::timestamp_type new_timestamp() {
+    static thread_local api::timestamp_type ts = api::min_timestamp;
+    return ts++;
+}
+
 static void test_range_queries(populate_fn populate) {
     BOOST_TEST_MESSAGE("Testing range queries");
 
@@ -177,7 +182,7 @@ struct mutation_sets {
 };
 
 static tombstone new_tombstone() {
-    return { api::new_timestamp(), gc_clock::now() };
+    return { new_timestamp(), gc_clock::now() };
 }
 
 static mutation_sets generate_mutation_sets() {
@@ -243,7 +248,7 @@ static mutation_sets generate_mutation_sets() {
         }
 
         {
-            auto ts = api::new_timestamp();
+            auto ts = new_timestamp();
             m1.set_clustered_cell(ck1, "regular_col_1", data_value(bytes("regular_col_value")), ts, ttl);
             result.unequal.emplace_back(mutations{m1, m2});
             m2.set_clustered_cell(ck1, "regular_col_1", data_value(bytes("regular_col_value")), ts, ttl);
@@ -251,7 +256,7 @@ static mutation_sets generate_mutation_sets() {
         }
 
         {
-            auto ts = api::new_timestamp();
+            auto ts = new_timestamp();
             m1.set_clustered_cell(ck1, "regular_col_2", data_value(bytes("regular_col_value")), ts, ttl);
             result.unequal.emplace_back(mutations{m1, m2});
             m2.set_clustered_cell(ck1, "regular_col_2", data_value(bytes("regular_col_value")), ts, ttl);
@@ -259,7 +264,7 @@ static mutation_sets generate_mutation_sets() {
         }
 
         {
-            auto ts = api::new_timestamp();
+            auto ts = new_timestamp();
             m1.partition().apply_insert(*s1, ck2, ts);
             result.unequal.emplace_back(mutations{m1, m2});
             m2.partition().apply_insert(*s1, ck2, ts);
@@ -267,7 +272,7 @@ static mutation_sets generate_mutation_sets() {
         }
 
         {
-            auto ts = api::new_timestamp();
+            auto ts = new_timestamp();
             m1.set_clustered_cell(ck2, "regular_col_1", data_value(bytes("ck2_regular_col_1_value")), ts);
             result.unequal.emplace_back(mutations{m1, m2});
             m2.set_clustered_cell(ck2, "regular_col_1", data_value(bytes("ck2_regular_col_1_value")), ts);
@@ -275,7 +280,7 @@ static mutation_sets generate_mutation_sets() {
         }
 
         {
-            auto ts = api::new_timestamp();
+            auto ts = new_timestamp();
             m1.set_static_cell("static_col_1", data_value(bytes("static_col_value")), ts, ttl);
             result.unequal.emplace_back(mutations{m1, m2});
             m2.set_static_cell("static_col_1", data_value(bytes("static_col_value")), ts, ttl);
@@ -283,7 +288,7 @@ static mutation_sets generate_mutation_sets() {
         }
 
         {
-            auto ts = api::new_timestamp();
+            auto ts = new_timestamp();
             m1.set_static_cell("static_col_2", data_value(bytes("static_col_value")), ts);
             result.unequal.emplace_back(mutations{m1, m2});
             m2.set_static_cell("static_col_2", data_value(bytes("static_col_value")), ts);
@@ -291,7 +296,7 @@ static mutation_sets generate_mutation_sets() {
         }
 
         {
-            auto ts = api::new_timestamp();
+            auto ts = new_timestamp();
             m1.set_clustered_cell(ck2, "regular_col_1_s1", data_value(bytes("x")), ts);
             result.unequal.emplace_back(mutations{m1, m2});
             m2.set_clustered_cell(ck2, "regular_col_1_s2", data_value(bytes("x")), ts);
