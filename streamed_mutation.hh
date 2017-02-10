@@ -630,6 +630,7 @@ public:
     void apply(const range_tombstone_list& list) {
         _list.apply(_schema, list);
     }
+    void apply(const range_tombstone_list&, const query::clustering_range&);
 };
 
 // mutation_hasher is an equivalent of hashing_partition_visitor for

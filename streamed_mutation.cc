@@ -395,6 +395,12 @@ mutation_fragment_opt range_tombstone_stream::get_next()
     return { };
 }
 
+void range_tombstone_stream::apply(const range_tombstone_list& list, const query::clustering_range& range) {
+    for (const range_tombstone& rt : list.slice(_schema, range)) {
+        _list.apply(_schema, rt);
+    }
+}
+
 streamed_mutation reverse_streamed_mutation(streamed_mutation sm) {
     class reversing_steamed_mutation final : public streamed_mutation::impl {
         streamed_mutation_opt _source;
