@@ -513,21 +513,28 @@ public:
 
 template <typename MemoryAccounter, typename... Args>
 inline streamed_mutation
-make_partition_snapshot_reader(schema_ptr s, dht::decorated_key dk,
+make_partition_snapshot_reader(schema_ptr s,
+    dht::decorated_key dk,
     query::clustering_key_filter_ranges crr,
-    lw_shared_ptr<partition_snapshot> snp, logalloc::region& region,
-    logalloc::allocating_section& read_section, boost::any pointer_to_container, Args&&... args)
+    lw_shared_ptr<partition_snapshot> snp,
+    logalloc::region& region,
+    logalloc::allocating_section& read_section,
+    boost::any pointer_to_container,
+    Args&&... args)
 {
     return make_streamed_mutation<partition_snapshot_reader<MemoryAccounter>>(s, std::move(dk),
            snp, std::move(crr), region, read_section, std::move(pointer_to_container), std::forward<Args>(args)...);
 }
 
 inline streamed_mutation
-make_partition_snapshot_reader(schema_ptr s, dht::decorated_key dk,
+make_partition_snapshot_reader(schema_ptr s,
+    dht::decorated_key dk,
     query::clustering_key_filter_ranges crr,
-    lw_shared_ptr<partition_snapshot> snp, logalloc::region& region,
-    logalloc::allocating_section& read_section, boost::any pointer_to_container)
+    lw_shared_ptr<partition_snapshot> snp,
+    logalloc::region& region,
+    logalloc::allocating_section& read_section,
+    boost::any pointer_to_container)
 {
-    return make_streamed_mutation<partition_snapshot_reader<>>(s, std::move(dk),
-           snp, std::move(crr), region, read_section, std::move(pointer_to_container));
+    return make_partition_snapshot_reader<partition_snapshot_reader_dummy_accounter>(std::move(s),
+        std::move(dk), std::move(crr), std::move(snp), region, read_section, std::move(pointer_to_container));
 }
