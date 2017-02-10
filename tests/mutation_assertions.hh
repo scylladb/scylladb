@@ -150,9 +150,8 @@ public:
 
     streamed_mutation_assertions& produces_end_of_stream() {
         auto mfopt = _sm().get0();
-        BOOST_REQUIRE(!mfopt);
         if (mfopt) {
-            BOOST_FAIL(sprint("Expected end of stream, got: %s", mfopt->mutation_fragment_kind()));
+            BOOST_FAIL(sprint("Expected end of stream, got: %s", *mfopt));
         }
         return *this;
     }
