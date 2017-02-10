@@ -330,6 +330,7 @@ class position_in_partition {
     stdx::optional<clustering_key_prefix> _ck;
 public:
     struct static_row_tag_t { };
+    struct after_static_row_tag_t { };
     struct clustering_row_tag_t { };
     struct range_tag_t { };
     using range_tombstone_tag_t = range_tag_t;
@@ -339,6 +340,8 @@ public:
         : _ck(std::move(ck)) { }
     position_in_partition(range_tag_t, bound_view bv)
         : _bound_weight(weight(bv.kind)), _ck(bv.prefix) { }
+    position_in_partition(after_static_row_tag_t) :
+        position_in_partition(range_tag_t(), bound_view::bottom()) { }
     explicit position_in_partition(position_in_partition_view view)
         : _bound_weight(view._bound_weight)
         {
