@@ -308,12 +308,13 @@ class position_in_partition_view {
 public:
     struct static_row_tag_t { };
     struct clustering_row_tag_t { };
-    struct range_tombstone_tag_t { };
+    struct range_tag_t { };
+    using range_tombstone_tag_t = range_tag_t;
 
     explicit position_in_partition_view(static_row_tag_t) : _ck(nullptr) { }
     position_in_partition_view(clustering_row_tag_t, const clustering_key_prefix& ck)
         : _ck(&ck) { }
-    position_in_partition_view(range_tombstone_tag_t, bound_view bv)
+    position_in_partition_view(range_tag_t, bound_view bv)
         : _bound_weight(weight(bv.kind)), _ck(&bv.prefix) { }
 };
 
@@ -323,12 +324,13 @@ class position_in_partition {
 public:
     struct static_row_tag_t { };
     struct clustering_row_tag_t { };
-    struct range_tombstone_tag_t { };
+    struct range_tag_t { };
+    using range_tombstone_tag_t = range_tag_t;
 
     explicit position_in_partition(static_row_tag_t) { }
     position_in_partition(clustering_row_tag_t, clustering_key_prefix ck)
         : _ck(std::move(ck)) { }
-    position_in_partition(range_tombstone_tag_t, bound_view bv)
+    position_in_partition(range_tag_t, bound_view bv)
         : _bound_weight(weight(bv.kind)), _ck(bv.prefix) { }
     explicit position_in_partition(position_in_partition_view view)
         : _bound_weight(view._bound_weight)
@@ -340,7 +342,6 @@ public:
 
     bool is_static_row() const { return !_ck; }
     bool is_clustering_row() const { return _ck && !_bound_weight; }
-    bool is_range_tombstone() const { return _bound_weight; }
 
     template<typename Hasher>
     void feed_hash(Hasher& hasher, const schema& s) const {
