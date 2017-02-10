@@ -475,7 +475,10 @@ public:
     , _lsa_region(region)
     , _read_section(read_section) {
         for (auto&& v : _snapshot->versions()) {
-            _range_tombstones.apply(v.partition().row_tombstones());
+            auto&& rt_list = v.partition().row_tombstones();
+            for (auto&& range : _ck_ranges.ranges()) {
+                _range_tombstones.apply(rt_list, range);
+            }
         }
         do_fill_buffer();
     }

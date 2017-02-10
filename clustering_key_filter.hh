@@ -54,6 +54,7 @@ public:
     auto end() const { return _ref.end(); }
     bool empty() const { return _ref.empty(); }
     size_t size() const { return _ref.size(); }
+    const clustering_row_ranges& ranges() const { return _ref; }
 
     static clustering_key_filter_ranges get_ranges(const schema& schema, const query::partition_slice& slice, const partition_key& key) {
         const query::clustering_row_ranges& ranges = slice.row_ranges(schema, key);
