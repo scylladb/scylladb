@@ -321,6 +321,8 @@ public:
         : _ck(&ck) { }
     position_in_partition_view(range_tag_t, bound_view bv)
         : _bound_weight(weight(bv.kind)), _ck(&bv.prefix) { }
+
+    friend std::ostream& operator<<(std::ostream&, position_in_partition_view);
 };
 
 class position_in_partition {
@@ -438,6 +440,7 @@ public:
             return compare(a, b);
         }
     };
+    friend std::ostream& operator<<(std::ostream&, const position_in_partition&);
 };
 
 inline position_in_partition_view static_row::position() const

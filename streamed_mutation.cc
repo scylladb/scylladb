@@ -37,6 +37,20 @@ operator<<(std::ostream& os, const static_row& row) {
     return os << "{static_row: "<< row._cells << "}";
 }
 
+std::ostream& operator<<(std::ostream& out, position_in_partition_view pos) {
+    out << "{position: " << pos._bound_weight << ":";
+    if (pos._ck) {
+        out << *pos._ck;
+    } else {
+        out << "null";
+    }
+    return out << "}";
+}
+
+std::ostream& operator<<(std::ostream& out, const position_in_partition& pos) {
+    return out << static_cast<position_in_partition_view>(pos);
+}
+
 mutation_fragment::mutation_fragment(static_row&& r)
     : _kind(kind::static_row), _data(std::make_unique<data>())
 {
