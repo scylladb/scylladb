@@ -171,17 +171,10 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
             continue;
         }
 
-        struct counter_shard_or_tombstone {
-            stdx::optional<counter_shard> shard;
-            tombstone tomb;
-        };
-        std::deque<std::pair<column_id, counter_shard_or_tombstone>> shards;
+        std::deque<std::pair<column_id, counter_shard>> shards;
         it->row().cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
             auto acv = ac_o_c.as_atomic_cell();
             if (!acv.is_live()) {
-                counter_shard_or_tombstone cs_o_t { { },
-                                                    tombstone(acv.timestamp(), acv.deletion_time()) };
-                shards.emplace_back(std::make_pair(id, cs_o_t));
                 return; // continue -- we are in lambda
             }
             counter_cell_view ccv(acv);
@@ -189,7 +182,7 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
             if (!cs) {
                 return; // continue
             }
-            shards.emplace_back(std::make_pair(id, counter_shard_or_tombstone { counter_shard(*cs), tombstone() }));
+            shards.emplace_back(std::make_pair(id, counter_shard(*cs)));
         });
 
         cr.row().cells().for_each_cell([&] (column_id id, atomic_cell_or_collection& ac_o_c) {
@@ -206,19 +199,11 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
             counter_cell_builder ccb;
             if (shards.empty() || shards.front().first > id) {
                 ccb.add_shard(counter_shard(counter_id::local(), delta, clock_offset + 1));
-            } else if (shards.front().second.tomb.timestamp == api::missing_timestamp) {
-                auto& cs = *shards.front().second.shard;
+            } else {
+                auto& cs = shards.front().second;
                 cs.update(delta, clock_offset + 1);
                 ccb.add_shard(cs);
                 shards.pop_front();
-            } else {
-                // We are apply the tombstone that's already there second time.
-                // It is not necessary but there is no easy way to remove cell
-                // from a mutation.
-                tombstone t = shards.front().second.tomb;
-                ac_o_c = atomic_cell::make_dead(t.timestamp, t.deletion_time);
-                shards.pop_front();
-                return; // continue -- we are in lambda
             }
             ac_o_c = ccb.build(acv.timestamp());
         });
