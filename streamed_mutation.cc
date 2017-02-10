@@ -418,6 +418,18 @@ protected:
         }
         return make_ready_future<>();
     }
+    virtual future<> fast_forward_to(position_range pr) override {
+        _deferred_tombstones.forward_to(pr.start());
+        forward_buffer_to(pr.start());
+        _end_of_stream = false;
+
+        _next_readers.clear();
+        _readers.clear();
+        return parallel_for_each(_original_readers, [this, &pr] (streamed_mutation& rd) {
+            _next_readers.emplace_back(&rd);
+            return rd.fast_forward_to(pr);
+        });
+    }
 public:
     mutation_merger(schema_ptr s, dht::decorated_key dk, std::vector<streamed_mutation> readers)
         : streamed_mutation::impl(s, std::move(dk), merge_partition_tombstones(readers))
@@ -470,6 +482,12 @@ mutation_fragment_opt range_tombstone_stream::get_next()
         return do_get_next();
     }
     return { };
+}
+
+void range_tombstone_stream::forward_to(position_in_partition_view pos) {
+    _list.erase_where([this, &pos] (const range_tombstone& rt) {
+        return !_cmp(pos, rt.end_position());
+    });
 }
 
 void range_tombstone_stream::apply(const range_tombstone_list& list, const query::clustering_range& range) {

@@ -746,6 +746,8 @@ public:
     mutation_fragment_opt get_next(const rows_entry&);
     mutation_fragment_opt get_next(const mutation_fragment&);
     mutation_fragment_opt get_next();
+    // Forgets all tombstones which are not relevant for any range starting at given position.
+    void forward_to(position_in_partition_view);
 
     void apply(range_tombstone&& rt) {
         _list.apply(_schema, std::move(rt));
