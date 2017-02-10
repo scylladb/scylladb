@@ -446,6 +446,64 @@ public:
     friend std::ostream& operator<<(std::ostream&, const position_in_partition&);
 };
 
+// Includes all position_in_partition objects "p" for which: start <= p < end
+// And only those.
+class position_range {
+private:
+    position_in_partition _start;
+    position_in_partition _end;
+public:
+    static position_range from_range(const query::clustering_range&);
+
+    static position_range for_static_row() {
+        return {
+            position_in_partition(position_in_partition::static_row_tag_t()),
+            position_in_partition(position_in_partition::after_static_row_tag_t())
+        };
+    }
+
+    static position_range full() {
+        return {
+            position_in_partition(position_in_partition::static_row_tag_t()),
+            position_in_partition(position_in_partition::range_tag_t(), bound_view::top())
+        };
+    }
+
+    position_range(position_range&&) = default;
+    position_range& operator=(position_range&&) = default;
+    position_range(const position_range&) = default;
+    position_range& operator=(const position_range&) = default;
+
+    // Constructs position_range which covers the same rows as given clustering_range.
+    // position_range includes a fragment if it includes position of that fragment.
+    position_range(const query::clustering_range&);
+    position_range(query::clustering_range&&);
+
+    position_range(position_in_partition start, position_in_partition end)
+        : _start(std::move(start))
+        , _end(std::move(end))
+    { }
+
+    const position_in_partition& start() const { return _start; }
+    const position_in_partition& end() const { return _end; }
+    bool contains(const schema& s, position_in_partition_view pos) const;
+    bool overlaps(const schema& s, position_in_partition_view start, position_in_partition_view end) const;
+
+    friend std::ostream& operator<<(std::ostream&, const position_range&);
+};
+
+inline
+bool position_range::contains(const schema& s, position_in_partition_view pos) const {
+    position_in_partition::less_compare less(s);
+    return !less(pos, _start) && less(pos, _end);
+}
+
+inline
+bool position_range::overlaps(const schema& s, position_in_partition_view start, position_in_partition_view end) const {
+    position_in_partition::less_compare less(s);
+    return !less(end, _start) && less(start, _end);
+}
+
 inline position_in_partition_view static_row::position() const
 {
     return position_in_partition_view(position_in_partition_view::static_row_tag_t());

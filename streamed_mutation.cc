@@ -51,6 +51,10 @@ std::ostream& operator<<(std::ostream& out, const position_in_partition& pos) {
     return out << static_cast<position_in_partition_view>(pos);
 }
 
+std::ostream& operator<<(std::ostream& out, const position_range& range) {
+    return out << "{" << range.start() << ", " << range.end() << "}";
+}
+
 mutation_fragment::mutation_fragment(static_row&& r)
     : _kind(kind::static_row), _data(std::make_unique<data>())
 {
@@ -467,5 +471,21 @@ streamed_mutation reverse_streamed_mutation(streamed_mutation sm) {
     };
 
     return make_streamed_mutation<reversing_steamed_mutation>(std::move(sm));
-};
+}
+
+position_range position_range::from_range(const query::clustering_range& range) {
+    auto bv_range = bound_view::from_range(range);
+    return {
+        position_in_partition(position_in_partition::range_tag_t(), bv_range.first),
+        position_in_partition(position_in_partition::range_tag_t(), bv_range.second)
+    };
+}
+
+position_range::position_range(const query::clustering_range& range)
+    : position_range(from_range(range))
+{ }
+
+position_range::position_range(query::clustering_range&& range)
+    : position_range(range) // FIXME: optimize
+{ }
 
