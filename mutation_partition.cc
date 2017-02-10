@@ -247,7 +247,7 @@ mutation_partition::mutation_partition(const mutation_partition& x, const schema
         : _tombstone(x._tombstone)
         , _static_row(x._static_row)
         , _rows()
-        , _row_tombstones(x._row_tombstones) {
+        , _row_tombstones(x._row_tombstones, range_tombstone_list::copy_comparator_only()) {
     try {
         for(auto&& r : ck_ranges) {
             for (const rows_entry& e : x.range(schema, r)) {
@@ -258,6 +258,12 @@ mutation_partition::mutation_partition(const mutation_partition& x, const schema
         _rows.clear_and_dispose(current_deleter<rows_entry>());
         throw;
     }
+
+    for(auto&& r : ck_ranges) {
+        for (auto&& rt : x._row_tombstones.slice(schema, r)) {
+            _row_tombstones.apply(schema, rt);
+        }
+    }
 }
 
 mutation_partition::mutation_partition(mutation_partition&& x, const schema& schema,
@@ -267,13 +273,29 @@ mutation_partition::mutation_partition(mutation_partition&& x, const schema& sch
     , _rows(std::move(x._rows))
     , _row_tombstones(std::move(x._row_tombstones))
 {
-    auto deleter = current_deleter<rows_entry>();
-    auto it = _rows.begin();
-    for (auto&& range : ck_ranges.ranges()) {
-        _rows.erase_and_dispose(it, lower_bound(schema, range), deleter);
-        it = upper_bound(schema, range);
+    {
+        auto deleter = current_deleter<rows_entry>();
+        auto it = _rows.begin();
+        for (auto&& range : ck_ranges.ranges()) {
+            _rows.erase_and_dispose(it, lower_bound(schema, range), deleter);
+            it = upper_bound(schema, range);
+        }
+        _rows.erase_and_dispose(it, _rows.end(), deleter);
     }
-    _rows.erase_and_dispose(it, _rows.end(), deleter);
+    {
+        range_tombstone_list::const_iterator it = _row_tombstones.begin();
+        for (auto&& range : ck_ranges.ranges()) {
+            auto rt_range = _row_tombstones.slice(schema, range);
+            // upper bound for previous range may be after lower bound for the next range
+            // if both ranges are connected through a range tombstone. In this case the
+            // erase range would be invalid.
+            if (rt_range.begin() == _row_tombstones.end() || std::next(rt_range.begin()) != it) {
+                _row_tombstones.erase(it, rt_range.begin());
+            }
+            it = rt_range.end();
+        }
+        _row_tombstones.erase(it, _row_tombstones.end());
+    }
 }
 
 mutation_partition::~mutation_partition() {
