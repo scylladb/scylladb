@@ -38,8 +38,9 @@ constexpr size_t result_memory_limiter::maximum_result_size;
 thread_local semaphore result_memory_tracker::_dummy { 0 };
 
 const dht::partition_range full_partition_range = dht::partition_range::make_open_ended_both_sides();
+const clustering_range full_clustering_range = clustering_range::make_open_ended_both_sides();
 
-const query::partition_slice full_slice = query::partition_slice({ query::clustering_range::make_open_ended_both_sides() }, { }, { }, { });
+const query::partition_slice full_slice = query::partition_slice({ full_clustering_range }, { }, { }, { });
 
 std::ostream& operator<<(std::ostream& out, const specific_ranges& s);
 
