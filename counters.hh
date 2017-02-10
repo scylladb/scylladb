@@ -180,10 +180,15 @@ public:
     }
 
     atomic_cell build(api::timestamp_type timestamp) const {
-        bytes b(bytes::initialized_later(), serialized_size());
-        auto out = b.begin();
-        serialize(out);
-        return atomic_cell::make_live(timestamp, b);
+        return atomic_cell::make_live_from_serializer(timestamp, serialized_size(), [this] (bytes::iterator out) {
+            serialize(out);
+        });
+    }
+
+    static atomic_cell from_single_shard(api::timestamp_type timestamp, const counter_shard& cs) {
+        return atomic_cell::make_live_from_serializer(timestamp, counter_shard::serialized_size(), [&cs] (bytes::iterator out) {
+            cs.serialize(out);
+        });
     }
 
     class inserter_iterator : public std::iterator<std::output_iterator_tag, counter_shard> {

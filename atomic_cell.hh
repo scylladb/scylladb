@@ -29,6 +29,7 @@
 #include "net/byteorder.hh"
 #include <cstdint>
 #include <iosfwd>
+#include <seastar/util/gcc6-concepts.hh>
 
 template<typename T>
 static inline
@@ -67,6 +68,7 @@ private:
     static constexpr unsigned deletion_time_size = 4;
     static constexpr unsigned ttl_offset = expiry_offset + expiry_size;
     static constexpr unsigned ttl_size = 4;
+    friend class counter_cell_builder;
 private:
     static bool is_counter_update(bytes_view cell) {
         return cell[0] & COUNTER_UPDATE_FLAG;
@@ -150,6 +152,31 @@ private:
         set_field(b, expiry_offset, expiry.time_since_epoch().count());
         set_field(b, ttl_offset, ttl.count());
         std::copy_n(value.begin(), value.size(), b.begin() + value_offset);
+        return b;
+    }
+    // make_live_from_serializer() is intended for users that need to serialise
+    // some object or objects to the format used in atomic_cell::value().
+    // With just make_live() the patter would look like follows:
+    // 1. allocate a buffer and write to it serialised objects
+    // 2. pass that buffer to make_live()
+    // 3. make_live() needs to prepend some metadata to the cell value so it
+    //    allocates a new buffer and copies the content of the original one
+    //
+    // The allocation and copy of a buffer can be avoided.
+    // make_live_from_serializer() allows the user code to specify the timestamp
+    // and size of the cell value as well as provide the serialiser function
+    // object, which would write the serialised value of the cell to the buffer
+    // given to it by make_live_from_serializer().
+    template<typename Serializer>
+    GCC6_CONCEPT(requires requires(Serializer serializer, bytes::iterator it) {
+        serializer(it);
+    })
+    static managed_bytes make_live_from_serializer(api::timestamp_type timestamp, size_t size, Serializer&& serializer) {
+        auto value_offset = flags_size + timestamp_size;
+        managed_bytes b(managed_bytes::initialized_later(), value_offset + size);
+        b[0] = LIVE_FLAG;
+        set_field(b, timestamp_offset, timestamp);
+        serializer(b.begin() + value_offset);
         return b;
     }
     template<typename ByteContainer>
@@ -281,6 +308,10 @@ public:
         } else {
             return atomic_cell_type::make_live(timestamp, value, gc_clock::now() + *ttl, *ttl);
         }
+    }
+    template<typename Serializer>
+    static atomic_cell make_live_from_serializer(api::timestamp_type timestamp, size_t size, Serializer&& serializer) {
+        return atomic_cell_type::make_live_from_serializer(timestamp, size, std::forward<Serializer>(serializer));
     }
     friend class atomic_cell_or_collection;
     friend std::ostream& operator<<(std::ostream& os, const atomic_cell& ac);
