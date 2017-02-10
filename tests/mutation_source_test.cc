@@ -820,7 +820,9 @@ public:
         _schema = make_schema();
 
         for (size_t i = 0; i < n_blobs; ++i) {
-            _blobs.emplace_back(make_blob(_external_blob_size));
+            bytes b(_external_blob_size, int8_t(0));
+            std::copy_n(reinterpret_cast<int8_t*>(&i), sizeof(i), b.begin());
+            _blobs.emplace_back(std::move(b));
         }
 
         std::random_device rd;
