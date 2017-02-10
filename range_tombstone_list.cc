@@ -296,6 +296,11 @@ range_tombstone_list::slice(const schema& s, const query::clustering_range& r) c
         _tombstones.upper_bound(bv_range.second, order_by_start{s}));
 }
 
+range_tombstone_list::iterator
+range_tombstone_list::erase(const_iterator a, const_iterator b) {
+    return _tombstones.erase_and_dispose(a, b, current_deleter<range_tombstone>());
+}
+
 range_tombstone_list::range_tombstones_type::iterator
 range_tombstone_list::reverter::insert(range_tombstones_type::iterator it, range_tombstone& new_rt) {
     _insert_undo_ops.emplace_back(new_rt);

@@ -141,6 +141,7 @@ public:
     tombstone search_tombstone_covering(const schema& s, const clustering_key_prefix& key) const;
     // Returns range of tombstones which overlap with given range
     boost::iterator_range<const_iterator> slice(const schema& s, const query::clustering_range&) const;
+    iterator erase(const_iterator, const_iterator);
     range_tombstone_list difference(const schema& s, const range_tombstone_list& rt_list) const;
     // Erases the range tombstones for which filter returns true.
     template <typename Pred>
