@@ -538,7 +538,7 @@ public:
     const partition_key& key() const { return _impl->_key.key(); }
     const dht::decorated_key& decorated_key() const { return _impl->_key; }
 
-    schema_ptr schema() const { return _impl->_schema; }
+    const schema_ptr& schema() const { return _impl->_schema; }
 
     tombstone partition_tombstone() const { return _impl->_partition_tombstone; }
 
