@@ -252,6 +252,65 @@ streamed_mutation streamed_mutation_from_mutation(mutation m)
     return make_streamed_mutation<reader>(std::move(m));
 }
 
+streamed_mutation make_forwardable(streamed_mutation m) {
+    class reader : public streamed_mutation::impl {
+        streamed_mutation _sm;
+        position_range _current = position_range::for_static_row();
+        mutation_fragment_opt _next;
+    private:
+        // When resolves, _next is engaged or _end_of_stream is set.
+        future<> ensure_next() {
+            if (_next) {
+                return make_ready_future<>();
+            }
+            return _sm().then([this] (auto&& mfo) {
+                _next = std::move(mfo);
+                if (!_next) {
+                    _end_of_stream = true;
+                }
+            });
+        }
+    public:
+        explicit reader(streamed_mutation sm)
+            : impl(sm.schema(), std::move(sm.decorated_key()), sm.partition_tombstone())
+            , _sm(std::move(sm))
+        { }
+
+        virtual future<> fill_buffer() override {
+            return repeat([this] {
+                if (is_buffer_full()) {
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }
+                return ensure_next().then([this] {
+                    if (is_end_of_stream()) {
+                        return stop_iteration::yes;
+                    }
+                    position_in_partition::less_compare cmp(*_sm.schema());
+                    if (!cmp(_next->position(), _current.end())) {
+                        _end_of_stream = true;
+                        // keep _next, it may be relevant for next range
+                        return stop_iteration::yes;
+                    }
+                    if (_next->relevant_for_range(*_schema, _current.start())) {
+                        push_mutation_fragment(std::move(*_next));
+                    }
+                    _next = {};
+                    return stop_iteration::no;
+                });
+            });
+        }
+
+        virtual future<> fast_forward_to(position_range pr) override {
+            _current = std::move(pr);
+            _end_of_stream = false;
+            forward_buffer_to(_current.start());
+            return make_ready_future<>();
+        }
+    };
+
+    return make_streamed_mutation<reader>(std::move(m));
+}
+
 class mutation_merger final : public streamed_mutation::impl {
     std::vector<streamed_mutation> _original_readers;
     std::vector<streamed_mutation*> _next_readers;
@@ -488,3 +547,28 @@ position_range::position_range(const query::clustering_range& range)
 position_range::position_range(query::clustering_range&& range)
     : position_range(range) // FIXME: optimize
 { }
+
+void streamed_mutation::impl::forward_buffer_to(const position_in_partition& pos) {
+    _buffer.erase(std::remove_if(_buffer.begin(), _buffer.end(), [this, &pos] (mutation_fragment& f) {
+        return !f.relevant_for_range_assuming_after(*_schema, pos);
+    }), _buffer.end());
+
+    _buffer_size = 0;
+    for (auto&& f : _buffer) {
+        _buffer_size += f.memory_usage();
+    }
+}
+
+bool mutation_fragment::relevant_for_range(const schema& s, position_in_partition_view pos) const {
+    position_in_partition::less_compare cmp(s);
+    if (!cmp(position(), pos)) {
+        return true;
+    }
+    return relevant_for_range_assuming_after(s, pos);
+}
+
+bool mutation_fragment::relevant_for_range_assuming_after(const schema& s, position_in_partition_view pos) const {
+    position_in_partition::less_compare cmp(s);
+    // Range tombstones overlapping with the new range are let in
+    return is_range_tombstone() && cmp(pos, as_range_tombstone().end_position());
+}

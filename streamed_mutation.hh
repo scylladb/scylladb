@@ -204,6 +204,13 @@ public:
 
     position_in_partition_view position() const;
 
+    // Checks if this fragment may be relevant for any range starting at given position.
+    bool relevant_for_range(const schema& s, position_in_partition_view pos) const;
+
+    // Like relevant_for_range() but makes use of assumption that pos is greater
+    // than the starting position of this fragment.
+    bool relevant_for_range_assuming_after(const schema& s, position_in_partition_view pos) const;
+
     bool has_key() const { return !is_static_row(); }
     // Requirements: has_key() == true
     const clustering_key_prefix& key() const;
@@ -613,6 +620,10 @@ public:
             }
             return make_ready_future<mutation_fragment_opt>(pop_mutation_fragment());
         }
+
+        // Removes all fragments from the buffer which are not relevant for any range starting at given position.
+        // It is assumed that pos is greater than positions of fragments already in the buffer.
+        void forward_buffer_to(const position_in_partition& pos);
     };
 private:
     std::unique_ptr<impl> _impl;
@@ -651,6 +662,9 @@ public:
         return _impl->operator()();
     }
 };
+
+// Adapts streamed_mutation to a streamed_mutation which is in forwarding mode.
+streamed_mutation make_forwardable(streamed_mutation);
 
 std::ostream& operator<<(std::ostream& os, const streamed_mutation& sm);
 
