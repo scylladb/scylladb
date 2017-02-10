@@ -534,6 +534,29 @@ using mutation_fragment_opt = optimized_optional<mutation_fragment>;
 // streamed_mutation itself.
 class streamed_mutation {
 public:
+    // Determines whether streamed_mutation is in forwarding mode or not.
+    //
+    // In forwarding mode the stream does not return all fragments right away,
+    // but only those belonging to the current clustering range. Initially
+    // current range only covers the static row. The stream can be forwarded
+    // (even before end-of- stream) to a later range with fast_forward_to().
+    // Forwarding doesn't change initial restrictions of the stream, it can
+    // only be used to skip over data.
+    //
+    // Monotonicity of positions is preserved by forwarding. That is fragments
+    // emitted after forwarding will have greater positions than any fragments
+    // emitted before forwarding.
+    //
+    // For any range, all range tombstones relevant for that range which are
+    // present in the original stream will be emitted. Range tombstones
+    // emitted before forwarding which overlap with the new range are not
+    // necessarily re-emitted.
+    //
+    // When streamed_mutation is not in forwarding mode, fast_forward_to()
+    // cannot be used.
+    //
+    using forwarding = bool_class<class forwarding_tag>;
+
     // streamed_mutation uses batching. The mutation implementations are
     // supposed to fill a buffer with mutation fragments until is_buffer_full()
     // or end of stream is encountered.
@@ -564,6 +587,11 @@ public:
 
         virtual ~impl() { }
         virtual future<> fill_buffer() = 0;
+
+        // See streamed_mutation::fast_forward_to().
+        virtual future<> fast_forward_to(position_range) {
+            throw std::bad_function_call(); // FIXME: make pure virtual after implementing everywhere.
+        }
 
         bool is_end_of_stream() const { return _end_of_stream; }
         bool is_buffer_empty() const { return _buffer.empty(); }
@@ -610,6 +638,14 @@ public:
     mutation_fragment pop_mutation_fragment() { return _impl->pop_mutation_fragment(); }
 
     future<> fill_buffer() { return _impl->fill_buffer(); }
+
+    // Skips to a later range of rows.
+    // The new range must not overlap with the current range.
+    //
+    // See docs of streamed_mutation::forwarding for semantics.
+    future<> fast_forward_to(position_range pr) {
+        return _impl->fast_forward_to(std::move(pr));
+    }
 
     future<mutation_fragment_opt> operator()() {
         return _impl->operator()();

@@ -488,4 +488,3 @@ position_range::position_range(const query::clustering_range& range)
 position_range::position_range(query::clustering_range&& range)
     : position_range(range) // FIXME: optimize
 { }
-
