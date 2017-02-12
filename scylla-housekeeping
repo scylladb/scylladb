@@ -31,6 +31,8 @@ import os
 import sys
 import subprocess
 import uuid
+import re
+import glob
 from pkg_resources import parse_version
 
 VERSION = "1.0"
@@ -69,6 +71,20 @@ def create_uuid_file(fl):
     with open(args.uuid_file, 'w') as myfile:
         myfile.write(str(uuid.uuid1()) + "\n")
 
+def get_repo_file(dir):
+    files = glob.glob(dir)
+    files.sort(key=os.path.getmtime, reverse=True)
+    for name in files:
+        with open(name, 'r') as myfile:
+            for line in myfile:
+                match = re.search(".*http.?://.*/scylladb/([^/\s]+)/deb/([^/\s]+)\s.*", line)
+                if match:
+                    return match.group(2), match.group(1)
+                match = re.search(".*http.?://.*/scylladb/([^/]+)/rpm/[^/]+/([^/\s]+)/.*", line)
+                if match:
+                    return match.group(2), match.group(1)
+    return None, None
+
 def check_version(ar):
     if config and (not config.has_option("housekeeping", "check-version") or not config.getboolean("housekeeping", "check-version")):
         return
@@ -87,6 +103,10 @@ def check_version(ar):
             params = params + "&sts=" + ar.mode
         if uid:
             params = params + "&uu=" + uid
+        if repo_id:
+            params = params + "&rid=" + repo_id
+        if repo_type:
+            params = params + "&rtype=" + repo_type
         latest_version = get_json_from_url(version_url + params)["version"]
     except:
         traceln("Unable to retrieve version information")
@@ -99,6 +119,7 @@ parser.add_argument('-q', '--quiet', action='store_true', default=False, help='Q
 parser.add_argument('-c', '--config', default="", help='An optional config file. Specifying a missing file will terminate the script')
 parser.add_argument('--uuid', default="", help='A uuid for the requests')
 parser.add_argument('--uuid-file', default="", help='A uuid file for the requests')
+parser.add_argument('--repo-files', default="", help='The repository files that is been used for private repositories')
 
 subparsers = parser.add_subparsers(help='Available commands')
 parser_help = subparsers.add_parser('help', help='Display help information')
@@ -111,6 +132,9 @@ parser_system.set_defaults(func=check_version)
 args = parser.parse_args()
 quiet = args.quiet
 config = None
+repo_id = None
+repo_type = None
+
 if args.config != "":
     if not os.path.isfile(args.config):
         traceln("Config file ", args.config, " is missing, terminating")
@@ -125,4 +149,6 @@ if args.uuid_file != "":
         create_uuid_file(args.uuid_file)
     with open(args.uuid_file, 'r') as myfile:
         uid = myfile.read().replace('\n', '')
+if args.repo_files != "":
+    repo_type, repo_id = get_repo_file(args.repo_files)
 args.func(args)
