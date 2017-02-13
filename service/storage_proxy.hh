@@ -282,8 +282,10 @@ private:
         frozen_mutation fm;
         schema_ptr s;
     };
-    future<> mutate_counters_on_leader(std::vector<frozen_mutation_and_schema> mutations, db::consistency_level cl, clock_type::time_point timeout);
-    future<> mutate_counter_on_leader_and_replicate(const schema_ptr& s, frozen_mutation m, db::consistency_level cl, clock_type::time_point timeout);
+    future<> mutate_counters_on_leader(std::vector<frozen_mutation_and_schema> mutations, db::consistency_level cl, clock_type::time_point timeout,
+                                       tracing::trace_state_ptr trace_state);
+    future<> mutate_counter_on_leader_and_replicate(const schema_ptr& s, frozen_mutation m, db::consistency_level cl, clock_type::time_point timeout,
+                                                    tracing::trace_state_ptr trace_state);
 
     gms::inet_address find_leader_for_counter_update(const mutation& m, db::consistency_level cl);
 public:

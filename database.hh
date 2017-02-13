@@ -1139,7 +1139,8 @@ private:
 
     query::result_memory_limiter _result_memory_limiter;
 
-    future<mutation> do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema, timeout_clock::time_point timeout);
+    future<mutation> do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema, timeout_clock::time_point timeout,
+                                             tracing::trace_state_ptr trace_state);
 public:
     static utils::UUID empty_version;
 
@@ -1214,7 +1215,7 @@ public:
     // Throws timed_out_error when timeout is reached.
     future<> apply(schema_ptr, const frozen_mutation&, timeout_clock::time_point timeout = timeout_clock::time_point::max());
     future<> apply_streaming_mutation(schema_ptr, utils::UUID plan_id, const frozen_mutation&, bool fragmented);
-    future<mutation> apply_counter_update(schema_ptr, const frozen_mutation& m, timeout_clock::time_point timeout = timeout_clock::time_point::max());
+    future<mutation> apply_counter_update(schema_ptr, const frozen_mutation& m, timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
     const sstring& get_snitch_name() const;
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names);

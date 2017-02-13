@@ -2694,7 +2694,8 @@ column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const
     do_apply(rp, m, m_schema);
 }
 
-future<mutation> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema, timeout_clock::time_point timeout) {
+future<mutation> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema,
+                                                   timeout_clock::time_point timeout,tracing::trace_state_ptr trace_state) {
     auto m = fm.unfreeze(m_schema);
     m.upgrade(cf.schema());
 
@@ -2720,8 +2721,8 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
         cql_serialization_format::internal(), query::max_rows);
 
     return do_with(std::move(slice), std::move(m), std::vector<locked_cell>(),
-                   [this, &cf, timeout] (const query::partition_slice& slice, mutation& m, std::vector<locked_cell>& locks) mutable {
-        return cf.lock_counter_cells(m, timeout).then([&, m_schema = cf.schema(), timeout, this] (std::vector<locked_cell> lcs) {
+                   [this, &cf, timeout, trace_state = std::move(trace_state)] (const query::partition_slice& slice, mutation& m, std::vector<locked_cell>& locks) mutable {
+        return cf.lock_counter_cells(m, timeout).then([&, m_schema = cf.schema(), trace_state = std::move(trace_state), timeout, this] (std::vector<locked_cell> lcs) mutable {
             locks = std::move(lcs);
 
             // Before counter update is applied it needs to be transformed from
@@ -2729,7 +2730,7 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
             // counter state for each modified cell...
 
             // FIXME: tracing
-            return counter_write_query(m_schema, cf.as_mutation_source(), m.decorated_key(), slice, {})
+            return counter_write_query(m_schema, cf.as_mutation_source(), m.decorated_key(), slice, std::move(trace_state))
                     .then([this, &cf, &m, m_schema, timeout] (auto mopt) {
                 // ...now, that we got existing state of all affected counter
                 // cells we can look for our shard in each of them, increment
@@ -2894,14 +2895,14 @@ future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rep
     }, timeout);
 }
 
-future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
+future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
     if (!s->is_synced()) {
         throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
                                         s->ks_name(), s->cf_name(), s->version()));
     }
     try {
         auto& cf = find_column_family(m.column_family_id());
-        return do_apply_counter_update(cf, m, s, timeout);
+        return do_apply_counter_update(cf, m, s, timeout, std::move(trace_state));
     } catch (no_such_column_family&) {
         dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
         throw;
