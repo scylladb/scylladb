@@ -759,20 +759,16 @@ class sstable_streamed_mutation : public streamed_mutation::impl {
     bool _finished = false;
     range_tombstone_stream _range_tombstones;
     mutation_fragment_opt _current_candidate;
-    mutation_fragment_opt _next_candidate;
-    stdx::optional<position_in_partition> _last_position;
     position_in_partition::less_compare _cmp;
     position_in_partition::equal_compare _eq;
 private:
     future<stdx::optional<mutation_fragment_opt>> read_next() {
         // Because of #1203 we may encounter sstables with range tombstones
         // placed earler than expected.
-        if (_next_candidate || (_current_candidate && _finished)) {
-            assert(_current_candidate);
+        if (_current_candidate) {
             auto mf = _range_tombstones.get_next(*_current_candidate);
             if (!mf) {
                 mf = move_and_disengage(_current_candidate);
-                _current_candidate = move_and_disengage(_next_candidate);
             }
             return make_ready_future<stdx::optional<mutation_fragment_opt>>(std::move(mf));
         }
@@ -785,25 +781,9 @@ private:
             auto mf = _ds->_consumer.get_mutation_fragment();
             if (mf) {
                 if (mf->is_range_tombstone()) {
-                    // If sstable uses promoted index it will repeat relevant range tombstones in
-                    // each block. Do not emit these duplicates as they will break the guarantee
-                    // that mutation fragment are produced in ascending order.
-                    if (!_last_position || !_cmp(mf->position(), *_last_position)) {
-                        _last_position = position_in_partition(mf->position());
-                        _range_tombstones.apply(std::move(*mf).as_range_tombstone());
-                    }
+                    _range_tombstones.apply(std::move(*mf).as_range_tombstone());
                 } else {
-                    // mp_row_consumer may produce mutation_fragments in parts if they are
-                    // interrupted by range tombstone duplicate. Make sure they are merged
-                    // before emitting them.
-                    _last_position = position_in_partition(mf->position());
-                    if (!_current_candidate) {
-                        _current_candidate = std::move(mf);
-                    } else if (_current_candidate && _eq(_current_candidate->position(), mf->position())) {
-                        _current_candidate->apply(*_schema, std::move(*mf));
-                    } else {
-                        _next_candidate = std::move(mf);
-                    }
+                    _current_candidate = std::move(mf);
                 }
             }
             return stdx::optional<mutation_fragment_opt>();
