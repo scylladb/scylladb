@@ -279,15 +279,13 @@ private:
 
     // We rely on the fact that the first 'S' in SSTables stands for 'sorted'
     // and the clustering row keys are always in an ascending order.
-    bool is_in_range(const clustering_key_prefix& ck) {
-        // This is a wrong comparator to use here, but at the moment the correct
-        // one has a very serious disadvantage of not existing (see #1446).
-        clustering_key_prefix::prefix_equality_less_compare cmp(*_schema);
+    bool is_in_range(position_in_partition_view pos) {
+        position_in_partition::less_compare less(*_schema);
 
         while (_current_ck_range != _ck_range_end) {
             if (!_in_current_ck_range && _current_ck_range->start()) {
-                auto& start = *_current_ck_range->start();
-                if ((start.is_inclusive() && cmp(ck, start.value())) || (!start.is_inclusive() && !cmp(start.value(), ck))) {
+                position_in_partition_view range_start(position_in_partition_view::range_tag_t(), bound_view::from_range_start(*_current_ck_range));
+                if (less(pos, range_start)) {
                     return false;
                 }
             }
@@ -299,8 +297,8 @@ private:
                 return true;
             }
 
-            auto& end = *_current_ck_range->end();
-            if ((!end.is_inclusive() && cmp(ck, end.value())) || (end.is_inclusive() && !cmp(end.value(), ck))) {
+            position_in_partition_view range_end(position_in_partition_view::range_tag_t(), bound_view::from_range_end(*_current_ck_range));
+            if (less(pos, range_end)) {
                 return true;
             }
 
@@ -420,7 +418,7 @@ public:
             flush();
         }
         if (!_in_progress) {
-            _skip_clustering_row = !is_static && !is_in_range(pos.key());
+            _skip_clustering_row = !is_static && !is_in_range(static_cast<position_in_partition_view>(pos));
             if (is_static) {
                 _in_progress = mutation_fragment(static_row());
             } else {
