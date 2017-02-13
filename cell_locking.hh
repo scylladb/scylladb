@@ -137,6 +137,9 @@ public:
 class locked_cell;
 
 class cell_locker {
+public:
+    using timeout_clock = lowres_clock;
+private:
     class partition_entry;
 
     struct cell_address {
@@ -374,7 +377,8 @@ public:
     }
 
     // partition_cells_range is required to be in cell_locker::schema()
-    future<std::vector<locked_cell>> lock_cells(const dht::decorated_key& dk, partition_cells_range&& range);
+    future<std::vector<locked_cell>> lock_cells(const dht::decorated_key& dk, partition_cells_range&& range,
+                                                timeout_clock::time_point timeout);
 };
 
 
@@ -441,7 +445,7 @@ public:
 };
 
 inline
-future<std::vector<locked_cell>> cell_locker::lock_cells(const dht::decorated_key& dk, partition_cells_range&& range) {
+future<std::vector<locked_cell>> cell_locker::lock_cells(const dht::decorated_key& dk, partition_cells_range&& range, timeout_clock::time_point) {
     partition_entry::hasher pe_hash;
     partition_entry::equal_compare pe_eq(*_schema);
 

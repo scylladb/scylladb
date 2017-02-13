@@ -667,9 +667,9 @@ column_family::make_streaming_reader(schema_ptr s,
     return make_multi_range_reader(s, std::move(source), ranges, slice, pc, nullptr, streamed_mutation::forwarding::no);
 }
 
-future<std::vector<locked_cell>> column_family::lock_counter_cells(const mutation& m) {
+future<std::vector<locked_cell>> column_family::lock_counter_cells(const mutation& m, timeout_clock::time_point timeout) {
     assert(m.schema() == _counter_cell_locks->schema());
-    return _counter_cell_locks->lock_cells(m.decorated_key(), partition_cells_range(m.partition()));
+    return _counter_cell_locks->lock_cells(m.decorated_key(), partition_cells_range(m.partition()), timeout);
 }
 
 // Not performance critical. Currently used for testing only.
@@ -2694,7 +2694,7 @@ column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const
     do_apply(rp, m, m_schema);
 }
 
-future<mutation> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema) {
+future<mutation> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema, timeout_clock::time_point timeout) {
     auto m = fm.unfreeze(m_schema);
     m.upgrade(cf.schema());
 
@@ -2720,8 +2720,8 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
         cql_serialization_format::internal(), query::max_rows);
 
     return do_with(std::move(slice), std::move(m), std::vector<locked_cell>(),
-                   [this, &cf] (const query::partition_slice& slice, mutation& m, std::vector<locked_cell>& locks) mutable {
-        return cf.lock_counter_cells(m).then([&, m_schema = cf.schema(), this] (std::vector<locked_cell> lcs) {
+                   [this, &cf, timeout] (const query::partition_slice& slice, mutation& m, std::vector<locked_cell>& locks) mutable {
+        return cf.lock_counter_cells(m, timeout).then([&, m_schema = cf.schema(), timeout, this] (std::vector<locked_cell> lcs) {
             locks = std::move(lcs);
 
             // Before counter update is applied it needs to be transformed from
@@ -2730,14 +2730,12 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
 
             // FIXME: tracing
             return counter_write_query(m_schema, cf.as_mutation_source(), m.decorated_key(), slice, {})
-                    .then([this, &cf, &m, m_schema] (auto mopt) {
+                    .then([this, &cf, &m, m_schema, timeout] (auto mopt) {
                 // ...now, that we got existing state of all affected counter
                 // cells we can look for our shard in each of them, increment
                 // its clock and apply the delta.
                 transform_counter_updates_to_shards(m, mopt ? &*mopt : nullptr, cf.failed_counter_applies_to_memtable());
-
-                // FIXME: timeout
-                return this->apply_with_commitlog(cf, m, { });
+                return this->apply_with_commitlog(cf, m, timeout);
             }).then([&m] {
                 return std::move(m);
             });
@@ -2903,7 +2901,7 @@ future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutat
     }
     try {
         auto& cf = find_column_family(m.column_family_id());
-        return do_apply_counter_update(cf, m, s);
+        return do_apply_counter_update(cf, m, s, timeout);
     } catch (no_such_column_family&) {
         dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
         throw;

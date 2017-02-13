@@ -992,8 +992,8 @@ future<>
 storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, frozen_mutation fm, db::consistency_level cl, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(fm);
     return _db.invoke_on(shard, [gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout] (database& db) {
-        return db.apply_counter_update(gs, fm, timeout).then([cl] (mutation m) {
-            return service::get_local_storage_proxy().replicate_counter_from_leader(std::move(m), cl, { });
+        return db.apply_counter_update(gs, fm, timeout).then([cl, timeout] (mutation m) {
+            return service::get_local_storage_proxy().replicate_counter_from_leader(std::move(m), cl, { }, timeout);
         });
     });
 }
@@ -1106,8 +1106,9 @@ future<std::vector<storage_proxy::unique_response_handler>> storage_proxy::mutat
     });
 }
 
-future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl) {
-    return parallel_for_each(ids, [this, cl] (unique_response_handler& protected_response) {
+future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl,
+                                     stdx::optional<clock_type::time_point> timeout_opt) {
+    return parallel_for_each(ids, [this, cl, timeout_opt] (unique_response_handler& protected_response) {
         auto response_id = protected_response.id;
         // it is better to send first and hint afterwards to reduce latency
         // but request may complete before hint_to_dead_endpoints() is called and
@@ -1115,7 +1116,7 @@ future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, d
         // frozen_mutation copy, or manage handler live time differently.
         hint_to_dead_endpoints(response_id, cl);
 
-        auto timeout = clock_type::now() + std::chrono::milliseconds(_db.local().get_config().write_request_timeout_in_ms());
+        auto timeout = timeout_opt.value_or(clock_type::now() + std::chrono::milliseconds(_db.local().get_config().write_request_timeout_in_ms()));
         // call before send_to_live_endpoints() for the same reason as above
         auto f = response_wait(response_id, timeout);
         send_to_live_endpoints(protected_response.release(), timeout); // response is now running and it will either complete or timeout
@@ -1244,9 +1245,10 @@ future<> storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_
     );
 }
 
-future<> storage_proxy::replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state) {
+future<> storage_proxy::replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state,
+                                                      clock_type::time_point timeout) {
     // FIXME: do not send the mutation to itself, it has already been applied (it is not incorrect to do so, though)
-    return mutate_internal(std::array<mutation, 1>{std::move(m)}, cl, true, std::move(tr_state));
+    return mutate_internal(std::array<mutation, 1>{std::move(m)}, cl, true, std::move(tr_state), timeout);
 }
 
 /*
@@ -1256,7 +1258,8 @@ future<> storage_proxy::replicate_counter_from_leader(mutation m, db::consistenc
  */
 template<typename Range>
 future<>
-storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool counters, tracing::trace_state_ptr tr_state) {
+storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool counters, tracing::trace_state_ptr tr_state,
+                               stdx::optional<clock_type::time_point> timeout_opt) {
     logger.trace("mutate cl={}", cl);
     mlogger.trace("mutations={}", mutations);
     if (boost::empty(mutations)) {
@@ -1271,8 +1274,8 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool c
     utils::latency_counter lc;
     lc.start();
 
-    return mutate_prepare(mutations, cl, type, tr_state).then([this, cl] (std::vector<storage_proxy::unique_response_handler> ids) {
-        return mutate_begin(std::move(ids), cl);
+    return mutate_prepare(mutations, cl, type, tr_state).then([this, cl, timeout_opt] (std::vector<storage_proxy::unique_response_handler> ids) {
+        return mutate_begin(std::move(ids), cl, timeout_opt);
     }).then_wrapped([p = shared_from_this(), lc, tr_state] (future<> f) mutable {
         return p->mutate_end(std::move(f), lc, std::move(tr_state));
     });

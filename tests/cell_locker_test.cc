@@ -75,6 +75,10 @@ static schema_ptr make_schema_disjoint_with_others()
 
 static data_value empty_value = data_value(to_bytes(""));
 
+static cell_locker::timeout_clock::time_point no_timeout {
+    cell_locker::timeout_clock::duration(std::numeric_limits<cell_locker::timeout_clock::duration::rep>::max())
+};
+
 static auto make_row(const sstring& key, std::initializer_list<sstring> cells) {
     return std::pair<sstring, std::initializer_list<sstring>>(key, cells);
 }
@@ -107,8 +111,8 @@ SEASTAR_TEST_CASE(test_simple_locking_cells) {
             make_row("two", { "r2", "r3" }),
         });
 
-        auto l1 = cl.lock_cells(m.decorated_key(), partition_cells_range(m.partition())).get0();
-        auto f2 = cl.lock_cells(m.decorated_key(), partition_cells_range(m.partition()));
+        auto l1 = cl.lock_cells(m.decorated_key(), partition_cells_range(m.partition()), no_timeout).get0();
+        auto f2 = cl.lock_cells(m.decorated_key(), partition_cells_range(m.partition()), no_timeout);
         BOOST_REQUIRE(!f2.available());
 
         destroy(std::move(l1));
@@ -133,9 +137,9 @@ SEASTAR_TEST_CASE(test_disjoint_mutations) {
         auto m3 = mutation(partition_key::from_single_value(*s, to_bytes("1")), s);
         m3.partition() = m1.partition();
 
-        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition())).get0();
-        auto l2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition())).get0();
-        auto l3 = cl.lock_cells(m3.decorated_key(), partition_cells_range(m3.partition())).get0();
+        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get0();
+        auto l2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout).get0();
+        auto l3 = cl.lock_cells(m3.decorated_key(), partition_cells_range(m3.partition()), no_timeout).get0();
     });
 }
 
@@ -159,12 +163,12 @@ SEASTAR_TEST_CASE(test_single_cell_overlap) {
                 make_row("one", { "r2", "r3" }),
         });
 
-        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition())).get0();
-        auto f2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()));
+        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get0();
+        auto f2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout);
         BOOST_REQUIRE(!f2.available());
         destroy(std::move(l1));
         auto l2 = f2.get0();
-        auto f3 = cl.lock_cells(m3.decorated_key(), partition_cells_range(m3.partition()));
+        auto f3 = cl.lock_cells(m3.decorated_key(), partition_cells_range(m3.partition()), no_timeout);
         BOOST_REQUIRE(!f3.available());
         destroy(std::move(l2));
         auto l3 = f3.get0();
@@ -194,14 +198,14 @@ SEASTAR_TEST_CASE(test_schema_change) {
                 make_row("one", { "r1", "r3" }),
         });
 
-        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition())).get0();
+        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get0();
 
         destroy(std::move(m1));
         destroy(std::move(s1));
         cl.set_schema(s2);
 
-        auto l2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition())).get0();
-        auto f3 = cl.lock_cells(m3.decorated_key(), partition_cells_range(m3.partition()));
+        auto l2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout).get0();
+        auto f3 = cl.lock_cells(m3.decorated_key(), partition_cells_range(m3.partition()), no_timeout);
         BOOST_REQUIRE(!f3.available());
         destroy(std::move(l1));
         auto l3 = f3.get0();
@@ -213,6 +217,6 @@ SEASTAR_TEST_CASE(test_schema_change) {
                 make_row("one", { "r8", "r9" }),
                 make_row("two", { "r8", "r9" }),
         });
-        auto l4 = cl.lock_cells(m4.decorated_key(), partition_cells_range(m4.partition())).get0();
+        auto l4 = cl.lock_cells(m4.decorated_key(), partition_cells_range(m4.partition()), no_timeout).get0();
     });
 }

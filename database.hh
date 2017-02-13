@@ -392,6 +392,8 @@ struct cf_stats {
 
 class column_family {
 public:
+    using timeout_clock = lowres_clock;
+
     struct config {
         sstring datadir;
         bool enable_disk_writes = true;
@@ -661,7 +663,7 @@ public:
         return _cache;
     }
 
-    future<std::vector<locked_cell>> lock_counter_cells(const mutation& m);
+    future<std::vector<locked_cell>> lock_counter_cells(const mutation& m, timeout_clock::time_point timeout);
 
     logalloc::occupancy_stats occupancy() const;
 private:
@@ -1137,7 +1139,7 @@ private:
 
     query::result_memory_limiter _result_memory_limiter;
 
-    future<mutation> do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema);
+    future<mutation> do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema, timeout_clock::time_point timeout);
 public:
     static utils::UUID empty_version;
 
