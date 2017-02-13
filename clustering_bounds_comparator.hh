@@ -142,11 +142,20 @@ public:
         };
     };*/
     template<template<typename> typename Range>
+    static bound_view from_range_start(const Range<clustering_key_prefix>& range) {
+        return range.start()
+               ? bound_view(range.start()->value(), range.start()->is_inclusive() ? bound_kind::incl_start : bound_kind::excl_start)
+               : bottom();
+    }
+    template<template<typename> typename Range>
+    static bound_view from_range_end(const Range<clustering_key_prefix>& range) {
+        return range.end()
+               ? bound_view(range.end()->value(), range.end()->is_inclusive() ? bound_kind::incl_end : bound_kind::excl_end)
+               : top();
+    }
+    template<template<typename> typename Range>
     static std::pair<bound_view, bound_view> from_range(const Range<clustering_key_prefix>& range) {
-        return {
-            range.start() ? bound_view(range.start()->value(), range.start()->is_inclusive() ? bound_kind::incl_start : bound_kind::excl_start) : bottom(),
-            range.end() ? bound_view(range.end()->value(), range.end()->is_inclusive() ? bound_kind::incl_end : bound_kind::excl_end) : top(),
-        };
+        return {from_range_start(range), from_range_end(range)};
     }
     friend std::ostream& operator<<(std::ostream& out, const bound_view& b) {
         return out << "{bound: prefix=" << b.prefix << ", kind=" << b.kind << "}";
