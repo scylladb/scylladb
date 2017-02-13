@@ -310,6 +310,31 @@ private:
         return false;
     }
 
+    // Returns true if and only if the range tombstone is relevant for requested ranges.
+    // Assumes that this and is_in_range() are called with monotonic positions, except before
+    // the first call to is_in_range(), due to #1203.
+    bool is_tombstone_in_range(const range_tombstone& rt) {
+        position_in_partition::less_compare less(*_schema);
+        auto&& start = rt.position();
+        auto&& end = rt.end_position();
+
+        auto i = _current_ck_range; // Cannot advance _current_ck_range due to #1203
+        while (i != _ck_range_end) {
+            position_in_partition_view range_start(position_in_partition_view::range_tag_t(), bound_view::from_range_start(*i));
+            if (less(end, range_start)) {
+                return false;
+            }
+
+            position_in_partition_view range_end(position_in_partition_view::range_tag_t(), bound_view::from_range_end(*i));
+            if (less(start, range_end)) {
+                return true;
+            }
+
+            ++i;
+        }
+        return false;
+    }
+
     void set_up_ck_ranges(const partition_key& pk) {
         _ck_ranges = query::clustering_key_filter_ranges::get_ranges(*_schema, _slice, pk);
         _current_ck_range = _ck_ranges->begin();
@@ -634,6 +659,14 @@ public:
                 return ret;
             } else {
                 auto rt = range_tombstone(std::move(start_ck), start_kind, std::move(end), end_kind, tombstone(deltime));
+                position_in_partition::less_compare less(*_schema);
+                auto rt_pos = rt.position();
+                if (_in_progress && less(rt_pos, _in_progress->position())) {
+                    return proceed::yes; // repeated tombstone, ignore
+                }
+                if (!is_tombstone_in_range(rt)) {
+                    return proceed::yes;
+                }
                 if (flush_if_needed_for_range_tombstone() == proceed::yes) {
                     _ready = mutation_fragment(std::move(rt));
                 } else {
