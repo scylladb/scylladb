@@ -140,6 +140,8 @@ class cell_locker {
 public:
     using timeout_clock = lowres_clock;
 private:
+    using semaphore_type = basic_semaphore<default_timeout_exception_factory, timeout_clock>;
+
     class partition_entry;
 
     struct cell_address {
@@ -151,7 +153,7 @@ private:
                        public enable_lw_shared_from_this<cell_entry> {
         partition_entry& _parent;
         cell_address _address;
-        semaphore _semaphore { 0 };
+        semaphore_type _semaphore { 0 };
 
         friend class cell_locker;
     public:
@@ -180,8 +182,8 @@ private:
             return _address.position;
         }
 
-        future<> lock() {
-            return _semaphore.wait();
+        future<> lock(timeout_clock::time_point _timeout) {
+            return _semaphore.wait(_timeout);
         }
         void unlock() {
             _semaphore.signal();
@@ -407,6 +409,7 @@ struct cell_locker::locker {
     partition_cells_range::iterator _current_ck;
     cells_range::const_iterator _current_cell;
 
+    timeout_clock::time_point _timeout;
     std::vector<locked_cell> _locks;
 private:
     void update_ck() {
@@ -419,12 +422,13 @@ private:
 
     bool is_done() const { return _current_ck == _range.end(); }
 public:
-    explicit locker(const ::schema& s, partition_entry& pe, partition_cells_range&& range)
+    explicit locker(const ::schema& s, partition_entry& pe, partition_cells_range&& range, timeout_clock::time_point timeout)
         : _hasher(s)
         , _eq_cmp(s)
         , _partition_entry(pe)
         , _range(std::move(range))
         , _current_ck(_range.begin())
+        , _timeout(timeout)
     {
         update_ck();
     }
@@ -445,7 +449,7 @@ public:
 };
 
 inline
-future<std::vector<locked_cell>> cell_locker::lock_cells(const dht::decorated_key& dk, partition_cells_range&& range, timeout_clock::time_point) {
+future<std::vector<locked_cell>> cell_locker::lock_cells(const dht::decorated_key& dk, partition_cells_range&& range, timeout_clock::time_point timeout) {
     partition_entry::hasher pe_hash;
     partition_entry::equal_compare pe_eq(*_schema);
 
@@ -480,7 +484,7 @@ future<std::vector<locked_cell>> cell_locker::lock_cells(const dht::decorated_ke
         return make_ready_future<std::vector<locked_cell>>(std::move(locks));
     }
 
-    auto l = std::make_unique<locker>(*_schema, *it, std::move(range));
+    auto l = std::make_unique<locker>(*_schema, *it, std::move(range), timeout);
     auto f = l->lock_all();
     return f.then([l = std::move(l)] {
         return std::move(*l).get();
@@ -501,7 +505,7 @@ future<> cell_locker::locker::lock_next() {
         cell_address ca { position_in_partition(_current_ck->position()), cid };
         auto it = _partition_entry.cells().find(ca, _hasher, _eq_cmp);
         if (it != _partition_entry.cells().end()) {
-            return it->lock().then([this, ce = it->shared_from_this()] () mutable {
+            return it->lock(_timeout).then([this, ce = it->shared_from_this()] () mutable {
                 _locks.emplace_back(std::move(ce));
             });
         }
