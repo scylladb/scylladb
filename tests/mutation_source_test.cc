@@ -44,6 +44,55 @@ static api::timestamp_type new_timestamp() {
     return ts++;
 }
 
+static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populate_fn populate) {
+    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+
+    // Generates few random mutations and row slices and verifies that using
+    // fast_forward_to() over the slices gives the same mutations as using those
+    // slices in partition_slice without forwarding.
+
+    random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+
+    for (int i = 0; i < 10; ++i) {
+        mutation m = gen();
+
+        std::vector<query::clustering_range> ranges = gen.make_random_ranges(10);
+        auto prange = dht::partition_range::make_singular(m.decorated_key());
+        query::partition_slice full_slice = partition_slice_builder(*m.schema()).build();
+        query::partition_slice slice_with_ranges = partition_slice_builder(*m.schema())
+            .with_ranges(ranges)
+            .build();
+
+        BOOST_TEST_MESSAGE(sprint("ranges: %s", ranges));
+
+        mutation_source ms = populate(m.schema(), {m});
+
+        streamed_mutation sliced_sm = [&] {
+            mutation_reader rd = ms(m.schema(), prange, slice_with_ranges);
+            streamed_mutation_opt smo = rd().get0();
+            BOOST_REQUIRE(bool(smo));
+            return std::move(*smo);
+        }();
+
+        streamed_mutation fwd_sm = [&] {
+            mutation_reader rd = ms(m.schema(), prange, full_slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
+            streamed_mutation_opt smo = rd().get0();
+            BOOST_REQUIRE(bool(smo));
+            return std::move(*smo);
+        }();
+
+        mutation fwd_m = mutation_from_streamed_mutation(fwd_sm).get0();
+        for (auto&& range : ranges) {
+            BOOST_TEST_MESSAGE(sprint("fwd %s", range));
+            fwd_sm.fast_forward_to(position_range(range));
+            fwd_m += mutation_from_streamed_mutation(fwd_sm).get0();
+        }
+
+        mutation sliced_m = mutation_from_streamed_mutation(sliced_sm).get0();
+        assert_that(sliced_m).is_equal_to(fwd_m);
+    }
+}
+
 // Helper for working with the following table:
 //
 //   CREATE TABLE ks.cf (pk utf8, ck utf8, v utf8, s1 utf8 static, PRIMARY KEY (pk, ck));
@@ -62,6 +111,11 @@ public:
 
     clustering_key make_ckey(sstring ck) {
         return clustering_key::from_single_value(*_s, data_value(ck).serialize());
+    }
+
+    // Make a clustering_key which is n-th in some arbitrary sequence of keys
+    clustering_key make_ckey(uint32_t n) {
+        return make_ckey(sprint("ck%010d", n));
     }
 
     partition_key make_pkey(sstring pk) {
@@ -83,10 +137,136 @@ public:
         return rt;
     }
 
+    mutation new_mutation(sstring pk) {
+        return mutation(make_pkey(pk), _s);
+    }
+
     schema_ptr schema() {
         return _s;
     }
 };
+
+static void test_streamed_mutation_forwarding_guarantees(populate_fn populate) {
+    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+
+    simple_schema table;
+    schema_ptr s = table.schema();
+
+    // mutation will include odd keys
+    auto contains_key = [] (int i) {
+        return i % 2 == 1;
+    };
+
+    const int n_keys = 1001;
+    assert(!contains_key(n_keys - 1)); // so that we can form a range with position greater than all keys
+
+    mutation m(table.make_pkey("pkey1"), s);
+    std::vector<clustering_key> keys;
+    for (int i = 0; i < n_keys; ++i) {
+        keys.push_back(table.make_ckey(i));
+        if (contains_key(i)) {
+            table.add_row(m, keys.back(), "value");
+        }
+    }
+
+    table.add_static_row(m, "static_value");
+
+    mutation_source ms = populate(s, std::vector<mutation>({m}));
+
+    auto new_stream = [&ms, s] () -> streamed_mutation_assertions {
+        BOOST_TEST_MESSAGE("Creating new streamed_mutation");
+        mutation_reader rd = ms(s,
+            query::full_partition_range,
+            query::full_slice,
+            default_priority_class(),
+            nullptr,
+            streamed_mutation::forwarding::yes);
+
+        streamed_mutation_opt smo = rd().get0();
+        BOOST_REQUIRE(bool(smo));
+        return assert_that_stream(std::move(*smo));
+    };
+
+    auto verify_range = [&] (streamed_mutation_assertions& sm, int start, int end) {
+        sm.fwd_to(keys[start], keys[end]);
+
+        for (; start < end; ++start) {
+            if (!contains_key(start)) {
+                BOOST_TEST_MESSAGE(sprint("skip %d", start));
+                continue;
+            }
+            sm.produces_row_with_key(keys[start]);
+        }
+        sm.produces_end_of_stream();
+    };
+
+    // Test cases start here
+
+    {
+        auto sm = new_stream();
+        sm.produces_static_row();
+        sm.produces_end_of_stream();
+    }
+
+    {
+        auto sm = new_stream();
+        verify_range(sm, 0, 1);
+        verify_range(sm, 1, 2);
+        verify_range(sm, 2, 4);
+        verify_range(sm, 7, 7);
+        verify_range(sm, 7, 9);
+        verify_range(sm, 11, 15);
+        verify_range(sm, 21, 32);
+        verify_range(sm, 132, 200);
+        verify_range(sm, 300, n_keys - 1);
+    }
+
+    // Skip before EOS
+    {
+        auto sm = new_stream();
+        sm.fwd_to(keys[0], keys[4]);
+        sm.produces_row_with_key(keys[1]);
+        sm.fwd_to(keys[5], keys[8]);
+        sm.produces_row_with_key(keys[5]);
+        sm.produces_row_with_key(keys[7]);
+        sm.produces_end_of_stream();
+        sm.fwd_to(keys[9], keys[12]);
+        sm.fwd_to(keys[12], keys[13]);
+        sm.fwd_to(keys[13], keys[13]);
+        sm.produces_end_of_stream();
+        sm.fwd_to(keys[13], keys[16]);
+        sm.produces_row_with_key(keys[13]);
+        sm.produces_row_with_key(keys[15]);
+        sm.produces_end_of_stream();
+    }
+
+    {
+        auto sm = new_stream();
+        verify_range(sm, n_keys - 2, n_keys - 1);
+    }
+
+    {
+        auto sm = new_stream();
+        verify_range(sm, 0, n_keys - 1);
+    }
+
+    // Few random ranges
+    std::default_random_engine rnd;
+    std::uniform_int_distribution<int> key_dist{0, n_keys - 1};
+    for (int i = 0; i < 10; ++i) {
+        std::vector<int> indices;
+        const int n_ranges = 7;
+        for (int j = 0; j < n_ranges * 2; ++j) {
+            indices.push_back(key_dist(rnd));
+        }
+        std::sort(indices.begin(), indices.end());
+
+        auto sm = new_stream();
+        for (int j = 0; j < n_ranges; ++j) {
+            verify_range(sm, indices[j*2], indices[j*2 + 1]);
+        }
+    }
+}
 
 static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(populate_fn populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
@@ -98,7 +278,7 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
 
     std::vector<clustering_key> keys;
     for (int i = 0; i < 20; ++i) {
-        keys.push_back(table.make_ckey(sprint("ck%05d", i)));
+        keys.push_back(table.make_ckey(i));
     }
 
     auto rt1 = table.delete_range(m, query::clustering_range::make(
@@ -156,6 +336,100 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
     sm.produces_range_tombstone(rt3);
     sm.produces_row_with_key(keys[8]);
     sm.produces_range_tombstone(rt4);
+    sm.produces_end_of_stream();
+}
+
+static void test_streamed_mutation_forwarding_across_range_tombstones(populate_fn populate) {
+    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+
+    simple_schema table;
+    schema_ptr s = table.schema();
+
+    mutation m(table.make_pkey("pkey1"), s);
+
+    std::vector<clustering_key> keys;
+    for (int i = 0; i < 20; ++i) {
+        keys.push_back(table.make_ckey(i));
+    }
+
+    auto rt1 = table.delete_range(m, query::clustering_range::make(
+        query::clustering_range::bound(keys[0], true),
+        query::clustering_range::bound(keys[1], false)
+    ));
+
+    table.add_row(m, keys[2], "value");
+
+    auto rt2 = table.delete_range(m, query::clustering_range::make(
+        query::clustering_range::bound(keys[3], true),
+        query::clustering_range::bound(keys[6], true)
+    ));
+
+    table.add_row(m, keys[4], "value");
+
+    auto rt3 = table.delete_range(m, query::clustering_range::make(
+        query::clustering_range::bound(keys[7], true),
+        query::clustering_range::bound(keys[8], true)
+    ));
+
+    auto rt4 = table.delete_range(m, query::clustering_range::make(
+        query::clustering_range::bound(keys[9], true),
+        query::clustering_range::bound(keys[10], true)
+    ));
+
+    auto rt5 = table.delete_range(m, query::clustering_range::make(
+        query::clustering_range::bound(keys[11], true),
+        query::clustering_range::bound(keys[13], true)
+    ));
+
+    mutation_source ms = populate(s, std::vector<mutation>({m}));
+    mutation_reader rd = ms(s,
+        query::full_partition_range,
+        query::full_slice,
+        default_priority_class(),
+        nullptr,
+        streamed_mutation::forwarding::yes);
+
+    streamed_mutation_opt smo = rd().get0();
+    BOOST_REQUIRE(bool(smo));
+    auto sm = assert_that_stream(std::move(*smo));
+
+    sm.fwd_to(position_range(query::clustering_range::make(
+        query::clustering_range::bound(keys[1], true),
+        query::clustering_range::bound(keys[2], true)
+    )));
+
+    sm.produces_row_with_key(keys[2]);
+
+    sm.fwd_to(position_range(query::clustering_range::make(
+        query::clustering_range::bound(keys[4], true),
+        query::clustering_range::bound(keys[8], false)
+    )));
+
+    sm.produces_range_tombstone(rt2);
+    sm.produces_row_with_key(keys[4]);
+    sm.produces_range_tombstone(rt3);
+
+    sm.fwd_to(position_range(query::clustering_range::make(
+        query::clustering_range::bound(keys[10], true),
+        query::clustering_range::bound(keys[12], false)
+    )));
+
+    sm.produces_range_tombstone(rt4);
+    sm.produces_range_tombstone(rt5);
+    sm.produces_end_of_stream();
+
+    sm.fwd_to(position_range(query::clustering_range::make(
+        query::clustering_range::bound(keys[14], true),
+        query::clustering_range::bound(keys[15], false)
+    )));
+
+    sm.produces_end_of_stream();
+
+    sm.fwd_to(position_range(query::clustering_range::make(
+        query::clustering_range::bound(keys[15], true),
+        query::clustering_range::bound(keys[16], false)
+    )));
+
     sm.produces_end_of_stream();
 }
 
@@ -290,7 +564,10 @@ static void test_range_queries(populate_fn populate) {
 }
 
 void run_mutation_source_tests(populate_fn populate) {
+    test_streamed_mutation_forwarding_across_range_tombstones(populate);
+    test_streamed_mutation_forwarding_guarantees(populate);
     test_streamed_mutation_slicing_returns_only_relevant_tombstones(populate);
+    test_streamed_mutation_forwarding_is_consistent_with_slicing(populate);
     test_range_queries(populate);
 }
 
