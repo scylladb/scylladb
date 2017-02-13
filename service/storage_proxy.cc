@@ -1223,6 +1223,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 
             auto& ms = net::get_local_messaging_service();
             auto msg_addr = net::messaging_service::msg_addr{ endpoint_and_mutations.first, 0 };
+            tracing::trace(tr_state, "Enqueuing counter update to {}", msg_addr);
             return ms.send_counter_mutation(msg_addr, timeout, std::move(fms), cl, tracing::make_trace_info(tr_state));
         }
     });
