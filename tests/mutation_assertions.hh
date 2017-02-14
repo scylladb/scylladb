@@ -148,11 +148,42 @@ public:
         return *this;
     }
 
+    streamed_mutation_assertions& produces_row_with_key(const clustering_key& ck) {
+        BOOST_TEST_MESSAGE(sprint("Expect %s", ck));
+        auto mfo = _sm().get0();
+        if (!mfo) {
+            BOOST_FAIL(sprint("Expected row with key %s, but got end of stream", ck));
+        }
+        if (!mfo->is_clustering_row()) {
+            BOOST_FAIL(sprint("Expected row with key %s, but got %s", ck, *mfo));
+        }
+        auto& actual = mfo->as_clustering_row().key();
+        if (!actual.equal(*_sm.schema(), ck)) {
+            BOOST_FAIL(sprint("Expected row with key %s, but key is %s", ck, actual));
+        }
+        return *this;
+    }
+
+    streamed_mutation_assertions& produces_range_tombstone(const range_tombstone& rt) {
+        BOOST_TEST_MESSAGE(sprint("Expect %s", rt));
+        auto mfo = _sm().get0();
+        if (!mfo) {
+            BOOST_FAIL(sprint("Expected range tombstone %s, but got end of stream", rt));
+        }
+        if (!mfo->is_range_tombstone()) {
+            BOOST_FAIL(sprint("Expected range tombstone %s, but got %s", rt, *mfo));
+        }
+        auto& actual = mfo->as_range_tombstone();
+        if (!actual.equal(*_sm.schema(), rt)) {
+            BOOST_FAIL(sprint("Expected range tombstone %s, but got %s", rt, actual));
+        }
+        return *this;
+    }
+
     streamed_mutation_assertions& produces_end_of_stream() {
         auto mfopt = _sm().get0();
-        BOOST_REQUIRE(!mfopt);
         if (mfopt) {
-            BOOST_FAIL(sprint("Expected end of stream, got: %s", mfopt->mutation_fragment_kind()));
+            BOOST_FAIL(sprint("Expected end of stream, got: %s", *mfopt));
         }
         return *this;
     }

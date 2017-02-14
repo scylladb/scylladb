@@ -22,6 +22,7 @@
 #pragma once
 
 #include "range_tombstone.hh"
+#include "query-request.hh"
 
 class range_tombstone_list final {
     using range_tombstones_type = range_tombstone::container_type;
@@ -86,6 +87,10 @@ class range_tombstone_list final {
 private:
     range_tombstones_type _tombstones;
 public:
+    // ForwardIterator<range_tombstone>
+    using iterator = range_tombstones_type::iterator;
+    using const_iterator = range_tombstones_type::const_iterator;
+
     struct copy_comparator_only { };
     range_tombstone_list(const schema& s)
         : _tombstones(range_tombstone::compare(s))
@@ -134,6 +139,9 @@ public:
         apply_reversibly(s, std::move(start), start_kind, std::move(end), end_kind, std::move(tomb), rev);
     }
     tombstone search_tombstone_covering(const schema& s, const clustering_key_prefix& key) const;
+    // Returns range of tombstones which overlap with given range
+    boost::iterator_range<const_iterator> slice(const schema& s, const query::clustering_range&) const;
+    iterator erase(const_iterator, const_iterator);
     range_tombstone_list difference(const schema& s, const range_tombstone_list& rt_list) const;
     // Erases the range tombstones for which filter returns true.
     template <typename Pred>

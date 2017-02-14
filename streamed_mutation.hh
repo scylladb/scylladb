@@ -305,16 +305,24 @@ class position_in_partition_view {
 
     int _bound_weight = 0;
     const clustering_key_prefix* _ck; // nullptr for static row
+private:
+    position_in_partition_view(int bound_weight, const clustering_key_prefix* ck)
+        : _bound_weight(bound_weight)
+        , _ck(ck)
+    { }
 public:
     struct static_row_tag_t { };
     struct clustering_row_tag_t { };
-    struct range_tombstone_tag_t { };
+    struct range_tag_t { };
+    using range_tombstone_tag_t = range_tag_t;
 
     explicit position_in_partition_view(static_row_tag_t) : _ck(nullptr) { }
     position_in_partition_view(clustering_row_tag_t, const clustering_key_prefix& ck)
         : _ck(&ck) { }
-    position_in_partition_view(range_tombstone_tag_t, bound_view bv)
+    position_in_partition_view(range_tag_t, bound_view bv)
         : _bound_weight(weight(bv.kind)), _ck(&bv.prefix) { }
+
+    friend std::ostream& operator<<(std::ostream&, position_in_partition_view);
 };
 
 class position_in_partition {
@@ -323,12 +331,13 @@ class position_in_partition {
 public:
     struct static_row_tag_t { };
     struct clustering_row_tag_t { };
-    struct range_tombstone_tag_t { };
+    struct range_tag_t { };
+    using range_tombstone_tag_t = range_tag_t;
 
     explicit position_in_partition(static_row_tag_t) { }
     position_in_partition(clustering_row_tag_t, clustering_key_prefix ck)
         : _ck(std::move(ck)) { }
-    position_in_partition(range_tombstone_tag_t, bound_view bv)
+    position_in_partition(range_tag_t, bound_view bv)
         : _bound_weight(weight(bv.kind)), _ck(bv.prefix) { }
     explicit position_in_partition(position_in_partition_view view)
         : _bound_weight(view._bound_weight)
@@ -340,7 +349,6 @@ public:
 
     bool is_static_row() const { return !_ck; }
     bool is_clustering_row() const { return _ck && !_bound_weight; }
-    bool is_range_tombstone() const { return _bound_weight; }
 
     template<typename Hasher>
     void feed_hash(Hasher& hasher, const schema& s) const {
@@ -358,6 +366,9 @@ public:
     }
     const clustering_key_prefix& key() const {
         return *_ck;
+    }
+    explicit operator position_in_partition_view() const {
+        return { _bound_weight, _ck ? &*_ck : nullptr };
     }
 
     class tri_compare {
@@ -429,6 +440,7 @@ public:
             return compare(a, b);
         }
     };
+    friend std::ostream& operator<<(std::ostream&, const position_in_partition&);
 };
 
 inline position_in_partition_view static_row::position() const
@@ -630,6 +642,7 @@ public:
     void apply(const range_tombstone_list& list) {
         _list.apply(_schema, list);
     }
+    void apply(const range_tombstone_list&, const query::clustering_range&);
 };
 
 // mutation_hasher is an equivalent of hashing_partition_visitor for

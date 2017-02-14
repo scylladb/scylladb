@@ -37,6 +37,20 @@ operator<<(std::ostream& os, const static_row& row) {
     return os << "{static_row: "<< row._cells << "}";
 }
 
+std::ostream& operator<<(std::ostream& out, position_in_partition_view pos) {
+    out << "{position: " << pos._bound_weight << ":";
+    if (pos._ck) {
+        out << *pos._ck;
+    } else {
+        out << "null";
+    }
+    return out << "}";
+}
+
+std::ostream& operator<<(std::ostream& out, const position_in_partition& pos) {
+    return out << static_cast<position_in_partition_view>(pos);
+}
+
 mutation_fragment::mutation_fragment(static_row&& r)
     : _kind(kind::static_row), _data(std::make_unique<data>())
 {
@@ -122,7 +136,7 @@ std::ostream& operator<<(std::ostream& os, mutation_fragment::kind k)
 }
 
 std::ostream& operator<<(std::ostream& os, const mutation_fragment& mf) {
-    os << "{mutation_fragment: " << mf._kind << " ";
+    os << "{mutation_fragment: " << mf._kind << " " << mf.position() << " ";
     mf.visit([&os] (const auto& what) {
        os << what;
     });
@@ -393,6 +407,12 @@ mutation_fragment_opt range_tombstone_stream::get_next()
         return do_get_next();
     }
     return { };
+}
+
+void range_tombstone_stream::apply(const range_tombstone_list& list, const query::clustering_range& range) {
+    for (const range_tombstone& rt : list.slice(_schema, range)) {
+        _list.apply(_schema, rt);
+    }
 }
 
 streamed_mutation reverse_streamed_mutation(streamed_mutation sm) {

@@ -19,8 +19,11 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <set>
+#include "partition_slice_builder.hh"
 #include "schema_builder.hh"
 #include "mutation_reader_assertions.hh"
+#include "mutation_assertions.hh"
 #include "mutation_source_test.hh"
 #include "counters.hh"
 
@@ -34,6 +37,126 @@ static void require_no_token_duplicates(const std::vector<mutation>& partitions)
         }
         last_token = key.token();
     }
+}
+
+static api::timestamp_type new_timestamp() {
+    static thread_local api::timestamp_type ts = api::min_timestamp;
+    return ts++;
+}
+
+// Helper for working with the following table:
+//
+//   CREATE TABLE ks.cf (pk utf8, ck utf8, v utf8, s1 utf8 static, PRIMARY KEY (pk, ck));
+//
+class simple_schema {
+    schema_ptr _s;
+public:
+    simple_schema()
+        : _s(schema_builder("ks", "cf")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("ck", utf8_type, column_kind::clustering_key)
+            .with_column("s1", utf8_type, column_kind::static_column)
+            .with_column("v", utf8_type)
+            .build())
+    { }
+
+    clustering_key make_ckey(sstring ck) {
+        return clustering_key::from_single_value(*_s, data_value(ck).serialize());
+    }
+
+    partition_key make_pkey(sstring pk) {
+        return partition_key::from_single_value(*_s, data_value(pk).serialize());
+    }
+
+    void add_row(mutation& m, const clustering_key& key, sstring v) {
+        m.set_clustered_cell(key, to_bytes("v"), data_value(v), new_timestamp());
+    }
+
+    void add_static_row(mutation& m, sstring s1) {
+        m.set_static_cell(to_bytes("s1"), data_value(s1), new_timestamp());
+    }
+
+    range_tombstone delete_range(mutation& m, const query::clustering_range& range) {
+        auto bv_range = bound_view::from_range(range);
+        range_tombstone rt(bv_range.first, bv_range.second, tombstone(new_timestamp(), gc_clock::now()));
+        m.partition().apply_delete(*_s, rt);
+        return rt;
+    }
+
+    schema_ptr schema() {
+        return _s;
+    }
+};
+
+static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(populate_fn populate) {
+    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+
+    simple_schema table;
+    schema_ptr s = table.schema();
+
+    mutation m(table.make_pkey("pkey1"), s);
+
+    std::vector<clustering_key> keys;
+    for (int i = 0; i < 20; ++i) {
+        keys.push_back(table.make_ckey(sprint("ck%05d", i)));
+    }
+
+    auto rt1 = table.delete_range(m, query::clustering_range::make(
+        query::clustering_range::bound(keys[0], true),
+        query::clustering_range::bound(keys[1], true)
+    ));
+
+    table.add_row(m, keys[2], "value");
+
+    auto rt2 = table.delete_range(m, query::clustering_range::make(
+        query::clustering_range::bound(keys[3], true),
+        query::clustering_range::bound(keys[4], true)
+    ));
+
+    table.add_row(m, keys[5], "value");
+
+    auto rt3 = table.delete_range(m, query::clustering_range::make(
+        query::clustering_range::bound(keys[6], true),
+        query::clustering_range::bound(keys[7], true)
+    ));
+
+    table.add_row(m, keys[8], "value");
+
+    auto rt4 = table.delete_range(m, query::clustering_range::make(
+        query::clustering_range::bound(keys[9], true),
+        query::clustering_range::bound(keys[10], true)
+    ));
+
+    auto rt5 = table.delete_range(m, query::clustering_range::make(
+        query::clustering_range::bound(keys[11], true),
+        query::clustering_range::bound(keys[12], true)
+    ));
+
+    table.add_row(m, keys[10], "value");
+
+    auto slice = partition_slice_builder(*s)
+        .with_range(query::clustering_range::make(
+            query::clustering_range::bound(keys[2], true),
+            query::clustering_range::bound(keys[2], true)
+        ))
+        .with_range(query::clustering_range::make(
+            query::clustering_range::bound(keys[7], true),
+            query::clustering_range::bound(keys[9], true)
+        ))
+        .build();
+
+    mutation_source ms = populate(s, std::vector<mutation>({m}));
+    mutation_reader rd = ms(s, query::full_partition_range, slice);
+
+    streamed_mutation_opt smo = rd().get0();
+    BOOST_REQUIRE(bool(smo));
+    auto sm = assert_that_stream(std::move(*smo));
+
+    sm.produces_row_with_key(keys[2]);
+    sm.produces_range_tombstone(rt3);
+    sm.produces_row_with_key(keys[8]);
+    sm.produces_range_tombstone(rt4);
+    sm.produces_end_of_stream();
 }
 
 static void test_range_queries(populate_fn populate) {
@@ -167,6 +290,7 @@ static void test_range_queries(populate_fn populate) {
 }
 
 void run_mutation_source_tests(populate_fn populate) {
+    test_streamed_mutation_slicing_returns_only_relevant_tombstones(populate);
     test_range_queries(populate);
 }
 
@@ -177,7 +301,7 @@ struct mutation_sets {
 };
 
 static tombstone new_tombstone() {
-    return { api::new_timestamp(), gc_clock::now() };
+    return { new_timestamp(), gc_clock::now() };
 }
 
 static mutation_sets generate_mutation_sets() {
@@ -243,7 +367,7 @@ static mutation_sets generate_mutation_sets() {
         }
 
         {
-            auto ts = api::new_timestamp();
+            auto ts = new_timestamp();
             m1.set_clustered_cell(ck1, "regular_col_1", data_value(bytes("regular_col_value")), ts, ttl);
             result.unequal.emplace_back(mutations{m1, m2});
             m2.set_clustered_cell(ck1, "regular_col_1", data_value(bytes("regular_col_value")), ts, ttl);
@@ -251,7 +375,7 @@ static mutation_sets generate_mutation_sets() {
         }
 
         {
-            auto ts = api::new_timestamp();
+            auto ts = new_timestamp();
             m1.set_clustered_cell(ck1, "regular_col_2", data_value(bytes("regular_col_value")), ts, ttl);
             result.unequal.emplace_back(mutations{m1, m2});
             m2.set_clustered_cell(ck1, "regular_col_2", data_value(bytes("regular_col_value")), ts, ttl);
@@ -259,7 +383,7 @@ static mutation_sets generate_mutation_sets() {
         }
 
         {
-            auto ts = api::new_timestamp();
+            auto ts = new_timestamp();
             m1.partition().apply_insert(*s1, ck2, ts);
             result.unequal.emplace_back(mutations{m1, m2});
             m2.partition().apply_insert(*s1, ck2, ts);
@@ -267,7 +391,7 @@ static mutation_sets generate_mutation_sets() {
         }
 
         {
-            auto ts = api::new_timestamp();
+            auto ts = new_timestamp();
             m1.set_clustered_cell(ck2, "regular_col_1", data_value(bytes("ck2_regular_col_1_value")), ts);
             result.unequal.emplace_back(mutations{m1, m2});
             m2.set_clustered_cell(ck2, "regular_col_1", data_value(bytes("ck2_regular_col_1_value")), ts);
@@ -275,7 +399,7 @@ static mutation_sets generate_mutation_sets() {
         }
 
         {
-            auto ts = api::new_timestamp();
+            auto ts = new_timestamp();
             m1.set_static_cell("static_col_1", data_value(bytes("static_col_value")), ts, ttl);
             result.unequal.emplace_back(mutations{m1, m2});
             m2.set_static_cell("static_col_1", data_value(bytes("static_col_value")), ts, ttl);
@@ -283,7 +407,7 @@ static mutation_sets generate_mutation_sets() {
         }
 
         {
-            auto ts = api::new_timestamp();
+            auto ts = new_timestamp();
             m1.set_static_cell("static_col_2", data_value(bytes("static_col_value")), ts);
             result.unequal.emplace_back(mutations{m1, m2});
             m2.set_static_cell("static_col_2", data_value(bytes("static_col_value")), ts);
@@ -291,7 +415,7 @@ static mutation_sets generate_mutation_sets() {
         }
 
         {
-            auto ts = api::new_timestamp();
+            auto ts = new_timestamp();
             m1.set_clustered_cell(ck2, "regular_col_1_s1", data_value(bytes("x")), ts);
             result.unequal.emplace_back(mutations{m1, m2});
             m2.set_clustered_cell(ck2, "regular_col_1_s2", data_value(bytes("x")), ts);

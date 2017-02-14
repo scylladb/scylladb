@@ -276,6 +276,31 @@ range_tombstone_list::reverter range_tombstone_list::apply_reversibly(const sche
     return rev;
 }
 
+boost::iterator_range<range_tombstone_list::const_iterator>
+range_tombstone_list::slice(const schema& s, const query::clustering_range& r) const {
+    auto bv_range = bound_view::from_range(r);
+    struct order_by_end {
+        bound_view::compare less;
+        order_by_end(const schema& s) : less(s) {}
+        bool operator()(bound_view v, const range_tombstone& rt) const { return less(v, rt.end_bound()); }
+        bool operator()(const range_tombstone& rt, bound_view v) const { return less(rt.end_bound(), v); }
+    };
+    struct order_by_start {
+        bound_view::compare less;
+        order_by_start(const schema& s) : less(s) {}
+        bool operator()(bound_view v, const range_tombstone& rt) const { return less(v, rt.start_bound()); }
+        bool operator()(const range_tombstone& rt, bound_view v) const { return less(rt.start_bound(), v); }
+    };
+    return boost::make_iterator_range(
+        _tombstones.lower_bound(bv_range.first, order_by_end{s}),
+        _tombstones.upper_bound(bv_range.second, order_by_start{s}));
+}
+
+range_tombstone_list::iterator
+range_tombstone_list::erase(const_iterator a, const_iterator b) {
+    return _tombstones.erase_and_dispose(a, b, current_deleter<range_tombstone>());
+}
+
 range_tombstone_list::range_tombstones_type::iterator
 range_tombstone_list::reverter::insert(range_tombstones_type::iterator it, range_tombstone& new_rt) {
     _insert_undo_ops.emplace_back(new_rt);

@@ -53,6 +53,10 @@ position_in_partition_view range_tombstone::position() const {
     return position_in_partition_view(position_in_partition_view::range_tombstone_tag_t(), start_bound());
 }
 
+position_in_partition_view range_tombstone::end_position() const {
+    return position_in_partition_view(position_in_partition_view::range_tombstone_tag_t(), end_bound());
+}
+
 void range_tombstone_accumulator::update_current_tombstone() {
     _current_tombstone = boost::accumulate(_range_tombstones, _partition_tombstone, [] (tombstone t, const range_tombstone& rt) {
         t.apply(rt.tomb);

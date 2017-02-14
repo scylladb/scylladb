@@ -310,6 +310,31 @@ private:
         return false;
     }
 
+    // Returns true if and only if the range tombstone is relevant for requested ranges.
+    // Assumes that this and is_in_range() are called with monotonic positions, except before
+    // the first call to is_in_range(), due to #1203.
+    bool is_tombstone_in_range(const range_tombstone& rt) {
+        position_in_partition::less_compare less(*_schema);
+        auto&& start = rt.position();
+        auto&& end = rt.end_position();
+
+        auto i = _current_ck_range; // Cannot advance _current_ck_range due to #1203
+        while (i != _ck_range_end) {
+            position_in_partition_view range_start(position_in_partition_view::range_tag_t(), bound_view::from_range_start(*i));
+            if (less(end, range_start)) {
+                return false;
+            }
+
+            position_in_partition_view range_end(position_in_partition_view::range_tag_t(), bound_view::from_range_end(*i));
+            if (less(start, range_end)) {
+                return true;
+            }
+
+            ++i;
+        }
+        return false;
+    }
+
     void set_up_ck_ranges(const partition_key& pk) {
         _ck_ranges = query::clustering_key_filter_ranges::get_ranges(*_schema, _slice, pk);
         _current_ck_range = _ck_ranges->begin();
@@ -634,6 +659,14 @@ public:
                 return ret;
             } else {
                 auto rt = range_tombstone(std::move(start_ck), start_kind, std::move(end), end_kind, tombstone(deltime));
+                position_in_partition::less_compare less(*_schema);
+                auto rt_pos = rt.position();
+                if (_in_progress && less(rt_pos, _in_progress->position())) {
+                    return proceed::yes; // repeated tombstone, ignore
+                }
+                if (!is_tombstone_in_range(rt)) {
+                    return proceed::yes;
+                }
                 if (flush_if_needed_for_range_tombstone() == proceed::yes) {
                     _ready = mutation_fragment(std::move(rt));
                 } else {
@@ -726,20 +759,16 @@ class sstable_streamed_mutation : public streamed_mutation::impl {
     bool _finished = false;
     range_tombstone_stream _range_tombstones;
     mutation_fragment_opt _current_candidate;
-    mutation_fragment_opt _next_candidate;
-    stdx::optional<position_in_partition> _last_position;
     position_in_partition::less_compare _cmp;
     position_in_partition::equal_compare _eq;
 private:
     future<stdx::optional<mutation_fragment_opt>> read_next() {
         // Because of #1203 we may encounter sstables with range tombstones
         // placed earler than expected.
-        if (_next_candidate || (_current_candidate && _finished)) {
-            assert(_current_candidate);
+        if (_current_candidate) {
             auto mf = _range_tombstones.get_next(*_current_candidate);
             if (!mf) {
                 mf = move_and_disengage(_current_candidate);
-                _current_candidate = move_and_disengage(_next_candidate);
             }
             return make_ready_future<stdx::optional<mutation_fragment_opt>>(std::move(mf));
         }
@@ -752,25 +781,9 @@ private:
             auto mf = _ds->_consumer.get_mutation_fragment();
             if (mf) {
                 if (mf->is_range_tombstone()) {
-                    // If sstable uses promoted index it will repeat relevant range tombstones in
-                    // each block. Do not emit these duplicates as they will break the guarantee
-                    // that mutation fragment are produced in ascending order.
-                    if (!_last_position || !_cmp(mf->position(), *_last_position)) {
-                        _last_position = position_in_partition(mf->position());
-                        _range_tombstones.apply(std::move(*mf).as_range_tombstone());
-                    }
+                    _range_tombstones.apply(std::move(*mf).as_range_tombstone());
                 } else {
-                    // mp_row_consumer may produce mutation_fragments in parts if they are
-                    // interrupted by range tombstone duplicate. Make sure they are merged
-                    // before emitting them.
-                    _last_position = position_in_partition(mf->position());
-                    if (!_current_candidate) {
-                        _current_candidate = std::move(mf);
-                    } else if (_current_candidate && _eq(_current_candidate->position(), mf->position())) {
-                        _current_candidate->apply(*_schema, std::move(*mf));
-                    } else {
-                        _next_candidate = std::move(mf);
-                    }
+                    _current_candidate = std::move(mf);
                 }
             }
             return stdx::optional<mutation_fragment_opt>();
