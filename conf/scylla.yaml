@@ -788,3 +788,23 @@ commitlog_total_space_in_mb: -1
 # By default, Scylla binds all interfaces to the prometheus API
 # It is possible to restrict the listening address to a specific one
 # prometheus_address: 0.0.0.0
+
+# Distribution of data among cores (shards) within a node
+#
+# Scylla distributes data within a node among shards, using a round-robin
+# strategy:
+#  [shard0] [shard1] ... [shardN-1] [shard0] [shard1] ... [shardN-1] ...
+#
+# Scylla versions 1.6 and below used just one repetition of the pattern;
+# this intefered with data placement among nodes (vnodes).
+#
+# Scylla versions 1.7 and above use 4096 repetitions of the pattern; this
+# provides for better data distribution.
+#
+# the value below is log (base 2) of the number of repetitions.
+#
+# Set to 0 to avoid rewriting all data when upgrading from Scylla 1.6 and
+# below.
+#
+# Keep at 12 for new clusters.
+murmur3_partitioner_ignore_msb_bits: 12
