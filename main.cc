@@ -55,6 +55,7 @@
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
+seastar::metrics::metric_groups app_metrics;
 
 namespace bpo = boost::program_options;
 
@@ -321,6 +322,11 @@ int main(int ac, char** av) {
         }
         print("Scylla version %s starting ...\n", scylla_version());
         auto&& opts = app.configuration();
+
+        namespace sm = seastar::metrics;
+        app_metrics.add_group("scylladb", {
+            sm::make_gauge("current_version", sm::description("Current ScyllaDB version."), { sm::label_instance("version", scylla_version()), sm::shard_label("") }, [] { return 0; })
+        });
 
         // Do this first once set log applied from command line so for example config
         // parse can get right log level.
