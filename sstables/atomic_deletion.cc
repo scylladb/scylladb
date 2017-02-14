@@ -47,7 +47,6 @@ atomic_deletion_manager::delete_atomically(std::vector<sstable_to_delete> atomic
 
     // Insert atomic_deletion_set into the list of sets pending deletion.  If the new set
     // overlaps with an existing set, merge them (the merged set will be deleted atomically).
-    std::unordered_map<sstring, lw_shared_ptr<pending_deletion>> new_atomic_deletion_sets;
     auto merged_set = make_lw_shared(pending_deletion());
     for (auto&& sst_to_delete : atomic_deletion_set) {
         merged_set->names.insert(sst_to_delete.name);
@@ -56,7 +55,6 @@ atomic_deletion_manager::delete_atomically(std::vector<sstable_to_delete> atomic
                 _shards_agreeing_to_delete_sstable[sst_to_delete.name].insert(shard);
             }
         }
-        new_atomic_deletion_sets.emplace(sst_to_delete.name, merged_set);
     }
     auto pr = make_lw_shared<promise<>>();
     merged_set->completions.insert(pr);
@@ -115,8 +113,6 @@ atomic_deletion_manager::delete_atomically(std::vector<sstable_to_delete> atomic
             sf.get_future().forward_to(std::move(*comp));
         }
     });
-
-    return ret;
 }
 
 void
