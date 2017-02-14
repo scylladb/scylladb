@@ -40,11 +40,15 @@
  */
 #pragma once
 
+#include <tuple>
 #include <seastar/core/gate.hh>
+#include <seastar/core/apply.hh>
 #include <seastar/core/metrics_registration.hh>
+#include <seastar/util/gcc6-concepts.hh>
 #include "database.hh"
 #include "tracing/tracing.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/statements/modification_statement.hh"
 
 namespace tracing {
 
@@ -62,28 +66,7 @@ private:
 
     seastar::gate _pending_writes;
     int64_t _slow_query_last_nanos = 0;
-
-    const column_definition* _slow_session_id_column;
-    const column_definition* _slow_date_column;
-    const column_definition* _slow_command_column;
-    const column_definition* _slow_duration_column;
-    const column_definition* _slow_parameters_column;
-    const column_definition* _slow_source_ip_column;
-    const column_definition* _slow_table_names_column;
-    const column_definition* _slow_username_column;
-
-    const column_definition* _client_column;
-    const column_definition* _coordinator_column;
-    const column_definition* _request_column;
-    const column_definition* _started_at_column;
-    const column_definition* _command_column;
-    const column_definition* _duration_column;
-    const column_definition* _parameters_column;
-
-    const column_definition* _activity_column;
-    const column_definition* _source_column;
-    const column_definition* _thread_column;
-    const column_definition* _source_elapsed_column;
+    service::query_state _dummy_query_state;
 
     /**
      * \class table_helper
@@ -93,13 +76,19 @@ private:
     private:
         const sstring _name; /** a table name */
         const sstring _create_cql; /** a CQL CREATE TABLE statement for the table */
+        const sstring _insert_cql; /** a CQL INSERT statement */
 
-        utils::UUID _id; /** A table (UU)ID */
+        cql3::statements::prepared_statement::checked_weak_ptr _prepared_stmt; /** a raw prepared statement object (containing the INSERT statement) */
+        shared_ptr<cql3::statements::modification_statement> _insert_stmt; /** INSERT prepared statement */
+
+        trace_keyspace_helper& _ks_helper; /** a reference to the trace_keyspace_helper object */
 
     public:
-        table_helper(sstring name, sstring create_cql)
+        table_helper(sstring name, trace_keyspace_helper& ks_helper, sstring create_cql, sstring insert_cql)
             : _name(std::move(name))
-            , _create_cql(std::move(create_cql)) {}
+            , _create_cql(std::move(create_cql))
+            , _insert_cql(std::move(insert_cql))
+            , _ks_helper(ks_helper) {}
 
         /**
          * Tries to create a table using create_cql command.
@@ -110,28 +99,41 @@ private:
         future<> setup_table() const;
 
         /**
-         * Get a schema_ptr by a table (UU)ID.
-         * If not found will try to get it by name.
-         * If not found will issue a table creation and throw no_such_column_family exception.
-         * If table is found by name but its schema doesn't match the expected schema will throw bad_column_family
-         * exception.
-         *
-         * @tparam ColumnsHandlesChecker a "bool (const schema_ptr&)" function that
-         *                              checks the schema and cached a table's ID
-         *                              and column definitions in case of a match
-         * @param check_and_cache a ColumnsHandlesChecker instance
-         *
-         * @return a schema_ptr as requested
+         * @return a future that resolves when the given t_helper is ready to be used for
+         * data insertion.
          */
-        template <typename ColumnsHandlesChecker>
-        schema_ptr get_schema_ptr_or_create(ColumnsHandlesChecker check_and_cache) const;
+        future<> cache_table_info();
 
+        /**
+         * @return The table name
+         */
         const sstring& name() const {
             return _name;
         }
 
-        void set_id(const utils::UUID& new_id) {
-            _id = new_id;
+        /**
+         * @return A pointer to the INSERT prepared statement
+         */
+        shared_ptr<cql3::statements::modification_statement> insert_stmt() const {
+            return _insert_stmt;
+        }
+
+        /**
+         * Execute a single insertion into the table.
+         *
+         * @tparam OptMaker cql_options maker functor type
+         * @tparam Args OptMaker arguments' types
+         * @param opt_maker cql_options maker functor
+         * @param opt_maker_args opt_maker arguments
+         */
+        template <typename OptMaker, typename... Args>
+        GCC6_CONCEPT( requires seastar::CanApply<OptMaker, Args...> )
+        future<> insert(OptMaker opt_maker, Args&&... opt_maker_args) {
+            return cache_table_info().then([this, opt_maker = std::move(opt_maker), args = std::forward_as_tuple(std::forward<Args>(opt_maker_args)...)] () mutable {
+                return do_with(apply(opt_maker, std::move(args)), [this] (auto& opts) {
+                    return _insert_stmt->execute(service::get_storage_proxy(), _ks_helper.get_dummy_qs(), opts);
+                });
+            }).discard_result();
         }
     };
 
@@ -163,6 +165,8 @@ public:
 
     virtual void write_records_bulk(records_bulk& bulk) override;
     virtual std::unique_ptr<backend_session_state_base> allocate_session_state() const override;
+
+    service::query_state& get_dummy_qs() { return _dummy_query_state; }
 
 private:
     /**
@@ -217,6 +221,7 @@ private:
      *
      * @param records all session records
      * @param events_records events recods to apply
+     * @param start_point a time point when this tracing session data writing has started
      *
      * @return a future that resolves when the mutation has been written.
      *
@@ -226,67 +231,35 @@ private:
     future<> apply_events_mutation(lw_shared_ptr<one_session_records> records, std::deque<event_record>& events_records);
 
     /**
-     * Cache definitions of a system_traces.sessions table: table ID and column
-     * definitions.
-     *
-     * @param s schema handle
-     * @return TRUE if succeeded to cache all relevant information. FALSE will
-     *         be returned if something is wrong with the table: it was dropped
-     *         or its columns definitions are not as expected.
-     */
-    bool cache_sessions_table_handles(const schema_ptr& s);
-
-    /**
-     * Cache definitions of a system_traces.node_slow_log table: table ID and column
-     * definitions.
-     *
-     * @param s schema handle
-     * @return TRUE if succeeded to cache all relevant information. FALSE will
-     *         be returned if something is wrong with the table: it was dropped
-     *         or its columns definitions are not as expected.
-     */
-    bool cache_node_slow_log_table_handles(const schema_ptr& s);
-
-    /**
-     * Cache definitions of a system_traces.events table: table ID and column
-     * definitions.
-     *
-     * @param s schema handle
-     * @return TRUE if succeeded to cache all relevant information. FALSE will
-     *         be returned if something is wrong with the table: it was dropped
-     *         or its columns definitions are not as expected.
-     */
-    bool cache_events_table_handles(const schema_ptr& s);
-
-    /**
-     * Create a mutation for a new session record
+     * Create a mutation data for a new session record
      *
      * @param all_records_handle handle to access an object with all records of this session
      *
-     * @return the relevant mutation
+     * @return the relevant cql3::query_options object with the mutation data
      */
-    mutation make_session_mutation(const one_session_records& all_records_handle);
+    static cql3::query_options make_session_mutation_data(const one_session_records& all_records_handle);
 
     /**
      * Create mutation for a new slow_query_log record
      *
      * @param all_records_handle handle to access an object with all records of this session
+     * @param start_time_id time UUID generated from the query start time
      *
      * @return the relevant mutation
      */
-    mutation make_slow_query_mutation(const one_session_records& all_records_handle);
+    static cql3::query_options make_slow_query_mutation_data(const one_session_records& all_records_handle, const utils::UUID& start_time_id);
 
     /**
-     * Create a mutation for a new trace point record
+     * Create a mutation data for a new trace point record
      *
      * @param session_records handle to access an object with all records of this session.
      *                        It's needed here in order to update the last event's mutation
      *                        timestamp value stored inside it.
      * @param record data describing this trace event
      *
-     * @return the relevant mutation
+     * @return a vector with the mutation data
      */
-    mutation make_event_mutation(one_session_records& session_records, const event_record& record);
+    std::vector<cql3::raw_value> make_event_mutation_data(one_session_records& session_records, const event_record& record);
 
     /**
      * Converts a @param elapsed to an int32_t value of microseconds.
@@ -303,10 +276,6 @@ private:
         }
 
         return elapsed_micros;
-    }
-
-    bool check_column_definition(const column_definition* column_def, const shared_ptr<const abstract_type>& abstracet_type_inst) const {
-        return column_def && column_def->type == abstracet_type_inst;
     }
 };
 
@@ -327,29 +296,4 @@ public:
         return _what.c_str();
     }
 };
-
-template <typename ColumnsHandlesChecker>
-schema_ptr trace_keyspace_helper::table_helper::get_schema_ptr_or_create(ColumnsHandlesChecker check_and_cache) const {
-    auto& db = cql3::get_local_query_processor().db().local();
-    schema_ptr schema;
-    try {
-        schema = db.find_schema(_id);
-    } catch (...) {
-        // if schema is not found by ID - try to find it by its name
-        try {
-            schema = db.find_schema(KEYSPACE_NAME, _name);
-        } catch (...) {
-            // if not found - create and throw
-            setup_table();
-            throw;
-        }
-        // Update the ID and column definitions. If columns do not match our
-        // expectations - throw an exception
-        if (!check_and_cache(schema)) {
-            throw bad_column_family(_name);
-        }
-    }
-
-    return schema;
-}
 }
