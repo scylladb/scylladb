@@ -603,16 +603,32 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
         big_region->alloc();
 
         // We should not be permitted to go forward with a new allocation now...
+        BOOST_MESSAGE(sprint("now = %s", lowres_clock::now().time_since_epoch().count()));
         fut = simple.run_when_memory_available([&simple_region] { simple_region->alloc_small(); });
         BOOST_REQUIRE_EQUAL(fut.available(), false);
         BOOST_REQUIRE_GT(simple.memory_used(), logalloc::segment_size);
+
+        BOOST_MESSAGE(sprint("now = %s", lowres_clock::now().time_since_epoch().count()));
+        BOOST_MESSAGE(sprint("used = %d", simple.memory_used()));
+
+        BOOST_MESSAGE("Resetting");
 
         // But when we remove the big bytes allocator from the region, then we should.
         // Internally, we can't guarantee that just freeing the object will give the segment back,
         // that's up to the internal policies. So to make sure we need to remove the whole region.
         big_region.reset();
 
-        quiesce(std::move(fut));
+        BOOST_MESSAGE(sprint("used = %d", simple.memory_used()));
+        BOOST_MESSAGE(sprint("now = %s", lowres_clock::now().time_since_epoch().count()));
+        try {
+            quiesce(std::move(fut));
+        } catch (...) {
+            BOOST_MESSAGE(sprint("Aborting: %s", std::current_exception()));
+            BOOST_MESSAGE(sprint("now = %s", lowres_clock::now().time_since_epoch().count()));
+            BOOST_MESSAGE(sprint("used = %d", simple.memory_used()));
+            abort();
+        }
+        BOOST_MESSAGE(sprint("now = %s", lowres_clock::now().time_since_epoch().count()));
     });
 }
 
