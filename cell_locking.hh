@@ -162,7 +162,7 @@ class cell_locker {
         // temporarily removed from its parent partition_entry.
         // Returns true if the cell_entry still exist in the new schema and
         // should be reinserted.
-        bool upgrade(const schema& from, const schema& to, column_kind kind) {
+        bool upgrade(const schema& from, const schema& to, column_kind kind) noexcept {
             auto& old_column_mapping = from.get_column_mapping();
             auto& column = old_column_mapping.column_at(kind, _address.id);
             auto cdef = to.get_column_definition(column.name());
@@ -185,7 +185,9 @@ class cell_locker {
         }
 
         ~cell_entry() {
-            assert(is_linked());
+            if (!is_linked()) {
+                return;
+            }
             unlink();
             if (!--_parent._cell_count) {
                 delete &_parent;
@@ -514,15 +516,12 @@ bool cell_locker::partition_entry::upgrade(schema_ptr new_schema) {
         return true;
     }
 
-    auto buckets = std::make_unique<cells_type::bucket_type[]>(initial_bucket_count);
+    auto buckets = std::make_unique<cells_type::bucket_type[]>(_cells.bucket_count());
     auto cells = cells_type(cells_type::bucket_traits(buckets.get(), _cells.bucket_count()),
                             cell_entry::hasher(*new_schema), cell_entry::equal_compare(*new_schema));
 
-    while (!_cells.empty()) {
-        auto it = _cells.begin();
-        auto& cell = *it;
-        _cells.erase(it);
-
+    _cells.clear_and_dispose([&] (cell_entry* cell_ptr) noexcept {
+        auto& cell = *cell_ptr;
         auto kind = cell.position().is_static_row() ? column_kind::static_column
                                                     : column_kind::regular_column;
         auto reinsert = cell.upgrade(*_schema, *new_schema, kind);
@@ -531,9 +530,16 @@ bool cell_locker::partition_entry::upgrade(schema_ptr new_schema) {
         } else {
             _cell_count--;
         }
-    }
+    });
 
+    // bi::unordered_set move assignment is actually a swap.
+    // Original _buckets cannot be destroyed before the container using them is
+    // so we need to explicitly make sure that the original _cells is no more.
     _cells = std::move(cells);
+    auto destroy = [] (auto) { };
+    destroy(std::move(cells));
+
     _buckets = std::move(buckets);
+    _schema = new_schema;
     return _cell_count;
 }
