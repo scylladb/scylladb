@@ -28,10 +28,6 @@ if [ ! -f boost-1.58.0-11.fc23.src.rpm ]; then
     wget -nv https://kojipkgs.fedoraproject.org//packages/boost/1.58.0/11.fc23/src/boost-1.58.0-11.fc23.src.rpm
 fi
 
-if [ ! -f ninja-build-1.6.0-2.fc23.src.rpm ]; then
-    wget -nv https://kojipkgs.fedoraproject.org//packages/ninja-build/1.6.0/2.fc23/src/ninja-build-1.6.0-2.fc23.src.rpm
-fi
-
 if [ ! -f ragel-6.8-5.fc23.src.rpm ]; then
    wget -nv https://kojipkgs.fedoraproject.org//packages/ragel/6.8/5.fc23/src/ragel-6.8-5.fc23.src.rpm
 fi
@@ -93,13 +89,6 @@ if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-boost-1.58.0-11.el7*.x86_64.rpm ]; then
     rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/boost.spec
 fi
 do_install scylla-boost*
-
-if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-ninja-build-1.6.0-2.el7*.x86_64.rpm ]; then
-   rpm --define "_topdir $RPMBUILD" -ivh build/srpms/ninja-build-1.6.0-2.fc23.src.rpm
-   patch $RPMBUILD/SPECS/ninja-build.spec < dist/redhat/centos_dep/ninja-build.diff
-   rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/ninja-build.spec
-fi
-do_install scylla-ninja-build-1.6.0-2.el7*.x86_64.rpm
 
 if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-ragel-6.8-5.el7*.x86_64.rpm ]; then
     rpm --define "_topdir $RPMBUILD" -ivh build/srpms/ragel-6.8-5.fc23.src.rpm
