@@ -64,6 +64,11 @@ struct filter {
     explicit filter(int hashes, std::deque<uint64_t> buckets) : hashes(hashes), buckets({std::move(buckets)}) {}
 };
 
+enum class indexable_element {
+    partition,
+    cell
+};
+
 class index_entry {
     temporary_buffer<char> _key;
     uint64_t _position;

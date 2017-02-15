@@ -398,9 +398,18 @@ public:
         }
     }
 
-    void reset(uint64_t offset) {
-        _state = state::ROW_START;
-        _consumer.reset();
+    void reset(indexable_element el) {
+        switch (el) {
+        case indexable_element::partition:
+            _state = state::ROW_START;
+            break;
+        case indexable_element::cell:
+            _state = state::ATOM_START;
+            break;
+        default:
+            assert(0);
+        }
+        _consumer.reset(el);
     }
 };
 
@@ -429,7 +438,15 @@ public:
         return _ctx->consume_input(*_ctx);
     }
     future<> fast_forward_to(uint64_t begin, uint64_t end) {
+        _ctx->reset(indexable_element::partition);
         return _ctx->fast_forward_to(begin, end);
+    }
+    future<> skip_to(indexable_element el, uint64_t begin) {
+        if (begin <= _ctx->position()) {
+            return make_ready_future<>();
+        }
+        _ctx->reset(el);
+        return _ctx->skip_to(begin);
     }
 };
 
@@ -447,6 +464,9 @@ future<> data_consume_context::read() {
 }
 future<> data_consume_context::fast_forward_to(uint64_t begin, uint64_t end) {
     return _pimpl->fast_forward_to(begin, end);
+}
+future<> data_consume_context::skip_to(indexable_element el, uint64_t begin) {
+    return _pimpl->skip_to(el, begin);
 }
 
 data_consume_context sstable::data_consume_rows(

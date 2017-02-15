@@ -773,11 +773,17 @@ public:
         _skip_partition = true;
     }
 
-    virtual void reset() override {
-        _pending_collection = { };
-        _in_progress = { };
-        _ready = { };
-        _is_mutation_end = true;
+    virtual void reset(indexable_element el) override {
+        _ready = {};
+        if (el == indexable_element::partition) {
+            _pending_collection = {};
+            _in_progress = {};
+            _is_mutation_end = true;
+            _out_of_range = true;
+        } else {
+            // Do not reset _in_progress so that out-of-order tombstone detection works.
+            _is_mutation_end = false;
+        }
     }
 
     // Changes current fragment range. Only fragments relevant for

@@ -432,7 +432,7 @@ public:
     virtual const io_priority_class& io_priority() override {
         return default_priority_class();
     }
-    virtual void reset() override { }
+    virtual void reset(indexable_element) override { }
 };
 
 SEASTAR_TEST_CASE(uncompressed_row_read_at_once) {
@@ -540,7 +540,7 @@ public:
     virtual const io_priority_class& io_priority() override {
         return default_priority_class();
     }
-    virtual void reset() override { }
+    virtual void reset(indexable_element) override { }
 };
 
 

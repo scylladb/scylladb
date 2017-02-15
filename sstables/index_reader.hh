@@ -204,6 +204,7 @@ class index_reader {
     uint64_t _current_summary_idx = 0;
     uint64_t _current_index_idx = 0;
     uint64_t _data_file_position = 0;
+    indexable_element _element = indexable_element::partition;
 private:
     future<> advance_to_end() {
         _data_file_position = data_file_end();
@@ -362,6 +363,11 @@ public:
     // When eof(), returns data_file_end().
     uint64_t data_file_position() const {
         return _data_file_position;
+    }
+
+    // Returns the kind of sstable element the cursor is pointing at.
+    indexable_element element_kind() const {
+        return _element;
     }
 
     // Returns position right after all partitions in the sstable
