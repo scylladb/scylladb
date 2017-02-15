@@ -230,6 +230,7 @@ scylla_tests = [
     'tests/virtual_reader_test',
     'tests/view_schema_test',
     'tests/counter_test',
+    'tests/cell_locker_test',
 ]
 
 apps = [
