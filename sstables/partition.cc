@@ -140,6 +140,7 @@ private:
     stdx::optional<new_mutation> _mutation;
     bool _is_mutation_end = true;
     position_range _fwd_range = position_range::full(); // Restricts the stream on top of _ck_ranges.
+    streamed_mutation::forwarding _fwd;
     bool _after_fwd_range_start = false;
 
     // Because of #1203 we may encounter sstables with range tombstones
@@ -352,6 +353,7 @@ private:
     void set_up_ck_ranges(const partition_key& pk) {
         _ck_ranges = query::clustering_key_filter_ranges::get_ranges(*_schema, _slice, pk);
         _ck_ranges_walker = clustering_ranges_walker(*_schema, _ck_ranges->ranges());
+        _fwd_range = _fwd ? position_range::for_static_row() : position_range::full();
         _out_of_range = false;
         _after_fwd_range_start = false;
         _range_tombstones.reset();
@@ -363,11 +365,13 @@ public:
     mp_row_consumer(const key& key,
                     const schema_ptr schema,
                     const query::partition_slice& slice,
-                    const io_priority_class& pc)
+                    const io_priority_class& pc,
+                    streamed_mutation::forwarding fwd)
             : _schema(schema)
             , _key(key_view(key))
             , _pc(&pc)
             , _slice(slice)
+            , _fwd(fwd)
             , _range_tombstones(*_schema)
     {
         set_up_ck_ranges(partition_key::from_exploded(*_schema, key.explode(*_schema)));
@@ -375,21 +379,25 @@ public:
 
     mp_row_consumer(const key& key,
                     const schema_ptr schema,
-                    const io_priority_class& pc)
-            : mp_row_consumer(key, schema, query::full_slice, pc) { }
+                    const io_priority_class& pc,
+                    streamed_mutation::forwarding fwd)
+            : mp_row_consumer(key, schema, query::full_slice, pc, fwd) { }
 
     mp_row_consumer(const schema_ptr schema,
                     const query::partition_slice& slice,
-                    const io_priority_class& pc)
+                    const io_priority_class& pc,
+                    streamed_mutation::forwarding fwd)
             : _schema(schema)
             , _pc(&pc)
             , _slice(slice)
+            , _fwd(fwd)
             , _range_tombstones(*_schema)
     { }
 
     mp_row_consumer(const schema_ptr schema,
-                    const io_priority_class& pc)
-            : mp_row_consumer(schema, query::full_slice, pc) { }
+                    const io_priority_class& pc,
+                    streamed_mutation::forwarding fwd)
+            : mp_row_consumer(schema, query::full_slice, pc, fwd) { }
 
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         if (_key.empty() || key == _key) {
@@ -817,9 +825,9 @@ struct sstable_data_source {
     { }
 
     sstable_data_source(schema_ptr s, shared_sstable sst, const sstables::key& k, const io_priority_class& pc,
-            const query::partition_slice& slice, sstable::disk_read_range toread)
+            const query::partition_slice& slice, sstable::disk_read_range toread, streamed_mutation::forwarding fwd)
         : _sst(std::move(sst))
-        , _consumer(k, s, slice, pc)
+        , _consumer(k, s, slice, pc, fwd)
         , _context(_sst->data_consume_single_partition(_consumer, std::move(toread)))
     { }
 
@@ -886,17 +894,12 @@ public:
                                             sstable::disk_read_range toread,
                                             streamed_mutation::forwarding fwd)
     {
-        auto ds = make_lw_shared<sstable_data_source>(s, sst, k, pc, slice, std::move(toread));
-        return ds->_context.read().then([s, ds, fwd] {
+        auto ds = make_lw_shared<sstable_data_source>(s, sst, k, pc, slice, std::move(toread), fwd);
+        return ds->_context.read().then([s, ds] {
             auto mut = ds->_consumer.get_mutation();
             assert(mut);
             auto dk = dht::global_partitioner().decorate_key(*s, std::move(mut->key));
-            auto sm = make_streamed_mutation<sstable_streamed_mutation>(s, std::move(dk), mut->tomb, ds);
-            if (fwd) {
-                return make_forwardable(std::move(sm)); // FIXME: optimize
-            } else {
-                return std::move(sm);
-            }
+            return make_streamed_mutation<sstable_streamed_mutation>(s, std::move(dk), mut->tomb, ds);
         });
     }
 };
@@ -1144,7 +1147,6 @@ private:
     const io_priority_class& _pc;
     schema_ptr _schema;
     lw_shared_ptr<sstable_data_source> _ds;
-    streamed_mutation::forwarding _fwd;
     std::function<future<lw_shared_ptr<sstable_data_source>> ()> _get_data_source;
 public:
     impl(shared_sstable sst, schema_ptr schema, sstable::disk_read_range toread,
@@ -1152,9 +1154,8 @@ public:
          streamed_mutation::forwarding fwd)
         : _pc(pc)
         , _schema(schema)
-        , _fwd(fwd)
-        , _get_data_source([this, sst = std::move(sst), toread, &pc] {
-            auto consumer = mp_row_consumer(_schema, query::full_slice, pc);
+        , _get_data_source([this, sst = std::move(sst), toread, &pc, fwd] {
+            auto consumer = mp_row_consumer(_schema, query::full_slice, pc, fwd);
             auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(consumer), std::move(toread), std::unique_ptr<index_reader>());
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
@@ -1163,9 +1164,8 @@ public:
          streamed_mutation::forwarding fwd)
         : _pc(pc)
         , _schema(schema)
-        , _fwd(fwd)
-        , _get_data_source([this, sst = std::move(sst), &pc] {
-            auto consumer = mp_row_consumer(_schema, query::full_slice, pc);
+        , _get_data_source([this, sst = std::move(sst), &pc, fwd] {
+            auto consumer = mp_row_consumer(_schema, query::full_slice, pc, fwd);
             auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(consumer));
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
@@ -1177,15 +1177,14 @@ public:
          streamed_mutation::forwarding fwd)
         : _pc(pc)
         , _schema(schema)
-        , _fwd(fwd)
-        , _get_data_source([this, &pr, sst = std::move(sst), &pc, &slice] () mutable {
+        , _get_data_source([this, &pr, sst = std::move(sst), &pc, &slice, fwd] () mutable {
             auto index = std::make_unique<index_reader>(sst->get_index_reader(_pc));
             auto f = index->get_disk_read_range(*_schema, pr);
-            return f.then([this, index = std::move(index), sst = std::move(sst), &pc, &slice] (sstable::disk_read_range drr) mutable {
+            return f.then([this, index = std::move(index), sst = std::move(sst), &pc, &slice, fwd] (sstable::disk_read_range drr) mutable {
                 if (!drr.found_row()) {
                     _read_enabled = false;
                 }
-                auto consumer = mp_row_consumer(_schema, slice, pc);
+                auto consumer = mp_row_consumer(_schema, slice, pc, fwd);
                 return make_lw_shared<sstable_data_source>(std::move(sst), std::move(consumer), std::move(drr), std::move(index));
             });
         }) { }
@@ -1247,9 +1246,6 @@ private:
             }
             auto dk = dht::global_partitioner().decorate_key(*_schema, std::move(mut->key));
             auto sm = make_streamed_mutation<sstable_streamed_mutation>(_schema, std::move(dk), mut->tomb, _ds);
-            if (_fwd) {
-                sm = make_forwardable(std::move(sm)); // FIXME: optimize
-            }
             return make_ready_future<streamed_mutation_opt>(std::move(sm));
         });
     }
