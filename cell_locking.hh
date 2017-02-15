@@ -39,6 +39,7 @@ using small_vector = std::vector<T>;
 #endif
 
 #include "fnv1a_hasher.hh"
+#include "streamed_mutation.hh"
 #include "mutation_partition.hh"
 
 class cells_range {
@@ -438,6 +439,7 @@ public:
     }
 };
 
+inline
 future<std::vector<locked_cell>> cell_locker::lock_cells(const dht::decorated_key& dk, partition_cells_range&& range) {
     partition_entry::hasher pe_hash;
     partition_entry::equal_compare pe_eq(*_schema);
@@ -478,6 +480,7 @@ future<std::vector<locked_cell>> cell_locker::lock_cells(const dht::decorated_ke
     });
 }
 
+inline
 future<> cell_locker::locker::lock_next() {
     while (!is_done()) {
         if (_current_cell == _cells_range.end() || _cells_range.empty()) {
@@ -503,6 +506,7 @@ future<> cell_locker::locker::lock_next() {
     return make_ready_future<>();
 }
 
+inline
 bool cell_locker::partition_entry::upgrade(schema_ptr new_schema) {
     if (_schema == new_schema) {
         return true;
