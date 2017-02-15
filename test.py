@@ -78,6 +78,7 @@ boost_tests = [
     'virtual_reader_test',
     'view_schema_test',
     'counter_test',
+    'cell_locker_test',
 ]
 
 other_tests = [

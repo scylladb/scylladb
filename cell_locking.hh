@@ -39,6 +39,7 @@ using small_vector = std::vector<T>;
 #endif
 
 #include "fnv1a_hasher.hh"
+#include "streamed_mutation.hh"
 #include "mutation_partition.hh"
 
 class cells_range {
@@ -161,7 +162,7 @@ class cell_locker {
         // temporarily removed from its parent partition_entry.
         // Returns true if the cell_entry still exist in the new schema and
         // should be reinserted.
-        bool upgrade(const schema& from, const schema& to, column_kind kind) {
+        bool upgrade(const schema& from, const schema& to, column_kind kind) noexcept {
             auto& old_column_mapping = from.get_column_mapping();
             auto& column = old_column_mapping.column_at(kind, _address.id);
             auto cdef = to.get_column_definition(column.name());
@@ -184,7 +185,9 @@ class cell_locker {
         }
 
         ~cell_entry() {
-            assert(is_linked());
+            if (!is_linked()) {
+                return;
+            }
             unlink();
             if (!--_parent._cell_count) {
                 delete &_parent;
@@ -399,22 +402,19 @@ struct cell_locker::locker {
 
     partition_cells_range _range;
     partition_cells_range::iterator _current_ck;
-    cells_range _cells_range;
     cells_range::const_iterator _current_cell;
 
     std::vector<locked_cell> _locks;
 private:
     void update_ck() {
         if (!is_done()) {
-            _cells_range = *_current_ck;
-            _current_cell = _cells_range.begin();
+            _current_cell = _current_ck->begin();
         }
     }
 
     future<> lock_next();
 
     bool is_done() const { return _current_ck == _range.end(); }
-    std::vector<locked_cell> get() && { return std::move(_locks); }
 public:
     explicit locker(const ::schema& s, partition_entry& pe, partition_cells_range&& range)
         : _hasher(s)
@@ -426,18 +426,22 @@ public:
         update_ck();
     }
 
-    future<std::vector<locked_cell>> lock_all() && {
+    locker(const locker&) = delete;
+    locker(locker&&) = delete;
+
+    future<> lock_all() {
         // Cannot defer before first call to lock_next().
         return lock_next().then([this] {
             return do_until([this] { return is_done(); }, [this] {
                 return lock_next();
-            }).then([&] {
-                return std::move(*this).get();
             });
         });
     }
+
+    std::vector<locked_cell> get() && { return std::move(_locks); }
 };
 
+inline
 future<std::vector<locked_cell>> cell_locker::lock_cells(const dht::decorated_key& dk, partition_cells_range&& range) {
     partition_entry::hasher pe_hash;
     partition_entry::equal_compare pe_eq(*_schema);
@@ -473,14 +477,17 @@ future<std::vector<locked_cell>> cell_locker::lock_cells(const dht::decorated_ke
         return make_ready_future<std::vector<locked_cell>>(std::move(locks));
     }
 
-    return do_with(locker(*_schema, *it, std::move(range)), [] (auto& locker)  mutable {
-        return std::move(locker).lock_all();
+    auto l = std::make_unique<locker>(*_schema, *it, std::move(range));
+    auto f = l->lock_all();
+    return f.then([l = std::move(l)] {
+        return std::move(*l).get();
     });
 }
 
+inline
 future<> cell_locker::locker::lock_next() {
     while (!is_done()) {
-        if (_current_cell == _cells_range.end() || _cells_range.empty()) {
+        if (_current_cell == _current_ck->end()) {
             ++_current_ck;
             update_ck();
             continue;
@@ -488,7 +495,7 @@ future<> cell_locker::locker::lock_next() {
 
         auto cid = *_current_cell++;
 
-        cell_address ca { position_in_partition(_cells_range.position()), cid };
+        cell_address ca { position_in_partition(_current_ck->position()), cid };
         auto it = _partition_entry.cells().find(ca, _hasher, _eq_cmp);
         if (it != _partition_entry.cells().end()) {
             return it->lock().then([this, ce = it->shared_from_this()] () mutable {
@@ -496,27 +503,25 @@ future<> cell_locker::locker::lock_next() {
             });
         }
 
-        auto cell = make_lw_shared<cell_entry>(_partition_entry, position_in_partition(_cells_range.position()), cid);
+        auto cell = make_lw_shared<cell_entry>(_partition_entry, position_in_partition(_current_ck->position()), cid);
         _partition_entry.insert(cell);
         _locks.emplace_back(std::move(cell));
     }
     return make_ready_future<>();
 }
 
+inline
 bool cell_locker::partition_entry::upgrade(schema_ptr new_schema) {
     if (_schema == new_schema) {
         return true;
     }
 
-    auto buckets = std::make_unique<cells_type::bucket_type[]>(initial_bucket_count);
+    auto buckets = std::make_unique<cells_type::bucket_type[]>(_cells.bucket_count());
     auto cells = cells_type(cells_type::bucket_traits(buckets.get(), _cells.bucket_count()),
                             cell_entry::hasher(*new_schema), cell_entry::equal_compare(*new_schema));
 
-    while (!_cells.empty()) {
-        auto it = _cells.begin();
-        auto& cell = *it;
-        _cells.erase(it);
-
+    _cells.clear_and_dispose([&] (cell_entry* cell_ptr) noexcept {
+        auto& cell = *cell_ptr;
         auto kind = cell.position().is_static_row() ? column_kind::static_column
                                                     : column_kind::regular_column;
         auto reinsert = cell.upgrade(*_schema, *new_schema, kind);
@@ -525,9 +530,16 @@ bool cell_locker::partition_entry::upgrade(schema_ptr new_schema) {
         } else {
             _cell_count--;
         }
-    }
+    });
 
+    // bi::unordered_set move assignment is actually a swap.
+    // Original _buckets cannot be destroyed before the container using them is
+    // so we need to explicitly make sure that the original _cells is no more.
     _cells = std::move(cells);
+    auto destroy = [] (auto) { };
+    destroy(std::move(cells));
+
     _buckets = std::move(buckets);
+    _schema = new_schema;
     return _cell_count;
 }
