@@ -400,22 +400,19 @@ struct cell_locker::locker {
 
     partition_cells_range _range;
     partition_cells_range::iterator _current_ck;
-    cells_range _cells_range;
     cells_range::const_iterator _current_cell;
 
     std::vector<locked_cell> _locks;
 private:
     void update_ck() {
         if (!is_done()) {
-            _cells_range = *_current_ck;
-            _current_cell = _cells_range.begin();
+            _current_cell = _current_ck->begin();
         }
     }
 
     future<> lock_next();
 
     bool is_done() const { return _current_ck == _range.end(); }
-    std::vector<locked_cell> get() && { return std::move(_locks); }
 public:
     explicit locker(const ::schema& s, partition_entry& pe, partition_cells_range&& range)
         : _hasher(s)
@@ -427,16 +424,19 @@ public:
         update_ck();
     }
 
-    future<std::vector<locked_cell>> lock_all() && {
+    locker(const locker&) = delete;
+    locker(locker&&) = delete;
+
+    future<> lock_all() {
         // Cannot defer before first call to lock_next().
         return lock_next().then([this] {
             return do_until([this] { return is_done(); }, [this] {
                 return lock_next();
-            }).then([&] {
-                return std::move(*this).get();
             });
         });
     }
+
+    std::vector<locked_cell> get() && { return std::move(_locks); }
 };
 
 inline
@@ -475,15 +475,17 @@ future<std::vector<locked_cell>> cell_locker::lock_cells(const dht::decorated_ke
         return make_ready_future<std::vector<locked_cell>>(std::move(locks));
     }
 
-    return do_with(locker(*_schema, *it, std::move(range)), [] (auto& locker)  mutable {
-        return std::move(locker).lock_all();
+    auto l = std::make_unique<locker>(*_schema, *it, std::move(range));
+    auto f = l->lock_all();
+    return f.then([l = std::move(l)] {
+        return std::move(*l).get();
     });
 }
 
 inline
 future<> cell_locker::locker::lock_next() {
     while (!is_done()) {
-        if (_current_cell == _cells_range.end() || _cells_range.empty()) {
+        if (_current_cell == _current_ck->end()) {
             ++_current_ck;
             update_ck();
             continue;
@@ -491,7 +493,7 @@ future<> cell_locker::locker::lock_next() {
 
         auto cid = *_current_cell++;
 
-        cell_address ca { position_in_partition(_cells_range.position()), cid };
+        cell_address ca { position_in_partition(_current_ck->position()), cid };
         auto it = _partition_entry.cells().find(ca, _hasher, _eq_cmp);
         if (it != _partition_entry.cells().end()) {
             return it->lock().then([this, ce = it->shared_from_this()] () mutable {
@@ -499,7 +501,7 @@ future<> cell_locker::locker::lock_next() {
             });
         }
 
-        auto cell = make_lw_shared<cell_entry>(_partition_entry, position_in_partition(_cells_range.position()), cid);
+        auto cell = make_lw_shared<cell_entry>(_partition_entry, position_in_partition(_current_ck->position()), cid);
         _partition_entry.insert(cell);
         _locks.emplace_back(std::move(cell));
     }
