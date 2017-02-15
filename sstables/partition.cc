@@ -112,6 +112,7 @@ private:
     const io_priority_class* _pc = nullptr;
     const query::partition_slice& _slice;
     bool _in_current_ck_range = false;
+    bool _out_of_range = false;
     stdx::optional<query::clustering_key_filter_ranges> _ck_ranges;
     query::clustering_row_ranges::const_iterator _current_ck_range;
     query::clustering_row_ranges::const_iterator _ck_range_end;
@@ -130,7 +131,7 @@ private:
     mutation_fragment_opt _ready;
 
     stdx::optional<new_mutation> _mutation;
-    bool _is_mutation_end = false;
+    bool _is_mutation_end = true;
 
 public:
     struct column {
@@ -305,6 +306,7 @@ private:
             ++_current_ck_range;
             _in_current_ck_range = false;
         }
+        _out_of_range = true;
         return false;
     }
 
@@ -338,6 +340,7 @@ private:
         _current_ck_range = _ck_ranges->begin();
         _ck_range_end = _ck_ranges->end();
         _in_current_ck_range = false;
+        _out_of_range = false;
     }
 public:
     mutation_opt mut;
@@ -419,6 +422,9 @@ public:
         }
         if (!_in_progress) {
             _skip_clustering_row = !is_static && !is_in_range(static_cast<position_in_partition_view>(pos));
+            if (_out_of_range) {
+                ret = proceed::no;
+            }
             if (is_static) {
                 _in_progress = mutation_fragment(static_row());
             } else {
@@ -594,6 +600,7 @@ public:
     virtual proceed consume_row_end() override {
         flush();
         _is_mutation_end = true;
+        _out_of_range = true;
         return proceed::no;
     }
 
@@ -690,8 +697,15 @@ public:
         return *_pc;
     }
 
-    bool get_and_reset_is_mutation_end() {
-        return std::exchange(_is_mutation_end, false);
+    // Returns true if the consumer is positioned at partition boundary,
+    // meaning that after next read either get_mutation() will
+    // return engaged mutation or end of stream was reached.
+    bool is_mutation_end() const {
+        return _is_mutation_end;
+    }
+
+    bool is_out_of_range() const {
+        return _out_of_range;
     }
 
     stdx::optional<new_mutation> get_mutation() {
@@ -714,6 +728,7 @@ public:
         _pending_collection = { };
         _in_progress = { };
         _ready = { };
+        _is_mutation_end = true;
     }
 };
 
@@ -779,7 +794,7 @@ private:
             return make_ready_future<stdx::optional<mutation_fragment_opt>>(_range_tombstones.get_next());
         }
         return _ds->_context.read().then([this] {
-            _finished = _ds->_consumer.get_and_reset_is_mutation_end();
+            _finished = _ds->_consumer.is_out_of_range();
             auto mf = _ds->_consumer.get_mutation_fragment();
             if (mf) {
                 if (mf->is_range_tombstone()) {
@@ -1177,17 +1192,24 @@ public:
     }
 private:
     future<streamed_mutation_opt> do_read() {
+        auto& consumer = _ds->_consumer;
+        if (!consumer.is_mutation_end()) {
+            // FIXME: use index to skip to the next partition.
+            // Skip to the next partition, the slow way.
+            consumer.skip_partition();
+            return _ds->_context.read().then([this] {
+                if (!_ds->_consumer.is_mutation_end()) {
+                    // FIXME: give more details from _context
+                    throw malformed_sstable_exception("skipped not to partition end", _ds->_sst->get_filename());
+                }
+                return do_read();
+            });
+        }
         return _ds->_context.read().then([this] {
             auto& consumer = _ds->_consumer;
             auto mut = consumer.get_mutation();
             if (!mut) {
-                if (consumer.get_mutation_fragment() || consumer.get_and_reset_is_mutation_end()) {
-                    // We are still in the middle of the previous mutation.
-                    consumer.skip_partition();
-                    return do_read();
-                } else {
-                    return make_ready_future<streamed_mutation_opt>();
-                }
+                return make_ready_future<streamed_mutation_opt>();
             }
             auto dk = dht::global_partitioner().decorate_key(*_schema, std::move(mut->key));
             auto sm = make_streamed_mutation<sstable_streamed_mutation>(_schema, std::move(dk), mut->tomb, _ds);
