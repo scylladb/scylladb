@@ -45,21 +45,6 @@ class partition_snapshot_reader : public streamed_mutation::impl, public MemoryA
             return _cmp(*b._position, *a._position);
         }
     };
-    class rows_entry_compare {
-        position_in_partition::less_compare _cmp;
-    public:
-        explicit rows_entry_compare(const schema& s) : _cmp(s) { }
-        bool operator()(const rows_entry& a, const position_in_partition& b) const {
-            position_in_partition_view a_view(position_in_partition_view::clustering_row_tag_t(),
-                                              a.key());
-            return _cmp(a_view, b);
-        }
-        bool operator()(const position_in_partition& a, const rows_entry& b) const {
-            position_in_partition_view b_view(position_in_partition_view::clustering_row_tag_t(),
-                                              b.key());
-            return _cmp(a, b_view);
-        }
-    };
 private:
     // Keeps shared pointer to the container we read mutation from to make sure
     // that its lifetime is appropriately extended.
@@ -70,7 +55,7 @@ private:
     query::clustering_row_ranges::const_iterator _ck_range_end;
     bool _in_ck_range = false;
 
-    rows_entry_compare _cmp;
+    rows_entry::compare _cmp;
     clustering_key_prefix::equality _eq;
     heap_compare _heap_cmp;
 
