@@ -508,6 +508,11 @@ void range_tombstone_stream::apply(const range_tombstone_list& list, const query
     }
 }
 
+void range_tombstone_stream::reset() {
+    _inside_range_tombstone = false;
+    _list.clear();
+}
+
 streamed_mutation reverse_streamed_mutation(streamed_mutation sm) {
     class reversing_steamed_mutation final : public streamed_mutation::impl {
         streamed_mutation_opt _source;
