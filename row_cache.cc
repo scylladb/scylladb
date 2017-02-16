@@ -875,10 +875,6 @@ void row_cache::set_schema(schema_ptr new_schema) noexcept {
     _schema = std::move(new_schema);
 }
 
-streamed_mutation cache_entry::read(row_cache& rc, const schema_ptr& s, streamed_mutation::forwarding fwd) {
-    return read(rc, s, query::full_slice, fwd);
-}
-
 streamed_mutation cache_entry::read(row_cache& rc, const schema_ptr& s, const query::partition_slice& slice, streamed_mutation::forwarding fwd) {
     if (_schema->version() != s->version()) {
         auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*s, slice, _key.key());
