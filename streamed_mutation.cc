@@ -480,6 +480,14 @@ mutation_fragment_opt range_tombstone_stream::get_next(const mutation_fragment& 
     return { };
 }
 
+mutation_fragment_opt range_tombstone_stream::get_next(position_in_partition_view upper_bound)
+{
+    if (!_list.empty()) {
+        return _cmp(_list.begin()->position(), upper_bound) ? do_get_next() : mutation_fragment_opt();
+    }
+    return { };
+}
+
 mutation_fragment_opt range_tombstone_stream::get_next()
 {
     if (!_list.empty()) {
