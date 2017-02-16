@@ -367,7 +367,7 @@ public:
     const clustering_key_prefix& key() const {
         return *_ck;
     }
-    explicit operator position_in_partition_view() const {
+    operator position_in_partition_view() const {
         return { _bound_weight, _ck ? &*_ck : nullptr };
     }
 
