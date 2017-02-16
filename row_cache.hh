@@ -44,7 +44,9 @@ class row_cache;
 namespace cache {
 
 class autoupdating_underlying_reader;
+class cache_streamed_mutation;
 class read_context;
+class lsa_manager;
 
 }
 
@@ -249,6 +251,8 @@ public:
     friend class cache::autoupdating_underlying_reader;
     friend class single_partition_populating_reader;
     friend class cache_entry;
+    friend class cache::cache_streamed_mutation;
+    friend class cache::lsa_manager;
     friend class cache::read_context;
     friend class partition_range_cursor;
 public:
