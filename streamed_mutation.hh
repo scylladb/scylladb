@@ -184,9 +184,29 @@ public:
     mutation_fragment(clustering_row&& r);
     mutation_fragment(range_tombstone&& r);
 
-    mutation_fragment(const mutation_fragment&) = delete;
+    mutation_fragment(const mutation_fragment& o)
+        : _kind(o._kind), _data(std::make_unique<data>()) {
+        switch(_kind) {
+            case kind::static_row:
+                new (&_data->_static_row) static_row(o._data->_static_row);
+                break;
+            case kind::clustering_row:
+                new (&_data->_clustering_row) clustering_row(o._data->_clustering_row);
+                break;
+            case kind::range_tombstone:
+                new (&_data->_range_tombstone) range_tombstone(o._data->_range_tombstone);
+                break;
+        }
+    }
     mutation_fragment(mutation_fragment&& other) = default;
-    mutation_fragment& operator=(const mutation_fragment&) = delete;
+    mutation_fragment& operator=(const mutation_fragment& other) {
+        if (this != &other) {
+            mutation_fragment copy(other);
+            this->~mutation_fragment();
+            new (this) mutation_fragment(std::move(copy));
+        }
+        return *this;
+    }
     mutation_fragment& operator=(mutation_fragment&& other) noexcept {
         if (this != &other) {
             this->~mutation_fragment();
