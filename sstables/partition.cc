@@ -374,8 +374,6 @@ public:
                     const io_priority_class& pc)
             : mp_row_consumer(schema, query::full_slice, pc) { }
 
-    mp_row_consumer() : _slice(query::full_slice) {}
-
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         if (_key.empty() || key == _key) {
             _mutation = new_mutation { partition_key::from_exploded(key.explode(*_schema)), tombstone(deltime) };
@@ -1104,11 +1102,6 @@ private:
     const io_priority_class& _pc;
     schema_ptr _schema;
     lw_shared_ptr<sstable_data_source> _ds;
-    // For some reason std::function requires functors to be copyable and that's
-    // why we cannot store mp_row_consumer in _get_data_source captured values.
-    // Instead we have this _consumer field here which is moved away by
-    // _get_data_source().
-    mp_row_consumer _consumer;
     streamed_mutation::forwarding _fwd;
     std::function<future<lw_shared_ptr<sstable_data_source>> ()> _get_data_source;
 public:
@@ -1117,10 +1110,10 @@ public:
          streamed_mutation::forwarding fwd)
         : _pc(pc)
         , _schema(schema)
-        , _consumer(schema, query::full_slice, pc)
         , _fwd(fwd)
-        , _get_data_source([this, sst = std::move(sst), toread] {
-            auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), std::move(toread), std::unique_ptr<index_reader>());
+        , _get_data_source([this, sst = std::move(sst), toread, &pc] {
+            auto consumer = mp_row_consumer(_schema, query::full_slice, pc);
+            auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(consumer), std::move(toread), std::unique_ptr<index_reader>());
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
     impl(shared_sstable sst, schema_ptr schema,
@@ -1128,10 +1121,10 @@ public:
          streamed_mutation::forwarding fwd)
         : _pc(pc)
         , _schema(schema)
-        , _consumer(schema, query::full_slice, pc)
         , _fwd(fwd)
-        , _get_data_source([this, sst = std::move(sst)] {
-            auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer));
+        , _get_data_source([this, sst = std::move(sst), &pc] {
+            auto consumer = mp_row_consumer(_schema, query::full_slice, pc);
+            auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(consumer));
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
     impl(shared_sstable sst,
@@ -1142,19 +1135,18 @@ public:
          streamed_mutation::forwarding fwd)
         : _pc(pc)
         , _schema(schema)
-        , _consumer(schema, slice, pc)
         , _fwd(fwd)
-        , _get_data_source([this, &pr, sst = std::move(sst)] () mutable {
+        , _get_data_source([this, &pr, sst = std::move(sst), &pc, &slice] () mutable {
             auto index = std::make_unique<index_reader>(sst->get_index_reader(_pc));
             auto f = index->get_disk_read_range(*_schema, pr);
-            return f.then([this, index = std::move(index), sst = std::move(sst)] (sstable::disk_read_range drr) mutable {
+            return f.then([this, index = std::move(index), sst = std::move(sst), &pc, &slice] (sstable::disk_read_range drr) mutable {
                 if (!drr.found_row()) {
                     _read_enabled = false;
                 }
-                return make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), std::move(drr), std::move(index));
+                auto consumer = mp_row_consumer(_schema, slice, pc);
+                return make_lw_shared<sstable_data_source>(std::move(sst), std::move(consumer), std::move(drr), std::move(index));
             });
         }) { }
-    impl() : _read_enabled(false), _pc(default_priority_class()), _get_data_source() { }
 
     // Reference to _consumer is passed to data_consume_rows() in the constructor so we must not allow move/copy
     impl(impl&&) = delete;
