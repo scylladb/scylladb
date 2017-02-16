@@ -374,6 +374,9 @@ public:
     static position_in_partition_view before_all_clustered_rows() {
         return {range_tag_t(), bound_view::bottom()};
     }
+    static position_in_partition_view after_all_clustered_rows() {
+        return {position_in_partition_view::range_tag_t(), bound_view::top()};
+    }
 
     static position_in_partition_view for_static_row() {
         return {static_row_tag_t()};
