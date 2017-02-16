@@ -69,6 +69,76 @@ SEASTAR_TEST_CASE(test_counter_cell) {
     });
 }
 
+SEASTAR_TEST_CASE(test_reversability_of_apply) {
+    return seastar::async([] {
+        auto verify_applies_reversibly = [] (atomic_cell_or_collection dst, atomic_cell_or_collection src, int64_t value) {
+            auto original_dst = dst;
+
+            auto applied = counter_cell_view::apply_reversibly(dst, src);
+            auto applied_dst = dst;
+
+            auto cv = counter_cell_view(dst.as_atomic_cell());
+            BOOST_REQUIRE_EQUAL(cv.total_value(), value);
+            BOOST_REQUIRE_EQUAL(cv.timestamp(), std::max(dst.as_atomic_cell().timestamp(), src.as_atomic_cell().timestamp()));
+
+            if (applied) {
+                counter_cell_view::revert_apply(dst, src);
+            }
+            BOOST_REQUIRE_EQUAL(counter_cell_view(dst.as_atomic_cell()),
+                                counter_cell_view(original_dst.as_atomic_cell()));
+
+            applied = counter_cell_view::apply_reversibly(dst, src);
+            BOOST_REQUIRE_EQUAL(counter_cell_view(dst.as_atomic_cell()),
+                                counter_cell_view(applied_dst.as_atomic_cell()));
+
+            if (applied) {
+                counter_cell_view::revert_apply(dst, src);
+            }
+            BOOST_REQUIRE_EQUAL(counter_cell_view(dst.as_atomic_cell()),
+                                counter_cell_view(original_dst.as_atomic_cell()));
+        };
+        auto id = generate_ids(5);
+
+        counter_cell_builder b1;
+        b1.add_shard(counter_shard(id[0], 3, 1));
+        b1.add_shard(counter_shard(id[2], 2, 2));
+        b1.add_shard(counter_shard(id[4], 1, 3));
+        auto c1 = atomic_cell_or_collection(b1.build(1));
+
+        auto c2 = counter_cell_builder::from_single_shard(2, counter_shard(id[2], 8, 3));
+
+        verify_applies_reversibly(c1, c2, 12);
+        verify_applies_reversibly(c2, c1, 12);
+
+        counter_cell_builder b2;
+        b2.add_shard(counter_shard(id[1], 4, 5));
+        b2.add_shard(counter_shard(id[3], 5, 4));
+        auto c3 = atomic_cell_or_collection(b2.build(2));
+
+        verify_applies_reversibly(c1, c3, 15);
+        verify_applies_reversibly(c3, c1, 15);
+
+        auto c4 = counter_cell_builder::from_single_shard(0, counter_shard(id[2], 8, 1));
+
+        verify_applies_reversibly(c1, c4, 6);
+        verify_applies_reversibly(c4, c1, 6);
+
+        counter_cell_builder b3;
+        b3.add_shard(counter_shard(id[0], 9, 0));
+        b3.add_shard(counter_shard(id[2], 12, 3));
+        b3.add_shard(counter_shard(id[3], 5, 4));
+        auto c5 = atomic_cell_or_collection(b3.build(2));
+
+        verify_applies_reversibly(c1, c5, 21);
+        verify_applies_reversibly(c5, c1, 21);
+
+        auto c6 = counter_cell_builder::from_single_shard(3, counter_shard(id[2], 8, 1));
+
+        verify_applies_reversibly(c1, c6, 6);
+        verify_applies_reversibly(c6, c1, 6);
+    });
+}
+
 schema_ptr get_schema() {
     return schema_builder("ks", "cf")
             .with_column("pk", int32_type, column_kind::partition_key)
