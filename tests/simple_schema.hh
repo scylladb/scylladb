@@ -26,6 +26,7 @@
 #include "make_random_string.hh"
 #include "schema.hh"
 #include "keys.hh"
+#include "streamed_mutation.hh"
 
 // Helper for working with the following table:
 //
@@ -33,6 +34,11 @@
 //
 class simple_schema {
     schema_ptr _s;
+    api::timestamp_type _timestamp = api::min_timestamp;
+private:
+    api::timestamp_type new_timestamp() {
+        return _timestamp++;
+    }
 public:
     simple_schema()
         : _s(schema_builder("ks", "cf")
@@ -52,12 +58,20 @@ public:
         return make_ckey(sprint("ck%010d", n));
     }
 
-    partition_key make_pkey(sstring pk) {
-        return partition_key::from_single_value(*_s, data_value(pk).serialize());
+    dht::decorated_key make_pkey(sstring pk) {
+        auto key = partition_key::from_single_value(*_s, data_value(pk).serialize());
+        return dht::global_partitioner().decorate_key(*_s, key);
     }
 
     void add_row(mutation& m, const clustering_key& key, sstring v) {
         m.set_clustered_cell(key, to_bytes("v"), data_value(v), new_timestamp());
+    }
+
+    mutation_fragment make_row(const clustering_key& key, sstring v) {
+        auto row = clustering_row(key);
+        row.cells().apply(*_s->get_column_definition(to_bytes(sstring("v"))),
+            atomic_cell::make_live(new_timestamp(), data_value(v).serialize()));
+        return mutation_fragment(std::move(row));
     }
 
     void add_static_row(mutation& m, sstring s1) {
@@ -65,9 +79,14 @@ public:
     }
 
     range_tombstone delete_range(mutation& m, const query::clustering_range& range) {
+        auto rt = make_range_tombstone(range);
+        m.partition().apply_delete(*_s, rt);
+        return rt;
+    }
+
+    range_tombstone make_range_tombstone(const query::clustering_range& range) {
         auto bv_range = bound_view::from_range(range);
         range_tombstone rt(bv_range.first, bv_range.second, tombstone(new_timestamp(), gc_clock::now()));
-        m.partition().apply_delete(*_s, rt);
         return rt;
     }
 
