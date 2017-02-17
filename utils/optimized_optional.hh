@@ -22,6 +22,7 @@
 #pragma once
 
 #include <experimental/optional>
+#include <iostream>
 
 // optimized_optional<> is intended mainly for use with classes that store
 // their data externally and expect pointer to this data to be always non-null.
@@ -83,6 +84,12 @@ public:
     }
     bool operator!=(const optimized_optional& other) const {
         return _object != other._object;
+    }
+    friend std::ostream& operator<<(std::ostream& out, const optimized_optional& opt) {
+        if (!opt) {
+            return out << "null";
+        }
+        return out << *opt;
     }
 };
 
