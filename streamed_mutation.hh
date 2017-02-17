@@ -329,6 +329,8 @@ public:
     position_in_partition_view(range_tag_t, bound_view bv)
         : _bound_weight(weight(bv.kind)), _ck(&bv.prefix) { }
 
+    bool is_static_row() const { return !_ck; }
+
     friend std::ostream& operator<<(std::ostream&, position_in_partition_view);
 };
 
