@@ -522,29 +522,12 @@ static void test_range_queries(populate_fn populate) {
     test_slice(inclusive_token_range(128, partitions.size() - 1));
 }
 
-void ensure_monotonic_positions(streamed_mutation& sm) {
-    position_in_partition::less_compare less(*sm.schema());
-    mutation_fragment_opt prev;
-    for (;;) {
-        mutation_fragment_opt mfo = sm().get0();
-        if (!mfo) {
-            break;
-        }
-        if (prev) {
-            if (!less(prev->position(), mfo->position())) {
-                BOOST_FAIL(sprint("previous fragment has greater position: prev=%s, current=%s", *prev, *mfo));
-            }
-        }
-        prev = std::move(mfo);
-    }
-}
-
 void test_streamed_mutation_fragments_have_monotonic_positions(populate_fn populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
 
     for_each_mutation([] (const mutation& m) {
         streamed_mutation sm = streamed_mutation_from_mutation(m);
-        ensure_monotonic_positions(sm);
+        assert_that_stream(std::move(sm)).has_monotonic_positions();
     });
 }
 
