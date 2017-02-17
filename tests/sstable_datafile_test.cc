@@ -2600,7 +2600,7 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
 
         auto smopt = reader().get0();
         BOOST_REQUIRE(smopt);
-        
+
         using kind = mutation_fragment::kind;
         assert_that_stream(std::move(*smopt))
             .produces(kind::range_tombstone, { 0 })

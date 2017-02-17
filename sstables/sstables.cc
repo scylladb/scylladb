@@ -1766,17 +1766,18 @@ static const db::config& get_config() {
 }
 
 components_writer::components_writer(sstable& sst, const schema& s, file_writer& out,
-                                     uint64_t estimated_partitions, uint64_t max_sstable_size,
+                                     uint64_t estimated_partitions,
+                                     const sstable_writer_config& cfg,
                                      const io_priority_class& pc)
     : _sst(sst)
     , _schema(s)
     , _out(out)
     , _index(index_file_writer(sst, pc))
-    , _max_sstable_size(max_sstable_size)
+    , _max_sstable_size(cfg.max_sstable_size)
     , _tombstone_written(false)
 {
     _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance());
-    _sst._pi_write.desired_block_size = get_config().column_index_size_in_kb() * 1024;
+    _sst._pi_write.desired_block_size = cfg.promoted_index_block_size.value_or(get_config().column_index_size_in_kb() * 1024);
 
     prepare_summary(_sst._components->summary, estimated_partitions, _schema.min_index_interval());
 
@@ -1914,8 +1915,10 @@ void components_writer::consume_end_of_stream() {
 
 future<> sstable::write_components(memtable& mt, bool backup, const io_priority_class& pc, bool leave_unsealed) {
     _collector.set_replay_position(mt.replay_position());
-    return write_components(mt.make_flush_reader(mt.schema(), pc),
-            mt.partition_count(), mt.schema(), std::numeric_limits<uint64_t>::max(), backup, pc, leave_unsealed);
+    sstable_writer_config cfg;
+    cfg.backup = backup;
+    cfg.leave_unsealed = leave_unsealed;
+    return write_components(mt.make_flush_reader(mt.schema(), pc), mt.partition_count(), mt.schema(), cfg, pc);
 }
 
 future<>
@@ -1983,19 +1986,19 @@ sstable_writer::~sstable_writer() {
 }
 
 sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
-                               uint64_t max_sstable_size, bool backup, bool leave_unsealed, const io_priority_class& pc)
+                               const sstable_writer_config& cfg, const io_priority_class& pc)
     : _sst(sst)
     , _schema(s)
     , _pc(pc)
-    , _backup(backup)
-    , _leave_unsealed(leave_unsealed)
+    , _backup(cfg.backup)
+    , _leave_unsealed(cfg.leave_unsealed)
 {
     _sst.generate_toc(_schema.get_compressor_params().get_compressor(), _schema.bloom_filter_fp_chance());
     _sst.write_toc(_pc);
     _sst.create_data().get();
     _compression_enabled = !_sst.has_component(sstable::component_type::CRC);
     prepare_file_writer();
-    _components_writer.emplace(_sst, _schema, *_writer, estimated_partitions, max_sstable_size, _pc);
+    _components_writer.emplace(_sst, _schema, *_writer, estimated_partitions, cfg, _pc);
 }
 
 void sstable_writer::consume_end_of_stream()
@@ -2027,16 +2030,15 @@ future<> sstable::seal_sstable(bool backup)
     });
 }
 
-sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partitions, uint64_t max_sstable_size,
-                                   bool backup, const io_priority_class& pc, bool leave_unsealed)
+sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partitions, const sstable_writer_config& cfg, const io_priority_class& pc)
 {
-    return sstable_writer(*this, s, estimated_partitions, max_sstable_size, backup, leave_unsealed, pc);
+    return sstable_writer(*this, s, estimated_partitions, cfg, pc);
 }
 
 future<> sstable::write_components(::mutation_reader mr,
-        uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, bool backup, const io_priority_class& pc, bool leave_unsealed) {
-    return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), max_sstable_size, backup, &pc, leave_unsealed] () mutable {
-        auto wr = get_writer(*schema, estimated_partitions, max_sstable_size, backup, pc, leave_unsealed);
+        uint64_t estimated_partitions, schema_ptr schema, const sstable_writer_config& cfg, const io_priority_class& pc) {
+    return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), cfg, &pc] () mutable {
+        auto wr = get_writer(*schema, estimated_partitions, cfg, pc);
         consume_flattened_in_thread(mr, wr);
     });
 }
