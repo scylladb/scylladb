@@ -34,7 +34,7 @@ static inline T consume_be(temporary_buffer<char>& p) {
 }
 
 namespace data_consumer {
-enum class proceed { yes, no };
+enum class proceed { no, yes };
 
 template <typename StateProcessor>
 class continuous_data_consumer {
