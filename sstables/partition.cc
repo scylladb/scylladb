@@ -32,6 +32,7 @@
 #include "index_reader.hh"
 #include "counters.hh"
 #include "utils/data_input.hh"
+#include "clustering_ranges_walker.hh"
 
 namespace sstables {
 
@@ -111,11 +112,9 @@ private:
     key_view _key;
     const io_priority_class* _pc = nullptr;
     const query::partition_slice& _slice;
-    bool _in_current_ck_range = false;
     bool _out_of_range = false;
     stdx::optional<query::clustering_key_filter_ranges> _ck_ranges;
-    query::clustering_row_ranges::const_iterator _current_ck_range;
-    query::clustering_row_ranges::const_iterator _ck_range_end;
+    stdx::optional<clustering_ranges_walker> _ck_ranges_walker;
 
     bool _skip_partition = false;
     bool _skip_clustering_row = false;
@@ -295,68 +294,25 @@ private:
         }
     }
 
+    // Returns true if and only if the position is inside requested ranges.
+    // Assumes that this and the other advance_to() are called with monotonic positions.
     // We rely on the fact that the first 'S' in SSTables stands for 'sorted'
     // and the clustering row keys are always in an ascending order.
-    bool is_in_range(position_in_partition_view pos) {
-        position_in_partition::less_compare less(*_schema);
-
-        while (_current_ck_range != _ck_range_end) {
-            if (!_in_current_ck_range && _current_ck_range->start()) {
-                position_in_partition_view range_start(position_in_partition_view::range_tag_t(), bound_view::from_range_start(*_current_ck_range));
-                if (less(pos, range_start)) {
-                    return false;
-                }
-            }
-            // All subsequent clustering keys are larger than the start of this
-            // range so there is no need to check that again.
-            _in_current_ck_range = true;
-
-            if (!_current_ck_range->end()) {
-                return true;
-            }
-
-            position_in_partition_view range_end(position_in_partition_view::range_tag_t(), bound_view::from_range_end(*_current_ck_range));
-            if (less(pos, range_end)) {
-                return true;
-            }
-
-            ++_current_ck_range;
-            _in_current_ck_range = false;
-        }
-        _out_of_range = true;
-        return false;
+    void advance_to(position_in_partition_view pos) {
+        _skip_clustering_row = !pos.is_static_row() && !_ck_ranges_walker->advance_to(pos);
+        _out_of_range |= _ck_ranges_walker->out_of_range();
     }
 
     // Returns true if and only if the range tombstone is relevant for requested ranges.
-    // Assumes that this and is_in_range() are called with monotonic positions, except before
-    // the first call to is_in_range(), due to #1203.
-    bool is_tombstone_in_range(const range_tombstone& rt) {
-        position_in_partition::less_compare less(*_schema);
-        auto&& start = rt.position();
-        auto&& end = rt.end_position();
-
-        auto i = _current_ck_range; // Cannot advance _current_ck_range due to #1203
-        while (i != _ck_range_end) {
-            position_in_partition_view range_start(position_in_partition_view::range_tag_t(), bound_view::from_range_start(*i));
-            if (less(end, range_start)) {
-                return false;
-            }
-
-            position_in_partition_view range_end(position_in_partition_view::range_tag_t(), bound_view::from_range_end(*i));
-            if (less(start, range_end)) {
-                return true;
-            }
-
-            ++i;
-        }
-        return false;
+    // Assumes that this and the other advance_to() are called with monotonic positions.
+    void advance_to(const range_tombstone& rt) {
+        _skip_clustering_row = !_ck_ranges_walker->advance_to(rt.position(), rt.end_position());
+        _out_of_range |= _ck_ranges_walker->out_of_range();
     }
 
     void set_up_ck_ranges(const partition_key& pk) {
         _ck_ranges = query::clustering_key_filter_ranges::get_ranges(*_schema, _slice, pk);
-        _current_ck_range = _ck_ranges->begin();
-        _ck_range_end = _ck_ranges->end();
-        _in_current_ck_range = false;
+        _ck_ranges_walker = clustering_ranges_walker(*_schema, _ck_ranges->ranges());
         _out_of_range = false;
         _range_tombstones.reset();
         _first_row_encountered = false;
@@ -428,7 +384,7 @@ public:
             ret = _skip_clustering_row ? proceed::yes : proceed::no;
             flush();
         }
-        _skip_clustering_row = !is_tombstone_in_range(rt);
+        advance_to(rt);
         if (_out_of_range) {
             ret = proceed::no;
         }
@@ -440,6 +396,8 @@ public:
         // Part of workaround for #1203
         if (!is_static && !_first_row_encountered) {
             _first_row_encountered = true;
+            // from now on both range tombstones and rows should be in order
+            _ck_ranges_walker->reset();
         }
 
         position_in_partition::equal_compare eq(*_schema);
@@ -449,7 +407,7 @@ public:
             flush();
         }
         if (!_in_progress) {
-            _skip_clustering_row = !is_static && !is_in_range(static_cast<position_in_partition_view>(pos));
+            advance_to(pos);
             if (_out_of_range) {
                 ret = proceed::no;
             }
@@ -699,7 +657,7 @@ public:
                 }
                 // Workaround for #1203
                 if (!_first_row_encountered) {
-                    if (is_tombstone_in_range(rt)) {
+                    if (_ck_ranges_walker->advance_to(rt_pos, rt.end_position())) {
                         _range_tombstones.apply(std::move(rt));
                     }
                     return proceed::yes;
