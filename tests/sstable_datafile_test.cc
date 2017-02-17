@@ -1075,8 +1075,8 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
                 });
             });
         });
-    }).then([s, tmp] {
-        return make_ready_future<>();
+    }).finally([s, cm, tmp] {
+        return cm->stop().then([cm] {});
     });
 }
 
