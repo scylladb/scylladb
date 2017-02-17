@@ -356,17 +356,6 @@ SEASTAR_TEST_CASE(read_partial_range_2) {
     });
 }
 
-::mutation_source as_mutation_source(lw_shared_ptr<sstables::sstable> sst) {
-    return mutation_source([sst] (schema_ptr s,
-            const dht::partition_range& range,
-            const query::partition_slice& slice,
-            const io_priority_class& pc,
-            tracing::trace_state_ptr trace_ptr,
-            streamed_mutation::forwarding fwd) mutable {
-        return as_mutation_reader(sst, sst->read_range_rows(s, range, slice, pc, fwd));
-    });
-}
-
 SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
     return seastar::async([] {
         std::vector<tmpdir> dirs;
