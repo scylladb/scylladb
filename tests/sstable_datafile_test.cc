@@ -45,6 +45,7 @@
 #include "mutation_reader_assertions.hh"
 #include "counters.hh"
 #include "cell_locking.hh"
+#include "simple_schema.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -3277,6 +3278,70 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
             .produces_end_of_stream()
             .fast_forward_to(dht::partition_range::make({ dht::ring_position(keys[8]), false }, { dht::ring_position(keys[9]), false }))
             .produces_end_of_stream();
+    });
+}
+
+// Must be run in a seastar thread
+static
+shared_sstable make_sstable(sstring path, streamed_mutation sm, sstable_writer_config cfg) {
+    auto s = sm.schema();
+    auto sst = make_lw_shared<sstable>(s, path, 1, la, big);
+    sst->write_components(make_reader_returning(std::move(sm)), 1, s, cfg).get();
+    sst->load().get();
+    return sst;
+}
+
+SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
+    return seastar::async([] {
+        simple_schema table;
+
+        std::vector<mutation_fragment> fragments;
+
+        uint32_t count = 1000; // large enough to cross index block several times
+
+        auto rt = table.make_range_tombstone(query::clustering_range::make(
+            query::clustering_range::bound(table.make_ckey(0), true),
+            query::clustering_range::bound(table.make_ckey(count - 1), true)
+        ));
+
+        fragments.push_back(mutation_fragment(range_tombstone(rt)));
+
+        std::vector<range_tombstone> rts;
+
+        uint32_t seq = 1;
+        while (seq < count) {
+            rts.push_back(table.make_range_tombstone(query::clustering_range::make(
+                query::clustering_range::bound(table.make_ckey(seq), true),
+                query::clustering_range::bound(table.make_ckey(seq + 1), false)
+            )));
+            fragments.push_back(range_tombstone(rts.back()));
+            ++seq;
+
+            fragments.push_back(table.make_row(table.make_ckey(seq), make_random_string(1)));
+            ++seq;
+        }
+
+        tmpdir dir;
+        sstable_writer_config cfg;
+        cfg.promoted_index_block_size = 100;
+        auto sst = make_sstable(dir.path, streamed_mutation_returning(table.schema(), table.make_pkey("pk"), std::move(fragments)), cfg);
+        auto ms = as_mutation_source(sst);
+
+        for (uint32_t i = 3; i < seq; i++) {
+            auto ck1 = table.make_ckey(1);
+            auto ck2 = table.make_ckey((1 + i) / 2);
+            auto ck3 = table.make_ckey(i);
+            BOOST_TEST_MESSAGE(sprint("checking %s %s", ck2, ck3));
+            auto slice = partition_slice_builder(*table.schema())
+                .with_range(query::clustering_range::make_singular(ck1))
+                .with_range(query::clustering_range::make_singular(ck2))
+                .with_range(query::clustering_range::make_singular(ck3))
+                .build();
+            ::mutation_reader rd = ms(table.schema(), query::full_partition_range, slice);
+            streamed_mutation_opt smo = rd().get0();
+            BOOST_REQUIRE(bool(smo));
+            assert_that_stream(std::move(*smo)).has_monotonic_positions();
+        }
     });
 }
 
