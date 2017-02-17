@@ -242,6 +242,11 @@ public:
         return _core_local.stop();
     }
 
+    future<> create_keyspace(sstring name) {
+        auto query = sprint("create keyspace %s with replication = { 'class' : 'org.apache.cassandra.locator.SimpleStrategy', 'replication_factor' : 1 };", name);
+        return execute_cql(query).discard_result();
+    }
+
     static future<> do_with(std::function<future<>(cql_test_env&)> func, const db::config& cfg_in) {
         return seastar::async([cfg_in, func] {
             bool old_active = false;
@@ -264,7 +269,9 @@ public:
             auto db = ::make_shared<distributed<database>>();
             auto cfg = make_lw_shared<db::config>(std::move(cfg_in));
             tmpdir data_dir;
-            cfg->data_file_directories() = { data_dir.path };
+            if (!cfg->data_file_directories.is_set()) {
+                cfg->data_file_directories() = {data_dir.path};
+            }
             cfg->commitlog_directory() = data_dir.path + "/commitlog.dir";
             cfg->num_tokens() = 256;
             cfg->ring_delay_ms() = 500;
@@ -316,7 +323,7 @@ public:
                 auto cfm = pair.second;
                 return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
             }).get();
-
+            distributed_loader::init_non_system_keyspaces(*db, proxy).get();
             // In main.cc we call db::system_keyspace::setup which calls
             // minimal_setup and init_local_cache
             db::system_keyspace::minimal_setup(*db, qp);
@@ -335,8 +342,11 @@ public:
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 
-            auto query = sprint("create keyspace %s with replication = { 'class' : 'org.apache.cassandra.locator.SimpleStrategy', 'replication_factor' : 1 };", sstring{ks_name});
-            env.execute_cql(query).get();
+            try {
+                env.local_db().find_keyspace(ks_name);
+            } catch (const no_such_keyspace&) {
+                env.create_keyspace(ks_name).get();
+            }
 
             func(env).get();
         });
