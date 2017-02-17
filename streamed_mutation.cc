@@ -567,6 +567,25 @@ streamed_mutation reverse_streamed_mutation(streamed_mutation sm) {
     return make_streamed_mutation<reversing_steamed_mutation>(std::move(sm));
 }
 
+streamed_mutation streamed_mutation_returning(schema_ptr s, dht::decorated_key key, std::vector<mutation_fragment> frags, tombstone t) {
+    class reader : public streamed_mutation::impl {
+    public:
+        explicit reader(schema_ptr s, dht::decorated_key key, std::vector<mutation_fragment> frags, tombstone t)
+            : streamed_mutation::impl(std::move(s), std::move(key), t)
+        {
+            for (auto&& f : frags) {
+                push_mutation_fragment(std::move(f));
+            }
+            _end_of_stream = true;
+        }
+
+        virtual future<> fill_buffer() override {
+            return make_ready_future<>();
+        }
+    };
+    return make_streamed_mutation<reader>(std::move(s), std::move(key), std::move(frags), t);
+}
+
 position_range position_range::from_range(const query::clustering_range& range) {
     auto bv_range = bound_view::from_range(range);
     return {
