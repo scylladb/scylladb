@@ -31,6 +31,7 @@ private:
     schema::raw_schema _raw;
     std::experimental::optional<compact_storage> _compact_storage;
     std::experimental::optional<table_schema_version> _version;
+    std::experimental::optional<raw_view_info> _view_info;
     schema_builder(const schema::raw_schema&);
 public:
     schema_builder(const sstring& ks_name, const sstring& cf_name,

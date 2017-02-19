@@ -169,7 +169,7 @@ schema::raw_schema::raw_schema(utils::UUID id)
     : _id(id)
 { }
 
-schema::schema(const raw_schema& raw)
+schema::schema(const raw_schema& raw, stdx::optional<raw_view_info> raw_view_info)
     : _raw(raw)
     , _offsets([this] {
         if (_raw._columns.size() > std::numeric_limits<column_count_type>::max()) {
@@ -263,6 +263,9 @@ schema::schema(const raw_schema& raw)
     }
 
     rebuild();
+    if (raw_view_info) {
+        _view_info = raw_view_info;
+    }
 }
 
 schema::schema(std::experimental::optional<utils::UUID> id,
@@ -297,7 +300,7 @@ schema::schema(std::experimental::optional<utils::UUID> id,
         build_columns(regular_columns, column_kind::regular_column);
 
         return raw;
-    }())
+    }(), stdx::nullopt)
 {}
 
 schema::schema(const schema& o)
@@ -307,6 +310,9 @@ schema::schema(const schema& o)
     , _is_counter(o._is_counter)
 {
     rebuild();
+    if (o.is_view()) {
+        _view_info = o.view_info();
+    }
 }
 
 schema::~schema() {
@@ -366,7 +372,7 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._caching_options == y._raw._caching_options
         && x._raw._dropped_columns == y._raw._dropped_columns
         && x._raw._collections == y._raw._collections
-        && x._raw._view_info == y._raw._view_info;
+        && indirect_equal_to<stdx::optional<::view_info>>()(x._view_info, y._view_info);
 #if 0
         && Objects.equal(triggers, other.triggers)
 #endif
@@ -543,7 +549,11 @@ schema_builder::schema_builder(const sstring& ks_name, const sstring& cf_name,
 
 schema_builder::schema_builder(const schema_ptr s)
     : schema_builder(s->_raw)
-{}
+{
+    if (s->is_view()) {
+        _view_info = s->view_info();
+    }
+}
 
 schema_builder::schema_builder(const schema::raw_schema& raw)
     : _raw(raw)
@@ -714,7 +724,7 @@ void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
 }
 
 schema_builder& schema_builder::with_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause) {
-    _raw._view_info = view_info(std::move(base_id), std::move(base_name), include_all_columns, std::move(where_clause));
+    _view_info = raw_view_info(std::move(base_id), std::move(base_name), include_all_columns, std::move(where_clause));
     return *this;
 }
 
@@ -751,7 +761,7 @@ schema_ptr schema_builder::build() {
     }
 
     prepare_dense_schema(new_raw);
-    return make_lw_shared<schema>(schema(new_raw));
+    return make_lw_shared<schema>(schema(new_raw, _view_info));
 }
 
 schema_ptr schema_builder::build(compact_storage cp) {
