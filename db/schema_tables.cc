@@ -67,6 +67,7 @@
 
 #include "compaction_strategy.hh"
 #include "utils/joinpoint.hh"
+#include "view_info.hh"
 
 using namespace db::system_keyspace;
 using namespace std::chrono_literals;

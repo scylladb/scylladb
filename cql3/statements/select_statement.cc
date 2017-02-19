@@ -50,6 +50,7 @@
 #include "query_result_merger.hh"
 #include "service/pager/query_pagers.hh"
 #include <seastar/core/execution_stage.hh>
+#include "view_info.hh"
 
 namespace cql3 {
 

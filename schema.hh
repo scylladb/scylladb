@@ -377,7 +377,7 @@ public:
 bool operator==(const raw_view_info&, const raw_view_info&);
 std::ostream& operator<<(std::ostream& os, const raw_view_info& view);
 
-using view_info = raw_view_info;
+class view_info;
 
 /*
  * Effectively immutable.
@@ -426,7 +426,7 @@ private:
     raw_schema _raw;
     thrift_schema _thrift;
     mutable schema_registry_entry* _registry_entry = nullptr;
-    stdx::optional<::view_info> _view_info;
+    std::unique_ptr<::view_info> _view_info;
 
     const std::array<column_count_type, 3> _offsets;
 
@@ -632,7 +632,7 @@ public:
     const data_type& regular_column_name_type() const {
         return _raw._regular_column_name_type;
     }
-    const stdx::optional<::view_info>& view_info() const {
+    const std::unique_ptr<::view_info>& view_info() const {
         return _view_info;
     }
     bool is_view() const {

@@ -529,8 +529,7 @@ private:
     // Last but not least, we seldom need to guarantee any ordering here: as long
     // as all data is waited for, we're good.
     seastar::gate _streaming_flush_gate;
-    std::unordered_map<sstring, lw_shared_ptr<db::view::view>> _views;
-    std::vector<view_ptr> _view_schemas;
+    std::vector<view_ptr> _views;
     semaphore _cache_update_sem{1};
 
     std::unique_ptr<cell_locker> _counter_cell_locks;
@@ -828,10 +827,9 @@ public:
     const std::vector<view_ptr>& views() const;
     future<> push_view_replica_updates(const schema_ptr& base, mutation&& m) const;
 private:
-    void update_view_schemas();
-    std::vector<lw_shared_ptr<db::view::view>> affected_views(const schema_ptr& base, const mutation& update) const;
+    std::vector<view_ptr> affected_views(const schema_ptr& base, const mutation& update) const;
     future<std::vector<mutation>> generate_view_updates(const schema_ptr& base,
-            std::vector<lw_shared_ptr<db::view::view>>&& views,
+            std::vector<view_ptr>&& views,
             streamed_mutation updates,
             streamed_mutation existings) const;
 

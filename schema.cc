@@ -31,6 +31,7 @@
 #include "schema_registry.hh"
 #include <boost/range/algorithm.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
+#include "view_info.hh"
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -264,7 +265,7 @@ schema::schema(const raw_schema& raw, stdx::optional<raw_view_info> raw_view_inf
 
     rebuild();
     if (raw_view_info) {
-        _view_info = raw_view_info;
+        _view_info = std::make_unique<::view_info>(*this, *raw_view_info);
     }
 }
 
@@ -311,7 +312,7 @@ schema::schema(const schema& o)
 {
     rebuild();
     if (o.is_view()) {
-        _view_info = o.view_info();
+        _view_info = std::make_unique<::view_info>(*this, o.view_info()->raw());
     }
 }
 
@@ -372,7 +373,7 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._caching_options == y._raw._caching_options
         && x._raw._dropped_columns == y._raw._dropped_columns
         && x._raw._collections == y._raw._collections
-        && indirect_equal_to<stdx::optional<::view_info>>()(x._view_info, y._view_info);
+        && indirect_equal_to<std::unique_ptr<::view_info>>()(x._view_info, y._view_info);
 #if 0
         && Objects.equal(triggers, other.triggers)
 #endif
@@ -551,7 +552,7 @@ schema_builder::schema_builder(const schema_ptr s)
     : schema_builder(s->_raw)
 {
     if (s->is_view()) {
-        _view_info = s->view_info();
+        _view_info = s->view_info()->raw();
     }
 }
 
