@@ -179,7 +179,7 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
     }
 
     auto& cf = db.find_column_family(schema);
-    std::vector<schema_ptr> view_updates;
+    std::vector<view_ptr> view_updates;
 
     switch (_type) {
     case alter_table_statement::type::add:
@@ -236,7 +236,7 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
                 if (view->view_info()->include_all_columns()) {
                     schema_builder builder(view);
                     builder.with_column(column_name->name(), type);
-                    view_updates.push_back(builder.build());
+                    view_updates.push_back(view_ptr(builder.build()));
                 }
             }
         }
@@ -262,7 +262,7 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
                 schema_builder builder(view);
                 auto view_type = validate_alter(view, *view_def, *validator);
                 builder.with_altered_column_type(column_name->name(), std::move(view_type));
-                view_updates.push_back(builder.build());
+                view_updates.push_back(view_ptr(builder.build()));
             }
         }
         break;
@@ -348,19 +348,14 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
                     builder.with_view_info(view->view_info()->base_id(), view->view_info()->base_name(),
                             view->view_info()->include_all_columns(), std::move(new_where));
 
-                    view_updates.push_back(builder.build());
+                    view_updates.push_back(view_ptr(builder.build()));
                 }
             }
         }
         break;
     }
 
-    auto f = service::get_local_migration_manager().announce_column_family_update(cfm.build(), false, is_local_only);
-    return f.then([is_local_only, view_updates = std::move(view_updates)] {
-        return parallel_for_each(view_updates, [is_local_only] (auto&& view) {
-            return service::get_local_migration_manager().announce_view_update(view_ptr(std::move(view)), is_local_only);
-        });
-    }).then([] {
+    return service::get_local_migration_manager().announce_column_family_update(cfm.build(), false, std::move(view_updates), is_local_only).then([] {
         return true;
     });
 }

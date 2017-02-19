@@ -201,7 +201,7 @@ cql3::statements::create_index_statement::announce_migration(distributed<service
     cfm.add_default_index_names(proxy.local().get_db().local());
 
     return service::get_local_migration_manager().announce_column_family_update(
-            cfm.build(), false, is_local_only).then([]() {
+            cfm.build(), false, {}, is_local_only).then([]() {
         return make_ready_future<bool>(true);
     });
 }
