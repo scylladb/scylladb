@@ -346,13 +346,13 @@ public:
  * Augments a schema with fields related to materialized views.
  * Effectively immutable.
  */
-class view_info final {
+class raw_view_info final {
     utils::UUID _base_id;
     sstring _base_name;
     bool _include_all_columns;
     sstring _where_clause;
 public:
-    view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause);
+    raw_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause);
 
     const utils::UUID& base_id() const {
         return _base_id;
@@ -370,12 +370,15 @@ public:
         return _where_clause;
     }
 
-    friend bool operator==(const view_info&, const view_info&);
-    friend std::ostream& operator<<(std::ostream& os, const view_info& view);
+    friend bool operator==(const raw_view_info&, const raw_view_info&);
+    friend std::ostream& operator<<(std::ostream& os, const raw_view_info& view);
 };
 
-bool operator==(const view_info&, const view_info&);
-std::ostream& operator<<(std::ostream& os, const view_info& view);
+bool operator==(const raw_view_info&, const raw_view_info&);
+std::ostream& operator<<(std::ostream& os, const raw_view_info& view);
+
+using view_info = raw_view_info;
+
 /*
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
