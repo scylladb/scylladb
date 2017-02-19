@@ -756,7 +756,9 @@ public:
                     return new_seg->allocate(id, std::move(writer), std::move(permit), timeout);
                 });
             } else {
-                cycle();
+                cycle().discard_result().handle_exception([] (auto ex) {
+                    logger.error("Failed to flush commits to disk: {}", ex);
+                });
             }
         }
 
@@ -807,7 +809,9 @@ public:
             // then no other request will be allowed in to force the cycle()ing of this buffer. We
             // have to do it ourselves.
             if ((_buf_pos >= (db::commitlog::segment::default_size))) {
-                cycle();
+                cycle().discard_result().handle_exception([] (auto ex) {
+                    logger.error("Failed to flush commits to disk: {}", ex);
+                });
             }
             return make_ready_future<replay_position>(rp);
         }
