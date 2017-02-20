@@ -64,8 +64,7 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
     schema_registry& _registry; // always valid
 
     async_schema_loader _loader; // valid when state == LOADING
-    promise<schema_ptr> _schema_promise; // valid when state == LOADING
-    shared_future<schema_ptr> _schema_future; // valid when state == LOADING
+    shared_promise<schema_ptr> _schema_promise; // valid when state == LOADING
 
     std::experimental::optional<frozen_schema> _frozen_schema; // engaged when state == LOADED
     // valid when state == LOADED
@@ -74,8 +73,7 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
 
     enum class sync_state { NOT_SYNCED, SYNCING, SYNCED };
     sync_state _sync_state;
-    promise<> _synced_promise; // valid when _sync_state == SYNCING
-    shared_future<> _synced_future; // valid when _sync_state == SYNCING
+    shared_promise<> _synced_promise; // valid when _sync_state == SYNCING
 
     friend class schema_registry;
 public:

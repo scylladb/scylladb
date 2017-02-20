@@ -95,7 +95,7 @@ future<schema_ptr> schema_registry::get_or_load(table_schema_version v, const as
     }
     schema_registry_entry& e = *i->second;
     if (e._state == schema_registry_entry::state::LOADING) {
-        return e._schema_future.get_future();
+        return e._schema_promise.get_shared_future();
     }
     return make_ready_future<schema_ptr>(e.get_schema());
 }
@@ -142,7 +142,7 @@ schema_ptr schema_registry_entry::load(frozen_schema fs) {
 future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader loader) {
     _loader = std::move(loader);
     auto f = _loader(_version);
-    _schema_future = _schema_promise.get_future();
+    auto sf = _schema_promise.get_shared_future();
     _state = state::LOADING;
     logger.trace("Loading {}", _version);
     f.then_wrapped([self = shared_from_this(), this] (future<frozen_schema>&& f) {
@@ -163,7 +163,7 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
             _registry._entries.erase(_version);
         }
     });
-    return _schema_future;
+    return sf;
 }
 
 schema_ptr schema_registry_entry::get_schema() {
@@ -202,14 +202,14 @@ future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
         case schema_registry_entry::sync_state::SYNCED:
             return make_ready_future<>();
         case schema_registry_entry::sync_state::SYNCING:
-            return _synced_future;
+            return _synced_promise.get_shared_future();
         case schema_registry_entry::sync_state::NOT_SYNCED: {
             logger.debug("Syncing {}", _version);
             _synced_promise = {};
             auto f = do_with(std::move(syncer), [] (auto& syncer) {
                 return syncer();
             });
-            _synced_future = _synced_promise.get_future();
+            auto sf = _synced_promise.get_shared_future();
             _sync_state = schema_registry_entry::sync_state::SYNCING;
             f.then_wrapped([this, self = shared_from_this()] (auto&& f) {
                 if (_sync_state != sync_state::SYNCING) {
@@ -225,7 +225,7 @@ future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
                     _synced_promise.set_value();
                 }
             });
-            return _synced_future;
+            return sf;
         }
         default:
             assert(0);
