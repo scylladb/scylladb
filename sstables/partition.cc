@@ -661,7 +661,7 @@ public:
                 auto rt = range_tombstone(std::move(start_ck), start_kind, std::move(end), end_kind, tombstone(deltime));
                 position_in_partition::less_compare less(*_schema);
                 auto rt_pos = rt.position();
-                if (_in_progress && less(rt_pos, _in_progress->position())) {
+                if (_in_progress && !less(_in_progress->position(), rt_pos)) {
                     return proceed::yes; // repeated tombstone, ignore
                 }
                 if (!is_tombstone_in_range(rt)) {
