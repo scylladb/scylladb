@@ -1935,6 +1935,16 @@ sstable_writer::~sstable_writer() {
     }
 }
 
+sstable_writer::~sstable_writer() {
+    if (_writer) {
+        try {
+            _writer->close().get();
+        } catch (...) {
+            sstlog.error("sstable_writer failed to close file: {}", std::current_exception());
+        }
+    }
+}
+
 sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
                                uint64_t max_sstable_size, bool backup, bool leave_unsealed, const io_priority_class& pc)
     : _sst(sst)
