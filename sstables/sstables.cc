@@ -1951,23 +1951,34 @@ void sstable_writer::prepare_file_writer()
     options.write_behind = 10;
 
     if (!_compression_enabled) {
-        _writer = make_shared<checksummed_file_writer>(std::move(_sst._data_file), std::move(options), true);
+        _writer = std::make_unique<checksummed_file_writer>(std::move(_sst._data_file), std::move(options), true);
     } else {
         prepare_compression(_sst._components->compression, _schema);
-        _writer = make_shared<file_writer>(make_compressed_file_output_stream(std::move(_sst._data_file), std::move(options), &_sst._components->compression));
+        _writer = std::make_unique<file_writer>(make_compressed_file_output_stream(std::move(_sst._data_file), std::move(options), &_sst._components->compression));
     }
 }
 
 void sstable_writer::finish_file_writer()
 {
-    _writer->close().get();
+    auto writer = std::move(_writer);
+    writer->close().get();
 
     if (!_compression_enabled) {
-        auto chksum_wr = static_pointer_cast<checksummed_file_writer>(_writer);
+        auto chksum_wr = static_cast<checksummed_file_writer*>(writer.get());
         write_digest(_sst._write_error_handler, _sst.filename(sstable::component_type::Digest), chksum_wr->full_checksum());
         write_crc(_sst._write_error_handler, _sst.filename(sstable::component_type::CRC), chksum_wr->finalize_checksum());
     } else {
         write_digest(_sst._write_error_handler, _sst.filename(sstable::component_type::Digest), _sst._components->compression.full_checksum());
+    }
+}
+
+sstable_writer::~sstable_writer() {
+    if (_writer) {
+        try {
+            _writer->close().get();
+        } catch (...) {
+            sstlog.error("sstable_writer failed to close file: {}", std::current_exception());
+        }
     }
 }
 
