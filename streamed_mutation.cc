@@ -148,7 +148,7 @@ std::ostream& operator<<(std::ostream& os, const mutation_fragment& mf) {
     return os;
 }
 
-streamed_mutation streamed_mutation_from_mutation(mutation m)
+streamed_mutation streamed_mutation_from_mutation(mutation m, streamed_mutation::forwarding fwd)
 {
     class reader final : public streamed_mutation::impl {
         mutation _mutation;
@@ -249,7 +249,11 @@ streamed_mutation streamed_mutation_from_mutation(mutation m)
         }
     };
 
-    return make_streamed_mutation<reader>(std::move(m));
+    auto sm = make_streamed_mutation<reader>(std::move(m));
+    if (fwd) {
+        return make_forwardable(std::move(sm)); // FIXME: optimize
+    }
+    return std::move(sm);
 }
 
 streamed_mutation make_forwardable(streamed_mutation m) {

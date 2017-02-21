@@ -353,7 +353,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
             auto test = [&] (const mutation_source& ds, const dht::partition_range& range, int expected_count) {
                 do_test(ds, range, secondary_calls_count, expected_count);
             };
-            
+
             auto ds = make_ds(s, secondary_calls_count);
             auto expected = partitions.size() + 1;
             test(ds, query::full_partition_range, expected);
@@ -589,8 +589,9 @@ SEASTAR_TEST_CASE(test_row_cache_conforms_to_mutation_source) {
                     const dht::partition_range& range,
                     const query::partition_slice& slice,
                     const io_priority_class& pc,
-                    tracing::trace_state_ptr trace_state) {
-                return cache->make_reader(s, range, slice, pc, std::move(trace_state));
+                    tracing::trace_state_ptr trace_state,
+                    streamed_mutation::forwarding fwd) {
+                return cache->make_reader(s, range, slice, pc, std::move(trace_state), fwd);
             });
         });
     });

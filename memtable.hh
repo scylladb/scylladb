@@ -59,7 +59,7 @@ public:
     partition_entry& partition() { return _pe; }
     const schema_ptr& schema() const { return _schema; }
     schema_ptr& schema() { return _schema; }
-    streamed_mutation read(lw_shared_ptr<memtable> mtbl, const schema_ptr&, const query::partition_slice&);
+    streamed_mutation read(lw_shared_ptr<memtable> mtbl, const schema_ptr&, const query::partition_slice&, streamed_mutation::forwarding);
 
     size_t external_memory_usage_without_rows() const {
         return _key.key().external_memory_usage();
@@ -174,7 +174,8 @@ public:
                                 const dht::partition_range& range = query::full_partition_range,
                                 const query::partition_slice& slice = query::full_slice,
                                 const io_priority_class& pc = default_priority_class(),
-                                tracing::trace_state_ptr trace_state_ptr = nullptr);
+                                tracing::trace_state_ptr trace_state_ptr = nullptr,
+                                streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
 
     mutation_reader make_flush_reader(schema_ptr, const io_priority_class& pc);

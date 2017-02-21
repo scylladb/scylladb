@@ -520,10 +520,16 @@ make_partition_snapshot_reader(schema_ptr s,
     logalloc::region& region,
     logalloc::allocating_section& read_section,
     boost::any pointer_to_container,
+    streamed_mutation::forwarding fwd,
     Args&&... args)
 {
-    return make_streamed_mutation<partition_snapshot_reader<MemoryAccounter>>(s, std::move(dk),
+    auto sm = make_streamed_mutation<partition_snapshot_reader<MemoryAccounter>>(s, std::move(dk),
            snp, std::move(crr), region, read_section, std::move(pointer_to_container), std::forward<Args>(args)...);
+    if (fwd) {
+        return make_forwardable(std::move(sm)); // FIXME: optimize
+    } else {
+        return std::move(sm);
+    }
 }
 
 inline streamed_mutation
@@ -533,8 +539,9 @@ make_partition_snapshot_reader(schema_ptr s,
     lw_shared_ptr<partition_snapshot> snp,
     logalloc::region& region,
     logalloc::allocating_section& read_section,
-    boost::any pointer_to_container)
+    boost::any pointer_to_container,
+    streamed_mutation::forwarding fwd)
 {
     return make_partition_snapshot_reader<partition_snapshot_reader_dummy_accounter>(std::move(s),
-        std::move(dk), std::move(crr), std::move(snp), region, read_section, std::move(pointer_to_container));
+        std::move(dk), std::move(crr), std::move(snp), region, read_section, std::move(pointer_to_container), fwd);
 }

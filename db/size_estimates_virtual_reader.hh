@@ -52,11 +52,13 @@ class size_estimates_mutation_reader final : public mutation_reader::impl {
     using ks_range = std::vector<sstring>;
     stdx::optional<ks_range> _keyspaces;
     ks_range::const_iterator _current_partition;
+    streamed_mutation::forwarding _fwd;
 public:
-    size_estimates_mutation_reader(schema_ptr schema, const dht::partition_range& prange, const query::partition_slice& slice)
+    size_estimates_mutation_reader(schema_ptr schema, const dht::partition_range& prange, const query::partition_slice& slice, streamed_mutation::forwarding fwd)
             : _schema(schema)
             , _prange(prange)
             , _slice(slice)
+            , _fwd(fwd)
     { }
 
     virtual future<streamed_mutation_opt> operator()() override {
@@ -73,7 +75,7 @@ public:
             auto estimates = this->estimates_for_current_keyspace(db, std::move(ranges));
             auto mutations = db::system_keyspace::make_size_estimates_mutation(*_current_partition, std::move(estimates));
             ++_current_partition;
-            return streamed_mutation_opt(streamed_mutation_from_mutation(std::move(mutations)));
+            return streamed_mutation_opt(streamed_mutation_from_mutation(std::move(mutations), _fwd));
         });
     }
     /**
@@ -271,8 +273,9 @@ struct virtual_reader {
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc,
-            tracing::trace_state_ptr trace_state) {
-        return make_mutation_reader<size_estimates_mutation_reader>(schema, range, slice);
+            tracing::trace_state_ptr trace_state,
+            streamed_mutation::forwarding fwd) {
+        return make_mutation_reader<size_estimates_mutation_reader>(schema, range, slice, fwd);
     }
 };
 

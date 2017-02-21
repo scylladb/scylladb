@@ -261,14 +261,16 @@ public:
         schema_ptr schema,
         const key& k,
         const query::partition_slice& slice = query::full_slice,
-        const io_priority_class& pc = default_priority_class());
+        const io_priority_class& pc = default_priority_class(),
+        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
     // Returns a mutation_reader for given range of partitions
     mutation_reader read_range_rows(
         schema_ptr schema,
         const dht::partition_range& range,
         const query::partition_slice& slice = query::full_slice,
-        const io_priority_class& pc = default_priority_class());
+        const io_priority_class& pc = default_priority_class(),
+        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
     // read_rows() returns each of the rows in the sstable, in sequence,
     // converted to a "mutation" data structure.
@@ -281,7 +283,9 @@ public:
     // The caller must ensure (e.g., using do_with()) that the context object,
     // as well as the sstable, remains alive as long as a read() is in
     // progress (i.e., returned a future which hasn't completed yet).
-    mutation_reader read_rows(schema_ptr schema, const io_priority_class& pc = default_priority_class());
+    mutation_reader read_rows(schema_ptr schema,
+        const io_priority_class& pc = default_priority_class(),
+        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
     // Write sstable components from a memtable.
     future<> write_components(memtable& mt, bool backup = false,

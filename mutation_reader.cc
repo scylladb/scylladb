@@ -191,13 +191,13 @@ public:
     }
 };
 
-mutation_reader make_reader_returning_many(std::vector<mutation> mutations, const query::partition_slice& slice) {
+mutation_reader make_reader_returning_many(std::vector<mutation> mutations, const query::partition_slice& slice, streamed_mutation::forwarding fwd) {
     std::vector<streamed_mutation> streamed_mutations;
     streamed_mutations.reserve(mutations.size());
     for (auto& m : mutations) {
         auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*m.schema(), slice, m.key());
         auto mp = mutation_partition(std::move(m.partition()), *m.schema(), std::move(ck_ranges));
-        auto sm = streamed_mutation_from_mutation(mutation(m.schema(), m.decorated_key(), std::move(mp)));
+        auto sm = streamed_mutation_from_mutation(mutation(m.schema(), m.decorated_key(), std::move(mp)), fwd);
         streamed_mutations.emplace_back(std::move(sm));
     }
     return make_mutation_reader<reader_returning_many>(std::move(streamed_mutations), query::full_partition_range);
@@ -282,10 +282,10 @@ private:
 public:
     multi_range_mutation_reader(schema_ptr s, mutation_source source, const ranges_vector& ranges,
                                 const query::partition_slice& slice, const io_priority_class& pc,
-                                tracing::trace_state_ptr trace_state)
+                                tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd)
         : _ranges(ranges)
         , _current_range(_ranges.begin())
-        , _reader(source(s, *_current_range, slice, pc, trace_state))
+        , _reader(source(s, *_current_range, slice, pc, trace_state, fwd))
     {
     }
 
@@ -317,8 +317,8 @@ public:
 mutation_reader
 make_multi_range_reader(schema_ptr s, mutation_source source, const dht::partition_range_vector& ranges,
                         const query::partition_slice& slice, const io_priority_class& pc,
-                        tracing::trace_state_ptr trace_state)
+                        tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd)
 {
     return make_mutation_reader<multi_range_mutation_reader>(std::move(s), std::move(source), ranges,
-                                                             slice, pc, std::move(trace_state));
+                                                             slice, pc, std::move(trace_state), fwd);
 }
