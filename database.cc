@@ -2657,11 +2657,12 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
 }
 
 template<typename... Args>
-void column_family::do_apply(Args&&... args) {
+void column_family::do_apply(const db::replay_position& rp, Args&&... args) {
     utils::latency_counter lc;
     _stats.writes.set_latency(lc);
+    check_valid_rp(rp);
     try {
-        _memtables->active_memtable().apply(std::forward<Args>(args)...);
+        _memtables->active_memtable().apply(std::forward<Args>(args)..., rp);
     } catch (...) {
         _failed_counter_applies_to_memtable++;
         throw;
@@ -2674,12 +2675,12 @@ void column_family::do_apply(Args&&... args) {
 
 void
 column_family::apply(const mutation& m, const db::replay_position& rp) {
-    do_apply(m, rp);
+    do_apply(rp, m);
 }
 
 void
 column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& rp) {
-    do_apply(m, m_schema, rp);
+    do_apply(rp, m, m_schema);
 }
 
 future<frozen_mutation> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema) {

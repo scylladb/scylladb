@@ -438,7 +438,7 @@ private:
     uint64_t _failed_counter_applies_to_memtable = 0;
 
     template<typename... Args>
-    void do_apply(Args&&... args);
+    void do_apply(const db::replay_position&, Args&&... args);
 
     lw_shared_ptr<memtable_list> _memtables;
 
