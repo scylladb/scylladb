@@ -630,7 +630,7 @@ deps['tests/sstable_test'] += ['tests/sstable_datafile_test.cc']
 
 deps['tests/bytes_ostream_test'] = ['tests/bytes_ostream_test.cc']
 deps['tests/input_stream_test'] = ['tests/input_stream_test.cc']
-deps['tests/UUID_test'] = ['utils/UUID_gen.cc', 'tests/UUID_test.cc']
+deps['tests/UUID_test'] = ['utils/UUID_gen.cc', 'tests/UUID_test.cc', 'utils/uuid.cc']
 deps['tests/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'tests/murmur_hash_test.cc']
 deps['tests/allocation_strategy_test'] = ['tests/allocation_strategy_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
 deps['tests/anchorless_list_test'] = ['tests/anchorless_list_test.cc']
