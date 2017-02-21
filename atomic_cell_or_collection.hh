@@ -39,9 +39,13 @@ public:
     static atomic_cell_or_collection from_atomic_cell(atomic_cell data) { return { std::move(data._data) }; }
     atomic_cell_view as_atomic_cell() const { return atomic_cell_view::from_bytes(_data); }
     atomic_cell_ref as_atomic_cell_ref() { return { _data }; }
+    atomic_cell_mutable_view as_mutable_atomic_cell() { return atomic_cell_mutable_view::from_bytes(_data); }
     atomic_cell_or_collection(collection_mutation cm) : _data(std::move(cm.data)) {}
     explicit operator bool() const {
         return !_data.empty();
+    }
+    bool can_use_mutable_view() const {
+        return !_data.is_fragmented();
     }
     static atomic_cell_or_collection from_collection_mutation(collection_mutation data) {
         return std::move(data.data);

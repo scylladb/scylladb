@@ -31,9 +31,9 @@
 #include <iosfwd>
 #include <seastar/util/gcc6-concepts.hh>
 
-template<typename T>
+template<typename T, typename Input>
 static inline
-void set_field(managed_bytes& v, unsigned offset, T val) {
+void set_field(Input& v, unsigned offset, T val) {
     reinterpret_cast<net::packed<T>*>(v.begin() + offset)->raw = net::hton(val);
 }
 
@@ -93,12 +93,25 @@ private:
     static api::timestamp_type timestamp(const bytes_view& cell) {
         return get_field<api::timestamp_type>(cell, timestamp_offset);
     }
+    template<typename BytesContainer>
+    static void set_timestamp(BytesContainer& cell, api::timestamp_type ts) {
+        set_field(cell, timestamp_offset, ts);
+    }
     // Can be called on live cells only
-    static bytes_view value(bytes_view cell) {
+private:
+    template<typename BytesView>
+    static BytesView do_get_value(BytesView cell) {
         auto expiry_field_size = bool(cell[0] & EXPIRY_FLAG) * (expiry_size + ttl_size);
         auto value_offset = flags_size + timestamp_size + expiry_field_size;
         cell.remove_prefix(value_offset);
         return cell;
+    }
+public:
+    static bytes_view value(bytes_view cell) {
+        return do_get_value(cell);
+    }
+    static bytes_mutable_view value(bytes_mutable_view cell) {
+        return do_get_value(cell);
     }
     // Can be called on live counter update cells only
     static int64_t counter_update_value(bytes_view cell) {
@@ -220,8 +233,11 @@ public:
     api::timestamp_type timestamp() const {
         return atomic_cell_type::timestamp(_data);
     }
+    void set_timestamp(api::timestamp_type ts) {
+        atomic_cell_type::set_timestamp(_data, ts);
+    }
     // Can be called on live cells only
-    bytes_view value() const {
+    auto value() const {
         return atomic_cell_type::value(_data);
     }
     // Can be called on live counter update cells only
@@ -259,6 +275,14 @@ public:
 
     friend class atomic_cell;
     friend std::ostream& operator<<(std::ostream& os, const atomic_cell_view& acv);
+};
+
+class atomic_cell_mutable_view final : public atomic_cell_base<bytes_mutable_view> {
+    atomic_cell_mutable_view(bytes_mutable_view data) : atomic_cell_base(std::move(data)) {}
+public:
+    static atomic_cell_mutable_view from_bytes(bytes_mutable_view data) { return atomic_cell_mutable_view(data); }
+
+    friend class atomic_cell;
 };
 
 class atomic_cell_ref final : public atomic_cell_base<managed_bytes&> {
