@@ -1303,6 +1303,10 @@ normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_ide
           }
           add_raw_update(operations, key, make_shared<cql3::operation::addition>(cql3::constants::literal::integer($i.text)));
       }
+    | K_SCYLLA_COUNTER_SHARD_LIST '(' t=term ')'
+      {
+          add_raw_update(operations, key, ::make_shared<cql3::operation::set_counter_value_from_tuple_list>(t));      
+      }
     ;
 
 specializedColumnOperation[std::vector<std::pair<shared_ptr<cql3::column_identifier::raw>,
@@ -1688,6 +1692,7 @@ K_REPLACE:     R E P L A C E;
 K_DETERMINISTIC: D E T E R M I N I S T I C;
 
 K_SCYLLA_TIMEUUID_LIST_INDEX: S C Y L L A '_' T I M E U U I D '_' L I S T '_' I N D E X;
+K_SCYLLA_COUNTER_SHARD_LIST: S C Y L L A '_' C O U N T E R '_' S H A R D '_' L I S T; 
 
 // Case-insensitive alpha characters
 fragment A: ('a'|'A');

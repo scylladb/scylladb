@@ -149,6 +149,13 @@ void batch_statement::validate()
                         | boost::adaptors::uniqued) != 1))) {
         throw exceptions::invalid_request_exception("Batch with conditions cannot span multiple tables");
     }
+    std::experimental::optional<bool> raw_counter;
+    for (auto& s : _statements) {
+        if (raw_counter && s->is_raw_counter_shard_write() != *raw_counter) {
+            throw exceptions::invalid_request_exception("Cannot mix raw and regular counter statements in batch");
+        }
+        raw_counter = s->is_raw_counter_shard_write();
+    }
 }
 
 void batch_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state)

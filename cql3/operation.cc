@@ -36,6 +36,7 @@
  * You should have received a copy of the GNU General Public License
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
+#include <utility>
 
 #include "operation.hh"
 #include "operation_impl.hh"
@@ -191,6 +192,78 @@ operation::set_value::prepare(database& db, const sstring& keyspace, const colum
         abort();
     }
 }
+
+::shared_ptr <operation>
+operation::set_counter_value_from_tuple_list::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
+    static thread_local const data_type counter_tuple_type = tuple_type_impl::get_instance({int32_type, uuid_type, long_type, long_type});
+    static thread_local const data_type counter_tuple_list_type = list_type_impl::get_instance(counter_tuple_type, true);
+
+    if (!receiver.type->is_counter()) {
+        throw exceptions::invalid_request_exception(sprint("Column %s is not a counter", receiver.name_as_text()));
+    }
+
+    // We need to fake a column of list<tuple<...>> to prepare the value term
+    auto & os = receiver.column_specification;
+    auto spec = make_shared<cql3::column_specification>(os->ks_name, os->cf_name, os->name, counter_tuple_list_type);
+    auto v = _value->prepare(db, keyspace, spec);
+
+    // Will not be used elsewhere, so make it local.
+    class counter_setter : public operation {
+    public:
+        using operation::operation;
+
+        bool is_raw_counter_shard_write() const override {
+            return true;
+        }
+        void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override {
+            const auto& value = _t->bind(params._options);
+            auto&& list_value = dynamic_pointer_cast<lists::value>(value);
+
+            if (!list_value) {
+                throw std::invalid_argument("Invalid input data to counter set");
+            }
+
+            counter_id last(utils::UUID(0, 0));
+            counter_cell_builder ccb(list_value->_elements.size());
+            for (auto& bo : list_value->_elements) {
+                // lexical etc cast fails should be enough type checking here.
+                auto tuple = value_cast<tuple_type_impl::native_type>(counter_tuple_type->deserialize(*bo));
+                auto shard = value_cast<int>(tuple[0]);
+                auto id = counter_id(value_cast<utils::UUID>(tuple[1]));
+                auto clock = value_cast<int64_t>(tuple[2]);
+                auto value = value_cast<int64_t>(tuple[3]);
+
+                using namespace std::rel_ops;
+
+                if (id <= last) {
+                    throw marshal_exception(
+                                    sprint("invalid counter id order, %s <= %s",
+                                                    id.to_uuid().to_sstring(),
+                                                    last.to_uuid().to_sstring()));
+                }
+                last = id;
+                // TODO: maybe allow more than global values to propagate,
+                // though we don't (yet at least) in sstable::partition so...
+                switch (shard) {
+                case 'g':
+                    ccb.add_shard(counter_shard(id, value, clock));
+                    break;
+                case 'l':
+                    throw marshal_exception("encountered a local shard in a counter cell");
+                case 'r':
+                    throw marshal_exception("encountered remote shards in a counter cell");
+                default:
+                    throw marshal_exception(sprint("encountered unknown shard %d in a counter cell", shard));
+                }
+            }
+            // Note. this is a counter value cell, not an update.
+            // see counters.cc, we need to detect this.
+            m.set_cell(prefix, column, ccb.build(params.timestamp()));
+        }
+    };
+
+    return make_shared<counter_setter>(receiver, v);
+};
 
 bool
 operation::set_value::is_compatible_with(::shared_ptr <raw_update> other) {

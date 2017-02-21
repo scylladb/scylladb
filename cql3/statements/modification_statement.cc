@@ -494,7 +494,7 @@ modification_statement::execute_without_condition(distributed<service::storage_p
             return now();
         }
 
-        return proxy.local().mutate_with_triggers(std::move(mutations), cl, false, qs.get_trace_state());
+        return proxy.local().mutate_with_triggers(std::move(mutations), cl, false, qs.get_trace_state(), this->is_raw_counter_shard_write());
     });
 }
 
@@ -659,7 +659,7 @@ modification_statement::validate(distributed<service::storage_proxy>&, const ser
         throw exceptions::invalid_request_exception("Cannot provide custom timestamp for conditional updates");
     }
 
-    if (is_counter() && attrs->is_timestamp_set()) {
+    if (is_counter() && attrs->is_timestamp_set() && !is_raw_counter_shard_write()) {
         throw exceptions::invalid_request_exception("Cannot provide custom timestamp for counter updates");
     }
 
@@ -686,6 +686,15 @@ void modification_statement::add_operation(::shared_ptr<operation> op) {
     } else {
         _sets_regular_columns = true;
     }
+
+    if (op->column.is_counter()) {
+        auto is_raw_counter_shard_write = op->is_raw_counter_shard_write();
+        if (_is_raw_counter_shard_write && _is_raw_counter_shard_write != is_raw_counter_shard_write) {
+            throw exceptions::invalid_request_exception("Cannot mix regular and raw counter updates");
+        }
+        _is_raw_counter_shard_write = is_raw_counter_shard_write;
+    }
+
     _column_operations.push_back(std::move(op));
 }
 

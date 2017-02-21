@@ -61,6 +61,7 @@
 #include "service/storage_proxy.hh"
 
 #include <memory>
+#include <experimental/optional>
 
 namespace cql3 {
 
@@ -103,6 +104,7 @@ private:
 
     bool _sets_static_columns = false;
     bool _sets_regular_columns = false;
+    std::experimental::optional<bool> _is_raw_counter_shard_write;
 
     const std::function<const column_definition&(::shared_ptr<column_condition>)> get_column_for_condition =
         [](::shared_ptr<column_condition> cond) -> const column_definition& {
@@ -172,6 +174,9 @@ public:
 
     bool has_if_exist_condition() const;
 
+    bool is_raw_counter_shard_write() const {
+        return _is_raw_counter_shard_write.value_or(false);
+    }
 private:
     void add_key_values(const column_definition& def, ::shared_ptr<restrictions::restriction> values);
 

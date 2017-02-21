@@ -50,7 +50,7 @@
 namespace cql3 {
 
 class operation::set_value : public raw_update {
-private:
+protected:
     ::shared_ptr<term::raw> _value;
 public:
     set_value(::shared_ptr<term::raw> value) : _value(std::move(value)) {}
@@ -65,6 +65,12 @@ public:
 #endif
 
     virtual bool is_compatible_with(::shared_ptr <raw_update> other) override;
+};
+
+class operation::set_counter_value_from_tuple_list : public set_value {
+public:
+    using set_value::set_value;
+    ::shared_ptr <operation> prepare(database& db, const sstring& keyspace, const column_definition& receiver) override;
 };
 
 class operation::column_deletion : public raw_deletion {

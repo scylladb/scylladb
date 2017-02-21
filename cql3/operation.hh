@@ -103,6 +103,10 @@ public:
         return _t && _t->uses_function(ks_name, function_name);
     }
 
+    virtual bool is_raw_counter_shard_write() const {
+        return false;
+    }
+
     /**
     * @return whether the operation requires a read of the previous value to be executed
     * (only lists setterByIdx, discard and discardByIdx requires that).
@@ -193,6 +197,7 @@ public:
     };
 
     class set_value;
+    class set_counter_value_from_tuple_list;
 
     class set_element : public raw_update {
         const shared_ptr<term::raw> _selector;

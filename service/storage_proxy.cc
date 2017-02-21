@@ -1240,8 +1240,8 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
  * @param consistency_level the consistency level for the operation
  * @param tr_state trace state handle
  */
-future<> storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state) {
-    auto mid = boost::range::partition(mutations, [] (auto&& m) {
+future<> storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, bool raw_counters) {
+    auto mid = raw_counters ? mutations.begin() : boost::range::partition(mutations, [] (auto&& m) {
         return m.schema()->is_counter();
     });
     return seastar::when_all_succeed(
@@ -1286,7 +1286,7 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool c
 
 future<>
 storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl,
-    bool should_mutate_atomically, tracing::trace_state_ptr tr_state) {
+    bool should_mutate_atomically, tracing::trace_state_ptr tr_state, bool raw_counters) {
     warn(unimplemented::cause::TRIGGERS);
 #if 0
         Collection<Mutation> augmented = TriggerExecutor.instance.execute(mutations);
@@ -1295,9 +1295,10 @@ storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consist
         } else {
 #endif
     if (should_mutate_atomically) {
+        assert(!raw_counters);
         return mutate_atomically(std::move(mutations), cl, std::move(tr_state));
     }
-    return mutate(std::move(mutations), cl, std::move(tr_state));
+    return mutate(std::move(mutations), cl, std::move(tr_state), raw_counters);
 #if 0
     }
 #endif

@@ -312,7 +312,7 @@ public:
     * @param consistency_level the consistency level for the operation
     * @param tr_state trace state handle
     */
-    future<> mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state);
+    future<> mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, bool raw_counters = false);
 
     future<> replicate_counters_from_leader(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state);
 
@@ -320,7 +320,7 @@ public:
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state);
 
     future<> mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl,
-                                  bool should_mutate_atomically, tracing::trace_state_ptr tr_state);
+                                  bool should_mutate_atomically, tracing::trace_state_ptr tr_state, bool raw_counters = false);
 
     /**
     * See mutate. Adds additional steps before and after writing a batch.
