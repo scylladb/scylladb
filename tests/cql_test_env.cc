@@ -279,7 +279,7 @@ public:
             auto stop_ms = defer([&ms] { ms.stop().get(); });
 
             auto& ss = service::get_storage_service();
-            ss.start(std::ref(*db));
+            ss.start(std::ref(*db)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             db->start(std::move(*cfg)).get();
