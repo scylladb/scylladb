@@ -46,6 +46,7 @@ public:
     UUID(int64_t most_sig_bits, int64_t least_sig_bits)
         : most_sig_bits(most_sig_bits), least_sig_bits(least_sig_bits) {}
     explicit UUID(const sstring& uuid_string) : UUID(sstring_view(uuid_string)) { }
+    explicit UUID(const char * s) : UUID(sstring_view(s)) {}
     explicit UUID(sstring_view uuid_string);
 
     int64_t get_most_significant_bits() const {
@@ -94,9 +95,9 @@ public:
 
     bool operator<(const UUID& v) const {
          if (most_sig_bits != v.most_sig_bits) {
-             return most_sig_bits < v.most_sig_bits;
+             return uint64_t(most_sig_bits) < uint64_t(v.most_sig_bits);
          } else {
-             return least_sig_bits < v.least_sig_bits;
+             return uint64_t(least_sig_bits) < uint64_t(v.least_sig_bits);
          }
     }
 
