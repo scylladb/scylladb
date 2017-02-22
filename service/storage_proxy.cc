@@ -75,6 +75,7 @@
 #include "utils/joinpoint.hh"
 #include <seastar/util/lazy.hh>
 #include "core/metrics.hh"
+#include <seastar/core/execution_stage.hh>
 
 namespace service {
 
@@ -1250,6 +1251,11 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
     });
 }
 
+struct mutate_executor {
+    static auto get() { return &storage_proxy::do_mutate; }
+};
+static thread_local auto mutate_stage = seastar::make_execution_stage(mutate_executor::get());
+
 /**
  * Use this method to have these Mutations applied
  * across all replicas. This method will take care
@@ -1261,6 +1267,10 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
  * @param tr_state trace state handle
  */
 future<> storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, bool raw_counters) {
+    return mutate_stage(this, std::move(mutations), cl, std::move(tr_state), raw_counters);
+}
+
+future<> storage_proxy::do_mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, bool raw_counters) {
     auto mid = raw_counters ? mutations.begin() : boost::range::partition(mutations, [] (auto&& m) {
         return m.schema()->is_counter();
     });

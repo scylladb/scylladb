@@ -291,6 +291,9 @@ private:
                                                     tracing::trace_state_ptr trace_state);
 
     gms::inet_address find_leader_for_counter_update(const mutation& m, db::consistency_level cl);
+
+    future<> do_mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, bool);
+    friend class mutate_executor;
 public:
     storage_proxy(distributed<database>& db);
     ~storage_proxy();
