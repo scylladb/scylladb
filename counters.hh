@@ -95,6 +95,14 @@ public:
     int64_t value() const { return read<int64_t>(offset::value); }
     int64_t logical_clock() const { return read<int64_t>(offset::logical_clock); }
 
+    bool operator==(const basic_counter_shard_view& other) const {
+        return id() == other.id() && value() == other.value()
+               && logical_clock() == other.logical_clock();
+    }
+    bool operator!=(const basic_counter_shard_view& other) const {
+        return !(*this == other);
+    }
+
     struct less_compare_by_id {
         bool operator()(const basic_counter_shard_view& x, const basic_counter_shard_view& y) const {
             return x.id() < y.id();
@@ -305,6 +313,10 @@ public:
     stdx::optional<counter_shard_view> local_shard() const {
         // TODO: consider caching local shard position
         return get_shard(counter_id::local());
+    }
+
+    bool operator==(const basic_counter_cell_view& other) const {
+        return timestamp() == other.timestamp() && boost::equal(shards(), other.shards());
     }
 };
 
