@@ -51,6 +51,7 @@
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/algorithm/find_if.hpp>
+#include <boost/range/algorithm/sort.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "frozen_mutation.hh"
 #include "mutation_partition_applier.hh"
@@ -2700,25 +2701,30 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
     m.upgrade(cf.schema());
 
     // prepare partition slice
-    query::clustering_row_ranges cr_ranges;
-
     std::vector<column_id> static_columns;
     static_columns.reserve(m.partition().static_row().size());
-    m.partition().static_row().for_each_cell([&] (auto id, auto) {
+    m.partition().static_row().for_each_cell([&] (auto id, auto&&) {
         static_columns.emplace_back(id);
     });
 
-    std::set<column_id> regular_columns;
+    query::clustering_row_ranges cr_ranges;
+    cr_ranges.reserve(8);
+    std::vector<column_id> regular_columns;
+    regular_columns.reserve(32);
+
     for (auto&& cr : m.partition().clustered_rows()) {
         cr_ranges.emplace_back(query::clustering_range::make_singular(cr.key()));
-        cr.row().cells().for_each_cell([&] (auto id, auto) {
-            regular_columns.emplace(id);
+        cr.row().cells().for_each_cell([&] (auto id, auto&&) {
+            regular_columns.emplace_back(id);
         });
     }
 
+    boost::sort(regular_columns);
+    regular_columns.erase(std::unique(regular_columns.begin(), regular_columns.end()),
+                          regular_columns.end());
+
     auto slice = query::partition_slice(std::move(cr_ranges), std::move(static_columns),
-        boost::copy_range<std::vector<column_id>>(regular_columns), { }, { },
-        cql_serialization_format::internal(), query::max_rows);
+        std::move(regular_columns), { }, { }, cql_serialization_format::internal(), query::max_rows);
 
     return do_with(std::move(slice), std::move(m), std::vector<locked_cell>(),
                    [this, &cf, timeout, trace_state = std::move(trace_state)] (const query::partition_slice& slice, mutation& m, std::vector<locked_cell>& locks) mutable {
