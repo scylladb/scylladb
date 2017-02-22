@@ -144,9 +144,8 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
                 return; // continue -- we are in lambda
             }
             auto delta = acv.counter_update_value();
-            counter_cell_builder ccb;
-            ccb.add_shard(counter_shard(counter_id::local(), delta, clock_offset + 1));
-            ac_o_c = ccb.build(acv.timestamp());
+            auto cs = counter_shard(counter_id::local(), delta, clock_offset + 1);
+            ac_o_c = counter_cell_builder::from_single_shard(acv.timestamp(), cs);
         });
     };
 
@@ -196,16 +195,15 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
 
             auto delta = acv.counter_update_value();
 
-            counter_cell_builder ccb;
             if (shards.empty() || shards.front().first > id) {
-                ccb.add_shard(counter_shard(counter_id::local(), delta, clock_offset + 1));
+                auto cs = counter_shard(counter_id::local(), delta, clock_offset + 1);
+                ac_o_c = counter_cell_builder::from_single_shard(acv.timestamp(), cs);
             } else {
                 auto& cs = shards.front().second;
                 cs.update(delta, clock_offset + 1);
-                ccb.add_shard(cs);
+                ac_o_c = counter_cell_builder::from_single_shard(acv.timestamp(), cs);
                 shards.pop_front();
             }
-            ac_o_c = ccb.build(acv.timestamp());
         });
     }
 }
