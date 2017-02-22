@@ -247,6 +247,16 @@ private:
             operator++();
             return it;
         }
+        shard_iterator& operator--() noexcept {
+            _current -= counter_shard_view::size;
+            _current_view = basic_counter_shard_view<View>(_current);
+            return *this;
+        }
+        shard_iterator operator--(int) noexcept {
+            auto it = *this;
+            operator--();
+            return it;
+        }
         bool operator==(const shard_iterator& other) const noexcept {
             return _current == other._current;
         }
