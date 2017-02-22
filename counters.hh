@@ -67,7 +67,8 @@ static_assert(std::is_pod<counter_id>::value, "counter_id should be a POD type")
 
 std::ostream& operator<<(std::ostream& os, const counter_id& id);
 
-class counter_shard_view {
+template<typename View>
+class basic_counter_shard_view {
     enum class offset : unsigned {
         id = 0u,
         value = unsigned(id) + sizeof(counter_id),
@@ -75,7 +76,7 @@ class counter_shard_view {
         total_size = unsigned(logical_clock) + sizeof(int64_t),
     };
 private:
-    bytes_view::const_pointer _base;
+    typename View::pointer _base;
 private:
     template<typename T>
     T read(offset off) const {
@@ -86,8 +87,8 @@ private:
 public:
     static constexpr auto size = size_t(offset::total_size);
 public:
-    counter_shard_view() = default;
-    explicit counter_shard_view(bytes_view::const_pointer ptr) noexcept
+    basic_counter_shard_view() = default;
+    explicit basic_counter_shard_view(typename View::pointer ptr) noexcept
         : _base(ptr) { }
 
     counter_id id() const { return read<counter_id>(offset::id); }
@@ -95,11 +96,13 @@ public:
     int64_t logical_clock() const { return read<int64_t>(offset::logical_clock); }
 
     struct less_compare_by_id {
-        bool operator()(const counter_shard_view& x, const counter_shard_view& y) const {
+        bool operator()(const basic_counter_shard_view& x, const basic_counter_shard_view& y) const {
             return x.id() < y.id();
         }
     };
 };
+
+using counter_shard_view = basic_counter_shard_view<bytes_view>;
 
 std::ostream& operator<<(std::ostream& os, counter_shard_view csv);
 
@@ -215,26 +218,28 @@ public:
 // <counter_id>   := <int64_t><int64_t>
 // <shard>        := <counter_id><int64_t:value><int64_t:logical_clock>
 // <counter_cell> := <shard>*
-class counter_cell_view {
-    atomic_cell_view _cell;
+template<typename View>
+class basic_counter_cell_view {
+protected:
+    atomic_cell_base<View> _cell;
 private:
-    class shard_iterator : public std::iterator<std::input_iterator_tag, const counter_shard_view> {
-        bytes_view::const_pointer _current;
-        counter_shard_view _current_view;
+    class shard_iterator : public std::iterator<std::input_iterator_tag, basic_counter_shard_view<View>> {
+        typename View::pointer _current;
+        basic_counter_shard_view<View> _current_view;
     public:
         shard_iterator() = default;
-        shard_iterator(bytes_view::const_pointer ptr) noexcept
+        shard_iterator(typename View::pointer ptr) noexcept
             : _current(ptr), _current_view(ptr) { }
 
-        const counter_shard_view& operator*() const noexcept {
+        basic_counter_shard_view<View>& operator*() noexcept {
             return _current_view;
         }
-        const counter_shard_view* operator->() const noexcept {
+        basic_counter_shard_view<View>* operator->() noexcept {
             return &_current_view;
         }
         shard_iterator& operator++() noexcept {
             _current += counter_shard_view::size;
-            _current_view = counter_shard_view(_current);
+            _current_view = basic_counter_shard_view<View>(_current);
             return *this;
         }
         shard_iterator operator++(int) noexcept {
@@ -262,7 +267,7 @@ public:
     }
 public:
     // ac must be a live counter cell
-    explicit counter_cell_view(atomic_cell_view ac) noexcept : _cell(ac) {
+    explicit basic_counter_cell_view(atomic_cell_base<View> ac) noexcept : _cell(ac) {
         assert(_cell.is_live());
         assert(!_cell.is_counter_update());
     }
@@ -291,6 +296,10 @@ public:
         // TODO: consider caching local shard position
         return get_shard(counter_id::local());
     }
+};
+
+struct counter_cell_view : basic_counter_cell_view<bytes_view> {
+    using basic_counter_cell_view::basic_counter_cell_view;
 
     // Reversibly applies two counter cells, at least one of them must be live.
     // Returns true iff dst was modified.
@@ -304,6 +313,10 @@ public:
     static stdx::optional<atomic_cell> difference(atomic_cell_view a, atomic_cell_view b);
 
     friend std::ostream& operator<<(std::ostream& os, counter_cell_view ccv);
+};
+
+struct counter_cell_mutable_view : basic_counter_cell_view<bytes_mutable_view> {
+    using basic_counter_cell_view::basic_counter_cell_view;
 };
 
 // Transforms mutation dst from counter updates to counter shards using state
