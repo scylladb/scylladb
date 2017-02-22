@@ -274,7 +274,13 @@ void messaging_service::start_listen() {
         if (listen_to_bc) {
             _server_tls[1] = listen(utils::fb_utilities::get_broadcast_address());
         }
-
+    }
+    // Do this on just cpu 0, to avoid duplicate logs.
+    if (engine().cpu_id() == 0) {
+        if (_server_tls[0]) {
+            logger.info("Starting Encrypted Messaging Service on SSL port {}", _ssl_port);
+        }
+        logger.info("Starting Messaging Service on port {}", _port);
     }
 }
 
@@ -307,14 +313,6 @@ messaging_service::messaging_service(gms::inet_address ip
 
     if (listen_now) {
         start_listen();
-    }
-
-    // Do this on just cpu 0, to avoid duplicate logs.
-    if (engine().cpu_id() == 0) {
-        if (_server_tls[0]) {
-            logger.info("Starting Encrypted Messaging Service on SSL port {}", _ssl_port);
-        }
-        logger.info("Starting Messaging Service on port {}", _port);
     }
 }
 
