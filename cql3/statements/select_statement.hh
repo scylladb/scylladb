@@ -90,6 +90,10 @@ private:
 
     query::partition_slice::option_set _opts;
     cql_stats& _stats;
+private:
+    future<::shared_ptr<transport::messages::result_message>> do_execute(distributed<service::storage_proxy>& proxy,
+        service::query_state& state, const query_options& options);
+    friend class select_statement_executor;
 public:
     select_statement(schema_ptr schema,
             uint32_t bound_terms,
