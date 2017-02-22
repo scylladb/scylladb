@@ -63,11 +63,6 @@ private:
     seastar::gate _pending_writes;
     int64_t _slow_query_last_nanos = 0;
 
-    sstring _sessions_create_cql;
-    sstring _events_create_cql;
-    sstring _node_slow_query_log_cql;
-
-    utils::UUID _slow_query_log_id;
     const column_definition* _slow_session_id_column;
     const column_definition* _slow_date_column;
     const column_definition* _slow_command_column;
@@ -77,7 +72,6 @@ private:
     const column_definition* _slow_table_names_column;
     const column_definition* _slow_username_column;
 
-    utils::UUID _sessions_id;
     const column_definition* _client_column;
     const column_definition* _coordinator_column;
     const column_definition* _request_column;
@@ -86,11 +80,64 @@ private:
     const column_definition* _duration_column;
     const column_definition* _parameters_column;
 
-    utils::UUID _events_id;
     const column_definition* _activity_column;
     const column_definition* _source_column;
     const column_definition* _thread_column;
     const column_definition* _source_elapsed_column;
+
+    /**
+     * \class table_helper
+     * \brief A helper class that unites the operations on a single table under the same roof.
+     */
+    class table_helper {
+    private:
+        const sstring _name; /** a table name */
+        const sstring _create_cql; /** a CQL CREATE TABLE statement for the table */
+
+        utils::UUID _id; /** A table (UU)ID */
+
+    public:
+        table_helper(sstring name, sstring create_cql)
+            : _name(std::move(name))
+            , _create_cql(std::move(create_cql)) {}
+
+        /**
+         * Tries to create a table using create_cql command.
+         *
+         * @return A future that resolves when the operation is complete. Any
+         *         possible errors are ignored.
+         */
+        future<> setup_table() const;
+
+        /**
+         * Get a schema_ptr by a table (UU)ID.
+         * If not found will try to get it by name.
+         * If not found will issue a table creation and throw no_such_column_family exception.
+         * If table is found by name but its schema doesn't match the expected schema will throw bad_column_family
+         * exception.
+         *
+         * @tparam ColumnsHandlesChecker a "bool (const schema_ptr&)" function that
+         *                              checks the schema and cached a table's ID
+         *                              and column definitions in case of a match
+         * @param check_and_cache a ColumnsHandlesChecker instance
+         *
+         * @return a schema_ptr as requested
+         */
+        template <typename ColumnsHandlesChecker>
+        schema_ptr get_schema_ptr_or_create(ColumnsHandlesChecker check_and_cache) const;
+
+        const sstring& name() const {
+            return _name;
+        }
+
+        void set_id(const utils::UUID& new_id) {
+            _id = new_id;
+        }
+    };
+
+    table_helper _sessions;
+    table_helper _events;
+    table_helper _slow_query_log;
 
     struct stats {
         uint64_t tracing_errors = 0;
@@ -152,18 +199,6 @@ private:
     }
 
     /**
-     * Tries to create a table with a given name and using the provided CQL
-     * command.
-     *
-     * @param name a table name
-     * @param cql a CQL command for creating a table
-     *
-     * @return A future that resolves when the operation is complete. Any
-     *         possible errors are ignored.
-     */
-    future<> setup_table(const sstring& name, const sstring& cql) const;
-
-    /**
      * Flush mutations of one particular tracing session. First "events"
      * mutations and then, when they are complete, a "sessions" mutation.
      *
@@ -189,26 +224,6 @@ private:
      * returned future resolves.
      */
     future<> apply_events_mutation(lw_shared_ptr<one_session_records> records, std::deque<event_record>& events_records);
-
-    /**
-     * Get a schema_ptr by a table (UU)ID. If not found will try to get it by
-     * name. If not found will issue a table creation and throw
-     * no_such_column_family exception. If table is found by name but its
-     * schema doesn't match the expected schema will throw bad_column_family
-     * exception.
-     *
-     * @param ColumnsHandlesChecker a "bool (const schema_ptr&)" function that
-     *                              checks the schema and cached a table's ID
-     *                              and column definitions in case of a match
-     * @param id table ID
-     * @param table_name table name
-     * @param cql CQL command for a table creation
-     * @param check_and_cache a ColumnsHandlesChecker instance
-     *
-     * @return a schema_ptr as requested
-     */
-    template <typename ColumnsHandlesChecker>
-    schema_ptr get_schema_ptr_or_create(utils::UUID& id, const sstring& table_name, const sstring& cql, ColumnsHandlesChecker check_and_cache) const;
 
     /**
      * Cache definitions of a system_traces.sessions table: table ID and column
@@ -310,24 +325,24 @@ public:
 };
 
 template <typename ColumnsHandlesChecker>
-schema_ptr trace_keyspace_helper::get_schema_ptr_or_create(utils::UUID& id, const sstring& table_name, const sstring& cql, ColumnsHandlesChecker check_and_cache) const {
+schema_ptr trace_keyspace_helper::table_helper::get_schema_ptr_or_create(ColumnsHandlesChecker check_and_cache) const {
     auto& db = cql3::get_local_query_processor().db().local();
     schema_ptr schema;
     try {
-        schema = db.find_schema(id);
+        schema = db.find_schema(_id);
     } catch (...) {
         // if schema is not found by ID - try to find it by its name
         try {
-            schema = db.find_schema(KEYSPACE_NAME, table_name);
+            schema = db.find_schema(KEYSPACE_NAME, _name);
         } catch (...) {
             // if not found - create and throw
-            setup_table(table_name, cql).discard_result();
+            setup_table();
             throw;
         }
         // Update the ID and column definitions. If columns do not match our
         // expectations - throw an exception
         if (!check_and_cache(schema)) {
-            throw bad_column_family(table_name);
+            throw bad_column_family(_name);
         }
     }
 

@@ -61,7 +61,47 @@ struct trace_keyspace_backend_sesssion_state final : public backend_session_stat
 };
 
 trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
-            : i_tracing_backend_helper(tr) {
+            : i_tracing_backend_helper(tr)
+            , _sessions(SESSIONS,
+                        sprint("CREATE TABLE %s.%s ("
+                                  "session_id uuid,"
+                                  "command text,"
+                                  "client inet,"
+                                  "coordinator inet,"
+                                  "duration int,"
+                                  "parameters map<text, text>,"
+                                  "request text,"
+                                  "started_at timestamp,"
+                                  "PRIMARY KEY ((session_id))) "
+                                  "WITH default_time_to_live = 86400", KEYSPACE_NAME, SESSIONS))
+
+            , _events(EVENTS,
+                      sprint("CREATE TABLE %s.%s ("
+                                "session_id uuid,"
+                                "event_id timeuuid,"
+                                "activity text,"
+                                "source inet,"
+                                "source_elapsed int,"
+                                "thread text,"
+                                "PRIMARY KEY ((session_id), event_id)) "
+                                "WITH default_time_to_live = 86400", KEYSPACE_NAME, EVENTS))
+
+            , _slow_query_log(NODE_SLOW_QUERY_LOG,
+                              sprint("CREATE TABLE %s.%s ("
+                                        "node_ip inet,"
+                                        "shard int,"
+                                        "session_id uuid,"
+                                        "date timestamp,"
+                                        "start_time timeuuid,"
+                                        "command text,"
+                                        "duration int,"
+                                        "parameters map<text, text>,"
+                                        "source_ip inet,"
+                                        "table_names set<text>,"
+                                        "username text,"
+                                        "PRIMARY KEY (start_time, node_ip, shard)) "
+                                        "WITH default_time_to_live = 86400", KEYSPACE_NAME, NODE_SLOW_QUERY_LOG))
+{
     namespace sm = seastar::metrics;
 
     _metrics.add_group("tracing_keyspace_helper", {
@@ -75,55 +115,18 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                         "Non-zero value indicates that the administrator has to take immediate steps to fix the corresponding schema. "
                                         "The appropriate error message will be printed in the syslog.")),
     });
-
-    _sessions_create_cql = sprint("CREATE TABLE %s.%s ("
-                                  "session_id uuid,"
-                                  "command text,"
-                                  "client inet,"
-                                  "coordinator inet,"
-                                  "duration int,"
-                                  "parameters map<text, text>,"
-                                  "request text,"
-                                  "started_at timestamp,"
-                                  "PRIMARY KEY ((session_id))) "
-                                  "WITH default_time_to_live = 86400", KEYSPACE_NAME, SESSIONS);
-
-    _events_create_cql = sprint("CREATE TABLE %s.%s ("
-                                "session_id uuid,"
-                                "event_id timeuuid,"
-                                "activity text,"
-                                "source inet,"
-                                "source_elapsed int,"
-                                "thread text,"
-                                "PRIMARY KEY ((session_id), event_id)) "
-                                "WITH default_time_to_live = 86400", KEYSPACE_NAME, EVENTS);
-
-    _node_slow_query_log_cql = sprint("CREATE TABLE %s.%s ("
-                                "node_ip inet,"
-                                "shard int,"
-                                "session_id uuid,"
-                                "date timestamp,"
-                                "start_time timeuuid,"
-                                "command text,"
-                                "duration int,"
-                                "parameters map<text, text>,"
-                                "source_ip inet,"
-                                "table_names set<text>,"
-                                "username text,"
-                                "PRIMARY KEY (start_time, node_ip, shard)) "
-                                "WITH default_time_to_live = 86400", KEYSPACE_NAME, NODE_SLOW_QUERY_LOG);
 }
 
-future<> trace_keyspace_helper::setup_table(const sstring& name, const sstring& cql) const {
+future<> trace_keyspace_helper::table_helper::setup_table() const {
     auto& qp = cql3::get_local_query_processor();
     auto& db = qp.db().local();
 
-    if (db.has_schema(KEYSPACE_NAME, name)) {
+    if (db.has_schema(KEYSPACE_NAME, _name)) {
         return make_ready_future<>();
     }
 
     ::shared_ptr<cql3::statements::raw::cf_statement> parsed = static_pointer_cast<
-                    cql3::statements::raw::cf_statement>(cql3::query_processor::parse_statement(cql));
+                    cql3::statements::raw::cf_statement>(cql3::query_processor::parse_statement(_create_cql));
     parsed->prepare_keyspace(KEYSPACE_NAME);
     ::shared_ptr<cql3::statements::create_table_statement> statement =
                     static_pointer_cast<cql3::statements::create_table_statement>(
@@ -164,10 +167,10 @@ bool trace_keyspace_helper::cache_sessions_table_handles(const schema_ptr& schem
         check_column_definition(_duration_column, int32_type) &&
         check_column_definition(_parameters_column, map_type_impl::get_instance(utf8_type, utf8_type, true))) {
         // store a table ID only if its format meets our demands
-        _sessions_id = schema->id();
+        _sessions.set_id(schema->id());
         return true;
     } else {
-        _sessions_id = utils::UUID();
+        _sessions.set_id(utils::UUID());
         return false;
     }
 }
@@ -197,10 +200,10 @@ bool trace_keyspace_helper::cache_node_slow_log_table_handles(const schema_ptr& 
         check_column_definition(_slow_table_names_column, set_type_impl::get_instance(utf8_type, true)) &&
         check_column_definition(_slow_username_column, utf8_type)) {
         // store a table ID only if its format meets our demands
-        _slow_query_log_id = schema->id();
+        _slow_query_log.set_id(schema->id());
         return true;
     } else {
-        _slow_query_log_id = utils::UUID();
+        _slow_query_log.set_id(utils::UUID());
         return false;
     }
 }
@@ -220,10 +223,10 @@ bool trace_keyspace_helper::cache_events_table_handles(const schema_ptr& schema)
         check_column_definition(_thread_column, utf8_type) &&
         check_column_definition(_source_elapsed_column, int32_type)) {
         // store a table ID only if its format meets our demands
-        _events_id = schema->id();
+        _events.set_id(schema->id());
         return true;
     } else {
-        _events_id = utils::UUID();
+        _events.set_id(utils::UUID());
         return false;
     }
 }
@@ -243,9 +246,9 @@ future<> trace_keyspace_helper::start() {
             }
 
             // Create tables
-            setup_table(SESSIONS, _sessions_create_cql).get();
-            setup_table(EVENTS, _events_create_cql).get();
-            setup_table(NODE_SLOW_QUERY_LOG, _node_slow_query_log_cql).get();
+            _sessions.setup_table().get();
+            _events.setup_table().get();
+            _slow_query_log.setup_table().get();
         });
     } else {
         return make_ready_future<>();
@@ -282,8 +285,7 @@ void trace_keyspace_helper::write_records_bulk(records_bulk& bulk) {
 }
 
 mutation trace_keyspace_helper::make_session_mutation(const one_session_records& session_records) {
-    schema_ptr schema = get_schema_ptr_or_create(_sessions_id, SESSIONS, _sessions_create_cql,
-                                                 [this] (const schema_ptr& s) { return cache_sessions_table_handles(s); });
+    schema_ptr schema = _sessions.get_schema_ptr_or_create([this] (const schema_ptr& s) { return cache_sessions_table_handles(s); });
 
     auto key = partition_key::from_singular(*schema, session_records.session_id);
     gc_clock::duration ttl = session_records.ttl;
@@ -313,8 +315,7 @@ mutation trace_keyspace_helper::make_session_mutation(const one_session_records&
 }
 
 mutation trace_keyspace_helper::make_slow_query_mutation(const one_session_records& session_records) {
-    schema_ptr schema = get_schema_ptr_or_create(_slow_query_log_id, NODE_SLOW_QUERY_LOG, _node_slow_query_log_cql,
-                                                 [this] (const schema_ptr& s) { return cache_node_slow_log_table_handles(s); });
+    schema_ptr schema = _slow_query_log.get_schema_ptr_or_create([this] (const schema_ptr& s) { return cache_node_slow_log_table_handles(s); });
 
     const session_record& record = session_records.session_rec;
 
@@ -376,8 +377,7 @@ mutation trace_keyspace_helper::make_slow_query_mutation(const one_session_recor
 }
 
 mutation trace_keyspace_helper::make_event_mutation(one_session_records& session_records, const event_record& record) {
-    schema_ptr schema = get_schema_ptr_or_create(_events_id, EVENTS, _events_create_cql,
-                                                 [this] (const schema_ptr& s) { return cache_events_table_handles(s); });
+    schema_ptr schema = _events.get_schema_ptr_or_create([this] (const schema_ptr& s) { return cache_events_table_handles(s); });
 
     auto key = partition_key::from_singular(*schema, session_records.session_id);
     gc_clock::duration ttl = session_records.ttl;
