@@ -203,7 +203,10 @@ protected:
                 bool local,
                 db::consistency_level cl,
                 tracing::trace_state_ptr trace_state);
-
+private:
+    future<::shared_ptr<transport::messages::result_message>>
+    do_execute(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options);
+    friend class modification_statement_executor;
 public:
     bool has_conditions();
 

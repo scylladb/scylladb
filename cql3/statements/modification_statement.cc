@@ -51,6 +51,7 @@
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include "service/storage_service.hh"
+#include <seastar/core/execution_stage.hh>
 
 namespace cql3 {
 
@@ -460,8 +461,18 @@ modification_statement::build_partition_keys(const query_options& options) {
     return result;
 }
 
+struct modification_statement_executor {
+    static auto get() { return &modification_statement::do_execute; }
+};
+static thread_local auto modify_stage = seastar::make_execution_stage(modification_statement_executor::get());
+
 future<::shared_ptr<transport::messages::result_message>>
 modification_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) {
+    return modify_stage(this, seastar::ref(proxy), seastar::ref(qs), seastar::cref(options));
+}
+
+future<::shared_ptr<transport::messages::result_message>>
+modification_statement::do_execute(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) {
     if (has_conditions() && options.get_protocol_version() == 1) {
         throw exceptions::invalid_request_exception("Conditional updates are not supported by the protocol version in use. You need to upgrade to a driver using the native protocol v2.");
     }
