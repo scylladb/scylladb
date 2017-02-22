@@ -220,3 +220,30 @@ SEASTAR_TEST_CASE(test_schema_change) {
         auto l4 = cl.lock_cells(m4.decorated_key(), partition_cells_range(m4.partition()), no_timeout).get0();
     });
 }
+
+SEASTAR_TEST_CASE(test_timed_out) {
+        return seastar::async([&] {
+            auto destroy = [] (auto) { };
+
+            auto s = make_schema();
+            cell_locker cl(s);
+
+            auto m1 = make_mutation(s, "0", { "s1", "s2", "s3"}, {
+                    make_row("one", { "r2", "r3" }),
+            });
+            auto m2 = make_mutation(s, "0", { }, {
+                    make_row("one", { "r1", "r2" }),
+            });
+
+            auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get0();
+
+            auto timeout = cell_locker::timeout_clock::now() - std::chrono::hours(1);
+            BOOST_REQUIRE_THROW(cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), timeout).get0(),
+                                timed_out_error);
+
+            auto f2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout);
+            BOOST_REQUIRE(!f2.available());
+            destroy(std::move(l1));
+            auto l2 = f2.get0();
+        });
+}
