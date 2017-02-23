@@ -1213,8 +1213,24 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
     return parallel_for_each(leaders, [this, cl, timeout, tr_state = std::move(tr_state), my_address] (auto& endpoint_and_mutations) {
         auto endpoint = endpoint_and_mutations.first;
 
+        // The leader receives a vector of mutations and processes them together,
+        // so if there is a timeout we don't really know which one is to "blame"
+        // and what to put in ks and cf fields of write timeout exception.
+        // Let's just use the schema of the first mutation in a vector.
+        auto handle_error = [this, sp = this->shared_from_this(), s = endpoint_and_mutations.second[0].s, cl] (std::exception_ptr exp) {
+            auto& ks = _db.local().find_keyspace(s->ks_name());
+            try {
+                std::rethrow_exception(std::move(exp));
+            } catch (rpc::timeout_error&) {
+                return make_exception_future<>(mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(ks, cl), db::write_type::COUNTER));
+            } catch (timed_out_error&) {
+                return make_exception_future<>(mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(ks, cl), db::write_type::COUNTER));
+            }
+        };
+
+        auto f = make_ready_future<>();
         if (endpoint == my_address) {
-            return this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout, tr_state);
+            f = this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout, tr_state);
         } else {
             auto& mutations = endpoint_and_mutations.second;
             auto fms = boost::copy_range<std::vector<frozen_mutation>>(mutations | boost::adaptors::transformed([] (auto& m) {
@@ -1224,8 +1240,9 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
             auto& ms = net::get_local_messaging_service();
             auto msg_addr = net::messaging_service::msg_addr{ endpoint_and_mutations.first, 0 };
             tracing::trace(tr_state, "Enqueuing counter update to {}", msg_addr);
-            return ms.send_counter_mutation(msg_addr, timeout, std::move(fms), cl, tracing::make_trace_info(tr_state));
+            f = ms.send_counter_mutation(msg_addr, timeout, std::move(fms), cl, tracing::make_trace_info(tr_state));
         }
+        return f.handle_exception(std::move(handle_error));
     });
 }
 
