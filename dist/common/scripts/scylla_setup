@@ -333,7 +333,12 @@ fi
 
 if [ $INTERACTIVE -eq 1 ]; then
     interactive_ask_service "Do you want to setup RAID and XFS?" "It is recommended to use RAID0 and XFS for Scylla data. If you select yes, you will be prompt to choose which unmounted disks to use for Scylla data. Selected disks will be formatted in the process." "yes" &&:
-    RAID_SETUP=$?
+    if [ $? -eq 1 ]; then
+        interactive_ask_service "Are you sure you want to setup RAID and XFS?" "If you choose Yes, selected drive will be reformated, erasing existing data in the process." "yes" &&:
+        RAID_SETUP=$?
+    else
+        RAID_SETUP=0
+    fi
     if [ $RAID_SETUP -eq 1 ]; then
         DEVS=`get_unused_disks`
         if [ "$DEVS" = "" ]; then
