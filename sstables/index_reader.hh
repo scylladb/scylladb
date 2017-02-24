@@ -167,6 +167,13 @@ public:
     }
 };
 
+// Provides access to sstable indexes.
+//
+// Maintains logical cursor to sstable elements (partitions, cells).
+// Initially the cursor is positioned on the first partition in the sstable.
+// The cursor can be advanced forward using advance_to().
+//
+// If eof() then the cursor is positioned past all partitions in the sstable.
 class index_reader {
     shared_sstable _sstable;
     const io_priority_class& _pc;
@@ -175,6 +182,7 @@ class index_reader {
         index_consumer _consumer;
         index_consume_entry_context<index_consumer> _context;
         uint64_t _current_summary_idx;
+        uint64_t _current_index_idx;
 
         static auto create_file_input_stream(shared_sstable sst, const io_priority_class& pc, uint64_t begin, uint64_t end) {
             file_input_stream_options options;
@@ -194,8 +202,17 @@ class index_reader {
 
     index_list _previous_bucket;
     uint64_t _previous_summary_idx = 0;
+    uint64_t _data_file_position = 0;
 private:
-    future<> read_index_entries(uint64_t summary_idx) {
+    future<> advance_to_end() {
+        _data_file_position = data_file_end();
+        return close_reader().finally([this] {
+            _reader = stdx::nullopt;
+        });
+    }
+
+    // Must be called for non-decreasing summary_idx.
+    future<> advance_to_page(uint64_t summary_idx) {
         assert(!_reader || _reader->_current_summary_idx <= summary_idx);
         if (_reader && _reader->_current_summary_idx == summary_idx) {
             return make_ready_future<>();
@@ -203,9 +220,7 @@ private:
 
         auto& summary = _sstable->get_summary();
         if (summary_idx >= summary.header.size) {
-            return close_reader().finally([this] {
-                _reader = stdx::nullopt;
-            });
+            return advance_to_end();
         }
 
         uint64_t position = summary.entries[summary_idx].position;
@@ -228,33 +243,25 @@ private:
                 throw;
             }
             _reader->_current_summary_idx = summary_idx;
+            _reader->_current_index_idx = 0;
             return _reader->_context.consume_input(_reader->_context);
         });
     }
-
-    future<uint64_t> data_end_position(uint64_t summary_idx) {
-        // We should only go to the end of the file if we are in the last summary group.
-        // Otherwise, we will determine the end position of the current data read by looking
-        // at the first index in the next summary group.
-        auto& summary = _sstable->get_summary();
-        if (size_t(summary_idx + 1) >= summary.entries.size()) {
-            return make_ready_future<uint64_t>(_sstable->data_size());
+public:
+    future<> advance_to_start(const schema& s, const dht::partition_range& range) {
+        if (range.start()) {
+            return advance_to(s, dht::ring_position_view(range.start()->value(),
+                                 dht::ring_position_view::after_key(!range.start()->is_inclusive())));
         }
-        return read_index_entries(summary_idx + 1).then([this] {
-            return _reader->_consumer.indexes.front().position();
-        });
+        return make_ready_future<>();
     }
 
-    future<uint64_t> start_position(const schema& s, const dht::partition_range& range) {
-        return range.start() ? lower_bound(s, dht::ring_position_view(range.start()->value(),
-                                              dht::ring_position_view::after_key(!range.start()->is_inclusive())))
-                             : make_ready_future<uint64_t>(0);
-    }
-
-    future<uint64_t> end_position(const schema& s, const dht::partition_range& range) {
-        return range.end() ? lower_bound(s, dht::ring_position_view(range.end()->value(),
-                                            dht::ring_position_view::after_key(range.end()->is_inclusive())))
-                           : make_ready_future<uint64_t>(_sstable->data_size());
+    future<> advance_to_end(const schema& s, const dht::partition_range& range) {
+        if (range.end()) {
+            return advance_to(s, dht::ring_position_view(range.end()->value(),
+                                 dht::ring_position_view::after_key(range.end()->is_inclusive())));
+        }
+        return advance_to_end();
     }
 public:
     index_reader(shared_sstable sst, const io_priority_class& pc)
@@ -263,18 +270,20 @@ public:
     { }
 
     future<index_list> get_index_entries(uint64_t summary_idx) {
-        return read_index_entries(summary_idx).then([this] {
+        return advance_to_page(summary_idx).then([this] {
             return _reader ? std::move(_reader->_consumer.indexes) : index_list();
         });
     }
-private:
-    future<uint64_t> lower_bound(const schema& s, dht::ring_position_view pos) {
+public:
+    // Positions the cursor on the first partition which is not smaller than pos (like std::lower_bound).
+    // Must be called for non-decreasing positions.
+    future<> advance_to(const schema& s, dht::ring_position_view pos) {
         auto& summary = _sstable->get_summary();
         _previous_summary_idx = std::distance(std::begin(summary.entries),
             std::lower_bound(summary.entries.begin() + _previous_summary_idx, summary.entries.end(), pos, index_comparator(s)));
 
         if (_previous_summary_idx == 0) {
-            return make_ready_future<uint64_t>(0);
+            return make_ready_future<>();
         }
 
         auto summary_idx = _previous_summary_idx - 1;
@@ -288,7 +297,7 @@ private:
         // Now, we want to get positions for range [G, J]. We start with [G,
         // summary look up will tel us to check the first bucket. However, there
         // is no G in that bucket so we read the following one to get the
-        // position (see data_end_position()). After we've got it, it's time to
+        // position (see the advance_to_page() call below). After we've got it, it's time to
         // get J] position. Again, summary points us to the first bucket and we
         // hit an assert since the reader is already at the second bucket and we
         // cannot go backward.
@@ -296,22 +305,37 @@ private:
         // the previous bucket we assume that the entry doesn't exist and return
         // the position of the first one in the current index bucket.
         if (_reader && summary_idx + 1 == _reader->_current_summary_idx) {
-            return make_ready_future<uint64_t>(_reader->_consumer.indexes.front().position());
+            return make_ready_future<>();
         }
 
-        return read_index_entries(summary_idx).then([this, &s, pos, summary_idx] {
-            if (!_reader) {
-                return data_end_position(summary_idx);
-            }
+        return advance_to_page(summary_idx).then([this, &s, pos, summary_idx] {
             auto& il = _reader->_consumer.indexes;
-            auto i = std::lower_bound(il.begin(), il.end(), pos, index_comparator(s));
+            auto i = std::lower_bound(il.begin() + _reader->_current_index_idx, il.end(), pos, index_comparator(s));
             if (i == il.end()) {
-                return data_end_position(summary_idx);
+                return advance_to_page(summary_idx + 1);
             }
-            return make_ready_future<uint64_t>(i->position());
+            _reader->_current_index_idx = std::distance(il.begin(), i);
+            _data_file_position = i->position();
+            return make_ready_future<>();
         });
     }
 
+    // Returns position in the data file of the cursor.
+    // Returns non-decreasing positions.
+    // When eof(), returns data_file_end().
+    uint64_t data_file_position() const {
+        return _data_file_position;
+    }
+
+    // Returns position right after all partitions in the sstable
+    uint64_t data_file_end() const {
+        return _sstable->data_size();
+    }
+
+    bool eof() const {
+        return _data_file_position == data_file_end();
+    }
+private:
     future<> close_reader() {
         if (_reader) {
             return _reader->_context.close();
@@ -320,8 +344,10 @@ private:
     }
 public:
     future<sstable::disk_read_range> get_disk_read_range(const schema& s, const dht::partition_range& range) {
-        return start_position(s, range).then([this, &s, &range] (uint64_t start) {
-            return end_position(s, range).then([&s, &range, start] (uint64_t end) {
+        return advance_to_start(s, range).then([this, &s, &range] () {
+            uint64_t start = data_file_position();
+            return advance_to_end(s, range).then([this, &s, &range, start] () {
+                uint64_t end = data_file_position();
                 return sstable::disk_read_range(start, end);
             });
         });
