@@ -28,6 +28,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/transformed.hpp>
+#include "sstables/key.hh"
 
 namespace dht {
 
@@ -250,6 +251,15 @@ std::ostream& operator<<(std::ostream& out, const ring_position& pos) {
     return out << "}";
 }
 
+std::ostream& operator<<(std::ostream& out, ring_position_view pos) {
+    out << "{" << pos._token;
+    if (pos._key) {
+        out << ", " << *pos._key;
+    }
+    out << ", w=" << static_cast<int>(pos._weight);
+    return out << "}";
+}
+
 unsigned shard_of(const token& t) {
     return global_partitioner().shard_of(t);
 }
@@ -315,22 +325,44 @@ bool ring_position::less_compare(const schema& s, const ring_position& other) co
     return tri_compare(s, other) < 0;
 }
 
-int ring_position_comparator::operator()(const ring_position& lh, const ring_position& rh) const {
-    if (lh._token != rh._token) {
-        return lh._token < rh._token ? -1 : 1;
+int ring_position_comparator::operator()(ring_position_view lh, ring_position_view rh) const {
+    auto token_cmp = tri_compare(lh._token, rh._token);
+    if (token_cmp) {
+        return token_cmp;
     }
-
     if (lh._key && rh._key) {
-        return lh._key->legacy_tri_compare(s, *rh._key);
+        auto c = lh._key->legacy_tri_compare(s, *rh._key);
+        if (c) {
+            return c;
+        }
+        return lh._weight - rh._weight;
     }
-
     if (!lh._key && !rh._key) {
-        return lh.relation_to_keys() - rh.relation_to_keys();
+        return lh._weight - rh._weight;
     } else if (!lh._key) {
-        return lh.relation_to_keys();
+        return lh._weight > 0 ? 1 : -1;
     } else {
-        return -rh.relation_to_keys();
+        return rh._weight > 0 ? -1 : 1;
     }
+}
+
+int ring_position_comparator::operator()(ring_position_view lh, sstables::key_view rh) const {
+    auto rh_token = global_partitioner().get_token(rh);
+    auto token_cmp = tri_compare(lh._token, rh_token);
+    if (token_cmp) {
+        return token_cmp;
+    }
+    if (lh._key) {
+        auto rel = rh.tri_compare(s, *lh._key);
+        if (rel) {
+            return -rel;
+        }
+    }
+    return lh._weight;
+}
+
+int ring_position_comparator::operator()(sstables::key_view a, ring_position_view b) const {
+    return -(*this)(b, a);
 }
 
 dht::partition_range

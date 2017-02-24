@@ -423,19 +423,93 @@ public:
     friend std::ostream& operator<<(std::ostream&, const ring_position&);
 };
 
-// Trichotomic comparator for ring_position
+// Non-owning version of ring_position.
+//
+// Unlike ring_position, it can express positions which are right after and right before the keys.
+// ring_position still can not because it is sent between nodes and such a position
+// would not be (yet) properly interpreted by old nodes. That's why any ring_position
+// can be converted to ring_position_view, but not the other way.
+//
+// It is possible to express a partition_range using a pair of two ring_position_views v1 and v2,
+// where v1 = ring_position_view::for_range_start(r) and v2 = ring_position_view::for_range_end(r).
+// Such range includes all keys k such that v1 <= k < v2, with order defined by ring_position_comparator.
+//
+class ring_position_view {
+    friend class ring_position_comparator;
+
+    // Order is lexicographical on (_token, _key) tuples, where _key part may be missing, and
+    // _weight affecting order between tuples if one is a prefix of the other (including being equal).
+    // A positive weight puts the position after all strictly prefixed by it, while a non-positive
+    // weight puts it before them. If tuples are equal, the order is further determined by _weight.
+    //
+    // For example {_token=t1, _key=nullptr, _weight=1} is ordered after {_token=t1, _key=k1, _weight=0},
+    // but {_token=t1, _key=nullptr, _weight=-1} is ordered before it.
+    //
+    const dht::token& _token;
+    const partition_key* _key; // Can be nullptr
+    int8_t _weight;
+public:
+    using after_key = bool_class<class after_key_tag>;
+
+    static ring_position_view min() {
+        return { minimum_token(), nullptr, -1 };
+    }
+
+    static ring_position_view max() {
+        return { maximum_token(), nullptr, 1 };
+    }
+
+    static ring_position_view for_range_start(const partition_range& r) {
+        return r.start() ? ring_position_view(r.start()->value(), after_key(!r.start()->is_inclusive())) : min();
+    }
+
+    static ring_position_view for_range_end(const partition_range& r) {
+        return r.end() ? ring_position_view(r.end()->value(), after_key(r.end()->is_inclusive())) : max();
+    }
+
+    static ring_position_view for_after_key(const dht::decorated_key& dk) {
+        return ring_position_view(dk, after_key::yes);
+    }
+
+    ring_position_view(const dht::ring_position& pos, after_key after = after_key::no)
+        : _token(pos.token())
+        , _key(pos.has_key() ? &*pos.key() : nullptr)
+        , _weight(pos.has_key() ? bool(after) : pos.relation_to_keys())
+    { }
+
+    ring_position_view(const dht::decorated_key& key, after_key after_key = after_key::no)
+        : _token(key.token())
+        , _key(&key.key())
+        , _weight(bool(after_key))
+    { }
+
+    ring_position_view(const dht::token& token, partition_key* key, int8_t weight)
+        : _token(token)
+        , _key(key)
+        , _weight(weight)
+    { }
+
+    friend std::ostream& operator<<(std::ostream&, ring_position_view);
+};
+
+// Trichotomic comparator for ring order
 struct ring_position_comparator {
     const schema& s;
     ring_position_comparator(const schema& s_) : s(s_) {}
-    int operator()(const ring_position& lh, const ring_position& rh) const;
+    int operator()(ring_position_view, ring_position_view) const;
+    int operator()(ring_position_view, sstables::key_view) const;
+    int operator()(sstables::key_view, ring_position_view) const;
 };
 
-// "less" comparator for ring_position
+// "less" comparator giving the same order as ring_position_comparator
 struct ring_position_less_comparator {
-    const schema& s;
-    ring_position_less_comparator(const schema& s_) : s(s_) {}
-    bool operator()(const ring_position& lh, const ring_position& rh) const {
-        return lh.less_compare(s, rh);
+    ring_position_comparator tri;
+
+    ring_position_less_comparator(const schema& s) : tri(s) {}
+
+    template<typename T, typename U>
+    bool operator()(const T& lh, const U& rh) const {
+        return tri(lh, rh) < 0;
     }
 };
 
