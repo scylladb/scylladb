@@ -157,6 +157,9 @@ public:
         // number of mutations received as a coordinator
         uint64_t received_mutations = 0;
 
+        // number of counter updates received as a leader
+        uint64_t received_counter_updates = 0;
+
         // number of forwarded mutations
         uint64_t forwarded_mutations = 0;
         uint64_t forwarding_errors = 0;

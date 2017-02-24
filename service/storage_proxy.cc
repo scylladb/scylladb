@@ -535,6 +535,9 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
     });
 
     _metrics.add_group(REPLICA_STATS_CATEGORY, {
+        sm::make_total_operations("received_counter_updates", _stats.received_counter_updates,
+                       sm::description("number of counter updates received by this node acting as an update leader")),
+
         sm::make_total_operations("received_mutations", _stats.received_mutations,
                        sm::description("number of mutations received by a replica Node")),
 
@@ -982,6 +985,7 @@ storage_proxy::mutate_locally(std::vector<mutation> mutations, clock_type::time_
 future<>
 storage_proxy::mutate_counters_on_leader(std::vector<frozen_mutation_and_schema> mutations, db::consistency_level cl, clock_type::time_point timeout,
                                          tracing::trace_state_ptr trace_state) {
+    _stats.received_counter_updates += mutations.size();
     return do_with(std::move(mutations), [this, cl, timeout, trace_state = std::move(trace_state)] (std::vector<frozen_mutation_and_schema>& update_ms) mutable {
         return parallel_for_each(update_ms, [this, cl, timeout, trace_state] (frozen_mutation_and_schema& fm_a_s) {
             return mutate_counter_on_leader_and_replicate(fm_a_s.s, std::move(fm_a_s.fm), cl, timeout, trace_state);
