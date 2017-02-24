@@ -1208,7 +1208,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
     }
 
     // Forward mutations to the leaders chosen for them
-    auto timeout = clock_type::now() + std::chrono::milliseconds(_db.local().get_config().write_request_timeout_in_ms());
+    auto timeout = clock_type::now() + std::chrono::milliseconds(_db.local().get_config().counter_write_request_timeout_in_ms());
     auto my_address = utils::fb_utilities::get_broadcast_address();
     return parallel_for_each(leaders, [this, cl, timeout, tr_state = std::move(tr_state), my_address] (auto& endpoint_and_mutations) {
         auto endpoint = endpoint_and_mutations.first;

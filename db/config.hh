@@ -489,7 +489,7 @@ public:
     val(read_request_timeout_in_ms, uint32_t, 5000, Used,     \
             "The time that the coordinator waits for read operations to complete"  \
     )   \
-    val(counter_write_request_timeout_in_ms, uint32_t, 5000, Unused,     \
+    val(counter_write_request_timeout_in_ms, uint32_t, 5000, Used,     \
             "The time that the coordinator waits for counter writes to complete."  \
     )   \
     val(cas_contention_timeout_in_ms, uint32_t, 5000, Unused,     \
