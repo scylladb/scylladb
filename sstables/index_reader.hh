@@ -193,8 +193,7 @@ class index_reader {
     stdx::optional<reader> _reader;
 
     index_list _previous_bucket;
-    static constexpr uint64_t invalid_idx = std::numeric_limits<uint64_t>::max();
-    uint64_t _previous_summary_idx = invalid_idx;
+    uint64_t _previous_summary_idx = 0;
 private:
     future<> read_index_entries(uint64_t summary_idx) {
         assert(!_reader || _reader->_current_summary_idx <= summary_idx);
@@ -271,14 +270,14 @@ public:
 private:
     future<uint64_t> lower_bound(const schema& s, dht::ring_position_view pos) {
         auto& summary = _sstable->get_summary();
-        uint64_t summary_idx = std::distance(std::begin(summary.entries),
-            std::lower_bound(summary.entries.begin(), summary.entries.end(), pos, index_comparator(s)));
+        _previous_summary_idx = std::distance(std::begin(summary.entries),
+            std::lower_bound(summary.entries.begin() + _previous_summary_idx, summary.entries.end(), pos, index_comparator(s)));
 
-        if (summary_idx == 0) {
+        if (_previous_summary_idx == 0) {
             return make_ready_future<uint64_t>(0);
         }
 
-        --summary_idx;
+        auto summary_idx = _previous_summary_idx - 1;
 
         // Despite the requirement that the values of 'pos' in subsequent calls
         // are increasing we still may encounter a situation when we try to read
