@@ -1867,9 +1867,15 @@ public:
 };
 
 future<> data_query(
-        schema_ptr s, const mutation_source& source, const dht::partition_range& range,
-        const query::partition_slice& slice, uint32_t row_limit, uint32_t partition_limit,
-        gc_clock::time_point query_time, query::result::builder& builder)
+        schema_ptr s,
+        const mutation_source& source,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        uint32_t row_limit,
+        uint32_t partition_limit,
+        gc_clock::time_point query_time,
+        query::result::builder& builder,
+        tracing::trace_state_ptr trace_ptr)
 {
     if (row_limit == 0 || slice.partition_row_limit() == 0 || partition_limit == 0) {
         return make_ready_future<>();
@@ -1881,7 +1887,7 @@ future<> data_query(
     auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::yes, query_result_builder>>(
             *s, query_time, slice, row_limit, partition_limit, std::move(qrb));
 
-    auto reader = source(s, range, slice, service::get_local_sstable_query_read_priority());
+    auto reader = source(s, range, slice, service::get_local_sstable_query_read_priority(), std::move(trace_ptr));
     return consume_flattened(std::move(reader), std::move(cfq), is_reversed);
 }
 
@@ -1972,7 +1978,8 @@ mutation_query(schema_ptr s,
                uint32_t row_limit,
                uint32_t partition_limit,
                gc_clock::time_point query_time,
-               query::result_memory_accounter&& accounter)
+               query::result_memory_accounter&& accounter,
+               tracing::trace_state_ptr trace_ptr)
 {
     if (row_limit == 0 || slice.partition_row_limit() == 0 || partition_limit == 0) {
         return make_ready_future<reconcilable_result>(reconcilable_result());
@@ -1984,7 +1991,7 @@ mutation_query(schema_ptr s,
     auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::no, reconcilable_result_builder>>(
             *s, query_time, slice, row_limit, partition_limit, std::move(rrb));
 
-    auto reader = source(s, range, slice, service::get_local_sstable_query_read_priority());
+    auto reader = source(s, range, slice, service::get_local_sstable_query_read_priority(), std::move(trace_ptr));
     return consume_flattened(std::move(reader), std::move(cfq), is_reversed);
 }
 

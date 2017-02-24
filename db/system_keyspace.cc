@@ -1027,7 +1027,7 @@ std::vector<schema_ptr> all_tables() {
 
 static void maybe_add_virtual_reader(schema_ptr s, database& db) {
     if (s.get() == size_estimates().get()) {
-        db.find_column_family(s).set_virtual_reader(db::size_estimates::virtual_reader());
+        db.find_column_family(s).set_virtual_reader(mutation_source(db::size_estimates::virtual_reader()));
     }
 }
 

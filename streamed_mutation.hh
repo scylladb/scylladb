@@ -204,6 +204,13 @@ public:
 
     position_in_partition_view position() const;
 
+    // Checks if this fragment may be relevant for any range starting at given position.
+    bool relevant_for_range(const schema& s, position_in_partition_view pos) const;
+
+    // Like relevant_for_range() but makes use of assumption that pos is greater
+    // than the starting position of this fragment.
+    bool relevant_for_range_assuming_after(const schema& s, position_in_partition_view pos) const;
+
     bool has_key() const { return !is_static_row(); }
     // Requirements: has_key() == true
     const clustering_key_prefix& key() const;
@@ -330,6 +337,7 @@ class position_in_partition {
     stdx::optional<clustering_key_prefix> _ck;
 public:
     struct static_row_tag_t { };
+    struct after_static_row_tag_t { };
     struct clustering_row_tag_t { };
     struct range_tag_t { };
     using range_tombstone_tag_t = range_tag_t;
@@ -339,6 +347,8 @@ public:
         : _ck(std::move(ck)) { }
     position_in_partition(range_tag_t, bound_view bv)
         : _bound_weight(weight(bv.kind)), _ck(bv.prefix) { }
+    position_in_partition(after_static_row_tag_t) :
+        position_in_partition(range_tag_t(), bound_view::bottom()) { }
     explicit position_in_partition(position_in_partition_view view)
         : _bound_weight(view._bound_weight)
         {
@@ -367,7 +377,7 @@ public:
     const clustering_key_prefix& key() const {
         return *_ck;
     }
-    explicit operator position_in_partition_view() const {
+    operator position_in_partition_view() const {
         return { _bound_weight, _ck ? &*_ck : nullptr };
     }
 
@@ -443,6 +453,64 @@ public:
     friend std::ostream& operator<<(std::ostream&, const position_in_partition&);
 };
 
+// Includes all position_in_partition objects "p" for which: start <= p < end
+// And only those.
+class position_range {
+private:
+    position_in_partition _start;
+    position_in_partition _end;
+public:
+    static position_range from_range(const query::clustering_range&);
+
+    static position_range for_static_row() {
+        return {
+            position_in_partition(position_in_partition::static_row_tag_t()),
+            position_in_partition(position_in_partition::after_static_row_tag_t())
+        };
+    }
+
+    static position_range full() {
+        return {
+            position_in_partition(position_in_partition::static_row_tag_t()),
+            position_in_partition(position_in_partition::range_tag_t(), bound_view::top())
+        };
+    }
+
+    position_range(position_range&&) = default;
+    position_range& operator=(position_range&&) = default;
+    position_range(const position_range&) = default;
+    position_range& operator=(const position_range&) = default;
+
+    // Constructs position_range which covers the same rows as given clustering_range.
+    // position_range includes a fragment if it includes position of that fragment.
+    position_range(const query::clustering_range&);
+    position_range(query::clustering_range&&);
+
+    position_range(position_in_partition start, position_in_partition end)
+        : _start(std::move(start))
+        , _end(std::move(end))
+    { }
+
+    const position_in_partition& start() const { return _start; }
+    const position_in_partition& end() const { return _end; }
+    bool contains(const schema& s, position_in_partition_view pos) const;
+    bool overlaps(const schema& s, position_in_partition_view start, position_in_partition_view end) const;
+
+    friend std::ostream& operator<<(std::ostream&, const position_range&);
+};
+
+inline
+bool position_range::contains(const schema& s, position_in_partition_view pos) const {
+    position_in_partition::less_compare less(s);
+    return !less(pos, _start) && less(pos, _end);
+}
+
+inline
+bool position_range::overlaps(const schema& s, position_in_partition_view start, position_in_partition_view end) const {
+    position_in_partition::less_compare less(s);
+    return !less(end, _start) && less(start, _end);
+}
+
 inline position_in_partition_view static_row::position() const
 {
     return position_in_partition_view(position_in_partition_view::static_row_tag_t());
@@ -473,6 +541,29 @@ using mutation_fragment_opt = optimized_optional<mutation_fragment>;
 // streamed_mutation itself.
 class streamed_mutation {
 public:
+    // Determines whether streamed_mutation is in forwarding mode or not.
+    //
+    // In forwarding mode the stream does not return all fragments right away,
+    // but only those belonging to the current clustering range. Initially
+    // current range only covers the static row. The stream can be forwarded
+    // (even before end-of- stream) to a later range with fast_forward_to().
+    // Forwarding doesn't change initial restrictions of the stream, it can
+    // only be used to skip over data.
+    //
+    // Monotonicity of positions is preserved by forwarding. That is fragments
+    // emitted after forwarding will have greater positions than any fragments
+    // emitted before forwarding.
+    //
+    // For any range, all range tombstones relevant for that range which are
+    // present in the original stream will be emitted. Range tombstones
+    // emitted before forwarding which overlap with the new range are not
+    // necessarily re-emitted.
+    //
+    // When streamed_mutation is not in forwarding mode, fast_forward_to()
+    // cannot be used.
+    //
+    using forwarding = bool_class<class forwarding_tag>;
+
     // streamed_mutation uses batching. The mutation implementations are
     // supposed to fill a buffer with mutation fragments until is_buffer_full()
     // or end of stream is encountered.
@@ -504,6 +595,11 @@ public:
         virtual ~impl() { }
         virtual future<> fill_buffer() = 0;
 
+        // See streamed_mutation::fast_forward_to().
+        virtual future<> fast_forward_to(position_range) {
+            throw std::bad_function_call(); // FIXME: make pure virtual after implementing everywhere.
+        }
+
         bool is_end_of_stream() const { return _end_of_stream; }
         bool is_buffer_empty() const { return _buffer.empty(); }
         bool is_buffer_full() const { return _buffer_size >= max_buffer_size_in_bytes; }
@@ -524,6 +620,10 @@ public:
             }
             return make_ready_future<mutation_fragment_opt>(pop_mutation_fragment());
         }
+
+        // Removes all fragments from the buffer which are not relevant for any range starting at given position.
+        // It is assumed that pos is greater than positions of fragments already in the buffer.
+        void forward_buffer_to(const position_in_partition& pos);
     };
 private:
     std::unique_ptr<impl> _impl;
@@ -538,7 +638,7 @@ public:
     const partition_key& key() const { return _impl->_key.key(); }
     const dht::decorated_key& decorated_key() const { return _impl->_key; }
 
-    schema_ptr schema() const { return _impl->_schema; }
+    const schema_ptr& schema() const { return _impl->_schema; }
 
     tombstone partition_tombstone() const { return _impl->_partition_tombstone; }
 
@@ -550,10 +650,21 @@ public:
 
     future<> fill_buffer() { return _impl->fill_buffer(); }
 
+    // Skips to a later range of rows.
+    // The new range must not overlap with the current range.
+    //
+    // See docs of streamed_mutation::forwarding for semantics.
+    future<> fast_forward_to(position_range pr) {
+        return _impl->fast_forward_to(std::move(pr));
+    }
+
     future<mutation_fragment_opt> operator()() {
         return _impl->operator()();
     }
 };
+
+// Adapts streamed_mutation to a streamed_mutation which is in forwarding mode.
+streamed_mutation make_forwardable(streamed_mutation);
 
 std::ostream& operator<<(std::ostream& os, const streamed_mutation& sm);
 
@@ -601,7 +712,7 @@ auto consume(streamed_mutation& m, Consumer consumer) {
 
 class mutation;
 
-streamed_mutation streamed_mutation_from_mutation(mutation);
+streamed_mutation streamed_mutation_from_mutation(mutation, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
 //Requires all streamed_mutations to have the same schema.
 streamed_mutation merge_mutations(std::vector<streamed_mutation>);
@@ -635,6 +746,8 @@ public:
     mutation_fragment_opt get_next(const rows_entry&);
     mutation_fragment_opt get_next(const mutation_fragment&);
     mutation_fragment_opt get_next();
+    // Forgets all tombstones which are not relevant for any range starting at given position.
+    void forward_to(position_in_partition_view);
 
     void apply(range_tombstone&& rt) {
         _list.apply(_schema, std::move(rt));

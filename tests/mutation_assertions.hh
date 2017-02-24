@@ -180,6 +180,19 @@ public:
         return *this;
     }
 
+    streamed_mutation_assertions& fwd_to(const clustering_key& ck1, const clustering_key& ck2) {
+        return fwd_to(position_range{
+            position_in_partition(position_in_partition::clustering_row_tag_t(), ck1),
+            position_in_partition(position_in_partition::clustering_row_tag_t(), ck2)
+        });
+    }
+
+    streamed_mutation_assertions& fwd_to(position_range range) {
+        BOOST_TEST_MESSAGE(sprint("Forwarding to %s", range));
+        _sm.fast_forward_to(std::move(range)).get();
+        return *this;
+    }
+
     streamed_mutation_assertions& produces_end_of_stream() {
         auto mfopt = _sm().get0();
         if (mfopt) {

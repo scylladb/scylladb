@@ -361,8 +361,9 @@ SEASTAR_TEST_CASE(read_partial_range_2) {
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc,
-            tracing::trace_state_ptr trace_ptr) mutable {
-        return as_mutation_reader(sst, sst->read_range_rows(s, range, slice, pc));
+            tracing::trace_state_ptr trace_ptr,
+            streamed_mutation::forwarding fwd) mutable {
+        return as_mutation_reader(sst, sst->read_range_rows(s, range, slice, pc, fwd));
     });
 }
 

@@ -118,11 +118,11 @@ public:
     const schema_ptr& schema() const { return _schema; }
     schema_ptr& schema() { return _schema; }
     // Requires: !wide_partition()
-    streamed_mutation read(row_cache&, const schema_ptr&);
+    streamed_mutation read(row_cache&, const schema_ptr&, streamed_mutation::forwarding);
     // Requires: !wide_partition()
-    streamed_mutation read(row_cache&, const schema_ptr&, const query::partition_slice&);
+    streamed_mutation read(row_cache&, const schema_ptr&, const query::partition_slice&, streamed_mutation::forwarding);
     // May return disengaged optional if the partition is empty.
-    future<streamed_mutation_opt> read_wide(row_cache&, schema_ptr, const query::partition_slice&, const io_priority_class&);
+    future<streamed_mutation_opt> read_wide(row_cache&, schema_ptr, const query::partition_slice&, const io_priority_class&, streamed_mutation::forwarding);
     bool continuous() const { return _flags._continuous; }
     void set_continuous(bool value) { _flags._continuous = value; }
     bool wide_partition() const { return _flags._wide_partition; }
@@ -284,7 +284,8 @@ private:
                                          const dht::partition_range&,
                                          const io_priority_class& pc,
                                          const query::partition_slice& slice,
-                                         tracing::trace_state_ptr trace_state);
+                                         tracing::trace_state_ptr trace_state,
+                                         streamed_mutation::forwarding);
     void on_hit();
     void on_miss();
     void on_uncached_wide_partition();
@@ -335,7 +336,8 @@ public:
                                 const dht::partition_range& = query::full_partition_range,
                                 const query::partition_slice& slice = query::full_slice,
                                 const io_priority_class& = default_priority_class(),
-                                tracing::trace_state_ptr trace_state = nullptr);
+                                tracing::trace_state_ptr trace_state = nullptr,
+                                streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
     const stats& stats() const { return _stats; }
 public:

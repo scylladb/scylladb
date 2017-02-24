@@ -39,6 +39,7 @@ using ring_position = dht::ring_position;
 using clustering_range = nonwrapping_range<clustering_key_prefix>;
 
 extern const dht::partition_range full_partition_range;
+extern const clustering_range full_clustering_range;
 
 inline
 bool is_single_partition(const dht::partition_range& range) {

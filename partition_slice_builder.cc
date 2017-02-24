@@ -77,6 +77,18 @@ partition_slice_builder::with_range(query::clustering_range range) {
 }
 
 partition_slice_builder&
+partition_slice_builder::with_ranges(std::vector<query::clustering_range> ranges) {
+    if (!_row_ranges) {
+        _row_ranges = std::move(ranges);
+    } else {
+        for (auto&& r : ranges) {
+            with_range(std::move(r));
+        }
+    }
+    return *this;
+}
+
+partition_slice_builder&
 partition_slice_builder::with_no_regular_columns() {
     _regular_columns = std::vector<column_id>();
     return *this;

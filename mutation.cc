@@ -316,3 +316,8 @@ future<mutation_opt> mutation_from_streamed_mutation(streamed_mutation_opt sm) {
     });
 }
 
+future<mutation> mutation_from_streamed_mutation(streamed_mutation& sm) {
+    return consume(sm, mutation_rebuilder<limit_mutation_size::no>(sm)).then([] (mutation_opt&& mo) {
+        return std::move(*mo);
+    });
+}

@@ -100,6 +100,101 @@ SEASTAR_TEST_CASE(test_mutation_merger) {
     });
 }
 
+// A StreamedMutationConsumer which distributes fragments randomly into several mutations.
+class fragment_scatterer {
+    std::vector<mutation>& _mutations;
+    size_t _next = 0;
+private:
+    template<typename Func>
+    void for_each_target(Func&& func) {
+        // round-robin
+        func(_mutations[_next % _mutations.size()]);
+        ++_next;
+    }
+public:
+    fragment_scatterer(std::vector<mutation>& muts)
+        : _mutations(muts)
+    { }
+
+    stop_iteration consume(tombstone t) {
+        for_each_target([&] (mutation& m) {
+            m.partition().apply(t);
+        });
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(range_tombstone&& rt) {
+        for_each_target([&] (mutation& m) {
+            m.partition().apply_row_tombstone(*m.schema(), std::move(rt));
+        });
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(static_row&& sr) {
+        for_each_target([&] (mutation& m) {
+            m.partition().static_row().apply(*m.schema(), column_kind::static_column, std::move(sr.cells()));
+        });
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(clustering_row&& cr) {
+        for_each_target([&] (mutation& m) {
+            auto& dr = m.partition().clustered_row(*m.schema(), std::move(cr.key()));
+            dr.apply(cr.tomb());
+            dr.apply(cr.marker());
+            dr.cells().apply(*m.schema(), column_kind::regular_column, std::move(cr.cells()));
+        });
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume_end_of_partition() {
+        return stop_iteration::no;
+    }
+};
+
+SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
+    return seastar::async([] {
+        run_mutation_source_tests([](schema_ptr s, const std::vector<mutation>& partitions) -> mutation_source {
+            // We create a mutation source which combines N memtables.
+            // The input fragments are spread among the memtables according to some selection logic,
+
+            const int n = 5;
+
+            std::vector<lw_shared_ptr<memtable>> memtables;
+            for (int i = 0; i < n; ++i) {
+                memtables.push_back(make_lw_shared<memtable>(s));
+            }
+
+            for (auto&& m : partitions) {
+                std::vector<mutation> muts;
+                for (int i = 0; i < n; ++i) {
+                    muts.push_back(mutation(m.decorated_key(), m.schema()));
+                }
+                fragment_scatterer c{muts};
+                auto sm = streamed_mutation_from_mutation(m);
+                do_consume_streamed_mutation_flattened(sm, c).get();
+                for (int i = 0; i < n; ++i) {
+                    memtables[i]->apply(std::move(muts[i]));
+                }
+            }
+
+            return mutation_source([memtables] (schema_ptr s,
+                    const dht::partition_range& range,
+                    const query::partition_slice& slice,
+                    const io_priority_class& pc,
+                    tracing::trace_state_ptr trace_state,
+                    streamed_mutation::forwarding fwd)
+            {
+                std::vector<mutation_reader> readers;
+                for (int i = 0; i < n; ++i) {
+                    readers.push_back(memtables[i]->make_reader(s, range, slice, pc, trace_state, fwd));
+                }
+                return make_combined_reader(std::move(readers));
+            });
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_freezing_streamed_mutations) {
     return seastar::async([] {
         storage_service_for_tests ssft;
