@@ -45,6 +45,7 @@
 #include "tests/mutation_reader_assertions.hh"
 #include "tests/result_set_assertions.hh"
 #include "mutation_source_test.hh"
+#include "cell_locking.hh"
 
 #include "disk-error-handler.hh"
 
@@ -74,11 +75,12 @@ with_column_family(schema_ptr s, column_family::config cfg, Func func) {
     auto dir = make_lw_shared<tmpdir>();
     cfg.datadir = { dir->path };
     auto cm = make_lw_shared<compaction_manager>();
-    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm);
+    auto cl_stats = make_lw_shared<cell_locker_stats>();
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats);
     cf->mark_ready_for_writes();
     return func(*cf).then([cf, cm] {
         return cf->stop();
-    }).finally([cf, cm, dir] {});
+    }).finally([cf, cm, dir, cl_stats] {});
 }
 
 SEASTAR_TEST_CASE(test_mutation_is_applied) {

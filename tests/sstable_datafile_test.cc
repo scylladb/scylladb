@@ -44,6 +44,7 @@
 #include "mutation_assertions.hh"
 #include "mutation_reader_assertions.hh"
 #include "counters.hh"
+#include "cell_locking.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -1017,7 +1018,8 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
     cfg.datadir = tmp->path;
     cfg.enable_commitlog = false;
     cfg.enable_incremental_backups = false;
-    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm);
+    auto cl_stats = make_lw_shared<cell_locker_stats>();
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats);
     cf->start();
     cf->mark_ready_for_writes();
     cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
@@ -1075,7 +1077,7 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
                 });
             });
         });
-    }).finally([s, cm, tmp] {
+    }).finally([s, cm, tmp, cl_stats] {
         return cm->stop().then([cm] {});
     });
 }
@@ -1098,7 +1100,8 @@ SEASTAR_TEST_CASE(compact) {
     builder.set_gc_grace_seconds(std::numeric_limits<int32_t>::max());
     auto s = builder.build();
     auto cm = make_lw_shared<compaction_manager>();
-    auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm);
+    auto cl_stats = make_lw_shared<cell_locker_stats>();
+    auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm, *cl_stats);
     cf->mark_ready_for_writes();
 
     return open_sstables(s, "tests/sstables/compaction", {1,2,3}).then([s, cf, cm, generation] (auto sstables) {
@@ -1174,7 +1177,7 @@ SEASTAR_TEST_CASE(compact) {
                 });
             });
         });
-    });
+    }).finally([cl_stats] { });
 
     // verify that the compacted sstable look like
 }
@@ -1208,7 +1211,8 @@ static future<std::vector<unsigned long>> compact_sstables(std::vector<unsigned 
     auto s = builder.build(schema_builder::compact_storage::no);
 
     auto cm = make_lw_shared<compaction_manager>();
-    auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm);
+    auto cl_stats = make_lw_shared<cell_locker_stats>();
+    auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm, *cl_stats);
     cf->mark_ready_for_writes();
 
     auto generations = make_lw_shared<std::vector<unsigned long>>(std::move(generations_to_compact));
@@ -1288,7 +1292,7 @@ static future<std::vector<unsigned long>> compact_sstables(std::vector<unsigned 
             throw std::runtime_error("unexpected strategy");
         }
         return make_ready_future<>();
-    }).then([cf, cm, created] {
+    }).then([cf, cm, created, cl_stats] {
         return std::move(*created);
     });
 }
@@ -1789,10 +1793,11 @@ SEASTAR_TEST_CASE(leveled_01) {
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
 
     column_family::config cfg;
+    cell_locker_stats cl_stats;
     compaction_manager cm;
     cfg.enable_disk_writes = false;
     cfg.enable_commitlog = false;
-    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm);
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
     cf->mark_ready_for_writes();
 
     auto key_and_token_pair = token_generation_for_current_shard(50);
@@ -1836,10 +1841,11 @@ SEASTAR_TEST_CASE(leveled_02) {
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
 
     column_family::config cfg;
+    cell_locker_stats cl_stats;
     compaction_manager cm;
     cfg.enable_disk_writes = false;
     cfg.enable_commitlog = false;
-    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm);
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
     cf->mark_ready_for_writes();
 
     auto key_and_token_pair = token_generation_for_current_shard(50);
@@ -1893,10 +1899,11 @@ SEASTAR_TEST_CASE(leveled_03) {
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
 
     column_family::config cfg;
+    cell_locker_stats cl_stats;
     compaction_manager cm;
     cfg.enable_disk_writes = false;
     cfg.enable_commitlog = false;
-    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm);
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
     cf->mark_ready_for_writes();
 
     auto key_and_token_pair = token_generation_for_current_shard(50);
@@ -1954,10 +1961,11 @@ SEASTAR_TEST_CASE(leveled_04) {
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
 
     column_family::config cfg;
+    cell_locker_stats cl_stats;
     compaction_manager cm;
     cfg.enable_disk_writes = false;
     cfg.enable_commitlog = false;
-    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm);
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
     cf->mark_ready_for_writes();
 
     auto key_and_token_pair = token_generation_for_current_shard(50);
@@ -2046,10 +2054,11 @@ SEASTAR_TEST_CASE(leveled_06) {
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
 
     column_family::config cfg;
+    cell_locker_stats cl_stats;
     compaction_manager cm;
     cfg.enable_disk_writes = false;
     cfg.enable_commitlog = false;
-    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm);
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
     cf->mark_ready_for_writes();
 
     auto max_sstable_size_in_mb = 1;
@@ -2085,9 +2094,10 @@ SEASTAR_TEST_CASE(leveled_07) {
 
     column_family::config cfg;
     compaction_manager cm;
+    cell_locker_stats cl_stats;
     cfg.enable_disk_writes = false;
     cfg.enable_commitlog = false;
-    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm);
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
     cf->mark_ready_for_writes();
 
     auto key_and_token_pair = token_generation_for_current_shard(5);
@@ -2123,7 +2133,8 @@ SEASTAR_TEST_CASE(check_overlapping) {
 
     column_family::config cfg;
     compaction_manager cm;
-    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm);
+    cell_locker_stats cl_stats;
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
 
     auto key_and_token_pair = token_generation_for_current_shard(4);
     auto min_key = key_and_token_pair[0].first;
@@ -2197,6 +2208,8 @@ static shared_sstable make_sstable_containing(std::function<shared_sstable()> ss
 SEASTAR_TEST_CASE(tombstone_purge_test) {
     BOOST_REQUIRE(smp::count == 1);
     return seastar::async([] {
+        cell_locker_stats cl_stats;
+
         // In a column family with gc_grace_seconds set to 0, check that a tombstone
         // is purged after compaction.
         auto builder = schema_builder("tests", "tombstone_purge")
@@ -2210,9 +2223,9 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
             return make_lw_shared<sstable>(s, tmp->path, (*gen)++, la, big);
         };
 
-        auto compact = [&sst_gen, s] (std::vector<shared_sstable> all, std::vector<shared_sstable> to_compact) -> std::vector<shared_sstable> {
+        auto compact = [&, s] (std::vector<shared_sstable> all, std::vector<shared_sstable> to_compact) -> std::vector<shared_sstable> {
             auto cm = make_lw_shared<compaction_manager>();
-            auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm);
+            auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm, cl_stats);
             cf->mark_ready_for_writes();
             for (auto&& sst : all) {
                 column_family_test(cf).add_sstable(sst);
@@ -2399,7 +2412,8 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
                 return sst;
             };
             auto cm = make_lw_shared<compaction_manager>();
-            auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm);
+            auto cl_stats = make_lw_shared<cell_locker_stats>();
+            auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm, *cl_stats);
             cf->mark_ready_for_writes();
             std::vector<shared_sstable> sstables;
             sstables.push_back(std::move(sstp));
@@ -2418,7 +2432,7 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
                 }).then([reader] (streamed_mutation_opt m) {
                     BOOST_REQUIRE(!m);
                 });
-            }).then([cm, cf] {});
+            }).then([cm, cf, cl_stats] {});
         }).then([sst, mt, s] {});
     });
 }
@@ -2739,7 +2753,8 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
             auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
                 {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type));
             auto cm = make_lw_shared<compaction_manager>();
-            auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm);
+            cell_locker_stats cl_stats;
+            auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm, cl_stats);
             auto mt = make_lw_shared<memtable>(s);
             auto now = gc_clock::now();
             int32_t last_expiry = 0;
@@ -2793,13 +2808,14 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
     compaction_manager cm;
     column_family::config cfg;
+    cell_locker_stats cl_stats;
 
     auto key_and_token_pair = token_generation_for_current_shard(4);
     auto min_key = key_and_token_pair[0].first;
     auto max_key = key_and_token_pair[key_and_token_pair.size()-1].first;
 
     {
-        auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm);
+        auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
         auto sst1 = add_sstable_for_overlapping_test(cf, /*gen*/1, min_key, key_and_token_pair[1].first, build_stats(0, 10, 10));
         auto sst2 = add_sstable_for_overlapping_test(cf, /*gen*/2, min_key, key_and_token_pair[2].first, build_stats(0, 10, std::numeric_limits<int32_t>::max()));
         auto sst3 = add_sstable_for_overlapping_test(cf, /*gen*/3, min_key, max_key, build_stats(20, 25, std::numeric_limits<int32_t>::max()));
@@ -2809,7 +2825,7 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
     }
 
     {
-        auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm);
+        auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
         auto sst1 = add_sstable_for_overlapping_test(cf, /*gen*/1, min_key, key_and_token_pair[1].first, build_stats(0, 10, 10));
         auto sst2 = add_sstable_for_overlapping_test(cf, /*gen*/2, min_key, key_and_token_pair[2].first, build_stats(15, 20, std::numeric_limits<int32_t>::max()));
         auto sst3 = add_sstable_for_overlapping_test(cf, /*gen*/3, min_key, max_key, build_stats(30, 40, std::numeric_limits<int32_t>::max()));
@@ -2827,7 +2843,8 @@ SEASTAR_TEST_CASE(basic_date_tiered_strategy_test) {
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
     compaction_manager cm;
     column_family::config cfg;
-    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm);
+    cell_locker_stats cl_stats;
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
 
     std::vector<sstables::shared_sstable> candidates;
     int min_threshold = cf->schema()->min_compaction_threshold();
@@ -2863,7 +2880,8 @@ SEASTAR_TEST_CASE(date_tiered_strategy_test_2) {
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
     compaction_manager cm;
     column_family::config cfg;
-    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm);
+    cell_locker_stats cl_stats;
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
 
     // deterministic timestamp for Fri, 01 Jan 2016 00:00:00 GMT.
     auto tp = db_clock::from_time_t(1451606400);
@@ -3069,7 +3087,8 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
             .with_column("r1", int32_type)
             .build();
         auto cm = make_lw_shared<compaction_manager>();
-        auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm);
+        auto cl_stats = make_lw_shared<cell_locker_stats>();
+        auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm, *cl_stats);
         auto tmp = make_lw_shared<tmpdir>();
         auto mt = make_lw_shared<memtable>(s);
         const column_definition& r1_col = *s->get_column_definition("r1");
@@ -3284,7 +3303,8 @@ SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_test) {
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
     auto cm = make_lw_shared<compaction_manager>();
-    auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm);
+    cell_locker_stats cl_stats;
+    auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm, cl_stats);
     auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
 
     std::vector<sstables::shared_sstable> candidates;

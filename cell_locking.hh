@@ -136,6 +136,11 @@ public:
 
 class locked_cell;
 
+struct cell_locker_stats {
+    uint64_t lock_acquisitions = 0;
+    uint64_t operations_waiting_for_lock = 0;
+};
+
 class cell_locker {
 public:
     using timeout_clock = lowres_clock;
@@ -339,6 +344,7 @@ private:
     // partitions_type uses equality comparator which keeps a reference to the
     // original schema, we must ensure that it doesn't die.
     schema_ptr _original_schema;
+    cell_locker_stats& _stats;
 
     friend class locked_cell;
 private:
@@ -359,12 +365,13 @@ private:
         }
     }
 public:
-    explicit cell_locker(schema_ptr s)
+    explicit cell_locker(schema_ptr s, cell_locker_stats& stats)
         : _buckets(std::make_unique<partitions_type::bucket_type[]>(initial_bucket_count))
         , _partitions(partitions_type::bucket_traits(_buckets.get(), initial_bucket_count),
                       partition_entry::hasher(), partition_entry::equal_compare(*s))
         , _schema(s)
         , _original_schema(std::move(s))
+        , _stats(stats)
     { }
 
     ~cell_locker() {
@@ -411,6 +418,7 @@ struct cell_locker::locker {
 
     timeout_clock::time_point _timeout;
     std::vector<locked_cell> _locks;
+    cell_locker_stats& _stats;
 private:
     void update_ck() {
         if (!is_done()) {
@@ -422,13 +430,14 @@ private:
 
     bool is_done() const { return _current_ck == _range.end(); }
 public:
-    explicit locker(const ::schema& s, partition_entry& pe, partition_cells_range&& range, timeout_clock::time_point timeout)
+    explicit locker(const ::schema& s, cell_locker_stats& st, partition_entry& pe, partition_cells_range&& range, timeout_clock::time_point timeout)
         : _hasher(s)
         , _eq_cmp(s)
         , _partition_entry(pe)
         , _range(std::move(range))
         , _current_ck(_range.begin())
         , _timeout(timeout)
+        , _stats(st)
     {
         update_ck();
     }
@@ -471,6 +480,7 @@ future<std::vector<locked_cell>> cell_locker::lock_cells(const dht::decorated_ke
             }
             for (auto&& c : r) {
                 auto cell = make_lw_shared<cell_entry>(*partition, position_in_partition(r.position()), c);
+                _stats.lock_acquisitions++;
                 partition->insert(cell);
                 locks.emplace_back(std::move(cell));
             }
@@ -484,7 +494,7 @@ future<std::vector<locked_cell>> cell_locker::lock_cells(const dht::decorated_ke
         return make_ready_future<std::vector<locked_cell>>(std::move(locks));
     }
 
-    auto l = std::make_unique<locker>(*_schema, *it, std::move(range), timeout);
+    auto l = std::make_unique<locker>(*_schema, _stats, *it, std::move(range), timeout);
     auto f = l->lock_all();
     return f.then([l = std::move(l)] {
         return std::move(*l).get();
@@ -505,12 +515,16 @@ future<> cell_locker::locker::lock_next() {
         cell_address ca { position_in_partition(_current_ck->position()), cid };
         auto it = _partition_entry.cells().find(ca, _hasher, _eq_cmp);
         if (it != _partition_entry.cells().end()) {
+            _stats.operations_waiting_for_lock++;
             return it->lock(_timeout).then([this, ce = it->shared_from_this()] () mutable {
+                _stats.operations_waiting_for_lock--;
+                _stats.lock_acquisitions++;
                 _locks.emplace_back(std::move(ce));
             });
         }
 
         auto cell = make_lw_shared<cell_entry>(_partition_entry, position_in_partition(_current_ck->position()), cid);
+        _stats.lock_acquisitions++;
         _partition_entry.insert(cell);
         _locks.emplace_back(std::move(cell));
     }

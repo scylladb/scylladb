@@ -78,6 +78,7 @@
 #include "db/view/view.hh"
 
 class cell_locker;
+class cell_locker_stats;
 class locked_cell;
 
 class frozen_mutation;
@@ -667,12 +668,12 @@ public:
 
     logalloc::occupancy_stats occupancy() const;
 private:
-    column_family(schema_ptr schema, config cfg, db::commitlog* cl, compaction_manager&);
+    column_family(schema_ptr schema, config cfg, db::commitlog* cl, compaction_manager&, cell_locker_stats& cl_stats);
 public:
-    column_family(schema_ptr schema, config cfg, db::commitlog& cl, compaction_manager& cm)
-        : column_family(schema, std::move(cfg), &cl, cm) {set_metrics();}
-    column_family(schema_ptr schema, config cfg, no_commitlog, compaction_manager& cm)
-        : column_family(schema, std::move(cfg), nullptr, cm) {set_metrics();}
+    column_family(schema_ptr schema, config cfg, db::commitlog& cl, compaction_manager& cm, cell_locker_stats& cl_stats)
+        : column_family(schema, std::move(cfg), &cl, cm, cl_stats) {set_metrics();}
+    column_family(schema_ptr schema, config cfg, no_commitlog, compaction_manager& cm, cell_locker_stats& cl_stats)
+        : column_family(schema, std::move(cfg), nullptr, cm, cl_stats) {set_metrics();}
     column_family(column_family&&) = delete; // 'this' is being captured during construction
     ~column_family();
     const schema_ptr& schema() const { return _schema; }
@@ -1100,6 +1101,7 @@ private:
     };
 
     lw_shared_ptr<db_stats> _stats;
+    std::unique_ptr<cell_locker_stats> _cl_stats;
 
     std::unique_ptr<db::config> _cfg;
 

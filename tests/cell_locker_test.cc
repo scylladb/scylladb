@@ -104,7 +104,8 @@ SEASTAR_TEST_CASE(test_simple_locking_cells) {
         auto destroy = [] (auto) { };
 
         auto s = make_schema();
-        cell_locker cl(s);
+        cell_locker_stats cl_stats;
+        cell_locker cl(s, cl_stats);
 
         auto m = make_mutation(s, "0", { "s1", "s3" }, {
             make_row("one", { "r1", "r2" }),
@@ -123,7 +124,8 @@ SEASTAR_TEST_CASE(test_simple_locking_cells) {
 SEASTAR_TEST_CASE(test_disjoint_mutations) {
     return seastar::async([&] {
         auto s = make_schema();
-        cell_locker cl(s);
+        cell_locker_stats cl_stats;
+        cell_locker cl(s, cl_stats);
 
         auto m1 = make_mutation(s, "0", { "s1" }, {
                 make_row("one", { "r1", "r2" }),
@@ -148,7 +150,8 @@ SEASTAR_TEST_CASE(test_single_cell_overlap) {
         auto destroy = [] (auto) { };
 
         auto s = make_schema();
-        cell_locker cl(s);
+        cell_locker_stats cl_stats;
+        cell_locker cl(s, cl_stats);
 
         auto m1 = make_mutation(s, "0", { "s1" }, {
                 make_row("one", { "r1", "r2" }),
@@ -181,7 +184,8 @@ SEASTAR_TEST_CASE(test_schema_change) {
 
         auto s1 = make_schema();
         auto s2 = make_alternative_schema();
-        cell_locker cl(s1);
+        cell_locker_stats cl_stats;
+        cell_locker cl(s1, cl_stats);
 
         auto m1 = make_mutation(s1, "0", { "s1", "s2", "s3"}, {
             make_row("one", { "r1", "r2", "r3" }),
@@ -226,7 +230,8 @@ SEASTAR_TEST_CASE(test_timed_out) {
             auto destroy = [] (auto) { };
 
             auto s = make_schema();
-            cell_locker cl(s);
+            cell_locker_stats cl_stats;
+            cell_locker cl(s, cl_stats);
 
             auto m1 = make_mutation(s, "0", { "s1", "s2", "s3"}, {
                     make_row("one", { "r2", "r3" }),
@@ -246,4 +251,36 @@ SEASTAR_TEST_CASE(test_timed_out) {
             destroy(std::move(l1));
             auto l2 = f2.get0();
         });
+}
+
+SEASTAR_TEST_CASE(test_locker_stats) {
+    return seastar::async([&] {
+        auto destroy = [] (auto) { };
+
+        auto s = make_schema();
+        cell_locker_stats cl_stats;
+        cell_locker cl(s, cl_stats);
+
+        auto m1 = make_mutation(s, "0", { "s2", "s3" }, {
+                make_row("one", { "r1", "r2" }),
+        });
+
+        auto m2 = make_mutation(s, "0", { "s1", "s3" }, {
+                make_row("one", { "r2", "r3" }),
+        });
+
+        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get0();
+        BOOST_REQUIRE_EQUAL(cl_stats.lock_acquisitions, 4);
+        BOOST_REQUIRE_EQUAL(cl_stats.operations_waiting_for_lock, 0);
+
+        auto f2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout);
+        BOOST_REQUIRE_EQUAL(cl_stats.lock_acquisitions, 5);
+        BOOST_REQUIRE_EQUAL(cl_stats.operations_waiting_for_lock, 1);
+        BOOST_REQUIRE(!f2.available());
+
+        destroy(std::move(l1));
+        destroy(f2.get0());
+        BOOST_REQUIRE_EQUAL(cl_stats.lock_acquisitions, 8);
+        BOOST_REQUIRE_EQUAL(cl_stats.operations_waiting_for_lock, 0);
+    });
 }

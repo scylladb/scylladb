@@ -124,7 +124,7 @@ column_family::make_streaming_memtable_big_list(streaming_memtable_big& smb) {
     return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager);
 }
 
-column_family::column_family(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager)
+column_family::column_family(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager, cell_locker_stats& cl_stats)
     : _schema(std::move(schema))
     , _config(std::move(config))
     , _memtables(_config.enable_disk_writes ? make_memtable_list() : make_memory_only_memtable_list())
@@ -135,7 +135,7 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog* cl
     , _commitlog(cl)
     , _compaction_manager(compaction_manager)
     , _flush_queue(std::make_unique<memtable_flush_queue>())
-    , _counter_cell_locks(std::make_unique<cell_locker>(_schema))
+    , _counter_cell_locks(std::make_unique<cell_locker>(_schema, cl_stats))
 {
     if (!_config.enable_disk_writes) {
         dblog.warn("Writes disabled, column family no durable.");
@@ -1772,6 +1772,7 @@ database::database() : database(db::config())
 
 database::database(const db::config& cfg)
     : _stats(make_lw_shared<db_stats>())
+    , _cl_stats(std::make_unique<cell_locker_stats>())
     , _cfg(std::make_unique<db::config>(cfg))
     // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
     , _system_dirty_memory_manager(*this, 10 << 20)
@@ -1899,6 +1900,12 @@ database::setup_metrics() {
 
         sm::make_derive("short_mutation_queries", _stats->short_mutation_queries,
                        sm::description("The rate of mutation queries that returned less rows than requested due to result size limiting.")),
+
+        sm::make_total_operations("counter_cell_lock_acquisition", _cl_stats->lock_acquisitions,
+                                 sm::description("The number of acquired counter cell locks.")),
+
+        sm::make_queue_length("counter_cell_lock_pending", _cl_stats->operations_waiting_for_lock,
+                             sm::description("The number of counter updates waiting for a lock.")),
     });
 }
 
@@ -2140,9 +2147,9 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
 
     lw_shared_ptr<column_family> cf;
     if (cfg.enable_commitlog && _commitlog) {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog, _compaction_manager);
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog, _compaction_manager, *_cl_stats);
     } else {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog(), _compaction_manager);
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog(), _compaction_manager, *_cl_stats);
     }
 
     auto uuid = schema->id();
