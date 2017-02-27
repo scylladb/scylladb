@@ -281,6 +281,8 @@ arg_parser.add_argument('--python', action = 'store', dest = 'python', default =
                         help = 'Python3 path')
 add_tristate(arg_parser, name = 'hwloc', dest = 'hwloc', help = 'hwloc support')
 add_tristate(arg_parser, name = 'xen', dest = 'xen', help = 'Xen support')
+arg_parser.add_argument('--enable-gcc6-concepts', dest='gcc6_concepts', action='store_true', default=False,
+                        help='enable experimental support for C++ Concepts as implemented in GCC 6')
 args = arg_parser.parse_args()
 
 defines = []
@@ -730,6 +732,8 @@ if args.staticcxx:
     seastar_flags += ['--static-stdc++']
 if args.staticboost:
     seastar_flags += ['--static-boost']
+if args.gcc6_concepts:
+    seastar_flags += ['--enable-gcc6-concepts']
 
 seastar_cflags = args.user_cflags + " -march=nehalem"
 seastar_flags += ['--compiler', args.cxx, '--cflags=%s' % (seastar_cflags)]
