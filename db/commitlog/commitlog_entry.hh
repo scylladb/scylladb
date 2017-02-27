@@ -31,15 +31,10 @@ namespace stdx = std::experimental;
 
 class commitlog_entry {
     stdx::optional<column_mapping> _mapping;
-    stdx::optional<frozen_mutation> _mutation_storage;
-    const frozen_mutation& _mutation;
+    frozen_mutation _mutation;
 public:
-    commitlog_entry(stdx::optional<column_mapping> mapping, frozen_mutation&& mutation);
-    commitlog_entry(stdx::optional<column_mapping> mapping, const frozen_mutation& mutation);
-    commitlog_entry(commitlog_entry&&);
-    commitlog_entry(const commitlog_entry&) = delete;
-    commitlog_entry& operator=(commitlog_entry&&);
-    commitlog_entry& operator=(const commitlog_entry&) = delete;
+    commitlog_entry(stdx::optional<column_mapping> mapping, frozen_mutation&& mutation)
+        : _mapping(std::move(mapping)), _mutation(std::move(mutation)) { }
     const stdx::optional<column_mapping>& mapping() const { return _mapping; }
     const frozen_mutation& mutation() const { return _mutation; }
 };
@@ -50,8 +45,9 @@ class commitlog_entry_writer {
     bool _with_schema = true;
     size_t _size;
 private:
+    template<typename Output>
+    void serialize(Output&) const;
     void compute_size();
-    commitlog_entry get_entry() const;
 public:
     commitlog_entry_writer(schema_ptr s, const frozen_mutation& fm)
         : _schema(std::move(s)), _mutation(fm)

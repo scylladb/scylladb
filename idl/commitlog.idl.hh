@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-class commitlog_entry {
+class commitlog_entry [[writable]] {
     std::experimental::optional<column_mapping> mapping();
     frozen_mutation mutation();
 };
