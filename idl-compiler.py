@@ -277,6 +277,9 @@ def is_optional(lst):
 
 created_writers = set()
 
+def get_member_name(name):
+    return name if not name.endswith('()') else name[:-2]
+
 def get_members(cls):
     return [p for p in cls["members"] if not is_class(p) and not is_enum(p)]
 
@@ -456,18 +459,19 @@ def add_param_writer_object(name, base_state, typ, var_type = "", var_index = No
 def add_param_write(current, base_state, vector = False, root_node = False):
     typ = current["type"]
     res = ""
+    name = get_member_name(current["name"])
     if is_basic_type(typ):
-        res = res + add_param_writer_basic_type(current["name"], base_state, typ)
+        res = res + add_param_writer_basic_type(name, base_state, typ)
     elif is_optional(typ):
             res = res +  Template(reindent(4, """
     after_${basestate}__$name<Output> skip_$name() && {
         serialize(_out, false);
         return { _out, std::move(_state) };
-    }""")).substitute({'type': param_type(typ), 'name': current["name"], 'basestate' : base_state})
+    }""")).substitute({'type': param_type(typ), 'name': name, 'basestate' : base_state})
             if is_basic_type(typ[1][0]):
-                res = res + add_param_writer_basic_type(current["name"], base_state, typ[1][0], "", "true")
+                res = res + add_param_writer_basic_type(name, base_state, typ[1][0], "", "true")
             elif is_local_type(typ[1][0]):
-                res = res + add_param_writer_object(current["name"], base_state[0][1], typ, "", "true")
+                res = res + add_param_writer_object(name, base_state[0][1], typ, "", "true")
             else:
                 print("non supported optional type ", type[0][1])
     elif is_vector(typ):
@@ -482,18 +486,18 @@ def add_param_write(current, base_state, vector = False, root_node = False):
         $set
         return { _out, std::move(_state) };
     }
-""").substitute({'type': param_type(typ), 'name': current["name"], 'basestate' : base_state, 'set' : set_size})
+""").substitute({'type': param_type(typ), 'name': name, 'basestate' : base_state, 'set' : set_size})
     elif is_local_type(typ):
-        res = res + add_param_writer_object(current["name"], base_state, typ)
+        res = res + add_param_writer_object(name, base_state, typ)
     elif is_variant(typ):
         for idx, p in enumerate(typ[1]):
             if is_basic_type(p):
                 varient_type = param_type(p)
-                res = res + add_param_writer_basic_type(current["name"], base_state, varient_type,"_" + varient_type, idx, root_node)
+                res = res + add_param_writer_basic_type(name, base_state, varient_type,"_" + varient_type, idx, root_node)
             elif is_variant(p):
-                res = res + add_param_writer_object(current["name"], base_state, p, '_' + "variant", idx, root_node)
+                res = res + add_param_writer_object(name, base_state, p, '_' + "variant", idx, root_node)
             elif is_local_type(p):
-                res = res + add_param_writer_object(current["name"], base_state, p, '_' + param_type(p), idx, root_node)
+                res = res + add_param_writer_object(name, base_state, p, '_' + param_type(p), idx, root_node)
     else:
         print ("something is wrong with type", typ)
     return res;
@@ -658,7 +662,7 @@ def handle_visitors_nodes(info, hout, variant_node = False, clases = []):
     if not members:
         add_node(hout, base_state_name, None, base_state_name, prefix, parents, add_end_method(parents, current_name, variant_node, clases), False, is_final(cls))
         return
-    add_node(hout, base_state_name + "__" + members[-1]["name"], members[-1]["type"], base_state_name, "after_", base_state_name, add_end_method(parents, current_name, variant_node, clases))
+    add_node(hout, base_state_name + "__" + get_member_name(members[-1]["name"]), members[-1]["type"], base_state_name, "after_", base_state_name, add_end_method(parents, current_name, variant_node, clases))
     # Create writer and reader for include class
     if not variant_node:
         for member in get_dependency(cls):
@@ -666,9 +670,9 @@ def handle_visitors_nodes(info, hout, variant_node = False, clases = []):
     for ind in reversed(range(1, len(members))):
         member = members[ind]
         add_nodes_when_needed(hout, info, member, base_state_name, parents, member_classes)
-        variant_state = base_state_name + "__" + member["name"] if is_variant(member["type"]) else base_state_name
+        variant_state = base_state_name + "__" + get_member_name(member["name"]) if is_variant(member["type"]) else base_state_name
         is_param_vector = is_vector(member["type"]) and  is_basic_type(member["type"][1][0])
-        add_node(hout, base_state_name + "__" + members[ind - 1]["name"], member["type"], variant_state, "after_", base_state_name, add_param_write(member, base_state_name), False)
+        add_node(hout, base_state_name + "__" + get_member_name(members[ind - 1]["name"]), member["type"], variant_state, "after_", base_state_name, add_param_write(member, base_state_name), False)
     member = members[0]
     is_param_vector = is_vector(member["type"]) and is_basic_type(member["type"][1][0])
     add_nodes_when_needed(hout, info, member, base_state_name, parents, member_classes)
@@ -790,7 +794,7 @@ def add_view(hout, info):
                return deserialize(in, boost::type<$type>());
               });
             }
-        """)).substitute({'name' : m["name"], 'type' : full_type, 'skip' : skip}))
+        """)).substitute({'name' : get_member_name(m["name"]), 'type' : full_type, 'skip' : skip}))
 
         skip = skip + Template("\n       ser::skip(in, boost::type<${type}>());").substitute({'type': full_type})
 
