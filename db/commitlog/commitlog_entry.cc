@@ -33,48 +33,26 @@
 #include "idl/mutation.dist.impl.hh"
 #include "idl/commitlog.dist.impl.hh"
 
-commitlog_entry::commitlog_entry(stdx::optional<column_mapping> mapping, frozen_mutation&& mutation)
-    : _mapping(std::move(mapping))
-      , _mutation_storage(std::move(mutation))
-      , _mutation(*_mutation_storage)
-{ }
-
-commitlog_entry::commitlog_entry(stdx::optional<column_mapping> mapping, const frozen_mutation& mutation)
-    : _mapping(std::move(mapping))
-      , _mutation(mutation)
-{ }
-
-commitlog_entry::commitlog_entry(commitlog_entry&& ce)
-    : _mapping(std::move(ce._mapping))
-    , _mutation_storage(std::move(ce._mutation_storage))
-    , _mutation(_mutation_storage ? *_mutation_storage : ce._mutation)
-{
-}
-
-commitlog_entry& commitlog_entry::operator=(commitlog_entry&& ce)
-{
-    if (this != &ce) {
-        this->~commitlog_entry();
-        new (this) commitlog_entry(std::move(ce));
-    }
-    return *this;
-}
-
-commitlog_entry commitlog_entry_writer::get_entry() const {
-    if (_with_schema) {
-        return commitlog_entry(_schema->get_column_mapping(), _mutation);
-    } else {
-        return commitlog_entry({}, _mutation);
-    }
+template<typename Output>
+void commitlog_entry_writer::serialize(Output& out) const {
+    [this, wr = ser::writer_of_commitlog_entry<Output>(out)] () mutable {
+        if (_with_schema) {
+            return std::move(wr).write_mapping(_schema->get_column_mapping());
+        } else {
+            return std::move(wr).skip_mapping();
+        }
+    }().write_mutation(_mutation).end_commitlog_entry();
 }
 
 void commitlog_entry_writer::compute_size() {
-    _size = ser::get_sizeof(get_entry());
+    seastar::measuring_output_stream ms;
+    serialize(ms);
+    _size = ms.size();
 }
 
 void commitlog_entry_writer::write(data_output& out) const {
     seastar::simple_output_stream str(out.reserve(size()), size());
-    ser::serialize(str, get_entry());
+    serialize(str);
 }
 
 commitlog_entry_reader::commitlog_entry_reader(const temporary_buffer<char>& buffer)
