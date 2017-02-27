@@ -1,6 +1,5 @@
-diff -Nur debian/rules.conf /home/syuu/gcc-5-5.4.1/debian/rules.conf
---- debian/rules.conf	2016-10-14 04:54:21.000000000 +0000
-+++ /home/syuu/gcc-5-5.4.1/debian/rules.conf	2016-10-12 17:28:54.138711378 +0000
+--- debian/rules.conf	2017-02-24 19:02:52.000000000 +0000
++++ /home/syuu/gcc-5.5/gcc-5-5.4.1/debian/rules.conf	2017-02-24 18:13:59.000000000 +0000
 @@ -206,7 +206,7 @@
    ifneq (,$(filter $(distrelease),vivid))
      BINUTILSBDV = 2.25-3~
@@ -10,14 +9,16 @@ diff -Nur debian/rules.conf /home/syuu/gcc-5-5.4.1/debian/rules.conf
    else ifneq (,$(filter $(distrelease),sid stretch xenial))
      BINUTILSBDV = 2.26.1
    endif
-@@ -387,9 +387,9 @@
+@@ -386,10 +386,10 @@
+   MPFR_BUILD_DEP = libmpfr-dev (>= 3.0.0-9~),
  endif
  
- ISL_BUILD_DEP = libisl-dev,
--ifneq (,$(filter $(distrelease),jessie sid experimental))
+-ISL_BUILD_DEP = libisl-dev,
+-ifneq (,$(filter $(distrelease),jessie stretch sid experimental))
 -  ISL_BUILD_DEP = libisl-dev (>= 0.14),
 -endif
-+#ifneq (,$(filter $(distrelease),jessie sid experimental))
++#ISL_BUILD_DEP = libisl-dev,
++#ifneq (,$(filter $(distrelease),jessie stretch sid experimental))
 +#  ISL_BUILD_DEP = libisl-dev (>= 0.14),
 +#endif
  
@@ -37,9 +38,8 @@ diff -Nur debian/rules.conf /home/syuu/gcc-5-5.4.1/debian/rules.conf
  ifneq ($(DEB_CROSS),yes)
  # all archs for which to create b-d's
  any_archs = alpha amd64 armel armhf arm64 i386 mips mipsel mips64 mips64el powerpc ppc64 ppc64el m68k sh4 sparc64 s390x x32
-diff -Nur debian/rules.defs /home/syuu/gcc-5-5.4.1/debian/rules.defs
---- debian/rules.defs	2016-10-14 04:54:21.000000000 +0000
-+++ /home/syuu/gcc-5-5.4.1/debian/rules.defs	2016-10-13 10:18:51.647631508 +0000
+--- debian/rules.defs	2017-02-24 19:02:52.000000000 +0000
++++ /home/syuu/gcc-5.5/gcc-5-5.4.1/debian/rules.defs	2017-02-24 18:13:59.000000000 +0000
 @@ -412,7 +412,7 @@
  # gcc versions (fixincludes, libgcj-common) ...
  #with_common_pkgs := yes

@@ -77,10 +77,11 @@ fi
 
 if [ "$DISTRIBUTION" = "Debian" ] && [ "$VERSION_ID" = "8" ]; then
     if [ ! -f build/gcc-5_*.deb ]; then
-        sudo cp dist/debian/dep/debian-stretch-source.list /etc/apt/sources.list.d/
-        sudo apt-get update
         cd build
-        apt-get source gcc-5/stretch=5.4.1-2
+        wget https://launchpad.net/debian/+archive/primary/+files/gcc-5_5.4.1-5.dsc
+        wget https://launchpad.net/debian/+archive/primary/+files/gcc-5_5.4.1.orig.tar.gz
+        wget https://launchpad.net/debian/+archive/primary/+files/gcc-5_5.4.1-5.diff.gz
+        dpkg-source -x gcc-5_5.4.1-5.dsc
         cd gcc-5-5.4.1
         # resolve build time dependencies manually, since mk-build-deps doesn't works for gcc package
         sudo apt-get install -y g++-multilib libc6-dev-i386 lib32gcc1 libc6-dev-x32 libx32gcc1 libc6-dbg m4 libtool autoconf2.64 autogen gawk zlib1g-dev systemtap-sdt-dev gperf bison flex gdb texinfo locales sharutils libantlr-java libffi-dev gnat-4.9 libisl-dev libmpc-dev libmpfr-dev libgmp-dev dejagnu realpath chrpath quilt doxygen graphviz ghostscript texlive-latex-base xsltproc libxml2-utils docbook-xsl-ns
