@@ -2881,7 +2881,7 @@ future<> dirty_memory_manager::flush_when_needed() {
         // that we have no waiters, but a flush still in flight. We wait for all background work to
         // stop. When that stops, we know that the foreground work in the _flush_serializer has
         // stopped as well.
-        return get_units(_background_work_flush_serializer, _max_background_work);
+        return get_units(_background_work_flush_serializer, _max_background_work).discard_result();
     });
 }
 
