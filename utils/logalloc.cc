@@ -27,12 +27,15 @@
 #include <boost/intrusive/set.hpp>
 #include <boost/intrusive/slist.hpp>
 #include <boost/range/adaptors.hpp>
+#include <boost/range/algorithm/max_element.hpp>
+#include <limits>
 #include <stack>
 
 #include <seastar/core/memory.hh>
 #include <seastar/core/align.hh>
 #include <seastar/core/print.hh>
 #include <seastar/core/metrics.hh>
+#include <seastar/core/bitops.hh>
 
 #include "utils/logalloc.hh"
 #include "log.hh"
@@ -137,61 +140,173 @@ tracker& shard_tracker() {
     return tracker_instance;
 }
 
-struct segment_occupancy_descending_less_compare {
-    inline bool operator()(segment* s1, segment* s2) const;
+inline constexpr size_t pow2_rank(size_t v) {
+    return std::numeric_limits<size_t>::digits - 1 - count_leading_zeros(v);
+}
+
+template<size_t MinSizeShift, size_t SubBucketShift, size_t MaxSizeShift>
+struct bucket_index {
+    static constexpr size_t number_of_buckets = ((MaxSizeShift - MinSizeShift) << SubBucketShift) + 2;
+    using type = std::conditional_t<(number_of_buckets > ((1 << 16) - 1)), uint32_t,
+                    std::conditional_t<(number_of_buckets > ((1 << 8) - 1)), uint16_t, uint8_t>>;
 };
 
-template<typename T>
-class prepared_buffers_allocator {
-    static thread_local T* _prepared_buffer;
-public:
-    using value_type = T;
-    using reference = T&;
-    using const_reference = const T&;
-    using pointer = T*;
-    using const_pointer = const T*;
-    using size_type = size_t;
-    using difference_type = ptrdiff_t;
+/*
+ * Histogram that stores elements in different buckets according to their size.
+ * Values are mapped to a sequence of power-of-two ranges that are split in
+ * 1 << SubbucketShift sub-buckets. Values less than 1 << MinSizeShift are placed
+ * in bucket 0, whereas values bigger than 1 << MaxSizeShift are not admitted.
+ */
+template<typename T, size_t MinSizeShift, size_t SubBucketShift, size_t MaxSizeShift>
+GCC6_CONCEPT(
+    requires std::is_base_of<boost::intrusive::list_base_hook<>, T>::value
+    && requires(T t, typename bucket_index<MinSizeShift, SubBucketShift, MaxSizeShift>::type b) {
+        { t.hist_key() } -> size_t;
+        { t.cache_bucket(b) };
+        { t.cached_bucket() } -> decltype(b);
+    }
+)
+class log_histogram final {
+private:
+    static constexpr size_t number_of_buckets = bucket_index<MinSizeShift, SubBucketShift, MaxSizeShift>::number_of_buckets;
+    using bucket = boost::intrusive::list<T, boost::intrusive::constant_time_size<false>>;
 
-    template<typename U>
-    struct rebind {
-        using other = prepared_buffers_allocator<U>;
+    struct hist_size_less_compare {
+        inline bool operator()(const T& v1, const T& v2) const {
+            return v1.hist_key() < v2.hist_key();
+        }
     };
+
+    std::array<bucket, number_of_buckets> _buckets;
+    ssize_t _watermark = -1;
 public:
-    pointer allocate(size_t n) {
-        assert(n == 1);
-        assert(_prepared_buffer);
-        auto ptr = _prepared_buffer;
-        _prepared_buffer = nullptr;
-        return ptr;
-    }
-    void deallocate(pointer, size_t) { }
-    template<typename U, typename... Args>
-    void construct(U* p, Args&&... args) {
-        new (p) U(std::forward<Args>(args)...);
+    template <bool IsConst>
+    class hist_iterator : public std::iterator<std::input_iterator_tag, std::conditional_t<IsConst, const T, T>> {
+        using hist_type = std::conditional_t<IsConst, const log_histogram, log_histogram>;
+        using iterator_type = std::conditional_t<IsConst, typename bucket::const_iterator, typename bucket::iterator>;
+
+        hist_type& _h;
+        ssize_t _b;
+        iterator_type _it;
+    public:
+        struct end_tag {};
+        hist_iterator(hist_type& h)
+            : hist_iterator(h, h._watermark) {
+        }
+        hist_iterator(hist_type& h, end_tag)
+            : hist_iterator(h, -1) {
+        }
+        hist_iterator(hist_type& h, ssize_t b)
+            : _h(h)
+            , _b(b)
+            , _it(b >= 0 ? h._buckets[b].begin() : h._buckets[0].end()) {
+        }
+        std::conditional_t<IsConst, const T, T>& operator*() {
+            return *_it;
+        }
+        hist_iterator& operator++() {
+            if (_b >= 0 && ++_it == _h._buckets[_b].end()) {
+                do {
+                    --_b;
+                } while (_b >= 0 && (_it = _h._buckets[_b].begin()) == _h._buckets[_b].end());
+            }
+            return *this;
+        }
+        bool operator==(const hist_iterator& other) const {
+            return _b == other._b && _it == other._it;
+        }
+        bool operator!=(const hist_iterator& other) const {
+            return !(*this == other);
+        }
     };
-    template<typename U>
-    void destroy(U* p) {
-        p->~U();
-    }
+    using iterator = hist_iterator<false>;
+    using const_iterator = hist_iterator<true>;
 public:
-    static void prepare(T* buffer) {
-        assert(!_prepared_buffer);
-        _prepared_buffer = buffer;
+    bool empty() const {
+        return _watermark == -1;
+    }
+    bool contains_above_min() const {
+        return _watermark > 0;
+    }
+    const_iterator begin() const {
+        return const_iterator(*this);
+    }
+    const_iterator end() const {
+        return const_iterator(*this, typename const_iterator::end_tag());
+    }
+    iterator begin() {
+        return iterator(*this);
+    }
+    iterator end() {
+        return iterator(*this, typename iterator::end_tag());
+    }
+    // Pops one of the most sparse elements in the histogram.
+    void pop_sparse() {
+        _buckets[_watermark].pop_front();
+        maybe_adjust_watermark();
+    }
+    // Returns one of the most sparse elements in the histogram.
+    const T& sparse() const {
+        return _buckets[_watermark].front();
+    }
+    // Returns the sparsest element in the histogram.
+    const T& sparsest() const {
+        return *boost::max_element(_buckets[_watermark], hist_size_less_compare());
+    }
+    // Returns one of the most sparse elements in the histogram.
+    T& sparse() {
+        return _buckets[_watermark].front();
+    }
+    // Returns the sparsest element in the histogram.
+    // Too expensive to be called from anything other than tests.
+    T& sparsest() {
+        return *boost::max_element(_buckets[_watermark], hist_size_less_compare());
+    }
+    // Pushes a new element onto the histogram.
+    void push(T& v) {
+        auto b = bucket_of(v.hist_key());
+        v.cache_bucket(b);
+        _buckets[b].push_front(v);
+        _watermark = std::max(ssize_t(b), _watermark);
+    }
+    // Adjusts the histogram when the specified element becomes more sparse.
+    void adjust_up(T& v) {
+        auto b = v.cached_bucket();
+        auto nb = bucket_of(v.hist_key());
+        if (nb != b) {
+            v.cache_bucket(nb);
+            _buckets[nb].splice(_buckets[nb].begin(), _buckets[b], _buckets[b].iterator_to(v));
+            _watermark = std::max(ssize_t(nb), _watermark);
+        }
+    }
+    // Removes the specified element from the histogram.
+    void erase(T& v) {
+        auto& b = _buckets[v.cached_bucket()];
+        b.erase(b.iterator_to(v));
+        maybe_adjust_watermark();
+    }
+    // Merges the specified histogram, moving all elements from it into this.
+    void merge(log_histogram& other) {
+        for (size_t i = 0; i < number_of_buckets; ++i) {
+            _buckets[i].splice(_buckets[i].begin(), other._buckets[i]);
+        }
+        _watermark = std::max(_watermark, other._watermark);
+        other._watermark = -1;
+    }
+private:
+    void maybe_adjust_watermark() {
+        while (_buckets[_watermark].empty() && --_watermark >= 0) ;
+    }
+    static size_t bucket_of(size_t value) {
+        const auto pow2_index = pow2_rank(value | (1 << (MinSizeShift - 1)));
+        const auto unmasked_sub_bucket_index = value >> (pow2_index - SubBucketShift);
+        const auto bucket = pow2_index - MinSizeShift + 1;
+        const auto bigger = value >= (1 << MinSizeShift);
+        const auto mask = ((1 << SubBucketShift) - 1) & -bigger;
+        const auto sub_bucket_index = unmasked_sub_bucket_index & mask;
+        return (bucket << SubBucketShift) - mask + sub_bucket_index;
     }
 };
-
-template<typename T>
-thread_local T* prepared_buffers_allocator<T>::_prepared_buffer;
-
-// FIXME: The choice of data structure was arbitrary, evaluate different heap variants.
-// Consider using an intrusive container leveraging segment_descriptor objects.
-using segment_heap = boost::heap::binomial_heap<
-    segment*, boost::heap::compare<segment_occupancy_descending_less_compare>,
-    boost::heap::allocator<prepared_buffers_allocator<segment*>>,
-    // constant_time_size<true> causes corruption with boost < 1.60
-    boost::heap::constant_time_size<false>>;
-using segment_heap_allocator = segment_heap::allocator_type;
 
 struct segment {
     static constexpr int size_shift = segment_size_shift;
@@ -217,9 +332,6 @@ struct segment {
     void record_free(size_type size);
     occupancy_stats occupancy() const;
 
-    void set_heap_handle(segment_heap::handle_type);
-    const segment_heap::handle_type& heap_handle();
-
 #ifndef DEFAULT_ALLOCATOR
     static void* operator new(size_t size) = delete;
     static void* operator new(size_t, void* ptr) noexcept { return ptr; }
@@ -227,25 +339,14 @@ struct segment {
 #endif
 };
 
-inline bool
-segment_occupancy_descending_less_compare::operator()(segment* s1, segment* s2) const {
-    return s2->occupancy() < s1->occupancy();
-}
-
 class segment_zone;
 
-struct segment_descriptor {
+struct segment_descriptor : public boost::intrusive::list_base_hook<> {
     bool _lsa_managed;
+    uint8_t _bucket; // Only valid when linked.
     segment::size_type _free_space;
-    segment_heap::handle_type _heap_handle;
     region::impl* _region;
     segment_zone* _zone;
-    union heap_node {
-        heap_node() { }
-        ~heap_node() { }
-        heap_node(heap_node&&) { }
-        segment_heap_allocator::value_type _node;
-    } _heap_node;
 
     segment_descriptor()
         : _lsa_managed(false), _region(nullptr)
@@ -267,14 +368,19 @@ struct segment_descriptor {
         _free_space += size;
     }
 
-    void set_heap_handle(segment_heap::handle_type h) {
-        _heap_handle = h;
+    // Orders segments by free space, assuming all segments have the same size.
+    // This avoids using the occupancy, which entails extra division operations.
+    size_t hist_key() const {
+        return _free_space;
     }
 
-    const segment_heap::handle_type& heap_handle() const {
-        return _heap_handle;
+    size_t cached_bucket() const {
+        return _bucket;
     }
 
+    void cache_bucket(size_t bucket) {
+        _bucket = bucket;
+    }
 };
 
 #ifndef DEFAULT_ALLOCATOR
@@ -521,6 +627,7 @@ public:
     segment_descriptor& descriptor(const segment*);
     // Returns segment containing given object or nullptr.
     segment* containing_segment(const void* obj) const;
+    segment* segment_from(const segment_descriptor& desc);
     void free_segment(segment*) noexcept;
     void free_segment(segment*, segment_descriptor&) noexcept;
     size_t segments_in_use() const;
@@ -543,7 +650,10 @@ public:
     }
     struct reservation_goal;
     void set_region(const segment* seg, region::impl* r) {
-        descriptor(seg)._region = r;
+        set_region(descriptor(seg), r);
+    }
+    void set_region(segment_descriptor& desc, region::impl* r) {
+        desc._region = r;
     }
     bool migrate_segment(segment* src, segment_zone& src_zone, segment* dst,
         segment_zone& dst_zone);
@@ -739,6 +849,13 @@ segment_pool::containing_segment(const void* obj) const {
 }
 
 segment*
+segment_pool::segment_from(const segment_descriptor& desc) {
+    assert(desc._lsa_managed);
+    auto index = &desc - &_segments[0];
+    return reinterpret_cast<segment*>(_segments_base + (index << segment::size_shift));
+}
+
+segment*
 segment_pool::allocate_or_fallback_to_reserve() {
     if (_emergency_reserve.size() <= _current_emergency_reserve_goal) {
         auto seg = allocate_segment();
@@ -803,6 +920,7 @@ segment_pool::segment_pool()
 // than the version for seastar's allocator.
 class segment_pool {
     std::unordered_map<const segment*, segment_descriptor> _segments;
+    std::unordered_map<const segment_descriptor*, segment*> _segment_descs;
     size_t _segments_in_use{};
     size_t _non_lsa_memory_in_use = 0;
 public:
@@ -814,6 +932,7 @@ public:
         desc._lsa_managed = true;
         desc._free_space = segment::size;
         desc._region = r;
+        _segment_descs[&desc] = seg;
         return seg;
     }
     segment_descriptor& descriptor(const segment* seg) {
@@ -826,6 +945,11 @@ public:
             return desc;
         }
     }
+    segment* segment_from(segment_descriptor& desc) {
+        auto i = _segment_descs.find(&desc);
+        assert(i != _segment_descs.end());
+        return i->second;
+    }
     void free_segment(segment* seg, segment_descriptor& desc) {
         free_segment(seg);
     }
@@ -833,6 +957,7 @@ public:
         --_segments_in_use;
         auto i = _segments.find(seg);
         assert(i != _segments.end());
+        _segment_descs.erase(&i->second);
         _segments.erase(i);
         ::free(seg);
     }
@@ -864,7 +989,10 @@ public:
         return _non_lsa_memory_in_use + _segments_in_use * segment::size;
     }
     void set_region(const segment* seg, region::impl* r) {
-        descriptor(seg)._region = r;
+        set_region(descriptor(seg), r);
+    }
+    void set_region(segment_descriptor& desc, region::impl* r) {
+        desc._region = r;
     }
     size_t reclaim_segments(size_t target) { return 0; }
     void reclaim_all_free_segments() { }
@@ -925,16 +1053,6 @@ segment::occupancy() const {
     return { shard_segment_pool.descriptor(this)._free_space, segment::size };
 }
 
-void
-segment::set_heap_handle(segment_heap::handle_type handle) {
-    shard_segment_pool.descriptor(this)._heap_handle = handle;
-}
-
-const segment_heap::handle_type&
-segment::heap_handle() {
-    return shard_segment_pool.descriptor(this)._heap_handle;
-}
-
 inline void
 region_group_binomial_group_sanity_check(auto& bh) {
 #ifdef DEBUG
@@ -989,7 +1107,10 @@ region_group_binomial_group_sanity_check(auto& bh) {
 class region_impl : public allocation_strategy {
     static constexpr float max_occupancy_for_compaction = 0.85; // FIXME: make configurable
     static constexpr float max_occupancy_for_compaction_on_idle = 0.93; // FIXME: make configurable
-    static constexpr size_t max_managed_object_size = segment::size * 0.1;
+    static constexpr size_t max_managed_object_size_shift = pow2_rank(segment::size * 0.1);
+    static constexpr size_t max_managed_object_size = 1 << max_managed_object_size_shift;
+
+    using segment_descriptor_hist = log_histogram<segment_descriptor, max_managed_object_size_shift, 3, segment::size_shift>;
 
     // single-byte flags
     struct obj_flags {
@@ -1103,7 +1224,7 @@ private:
     region_group* _group = nullptr;
     segment* _active = nullptr;
     size_t _active_offset;
-    segment_heap _segments; // Contains only closed segments
+    segment_descriptor_hist _segment_descs; // Contains only closed segments
     occupancy_stats _closed_occupancy;
     occupancy_stats _non_lsa_occupancy;
     // This helps us keeping track of the region_group* heap. That's because we call update before
@@ -1192,15 +1313,20 @@ private:
         logger.trace("Closing segment {}, used={}, waste={} [B]", _active, _active->occupancy(), segment::size - _active_offset);
         _closed_occupancy += _active->occupancy();
 
-        auto heap_node = &shard_segment_pool.descriptor(_active)._heap_node._node;
-        segment_heap_allocator::prepare(heap_node);
-        auto handle = _segments.push(_active);
-        _active->set_heap_handle(handle);
+        _segment_descs.push(shard_segment_pool.descriptor(_active));
         _active = nullptr;
     }
 
+    void free_segment(segment_descriptor& desc) noexcept {
+        free_segment(shard_segment_pool.segment_from(desc), desc);
+    }
+
     void free_segment(segment* seg) noexcept {
-        shard_segment_pool.free_segment(seg);
+        free_segment(seg, shard_segment_pool.descriptor(seg));
+    }
+
+    void free_segment(segment* seg, segment_descriptor& desc) noexcept {
+        shard_segment_pool.free_segment(seg, desc);
         if (_group) {
             _evictable_space -= segment_size;
             _group->decrease_usage(_heap_handle, -segment::size);
@@ -1216,7 +1342,7 @@ private:
         return seg;
     }
 
-    void compact(segment* seg) {
+    void compact(segment* seg, segment_descriptor& desc) {
         ++_reclaim_counter;
 
         for_each_live(seg, [this] (object_descriptor* desc, void* obj) {
@@ -1224,7 +1350,7 @@ private:
             desc->migrator()->migrate(obj, dst, desc->size());
         });
 
-        free_segment(seg);
+        free_segment(seg, desc);
     }
 
     void close_and_open() {
@@ -1268,11 +1394,11 @@ public:
     virtual ~region_impl() {
         tracker_instance._impl->unregister_region(this);
 
-        while (!_segments.empty()) {
-            segment* seg = _segments.top();
-            _segments.pop();
-            assert(seg->is_empty());
-            free_segment(seg);
+        while (!_segment_descs.empty()) {
+            auto& desc = _segment_descs.sparse();
+            _segment_descs.pop_sparse();
+            assert(desc.is_empty());
+            free_segment(desc);
         }
         _closed_occupancy = {};
         if (_active) {
@@ -1322,14 +1448,14 @@ public:
         return _reclaiming_enabled
             && (_closed_occupancy.free_space() >= 2 * segment::size)
             && (_closed_occupancy.used_fraction() < max_occupancy_for_compaction)
-            && (_segments.top()->occupancy().free_space() >= max_managed_object_size);
+            && (_segment_descs.contains_above_min());
     }
 
     bool is_idle_compactible() {
         return _reclaiming_enabled
             && (_closed_occupancy.free_space() >= 2 * segment::size)
             && (_closed_occupancy.used_fraction() < max_occupancy_for_compaction_on_idle)
-            && (_segments.top()->occupancy().free_space() >= max_managed_object_size);
+            && (_segment_descs.contains_above_min());
     }
 
     virtual void* alloc(allocation_strategy::migrate_fn migrator, size_t size, size_t alignment) override {
@@ -1380,11 +1506,11 @@ public:
         seg_desc.record_free(desc->size() + sizeof(object_descriptor) + desc->padding());
 
         if (seg != _active) {
-            _segments.increase(seg_desc.heap_handle());
             if (seg_desc.is_empty()) {
-                _segments.erase(seg_desc.heap_handle());
-                free_segment(seg);
+                _segment_descs.erase(seg_desc);
+                free_segment(seg, seg_desc);
             } else {
+                _segment_descs.adjust_up(seg_desc);
                 _closed_occupancy += seg_desc.occupancy();
             }
         }
@@ -1425,10 +1551,10 @@ public:
             other.close_active();
         }
 
-        for (auto& seg : other._segments) {
-            shard_segment_pool.set_region(seg, this);
+        for (auto& desc : other._segment_descs) {
+            shard_segment_pool.set_region(desc, this);
         }
-        _segments.merge(other._segments);
+        _segment_descs.merge(other._segment_descs);
 
         _closed_occupancy += other._closed_occupancy;
         _non_lsa_occupancy += other._non_lsa_occupancy;
@@ -1442,10 +1568,10 @@ public:
 
     // Returns occupancy of the sparsest compactible segment.
     occupancy_stats min_occupancy() const {
-        if (_segments.empty()) {
+        if (_segment_descs.empty()) {
             return {};
         }
-        return _segments.top()->occupancy();
+        return _segment_descs.sparsest().occupancy();
     }
 
     // Tries to release one full segment back to the segment pool.
@@ -1457,18 +1583,18 @@ public:
         compaction_lock _(*this);
 
         auto in_use = shard_segment_pool.segments_in_use();
-
         while (shard_segment_pool.segments_in_use() >= in_use) {
             compact_single_segment_locked();
         }
     }
 
     void compact_single_segment_locked() {
-        segment* seg = _segments.top();
+        auto& desc = _segment_descs.sparse();
+        _segment_descs.pop_sparse();
+        _closed_occupancy -= desc.occupancy();
+        segment* seg = shard_segment_pool.segment_from(desc);
         logger.debug("Compacting segment {} from region {}, {}", seg, id(), seg->occupancy());
-        _segments.pop();
-        _closed_occupancy -= seg->occupancy();
-        compact(seg);
+        compact(seg, desc);
         shard_segment_pool.on_segment_compaction();
     }
 
@@ -1478,14 +1604,12 @@ public:
         compact_single_segment_locked();
     }
 
-    void migrate_segment(segment* src, segment* dst) {
+    void migrate_segment(segment* src, segment_descriptor& src_desc, segment* dst, segment_descriptor& dst_desc) {
         ++_reclaim_counter;
         size_t segment_size;
         if (src != _active) {
-            _segments.erase(src->heap_handle());
-            auto heap_node = &shard_segment_pool.descriptor(dst)._heap_node._node;
-            segment_heap_allocator::prepare(heap_node);
-            dst->set_heap_handle(_segments.push(dst));
+            _segment_descs.erase(src_desc);
+            _segment_descs.push(dst_desc);
             segment_size = segment::size;
         } else {
             _active = dst;
@@ -1523,13 +1647,13 @@ public:
         compaction_lock _(*this);
         logger.debug("Full compaction, {}", occupancy());
         close_and_open();
-        segment_heap all;
-        std::swap(all, _segments);
+        region_impl::segment_descriptor_hist all;
+        std::swap(all, _segment_descs);
         _closed_occupancy = {};
         while (!all.empty()) {
-            segment* seg = all.top();
-            all.pop();
-            compact(seg);
+            auto& desc = all.sparse();
+            all.pop_sparse();
+            compact(shard_segment_pool.segment_from(desc), desc);
         }
         logger.debug("Done, {}", occupancy());
     }
@@ -1956,7 +2080,7 @@ bool segment_pool::migrate_segment(segment* src, segment_zone& src_zone,
         }
         dst_desc._lsa_managed = true;
         dst_desc._free_space = src_desc._free_space;
-        src_desc._region->migrate_segment(src, dst);
+        src_desc._region->migrate_segment(src, src_desc, dst, dst_desc);
     } else {
         _emergency_reserve.replace(src, dst);
     }
