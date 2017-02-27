@@ -115,4 +115,42 @@ inline frame<seastar::measuring_output_stream> start_frame(seastar::measuring_ou
     return { };
 }
 
+template<>
+class place_holder<seastar::simple_output_stream> {
+    seastar::simple_output_stream _substream;
+public:
+    place_holder(seastar::simple_output_stream substream)
+        : _substream(substream) { }
+
+    void set(seastar::simple_output_stream& out, size_type v) {
+        serialize(_substream, v);
+    }
+};
+
+template<>
+class frame<seastar::simple_output_stream> : public place_holder<seastar::simple_output_stream> {
+    char* _start;
+public:
+    frame(seastar::simple_output_stream ph, char* start)
+        : place_holder(ph), _start(start) { }
+
+    void end(seastar::simple_output_stream& out) {
+        set(out, out.begin() - _start);
+    }
+};
+
+inline place_holder<seastar::simple_output_stream> start_place_holder(seastar::simple_output_stream& out) {
+    return { out.write_substream(sizeof(size_type)) };
+}
+
+inline frame<seastar::simple_output_stream> start_frame(seastar::simple_output_stream& out) {
+    auto start = out.begin();
+    auto substream = out.write_substream(sizeof(size_type));
+    {
+        auto sstr = substream;
+        serialize(sstr, size_type(0));
+    }
+    return frame<seastar::simple_output_stream>(substream, start);
+}
+
 }
