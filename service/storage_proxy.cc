@@ -229,6 +229,9 @@ public:
             _ready.set_exception(mutation_write_timeout_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, total_block_for(), _type));
         }
     };
+    bool is_counter() const {
+        return _type == db::write_type::COUNTER;
+    }
     void unthrottle() {
         _proxy->_stats.background_writes++;
         _proxy->_stats.background_write_bytes += _mutation_holder->size();
@@ -1504,7 +1507,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
 
         lw_shared_ptr<const frozen_mutation> m = handler.get_mutation_for(coordinator);
 
-        if (!m) {
+        if (!m || (handler.is_counter() && coordinator == my_address)) {
             got_response(response_id, coordinator);
         } else {
             if (!handler.read_repair_write()) {
