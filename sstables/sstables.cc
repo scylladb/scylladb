@@ -2729,4 +2729,6 @@ atomic_deletion_cancelled::what() const noexcept {
     return _msg.c_str();
 }
 
+thread_local shared_index_lists::stats shared_index_lists::_shard_stats;
+
 }

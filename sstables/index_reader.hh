@@ -23,6 +23,7 @@
 #include "sstables.hh"
 #include "consumer.hh"
 #include "downsampling.hh"
+#include "sstables/shared_index_lists.hh"
 
 namespace sstables {
 
@@ -176,13 +177,12 @@ public:
 // If eof() then the cursor is positioned past all partitions in the sstable.
 class index_reader {
     shared_sstable _sstable;
+    shared_index_lists::list_ptr _current_list;
     const io_priority_class& _pc;
 
     struct reader {
         index_consumer _consumer;
         index_consume_entry_context<index_consumer> _context;
-        uint64_t _current_summary_idx;
-        uint64_t _current_index_idx;
 
         static auto create_file_input_stream(shared_sstable sst, const io_priority_class& pc, uint64_t begin, uint64_t end) {
             file_input_stream_options options;
@@ -200,12 +200,14 @@ class index_reader {
 
     stdx::optional<reader> _reader;
 
-    index_list _previous_bucket;
     uint64_t _previous_summary_idx = 0;
+    uint64_t _current_summary_idx = 0;
+    uint64_t _current_index_idx = 0;
     uint64_t _data_file_position = 0;
 private:
     future<> advance_to_end() {
         _data_file_position = data_file_end();
+        _current_list = {};
         return close_reader().finally([this] {
             _reader = stdx::nullopt;
         });
@@ -213,8 +215,8 @@ private:
 
     // Must be called for non-decreasing summary_idx.
     future<> advance_to_page(uint64_t summary_idx) {
-        assert(!_reader || _reader->_current_summary_idx <= summary_idx);
-        if (_reader && _reader->_current_summary_idx == summary_idx) {
+        assert(!_current_list || _current_summary_idx <= summary_idx);
+        if (_current_list && _current_summary_idx == summary_idx) {
             return make_ready_future<>();
         }
 
@@ -223,28 +225,39 @@ private:
             return advance_to_end();
         }
 
-        uint64_t position = summary.entries[summary_idx].position;
-        uint64_t quantity = downsampling::get_effective_index_interval_after_index(summary_idx, summary.header.sampling_level,
-                                                                                   summary.header.min_index_interval);
+        auto loader = [this] (uint64_t summary_idx) -> future<index_list> {
+            auto& summary = _sstable->get_summary();
+            uint64_t position = summary.entries[summary_idx].position;
+            uint64_t quantity = downsampling::get_effective_index_interval_after_index(summary_idx, summary.header.sampling_level,
+                summary.header.min_index_interval);
 
-        uint64_t end;
-        if (summary_idx + 1 >= summary.header.size) {
-            end = _sstable->index_size();
-        } else {
-            end = summary.entries[summary_idx + 1].position;
-        }
-
-        return close_reader().then_wrapped([this, position, end, quantity, summary_idx] (auto&& f) {
-            try {
-                f.get();
-                _reader.emplace(_sstable, _pc, position, end, quantity);
-            } catch (...) {
-                _reader = stdx::nullopt;
-                throw;
+            uint64_t end;
+            if (summary_idx + 1 >= summary.header.size) {
+                end = _sstable->index_size();
+            } else {
+                end = summary.entries[summary_idx + 1].position;
             }
-            _reader->_current_summary_idx = summary_idx;
-            _reader->_current_index_idx = 0;
-            return _reader->_context.consume_input(_reader->_context);
+
+            return close_reader().then_wrapped([this, position, end, quantity, summary_idx] (auto&& f) {
+                try {
+                    f.get();
+                    _reader.emplace(_sstable, _pc, position, end, quantity);
+                } catch (...) {
+                    _reader = stdx::nullopt;
+                    throw;
+                }
+                return _reader->_context.consume_input(_reader->_context).then([this] {
+                    return std::move(_reader->_consumer.indexes);
+                });
+            });
+        };
+
+        return _sstable->_index_lists.get_or_load(summary_idx, loader).then([this, summary_idx] (shared_index_lists::list_ptr ref) {
+            _current_list = std::move(ref);
+            _current_summary_idx = summary_idx;
+            _current_index_idx = 0;
+            assert(!_current_list->empty());
+            _data_file_position = (*_current_list)[0].position();
         });
     }
 public:
@@ -269,9 +282,11 @@ public:
         , _pc(pc)
     { }
 
+    // Cannot be used twice on the same summary_idx and together with advance_to().
+    // @deprecated
     future<index_list> get_index_entries(uint64_t summary_idx) {
         return advance_to_page(summary_idx).then([this] {
-            return _reader ? std::move(_reader->_consumer.indexes) : index_list();
+            return _current_list ? _current_list.release() : index_list();
         });
     }
 public:
@@ -304,17 +319,17 @@ public:
         // The solution is this condition above. If our lookup requires reading
         // the previous bucket we assume that the entry doesn't exist and return
         // the position of the first one in the current index bucket.
-        if (_reader && summary_idx + 1 == _reader->_current_summary_idx) {
+        if (summary_idx + 1 == _current_summary_idx) {
             return make_ready_future<>();
         }
 
         return advance_to_page(summary_idx).then([this, pos, summary_idx] {
-            auto& il = _reader->_consumer.indexes;
-            auto i = std::lower_bound(il.begin() + _reader->_current_index_idx, il.end(), pos, index_comparator(*_sstable->_schema));
+            index_list& il = *_current_list;
+            auto i = std::lower_bound(il.begin() + _current_index_idx, il.end(), pos, index_comparator(*_sstable->_schema));
             if (i == il.end()) {
                 return advance_to_page(summary_idx + 1);
             }
-            _reader->_current_index_idx = std::distance(il.begin(), i);
+            _current_index_idx = std::distance(il.begin(), i);
             _data_file_position = i->position();
             return make_ready_future<>();
         });

@@ -50,6 +50,7 @@
 #include "compound_compat.hh"
 #include "disk-error-handler.hh"
 #include "atomic_deletion.hh"
+#include "sstables/shared_index_lists.hh"
 
 namespace sstables {
 
@@ -117,7 +118,6 @@ class sstable_writer;
 struct foreign_sstable_open_info;
 struct sstable_open_info;
 
-using index_list = std::vector<index_entry>;
 class index_reader;
 
 struct sstable_writer_config {
@@ -437,6 +437,7 @@ private:
     std::vector<sstring> _unrecognized_components;
 
     foreign_ptr<lw_shared_ptr<shareable_components>> _components = make_foreign(make_lw_shared<shareable_components>());
+    shared_index_lists _index_lists;
     bool _shared = true;  // across shards; safe default
     // NOTE: _collector and _c_stats are used to generation of statistics file
     // when writing a new sstable.
