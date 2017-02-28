@@ -571,7 +571,7 @@ public:
     /**
      * Set the slow query record TTL
      *
-     * We limit the number of seconds in the TTL by a maximal unsigned 32-bit
+     * We limit the number of seconds in the TTL by a maximal signed 32-bit
      * integer.
      *
      * If a new TTL value exceeds the above limitation we will override it
@@ -580,8 +580,8 @@ public:
      * @param new_ttl new TTL
      */
     void set_slow_query_record_ttl(std::chrono::seconds new_ttl) {
-        if (new_ttl.count() > std::numeric_limits<uint32_t>::max()) {
-            _slow_query_record_ttl = std::chrono::seconds(std::numeric_limits<uint32_t>::max());
+        if (new_ttl.count() > std::numeric_limits<int32_t>::max()) {
+            _slow_query_record_ttl = std::chrono::seconds(std::numeric_limits<int32_t>::max());
             return;
         }
 
