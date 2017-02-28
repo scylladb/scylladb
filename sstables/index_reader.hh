@@ -248,18 +248,18 @@ private:
         });
     }
 public:
-    future<> advance_to_start(const schema& s, const dht::partition_range& range) {
+    future<> advance_to_start(const dht::partition_range& range) {
         if (range.start()) {
-            return advance_to(s, dht::ring_position_view(range.start()->value(),
-                                 dht::ring_position_view::after_key(!range.start()->is_inclusive())));
+            return advance_to(dht::ring_position_view(range.start()->value(),
+                              dht::ring_position_view::after_key(!range.start()->is_inclusive())));
         }
         return make_ready_future<>();
     }
 
-    future<> advance_to_end(const schema& s, const dht::partition_range& range) {
+    future<> advance_to_end(const dht::partition_range& range) {
         if (range.end()) {
-            return advance_to(s, dht::ring_position_view(range.end()->value(),
-                                 dht::ring_position_view::after_key(range.end()->is_inclusive())));
+            return advance_to(dht::ring_position_view(range.end()->value(),
+                              dht::ring_position_view::after_key(range.end()->is_inclusive())));
         }
         return advance_to_end();
     }
@@ -277,10 +277,10 @@ public:
 public:
     // Positions the cursor on the first partition which is not smaller than pos (like std::lower_bound).
     // Must be called for non-decreasing positions.
-    future<> advance_to(const schema& s, dht::ring_position_view pos) {
+    future<> advance_to(dht::ring_position_view pos) {
         auto& summary = _sstable->get_summary();
         _previous_summary_idx = std::distance(std::begin(summary.entries),
-            std::lower_bound(summary.entries.begin() + _previous_summary_idx, summary.entries.end(), pos, index_comparator(s)));
+            std::lower_bound(summary.entries.begin() + _previous_summary_idx, summary.entries.end(), pos, index_comparator(*_sstable->_schema)));
 
         if (_previous_summary_idx == 0) {
             return make_ready_future<>();
@@ -308,9 +308,9 @@ public:
             return make_ready_future<>();
         }
 
-        return advance_to_page(summary_idx).then([this, &s, pos, summary_idx] {
+        return advance_to_page(summary_idx).then([this, pos, summary_idx] {
             auto& il = _reader->_consumer.indexes;
-            auto i = std::lower_bound(il.begin() + _reader->_current_index_idx, il.end(), pos, index_comparator(s));
+            auto i = std::lower_bound(il.begin() + _reader->_current_index_idx, il.end(), pos, index_comparator(*_sstable->_schema));
             if (i == il.end()) {
                 return advance_to_page(summary_idx + 1);
             }
@@ -343,10 +343,10 @@ private:
         return make_ready_future<>();
     }
 public:
-    future<sstable::disk_read_range> get_disk_read_range(const schema& s, const dht::partition_range& range) {
-        return advance_to_start(s, range).then([this, &s, &range] () {
+    future<sstable::disk_read_range> get_disk_read_range(const dht::partition_range& range) {
+        return advance_to_start(range).then([this, &range] () {
             uint64_t start = data_file_position();
-            return advance_to_end(s, range).then([this, &s, &range, start] () {
+            return advance_to_end(range).then([this, &range, start] () {
                 uint64_t end = data_file_position();
                 return sstable::disk_read_range(start, end);
             });

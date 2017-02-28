@@ -1179,7 +1179,7 @@ public:
         , _schema(schema)
         , _get_data_source([this, &pr, sst = std::move(sst), &pc, &slice, fwd] () mutable {
             auto index = std::make_unique<index_reader>(sst->get_index_reader(_pc));
-            auto f = index->get_disk_read_range(*_schema, pr);
+            auto f = index->get_disk_read_range(pr);
             return f.then([this, index = std::move(index), sst = std::move(sst), &pc, &slice, fwd] (sstable::disk_read_range drr) mutable {
                 if (!drr.found_row()) {
                     _read_enabled = false;
@@ -1214,7 +1214,7 @@ public:
     }
     future<> fast_forward_to(const dht::partition_range& pr) {
         assert(_ds->_index);
-        return _ds->_index->get_disk_read_range(*_schema, pr).then([this] (sstable::disk_read_range drr) {
+        return _ds->_index->get_disk_read_range(pr).then([this] (sstable::disk_read_range drr) {
             if (drr.found_row()) {
                 _read_enabled = true;
                 return _ds->_context.fast_forward_to(drr.start, drr.end);
