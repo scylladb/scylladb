@@ -5,15 +5,20 @@
 . /usr/lib/scylla/scylla_lib.sh
 
 print_usage() {
-    echo "scylla-raid-setup --disks /dev/hda,/dev/hdb... --raiddev /dev/md0 --update-fstab"
+    echo "scylla-raid-setup --disks /dev/hda,/dev/hdb... --raiddev /dev/md0 --update-fstab --root /var/lib/scylla --volume-role [all|data|commitlog]"
     echo "  --disks	specify disks for RAID"
     echo "  --raiddev	MD device name for RAID"
     echo "  --update-fstab update /etc/fstab for RAID"
+    echo "  --root specify the root of the tree"
+    echo "  --volume-role specify how will this device be used (data, commitlog, or all)"
     exit 1
 }
 
 RAID=/dev/md0
 FSTAB=0
+ROOT=/var/lib/scylla
+ROLE="all"
+
 while [ $# -gt 0 ]; do
     case "$1" in
         "--disks")
@@ -29,11 +34,36 @@ while [ $# -gt 0 ]; do
             FSTAB=1
             shift 1
             ;;
+        "--root")
+            ROOT="$2"
+            shift 2
+            ;;
+        "--volume-role")
+            ROLE="$2"
+            shift 2
+            ;;
         *)
             print_usage
             ;;
     esac
 done
+
+ROOT=${ROOT%/}
+case "$ROLE" in
+    "all")
+        MOUNT_AT=$ROOT
+        ;;
+    "data")
+        MOUNT_AT="$ROOT/data"
+        ;;
+    "commitlog")
+        MOUNT_AT="$ROOT/commitlog"
+        ;;
+    *)
+        echo "Invalid role specified ($ROLE)"
+        print_usage
+        ;;
+esac
 
 if [ "$DISKS" = "" ]; then
     print_usage
@@ -51,8 +81,8 @@ if [ -e $RAID ]; then
     echo "$RAID is already using"
     exit 1
 fi
-if [ "`mount|grep /var/lib/scylla`" != "" ]; then
-    echo "/var/lib/scylla is already mounted"
+if [ "`mount|grep $MOUNT_AT `" != "" ]; then
+    echo "$MOUNT_AT is already mounted"
     exit 1
 fi
 
@@ -63,16 +93,21 @@ else
 fi
 mdadm --create --verbose --force --run $RAID --level=0 -c1024 --raid-devices=$NR_DISK $DISKS
 mkfs.xfs $RAID -f
-echo "DEVICE $DISKS" > /etc/mdadm.conf
-mdadm --detail --scan >> /etc/mdadm.conf
+mdadm --detail --scan > /etc/mdadm.conf
+
+mkdir -p "$MOUNT_AT"
+mount -t xfs -o noatime $RAID "$MOUNT_AT"
+
+# create this unconditionally so we are more robust about ordering
+# if the script is run multiple times. But must do after mount in case
+# we are mounting the root
+mkdir -p "$ROOT/data"
+mkdir -p "$ROOT/commitlog"
+mkdir -p "$ROOT/coredump"
+chown scylla:scylla "$ROOT"
+chown scylla:scylla "$ROOT"/*
+
 if [ $FSTAB -ne 0 ]; then
     UUID=`blkid $RAID | awk '{print $2}'`
-    echo "$UUID /var/lib/scylla xfs noatime 0 0" >> /etc/fstab
+    echo "$UUID $MOUNT_AT xfs noatime 0 0" >> /etc/fstab
 fi
-mount -t xfs -o noatime $RAID /var/lib/scylla
-
-mkdir -p /var/lib/scylla/data
-mkdir -p /var/lib/scylla/commitlog
-mkdir -p /var/lib/scylla/coredump
-chown scylla:scylla /var/lib/scylla/*
-chown scylla:scylla /var/lib/scylla/
