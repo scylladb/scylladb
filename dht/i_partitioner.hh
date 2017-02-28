@@ -113,8 +113,8 @@ public:
 };
 
 token midpoint_unsigned(const token& t1, const token& t2);
-token minimum_token();
-token maximum_token();
+const token& minimum_token();
+const token& maximum_token();
 bool operator==(const token& t1, const token& t2);
 bool operator<(const token& t1, const token& t2);
 int tri_compare(const token& t1, const token& t2);
