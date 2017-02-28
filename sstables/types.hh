@@ -89,6 +89,11 @@ public:
     index_entry(temporary_buffer<char>&& key, uint64_t position, temporary_buffer<char>&& promoted_index)
         : _key(std::move(key)), _position(position), _promoted_index(std::move(promoted_index)) {}
 
+    index_entry(const index_entry& o)
+        : _key(o._key.get(), o._key.size())
+        , _position(o._position)
+        , _promoted_index(o._promoted_index.get(), o._promoted_index.size())
+    { }
 };
 
 struct summary_entry {
