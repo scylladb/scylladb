@@ -108,6 +108,7 @@ table_schema_version generate_schema_version(utils::UUID table_id) {
 // problems (we need the type variables to be constructed first), and using
 // functions will solve this problem. So we use functions right now.
 
+
 schema_ptr hints() {
     static thread_local auto hints = [] {
         schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, HINTS), NAME, HINTS,
@@ -436,6 +437,499 @@ schema_ptr size_estimates() {
     }();
     return size_estimates;
 }
+
+namespace v3 {
+
+schema_ptr batches() {
+    static thread_local auto schema = [] {
+        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, BATCHES), NAME, BATCHES,
+        // partition key
+        {{"id", timeuuid_type}},
+        // clustering key
+        {},
+        // regular columns
+        {{"mutations", list_type_impl::get_instance(bytes_type, true)}, {"version", int32_type}},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "batches awaiting replay"
+       )));
+       builder.set_gc_grace_seconds(0);
+       // FIXME: the original Java code also had:
+       //.copy(new LocalPartitioner(TimeUUIDType.instance))
+       builder.set_gc_grace_seconds(0);
+       builder.set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
+       builder.set_compaction_strategy_options({{"min_threshold", "2"}});
+       builder.with_version(generate_schema_version(builder.uuid()));
+       return builder.build(schema_builder::compact_storage::no);
+    }();
+    return schema;
+}
+
+schema_ptr paxos() {
+    static thread_local auto schema = [] {
+        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, PAXOS), NAME, PAXOS,
+        // partition key
+        {{"row_key", bytes_type}},
+        // clustering key
+        {{"cf_id", uuid_type}},
+        // regular columns
+        {{"in_progress_ballot", timeuuid_type},
+         {"most_recent_commit", bytes_type},
+         {"most_recent_commit_at", timeuuid_type},
+         {"most_recent_commit_version", int32_type},
+         {"proposal", timeuuid_type},
+         {"proposal_version", int32_type}
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "in-progress paxos proposals"
+       )));
+       builder.set_compaction_strategy(sstables::compaction_strategy_type::leveled);
+       builder.with_version(generate_schema_version(builder.uuid()));
+       return builder.build();
+    }();
+    return schema;
+}
+
+schema_ptr built_indexes() {
+    // identical to ours, but ours otoh is a mix-in of the 3.x series cassandra one
+    return db::system_keyspace::built_indexes();
+}
+
+schema_ptr local() {
+    static thread_local auto schema = [] {
+        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, LOCAL), NAME, LOCAL,
+        // partition key
+        {{"key", utf8_type}},
+        // clustering key
+        {},
+        // regular columns
+        {
+                {"bootstrapped", utf8_type},
+                {"broadcast_address", inet_addr_type},
+                {"cluster_name", utf8_type},
+                {"cql_version", utf8_type},
+                {"data_center", utf8_type},
+                {"gossip_generation", int32_type},
+                {"host_id", uuid_type},
+                {"listen_address", inet_addr_type},
+                {"native_protocol_version", utf8_type},
+                {"partitioner", utf8_type},
+                {"rack", utf8_type},
+                {"release_version", utf8_type},
+                {"rpc_address", inet_addr_type},
+                {"schema_version", uuid_type},
+                {"thrift_version", utf8_type},
+                {"tokens", set_type_impl::get_instance(utf8_type, true)},
+                {"truncated_at", map_type_impl::get_instance(uuid_type, bytes_type, true)},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "information about the local node"
+       )));
+       builder.with_version(generate_schema_version(builder.uuid()));
+       return builder.build(schema_builder::compact_storage::no);
+    }();
+    return schema;
+}
+
+schema_ptr peers() {
+    // identical
+    return db::system_keyspace::peers();
+}
+
+schema_ptr peer_events() {
+    // identical
+    return db::system_keyspace::peer_events();
+}
+
+schema_ptr range_xfers() {
+    // identical
+    return db::system_keyspace::range_xfers();
+}
+
+schema_ptr compaction_history() {
+    // identical
+    return db::system_keyspace::compaction_history();
+}
+
+schema_ptr sstable_activity() {
+    // identical
+    return db::system_keyspace::sstable_activity();
+}
+
+schema_ptr size_estimates() {
+    // identical
+    return db::system_keyspace::size_estimates();
+}
+
+schema_ptr available_ranges() {
+    static thread_local auto schema = [] {
+        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, AVAILABLE_RANGES), NAME, AVAILABLE_RANGES,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {},
+        // regular columns
+        {{"ranges", set_type_impl::get_instance(bytes_type, true)}},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "available keyspace/ranges during bootstrap/replace that are ready to be served"
+       )));
+       builder.with_version(generate_schema_version(builder.uuid()));
+       return builder.build();
+    }();
+    return schema;
+}
+
+schema_ptr views_builds_in_progress() {
+    static thread_local auto schema = [] {
+        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, VIEWS_BUILDS_IN_PROGRESS), NAME, VIEWS_BUILDS_IN_PROGRESS,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"view_name", utf8_type}},
+        // regular columns
+        {{"last_token", utf8_type}, {"generation_number", int32_type}},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "views builds current progress"
+       )));
+       builder.with_version(generate_schema_version(builder.uuid()));
+       return builder.build();
+    }();
+    return schema;
+}
+
+schema_ptr built_views() {
+    static thread_local auto schema = [] {
+        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, BUILT_VIEWS), NAME, BUILT_VIEWS,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"view_name", utf8_type}},
+        // regular columns
+        {},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "built views"
+       )));
+       builder.with_version(generate_schema_version(builder.uuid()));
+       return builder.build();
+    }();
+    return schema;
+}
+
+} //</v3>
+
+namespace legacy {
+
+schema_ptr hints() {
+    static thread_local auto schema = [] {
+        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, HINTS), NAME, HINTS,
+        // partition key
+        {{"target_id", uuid_type}},
+        // clustering key
+        {{"hint_id", timeuuid_type}, {"message_version", int32_type}},
+        // regular columns
+        {{"mutation", bytes_type}},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "*DEPRECATED* hints awaiting delivery"
+       )));
+       builder.set_gc_grace_seconds(0);
+       builder.set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
+       builder.set_compaction_strategy_options({{"enabled", "false"}});
+       builder.with_version(generate_schema_version(builder.uuid()));
+       builder.with(schema_builder::compact_storage::yes);
+       return builder.build();
+    }();
+    return schema;
+}
+
+schema_ptr batchlog() {
+    static thread_local auto schema = [] {
+        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, BATCHLOG), NAME, BATCHLOG,
+        // partition key
+        {{"id", uuid_type}},
+        // clustering key
+        {},
+        // regular columns
+        {{"data", bytes_type}, {"version", int32_type}, {"written_at", timestamp_type}},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "*DEPRECATED* batchlog entries"
+       )));
+       builder.set_gc_grace_seconds(0);
+       builder.set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
+       builder.set_compaction_strategy_options({{"min_threshold", "2"}});
+       builder.with(schema_builder::compact_storage::no);
+       builder.with_version(generate_schema_version(builder.uuid()));
+       return builder.build();
+    }();
+    return schema;
+}
+
+static constexpr auto schema_gc_grace = std::chrono::duration_cast<std::chrono::seconds>(days(7)).count();
+
+schema_ptr keyspaces() {
+    static thread_local auto schema = [] {
+        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, KEYSPACES), NAME, KEYSPACES,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {},
+        // regular columns
+        {
+         {"durable_writes", boolean_type},
+         {"strategy_class", utf8_type},
+         {"strategy_options", utf8_type}
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "*DEPRECATED* keyspace definitions"
+       )));
+       builder.set_gc_grace_seconds(schema_gc_grace);
+       builder.with(schema_builder::compact_storage::yes);
+       builder.with_version(generate_schema_version(builder.uuid()));
+       return builder.build();
+    }();
+    return schema;
+}
+
+schema_ptr column_families() {
+    static thread_local auto schema = [] {
+        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, COLUMNFAMILIES), NAME, COLUMNFAMILIES,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"columnfamily_name", utf8_type}},
+        // regular columns
+        {
+         {"bloom_filter_fp_chance", double_type},
+         {"caching", utf8_type},
+         {"cf_id", uuid_type},
+         {"comment", utf8_type},
+         {"compaction_strategy_class", utf8_type},
+         {"compaction_strategy_options", utf8_type},
+         {"comparator", utf8_type},
+         {"compression_parameters", utf8_type},
+         {"default_time_to_live", int32_type},
+         {"default_validator", utf8_type},
+         {"dropped_columns",  map_type_impl::get_instance(utf8_type, long_type, true)},
+         {"gc_grace_seconds", int32_type},
+         {"is_dense", boolean_type},
+         {"key_validator", utf8_type},
+         {"local_read_repair_chance", double_type},
+         {"max_compaction_threshold", int32_type},
+         {"max_index_interval", int32_type},
+         {"memtable_flush_period_in_ms", int32_type},
+         {"min_compaction_threshold", int32_type},
+         {"min_index_interval", int32_type},
+         {"read_repair_chance", double_type},
+         {"speculative_retry", utf8_type},
+         {"subcomparator", utf8_type},
+         {"type", utf8_type},
+         // The following 4 columns are only present up until 2.1.8 tables
+         {"key_aliases", utf8_type},
+         {"value_alias", utf8_type},
+         {"column_aliases", utf8_type},
+         {"index_interval", int32_type},},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "*DEPRECATED* table definitions"
+       )));
+       builder.set_gc_grace_seconds(schema_gc_grace);
+       builder.with(schema_builder::compact_storage::no);
+       builder.with_version(generate_schema_version(builder.uuid()));
+       return builder.build();
+    }();
+    return schema;
+}
+
+schema_ptr columns() {
+    static thread_local auto schema = [] {
+        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, COLUMNS), NAME, COLUMNS,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"columnfamily_name", utf8_type}, {"column_name", utf8_type}},
+        // regular columns
+        {
+            {"component_index", int32_type},
+            {"index_name", utf8_type},
+            {"index_options", utf8_type},
+            {"index_type", utf8_type},
+            {"type", utf8_type},
+            {"validator", utf8_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "column definitions"
+        )));
+        builder.set_gc_grace_seconds(schema_gc_grace);
+        builder.with(schema_builder::compact_storage::no);
+        builder.with_version(generate_schema_version(builder.uuid()));
+        return builder.build();
+    }();
+    return schema;
+}
+
+schema_ptr triggers() {
+    static thread_local auto schema = [] {
+        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, TRIGGERS), NAME, TRIGGERS,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"columnfamily_name", utf8_type}, {"trigger_name", utf8_type}},
+        // regular columns
+        {
+            {"trigger_options",  map_type_impl::get_instance(utf8_type, utf8_type, true)},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "trigger definitions"
+        )));
+        builder.set_gc_grace_seconds(schema_gc_grace);
+        builder.with(schema_builder::compact_storage::no);
+        builder.with_version(generate_schema_version(builder.uuid()));
+        return builder.build();
+    }();
+    return schema;
+}
+
+schema_ptr usertypes() {
+    static thread_local auto schema = [] {
+        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, USERTYPES), NAME, USERTYPES,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"type_name", utf8_type}},
+        // regular columns
+        {
+            {"field_names", list_type_impl::get_instance(utf8_type, true)},
+            {"field_types", list_type_impl::get_instance(utf8_type, true)},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "user defined type definitions"
+        )));
+        builder.set_gc_grace_seconds(schema_gc_grace);
+        builder.with(schema_builder::compact_storage::no);
+        builder.with_version(generate_schema_version(builder.uuid()));
+        return builder.build();
+    }();
+    return schema;
+}
+
+schema_ptr functions() {
+    /**
+     * Note: we have our own "legacy" version of this table (in schema_tables),
+     * but it is (afaik) not used, and differs slightly from the origin one.
+     * This is based on the origin schema, since we're more likely to encounter
+     * installations of that to migrate, rather than our own (if we dont use the table).
+     */
+    static thread_local auto schema = [] {
+        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, FUNCTIONS), NAME, FUNCTIONS,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"function_name", utf8_type},{"signature", list_type_impl::get_instance(utf8_type, false)}},
+        // regular columns
+        {
+            {"argument_names", list_type_impl::get_instance(utf8_type, true)},
+            {"argument_types", list_type_impl::get_instance(utf8_type, true)},
+            {"body", utf8_type},
+            {"language", utf8_type},
+            {"return_type", utf8_type},
+            {"called_on_null_input", boolean_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "*DEPRECATED* user defined type definitions"
+        )));
+        builder.set_gc_grace_seconds(schema_gc_grace);
+        builder.with(schema_builder::compact_storage::no);
+        builder.with_version(generate_schema_version(builder.uuid()));
+        return builder.build();
+    }();
+    return schema;
+}
+
+schema_ptr aggregates() {
+    static thread_local auto schema = [] {
+        schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, AGGREGATES), NAME, AGGREGATES,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"aggregate_name", utf8_type},{"signature", list_type_impl::get_instance(utf8_type, false)}},
+        // regular columns
+        {
+            {"argument_types", list_type_impl::get_instance(utf8_type, true)},
+            {"final_func", utf8_type},
+            {"initcond", bytes_type},
+            {"return_type", utf8_type},
+            {"state_func", utf8_type},
+            {"state_type", utf8_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "*DEPRECATED* user defined aggregate definition"
+        )));
+        builder.set_gc_grace_seconds(schema_gc_grace);
+        builder.with(schema_builder::compact_storage::no);
+        builder.with_version(generate_schema_version(builder.uuid()));
+        return builder.build();
+    }();
+    return schema;
+}
+
+} //</legacy>
 
 static future<> setup_version() {
     return gms::inet_address::lookup(qctx->db().get_config().rpc_address()).then([](gms::inet_address a) {

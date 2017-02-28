@@ -79,6 +79,34 @@ static constexpr auto COMPACTION_HISTORY = "compaction_history";
 static constexpr auto SSTABLE_ACTIVITY = "sstable_activity";
 static constexpr auto SIZE_ESTIMATES = "size_estimates";
 
+namespace v3 {
+static constexpr auto BATCHES = "batches";
+static constexpr auto PAXOS = "paxos";
+static constexpr auto BUILT_INDEXES = "IndexInfo";
+static constexpr auto LOCAL = "local";
+static constexpr auto PEERS = "peers";
+static constexpr auto PEER_EVENTS = "peer_events";
+static constexpr auto RANGE_XFERS = "range_xfers";
+static constexpr auto COMPACTION_HISTORY = "compaction_history";
+static constexpr auto SSTABLE_ACTIVITY = "sstable_activity";
+static constexpr auto SIZE_ESTIMATES = "size_estimates";
+static constexpr auto AVAILABLE_RANGES = "available_ranges";
+static constexpr auto VIEWS_BUILDS_IN_PROGRESS = "views_builds_in_progress";
+static constexpr auto BUILT_VIEWS = "built_views";
+}
+
+namespace legacy {
+static constexpr auto HINTS = "hints";
+static constexpr auto BATCHLOG = "batchlog";
+static constexpr auto KEYSPACES = "schema_keyspaces";
+static constexpr auto COLUMNFAMILIES = "schema_columnfamilies";
+static constexpr auto COLUMNS = "schema_columns";
+static constexpr auto TRIGGERS = "schema_triggers";
+static constexpr auto USERTYPES = "schema_usertypes";
+static constexpr auto FUNCTIONS = "schema_functions";
+static constexpr auto AGGREGATES = "schema_aggregates";
+}
+
 // Partition estimates for a given range of tokens.
 struct range_estimates {
     schema_ptr schema;
