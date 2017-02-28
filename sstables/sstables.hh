@@ -146,10 +146,12 @@ public:
     };
     enum class version_types { ka, la };
     enum class format_types { big };
+    static const size_t default_buffer_size = 128*1024;
 public:
     sstable(schema_ptr schema, sstring dir, int64_t generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now(),
-            io_error_handler_gen error_handler_gen = default_io_error_handler_gen())
-        : _schema(std::move(schema))
+            io_error_handler_gen error_handler_gen = default_io_error_handler_gen(), size_t buffer_size = default_buffer_size)
+        : sstable_buffer_size(buffer_size)
+        , _schema(std::move(schema))
         , _dir(std::move(dir))
         , _generation(generation)
         , _version(v)
@@ -425,20 +427,7 @@ public:
         stdx::optional<sstables::scylla_metadata> scylla_metadata;
     };
 private:
-    sstable(size_t wbuffer_size, schema_ptr schema, sstring dir, int64_t generation, version_types v, format_types f,
-            gc_clock::time_point now = gc_clock::now(), io_error_handler_gen error_handler_gen = default_io_error_handler_gen())
-        : sstable_buffer_size(wbuffer_size)
-        , _schema(std::move(schema))
-        , _dir(std::move(dir))
-        , _generation(generation)
-        , _version(v)
-        , _format(f)
-        , _now(now)
-        , _read_error_handler(error_handler_gen(sstable_read_error))
-        , _write_error_handler(error_handler_gen(sstable_write_error))
-    { }
-
-    size_t sstable_buffer_size = 128*1024;
+    size_t sstable_buffer_size = default_buffer_size;
 
     static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
     static std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
