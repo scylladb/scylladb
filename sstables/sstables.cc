@@ -2594,11 +2594,6 @@ sstable::get_owning_shards_from_unloaded() {
     });
 }
 
-void sstable::mark_sstable_for_deletion(const schema_ptr& schema, sstring dir, int64_t generation, version_types v, format_types f) {
-    auto sst = sstable(schema, dir, generation, v, f);
-    sst.mark_for_deletion();
-}
-
 /**
  * Returns a pair of positions [p1, p2) in the summary file corresponding to entries
  * covered by the specified range, or a disengaged optional if no such pair exists.

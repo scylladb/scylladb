@@ -708,11 +708,6 @@ public:
 
     const std::vector<nonwrapping_range<bytes_view>>& clustering_components_ranges() const;
 
-    // Used to mark a sstable for deletion that is not relevant to the current shard.
-    // It doesn't mean that the sstable will be deleted, but that the sstable is not
-    // relevant to the current shard, thus can be deleted by the deletion manager.
-    static void mark_sstable_for_deletion(const schema_ptr& schema, sstring dir, int64_t generation, version_types v, format_types f);
-
     // returns all info needed for a sstable to be shared with other shards.
     static future<sstable_open_info> load_shared_components(const schema_ptr& s, sstring dir, int generation, version_types v, format_types f);
 
