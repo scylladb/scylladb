@@ -36,10 +36,6 @@ class column_family_test {
 public:
     column_family_test(lw_shared_ptr<column_family> cf) : _cf(cf) {}
 
-    void add_sstable(sstables::sstable&& sstable) {
-        _cf->_sstables->insert(make_lw_shared(std::move(sstable)));
-    }
-
     void add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
         _cf->_sstables->insert(std::move(sstable));
     }

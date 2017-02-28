@@ -1046,7 +1046,7 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
 
         return sst->write_components(*mt).then([mt, sst, cf] {
             return sst->load().then([sst, cf] {
-                column_family_test(cf).add_sstable(std::move(*sst));
+                column_family_test(cf).add_sstable(sst);
                 return make_ready_future<>();
             });
         });
@@ -1276,7 +1276,7 @@ static future<std::vector<unsigned long>> compact_sstables(std::vector<unsigned 
             for (auto& sst : *sstables) {
                 BOOST_REQUIRE(sst->get_sstable_level() == 0);
                 BOOST_REQUIRE(sst->data_size() >= min_sstable_size);
-                column_family_test(cf).add_sstable(std::move(*sst));
+                column_family_test(cf).add_sstable(sst);
             }
             auto candidates = get_candidates_for_leveled_strategy(*cf);
             leveled_manifest manifest = leveled_manifest::create(*cf, candidates, 1);
@@ -1750,7 +1750,7 @@ static void add_sstable_for_leveled_test(lw_shared_ptr<column_family>& cf, int64
     assert(sst->get_sstable_level() == sstable_level);
     assert(sst->get_stats_metadata().max_timestamp == max_timestamp);
     assert(sst->generation() == gen);
-    column_family_test(cf).add_sstable(std::move(*sst));
+    column_family_test(cf).add_sstable(sst);
 }
 
 static lw_shared_ptr<sstable> add_sstable_for_overlapping_test(lw_shared_ptr<column_family>& cf, int64_t gen, sstring first_key, sstring last_key, stats_metadata stats = {}) {
