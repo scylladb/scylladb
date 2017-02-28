@@ -261,6 +261,8 @@ arg_parser.add_argument('--ldflags', action = 'store', dest = 'user_ldflags', de
                         help = 'Extra flags for the linker')
 arg_parser.add_argument('--compiler', action = 'store', dest = 'cxx', default = 'g++',
                         help = 'C++ compiler path')
+arg_parser.add_argument('--c-compiler', action='store', dest='cc', default='gcc',
+                        help='C compiler path')
 arg_parser.add_argument('--with-osv', action = 'store', dest = 'with_osv', default = '',
                         help = 'Shortcut for compile for OSv')
 arg_parser.add_argument('--enable-dpdk', action = 'store_true', dest = 'dpdk', default = False,
@@ -736,7 +738,7 @@ if args.gcc6_concepts:
     seastar_flags += ['--enable-gcc6-concepts']
 
 seastar_cflags = args.user_cflags + " -march=nehalem"
-seastar_flags += ['--compiler', args.cxx, '--cflags=%s' % (seastar_cflags)]
+seastar_flags += ['--compiler', args.cxx, '--c-compiler', args.cc, '--cflags=%s' % (seastar_cflags)]
 
 status = subprocess.call([python, './configure.py'] + seastar_flags, cwd = 'seastar')
 
