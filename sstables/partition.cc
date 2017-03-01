@@ -1161,6 +1161,7 @@ private:
     schema_ptr _schema;
     lw_shared_ptr<sstable_data_source> _ds;
     std::function<future<lw_shared_ptr<sstable_data_source>> ()> _get_data_source;
+    stdx::optional<dht::decorated_key> _key;
 public:
     impl(shared_sstable sst, schema_ptr schema, sstable::disk_read_range toread,
          const io_priority_class &pc,
@@ -1249,7 +1250,14 @@ private:
     future<streamed_mutation_opt> do_read() {
         auto& consumer = _ds->_consumer;
         if (!consumer.is_mutation_end()) {
-            // FIXME: use index to skip to the next partition.
+            if (_ds->_lh_index) { // FIXME: Ensure the index is always there
+                return _ds->_lh_index->advance_to(dht::ring_position_view::for_after_key(*_key)).then([this] {
+                    return _ds->_context.skip_to(_ds->_lh_index->element_kind(), _ds->_lh_index->data_file_position()).then([this] {
+                        assert(_ds->_consumer.is_mutation_end());
+                        return do_read();
+                    });
+                });
+            }
             // Skip to the next partition, the slow way.
             consumer.skip_partition();
             return _ds->_context.read().then([this] {
@@ -1266,8 +1274,8 @@ private:
             if (!mut) {
                 return make_ready_future<streamed_mutation_opt>();
             }
-            auto dk = dht::global_partitioner().decorate_key(*_schema, std::move(mut->key));
-            auto sm = make_streamed_mutation<sstable_streamed_mutation>(_schema, std::move(dk), mut->tomb, _ds);
+            _key = dht::global_partitioner().decorate_key(*_schema, std::move(mut->key));
+            auto sm = make_streamed_mutation<sstable_streamed_mutation>(_schema, *_key, mut->tomb, _ds);
             return make_ready_future<streamed_mutation_opt>(std::move(sm));
         });
     }
