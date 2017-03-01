@@ -50,6 +50,12 @@ public:
     // for real time waits.
 };
 
+// Returns a time point which is earlier from t by d, or minimum time point if it cannot be represented.
+template<typename Clock, typename Duration, typename Rep, typename Period>
+inline
+auto saturating_subtract(std::chrono::time_point<Clock, Duration> t, std::chrono::duration<Rep, Period> d) -> decltype(t) {
+    return std::max(t, decltype(t)::min() + d) - d;
+}
 
 using expiry_opt = std::experimental::optional<gc_clock::time_point>;
 using ttl_opt = std::experimental::optional<gc_clock::duration>;
