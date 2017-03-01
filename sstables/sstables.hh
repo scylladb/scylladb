@@ -54,6 +54,8 @@
 
 namespace sstables {
 
+extern logging::logger sstlog;
+
 // data_consume_context is an object returned by sstable::data_consume_rows()
 // which allows knowing when the consumer stops reading, and starting it again
 // (e.g., when the consumer wants to stop after every sstable row).

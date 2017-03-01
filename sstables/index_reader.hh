@@ -215,13 +215,16 @@ private:
 
     // Must be called for non-decreasing summary_idx.
     future<> advance_to_page(uint64_t summary_idx) {
+        sstlog.trace("index {}: advance_to_page({})", this, summary_idx);
         assert(!_current_list || _current_summary_idx <= summary_idx);
         if (_current_list && _current_summary_idx == summary_idx) {
+            sstlog.trace("index {}: same page", this);
             return make_ready_future<>();
         }
 
         auto& summary = _sstable->get_summary();
         if (summary_idx >= summary.header.size) {
+            sstlog.trace("index {}: eof", this);
             return advance_to_end();
         }
 
@@ -258,6 +261,15 @@ private:
             _current_index_idx = 0;
             assert(!_current_list->empty());
             _data_file_position = (*_current_list)[0].position();
+
+            if (sstlog.is_enabled(seastar::log_level::trace)) {
+                sstlog.trace("index {}: page:", this);
+                for (const index_entry& e : *_current_list) {
+                    auto dk = dht::global_partitioner().decorate_key(*_sstable->_schema,
+                        e.get_key().to_partition_key(*_sstable->_schema));
+                    sstlog.trace("  {} -> {}", dk, e.position());
+                }
+            }
         });
     }
 public:
@@ -280,7 +292,9 @@ public:
     index_reader(shared_sstable sst, const io_priority_class& pc)
         : _sstable(std::move(sst))
         , _pc(pc)
-    { }
+    {
+        sstlog.trace("index {}: index_reader for {}", this, _sstable->get_filename());
+    }
 
     // Cannot be used twice on the same summary_idx and together with advance_to().
     // @deprecated
@@ -293,15 +307,20 @@ public:
     // Positions the cursor on the first partition which is not smaller than pos (like std::lower_bound).
     // Must be called for non-decreasing positions.
     future<> advance_to(dht::ring_position_view pos) {
+        sstlog.trace("index {}: advance_to({}), _previous_summary_idx={}, _current_summary_idx={}", this, pos, _previous_summary_idx, _current_summary_idx);
+
         auto& summary = _sstable->get_summary();
         _previous_summary_idx = std::distance(std::begin(summary.entries),
             std::lower_bound(summary.entries.begin() + _previous_summary_idx, summary.entries.end(), pos, index_comparator(*_sstable->_schema)));
 
         if (_previous_summary_idx == 0) {
+            sstlog.trace("index {}: first entry", this);
             return make_ready_future<>();
         }
 
         auto summary_idx = _previous_summary_idx - 1;
+
+        sstlog.trace("index {}: summary_idx={}", this, summary_idx);
 
         // Despite the requirement that the values of 'pos' in subsequent calls
         // are increasing we still may encounter a situation when we try to read
@@ -325,12 +344,15 @@ public:
 
         return advance_to_page(summary_idx).then([this, pos, summary_idx] {
             index_list& il = *_current_list;
+            sstlog.trace("index {}: old page index = {}", this, _current_index_idx);
             auto i = std::lower_bound(il.begin() + _current_index_idx, il.end(), pos, index_comparator(*_sstable->_schema));
             if (i == il.end()) {
+                sstlog.trace("index {}: not found", this);
                 return advance_to_page(summary_idx + 1);
             }
             _current_index_idx = std::distance(il.begin(), i);
             _data_file_position = i->position();
+            sstlog.trace("index {}: new page index = {}, pos={}", this, _current_index_idx, _data_file_position);
             return make_ready_future<>();
         });
     }
