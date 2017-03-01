@@ -345,7 +345,7 @@ public:
         : _w(std::move(w))
         , _row_count(c)
         , _short_read(sr)
-        , _memory_tracker(std::move(_memory_tracker))
+        , _memory_tracker(std::move(memory_tracker))
         , _partition_count(pc)
     {
         w.reduce_chunk_count();
