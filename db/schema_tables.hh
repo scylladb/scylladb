@@ -71,6 +71,22 @@ static constexpr auto AGGREGATES = "schema_aggregates";
 static constexpr auto VIEWS = "views";
 static constexpr auto INDEXES = "indexes";
 
+namespace v3 {
+
+static constexpr auto NAME = "system_schema";
+static constexpr auto KEYSPACES = "keyspaces";
+static constexpr auto TABLES = "tables";
+static constexpr auto COLUMNS = "columns";
+static constexpr auto DROPPED_COLUMNS = "dropped_columns";
+static constexpr auto TRIGGERS = "triggers";
+static constexpr auto VIEWS = "views";
+static constexpr auto TYPES = "types";
+static constexpr auto FUNCTIONS = "functions";
+static constexpr auto AGGREGATES = "aggregates";
+static constexpr auto INDEXES = "indexes";
+
+}
+
 extern std::vector<const char*> ALL;
 
 std::vector<schema_ptr> all_tables();
