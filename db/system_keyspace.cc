@@ -1592,10 +1592,27 @@ load_dc_rack_info() {
     return _local_cache.local()._cached_dc_rack_info;
 }
 
+
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
 query_mutations(distributed<service::storage_proxy>& proxy, const sstring& cf_name) {
+    return query_mutations(proxy, db::system_keyspace::NAME, cf_name);
+}
+
+future<lw_shared_ptr<query::result_set>>
+query(distributed<service::storage_proxy>& proxy, const sstring& cf_name) {
+    return query(proxy, db::system_keyspace::NAME, cf_name);
+}
+
+future<lw_shared_ptr<query::result_set>>
+query(distributed<service::storage_proxy>& proxy, const sstring& cf_name, const dht::decorated_key& key, query::clustering_range row_range)
+{
+    return query(proxy, db::system_keyspace::NAME, cf_name, key, row_range);
+}
+
+future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+query_mutations(distributed<service::storage_proxy>& proxy, const sstring& ks_name, const sstring& cf_name) {
     database& db = proxy.local().get_db().local();
-    schema_ptr schema = db.find_schema(db::system_keyspace::NAME, cf_name);
+    schema_ptr schema = db.find_schema(ks_name, cf_name);
     auto slice = partition_slice_builder(*schema).build();
     auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(),
         std::move(slice), std::numeric_limits<uint32_t>::max());
@@ -1603,9 +1620,9 @@ query_mutations(distributed<service::storage_proxy>& proxy, const sstring& cf_na
 }
 
 future<lw_shared_ptr<query::result_set>>
-query(distributed<service::storage_proxy>& proxy, const sstring& cf_name) {
+query(distributed<service::storage_proxy>& proxy, const sstring& ks_name, const sstring& cf_name) {
     database& db = proxy.local().get_db().local();
-    schema_ptr schema = db.find_schema(db::system_keyspace::NAME, cf_name);
+    schema_ptr schema = db.find_schema(ks_name, cf_name);
     auto slice = partition_slice_builder(*schema).build();
     auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(),
         std::move(slice), std::numeric_limits<uint32_t>::max());
@@ -1615,10 +1632,10 @@ query(distributed<service::storage_proxy>& proxy, const sstring& cf_name) {
 }
 
 future<lw_shared_ptr<query::result_set>>
-query(distributed<service::storage_proxy>& proxy, const sstring& cf_name, const dht::decorated_key& key, query::clustering_range row_range)
+query(distributed<service::storage_proxy>& proxy, const sstring& ks_name, const sstring& cf_name, const dht::decorated_key& key, query::clustering_range row_range)
 {
     auto&& db = proxy.local().get_db().local();
-    auto schema = db.find_schema(db::system_keyspace::NAME, cf_name);
+    auto schema = db.find_schema(ks_name, cf_name);
     auto slice = partition_slice_builder(*schema)
         .with_range(std::move(row_range))
         .build();
