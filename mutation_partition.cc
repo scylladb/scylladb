@@ -1176,7 +1176,7 @@ uint32_t mutation_partition::do_compact(const schema& s,
 {
     assert(row_limit > 0);
 
-    auto gc_before = query_time - s.gc_grace_seconds();
+    auto gc_before = saturating_subtract(query_time, s.gc_grace_seconds());
 
     auto should_purge_tombstone = [&] (const tombstone& t) {
         return t.deletion_time < gc_before && can_gc(t);
