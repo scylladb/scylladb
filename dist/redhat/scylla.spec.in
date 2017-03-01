@@ -63,6 +63,9 @@ mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/collectd.d/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/scylla.d/
+%if 0%{?rhel}
+mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/modprobe.d/
+%endif
 mkdir -p $RPM_BUILD_ROOT%{_sysctldir}/
 mkdir -p $RPM_BUILD_ROOT%{_docdir}/scylla/
 mkdir -p $RPM_BUILD_ROOT%{_unitdir}
@@ -73,6 +76,9 @@ install -m644 dist/common/limits.d/scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/sec
 install -m644 dist/common/collectd.d/scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/collectd.d/
 install -m644 dist/common/scylla.d/*.conf $RPM_BUILD_ROOT%{_sysconfdir}/scylla.d/
 install -m644 dist/common/sysctl.d/*.conf $RPM_BUILD_ROOT%{_sysctldir}/
+%if 0%{?rhel}
+install -m644 dist/common/modprobe.d/*.conf $RPM_BUILD_ROOT%{_sysconfdir}/modprobe.d/
+%endif
 install -d -m755 $RPM_BUILD_ROOT%{_sysconfdir}/scylla
 install -m644 conf/scylla.yaml $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
 install -m644 conf/cassandra-rackdc.properties $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
@@ -226,6 +232,7 @@ Group:          Applications/Databases
 Summary:        Scylla configuration package for the Linux kernel
 License:        AGPLv3
 URL:            http://www.scylladb.com/
+Requires:       kmod
 
 %description kernel-conf
 This package contains Linux kernel configuration changes for the Scylla database.  Install this package
@@ -235,9 +242,18 @@ if Scylla is the main application on your server and you wish to optimize its la
 # We cannot use the sysctl_apply rpm macro because it is not present in 7.0
 # following is a "manual" expansion
 /usr/lib/systemd/systemd-sysctl 99-scylla-sched.conf >/dev/null 2>&1 || :
+# Write modprobe.d params when module already loaded
+%if 0%{?rhel}
+if [ -e /sys/module/raid0/parameters/devices_discard_performance ]; then
+    echo Y > /sys/module/raid0/parameters/devices_discard_performance
+fi
+%endif
 
 %files kernel-conf
 %defattr(-,root,root)
+%if 0%{?rhel}
+%config(noreplace) %{_sysconfdir}/modprobe.d/*.conf
+%endif
 %{_sysctldir}/*.conf
 
 %changelog
