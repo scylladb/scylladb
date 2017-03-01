@@ -145,17 +145,19 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
         }
     }
 
-    if (p == auth::permission::SELECT && resource.is_column_family_level() && resource.keyspace() == db::system_keyspace::NAME) {
-        for (auto& n : { db::system_keyspace::LOCAL, db::system_keyspace::PEERS }) {
-            if (resource.column_family() == n) {
-                return make_ready_future();
-            }
+    static thread_local std::set<auth::data_resource> readable_system_resources = [] {
+        std::set<auth::data_resource> tmp;
+        for (auto cf : { db::system_keyspace::LOCAL, db::system_keyspace::PEERS }) {
+            tmp.emplace(db::system_keyspace::NAME, cf);
         }
-        for (auto& n : db::schema_tables::ALL) {
-            if (resource.column_family() == n) {
-                return make_ready_future();
-            }
+        for (auto cf : db::schema_tables::ALL) {
+            tmp.emplace(db::schema_tables::NAME, cf);
         }
+        return tmp;
+    }();
+
+    if (p == auth::permission::SELECT && readable_system_resources.count(resource) != 0) {
+        return make_ready_future();
     }
     if (auth::permissions::ALTERATIONS.contains(p)) {
         for (auto& s : { auth::authorizer::get().protected_resources(),
