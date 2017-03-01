@@ -815,7 +815,8 @@ struct sstable_data_source {
     shared_sstable _sst;
     mp_row_consumer _consumer;
     data_consume_context _context;
-    std::unique_ptr<index_reader> _index;
+    std::unique_ptr<index_reader> _lh_index; // For lower bound
+    std::unique_ptr<index_reader> _rh_index; // For upper bound
 
     sstable_data_source(shared_sstable sst, mp_row_consumer&& consumer)
         : _sst(std::move(sst))
@@ -823,11 +824,13 @@ struct sstable_data_source {
         , _context(_sst->data_consume_rows(_consumer))
     { }
 
-    sstable_data_source(shared_sstable sst, mp_row_consumer&& consumer, sstable::disk_read_range toread, std::unique_ptr<index_reader> index)
+    sstable_data_source(shared_sstable sst, mp_row_consumer&& consumer, sstable::disk_read_range toread,
+            std::unique_ptr<index_reader> lh_index = {}, std::unique_ptr<index_reader> rh_index = {})
         : _sst(std::move(sst))
         , _consumer(std::move(consumer))
         , _context(_sst->data_consume_rows(_consumer, std::move(toread)))
-        , _index(std::move(index))
+        , _lh_index(std::move(lh_index))
+        , _rh_index(std::move(rh_index))
     { }
 
     sstable_data_source(schema_ptr s, shared_sstable sst, const sstables::key& k, const io_priority_class& pc,
@@ -838,10 +841,14 @@ struct sstable_data_source {
     { }
 
     ~sstable_data_source() {
-        if (_index) {
-            auto f = _index->close();
-            f.handle_exception([index = std::move(_index)] (auto&&) { });
-        }
+        auto close = [] (std::unique_ptr<index_reader>& ptr) {
+            if (ptr) {
+                auto f = ptr->close();
+                f.handle_exception([index = std::move(ptr)] (auto&&) { });
+            }
+        };
+        close(_lh_index);
+        close(_rh_index);
     }
 };
 
@@ -1162,7 +1169,7 @@ public:
         , _schema(schema)
         , _get_data_source([this, sst = std::move(sst), toread, &pc, fwd] {
             auto consumer = mp_row_consumer(_schema, query::full_slice, pc, fwd);
-            auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(consumer), std::move(toread), std::unique_ptr<index_reader>());
+            auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(consumer), std::move(toread));
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
     impl(shared_sstable sst, schema_ptr schema,
@@ -1184,14 +1191,18 @@ public:
         : _pc(pc)
         , _schema(schema)
         , _get_data_source([this, &pr, sst = std::move(sst), &pc, &slice, fwd] () mutable {
-            auto index = std::make_unique<index_reader>(sst->get_index_reader(_pc));
-            auto f = index->get_disk_read_range(pr);
-            return f.then([this, index = std::move(index), sst = std::move(sst), &pc, &slice, fwd] (sstable::disk_read_range drr) mutable {
+            auto lh_index = std::make_unique<index_reader>(sst->get_index_reader(_pc)); // lh = left hand
+            auto rh_index = std::make_unique<index_reader>(sst->get_index_reader(_pc));
+            auto f = seastar::when_all_succeed(lh_index->advance_to_start(pr), rh_index->advance_to_end(pr));
+            return f.then([this, lh_index = std::move(lh_index), rh_index = std::move(rh_index), sst = std::move(sst), &pc, &slice, fwd] () mutable {
+                sstable::disk_read_range drr{lh_index->data_file_position(),
+                                             rh_index->data_file_position()};
                 if (!drr.found_row()) {
                     _read_enabled = false;
                 }
                 auto consumer = mp_row_consumer(_schema, slice, pc, fwd);
-                return make_lw_shared<sstable_data_source>(std::move(sst), std::move(consumer), std::move(drr), std::move(index));
+                return make_lw_shared<sstable_data_source>(std::move(sst), std::move(consumer), std::move(drr),
+                    std::move(lh_index), std::move(rh_index));
             });
         }) { }
 
@@ -1219,11 +1230,16 @@ public:
         });
     }
     future<> fast_forward_to(const dht::partition_range& pr) {
-        assert(_ds->_index);
-        return _ds->_index->get_disk_read_range(pr).then([this] (sstable::disk_read_range drr) {
-            if (drr.found_row()) {
+        assert(_ds->_lh_index);
+        assert(_ds->_rh_index);
+        auto f1 = _ds->_lh_index->advance_to_start(pr);
+        auto f2 = _ds->_rh_index->advance_to_end(pr);
+        return seastar::when_all_succeed(std::move(f1), std::move(f2)).then([this] {
+            auto start = _ds->_lh_index->data_file_position();
+            auto end = _ds->_rh_index->data_file_position();
+            if (start != end) {
                 _read_enabled = true;
-                return _ds->_context.fast_forward_to(drr.start, drr.end);
+                return _ds->_context.fast_forward_to(start, end);
             }
             _read_enabled = false;
             return make_ready_future<>();

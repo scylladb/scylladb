@@ -143,28 +143,24 @@ public:
 
 // Less-comparator for lookups in the partition index.
 class index_comparator {
-    const schema& _s;
+    dht::ring_position_comparator _tri_cmp;
 public:
-    index_comparator(const schema& s) : _s(s) {}
-
-    int tri_cmp(key_view k2, dht::ring_position_view pos) const {
-        return -pos.tri_compare(_s, k2);
-    }
+    index_comparator(const schema& s) : _tri_cmp(s) {}
 
     bool operator()(const summary_entry& e, dht::ring_position_view rp) const {
-        return tri_cmp(e.get_key(), rp) < 0;
+        return _tri_cmp(e.get_key(), rp) < 0;
     }
 
     bool operator()(const index_entry& e, dht::ring_position_view rp) const {
-        return tri_cmp(e.get_key(), rp) < 0;
+        return _tri_cmp(e.get_key(), rp) < 0;
     }
 
     bool operator()(dht::ring_position_view rp, const summary_entry& e) const {
-        return tri_cmp(e.get_key(), rp) > 0;
+        return _tri_cmp(e.get_key(), rp) > 0;
     }
 
     bool operator()(dht::ring_position_view rp, const index_entry& e) const {
-        return tri_cmp(e.get_key(), rp) > 0;
+        return _tri_cmp(e.get_key(), rp) > 0;
     }
 };
 
@@ -298,7 +294,7 @@ public:
     }
 
     // Cannot be used twice on the same summary_idx and together with advance_to().
-    // @deprecated
+    [[deprecated]]
     future<index_list> get_index_entries(uint64_t summary_idx) {
         return advance_to_page(summary_idx).then([this] {
             return _current_list ? _current_list.release() : index_list();
