@@ -45,9 +45,6 @@ public:
     static time_point now() {
         return time_point(std::chrono::duration_cast<duration>(base::now().time_since_epoch())) + get_clocks_offset();
     }
-
-    // Intended for tests. Allows testing time related event without need
-    // for real time waits.
 };
 
 // Returns a time point which is earlier from t by d, or minimum time point if it cannot be represented.
