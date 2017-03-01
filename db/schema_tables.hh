@@ -59,6 +59,8 @@ namespace schema_tables {
 using schema_result = std::map<sstring, lw_shared_ptr<query::result_set>>;
 using schema_result_value_type = std::pair<sstring, lw_shared_ptr<query::result_set>>;
 
+extern const sstring NAME;
+
 static constexpr auto KEYSPACES = "schema_keyspaces";
 static constexpr auto COLUMNFAMILIES = "schema_columnfamilies";
 static constexpr auto COLUMNS = "schema_columns";

@@ -57,6 +57,7 @@
 #include "frozen_schema.hh"
 #include "schema_registry.hh"
 #include "mutation_query.hh"
+#include "system_keyspace.hh"
 
 #include "db/marshal/type_parser.hh"
 #include "db/config.hh"
@@ -76,6 +77,9 @@ using namespace std::chrono_literals;
 /** system.schema_* tables used to store keyspace/table/type attributes prior to C* 3.0 */
 namespace db {
 namespace schema_tables {
+
+// still "legacy" mode (i.e. 2.x)
+const sstring NAME = db::system_keyspace::NAME;
 
 logging::logger logger("schema_tables");
 
@@ -358,7 +362,7 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
 /** add entries to system.schema_* for the hardcoded system definitions */
 future<> save_system_keyspace_schema() {
-    auto& ks = db::qctx->db().find_keyspace(db::system_keyspace::NAME);
+    auto& ks = db::qctx->db().find_keyspace(NAME);
     auto ksm = ks.metadata();
 
     // delete old, possibly obsolete entries in schema tables
@@ -562,7 +566,7 @@ future<mutation> query_partition_mutation(service::storage_proxy& proxy,
 future<schema_result_value_type>
 read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const sstring& keyspace_name)
 {
-    auto schema = proxy.local().get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
+    auto schema = proxy.local().get_db().local().find_schema(NAME, schema_table_name);
     auto keyspace_key = dht::global_partitioner().decorate_key(*schema,
         partition_key::from_singular(*schema, keyspace_name));
     return db::system_keyspace::query(proxy, schema_table_name, keyspace_key).then([keyspace_name] (auto&& rs) {

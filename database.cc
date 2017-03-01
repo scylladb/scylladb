@@ -2140,14 +2140,14 @@ static future<> populate(distributed<database>& db, sstring datadir) {
 
 template <typename Func>
 static future<>
-do_parse_system_tables(distributed<service::storage_proxy>& proxy, const sstring& _cf_name, Func&& func) {
+do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring& _cf_name, Func&& func) {
     using namespace db::schema_tables;
     static_assert(std::is_same<future<>, std::result_of_t<Func(schema_result_value_type&)>>::value,
                   "bad Func signature");
 
 
     auto cf_name = make_lw_shared<sstring>(_cf_name);
-    return db::system_keyspace::query(proxy, *cf_name).then([] (auto rs) {
+    return db::system_keyspace::query(proxy, db::schema_tables::NAME, *cf_name).then([] (auto rs) {
         auto names = std::set<sstring>();
         for (auto& r : rs->rows()) {
             auto keyspace_name = r.template get_nonnull<sstring>("keyspace_name");
@@ -2177,11 +2177,11 @@ do_parse_system_tables(distributed<service::storage_proxy>& proxy, const sstring
 
 future<> database::parse_system_tables(distributed<service::storage_proxy>& proxy) {
     using namespace db::schema_tables;
-    return do_parse_system_tables(proxy, db::schema_tables::KEYSPACES, [this] (schema_result_value_type &v) {
+    return do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, [this] (schema_result_value_type &v) {
         auto ksm = create_keyspace_from_schema_partition(v);
         return create_keyspace(ksm);
     }).then([&proxy, this] {
-        return do_parse_system_tables(proxy, db::schema_tables::USERTYPES, [this, &proxy] (schema_result_value_type &v) {
+        return do_parse_schema_tables(proxy, db::schema_tables::USERTYPES, [this, &proxy] (schema_result_value_type &v) {
             auto&& user_types = create_types_from_schema_partition(v);
             auto& ks = this->find_keyspace(v.first);
             for (auto&& type : user_types) {
@@ -2190,7 +2190,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
             return make_ready_future<>();
         });
     }).then([&proxy, this] {
-        return do_parse_system_tables(proxy, db::schema_tables::VIEWS, [this, &proxy] (schema_result_value_type &v) {
+        return do_parse_schema_tables(proxy, db::schema_tables::VIEWS, [this, &proxy] (schema_result_value_type &v) {
             return create_views_from_schema_partition(proxy, v.second).then([this] (std::vector<view_ptr> views) {
                 return parallel_for_each(views.begin(), views.end(), [this] (auto&& v) {
                     return this->add_column_family_and_make_directory(v);
@@ -2198,7 +2198,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
             });
         });
     }).then([&proxy, this] {
-        return do_parse_system_tables(proxy, db::schema_tables::COLUMNFAMILIES, [this, &proxy] (schema_result_value_type &v) {
+        return do_parse_schema_tables(proxy, db::schema_tables::COLUMNFAMILIES, [this, &proxy] (schema_result_value_type &v) {
             return create_tables_from_tables_partition(proxy, v.second).then([this] (std::map<sstring, schema_ptr> tables) {
                 return parallel_for_each(tables.begin(), tables.end(), [this] (auto& t) {
                     return this->add_column_family_and_make_directory(t.second);
