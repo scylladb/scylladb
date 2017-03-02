@@ -531,6 +531,7 @@ int main(int ac, char** av) {
             db::get_batchlog_manager().start(std::ref(qp)).get();
             // #293 - do not stop anything
             // engine().at_exit([] { return db::get_batchlog_manager().stop(); });
+            sstables::init_metrics();
             supervisor::notify("loading sstables");
             auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);
             parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
