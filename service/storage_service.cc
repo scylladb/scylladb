@@ -1103,6 +1103,9 @@ sstring storage_service::get_application_state_value(inet_address endpoint, appl
 std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address endpoint) {
     auto tokens_string = get_application_state_value(endpoint, application_state::TOKENS);
     logger.trace("endpoint={}, tokens_string={}", endpoint, tokens_string);
+    if (tokens_string.size() == 0) {
+        return {}; // boost::split produces one element for emty string
+    }
     std::vector<sstring> tokens;
     std::unordered_set<token> ret;
     boost::split(tokens, tokens_string, boost::is_any_of(";"));
