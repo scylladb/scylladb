@@ -168,6 +168,17 @@ std::string bytes_to_string(bytes_view v) {
     return { reinterpret_cast<const char*>(v.begin()), v.size() };
 }
 
+namespace thrift {
+GCC6_CONCEPT(
+template<typename T>
+concept bool Aggregator =
+    requires() { typename T::type; }
+    && requires(T aggregator, typename T::type* aggregation, const bytes& name, const query::result_atomic_cell_view& cell) {
+        { aggregator.on_column(aggregation, name, cell) } -> void;
+    };
+)
+}
+
 class thrift_handler : public CassandraCobSvIf {
     distributed<database>& _db;
     distributed<cql3::query_processor>& _query_processor;
@@ -1512,15 +1523,9 @@ private:
     static std::string partition_key_to_string(const schema& s, const partition_key& key) {
         return bytes_to_string(to_legacy(*s.partition_key_type(), key));
     }
-    /*
-    template<typename T>
-    concept bool Aggregator() {
-        return requires (T aggregator, typename T::type* aggregation, const bytes& name, const query::result_atomic_cell_view& cell) {
-            { aggregator.on_column(aggregation, name, cell) } -> void;
-        };
-    }
-    */
+
     template<typename Aggregator>
+    GCC6_CONCEPT( requires thrift::Aggregator<Aggregator> )
     class column_visitor : public Aggregator {
         const schema& _s;
         const query::partition_slice& _slice;
