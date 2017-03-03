@@ -27,19 +27,17 @@
 #include <boost/intrusive/set.hpp>
 #include <boost/intrusive/slist.hpp>
 #include <boost/range/adaptors.hpp>
-#include <boost/range/algorithm/max_element.hpp>
-#include <limits>
 #include <stack>
 
 #include <seastar/core/memory.hh>
 #include <seastar/core/align.hh>
 #include <seastar/core/print.hh>
 #include <seastar/core/metrics.hh>
-#include <seastar/core/bitops.hh>
 
 #include "utils/logalloc.hh"
 #include "log.hh"
 #include "utils/dynamic_bitset.hh"
+#include "utils/log_histogram.hh"
 
 namespace bi = boost::intrusive;
 
@@ -140,218 +138,6 @@ tracker& shard_tracker() {
     return tracker_instance;
 }
 
-inline constexpr size_t pow2_rank(size_t v) {
-    return std::numeric_limits<size_t>::digits - 1 - count_leading_zeros(v);
-}
-
-struct log_histogram_options {
-    size_t min_size_shift;
-    size_t sub_bucket_shift;
-    size_t max_size_shift;
-
-    constexpr log_histogram_options(size_t min_size_shift, size_t sub_bucket_shift, size_t max_size_shift)
-            : min_size_shift(min_size_shift)
-            , sub_bucket_shift(sub_bucket_shift)
-            , max_size_shift(max_size_shift) {
-    }
-
-    constexpr size_t number_of_buckets() const {
-        return ((max_size_shift - min_size_shift) << sub_bucket_shift) + 2;
-    }
-};
-
-template<const log_histogram_options& opts>
-struct log_histogram_bucket_index {
-    using type = std::conditional_t<(opts.number_of_buckets() > ((1 << 16) - 1)), uint32_t,
-          std::conditional_t<(opts.number_of_buckets() > ((1 << 8) - 1)), uint16_t, uint8_t>>;
-};
-
-template<const log_histogram_options& opts>
-struct log_histogram_hook : public bi::list_base_hook<> {
-    typename log_histogram_bucket_index<opts>::type cached_bucket;
-};
-
-template<typename T>
-size_t hist_key(const T&);
-
-template<typename T, const log_histogram_options& opts, bool = std::is_base_of<log_histogram_hook<opts>, T>::value>
-struct log_histogram_element_traits {
-    using bucket_type = bi::list<T, bi::constant_time_size<false>>;
-    static void cache_bucket(T& v, typename log_histogram_bucket_index<opts>::type b) {
-        v.cached_bucket = b;
-    }
-    static size_t cached_bucket(const T& v) {
-        return v.cached_bucket;
-    }
-    static size_t hist_key(const T& v) {
-        return logalloc::hist_key<T>(v);
-    }
-};
-
-template<typename T, const log_histogram_options& opts>
-struct log_histogram_element_traits<T, opts, false> {
-    using bucket_type = typename T::bucket_type;
-    static void cache_bucket(T&, typename log_histogram_bucket_index<opts>::type);
-    static size_t cached_bucket(const T&);
-    static size_t hist_key(const T&);
-};
-
-/*
- * Histogram that stores elements in different buckets according to their size.
- * Values are mapped to a sequence of power-of-two ranges that are split in
- * 1 << SubbucketShift sub-buckets. Values less than 1 << MinSizeShift are placed
- * in bucket 0, whereas values bigger than 1 << MaxSizeShift are not admitted.
- * The histogram gives bigger precision to smaller values, with precision decreasing
- * as values get larger.
- */
-template<typename T, const log_histogram_options& opts>
-GCC6_CONCEPT(
-    requires requires() {
-        typename log_histogram_element_traits<T, opts>;
-    }
-)
-class log_histogram final {
-private:
-    using traits = log_histogram_element_traits<T, opts>;
-    using bucket = typename traits::bucket_type;
-
-    struct hist_size_less_compare {
-        inline bool operator()(const T& v1, const T& v2) const {
-            return traits::hist_key(v1) < traits::hist_key(v2);
-        }
-    };
-
-    std::array<bucket, opts.number_of_buckets()> _buckets;
-    ssize_t _watermark = -1;
-public:
-    template <bool IsConst>
-    class hist_iterator : public std::iterator<std::input_iterator_tag, std::conditional_t<IsConst, const T, T>> {
-        using hist_type = std::conditional_t<IsConst, const log_histogram, log_histogram>;
-        using iterator_type = std::conditional_t<IsConst, typename bucket::const_iterator, typename bucket::iterator>;
-
-        hist_type& _h;
-        ssize_t _b;
-        iterator_type _it;
-    public:
-        struct end_tag {};
-        hist_iterator(hist_type& h)
-            : _h(h)
-            , _b(h._watermark)
-            , _it(_b >= 0 ? h._buckets[_b].begin() : h._buckets[0].end()) {
-        }
-        hist_iterator(hist_type& h, end_tag)
-            : _h(h)
-            , _b(-1)
-            , _it(h._buckets[0].end()) {
-        }
-        std::conditional_t<IsConst, const T, T>& operator*() {
-            return *_it;
-        }
-        hist_iterator& operator++() {
-            if (++_it == _h._buckets[_b].end()) {
-                do {
-                    --_b;
-                } while (_b >= 0 && (_it = _h._buckets[_b].begin()) == _h._buckets[_b].end());
-            }
-            return *this;
-        }
-        bool operator==(const hist_iterator& other) const {
-            return _b == other._b && _it == other._it;
-        }
-        bool operator!=(const hist_iterator& other) const {
-            return !(*this == other);
-        }
-    };
-    using iterator = hist_iterator<false>;
-    using const_iterator = hist_iterator<true>;
-public:
-    bool empty() const {
-        return _watermark == -1;
-    }
-    bool contains_above_min() const {
-        return _watermark > 0;
-    }
-    const_iterator begin() const {
-        return const_iterator(*this);
-    }
-    const_iterator end() const {
-        return const_iterator(*this, typename const_iterator::end_tag());
-    }
-    iterator begin() {
-        return iterator(*this);
-    }
-    iterator end() {
-        return iterator(*this, typename iterator::end_tag());
-    }
-    // Pops one of the largest elements in the histogram.
-    void pop_one_of_largest() {
-        _buckets[_watermark].pop_front();
-        maybe_adjust_watermark();
-    }
-    // Returns one of the largest elements in the histogram.
-    const T& one_of_largest() const {
-        return _buckets[_watermark].front();
-    }
-    // Returns the largest element in the histogram.
-    // Too expensive to be called from anything other than tests.
-    const T& largest() const {
-        return *boost::max_element(_buckets[_watermark], hist_size_less_compare());
-    }
-    // Returns one of the largest elements in the histogram.
-    T& one_of_largest() {
-        return _buckets[_watermark].front();
-    }
-    // Returns the largest element in the histogram.
-    // Too expensive to be called from anything other than tests.
-    T& largest() {
-        return *boost::max_element(_buckets[_watermark], hist_size_less_compare());
-    }
-    // Pushes a new element onto the histogram.
-    void push(T& v) {
-        auto b = bucket_of(traits::hist_key(v));
-        traits::cache_bucket(v, b);
-        _buckets[b].push_front(v);
-        _watermark = std::max(ssize_t(b), _watermark);
-    }
-    // Adjusts the histogram when the specified element becomes larger.
-    void adjust_up(T& v) {
-        auto b = traits::cached_bucket(v);
-        auto nb = bucket_of(traits::hist_key(v));
-        if (nb != b) {
-            traits::cache_bucket(v, nb);
-            _buckets[nb].splice(_buckets[nb].begin(), _buckets[b], _buckets[b].iterator_to(v));
-            _watermark = std::max(ssize_t(nb), _watermark);
-        }
-    }
-    // Removes the specified element from the histogram.
-    void erase(T& v) {
-        auto& b = _buckets[traits::cached_bucket(v)];
-        b.erase(b.iterator_to(v));
-        maybe_adjust_watermark();
-    }
-    // Merges the specified histogram, moving all elements from it into this.
-    void merge(log_histogram& other) {
-        for (size_t i = 0; i < opts.number_of_buckets(); ++i) {
-            _buckets[i].splice(_buckets[i].begin(), other._buckets[i]);
-        }
-        _watermark = std::max(_watermark, other._watermark);
-        other._watermark = -1;
-    }
-private:
-    void maybe_adjust_watermark() {
-        while (_buckets[_watermark].empty() && --_watermark >= 0) ;
-    }
-    static typename log_histogram_bucket_index<opts>::type bucket_of(size_t value) {
-        const auto pow2_index = pow2_rank(value | (1 << (opts.min_size_shift - 1)));
-        const auto unmasked_sub_bucket_index = value >> (pow2_index - opts.sub_bucket_shift);
-        const auto bucket = pow2_index - opts.min_size_shift + 1;
-        const auto bigger = value >= (1 << opts.min_size_shift);
-        const auto mask = ((1 << opts.sub_bucket_shift) - 1) & -bigger;
-        const auto sub_bucket_index = unmasked_sub_bucket_index & mask;
-        return (bucket << opts.sub_bucket_shift) - mask + sub_bucket_index;
-    }
-};
-
 struct segment {
     static constexpr int size_shift = segment_size_shift;
     using size_type = std::conditional_t<(size_shift < 16), uint16_t, uint32_t>;
@@ -419,13 +205,6 @@ struct segment_descriptor : public log_histogram_hook<segment_descriptor_hist_op
         _free_space += size;
     }
 };
-
-// Orders segments by free space, assuming all segments have the same size.
-// This avoids using the occupancy, which entails extra division operations.
-template<>
-size_t hist_key<segment_descriptor>(const segment_descriptor& desc) {
-    return desc._free_space;
-}
 
 using segment_descriptor_hist = log_histogram<segment_descriptor, segment_descriptor_hist_options>;
 
@@ -2401,4 +2180,11 @@ void region_group::on_request_expiry::operator()(std::unique_ptr<allocating_func
     func->fail(std::make_exception_ptr(timed_out_error()));
 }
 
+}
+
+// Orders segments by free space, assuming all segments have the same size.
+// This avoids using the occupancy, which entails extra division operations.
+template<>
+size_t hist_key<logalloc::segment_descriptor>(const logalloc::segment_descriptor& desc) {
+    return desc._free_space;
 }
