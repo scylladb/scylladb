@@ -158,6 +158,17 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn populate) {
 
     {
         auto sm = new_stream();
+        sm.fwd_to(position_range(query::full_clustering_range));
+        for (int i = 0; i < n_keys; ++i) {
+            if (contains_key(i)) {
+                sm.produces_row_with_key(keys[i]);
+            }
+        }
+        sm.produces_end_of_stream();
+    }
+
+    {
+        auto sm = new_stream();
         verify_range(sm, 0, 1);
         verify_range(sm, 1, 2);
         verify_range(sm, 2, 4);
