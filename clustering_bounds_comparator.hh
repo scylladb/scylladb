@@ -152,6 +152,15 @@ public:
     static std::pair<bound_view, bound_view> from_range(const R<clustering_key_prefix>& range) {
         return {from_range_start(range), from_range_end(range)};
     }
+    template<template<typename> typename R>
+    GCC6_CONCEPT( requires Range<R, clustering_key_prefix_view> )
+    static stdx::optional<typename R<clustering_key_prefix_view>::bound> to_range_bound(const bound_view& bv) {
+        if (&bv.prefix == &empty_prefix) {
+            return {};
+        }
+        bool inclusive = bv.kind != bound_kind::excl_end && bv.kind != bound_kind::excl_start;
+        return {typename R<clustering_key_prefix_view>::bound(bv.prefix.view(), inclusive)};
+    }
     friend std::ostream& operator<<(std::ostream& out, const bound_view& b) {
         return out << "{bound: prefix=" << b.prefix << ", kind=" << b.kind << "}";
     }
