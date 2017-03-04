@@ -133,28 +133,23 @@ public:
     static bound_view top() {
         return {empty_prefix, bound_kind::incl_end};
     }
-    /*
-    template<template<typename> typename T, typename U>
-    concept bool Range() {
-        return requires (T<U> range) {
-            { range.start() } -> stdx::optional<U>;
-            { range.end() } -> stdx::optional<U>;
-        };
-    };*/
-    template<template<typename> typename Range>
-    static bound_view from_range_start(const Range<clustering_key_prefix>& range) {
+    template<template<typename> typename R>
+    GCC6_CONCEPT( requires Range<R, clustering_key_prefix_view> )
+    static bound_view from_range_start(const R<clustering_key_prefix>& range) {
         return range.start()
                ? bound_view(range.start()->value(), range.start()->is_inclusive() ? bound_kind::incl_start : bound_kind::excl_start)
                : bottom();
     }
-    template<template<typename> typename Range>
-    static bound_view from_range_end(const Range<clustering_key_prefix>& range) {
+    template<template<typename> typename R>
+    GCC6_CONCEPT( requires Range<R, clustering_key_prefix> )
+    static bound_view from_range_end(const R<clustering_key_prefix>& range) {
         return range.end()
                ? bound_view(range.end()->value(), range.end()->is_inclusive() ? bound_kind::incl_end : bound_kind::excl_end)
                : top();
     }
-    template<template<typename> typename Range>
-    static std::pair<bound_view, bound_view> from_range(const Range<clustering_key_prefix>& range) {
+    template<template<typename> typename R>
+    GCC6_CONCEPT( requires Range<R, clustering_key_prefix> )
+    static std::pair<bound_view, bound_view> from_range(const R<clustering_key_prefix>& range) {
         return {from_range_start(range), from_range_end(range)};
     }
     friend std::ostream& operator<<(std::ostream& out, const bound_view& b) {
