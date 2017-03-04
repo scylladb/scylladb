@@ -81,6 +81,14 @@ public:
         }
     };
 
+    struct tri_compare {
+        typename TopLevelView::compound _t;
+        tri_compare(const schema &s) : _t(get_compound_type(s)) {}
+        int operator()(const TopLevelView& k1, const TopLevelView& k2) const {
+            return _t->compare(k1.representation(), k2.representation());
+        }
+    };
+
     struct hashing {
         typename TopLevelView::compound _t;
         hashing(const schema& s) : _t(get_compound_type(s)) {}
