@@ -649,6 +649,21 @@ public:
         return boost::make_iterator_range(lower_bound(range, cmp), upper_bound(range, cmp));
     }
 
+    // Returns the intersection between this range and other.
+    template<typename Comparator>
+    stdx::optional<nonwrapping_range> intersection(const nonwrapping_range& other, Comparator&& cmp) const {
+        auto p = std::minmax(_range, other._range, [&cmp] (auto&& a, auto&& b) {
+            return wrapping_range<T>::less_than(a.start_bound(), b.start_bound(), cmp);
+        });
+        if (wrapping_range<T>::greater_than_or_equal(p.first.end_bound(), p.second.start_bound(), cmp)) {
+            auto& end = std::min(p.first.end_bound(), p.second.end_bound(), [&cmp] (auto&& a, auto&& b) {
+                return !wrapping_range<T>::greater_than_or_equal(a, b, cmp);
+            });
+            return nonwrapping_range(p.second.start(), end.b);
+        }
+        return {};
+    }
+
     template<typename U>
     friend std::ostream& operator<<(std::ostream& out, const nonwrapping_range<U>& r);
 };
