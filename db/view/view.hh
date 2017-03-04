@@ -85,6 +85,12 @@ future<std::vector<mutation>> generate_view_updates(
         streamed_mutation&& updates,
         streamed_mutation&& existings);
 
+query::clustering_row_ranges calculate_affected_clustering_ranges(
+        const schema& base,
+        const dht::decorated_key& key,
+        const mutation_partition& mp,
+        const std::vector<view_ptr>& views);
+
 void mutate_MV(const dht::token& base_token,
         std::vector<mutation> mutations);
 
