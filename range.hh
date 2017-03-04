@@ -351,19 +351,22 @@ public:
             return *this;
         }
     }
+    template<typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
+    static stdx::optional<typename wrapping_range<U>::bound> transform_bound(optional<bound> b, Transformer&& transformer) {
+        if (b) {
+            return { { transformer(std::move(*b).value()), b->is_inclusive() } };
+        };
+        return {};
+    }
     // Transforms this range into a new range of a different value type
     // Supplied transformer should transform value of type T (the old type) into value of type U (the new type).
     template<typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
     wrapping_range<U> transform(Transformer&& transformer) && {
-        auto t = [&transformer] (std::experimental::optional<bound>&& b)
-            -> std::experimental::optional<typename wrapping_range<U>::bound>
-        {
-            if (!b) {
-                return {};
-            }
-            return { { transformer(std::move(*b).value()), b->is_inclusive() } };
-        };
-        return wrapping_range<U>(t(std::move(_start)), t(std::move(_end)), _singular);
+        return wrapping_range<U>(transform_bound(std::move(_start), transformer), transform_bound(std::move(_end), transformer), _singular);
+    }
+    template<typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
+    wrapping_range<U> transform(Transformer&& transformer) const & {
+        return wrapping_range<U>(transform_bound(_start, transformer), transform_bound(_end, transformer), _singular);
     }
     template<typename Comparator>
     bool equal(const wrapping_range& other, Comparator&& cmp) const {
@@ -549,6 +552,10 @@ public:
     template<typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
     nonwrapping_range<U> transform(Transformer&& transformer) && {
         return nonwrapping_range<U>(std::move(_range).transform(std::forward<Transformer>(transformer)));
+    }
+    template<typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
+    nonwrapping_range<U> transform(Transformer&& transformer) const & {
+        return nonwrapping_range<U>(_range.transform(std::forward<Transformer>(transformer)));
     }
     template<typename Comparator>
     bool equal(const nonwrapping_range& other, Comparator&& cmp) const {
