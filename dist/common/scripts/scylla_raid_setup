@@ -81,7 +81,7 @@ if [ -e $RAID ]; then
     echo "$RAID is already using"
     exit 1
 fi
-if [ "`mount|grep $MOUNT_AT `" != "" ]; then
+if mountpoint -q $MOUNT_AT; then
     echo "$MOUNT_AT is already mounted"
     exit 1
 fi
