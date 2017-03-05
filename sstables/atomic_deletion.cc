@@ -106,13 +106,15 @@ atomic_deletion_manager::delete_atomically(std::vector<sstable_to_delete> atomic
     // Everyone agrees, let's delete
     auto names = boost::copy_range<std::vector<sstring>>(merged_set->names);
     _deletion_logger.debug("deleting {}", names);
-    return _delete_sstables(names).then_wrapped([this, merged_set] (future<> result) {
+    // Run deletion in the background; all callers are waiting for it via merged_set->completions
+    _delete_sstables(names).then_wrapped([this, merged_set] (future<> result) {
         _deletion_logger.debug("atomic deletion completed: {}", merged_set->names);
         shared_future<> sf(std::move(result));
         for (auto&& comp : merged_set->completions) {
             sf.get_future().forward_to(std::move(*comp));
         }
     });
+    return ret;
 }
 
 void
