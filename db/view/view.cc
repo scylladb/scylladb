@@ -471,7 +471,7 @@ class view_update_builder {
     schema_ptr _schema; // The base schema
     std::vector<view_updates> _view_updates;
     streamed_mutation _updates;
-    streamed_mutation _existings;
+    streamed_mutation_opt _existings;
     range_tombstone_accumulator _update_tombstone_tracker;
     range_tombstone_accumulator _existing_tombstone_tracker;
     mutation_fragment_opt _update;
@@ -482,7 +482,7 @@ public:
     view_update_builder(schema_ptr s,
         std::vector<view_updates>&& views_to_update,
         streamed_mutation&& updates,
-        streamed_mutation&& existings)
+        streamed_mutation_opt&& existings)
             : _schema(std::move(s))
             , _view_updates(std::move(views_to_update))
             , _updates(std::move(updates))
@@ -491,7 +491,9 @@ public:
             , _existing_tombstone_tracker(*_schema, false)
             , _now(gc_clock::now()) {
         _update_tombstone_tracker.set_partition_tombstone(_updates.partition_tombstone());
-        _existing_tombstone_tracker.set_partition_tombstone(_existings.partition_tombstone());
+        if (_existings) {
+            _existing_tombstone_tracker.set_partition_tombstone(_existings->partition_tombstone());
+        }
     }
 
     future<std::vector<mutation>> build();
@@ -501,7 +503,8 @@ private:
     future<stop_iteration> on_results();
 
     future<stop_iteration> advance_all() {
-        return when_all(_updates(), _existings()).then([this] (auto&& fragments) mutable {
+        auto existings_f = _existings ? (*_existings)() : make_ready_future<optimized_optional<mutation_fragment>>();
+        return when_all(_updates(), std::move(existings_f)).then([this] (auto&& fragments) mutable {
             _update = std::move(std::get<mutation_fragment_opt>(std::get<0>(fragments).get()));
             _existing = std::move(std::get<mutation_fragment_opt>(std::get<1>(fragments).get()));
             return stop_iteration::no;
@@ -516,7 +519,10 @@ private:
     }
 
     future<stop_iteration> advance_existings() {
-        return _existings().then([this] (auto&& existing) mutable {
+        if (!_existings) {
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+        return (*_existings)().then([this] (auto&& existing) mutable {
             _existing = std::move(existing);
             return stop_iteration::no;
         });
@@ -645,7 +651,7 @@ future<std::vector<mutation>> generate_view_updates(
         const schema_ptr& base,
         std::vector<view_ptr>&& views_to_update,
         streamed_mutation&& updates,
-        streamed_mutation&& existings) {
+        streamed_mutation_opt&& existings) {
     auto vs = boost::copy_range<std::vector<view_updates>>(views_to_update | boost::adaptors::transformed([&] (auto&& v) {
         return view_updates(std::move(v), base);
     }));

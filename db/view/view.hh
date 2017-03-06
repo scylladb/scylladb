@@ -83,7 +83,7 @@ future<std::vector<mutation>> generate_view_updates(
         const schema_ptr& base,
         std::vector<view_ptr>&& views_to_update,
         streamed_mutation&& updates,
-        streamed_mutation&& existings);
+        streamed_mutation_opt&& existings);
 
 query::clustering_row_ranges calculate_affected_clustering_ranges(
         const schema& base,
