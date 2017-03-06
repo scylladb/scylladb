@@ -76,6 +76,7 @@
 #include "tracing/trace_state.hh"
 #include <boost/intrusive/parent_from_member.hpp>
 #include "db/view/view.hh"
+#include "lister.hh"
 
 class cell_locker;
 class locked_cell;
@@ -764,7 +765,6 @@ public:
     future<bool> snapshot_exists(sstring name);
 
     future<> snapshot(sstring name);
-    future<> clear_snapshot(sstring name);
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
 
     const bool incremental_backups_enabled() const {
@@ -878,7 +878,7 @@ private:
     }
 
     // filter manifest.json files out
-    static bool manifest_json_filter(const sstring& fname);
+    static bool manifest_json_filter(const lister::path&, const directory_entry& entry);
 
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
