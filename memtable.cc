@@ -65,17 +65,15 @@ future<> memtable::clear_gently() noexcept {
         auto t = std::make_unique<seastar::thread>(attr, [this] {
             auto& alloc = allocator();
 
-            // entries can no longer be moved after unlink_leftmost_without_rebalance()
-            // so need to disable compaction.
-            logalloc::reclaim_lock rl(*this);
-
             auto p = std::move(partitions);
             while (!p.empty()) {
                 auto batch_size = std::min<size_t>(p.size(), 32);
                 auto dirty_before = dirty_size();
                 with_allocator(alloc, [&] () noexcept {
                     while (batch_size--) {
-                        alloc.destroy(p.unlink_leftmost_without_rebalance());
+                        p.erase_and_dispose(p.begin(), [&] (auto e) {
+                            alloc.destroy(e);
+                        });
                     }
                 });
                 remove_flushed_memory(dirty_before - dirty_size());
