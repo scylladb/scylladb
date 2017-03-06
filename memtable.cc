@@ -162,17 +162,21 @@ protected:
         , _range(&range)
     { }
 
-    memtable_entry* fetch_next_entry() {
+    memtable_entry* fetch_entry() {
         update_iterators();
         if (_i == _end) {
             return nullptr;
         } else {
             memtable_entry& e = *_i;
-            ++_i;
-            _last = e.key();
             _memtable->upgrade_entry(e);
             return &e;
         }
+    }
+
+    void advance() {
+        memtable_entry& e = *_i;
+        _last = e.key();
+        ++_i;
     }
 
     logalloc::allocating_section& read_section() {
@@ -244,14 +248,18 @@ public:
             return _delegate();
         }
 
-        logalloc::reclaim_lock _(region());
-        managed_bytes::linearization_context_guard lcg;
-        memtable_entry* e = fetch_next_entry();
-        if (!e) {
-             return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
-        } else {
-            return make_ready_future<streamed_mutation_opt>(e->read(mtbl(), schema(), _slice));
-        }
+        return read_section()(region(), [&] {
+            return with_linearized_managed_bytes([&] {
+                memtable_entry* e = fetch_entry();
+                if (!e) {
+                    return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
+                } else {
+                    auto ret =  make_ready_future<streamed_mutation_opt>(e->read(mtbl(), schema(), _slice));
+                    advance();
+                    return ret;
+                }
+            });
+        });
     }
 };
 
@@ -326,19 +334,24 @@ public:
     flush_reader& operator=(const flush_reader&) = delete;
 
     virtual future<streamed_mutation_opt> operator()() override {
-        logalloc::reclaim_lock _(region());
-        managed_bytes::linearization_context_guard lcg;
-        memtable_entry* e = fetch_next_entry();
-        if (!e) {
-            return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
-        } else {
-            auto cr = query::clustering_key_filter_ranges::get_ranges(*schema(), query::full_slice, e->key().key());
-            auto snp = e->partition().read(schema());
-            auto mpsr = make_partition_snapshot_reader<partition_snapshot_accounter>(schema(), e->key(), std::move(cr), snp, region(), read_section(), mtbl(), _flushed_memory);
-            _flushed_memory.account_component(*e);
-            _flushed_memory.account_component(*snp);
-            return make_ready_future<streamed_mutation_opt>(std::move(mpsr));
-        }
+        return read_section()(region(), [&] {
+            return with_linearized_managed_bytes([&] {
+                memtable_entry* e = fetch_entry();
+                if (!e) {
+                    return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
+                } else {
+                    auto cr = query::clustering_key_filter_ranges::get_ranges(*schema(), query::full_slice, e->key().key());
+                    auto snp = e->partition().read(schema());
+                    auto mpsr = make_partition_snapshot_reader<partition_snapshot_accounter>(schema(), e->key(), std::move(cr),
+                            snp, region(), read_section(), mtbl(), _flushed_memory);
+                    _flushed_memory.account_component(*e);
+                    _flushed_memory.account_component(*snp);
+                    auto ret = make_ready_future<streamed_mutation_opt>(std::move(mpsr));
+                    advance();
+                    return ret;
+                }
+            });
+        });
     }
 };
 
