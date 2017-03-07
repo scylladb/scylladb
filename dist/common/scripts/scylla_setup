@@ -16,6 +16,7 @@ fi
 print_usage() {
     echo "scylla_setup --disks /dev/hda,/dev/hdb... --nic eth0 --ntp-domain centos --ami --setup-nic --developer-mode --no-kernel-check --no-verify-package --no-enable-service --no-selinux-setup --no-bootparam-setup --no-ntp-setup --no-raid-setup --no-coredump-setup --no-sysconfig-setup --no-cpuscaling-setup"
     echo "  --disks			specify disks for RAID"
+    echo "  --raiddev	MD device name for RAID"
     echo "  --nic				specify NIC"
     echo "  --ntp-domain			specify NTP domain"
     echo "  --ami				setup AMI instance"
@@ -132,6 +133,7 @@ IO_SETUP=1
 NODE_EXPORTER=1
 CPUSCALING_SETUP=1
 SELINUX_REBOOT_REQUIRED=0
+RAIDDEV="/dev/md0"
 
 if [ $# -ne 0 ]; then
     INTERACTIVE=0
@@ -143,6 +145,10 @@ while [ $# -gt 0 ]; do
     case "$1" in
         "--disks")
             DISKS="$2"
+            shift 2
+            ;;
+        "--raiddev")
+            RAIDDEV="$2"
             shift 2
             ;;
         "--nic")
@@ -368,7 +374,7 @@ if [ $INTERACTIVE -eq 1 ]; then
     fi
 fi
 if [ $RAID_SETUP -eq 1 ]; then
-    run_setup_script "RAID" /usr/lib/scylla/scylla_raid_setup --disks $DISKS --update-fstab
+    run_setup_script "RAID" /usr/lib/scylla/scylla_raid_setup --disks $DISKS --update-fstab --raiddev $RAIDDEV
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
