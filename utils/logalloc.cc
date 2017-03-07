@@ -27,19 +27,17 @@
 #include <boost/intrusive/set.hpp>
 #include <boost/intrusive/slist.hpp>
 #include <boost/range/adaptors.hpp>
-#include <boost/range/algorithm/max_element.hpp>
-#include <limits>
 #include <stack>
 
 #include <seastar/core/memory.hh>
 #include <seastar/core/align.hh>
 #include <seastar/core/print.hh>
 #include <seastar/core/metrics.hh>
-#include <seastar/core/bitops.hh>
 
 #include "utils/logalloc.hh"
 #include "log.hh"
 #include "utils/dynamic_bitset.hh"
+#include "utils/log_histogram.hh"
 
 namespace bi = boost::intrusive;
 
@@ -140,174 +138,6 @@ tracker& shard_tracker() {
     return tracker_instance;
 }
 
-inline constexpr size_t pow2_rank(size_t v) {
-    return std::numeric_limits<size_t>::digits - 1 - count_leading_zeros(v);
-}
-
-template<size_t MinSizeShift, size_t SubBucketShift, size_t MaxSizeShift>
-struct bucket_index {
-    static constexpr size_t number_of_buckets = ((MaxSizeShift - MinSizeShift) << SubBucketShift) + 2;
-    using type = std::conditional_t<(number_of_buckets > ((1 << 16) - 1)), uint32_t,
-                    std::conditional_t<(number_of_buckets > ((1 << 8) - 1)), uint16_t, uint8_t>>;
-};
-
-/*
- * Histogram that stores elements in different buckets according to their size.
- * Values are mapped to a sequence of power-of-two ranges that are split in
- * 1 << SubbucketShift sub-buckets. Values less than 1 << MinSizeShift are placed
- * in bucket 0, whereas values bigger than 1 << MaxSizeShift are not admitted.
- */
-template<typename T, size_t MinSizeShift, size_t SubBucketShift, size_t MaxSizeShift>
-GCC6_CONCEPT(
-    requires std::is_base_of<boost::intrusive::list_base_hook<>, T>::value
-    && requires(T t, typename bucket_index<MinSizeShift, SubBucketShift, MaxSizeShift>::type b) {
-        { t.hist_key() } -> size_t;
-        { t.cache_bucket(b) };
-        { t.cached_bucket() } -> decltype(b);
-    }
-)
-class log_histogram final {
-private:
-    static constexpr size_t number_of_buckets = bucket_index<MinSizeShift, SubBucketShift, MaxSizeShift>::number_of_buckets;
-    using bucket = boost::intrusive::list<T, boost::intrusive::constant_time_size<false>>;
-
-    struct hist_size_less_compare {
-        inline bool operator()(const T& v1, const T& v2) const {
-            return v1.hist_key() < v2.hist_key();
-        }
-    };
-
-    std::array<bucket, number_of_buckets> _buckets;
-    ssize_t _watermark = -1;
-public:
-    template <bool IsConst>
-    class hist_iterator : public std::iterator<std::input_iterator_tag, std::conditional_t<IsConst, const T, T>> {
-        using hist_type = std::conditional_t<IsConst, const log_histogram, log_histogram>;
-        using iterator_type = std::conditional_t<IsConst, typename bucket::const_iterator, typename bucket::iterator>;
-
-        hist_type& _h;
-        ssize_t _b;
-        iterator_type _it;
-    public:
-        struct end_tag {};
-        hist_iterator(hist_type& h)
-            : hist_iterator(h, h._watermark) {
-        }
-        hist_iterator(hist_type& h, end_tag)
-            : hist_iterator(h, -1) {
-        }
-        hist_iterator(hist_type& h, ssize_t b)
-            : _h(h)
-            , _b(b)
-            , _it(b >= 0 ? h._buckets[b].begin() : h._buckets[0].end()) {
-        }
-        std::conditional_t<IsConst, const T, T>& operator*() {
-            return *_it;
-        }
-        hist_iterator& operator++() {
-            if (_b >= 0 && ++_it == _h._buckets[_b].end()) {
-                do {
-                    --_b;
-                } while (_b >= 0 && (_it = _h._buckets[_b].begin()) == _h._buckets[_b].end());
-            }
-            return *this;
-        }
-        bool operator==(const hist_iterator& other) const {
-            return _b == other._b && _it == other._it;
-        }
-        bool operator!=(const hist_iterator& other) const {
-            return !(*this == other);
-        }
-    };
-    using iterator = hist_iterator<false>;
-    using const_iterator = hist_iterator<true>;
-public:
-    bool empty() const {
-        return _watermark == -1;
-    }
-    bool contains_above_min() const {
-        return _watermark > 0;
-    }
-    const_iterator begin() const {
-        return const_iterator(*this);
-    }
-    const_iterator end() const {
-        return const_iterator(*this, typename const_iterator::end_tag());
-    }
-    iterator begin() {
-        return iterator(*this);
-    }
-    iterator end() {
-        return iterator(*this, typename iterator::end_tag());
-    }
-    // Pops one of the most sparse elements in the histogram.
-    void pop_sparse() {
-        _buckets[_watermark].pop_front();
-        maybe_adjust_watermark();
-    }
-    // Returns one of the most sparse elements in the histogram.
-    const T& sparse() const {
-        return _buckets[_watermark].front();
-    }
-    // Returns the sparsest element in the histogram.
-    const T& sparsest() const {
-        return *boost::max_element(_buckets[_watermark], hist_size_less_compare());
-    }
-    // Returns one of the most sparse elements in the histogram.
-    T& sparse() {
-        return _buckets[_watermark].front();
-    }
-    // Returns the sparsest element in the histogram.
-    // Too expensive to be called from anything other than tests.
-    T& sparsest() {
-        return *boost::max_element(_buckets[_watermark], hist_size_less_compare());
-    }
-    // Pushes a new element onto the histogram.
-    void push(T& v) {
-        auto b = bucket_of(v.hist_key());
-        v.cache_bucket(b);
-        _buckets[b].push_front(v);
-        _watermark = std::max(ssize_t(b), _watermark);
-    }
-    // Adjusts the histogram when the specified element becomes more sparse.
-    void adjust_up(T& v) {
-        auto b = v.cached_bucket();
-        auto nb = bucket_of(v.hist_key());
-        if (nb != b) {
-            v.cache_bucket(nb);
-            _buckets[nb].splice(_buckets[nb].begin(), _buckets[b], _buckets[b].iterator_to(v));
-            _watermark = std::max(ssize_t(nb), _watermark);
-        }
-    }
-    // Removes the specified element from the histogram.
-    void erase(T& v) {
-        auto& b = _buckets[v.cached_bucket()];
-        b.erase(b.iterator_to(v));
-        maybe_adjust_watermark();
-    }
-    // Merges the specified histogram, moving all elements from it into this.
-    void merge(log_histogram& other) {
-        for (size_t i = 0; i < number_of_buckets; ++i) {
-            _buckets[i].splice(_buckets[i].begin(), other._buckets[i]);
-        }
-        _watermark = std::max(_watermark, other._watermark);
-        other._watermark = -1;
-    }
-private:
-    void maybe_adjust_watermark() {
-        while (_buckets[_watermark].empty() && --_watermark >= 0) ;
-    }
-    static size_t bucket_of(size_t value) {
-        const auto pow2_index = pow2_rank(value | (1 << (MinSizeShift - 1)));
-        const auto unmasked_sub_bucket_index = value >> (pow2_index - SubBucketShift);
-        const auto bucket = pow2_index - MinSizeShift + 1;
-        const auto bigger = value >= (1 << MinSizeShift);
-        const auto mask = ((1 << SubBucketShift) - 1) & -bigger;
-        const auto sub_bucket_index = unmasked_sub_bucket_index & mask;
-        return (bucket << SubBucketShift) - mask + sub_bucket_index;
-    }
-};
-
 struct segment {
     static constexpr int size_shift = segment_size_shift;
     using size_type = std::conditional_t<(size_shift < 16), uint16_t, uint32_t>;
@@ -341,9 +171,16 @@ struct segment {
 
 class segment_zone;
 
-struct segment_descriptor : public boost::intrusive::list_base_hook<> {
+static constexpr size_t max_managed_object_size_shift = pow2_rank(segment::size * 0.1);
+static constexpr size_t max_managed_object_size = 1 << max_managed_object_size_shift;
+
+// Since we only compact if there's >= max_managed_object_size free space,
+// we use max_managed_object_size as the histogram's minimum size and put
+// everything below that value in the same bucket.
+constexpr log_histogram_options segment_descriptor_hist_options(max_managed_object_size_shift, 3, segment::size_shift);
+
+struct segment_descriptor : public log_histogram_hook<segment_descriptor_hist_options> {
     bool _lsa_managed;
-    uint8_t _bucket; // Only valid when linked.
     segment::size_type _free_space;
     region::impl* _region;
     segment_zone* _zone;
@@ -367,21 +204,9 @@ struct segment_descriptor : public boost::intrusive::list_base_hook<> {
     void record_free(segment::size_type size) {
         _free_space += size;
     }
-
-    // Orders segments by free space, assuming all segments have the same size.
-    // This avoids using the occupancy, which entails extra division operations.
-    size_t hist_key() const {
-        return _free_space;
-    }
-
-    size_t cached_bucket() const {
-        return _bucket;
-    }
-
-    void cache_bucket(size_t bucket) {
-        _bucket = bucket;
-    }
 };
+
+using segment_descriptor_hist = log_histogram<segment_descriptor, segment_descriptor_hist_options>;
 
 #ifndef DEFAULT_ALLOCATOR
 
@@ -1107,10 +932,6 @@ region_group_binomial_group_sanity_check(auto& bh) {
 class region_impl : public allocation_strategy {
     static constexpr float max_occupancy_for_compaction = 0.85; // FIXME: make configurable
     static constexpr float max_occupancy_for_compaction_on_idle = 0.93; // FIXME: make configurable
-    static constexpr size_t max_managed_object_size_shift = pow2_rank(segment::size * 0.1);
-    static constexpr size_t max_managed_object_size = 1 << max_managed_object_size_shift;
-
-    using segment_descriptor_hist = log_histogram<segment_descriptor, max_managed_object_size_shift, 3, segment::size_shift>;
 
     // single-byte flags
     struct obj_flags {
@@ -1395,8 +1216,8 @@ public:
         tracker_instance._impl->unregister_region(this);
 
         while (!_segment_descs.empty()) {
-            auto& desc = _segment_descs.sparse();
-            _segment_descs.pop_sparse();
+            auto& desc = _segment_descs.one_of_largest();
+            _segment_descs.pop_one_of_largest();
             assert(desc.is_empty());
             free_segment(desc);
         }
@@ -1571,7 +1392,7 @@ public:
         if (_segment_descs.empty()) {
             return {};
         }
-        return _segment_descs.sparsest().occupancy();
+        return _segment_descs.largest().occupancy();
     }
 
     // Tries to release one full segment back to the segment pool.
@@ -1589,8 +1410,8 @@ public:
     }
 
     void compact_single_segment_locked() {
-        auto& desc = _segment_descs.sparse();
-        _segment_descs.pop_sparse();
+        auto& desc = _segment_descs.one_of_largest();
+        _segment_descs.pop_one_of_largest();
         _closed_occupancy -= desc.occupancy();
         segment* seg = shard_segment_pool.segment_from(desc);
         logger.debug("Compacting segment {} from region {}, {}", seg, id(), seg->occupancy());
@@ -1647,12 +1468,12 @@ public:
         compaction_lock _(*this);
         logger.debug("Full compaction, {}", occupancy());
         close_and_open();
-        region_impl::segment_descriptor_hist all;
+        segment_descriptor_hist all;
         std::swap(all, _segment_descs);
         _closed_occupancy = {};
         while (!all.empty()) {
-            auto& desc = all.sparse();
-            all.pop_sparse();
+            auto& desc = all.one_of_largest();
+            all.pop_one_of_largest();
             compact(shard_segment_pool.segment_from(desc), desc);
         }
         logger.debug("Done, {}", occupancy());
@@ -2359,4 +2180,11 @@ void region_group::on_request_expiry::operator()(std::unique_ptr<allocating_func
     func->fail(std::make_exception_ptr(timed_out_error()));
 }
 
+}
+
+// Orders segments by free space, assuming all segments have the same size.
+// This avoids using the occupancy, which entails extra division operations.
+template<>
+size_t hist_key<logalloc::segment_descriptor>(const logalloc::segment_descriptor& desc) {
+    return desc._free_space;
 }
