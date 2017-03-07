@@ -78,7 +78,7 @@ atomic_cell read_atomic_cell(atomic_cell_variant cv)
                     return ccb.build(_created_at);
                 }
                 atomic_cell operator()(ser::counter_cell_update_view& ccv) const {
-                    return atomic_cell::make_live_counter_update(_created_at, long_type->decompose(ccv.delta()));
+                    return atomic_cell::make_live_counter_update(_created_at, ccv.delta());
                 }
                 atomic_cell operator()(ser::unknown_variant_type&) const {
                     throw std::runtime_error("Trying to deserialize counter cell in unknown state");

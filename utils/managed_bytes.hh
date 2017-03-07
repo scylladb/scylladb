@@ -319,6 +319,15 @@ public:
         return { data(), size() };
     }
 
+    bool is_fragmented() const {
+        return external() && _u.ptr->next;
+    }
+
+    operator bytes_mutable_view() {
+        assert(!is_fragmented());
+        return { data(), size() };
+    };
+
     bytes_view::value_type& operator[](size_type index) {
         return value_at_index(index);
     }

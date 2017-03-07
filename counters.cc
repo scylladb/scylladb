@@ -42,10 +42,79 @@ std::ostream& operator<<(std::ostream& os, counter_cell_view ccv) {
     return os << "{counter_cell timestamp: " << ccv.timestamp() << " shards: {" << ::join(", ", ccv.shards()) << "}}";
 }
 
+static bool apply_in_place(atomic_cell_or_collection& dst, atomic_cell_or_collection& src)
+{
+    auto dst_ccmv = counter_cell_mutable_view(dst.as_mutable_atomic_cell());
+    auto src_ccmv = counter_cell_mutable_view(src.as_mutable_atomic_cell());
+    auto dst_shards = dst_ccmv.shards();
+    auto src_shards = src_ccmv.shards();
+
+    auto dst_it = dst_shards.begin();
+    auto src_it = src_shards.begin();
+
+    while (src_it != src_shards.end()) {
+        while (dst_it != dst_shards.end() && dst_it->id() < src_it->id()) {
+            ++dst_it;
+        }
+        if (dst_it == dst_shards.end() || dst_it->id() != src_it->id()) {
+            // Fast-path failed. Revert and fall back to the slow path.
+            if (dst_it == dst_shards.end()) {
+                --dst_it;
+            }
+            while (src_it != src_shards.begin()) {
+                --src_it;
+                while (dst_it->id() != src_it->id()) {
+                    --dst_it;
+                }
+                src_it->swap_value_and_clock(*dst_it);
+            }
+            return false;
+        }
+        if (dst_it->logical_clock() < src_it->logical_clock()) {
+            dst_it->swap_value_and_clock(*src_it);
+        } else {
+            src_it->set_value_and_clock(*dst_it);
+        }
+        ++src_it;
+    }
+
+    auto dst_ts = dst_ccmv.timestamp();
+    auto src_ts = src_ccmv.timestamp();
+    dst_ccmv.set_timestamp(std::max(dst_ts, src_ts));
+    src_ccmv.set_timestamp(dst_ts);
+    src.as_mutable_atomic_cell().set_counter_in_place_revert(true);
+    return true;
+}
+
+static void revert_in_place_apply(atomic_cell_or_collection& dst, atomic_cell_or_collection& src)
+{
+    assert(dst.can_use_mutable_view() && src.can_use_mutable_view());
+    auto dst_ccmv = counter_cell_mutable_view(dst.as_mutable_atomic_cell());
+    auto src_ccmv = counter_cell_mutable_view(src.as_mutable_atomic_cell());
+    auto dst_shards = dst_ccmv.shards();
+    auto src_shards = src_ccmv.shards();
+
+    auto dst_it = dst_shards.begin();
+    auto src_it = src_shards.begin();
+
+    while (src_it != src_shards.end()) {
+        while (dst_it != dst_shards.end() && dst_it->id() < src_it->id()) {
+            ++dst_it;
+        }
+        assert(dst_it != dst_shards.end() && dst_it->id() == src_it->id());
+        dst_it->swap_value_and_clock(*src_it);
+        ++src_it;
+    }
+
+    auto dst_ts = dst_ccmv.timestamp();
+    auto src_ts = src_ccmv.timestamp();
+    dst_ccmv.set_timestamp(src_ts);
+    src_ccmv.set_timestamp(dst_ts);
+    src.as_mutable_atomic_cell().set_counter_in_place_revert(false);
+}
+
 bool counter_cell_view::apply_reversibly(atomic_cell_or_collection& dst, atomic_cell_or_collection& src)
 {
-    // TODO: optimise for single shard existing in the other
-    // TODO: optimise for no new shards?
     auto dst_ac = dst.as_atomic_cell();
     auto src_ac = src.as_atomic_cell();
 
@@ -58,23 +127,29 @@ bool counter_cell_view::apply_reversibly(atomic_cell_or_collection& dst, atomic_
     }
 
     if (dst_ac.is_counter_update() && src_ac.is_counter_update()) {
-        // FIXME: store deltas just as a normal int64_t and get rid of these calls
-        // to long_type
-        auto src_v = value_cast<int64_t>(long_type->deserialize_value(src_ac.value()));
-        auto dst_v = value_cast<int64_t>(long_type->deserialize_value(dst_ac.value()));
+        auto src_v = src_ac.counter_update_value();
+        auto dst_v = dst_ac.counter_update_value();
         dst = atomic_cell::make_live_counter_update(std::max(dst_ac.timestamp(), src_ac.timestamp()),
-                                                    long_type->decompose(src_v + dst_v));
+                                                    src_v + dst_v);
         return true;
     }
 
     assert(!dst_ac.is_counter_update());
     assert(!src_ac.is_counter_update());
 
-    auto a_shards = counter_cell_view(dst_ac).shards();
-    auto b_shards = counter_cell_view(src_ac).shards();
+    if (counter_cell_view(dst_ac).shard_count() >= counter_cell_view(src_ac).shard_count()
+        && dst.can_use_mutable_view() && src.can_use_mutable_view()) {
+        if (apply_in_place(dst, src)) {
+            return true;
+        }
+    }
+
+    src.as_mutable_atomic_cell().set_counter_in_place_revert(false);
+    auto dst_shards = counter_cell_view(dst_ac).shards();
+    auto src_shards = counter_cell_view(src_ac).shards();
 
     counter_cell_builder result;
-    combine(a_shards.begin(), a_shards.end(), b_shards.begin(), b_shards.end(),
+    combine(dst_shards.begin(), dst_shards.end(), src_shards.begin(), src_shards.end(),
             result.inserter(), counter_shard_view::less_compare_by_id(), [] (auto& x, auto& y) {
                 return x.logical_clock() < y.logical_clock() ? y : x;
             });
@@ -87,10 +162,12 @@ bool counter_cell_view::apply_reversibly(atomic_cell_or_collection& dst, atomic_
 void counter_cell_view::revert_apply(atomic_cell_or_collection& dst, atomic_cell_or_collection& src)
 {
     if (dst.as_atomic_cell().is_counter_update()) {
-        auto src_v = value_cast<int64_t>(long_type->deserialize_value(src.as_atomic_cell().value()));
-        auto dst_v = value_cast<int64_t>(long_type->deserialize_value(dst.as_atomic_cell().value()));
+        auto src_v = src.as_atomic_cell().counter_update_value();
+        auto dst_v = dst.as_atomic_cell().counter_update_value();
         dst = atomic_cell::make_live(dst.as_atomic_cell().timestamp(),
                                      long_type->decompose(dst_v - src_v));
+    } else if (src.as_atomic_cell().is_counter_in_place_revert_set()) {
+        revert_in_place_apply(dst, src);
     } else {
         std::swap(dst, src);
     }
@@ -145,10 +222,9 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
             if (!acv.is_live()) {
                 return; // continue -- we are in lambda
             }
-            auto delta = value_cast<int64_t>(long_type->deserialize_value(acv.value()));
-            counter_cell_builder ccb;
-            ccb.add_shard(counter_shard(counter_id::local(), delta, clock_offset + 1));
-            ac_o_c = ccb.build(acv.timestamp());
+            auto delta = acv.counter_update_value();
+            auto cs = counter_shard(counter_id::local(), delta, clock_offset + 1);
+            ac_o_c = counter_cell_builder::from_single_shard(acv.timestamp(), cs);
         });
     };
 
@@ -173,17 +249,10 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
             continue;
         }
 
-        struct counter_shard_or_tombstone {
-            stdx::optional<counter_shard> shard;
-            tombstone tomb;
-        };
-        std::deque<std::pair<column_id, counter_shard_or_tombstone>> shards;
+        std::deque<std::pair<column_id, counter_shard>> shards;
         it->row().cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
             auto acv = ac_o_c.as_atomic_cell();
             if (!acv.is_live()) {
-                counter_shard_or_tombstone cs_o_t { { },
-                                                    tombstone(acv.timestamp(), acv.deletion_time()) };
-                shards.emplace_back(std::make_pair(id, cs_o_t));
                 return; // continue -- we are in lambda
             }
             counter_cell_view ccv(acv);
@@ -191,7 +260,7 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
             if (!cs) {
                 return; // continue
             }
-            shards.emplace_back(std::make_pair(id, counter_shard_or_tombstone { counter_shard(*cs), tombstone() }));
+            shards.emplace_back(std::make_pair(id, counter_shard(*cs)));
         });
 
         cr.row().cells().for_each_cell([&] (column_id id, atomic_cell_or_collection& ac_o_c) {
@@ -203,26 +272,17 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
                 shards.pop_front();
             }
 
-            auto delta = value_cast<int64_t>(long_type->deserialize_value(acv.value()));
+            auto delta = acv.counter_update_value();
 
-            counter_cell_builder ccb;
             if (shards.empty() || shards.front().first > id) {
-                ccb.add_shard(counter_shard(counter_id::local(), delta, clock_offset + 1));
-            } else if (shards.front().second.tomb.timestamp == api::missing_timestamp) {
-                auto& cs = *shards.front().second.shard;
-                cs.update(delta, clock_offset + 1);
-                ccb.add_shard(cs);
-                shards.pop_front();
+                auto cs = counter_shard(counter_id::local(), delta, clock_offset + 1);
+                ac_o_c = counter_cell_builder::from_single_shard(acv.timestamp(), cs);
             } else {
-                // We are apply the tombstone that's already there second time.
-                // It is not necessary but there is no easy way to remove cell
-                // from a mutation.
-                tombstone t = shards.front().second.tomb;
-                ac_o_c = atomic_cell::make_dead(t.timestamp, t.deletion_time);
+                auto& cs = shards.front().second;
+                cs.update(delta, clock_offset + 1);
+                ac_o_c = counter_cell_builder::from_single_shard(acv.timestamp(), cs);
                 shards.pop_front();
-                return; // continue -- we are in lambda
             }
-            ac_o_c = ccb.build(acv.timestamp());
         });
     }
 }

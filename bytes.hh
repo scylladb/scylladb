@@ -26,9 +26,11 @@
 #include <experimental/optional>
 #include <iosfwd>
 #include <functional>
+#include "utils/mutable_view.hh"
 
 using bytes = basic_sstring<int8_t, uint32_t, 31>;
 using bytes_view = std::experimental::basic_string_view<int8_t>;
+using bytes_mutable_view = basic_mutable_view<bytes_view::value_type>;
 using bytes_opt = std::experimental::optional<bytes>;
 using sstring_view = std::experimental::string_view;
 

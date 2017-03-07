@@ -411,12 +411,15 @@ struct appending_hash<row_marker> {
     }
 };
 
+class clustering_row;
+
 class deletable_row final {
     tombstone _deleted_at;
     row_marker _marker;
     row _cells;
 public:
     deletable_row() {}
+    explicit deletable_row(clustering_row&&);
 
     void apply(tombstone deleted_at) {
         _deleted_at.apply(deleted_at);
@@ -724,6 +727,7 @@ public:
 private:
     template<typename Func>
     void for_each_row(const schema& schema, const query::clustering_range& row_range, bool reversed, Func&& func) const;
+    friend class counter_write_query_result_builder;
 };
 
 // A shadowable row tombstone is valid only if the row has no live marker. In other words,

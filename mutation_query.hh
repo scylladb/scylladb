@@ -139,3 +139,10 @@ future<> data_query(
     gc_clock::time_point query_time,
     query::result::builder& builder,
     tracing::trace_state_ptr trace_ptr = nullptr);
+
+// Performs a query for counter updates.
+future<mutation_opt> counter_write_query(schema_ptr, const mutation_source&,
+                                         const dht::decorated_key& dk,
+                                         const query::partition_slice& slice,
+                                         tracing::trace_state_ptr trace_ptr);
+

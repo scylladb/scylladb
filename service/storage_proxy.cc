@@ -229,6 +229,9 @@ public:
             _ready.set_exception(mutation_write_timeout_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, total_block_for(), _type));
         }
     };
+    bool is_counter() const {
+        return _type == db::write_type::COUNTER;
+    }
     void unthrottle() {
         _proxy->_stats.background_writes++;
         _proxy->_stats.background_write_bytes += _mutation_holder->size();
@@ -532,6 +535,9 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
     });
 
     _metrics.add_group(REPLICA_STATS_CATEGORY, {
+        sm::make_total_operations("received_counter_updates", _stats.received_counter_updates,
+                       sm::description("number of counter updates received by this node acting as an update leader")),
+
         sm::make_total_operations("received_mutations", _stats.received_mutations,
                        sm::description("number of mutations received by a replica Node")),
 
@@ -977,30 +983,25 @@ storage_proxy::mutate_locally(std::vector<mutation> mutations, clock_type::time_
 }
 
 future<>
-storage_proxy::mutate_counters_on_leader(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout) {
-    return do_with(std::vector<mutation>(), [this, cl, timeout, mutations = std::move(mutations)] (std::vector<mutation>& ms_for_replication) mutable {
-        ms_for_replication.reserve(mutations.size());
-        return parallel_for_each(std::move(mutations), [this, cl, timeout, &ms_for_replication] (const mutation& m) {
-            return mutate_counter_on_leader(m, timeout).then([&] (mutation m) {
-                ms_for_replication.emplace_back(std::move(m));
-            });
-        }).then([&, this, cl] {
-            return replicate_counters_from_leader(std::move(ms_for_replication), cl, { });
+storage_proxy::mutate_counters_on_leader(std::vector<frozen_mutation_and_schema> mutations, db::consistency_level cl, clock_type::time_point timeout,
+                                         tracing::trace_state_ptr trace_state) {
+    _stats.received_counter_updates += mutations.size();
+    return do_with(std::move(mutations), [this, cl, timeout, trace_state = std::move(trace_state)] (std::vector<frozen_mutation_and_schema>& update_ms) mutable {
+        return parallel_for_each(update_ms, [this, cl, timeout, trace_state] (frozen_mutation_and_schema& fm_a_s) {
+            return mutate_counter_on_leader_and_replicate(fm_a_s.s, std::move(fm_a_s.fm), cl, timeout, trace_state);
         });
     });
 }
 
-future<mutation>
-storage_proxy::mutate_counter_on_leader(const mutation& m, clock_type::time_point timeout) {
-    auto fm = freeze(m);
+future<>
+storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, frozen_mutation fm, db::consistency_level cl, clock_type::time_point timeout,
+                                                      tracing::trace_state_ptr trace_state) {
     auto shard = _db.local().shard_of(fm);
-    return _db.invoke_on(shard, [gs = global_schema_ptr(m.schema()), fm = std::move(fm), timeout] (database& db) {
-        return db.apply_counter_update(gs, fm, timeout).then([] (frozen_mutation fm) {
-            return make_foreign(std::make_unique<frozen_mutation>(std::move(fm)));
+    return _db.invoke_on(shard, [gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) {
+        auto trace_state = gt.get();
+        return db.apply_counter_update(gs, fm, timeout, trace_state).then([cl, timeout, trace_state] (mutation m) mutable {
+            return service::get_local_storage_proxy().replicate_counter_from_leader(std::move(m), cl, std::move(trace_state), timeout);
         });
-    }).then([s = m.schema()] (foreign_ptr<std::unique_ptr<frozen_mutation>> fm) {
-        // FIXME: way too many freeze/unfreeze cycles
-        return fm->unfreeze(s);
     });
 }
 
@@ -1112,8 +1113,9 @@ future<std::vector<storage_proxy::unique_response_handler>> storage_proxy::mutat
     });
 }
 
-future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl) {
-    return parallel_for_each(ids, [this, cl] (unique_response_handler& protected_response) {
+future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl,
+                                     stdx::optional<clock_type::time_point> timeout_opt) {
+    return parallel_for_each(ids, [this, cl, timeout_opt] (unique_response_handler& protected_response) {
         auto response_id = protected_response.id;
         // it is better to send first and hint afterwards to reduce latency
         // but request may complete before hint_to_dead_endpoints() is called and
@@ -1121,7 +1123,7 @@ future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, d
         // frozen_mutation copy, or manage handler live time differently.
         hint_to_dead_endpoints(response_id, cl);
 
-        auto timeout = clock_type::now() + std::chrono::milliseconds(_db.local().get_config().write_request_timeout_in_ms());
+        auto timeout = timeout_opt.value_or(clock_type::now() + std::chrono::milliseconds(_db.local().get_config().write_request_timeout_in_ms()));
         // call before send_to_live_endpoints() for the same reason as above
         auto f = response_wait(response_id, timeout);
         send_to_live_endpoints(protected_response.release(), timeout); // response is now running and it will either complete or timeout
@@ -1202,31 +1204,49 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
     }
 
     // Choose a leader for each mutation
-    std::unordered_map<gms::inet_address, std::vector<mutation>> leaders;
+    std::unordered_map<gms::inet_address, std::vector<frozen_mutation_and_schema>> leaders;
     for (auto& m : mutations) {
         auto leader = find_leader_for_counter_update(m, cl);
-        leaders[leader].emplace_back(std::move(m));
+        leaders[leader].emplace_back(frozen_mutation_and_schema { freeze(m), m.schema() });
         // FIXME: check if CL can be reached
     }
 
     // Forward mutations to the leaders chosen for them
-    auto timeout = clock_type::now() + std::chrono::milliseconds(_db.local().get_config().write_request_timeout_in_ms());
+    auto timeout = clock_type::now() + std::chrono::milliseconds(_db.local().get_config().counter_write_request_timeout_in_ms());
     auto my_address = utils::fb_utilities::get_broadcast_address();
     return parallel_for_each(leaders, [this, cl, timeout, tr_state = std::move(tr_state), my_address] (auto& endpoint_and_mutations) {
         auto endpoint = endpoint_and_mutations.first;
 
+        // The leader receives a vector of mutations and processes them together,
+        // so if there is a timeout we don't really know which one is to "blame"
+        // and what to put in ks and cf fields of write timeout exception.
+        // Let's just use the schema of the first mutation in a vector.
+        auto handle_error = [this, sp = this->shared_from_this(), s = endpoint_and_mutations.second[0].s, cl] (std::exception_ptr exp) {
+            auto& ks = _db.local().find_keyspace(s->ks_name());
+            try {
+                std::rethrow_exception(std::move(exp));
+            } catch (rpc::timeout_error&) {
+                return make_exception_future<>(mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(ks, cl), db::write_type::COUNTER));
+            } catch (timed_out_error&) {
+                return make_exception_future<>(mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(ks, cl), db::write_type::COUNTER));
+            }
+        };
+
+        auto f = make_ready_future<>();
         if (endpoint == my_address) {
-            return this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout);
+            f = this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout, tr_state);
         } else {
             auto& mutations = endpoint_and_mutations.second;
             auto fms = boost::copy_range<std::vector<frozen_mutation>>(mutations | boost::adaptors::transformed([] (auto& m) {
-                return freeze(m);
+                return std::move(m.fm);
             }));
 
             auto& ms = net::get_local_messaging_service();
             auto msg_addr = net::messaging_service::msg_addr{ endpoint_and_mutations.first, 0 };
-            return ms.send_counter_mutation(msg_addr, timeout, std::move(fms), cl, tracing::make_trace_info(tr_state));
+            tracing::trace(tr_state, "Enqueuing counter update to {}", msg_addr);
+            f = ms.send_counter_mutation(msg_addr, timeout, std::move(fms), cl, tracing::make_trace_info(tr_state));
         }
+        return f.handle_exception(std::move(handle_error));
     });
 }
 
@@ -1250,9 +1270,10 @@ future<> storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_
     );
 }
 
-future<> storage_proxy::replicate_counters_from_leader(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state) {
+future<> storage_proxy::replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state,
+                                                      clock_type::time_point timeout) {
     // FIXME: do not send the mutation to itself, it has already been applied (it is not incorrect to do so, though)
-    return mutate_internal(std::move(mutations), cl, true, std::move(tr_state));
+    return mutate_internal(std::array<mutation, 1>{std::move(m)}, cl, true, std::move(tr_state), timeout);
 }
 
 /*
@@ -1262,7 +1283,8 @@ future<> storage_proxy::replicate_counters_from_leader(std::vector<mutation> mut
  */
 template<typename Range>
 future<>
-storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool counters, tracing::trace_state_ptr tr_state) {
+storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool counters, tracing::trace_state_ptr tr_state,
+                               stdx::optional<clock_type::time_point> timeout_opt) {
     logger.trace("mutate cl={}", cl);
     mlogger.trace("mutations={}", mutations);
     if (boost::empty(mutations)) {
@@ -1277,8 +1299,8 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool c
     utils::latency_counter lc;
     lc.start();
 
-    return mutate_prepare(mutations, cl, type, tr_state).then([this, cl] (std::vector<storage_proxy::unique_response_handler> ids) {
-        return mutate_begin(std::move(ids), cl);
+    return mutate_prepare(mutations, cl, type, tr_state).then([this, cl, timeout_opt] (std::vector<storage_proxy::unique_response_handler> ids) {
+        return mutate_begin(std::move(ids), cl, timeout_opt);
     }).then_wrapped([p = shared_from_this(), lc, tr_state] (future<> f) mutable {
         return p->mutate_end(std::move(f), lc, std::move(tr_state));
     });
@@ -1504,7 +1526,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
 
         lw_shared_ptr<const frozen_mutation> m = handler.get_mutation_for(coordinator);
 
-        if (!m) {
+        if (!m || (handler.is_counter() && coordinator == my_address)) {
             got_response(response_id, coordinator);
         } else {
             if (!handler.read_repair_write()) {
@@ -3531,18 +3553,25 @@ void storage_proxy::init_messaging_service() {
     auto& ms = net::get_local_messaging_service();
     ms.register_counter_mutation([] (const rpc::client_info& cinfo, rpc::opt_time_point t, std::vector<frozen_mutation> fms, db::consistency_level cl, stdx::optional<tracing::trace_info> trace_info) {
         auto src_addr = net::messaging_service::get_source(cinfo);
-        // FIXME: tracing
-        return do_with(std::vector<mutation>(), [cl, src_addr, timeout = *t, fms = std::move(fms)] (std::vector<mutation>& mutations) mutable {
+
+        tracing::trace_state_ptr trace_state_ptr;
+        if (trace_info) {
+            trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*trace_info);
+            tracing::begin(trace_state_ptr);
+            tracing::trace(trace_state_ptr, "Message received from /{}", src_addr.addr);
+        }
+
+        return do_with(std::vector<frozen_mutation_and_schema>(),
+                       [cl, src_addr, timeout = *t, fms = std::move(fms), trace_state_ptr = std::move(trace_state_ptr)] (std::vector<frozen_mutation_and_schema>& mutations) mutable {
             return parallel_for_each(std::move(fms), [&mutations, src_addr] (frozen_mutation& fm) {
                 // FIXME: optimise for cases when all fms are in the same schema
                 auto schema_version = fm.schema_version();
                 return get_schema_for_write(schema_version, std::move(src_addr)).then([&mutations, fm = std::move(fm)] (schema_ptr s) mutable {
-                    // FIXME: unfreeze/freeze/unfreeze/freeze...
-                    mutations.emplace_back(fm.unfreeze(s));
+                    mutations.emplace_back(frozen_mutation_and_schema { std::move(fm), std::move(s) });
                 });
-            }).then([&, cl, timeout] {
+            }).then([trace_state_ptr = std::move(trace_state_ptr), &mutations, cl, timeout] {
                 auto sp = get_local_shared_storage_proxy();
-                return sp->mutate_counters_on_leader(std::move(mutations), cl, timeout);
+                return sp->mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr));
             });
         });
     });

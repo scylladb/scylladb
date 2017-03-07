@@ -79,6 +79,7 @@
 #include "lister.hh"
 
 class cell_locker;
+class cell_locker_stats;
 class locked_cell;
 
 class frozen_mutation;
@@ -393,6 +394,8 @@ struct cf_stats {
 
 class column_family {
 public:
+    using timeout_clock = lowres_clock;
+
     struct config {
         sstring datadir;
         bool enable_disk_writes = true;
@@ -662,16 +665,16 @@ public:
         return _cache;
     }
 
-    future<std::vector<locked_cell>> lock_counter_cells(const mutation& m);
+    future<std::vector<locked_cell>> lock_counter_cells(const mutation& m, timeout_clock::time_point timeout);
 
     logalloc::occupancy_stats occupancy() const;
 private:
-    column_family(schema_ptr schema, config cfg, db::commitlog* cl, compaction_manager&);
+    column_family(schema_ptr schema, config cfg, db::commitlog* cl, compaction_manager&, cell_locker_stats& cl_stats);
 public:
-    column_family(schema_ptr schema, config cfg, db::commitlog& cl, compaction_manager& cm)
-        : column_family(schema, std::move(cfg), &cl, cm) {set_metrics();}
-    column_family(schema_ptr schema, config cfg, no_commitlog, compaction_manager& cm)
-        : column_family(schema, std::move(cfg), nullptr, cm) {set_metrics();}
+    column_family(schema_ptr schema, config cfg, db::commitlog& cl, compaction_manager& cm, cell_locker_stats& cl_stats)
+        : column_family(schema, std::move(cfg), &cl, cm, cl_stats) {set_metrics();}
+    column_family(schema_ptr schema, config cfg, no_commitlog, compaction_manager& cm, cell_locker_stats& cl_stats)
+        : column_family(schema, std::move(cfg), nullptr, cm, cl_stats) {set_metrics();}
     column_family(column_family&&) = delete; // 'this' is being captured during construction
     ~column_family();
     const schema_ptr& schema() const { return _schema; }
@@ -1098,6 +1101,7 @@ private:
     };
 
     lw_shared_ptr<db_stats> _stats;
+    std::unique_ptr<cell_locker_stats> _cl_stats;
 
     std::unique_ptr<db::config> _cfg;
 
@@ -1122,7 +1126,7 @@ private:
 
     future<> init_commitlog();
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position, timeout_clock::time_point timeout);
-
+    future<> apply_in_memory(const mutation& m, column_family& cf, db::replay_position rp, timeout_clock::time_point timeout);
 private:
     // Unless you are an earlier boostraper or the database itself, you should
     // not be using this directly.  Go for the public create_keyspace instead.
@@ -1133,10 +1137,12 @@ private:
 
     future<> do_apply(schema_ptr, const frozen_mutation&, timeout_clock::time_point timeout);
     future<> apply_with_commitlog(schema_ptr, column_family&, utils::UUID, const frozen_mutation&, timeout_clock::time_point timeout);
+    future<> apply_with_commitlog(column_family& cf, const mutation& m, timeout_clock::time_point timeout);
 
     query::result_memory_limiter _result_memory_limiter;
 
-    future<frozen_mutation> do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema);
+    future<mutation> do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema, timeout_clock::time_point timeout,
+                                             tracing::trace_state_ptr trace_state);
 public:
     static utils::UUID empty_version;
 
@@ -1211,7 +1217,7 @@ public:
     // Throws timed_out_error when timeout is reached.
     future<> apply(schema_ptr, const frozen_mutation&, timeout_clock::time_point timeout = timeout_clock::time_point::max());
     future<> apply_streaming_mutation(schema_ptr, utils::UUID plan_id, const frozen_mutation&, bool fragmented);
-    future<frozen_mutation> apply_counter_update(schema_ptr, const frozen_mutation& m, timeout_clock::time_point timeout = timeout_clock::time_point::max());
+    future<mutation> apply_counter_update(schema_ptr, const frozen_mutation& m, timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
     const sstring& get_snitch_name() const;
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names);

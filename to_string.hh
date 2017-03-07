@@ -87,6 +87,12 @@ std::ostream& operator<<(std::ostream& os, const std::set<T>& items) {
     return os;
 }
 
+template<typename T, size_t N>
+std::ostream& operator<<(std::ostream& os, const std::array<T, N>& items) {
+    os << "{" << join(", ", items) << "}";
+    return os;
+}
+
 template <typename T>
 std::ostream& operator<<(std::ostream& os, const std::experimental::optional<T>& opt) {
     if (opt) {

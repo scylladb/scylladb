@@ -1998,3 +1998,50 @@ mutation_query(schema_ptr s,
 bool row_tombstone_is_shadowed(const schema& schema, const tombstone& row_tombstone, const row_marker& marker) {
     return schema.is_view() && marker.timestamp() > row_tombstone.timestamp;
 }
+
+deletable_row::deletable_row(clustering_row&& cr)
+    : _deleted_at(cr.tomb())
+    , _marker(std::move(cr.marker()))
+    , _cells(std::move(cr.cells()))
+{ }
+
+class counter_write_query_result_builder {
+    const schema& _schema;
+    mutation_opt _mutation;
+public:
+    counter_write_query_result_builder(const schema& s) : _schema(s) { }
+    void consume_new_partition(const dht::decorated_key& dk) {
+        _mutation = mutation(dk, _schema.shared_from_this());
+    }
+    void consume(tombstone) { }
+    stop_iteration consume(static_row&& sr, tombstone, bool) {
+        _mutation->partition().static_row() = std::move(sr.cells());
+        return stop_iteration::no;
+    }
+    stop_iteration consume(clustering_row&& cr, tombstone,  bool) {
+        _mutation->partition().insert_row(_schema, cr.key(), deletable_row(std::move(cr)));
+        return stop_iteration::no;
+    }
+    stop_iteration consume(range_tombstone&& rt) {
+        return stop_iteration::no;
+    }
+    stop_iteration consume_end_of_partition() {
+        return stop_iteration::no;
+    }
+    mutation_opt consume_end_of_stream() {
+        return std::move(_mutation);
+    }
+};
+
+future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& source,
+                                         const dht::decorated_key& dk,
+                                         const query::partition_slice& slice,
+                                         tracing::trace_state_ptr trace_ptr)
+{
+    auto cwqrb = counter_write_query_result_builder(*s);
+    auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::yes, counter_write_query_result_builder>>(
+            *s, gc_clock::now(), slice, query::max_rows, query::max_rows, std::move(cwqrb));
+    auto reader = source(s, dht::partition_range::make_singular(dk), slice,
+                         service::get_local_sstable_query_read_priority(), std::move(trace_ptr));
+    return consume_flattened(std::move(reader), std::move(cfq), false);
+}

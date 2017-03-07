@@ -147,8 +147,7 @@ public:
     };
 
     atomic_cell make_counter_update_cell(int64_t delta) const {
-        // FIXME: create directly from int64_t to avoid allocation
-        return atomic_cell::make_live_counter_update(_timestamp, long_type->decompose(delta));
+        return atomic_cell::make_live_counter_update(_timestamp, delta);
     }
 
     tombstone make_tombstone() const {

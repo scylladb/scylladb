@@ -75,6 +75,10 @@ static schema_ptr make_schema_disjoint_with_others()
 
 static data_value empty_value = data_value(to_bytes(""));
 
+static cell_locker::timeout_clock::time_point no_timeout {
+    cell_locker::timeout_clock::duration(std::numeric_limits<cell_locker::timeout_clock::duration::rep>::max())
+};
+
 static auto make_row(const sstring& key, std::initializer_list<sstring> cells) {
     return std::pair<sstring, std::initializer_list<sstring>>(key, cells);
 }
@@ -100,15 +104,16 @@ SEASTAR_TEST_CASE(test_simple_locking_cells) {
         auto destroy = [] (auto) { };
 
         auto s = make_schema();
-        cell_locker cl(s);
+        cell_locker_stats cl_stats;
+        cell_locker cl(s, cl_stats);
 
         auto m = make_mutation(s, "0", { "s1", "s3" }, {
             make_row("one", { "r1", "r2" }),
             make_row("two", { "r2", "r3" }),
         });
 
-        auto l1 = cl.lock_cells(m.decorated_key(), partition_cells_range(m.partition())).get0();
-        auto f2 = cl.lock_cells(m.decorated_key(), partition_cells_range(m.partition()));
+        auto l1 = cl.lock_cells(m.decorated_key(), partition_cells_range(m.partition()), no_timeout).get0();
+        auto f2 = cl.lock_cells(m.decorated_key(), partition_cells_range(m.partition()), no_timeout);
         BOOST_REQUIRE(!f2.available());
 
         destroy(std::move(l1));
@@ -119,7 +124,8 @@ SEASTAR_TEST_CASE(test_simple_locking_cells) {
 SEASTAR_TEST_CASE(test_disjoint_mutations) {
     return seastar::async([&] {
         auto s = make_schema();
-        cell_locker cl(s);
+        cell_locker_stats cl_stats;
+        cell_locker cl(s, cl_stats);
 
         auto m1 = make_mutation(s, "0", { "s1" }, {
                 make_row("one", { "r1", "r2" }),
@@ -133,9 +139,9 @@ SEASTAR_TEST_CASE(test_disjoint_mutations) {
         auto m3 = mutation(partition_key::from_single_value(*s, to_bytes("1")), s);
         m3.partition() = m1.partition();
 
-        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition())).get0();
-        auto l2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition())).get0();
-        auto l3 = cl.lock_cells(m3.decorated_key(), partition_cells_range(m3.partition())).get0();
+        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get0();
+        auto l2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout).get0();
+        auto l3 = cl.lock_cells(m3.decorated_key(), partition_cells_range(m3.partition()), no_timeout).get0();
     });
 }
 
@@ -144,7 +150,8 @@ SEASTAR_TEST_CASE(test_single_cell_overlap) {
         auto destroy = [] (auto) { };
 
         auto s = make_schema();
-        cell_locker cl(s);
+        cell_locker_stats cl_stats;
+        cell_locker cl(s, cl_stats);
 
         auto m1 = make_mutation(s, "0", { "s1" }, {
                 make_row("one", { "r1", "r2" }),
@@ -159,12 +166,12 @@ SEASTAR_TEST_CASE(test_single_cell_overlap) {
                 make_row("one", { "r2", "r3" }),
         });
 
-        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition())).get0();
-        auto f2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()));
+        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get0();
+        auto f2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout);
         BOOST_REQUIRE(!f2.available());
         destroy(std::move(l1));
         auto l2 = f2.get0();
-        auto f3 = cl.lock_cells(m3.decorated_key(), partition_cells_range(m3.partition()));
+        auto f3 = cl.lock_cells(m3.decorated_key(), partition_cells_range(m3.partition()), no_timeout);
         BOOST_REQUIRE(!f3.available());
         destroy(std::move(l2));
         auto l3 = f3.get0();
@@ -177,7 +184,8 @@ SEASTAR_TEST_CASE(test_schema_change) {
 
         auto s1 = make_schema();
         auto s2 = make_alternative_schema();
-        cell_locker cl(s1);
+        cell_locker_stats cl_stats;
+        cell_locker cl(s1, cl_stats);
 
         auto m1 = make_mutation(s1, "0", { "s1", "s2", "s3"}, {
             make_row("one", { "r1", "r2", "r3" }),
@@ -194,14 +202,14 @@ SEASTAR_TEST_CASE(test_schema_change) {
                 make_row("one", { "r1", "r3" }),
         });
 
-        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition())).get0();
+        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get0();
 
         destroy(std::move(m1));
         destroy(std::move(s1));
         cl.set_schema(s2);
 
-        auto l2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition())).get0();
-        auto f3 = cl.lock_cells(m3.decorated_key(), partition_cells_range(m3.partition()));
+        auto l2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout).get0();
+        auto f3 = cl.lock_cells(m3.decorated_key(), partition_cells_range(m3.partition()), no_timeout);
         BOOST_REQUIRE(!f3.available());
         destroy(std::move(l1));
         auto l3 = f3.get0();
@@ -213,6 +221,66 @@ SEASTAR_TEST_CASE(test_schema_change) {
                 make_row("one", { "r8", "r9" }),
                 make_row("two", { "r8", "r9" }),
         });
-        auto l4 = cl.lock_cells(m4.decorated_key(), partition_cells_range(m4.partition())).get0();
+        auto l4 = cl.lock_cells(m4.decorated_key(), partition_cells_range(m4.partition()), no_timeout).get0();
+    });
+}
+
+SEASTAR_TEST_CASE(test_timed_out) {
+        return seastar::async([&] {
+            auto destroy = [] (auto) { };
+
+            auto s = make_schema();
+            cell_locker_stats cl_stats;
+            cell_locker cl(s, cl_stats);
+
+            auto m1 = make_mutation(s, "0", { "s1", "s2", "s3"}, {
+                    make_row("one", { "r2", "r3" }),
+            });
+            auto m2 = make_mutation(s, "0", { }, {
+                    make_row("one", { "r1", "r2" }),
+            });
+
+            auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get0();
+
+            auto timeout = cell_locker::timeout_clock::now() - std::chrono::hours(1);
+            BOOST_REQUIRE_THROW(cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), timeout).get0(),
+                                timed_out_error);
+
+            auto f2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout);
+            BOOST_REQUIRE(!f2.available());
+            destroy(std::move(l1));
+            auto l2 = f2.get0();
+        });
+}
+
+SEASTAR_TEST_CASE(test_locker_stats) {
+    return seastar::async([&] {
+        auto destroy = [] (auto) { };
+
+        auto s = make_schema();
+        cell_locker_stats cl_stats;
+        cell_locker cl(s, cl_stats);
+
+        auto m1 = make_mutation(s, "0", { "s2", "s3" }, {
+                make_row("one", { "r1", "r2" }),
+        });
+
+        auto m2 = make_mutation(s, "0", { "s1", "s3" }, {
+                make_row("one", { "r2", "r3" }),
+        });
+
+        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get0();
+        BOOST_REQUIRE_EQUAL(cl_stats.lock_acquisitions, 4);
+        BOOST_REQUIRE_EQUAL(cl_stats.operations_waiting_for_lock, 0);
+
+        auto f2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout);
+        BOOST_REQUIRE_EQUAL(cl_stats.lock_acquisitions, 5);
+        BOOST_REQUIRE_EQUAL(cl_stats.operations_waiting_for_lock, 1);
+        BOOST_REQUIRE(!f2.available());
+
+        destroy(std::move(l1));
+        destroy(f2.get0());
+        BOOST_REQUIRE_EQUAL(cl_stats.lock_acquisitions, 8);
+        BOOST_REQUIRE_EQUAL(cl_stats.operations_waiting_for_lock, 0);
     });
 }

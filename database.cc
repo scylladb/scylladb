@@ -52,6 +52,7 @@
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/algorithm/find_if.hpp>
+#include <boost/range/algorithm/sort.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include "frozen_mutation.hh"
 #include "mutation_partition_applier.hh"
@@ -124,7 +125,7 @@ column_family::make_streaming_memtable_big_list(streaming_memtable_big& smb) {
     return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager);
 }
 
-column_family::column_family(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager)
+column_family::column_family(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager, cell_locker_stats& cl_stats)
     : _schema(std::move(schema))
     , _config(std::move(config))
     , _memtables(_config.enable_disk_writes ? make_memtable_list() : make_memory_only_memtable_list())
@@ -135,7 +136,7 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog* cl
     , _commitlog(cl)
     , _compaction_manager(compaction_manager)
     , _flush_queue(std::make_unique<memtable_flush_queue>())
-    , _counter_cell_locks(std::make_unique<cell_locker>(_schema))
+    , _counter_cell_locks(std::make_unique<cell_locker>(_schema, cl_stats))
 {
     if (!_config.enable_disk_writes) {
         dblog.warn("Writes disabled, column family no durable.");
@@ -668,9 +669,9 @@ column_family::make_streaming_reader(schema_ptr s,
     return make_multi_range_reader(s, std::move(source), ranges, slice, pc, nullptr, streamed_mutation::forwarding::no);
 }
 
-future<std::vector<locked_cell>> column_family::lock_counter_cells(const mutation& m) {
+future<std::vector<locked_cell>> column_family::lock_counter_cells(const mutation& m, timeout_clock::time_point timeout) {
     assert(m.schema() == _counter_cell_locks->schema());
-    return _counter_cell_locks->lock_cells(m.decorated_key(), partition_cells_range(m.partition()));
+    return _counter_cell_locks->lock_cells(m.decorated_key(), partition_cells_range(m.partition()), timeout);
 }
 
 // Not performance critical. Currently used for testing only.
@@ -1696,6 +1697,7 @@ database::database() : database(db::config())
 
 database::database(const db::config& cfg)
     : _stats(make_lw_shared<db_stats>())
+    , _cl_stats(std::make_unique<cell_locker_stats>())
     , _cfg(std::make_unique<db::config>(cfg))
     // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
     , _system_dirty_memory_manager(*this, 10 << 20)
@@ -1823,6 +1825,12 @@ database::setup_metrics() {
 
         sm::make_derive("short_mutation_queries", _stats->short_mutation_queries,
                        sm::description("The rate of mutation queries that returned less rows than requested due to result size limiting.")),
+
+        sm::make_total_operations("counter_cell_lock_acquisition", _cl_stats->lock_acquisitions,
+                                 sm::description("The number of acquired counter cell locks.")),
+
+        sm::make_queue_length("counter_cell_lock_pending", _cl_stats->operations_waiting_for_lock,
+                             sm::description("The number of counter updates waiting for a lock.")),
     });
 }
 
@@ -2064,9 +2072,9 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
 
     lw_shared_ptr<column_family> cf;
     if (cfg.enable_commitlog && _commitlog) {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog, _compaction_manager);
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog, _compaction_manager, *_cl_stats);
     } else {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog(), _compaction_manager);
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog(), _compaction_manager, *_cl_stats);
     }
 
     auto uuid = schema->id();
@@ -2619,62 +2627,58 @@ column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const
     do_apply(rp, m, m_schema);
 }
 
-future<frozen_mutation> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema) {
+future<mutation> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema,
+                                                   timeout_clock::time_point timeout,tracing::trace_state_ptr trace_state) {
     auto m = fm.unfreeze(m_schema);
     m.upgrade(cf.schema());
 
     // prepare partition slice
-    query::clustering_row_ranges cr_ranges;
-
     std::vector<column_id> static_columns;
     static_columns.reserve(m.partition().static_row().size());
-    m.partition().static_row().for_each_cell([&] (auto id, auto) {
+    m.partition().static_row().for_each_cell([&] (auto id, auto&&) {
         static_columns.emplace_back(id);
     });
 
-    std::set<column_id> regular_columns;
+    query::clustering_row_ranges cr_ranges;
+    cr_ranges.reserve(8);
+    std::vector<column_id> regular_columns;
+    regular_columns.reserve(32);
+
     for (auto&& cr : m.partition().clustered_rows()) {
         cr_ranges.emplace_back(query::clustering_range::make_singular(cr.key()));
-        cr.row().cells().for_each_cell([&] (auto id, auto) {
-            regular_columns.emplace(id);
+        cr.row().cells().for_each_cell([&] (auto id, auto&&) {
+            regular_columns.emplace_back(id);
         });
     }
 
-    auto slice = query::partition_slice(std::move(cr_ranges), std::move(static_columns),
-        boost::copy_range<std::vector<column_id>>(regular_columns), { }, { },
-        cql_serialization_format::internal(), query::max_rows);
+    boost::sort(regular_columns);
+    regular_columns.erase(std::unique(regular_columns.begin(), regular_columns.end()),
+                          regular_columns.end());
 
-    return do_with(std::move(slice), std::move(m), std::vector<locked_cell>(), stdx::optional<frozen_mutation>(),
-                   [this, &cf] (const query::partition_slice& slice, mutation& m, std::vector<locked_cell>& locks,
-                               stdx::optional<frozen_mutation>& fm) mutable {
-        return cf.lock_counter_cells(m).then([&, m_schema = cf.schema(), this] (std::vector<locked_cell> lcs) {
+    auto slice = query::partition_slice(std::move(cr_ranges), std::move(static_columns),
+        std::move(regular_columns), { }, { }, cql_serialization_format::internal(), query::max_rows);
+
+    return do_with(std::move(slice), std::move(m), std::vector<locked_cell>(),
+                   [this, &cf, timeout, trace_state = std::move(trace_state)] (const query::partition_slice& slice, mutation& m, std::vector<locked_cell>& locks) mutable {
+        tracing::trace(trace_state, "Acquiring counter locks");
+        return cf.lock_counter_cells(m, timeout).then([&, m_schema = cf.schema(), trace_state = std::move(trace_state), timeout, this] (std::vector<locked_cell> lcs) mutable {
             locks = std::move(lcs);
 
             // Before counter update is applied it needs to be transformed from
             // deltas to counter shards. To do that, we need to read the current
             // counter state for each modified cell...
 
-            // FIXME: tracing
-            return mutation_query(m_schema, cf.as_mutation_source(),
-                                  dht::partition_range::make_singular(m.decorated_key()),
-                                  slice, query::max_rows, query::max_partitions,
-                                  gc_clock::now(), { }).then([this, &cf, &m, &fm, m_schema] (auto result) {
-
+            tracing::trace(trace_state, "Reading counter values from the CF");
+            return counter_write_query(m_schema, cf.as_mutation_source(), m.decorated_key(), slice, trace_state)
+                    .then([this, &cf, &m, m_schema, timeout, trace_state] (auto mopt) {
                 // ...now, that we got existing state of all affected counter
                 // cells we can look for our shard in each of them, increment
                 // its clock and apply the delta.
-
-                auto& partitions = result.partitions();
-                mutation_opt mopt = partitions.empty() ? mutation_opt()
-                                                       : partitions[0].mut().unfreeze(m_schema);
                 transform_counter_updates_to_shards(m, mopt ? &*mopt : nullptr, cf.failed_counter_applies_to_memtable());
-
-                // FIXME: oh dear, another freeze
-                // FIXME: timeout
-                fm = freeze(m);
-                return this->do_apply(m_schema, *fm, { });
-            }).then([&fm] {
-                return std::move(*fm);
+                tracing::trace(trace_state, "Applying counter update");
+                return this->apply_with_commitlog(cf, m, timeout);
+            }).then([&m] {
+                return std::move(m);
             });
         });
     });
@@ -2825,18 +2829,48 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
     }, timeout);
 }
 
-future<frozen_mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
+future<> database::apply_in_memory(const mutation& m, column_family& cf, db::replay_position rp, timeout_clock::time_point timeout) {
+    return _dirty_memory_manager.region_group().run_when_memory_available([this, &m, &cf, rp = std::move(rp)] {
+        cf.apply(m, rp);
+    }, timeout);
+}
+
+future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
     if (!s->is_synced()) {
         throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
                                         s->ks_name(), s->cf_name(), s->version()));
     }
     try {
         auto& cf = find_column_family(m.column_family_id());
-        return do_apply_counter_update(cf, m, s);
+        return do_apply_counter_update(cf, m, s, timeout, std::move(trace_state));
     } catch (no_such_column_family&) {
         dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
         throw;
     }
+}
+
+future<> database::apply_with_commitlog(column_family& cf, const mutation& m, timeout_clock::time_point timeout) {
+    if (cf.commitlog() != nullptr) {
+        return do_with(freeze(m), [this, &m, &cf, timeout] (frozen_mutation& fm) {
+            commitlog_entry_writer cew(m.schema(), fm);
+            return cf.commitlog()->add_entry(m.schema()->id(), cew, timeout);
+        }).then([this, &m, &cf, timeout] (db::replay_position rp) {
+            return apply_in_memory(m, cf, rp, timeout).handle_exception([this, &cf, &m, timeout] (auto ep) {
+                try {
+                    std::rethrow_exception(ep);
+                } catch (replay_position_reordered_exception&) {
+                    // expensive, but we're assuming this is super rare.
+                    // if we failed to apply the mutation due to future re-ordering
+                    // (which should be the ever only reason for rp mismatch in CF)
+                    // let's just try again, add the mutation to the CL once more,
+                    // and assume success in inevitable eventually.
+                    dblog.debug("replay_position reordering detected");
+                    return this->apply_with_commitlog(cf, m, timeout);
+                }
+            });
+        });
+    }
+    return apply_in_memory(m, cf, db::replay_position(), timeout);
 }
 
 future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::UUID uuid, const frozen_mutation& m, timeout_clock::time_point timeout) {

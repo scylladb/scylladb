@@ -38,6 +38,7 @@
 #include "tmpdir.hh"
 #include "partition_slice_builder.hh"
 #include "tests/test_services.hh"
+#include "cell_locking.hh"
 
 #include "disk-error-handler.hh"
 
@@ -934,7 +935,8 @@ SEASTAR_TEST_CASE(reshuffle) {
             cfg.datadir = "tests/sstables/generation";
             cfg.enable_commitlog = false;
             cfg.enable_incremental_backups = false;
-            auto cf = make_lw_shared<column_family>(uncompressed_schema(), cfg, column_family::no_commitlog(), *cm);
+            auto cl_stats = make_lw_shared<cell_locker_stats>();
+            auto cf = make_lw_shared<column_family>(uncompressed_schema(), cfg, column_family::no_commitlog(), *cm, *cl_stats);
             cf->start();
             cf->mark_ready_for_writes();
             std::set<int64_t> existing_sstables = { 1, 5 };
@@ -952,7 +954,7 @@ SEASTAR_TEST_CASE(reshuffle) {
                 ).discard_result().then([cm] {
                     return cm->stop();
                 });
-            }).then([cm, cf] {});
+            }).then([cm, cf, cl_stats] {});
         });
     }, "tests/sstables/generation");
 }

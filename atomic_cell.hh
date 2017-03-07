@@ -29,10 +29,11 @@
 #include "net/byteorder.hh"
 #include <cstdint>
 #include <iosfwd>
+#include <seastar/util/gcc6-concepts.hh>
 
-template<typename T>
+template<typename T, typename Input>
 static inline
-void set_field(managed_bytes& v, unsigned offset, T val) {
+void set_field(Input& v, unsigned offset, T val) {
     reinterpret_cast<net::packed<T>*>(v.begin() + offset)->raw = net::hton(val);
 }
 
@@ -58,6 +59,7 @@ private:
     static constexpr int8_t EXPIRY_FLAG = 0x02; // When present, expiry field is present. Set only for live cells
     static constexpr int8_t REVERT_FLAG = 0x04; // transient flag used to efficiently implement ReversiblyMergeable for atomic cells.
     static constexpr int8_t COUNTER_UPDATE_FLAG = 0x08; // Cell is a counter update.
+    static constexpr int8_t COUNTER_IN_PLACE_REVERT = 0x10;
     static constexpr unsigned flags_size = 1;
     static constexpr unsigned timestamp_offset = flags_size;
     static constexpr unsigned timestamp_size = 8;
@@ -67,6 +69,7 @@ private:
     static constexpr unsigned deletion_time_size = 4;
     static constexpr unsigned ttl_offset = expiry_offset + expiry_size;
     static constexpr unsigned ttl_size = 4;
+    friend class counter_cell_builder;
 private:
     static bool is_counter_update(bytes_view cell) {
         return cell[0] & COUNTER_UPDATE_FLAG;
@@ -74,9 +77,16 @@ private:
     static bool is_revert_set(bytes_view cell) {
         return cell[0] & REVERT_FLAG;
     }
+    static bool is_counter_in_place_revert_set(bytes_view cell) {
+        return cell[0] & COUNTER_IN_PLACE_REVERT;
+    }
     template<typename BytesContainer>
     static void set_revert(BytesContainer& cell, bool revert) {
         cell[0] = (cell[0] & ~REVERT_FLAG) | (revert * REVERT_FLAG);
+    }
+    template<typename BytesContainer>
+    static void set_counter_in_place_revert(BytesContainer& cell, bool flag) {
+        cell[0] = (cell[0] & ~COUNTER_IN_PLACE_REVERT) | (flag * COUNTER_IN_PLACE_REVERT);
     }
     static bool is_live(const bytes_view& cell) {
         return cell[0] & LIVE_FLAG;
@@ -91,12 +101,29 @@ private:
     static api::timestamp_type timestamp(const bytes_view& cell) {
         return get_field<api::timestamp_type>(cell, timestamp_offset);
     }
+    template<typename BytesContainer>
+    static void set_timestamp(BytesContainer& cell, api::timestamp_type ts) {
+        set_field(cell, timestamp_offset, ts);
+    }
     // Can be called on live cells only
-    static bytes_view value(bytes_view cell) {
+private:
+    template<typename BytesView>
+    static BytesView do_get_value(BytesView cell) {
         auto expiry_field_size = bool(cell[0] & EXPIRY_FLAG) * (expiry_size + ttl_size);
         auto value_offset = flags_size + timestamp_size + expiry_field_size;
         cell.remove_prefix(value_offset);
         return cell;
+    }
+public:
+    static bytes_view value(bytes_view cell) {
+        return do_get_value(cell);
+    }
+    static bytes_mutable_view value(bytes_mutable_view cell) {
+        return do_get_value(cell);
+    }
+    // Can be called on live counter update cells only
+    static int64_t counter_update_value(bytes_view cell) {
+        return get_field<int64_t>(cell, flags_size + timestamp_size);
     }
     // Can be called only when is_dead() is true.
     static gc_clock::time_point deletion_time(const bytes_view& cell) {
@@ -130,12 +157,12 @@ private:
         std::copy_n(value.begin(), value.size(), b.begin() + value_offset);
         return b;
     }
-    static managed_bytes make_live_counter_update(api::timestamp_type timestamp, bytes_view value) {
+    static managed_bytes make_live_counter_update(api::timestamp_type timestamp, int64_t value) {
         auto value_offset = flags_size + timestamp_size;
-        managed_bytes b(managed_bytes::initialized_later(), value_offset + value.size());
+        managed_bytes b(managed_bytes::initialized_later(), value_offset + sizeof(value));
         b[0] = LIVE_FLAG | COUNTER_UPDATE_FLAG;
         set_field(b, timestamp_offset, timestamp);
-        std::copy_n(value.begin(), value.size(), b.begin() + value_offset);
+        set_field(b, value_offset, value);
         return b;
     }
     static managed_bytes make_live(api::timestamp_type timestamp, bytes_view value, gc_clock::time_point expiry, gc_clock::duration ttl) {
@@ -146,6 +173,31 @@ private:
         set_field(b, expiry_offset, expiry.time_since_epoch().count());
         set_field(b, ttl_offset, ttl.count());
         std::copy_n(value.begin(), value.size(), b.begin() + value_offset);
+        return b;
+    }
+    // make_live_from_serializer() is intended for users that need to serialise
+    // some object or objects to the format used in atomic_cell::value().
+    // With just make_live() the patter would look like follows:
+    // 1. allocate a buffer and write to it serialised objects
+    // 2. pass that buffer to make_live()
+    // 3. make_live() needs to prepend some metadata to the cell value so it
+    //    allocates a new buffer and copies the content of the original one
+    //
+    // The allocation and copy of a buffer can be avoided.
+    // make_live_from_serializer() allows the user code to specify the timestamp
+    // and size of the cell value as well as provide the serialiser function
+    // object, which would write the serialised value of the cell to the buffer
+    // given to it by make_live_from_serializer().
+    template<typename Serializer>
+    GCC6_CONCEPT(requires requires(Serializer serializer, bytes::iterator it) {
+        serializer(it);
+    })
+    static managed_bytes make_live_from_serializer(api::timestamp_type timestamp, size_t size, Serializer&& serializer) {
+        auto value_offset = flags_size + timestamp_size;
+        managed_bytes b(managed_bytes::initialized_later(), value_offset + size);
+        b[0] = LIVE_FLAG;
+        set_field(b, timestamp_offset, timestamp);
+        serializer(b.begin() + value_offset);
         return b;
     }
     template<typename ByteContainer>
@@ -166,6 +218,9 @@ public:
     }
     bool is_revert_set() const {
         return atomic_cell_type::is_revert_set(_data);
+    }
+    bool is_counter_in_place_revert_set() const {
+        return atomic_cell_type::is_counter_in_place_revert_set(_data);
     }
     bool is_live() const {
         return atomic_cell_type::is_live(_data);
@@ -189,9 +244,16 @@ public:
     api::timestamp_type timestamp() const {
         return atomic_cell_type::timestamp(_data);
     }
+    void set_timestamp(api::timestamp_type ts) {
+        atomic_cell_type::set_timestamp(_data, ts);
+    }
     // Can be called on live cells only
-    bytes_view value() const {
+    auto value() const {
         return atomic_cell_type::value(_data);
+    }
+    // Can be called on live counter update cells only
+    int64_t counter_update_value() const {
+        return atomic_cell_type::counter_update_value(_data);
     }
     // Can be called only when is_dead(gc_clock::time_point)
     gc_clock::time_point deletion_time() const {
@@ -215,6 +277,9 @@ public:
     void set_revert(bool revert) {
         atomic_cell_type::set_revert(_data, revert);
     }
+    void set_counter_in_place_revert(bool flag) {
+        atomic_cell_type::set_counter_in_place_revert(_data, flag);
+    }
 };
 
 class atomic_cell_view final : public atomic_cell_base<bytes_view> {
@@ -224,6 +289,14 @@ public:
 
     friend class atomic_cell;
     friend std::ostream& operator<<(std::ostream& os, const atomic_cell_view& acv);
+};
+
+class atomic_cell_mutable_view final : public atomic_cell_base<bytes_mutable_view> {
+    atomic_cell_mutable_view(bytes_mutable_view data) : atomic_cell_base(std::move(data)) {}
+public:
+    static atomic_cell_mutable_view from_bytes(bytes_mutable_view data) { return atomic_cell_mutable_view(data); }
+
+    friend class atomic_cell;
 };
 
 class atomic_cell_ref final : public atomic_cell_base<managed_bytes&> {
@@ -254,11 +327,8 @@ public:
     static atomic_cell make_live(api::timestamp_type timestamp, const bytes& value) {
         return make_live(timestamp, bytes_view(value));
     }
-    static atomic_cell make_live_counter_update(api::timestamp_type timestamp, bytes_view value) {
+    static atomic_cell make_live_counter_update(api::timestamp_type timestamp, int64_t value) {
         return atomic_cell_type::make_live_counter_update(timestamp, value);
-    }
-    static atomic_cell make_live_counter_update(api::timestamp_type timestamp, const bytes& value) {
-        return atomic_cell_type::make_live_counter_update(timestamp, bytes_view(value));
     }
     static atomic_cell make_live(api::timestamp_type timestamp, bytes_view value,
         gc_clock::time_point expiry, gc_clock::duration ttl)
@@ -276,6 +346,10 @@ public:
         } else {
             return atomic_cell_type::make_live(timestamp, value, gc_clock::now() + *ttl, *ttl);
         }
+    }
+    template<typename Serializer>
+    static atomic_cell make_live_from_serializer(api::timestamp_type timestamp, size_t size, Serializer&& serializer) {
+        return atomic_cell_type::make_live_from_serializer(timestamp, size, std::forward<Serializer>(serializer));
     }
     friend class atomic_cell_or_collection;
     friend std::ostream& operator<<(std::ostream& os, const atomic_cell& ac);
