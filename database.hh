@@ -1126,7 +1126,7 @@ private:
 
     query::result_memory_limiter _result_memory_limiter;
 
-    future<frozen_mutation> do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema);
+    future<frozen_mutation> do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema, timeout_clock::time_point timeout);
 public:
     static utils::UUID empty_version;
 

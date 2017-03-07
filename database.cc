@@ -2663,7 +2663,7 @@ column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const
     do_apply(m, m_schema, rp);
 }
 
-future<frozen_mutation> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema) {
+future<frozen_mutation> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema, timeout_clock::time_point timeout) {
     auto m = fm.unfreeze(m_schema);
     m.upgrade(cf.schema());
 
@@ -2689,9 +2689,9 @@ future<frozen_mutation> database::do_apply_counter_update(column_family& cf, con
         cql_serialization_format::internal(), query::max_rows);
 
     return do_with(std::move(slice), std::move(m), std::vector<locked_cell>(), stdx::optional<frozen_mutation>(),
-                   [this, &cf] (const query::partition_slice& slice, mutation& m, std::vector<locked_cell>& locks,
+                   [this, &cf, timeout] (const query::partition_slice& slice, mutation& m, std::vector<locked_cell>& locks,
                                stdx::optional<frozen_mutation>& fm) mutable {
-        return cf.lock_counter_cells(m).then([&, m_schema = cf.schema(), this] (std::vector<locked_cell> lcs) {
+        return cf.lock_counter_cells(m).then([&, timeout, m_schema = cf.schema(), this] (std::vector<locked_cell> lcs) {
             locks = std::move(lcs);
 
             // Before counter update is applied it needs to be transformed from
@@ -2702,7 +2702,7 @@ future<frozen_mutation> database::do_apply_counter_update(column_family& cf, con
             return mutation_query(m_schema, cf.as_mutation_source({}),
                                   dht::partition_range::make_singular(m.decorated_key()),
                                   slice, query::max_rows, query::max_partitions,
-                                  gc_clock::now(), { }).then([this, &cf, &m, &fm, m_schema] (auto result) {
+                                  gc_clock::now(), { }).then([this, timeout, &cf, &m, &fm, m_schema] (auto result) {
 
                 // ...now, that we got existing state of all affected counter
                 // cells we can look for our shard in each of them, increment
@@ -2714,9 +2714,8 @@ future<frozen_mutation> database::do_apply_counter_update(column_family& cf, con
                 transform_counter_updates_to_shards(m, mopt ? &*mopt : nullptr, cf.failed_counter_applies_to_memtable());
 
                 // FIXME: oh dear, another freeze
-                // FIXME: timeout
                 fm = freeze(m);
-                return this->do_apply(m_schema, *fm, { });
+                return this->do_apply(m_schema, *fm, timeout);
             }).then([&fm] {
                 return std::move(*fm);
             });
@@ -2876,7 +2875,7 @@ future<frozen_mutation> database::apply_counter_update(schema_ptr s, const froze
     }
     try {
         auto& cf = find_column_family(m.column_family_id());
-        return do_apply_counter_update(cf, m, s);
+        return do_apply_counter_update(cf, m, s, timeout);
     } catch (no_such_column_family&) {
         dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
         throw;
