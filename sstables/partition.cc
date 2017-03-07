@@ -815,7 +815,9 @@ public:
     //
     // The new range must not overlap with the previous range and
     // must be after it.
-    void fast_forward_to(position_range r) {
+    //
+    // Returns false if skipping is not necessary.
+    bool fast_forward_to(position_range r) {
         _fwd_range = std::move(r);
         _out_of_range = _is_mutation_end;
         _after_fwd_range_start = false;
@@ -831,6 +833,12 @@ public:
         }
 
         sstlog.trace("mp_row_consumer {}: fast_forward_to({}) => out_of_range={}, skip_in_progress={}", this, _fwd_range, _out_of_range, _skip_in_progress);
+
+        return !_in_progress || _skip_in_progress;
+    }
+
+    const position_range& current_range() const {
+        return _fwd_range;
     }
 };
 
@@ -880,6 +888,7 @@ class sstable_streamed_mutation : public streamed_mutation::impl {
     tombstone _t;
     position_in_partition::less_compare _cmp;
     position_in_partition::equal_compare _eq;
+    bool _index_in_current = false; // Whether _ds->_lh_index is in current partition;
 private:
     future<stdx::optional<mutation_fragment_opt>> read_next() {
         auto mf = _ds->_consumer.get_mutation_fragment();
@@ -920,8 +929,21 @@ public:
     future<> fast_forward_to(position_range range) override {
         _end_of_stream = false;
         forward_buffer_to(range.start());
-        _ds->_consumer.fast_forward_to(std::move(range));
-        return make_ready_future<>(); // FIXME: Skip using index
+        if (!_ds->_consumer.fast_forward_to(std::move(range)) || !_ds->_lh_index) {
+            return make_ready_future<>();
+        }
+        return [this] {
+            if (!_index_in_current) {
+                _index_in_current = true;
+                return _ds->_lh_index->advance_to(_key);
+            }
+            return make_ready_future();
+        }().then([this] {
+            return _ds->_lh_index->advance_to(_ds->_consumer.current_range().start()).then([this] {
+                index_reader& idx = *_ds->_lh_index;
+                return _ds->_context.skip_to(idx.element_kind(), idx.data_file_position());
+            });
+        });
     }
 
     static future<streamed_mutation> create(schema_ptr s, shared_sstable sst, const sstables::key& k,

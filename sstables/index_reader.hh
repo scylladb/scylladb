@@ -199,11 +199,13 @@ class index_reader {
     uint64_t _previous_summary_idx = 0;
     uint64_t _current_summary_idx = 0;
     uint64_t _current_index_idx = 0;
+    uint64_t _current_pi_idx = 0;
     uint64_t _data_file_position = 0;
     indexable_element _element = indexable_element::partition;
 private:
     future<> advance_to_end() {
         _data_file_position = data_file_end();
+        _element = indexable_element::partition;
         _current_list = {};
         return close_reader().finally([this] {
             _reader = stdx::nullopt;
@@ -256,8 +258,10 @@ private:
             _current_list = std::move(ref);
             _current_summary_idx = summary_idx;
             _current_index_idx = 0;
+            _current_pi_idx = 0;
             assert(!_current_list->empty());
             _data_file_position = (*_current_list)[0].position();
+            _element = indexable_element::partition;
 
             if (sstlog.is_enabled(seastar::log_level::trace)) {
                 sstlog.trace("index {}: page:", this);
@@ -301,6 +305,78 @@ public:
         });
     }
 public:
+    // Forwards the cursor to given position in current partition.
+    //
+    // Note that the index within partition, unlike the partition index, doesn't cover all keys.
+    // So this may forward the cursor to some position pos' which precedes pos, even though
+    // there exist rows with positions in the range [pos', pos].
+    //
+    // Must be called for non-decreasing positions.
+    // Must be called only after advanced to some partition and !eof().
+    future<> advance_to(position_in_partition_view pos) {
+        sstlog.trace("index {}: advance_to({}), current data_file_pos={}", this, pos, _data_file_position);
+
+        if (!_current_list) {
+            // Page is not read after advancing to the first partition.
+            return advance_to_page(_current_summary_idx).then([this, pos] {
+                sstlog.trace("index {}: page done", this);
+                assert(_current_list);
+                return advance_to(pos);
+            });
+        }
+
+        const schema& s = *_sstable->_schema;
+        index_entry& e = (*_current_list)[_current_index_idx];
+        promoted_index* pi = nullptr;
+        try {
+            pi = e.get_promoted_index(s);
+        } catch (...) {
+            sstlog.error("Failed to get promoted index for sstable {}, page {}, index {}: {}", _sstable->get_filename(),
+                _current_summary_idx, _current_index_idx, std::current_exception());
+        }
+        if (!pi) {
+            sstlog.trace("index {}: no promoted index", this);
+            return make_ready_future<>();
+        }
+
+        if (sstlog.is_enabled(seastar::log_level::trace)) {
+            sstlog.trace("index {}: promoted index:", this);
+            for (auto&& e : pi->entries) {
+                sstlog.trace("  {}-{}: +{} len={}", e.start, e.end, e.offset, e.width);
+            }
+        }
+
+        auto cmp_with_end = [pos_cmp = position_in_partition::composite_less_compare(s)]
+                (const promoted_index::entry& e, position_in_partition_view pos) -> bool {
+            return pos_cmp(e.end, pos);
+        };
+
+        // Optimize short skips which typically land in the same block
+        if (_current_pi_idx >= pi->entries.size() || !cmp_with_end(pi->entries[_current_pi_idx], pos)) {
+            sstlog.trace("index {}: position in current block", this);
+            return make_ready_future<>();
+        }
+
+        auto i = std::lower_bound(pi->entries.begin() + _current_pi_idx, pi->entries.end(), pos, cmp_with_end);
+        _current_pi_idx = std::distance(pi->entries.begin(), i);
+        if (i == pi->entries.end()) {
+            if (!pi->entries.empty()) {
+                // Skip to last block. Even though we know there are no rows in this block for the range
+                // we must skip to it in case it contains tombstones relevant for the requested range.
+                auto& last = pi->entries.back();
+                _data_file_position = e.position() + last.offset;
+                _element = indexable_element::cell;
+                sstlog.trace("index {}: skipping to last block", this);
+            }
+        } else {
+            _data_file_position = e.position() + i->offset;
+            _element = indexable_element::cell;
+            sstlog.trace("index {}: skipped to cell", this);
+        }
+        sstlog.trace("index {}: data_file_pos={}", this, _data_file_position);
+        return make_ready_future<>();
+    }
+
     // Positions the cursor on the first partition which is not smaller than pos (like std::lower_bound).
     // Must be called for non-decreasing positions.
     future<> advance_to(dht::ring_position_view pos) {
@@ -348,7 +424,9 @@ public:
                 return advance_to_page(summary_idx + 1);
             }
             _current_index_idx = std::distance(il.begin(), i);
+            _current_pi_idx = 0;
             _data_file_position = i->position();
+            _element = indexable_element::partition;
             sstlog.trace("index {}: new page index = {}, pos={}", this, _current_index_idx, _data_file_position);
             return make_ready_future<>();
         });
