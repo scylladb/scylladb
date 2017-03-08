@@ -1245,3 +1245,83 @@ SEASTAR_TEST_CASE(promoted_index_write) {
         }).then([sst, mtp] {});
     });
 }
+
+SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
+    return seastar::async([] {
+        tmpdir tmp;
+        auto file_path = tmp.path + "/test";
+        file f = open_file_dma(file_path, open_flags::create | open_flags::wo).get0();
+
+        file_input_stream_options opts;
+        opts.read_ahead = 0;
+
+        sstables::compression c;
+        c.set_compressor(compressor::lz4);
+        c.chunk_len = opts.buffer_size;
+        c.data_len = 0;
+        c.init_full_checksum();
+
+        // Make sure that amount of written data is a multiple of chunk_len so that we hit #2143.
+        temporary_buffer<char> buf1(c.chunk_len);
+        strcpy(buf1.get_write(), "buf1");
+        temporary_buffer<char> buf2(c.chunk_len);
+        strcpy(buf2.get_write(), "buf2");
+
+        size_t uncompressed_size = 0;
+        auto out = make_compressed_file_output_stream(f, file_output_stream_options(), &c);
+        out.write(buf1.get(), buf1.size()).get();
+        uncompressed_size += buf1.size();
+        out.write(buf2.get(), buf2.size()).get();
+        uncompressed_size += buf2.size();
+        out.close().get();
+
+        auto compressed_size = f.size().get0();
+        c.update(compressed_size);
+
+        auto make_is = [&] {
+            f = open_file_dma(file_path, open_flags::ro).get0();
+            return make_compressed_file_input_stream(f, &c, 0, uncompressed_size, opts);
+        };
+
+        auto expect = [] (input_stream<char>& in, const temporary_buffer<char>& buf) {
+            auto b = in.read_exactly(buf.size()).get0();
+            BOOST_REQUIRE(b == buf);
+        };
+
+        auto expect_eof = [] (input_stream<char>& in) {
+            auto b = in.read().get0();
+            BOOST_REQUIRE(b.empty());
+        };
+
+        auto in = make_is();
+        expect(in, buf1);
+        expect(in, buf2);
+        expect_eof(in);
+
+        in = make_is();
+        in.skip(0).get();
+        expect(in, buf1);
+        expect(in, buf2);
+        expect_eof(in);
+
+        in = make_is();
+        expect(in, buf1);
+        in.skip(0).get();
+        expect(in, buf2);
+        expect_eof(in);
+
+        in = make_is();
+        expect(in, buf1);
+        in.skip(opts.buffer_size).get();
+        expect_eof(in);
+
+        in = make_is();
+        in.skip(opts.buffer_size * 2).get();
+        expect_eof(in);
+
+        in = make_is();
+        in.skip(opts.buffer_size).get();
+        in.skip(opts.buffer_size).get();
+        expect_eof(in);
+    });
+}
