@@ -41,6 +41,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/net/byteorder.hh>
 #include <seastar/util/lazy.hh>
+#include <seastar/core/execution_stage.hh>
 
 #include "enum_set.hh"
 #include "service/query_state.hh"
@@ -617,6 +618,11 @@ future<> cql_server::connection::shutdown()
     }).handle_exception([] (auto) {});
 }
 
+struct process_request_executor {
+    static auto get() { return &cql_server::connection::process_request_one; }
+};
+static thread_local auto process_request_stage = seastar::make_execution_stage(process_request_executor::get());
+
 future<> cql_server::connection::process_request() {
     return read_frame().then_wrapped([this] (future<std::experimental::optional<cql_binary_frame_v3>>&& v) {
         auto maybe_frame = std::get<0>(v.get());
@@ -655,7 +661,7 @@ future<> cql_server::connection::process_request() {
                 auto bv = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
                 auto cpu = pick_request_cpu();
                 return smp::submit_to(cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state, tracing_requested] () mutable {
-                    return this->process_request_one(bv, op, stream, std::move(client_state), tracing_requested).then([](auto&& response) {
+                    return process_request_stage(this, bv, op, stream, std::move(client_state), tracing_requested).then([](auto&& response) {
                         auto& tracing_session_id_ptr = response.second.tracing_session_id_ptr();
                         if (tracing_session_id_ptr) {
                             response.first->set_tracing_id(*tracing_session_id_ptr);

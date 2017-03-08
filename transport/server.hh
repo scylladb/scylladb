@@ -127,6 +127,7 @@ public:
     using response_type = std::pair<shared_ptr<cql_server::response>, service::client_state>;
 private:
     class fmt_visitor;
+    friend class process_request_executor;
     class connection : public boost::intrusive::list_base_hook<> {
         cql_server& _server;
         connected_socket _fd;
@@ -160,6 +161,7 @@ private:
         future<> process_request();
         future<> shutdown();
     private:
+        friend class process_request_executor;
         future<response_type> process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request);
         unsigned frame_size() const;
         unsigned pick_request_cpu();
