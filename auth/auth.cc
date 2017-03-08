@@ -243,7 +243,8 @@ future<> auth::auth::setup() {
         std::map<sstring, sstring> opts;
         opts["replication_factor"] = "1";
         auto ksm = keyspace_metadata::new_keyspace(AUTH_KS, "org.apache.cassandra.locator.SimpleStrategy", opts, true);
-        f = service::get_local_migration_manager().announce_new_keyspace(ksm, false);
+        // We use min_timestamp so that default keyspace metadata will loose with any manual adjustments. See issue #2129.
+        f = service::get_local_migration_manager().announce_new_keyspace(ksm, api::min_timestamp, false);
     }
 
     return f.then([] {

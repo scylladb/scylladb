@@ -439,8 +439,10 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm, bool anno
             throw exceptions::already_exists_exception(cfm->ks_name(), cfm->cf_name());
         }
         logger.info("Create new ColumnFamily: {}", cfm);
-        auto mutations = db::schema_tables::make_create_table_mutations(keyspace.metadata(), cfm, api::new_timestamp());
-        return announce(std::move(mutations), announce_locally);
+        return db::schema_tables::make_create_table_mutations(keyspace.metadata(), cfm, api::new_timestamp())
+            .then([announce_locally, this] (auto&& mutations) {
+                return announce(std::move(mutations), announce_locally);
+            });
     } catch (const no_such_keyspace& e) {
         throw exceptions::configuration_exception(sprint("Cannot add table '%s' to non existing keyspace '%s'.", cfm->cf_name(), cfm->ks_name()));
     }
@@ -459,8 +461,10 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
 #endif
         logger.info("Update table '{}.{}' From {} To {}", cfm->ks_name(), cfm->cf_name(), *old_schema, *cfm);
         auto&& keyspace = db.find_keyspace(cfm->ks_name());
-        auto mutations = db::schema_tables::make_update_table_mutations(keyspace.metadata(), old_schema, cfm, api::new_timestamp(), from_thrift);
-        return announce(std::move(mutations), announce_locally);
+        return db::schema_tables::make_update_table_mutations(keyspace.metadata(), old_schema, cfm, api::new_timestamp(), from_thrift)
+            .then([announce_locally] (auto&& mutations) {
+                return announce(std::move(mutations), announce_locally);
+            });
     } catch (const no_such_column_family& e) {
         throw exceptions::configuration_exception(sprint("Cannot update non existing table '%s' in keyspace '%s'.",
                                                          cfm->cf_name(), cfm->ks_name()));
@@ -470,8 +474,10 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
 static future<> do_announce_new_type(user_type new_type, bool announce_locally) {
     auto& db = get_local_storage_proxy().get_db().local();
     auto&& keyspace = db.find_keyspace(new_type->_keyspace);
-    auto mutations = db::schema_tables::make_create_type_mutations(keyspace.metadata(), new_type, api::new_timestamp());
-    return migration_manager::announce(std::move(mutations), announce_locally);
+    return db::schema_tables::make_create_type_mutations(keyspace.metadata(), new_type, api::new_timestamp())
+        .then([announce_locally] (auto&& mutations) {
+            return migration_manager::announce(std::move(mutations), announce_locally);
+        });
 }
 
 future<> migration_manager::announce_new_type(user_type new_type, bool announce_locally) {
@@ -558,8 +564,10 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
         auto&& old_cfm = db.find_schema(ks_name, cf_name);
         auto&& keyspace = db.find_keyspace(ks_name);
         logger.info("Drop table '{}.{}'", old_cfm->ks_name(), old_cfm->cf_name());
-        auto mutations = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), old_cfm, api::new_timestamp());
-        return announce(std::move(mutations), announce_locally);
+        return db::schema_tables::make_drop_table_mutations(keyspace.metadata(), old_cfm, api::new_timestamp())
+            .then([announce_locally] (auto&& mutations) {
+                return announce(std::move(mutations), announce_locally);
+            });
     } catch (const no_such_column_family& e) {
         throw exceptions::configuration_exception(sprint("Cannot drop non existing table '%s' in keyspace '%s'.", cf_name, ks_name));
     }
@@ -570,8 +578,10 @@ future<> migration_manager::announce_type_drop(user_type dropped_type, bool anno
     auto& db = get_local_storage_proxy().get_db().local();
     auto&& keyspace = db.find_keyspace(dropped_type->_keyspace);
     logger.info("Drop User Type: {}", dropped_type->get_name_as_string());
-    auto mutations = db::schema_tables::make_drop_type_mutations(keyspace.metadata(), dropped_type, api::new_timestamp());
-    return announce(std::move(mutations), announce_locally);
+    return db::schema_tables::make_drop_type_mutations(keyspace.metadata(), dropped_type, api::new_timestamp())
+        .then([announce_locally] (auto&& mutations) {
+            return announce(std::move(mutations), announce_locally);
+        });
 }
 
 #if 0
