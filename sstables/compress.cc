@@ -71,6 +71,12 @@ void compression::set_compressor(compressor c) {
      }
 }
 
+// locate() takes a byte position in the uncompressed stream, and finds the
+// the location of the compressed chunk on disk which contains it, and the
+// offset in this chunk.
+// locate() may only be used for offsets of actual bytes, and in particular
+// the end-of-file position (one past the last byte) MUST not be used. If the
+// caller wants to read from the end of file, it should simply read nothing.
 compression::chunk_and_offset
 compression::locate(uint64_t position) const {
     auto ucl = uncompressed_chunk_length();
@@ -310,6 +316,9 @@ public:
     virtual future<temporary_buffer<char>> skip(uint64_t n) override {
         _pos += n;
         assert(_pos <= _end_pos);
+        if (_pos == _end_pos) {
+            return make_ready_future<temporary_buffer<char>>();
+        }
         auto addr = _compression_metadata->locate(_pos);
         auto underlying_n = addr.chunk_start - _underlying_pos;
         _underlying_pos = addr.chunk_start;
