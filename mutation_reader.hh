@@ -261,25 +261,39 @@ class mutation_source {
         tracing::trace_state_ptr,
         streamed_mutation::forwarding
     )>;
-    func_type _fn;
+    // We could have our own version of std::function<> that is nothrow
+    // move constructible and save some indirection and allocation.
+    // Probably not worth the effort though.
+    std::unique_ptr<func_type> _fn;
 private:
     mutation_source() = default;
     explicit operator bool() const { return bool(_fn); }
     friend class optimized_optional<mutation_source>;
 public:
-    mutation_source(func_type fn) : _fn(std::move(fn)) {}
+    mutation_source(func_type fn) : _fn(std::make_unique<func_type>(std::move(fn))) {}
     mutation_source(std::function<mutation_reader(schema_ptr, partition_range, const query::partition_slice&, io_priority)> fn)
-        : _fn([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr, streamed_mutation::forwarding) {
+        : _fn(std::make_unique<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr, streamed_mutation::forwarding) {
             return fn(s, range, slice, pc);
-        }) {}
+        })) {}
     mutation_source(std::function<mutation_reader(schema_ptr, partition_range, const query::partition_slice&)> fn)
-        : _fn([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding) {
+        : _fn(std::make_unique<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding) {
             return fn(s, range, slice);
-        }) {}
+        })) {}
     mutation_source(std::function<mutation_reader(schema_ptr, partition_range range)> fn)
-        : _fn([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice&, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding) {
+        : _fn(std::make_unique<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice&, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding) {
             return fn(s, range);
-        }) {}
+        })) {}
+
+    mutation_source(const mutation_source& other)
+        : _fn(std::make_unique<func_type>(*other._fn)) { }
+
+    mutation_source& operator=(const mutation_source& other) {
+        _fn = std::make_unique<func_type>(*other._fn);
+        return *this;
+    }
+
+    mutation_source(mutation_source&&) = default;
+    mutation_source& operator=(mutation_source&&) = default;
 
     // Creates a new reader.
     //
@@ -292,7 +306,7 @@ public:
         tracing::trace_state_ptr trace_state = nullptr,
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no) const
     {
-        return _fn(std::move(s), range, slice, pc, std::move(trace_state), fwd);
+        return (*_fn)(std::move(s), range, slice, pc, std::move(trace_state), fwd);
     }
 };
 
