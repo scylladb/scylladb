@@ -476,7 +476,7 @@ class scylla_ptr(gdb.Command):
             return
 
         pool = page['pool']
-        offset_in_span = page['offset_in_span'] * page_size + ptr % page_size
+        offset_in_span = int(page['offset_in_span']) * page_size + ptr % page_size
         first_page_in_span = cpu_mem['pages'][offset / page_size - page['offset_in_span']];
         if pool:
             object_size = int(pool['_object_size'])
@@ -818,7 +818,7 @@ class scylla_thread(gdb.Command):
     def invoke_apply_all(self, args):
         for r in reactors():
             for t in seastar_threads_on_current_shard():
-                gdb.write('\n[shard %2d] (seastar::thread_context*) 0x%x:\n\n' % (r['_id'], t.address))
+                gdb.write('\n[shard %2d] (seastar::thread_context*) 0x%x:\n\n' % (r['_id'], int(t.address)))
                 with seastar_thread_context(t):
                     gdb.execute(' '.join(args))
 
@@ -866,7 +866,7 @@ class scylla_threads(gdb.Command):
         for r in reactors():
             shard = r['_id']
             for t in seastar_threads_on_current_shard():
-                gdb.write('[shard %2d] (seastar::thread_context*) 0x%x\n' % (shard, t.address))
+                gdb.write('[shard %2d] (seastar::thread_context*) 0x%x\n' % (shard, int(t.address)))
 
 class circular_buffer(object):
     def __init__(self, ref):
