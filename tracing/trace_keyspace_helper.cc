@@ -238,7 +238,8 @@ future<> trace_keyspace_helper::start() {
                 std::map<sstring, sstring> opts;
                 opts["replication_factor"] = "2";
                 auto ksm = keyspace_metadata::new_keyspace(KEYSPACE_NAME, "org.apache.cassandra.locator.SimpleStrategy", std::move(opts), true);
-                service::get_local_migration_manager().announce_new_keyspace(ksm, false).get();
+                // We use min_timestamp so that default keyspace metadata will loose with any manual adjustments. See issue #2129.
+                service::get_local_migration_manager().announce_new_keyspace(ksm, api::min_timestamp, false).get();
             }
 
             // Create tables
