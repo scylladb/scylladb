@@ -364,7 +364,7 @@ int main(int ac, char** av) {
             if (pport) {
                 pctx.metric_help = "Scylla server statistics";
                 pctx.prefix = cfg->prometheus_prefix();
-                prometheus_server.start().get();
+                prometheus_server.start("prometheus").get();
                 prometheus::start(prometheus_server, pctx);
                 prometheus_server.listen(ipv4_addr{prom_addr.addr_list.front(), pport}).handle_exception([pport, &cfg] (auto ep) {
                     startlog.error("Could not start Prometheus API server on {}:{}: {}", cfg->prometheus_address(), pport, ep);
@@ -436,7 +436,7 @@ int main(int ac, char** av) {
             auto e = seastar::net::dns::get_host_by_name(api_address).get0();
             supervisor::notify("starting API server");
             auto ip = e.addr_list.front();
-            ctx.http_server.start().get();
+            ctx.http_server.start("API").get();
             api::set_server_init(ctx).get();
             ctx.http_server.listen(ipv4_addr{ip, api_port}).get();
             startlog.info("Scylla API server listening on {}:{} ...", api_address, api_port);
