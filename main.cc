@@ -358,7 +358,19 @@ int main(int ac, char** av) {
             sstring api_address = cfg->api_address() != "" ? cfg->api_address() : rpc_address;
             sstring broadcast_address = cfg->broadcast_address();
             sstring broadcast_rpc_address = cfg->broadcast_rpc_address();
-
+            auto prom_addr = seastar::net::dns::get_host_by_name(cfg->prometheus_address()).get0();
+            supervisor::notify("starting prometheus API server");
+            uint16_t pport = cfg->prometheus_port();
+            if (pport) {
+                pctx.metric_help = "Scylla server statistics";
+                pctx.prefix = cfg->prometheus_prefix();
+                prometheus_server.start().get();
+                prometheus::start(prometheus_server, pctx);
+                prometheus_server.listen(ipv4_addr{prom_addr.addr_list.front(), pport}).handle_exception([pport, &cfg] (auto ep) {
+                    startlog.error("Could not start Prometheus API server on {}:{}: {}", cfg->prometheus_address(), pport, ep);
+                    return make_exception_future<>(ep);
+                }).get();
+            }
             if (!broadcast_address.empty()) {
                 try {
                     utils::fb_utilities::set_broadcast_address(gms::inet_address::lookup(broadcast_address).get0());
@@ -631,19 +643,6 @@ int main(int ac, char** av) {
                 }).get();
             }
             api::set_server_done(ctx).get();
-            auto prom_addr = seastar::net::dns::get_host_by_name(cfg->prometheus_address()).get0();
-            supervisor::notify("starting prometheus API server");
-            uint16_t pport = cfg->prometheus_port();
-            if (pport) {
-                pctx.metric_help = "Scylla server statistics";
-                pctx.prefix = cfg->prometheus_prefix();
-                prometheus_server.start().get();
-                prometheus::start(prometheus_server, pctx);
-                prometheus_server.listen(ipv4_addr{prom_addr.addr_list.front(), pport}).handle_exception([pport, &cfg] (auto ep) {
-                    startlog.error("Could not start Prometheus API server on {}:{}: {}", cfg->prometheus_address(), pport, ep);
-                    return make_exception_future<>(ep);
-                }).get();
-            }
             supervisor::notify("serving");
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
             engine().at_exit([] {
