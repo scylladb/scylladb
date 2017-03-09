@@ -36,7 +36,7 @@
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
 
-logging::logger logger("NetworkTopologyStrategyLogger");
+static logging::logger logger("NetworkTopologyStrategyLogger");
 
 using namespace locator;
 
