@@ -118,7 +118,8 @@ public:
     virtual future<shared_ptr<transport::messages::result_message>> execute(
             distributed<service::storage_proxy>& storage, service::query_state& state, const query_options& options) override;
 private:
-    future<shared_ptr<transport::messages::result_message>> execute(
+    friend class batch_statement_executor;
+    future<shared_ptr<transport::messages::result_message>> do_execute(
             distributed<service::storage_proxy>& storage,
             service::query_state& query_state, const query_options& options,
             bool local, api::timestamp_type now);

@@ -120,7 +120,7 @@ query::result to_data_query_result(const reconcilable_result&, schema_ptr, const
 // 'source' doesn't have to survive deferring.
 future<reconcilable_result> mutation_query(
     schema_ptr,
-    const mutation_source& source,
+    mutation_source source,
     const dht::partition_range& range,
     const query::partition_slice& slice,
     uint32_t row_limit,

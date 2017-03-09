@@ -1135,6 +1135,7 @@ private:
     friend void db::system_keyspace::make(database& db, bool durable, bool volatile_testing_only);
     void setup_metrics();
 
+    friend class db_apply_executor;
     future<> do_apply(schema_ptr, const frozen_mutation&, timeout_clock::time_point timeout);
     future<> apply_with_commitlog(schema_ptr, column_family&, utils::UUID, const frozen_mutation&, timeout_clock::time_point timeout);
     future<> apply_with_commitlog(column_family& cf, const mutation& m, timeout_clock::time_point timeout);

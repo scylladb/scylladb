@@ -49,6 +49,7 @@
 #include "query-result-reader.hh"
 #include "query_result_merger.hh"
 #include "service/pager/query_pagers.hh"
+#include <seastar/core/execution_stage.hh>
 
 namespace cql3 {
 
@@ -226,8 +227,21 @@ bool select_statement::needs_post_query_ordering() const {
     return _restrictions->key_is_in_relation() && !_parameters->orderings().empty();
 }
 
+struct select_statement_executor {
+    static auto get() { return &select_statement::do_execute; }
+};
+static thread_local auto select_stage = seastar::make_execution_stage(select_statement_executor::get());
+
 future<shared_ptr<transport::messages::result_message>>
 select_statement::execute(distributed<service::storage_proxy>& proxy,
+                             service::query_state& state,
+                             const query_options& options)
+{
+    return select_stage(this, seastar::ref(proxy), seastar::ref(state), seastar::cref(options));
+}
+
+future<shared_ptr<transport::messages::result_message>>
+select_statement::do_execute(distributed<service::storage_proxy>& proxy,
                           service::query_state& state,
                           const query_options& options)
 {

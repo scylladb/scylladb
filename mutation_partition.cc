@@ -34,6 +34,7 @@
 #include "mutation_compactor.hh"
 #include "intrusive_set_external_comparator.hh"
 #include "counters.hh"
+#include <seastar/core/execution_stage.hh>
 
 template<bool reversed>
 struct reversal_traits;
@@ -1971,8 +1972,8 @@ public:
 };
 
 future<reconcilable_result>
-mutation_query(schema_ptr s,
-               const mutation_source& source,
+static do_mutation_query(schema_ptr s,
+               mutation_source source,
                const dht::partition_range& range,
                const query::partition_slice& slice,
                uint32_t row_limit,
@@ -1993,6 +1994,23 @@ mutation_query(schema_ptr s,
 
     auto reader = source(s, range, slice, service::get_local_sstable_query_read_priority(), std::move(trace_ptr));
     return consume_flattened(std::move(reader), std::move(cfq), is_reversed);
+}
+
+static thread_local auto mutation_query_stage = seastar::make_execution_stage(do_mutation_query);
+
+future<reconcilable_result>
+mutation_query(schema_ptr s,
+               mutation_source source,
+               const dht::partition_range& range,
+               const query::partition_slice& slice,
+               uint32_t row_limit,
+               uint32_t partition_limit,
+               gc_clock::time_point query_time,
+               query::result_memory_accounter&& accounter,
+               tracing::trace_state_ptr trace_ptr)
+{
+    return mutation_query_stage(std::move(s), std::move(source), seastar::cref(range), seastar::cref(slice),
+                                row_limit, partition_limit, query_time, std::move(accounter), std::move(trace_ptr));
 }
 
 bool row_tombstone_is_shadowed(const schema& schema, const tombstone& row_tombstone, const row_marker& marker) {

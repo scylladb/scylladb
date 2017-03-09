@@ -40,6 +40,7 @@
 #include "batch_statement.hh"
 #include "raw/batch_statement.hh"
 #include "db/config.hh"
+#include <seastar/core/execution_stage.hh>
 
 namespace {
 
@@ -248,13 +249,19 @@ void batch_statement::verify_batch_size(const std::vector<mutation>& mutations) 
     }
 }
 
+struct batch_statement_executor {
+    static auto get() { return &batch_statement::do_execute; }
+};
+static thread_local auto batch_stage = seastar::make_execution_stage(batch_statement_executor::get());
+
 future<shared_ptr<transport::messages::result_message>> batch_statement::execute(
         distributed<service::storage_proxy>& storage, service::query_state& state, const query_options& options) {
     ++_stats.batches;
-    return execute(storage, state, options, false, options.get_timestamp(state));
+    return batch_stage(this, seastar::ref(storage), seastar::ref(state),
+                       seastar::cref(options), false, options.get_timestamp(state));
 }
 
-future<shared_ptr<transport::messages::result_message>> batch_statement::execute(
+future<shared_ptr<transport::messages::result_message>> batch_statement::do_execute(
         distributed<service::storage_proxy>& storage,
         service::query_state& query_state, const query_options& options,
         bool local, api::timestamp_type now)

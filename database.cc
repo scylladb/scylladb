@@ -68,6 +68,7 @@
 #include "schema_registry.hh"
 #include "service/priority_manager.hh"
 #include "cell_locking.hh"
+#include <seastar/core/execution_stage.hh>
 
 #include "checked-file-impl.hh"
 #include "disk-error-handler.hh"
@@ -2503,11 +2504,15 @@ column_family::as_mutation_source() const {
     });
 }
 
+static thread_local auto data_query_stage = seastar::make_execution_stage(&column_family::query);
+
 future<lw_shared_ptr<query::result>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state,
                 uint64_t max_result_size) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return cf.query(std::move(s), cmd, request, ranges, std::move(trace_state), get_result_memory_limiter(), max_result_size).then_wrapped([this, s = _stats] (auto f) {
+    return data_query_stage(&cf, std::move(s), seastar::cref(cmd), request, seastar::cref(ranges),
+                            std::move(trace_state), seastar::ref(get_result_memory_limiter()),
+                            max_result_size).then_wrapped([this, s = _stats] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
         } else {
@@ -2916,11 +2921,16 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_cloc
     });
 }
 
+struct db_apply_executor {
+    static auto get() { return &database::do_apply; }
+};
+static thread_local auto apply_stage = seastar::make_execution_stage(db_apply_executor::get());
+
 future<> database::apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
     }
-    return do_apply(std::move(s), m, timeout).then_wrapped([this, s = _stats] (auto f) {
+    return apply_stage(this, std::move(s), seastar::cref(m), timeout).then_wrapped([this, s = _stats] (auto f) {
         if (f.failed()) {
             ++s->total_writes_failed;
             try {
