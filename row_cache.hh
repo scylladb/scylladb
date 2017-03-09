@@ -41,6 +41,12 @@ namespace bi = boost::intrusive;
 
 class row_cache;
 
+namespace cache {
+
+class read_context;
+
+}
+
 // Intrusive set entry which holds partition data.
 //
 // TODO: Make memtables use this format too.
@@ -102,7 +108,7 @@ public:
     partition_entry& partition() { return _pe; }
     const schema_ptr& schema() const { return _schema; }
     schema_ptr& schema() { return _schema; }
-    streamed_mutation read(row_cache&, const schema_ptr&, const query::partition_slice&, streamed_mutation::forwarding);
+    streamed_mutation read(row_cache&, cache::read_context& reader);
     bool continuous() const { return _flags._continuous; }
     void set_continuous(bool value) { _flags._continuous = value; }
 
@@ -228,6 +234,7 @@ public:
     friend class autoupdating_underlying_reader;
     friend class single_partition_populating_reader;
     friend class cache_entry;
+    friend class cache::read_context;
 public:
     struct stats {
         utils::timed_rate_moving_average hits;
@@ -253,13 +260,8 @@ private:
     logalloc::allocating_section _update_section;
     logalloc::allocating_section _populate_section;
     logalloc::allocating_section _read_section;
-    mutation_reader make_scanning_reader(schema_ptr,
-                                         const dht::partition_range&,
-                                         const io_priority_class& pc,
-                                         const query::partition_slice& slice,
-                                         tracing::trace_state_ptr trace_state,
-                                         streamed_mutation::forwarding,
-                                         mutation_reader::forwarding);
+    mutation_reader create_underlying_reader(cache::read_context&, const dht::partition_range&);
+    mutation_reader make_scanning_reader(const dht::partition_range&, lw_shared_ptr<cache::read_context>);
     void on_hit();
     void on_miss();
     void upgrade_entry(cache_entry&);
