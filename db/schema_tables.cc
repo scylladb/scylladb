@@ -500,7 +500,7 @@ future<schema_result>
 read_schema_for_keyspaces(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const std::set<sstring>& keyspace_names)
 {
     auto schema = proxy.local().get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
-    auto map = [&proxy, schema_table_name] (sstring keyspace_name) { return read_schema_partition_for_keyspace(proxy, schema_table_name, keyspace_name); };
+    auto map = [&proxy, schema_table_name] (const sstring& keyspace_name) { return read_schema_partition_for_keyspace(proxy, schema_table_name, keyspace_name); };
     auto insert = [] (schema_result&& result, auto&& schema_entity) {
         if (!schema_entity.second->empty()) {
             result.insert(std::move(schema_entity));
