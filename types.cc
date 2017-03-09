@@ -2063,10 +2063,7 @@ auto collection_type_impl::deserialize_mutation_form(collection_mutation_view cm
 bool collection_type_impl::is_empty(collection_mutation_view cm) const {
     auto&& in = cm.data;
     auto has_tomb = read_simple<bool>(in);
-    if (has_tomb) {
-        in.remove_prefix(sizeof(api::timestamp_type) + sizeof(gc_clock::duration::rep));
-    }
-    return read_simple<uint32_t>(in) == 0;
+    return !has_tomb && read_simple<uint32_t>(in) == 0;
 }
 
 bool collection_type_impl::is_any_live(collection_mutation_view cm, tombstone tomb, gc_clock::time_point now) const {
