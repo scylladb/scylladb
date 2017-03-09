@@ -208,7 +208,12 @@ future<std::vector<mutation>> batch_statement::get_mutations(distributed<service
 }
 
 void batch_statement::verify_batch_size(const std::vector<mutation>& mutations) {
+    if (mutations.size() <= 1) {
+        return;     // We only warn for batch spanning multiple mutations
+    }
+
     size_t warn_threshold = service::get_local_storage_proxy().get_db().local().get_config().batch_size_warn_threshold_in_kb() * 1024;
+    size_t fail_threshold = service::get_local_storage_proxy().get_db().local().get_config().batch_size_fail_threshold_in_kb() * 1024;
 
     class my_partition_visitor : public mutation_partition_visitor {
     public:
@@ -238,14 +243,20 @@ void batch_statement::verify_batch_size(const std::vector<mutation>& mutations) 
     }
 
     if (v.size > warn_threshold) {
-        std::unordered_set<sstring> ks_cf_pairs;
-        for (auto&& m : mutations) {
-            ks_cf_pairs.insert(m.schema()->ks_name() + "." + m.schema()->cf_name());
+        auto error = [&] (const char* type, size_t threshold) -> sstring {
+            std::unordered_set<sstring> ks_cf_pairs;
+            for (auto&& m : mutations) {
+                ks_cf_pairs.insert(m.schema()->ks_name() + "." + m.schema()->cf_name());
+            }
+            return sprint("Batch of prepared statements for %s is of size %d, exceeding specified %s threshold of %d by %d.",
+                    join(", ", ks_cf_pairs), v.size, type, threshold, v.size - threshold);
+        };
+        if (v.size > fail_threshold) {
+            _logger.error(error("FAIL", fail_threshold).c_str());
+            throw exceptions::invalid_request_exception("Batch too large");
+        } else {
+            _logger.warn(error("WARN", warn_threshold).c_str());
         }
-        _logger.warn(
-                        "Batch of prepared statements for {} is of size {}, exceeding specified threshold of {} by {}.{}",
-                        join(", ", ks_cf_pairs), v.size, warn_threshold,
-                        v.size - warn_threshold, "");
     }
 }
 

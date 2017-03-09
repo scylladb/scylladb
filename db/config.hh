@@ -395,6 +395,9 @@ public:
     val(batch_size_warn_threshold_in_kb, uint32_t, 5, Used,     \
             "Log WARN on any batch size exceeding this value in kilobytes. Caution should be taken on increasing the size of this threshold as it can lead to node instability."  \
     )   \
+    val(batch_size_fail_threshold_in_kb, uint32_t, 50, Used,     \
+            "Fail any multiple-partition batch exceeding this value. 50kb (10x warn threshold) by default." \
+    )   \
     val(broadcast_address, sstring, /* listen_address */, Used, \
             "The IP address a node tells other nodes in the cluster to contact it by. It allows public and private address to be different. For example, use the broadcast_address parameter in topologies where not all nodes have access to other nodes by their private IP addresses.\n" \
             "If your Scylla cluster is deployed across multiple Amazon EC2 regions and you use the EC2MultiRegionSnitch , set the broadcast_address to public IP address of the node and the listen_address to the private IP."    \

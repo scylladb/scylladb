@@ -192,6 +192,9 @@ api_address: 127.0.0.1
 # Caution should be taken on increasing the size of this threshold as it can lead to node instability.
 batch_size_warn_threshold_in_kb: 5
 
+# Fail any multiple-partition batch exceeding this value. 50kb (10x warn threshold) by default.
+batch_size_fail_threshold_in_kb: 50
+
 # Authentication backend, identifying users
 # Out of the box, Scylla provides org.apache.cassandra.auth.{AllowAllAuthenticator,
 # PasswordAuthenticator}.
