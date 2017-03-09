@@ -769,7 +769,8 @@ class random_mutation_generator::impl {
         for (column_id i = 0; i < column_count; ++i) {
             {
                 auto column_name = sprint("v%d", i);
-                builder.with_column(to_bytes(column_name), type, column_kind::regular_column);
+                auto col_type = type == counter_type || _bool_dist(_gen) ? type : list_type_impl::get_instance(type, true);
+                builder.with_column(to_bytes(column_name), col_type, column_kind::regular_column);
             }
             {
                 auto column_name = sprint("s%d", i);
@@ -786,6 +787,12 @@ class random_mutation_generator::impl {
     }
 public:
     explicit impl(generate_counters counters) : _generate_counters(counters) {
+        std::random_device rd;
+        // In case of errors, replace the seed with a fixed value to get a deterministic run.
+        auto seed = rd();
+        BOOST_TEST_MESSAGE(sprint("Random seed: %s", seed));
+        _gen = std::mt19937(seed);
+
         _schema = make_schema();
 
         for (size_t i = 0; i < n_blobs; ++i) {
@@ -793,12 +800,6 @@ public:
             std::copy_n(reinterpret_cast<int8_t*>(&i), sizeof(i), b.begin());
             _blobs.emplace_back(std::move(b));
         }
-
-        std::random_device rd;
-        // In case of errors, replace the seed with a fixed value to get a deterministic run.
-        auto seed = rd();
-        BOOST_TEST_MESSAGE(sprint("Random seed: %s", seed));
-        _gen = std::mt19937(seed);
     }
 
     bytes random_blob() {
@@ -909,17 +910,37 @@ public:
             auto columns_to_set = column_count_dist(_gen);
             for (column_id i = 0; i < columns_to_set; ++i) {
                 auto cid = column_id_dist(_gen);
-                auto get_live_cell = [&] {
+                auto& col = _schema->column_at(kind, cid);
+                auto get_live_cell = [&] () -> atomic_cell_or_collection {
                     if (_generate_counters) {
                         return random_counter_cell();
-                    } else {
+                    }
+                    if (col.is_atomic()) {
                         return atomic_cell::make_live(timestamp_dist(_gen), _blobs[value_blob_index_dist(_gen)]);
                     }
+                    static thread_local std::uniform_int_distribution<int> dist{1, 13};
+                    collection_type_impl::mutation m;
+                    auto num_cells = dist(_gen);
+                    m.cells.reserve(num_cells);
+                    for (auto i = 0; i < num_cells; ++i) {
+                        auto uuid = utils::UUID_gen::get_time_UUID_bytes();
+                        m.cells.emplace_back(
+                                bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size()),
+                                atomic_cell::make_live(timestamp_dist(_gen), _blobs[value_blob_index_dist(_gen)]));
+                    }
+                    return static_pointer_cast<const collection_type_impl>(col.type)->serialize_mutation_form(m);
+                };
+                auto get_dead_cell = [&] () -> atomic_cell_or_collection{
+                    if (col.is_atomic() || col.is_counter()) {
+                        return atomic_cell::make_dead(timestamp_dist(_gen), expiry_dist(_gen));
+                    }
+                    collection_type_impl::mutation m;
+                    m.tomb = tombstone(timestamp_dist(_gen), expiry_dist(_gen));
+                    return static_pointer_cast<const collection_type_impl>(col.type)->serialize_mutation_form(m);
+
                 };
                 // FIXME: generate expiring cells
-                auto cell = _bool_dist(_gen)
-                            ? get_live_cell()
-                            : atomic_cell::make_dead(timestamp_dist(_gen), expiry_dist(_gen));
+                auto cell = _bool_dist(_gen) ? get_live_cell() : get_dead_cell();
                 r.apply(_schema->column_at(kind, cid), std::move(cell));
             }
         };
