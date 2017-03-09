@@ -2247,7 +2247,9 @@ collection_type_impl::difference(collection_mutation_view a, collection_mutation
             diff.cells.emplace_back(std::move(cell));
         }
     }
-    diff.tomb = std::max(aa.tomb, bb.tomb);
+    if (aa.tomb > bb.tomb) {
+        diff.tomb = aa.tomb;
+    }
     return serialize_mutation_form(diff);
 }
 
