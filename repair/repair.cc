@@ -492,6 +492,13 @@ static void split_and_add(std::vector<::dht::token_range>& ranges,
     auto midpoint = dht::global_partitioner().midpoint(
             range.start() ? range.start()->value() : dht::minimum_token(),
             range.end() ? range.end()->value() : dht::minimum_token());
+    // This shouldn't happen, but if the range included just one token, we
+    // can't split further (split() may actually fail with assertion failure)
+    if ((range.start() && midpoint == range.start()->value()) ||
+        (range.end() && midpoint == range.end()->value())) {
+        ranges.push_back(range);
+        return;
+    }
     auto halves = range.split(midpoint, dht::token_comparator());
     ranges.push_back(halves.first);
     ranges.push_back(halves.second);
