@@ -425,9 +425,9 @@ void view_updates::generate_update(
                 // Note: multi-cell columns can't be part of the primary key.
                 auto cmp = compare_atomic_cell_for_merge(before->as_atomic_cell(), after->as_atomic_cell());
                 if (cmp == 0) {
-                    replace_entry(base_key, update, *existing, now);
-                } else {
                     update_entry(base_key, update, *existing, now);
+                } else {
+                    replace_entry(base_key, update, *existing, now);
                 }
             } else {
                 delete_old_entry(base_key, *existing, now);
