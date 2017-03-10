@@ -329,6 +329,8 @@ public:
     position_in_partition_view(range_tag_t, bound_view bv)
         : _bound_weight(weight(bv.kind)), _ck(&bv.prefix) { }
 
+    bool is_static_row() const { return !_ck; }
+
     friend std::ostream& operator<<(std::ostream&, position_in_partition_view);
 };
 
@@ -713,6 +715,7 @@ auto consume(streamed_mutation& m, Consumer consumer) {
 class mutation;
 
 streamed_mutation streamed_mutation_from_mutation(mutation, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+streamed_mutation streamed_mutation_returning(schema_ptr, dht::decorated_key, std::vector<mutation_fragment>, tombstone t = {});
 
 //Requires all streamed_mutations to have the same schema.
 streamed_mutation merge_mutations(std::vector<streamed_mutation>);
@@ -745,6 +748,8 @@ public:
     range_tombstone_stream(const schema& s) : _schema(s), _cmp(s), _list(s) { }
     mutation_fragment_opt get_next(const rows_entry&);
     mutation_fragment_opt get_next(const mutation_fragment&);
+    // Returns next fragment with position before upper_bound or disengaged optional if no such fragments are left.
+    mutation_fragment_opt get_next(position_in_partition_view upper_bound);
     mutation_fragment_opt get_next();
     // Forgets all tombstones which are not relevant for any range starting at given position.
     void forward_to(position_in_partition_view);
@@ -756,6 +761,7 @@ public:
         _list.apply(_schema, list);
     }
     void apply(const range_tombstone_list&, const query::clustering_range&);
+    void reset();
 };
 
 // mutation_hasher is an equivalent of hashing_partition_visitor for

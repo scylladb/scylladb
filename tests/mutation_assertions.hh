@@ -200,6 +200,23 @@ public:
         }
         return *this;
     }
+
+    void has_monotonic_positions() {
+        position_in_partition::less_compare less(*_sm.schema());
+        mutation_fragment_opt prev;
+        for (;;) {
+            mutation_fragment_opt mfo = _sm().get0();
+            if (!mfo) {
+                break;
+            }
+            if (prev) {
+                if (!less(prev->position(), mfo->position())) {
+                    BOOST_FAIL(sprint("previous fragment has greater position: prev=%s, current=%s", *prev, *mfo));
+                }
+            }
+            prev = std::move(mfo);
+        }
+    }
 };
 
 static inline streamed_mutation_assertions assert_that_stream(streamed_mutation sm)

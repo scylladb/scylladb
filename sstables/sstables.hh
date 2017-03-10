@@ -120,6 +120,13 @@ struct sstable_open_info;
 using index_list = std::vector<index_entry>;
 class index_reader;
 
+struct sstable_writer_config {
+    std::experimental::optional<size_t> promoted_index_block_size;
+    uint64_t max_sstable_size = std::numeric_limits<uint64_t>::max();
+    bool backup = false;
+    bool leave_unsealed = false;
+};
+
 class sstable : public enable_lw_shared_from_this<sstable> {
 public:
     enum class component_type {
@@ -292,12 +299,15 @@ public:
                               const io_priority_class& pc = default_priority_class(), bool leave_unsealed = false);
 
     future<> write_components(::mutation_reader mr,
-            uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, bool backup = false,
-            const io_priority_class& pc = default_priority_class(), bool leave_unsealed = false);
+            uint64_t estimated_partitions,
+            schema_ptr schema,
+            const sstable_writer_config&,
+            const io_priority_class& pc = default_priority_class());
 
-    sstable_writer get_writer(const schema& s, uint64_t estimated_partitions, uint64_t max_sstable_size,
-                              bool backup = false, const io_priority_class& pc = default_priority_class(),
-                              bool leave_unsealed = false);
+    sstable_writer get_writer(const schema& s,
+        uint64_t estimated_partitions,
+        const sstable_writer_config&,
+        const io_priority_class& pc = default_priority_class());
 
     future<> seal_sstable(bool backup);
 
@@ -787,7 +797,7 @@ private:
         }
     }
 public:
-    components_writer(sstable& sst, const schema& s, file_writer& out, uint64_t estimated_partitions, uint64_t max_sstable_size, const io_priority_class& pc);
+    components_writer(sstable& sst, const schema& s, file_writer& out, uint64_t estimated_partitions, const sstable_writer_config&, const io_priority_class& pc);
 
     void consume_new_partition(const dht::decorated_key& dk);
     void consume(tombstone t);
@@ -812,7 +822,7 @@ private:
     void finish_file_writer();
 public:
     sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
-                   uint64_t max_sstable_size, bool backup, bool leave_unsealed, const io_priority_class& pc);
+            const sstable_writer_config&, const io_priority_class& pc);
     ~sstable_writer();
     sstable_writer(sstable_writer&& o) : _sst(o._sst), _schema(o._schema), _pc(o._pc), _backup(o._backup),
             _leave_unsealed(o._leave_unsealed), _compression_enabled(o._compression_enabled), _writer(std::move(o._writer)),

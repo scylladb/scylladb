@@ -26,6 +26,7 @@
 #include "mutation_assertions.hh"
 #include "mutation_source_test.hh"
 #include "counters.hh"
+#include "simple_schema.hh"
 
 // partitions must be sorted by decorated key
 static void require_no_token_duplicates(const std::vector<mutation>& partitions) {
@@ -93,59 +94,6 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populat
     }
 }
 
-// Helper for working with the following table:
-//
-//   CREATE TABLE ks.cf (pk utf8, ck utf8, v utf8, s1 utf8 static, PRIMARY KEY (pk, ck));
-//
-class simple_schema {
-    schema_ptr _s;
-public:
-    simple_schema()
-        : _s(schema_builder("ks", "cf")
-            .with_column("pk", utf8_type, column_kind::partition_key)
-            .with_column("ck", utf8_type, column_kind::clustering_key)
-            .with_column("s1", utf8_type, column_kind::static_column)
-            .with_column("v", utf8_type)
-            .build())
-    { }
-
-    clustering_key make_ckey(sstring ck) {
-        return clustering_key::from_single_value(*_s, data_value(ck).serialize());
-    }
-
-    // Make a clustering_key which is n-th in some arbitrary sequence of keys
-    clustering_key make_ckey(uint32_t n) {
-        return make_ckey(sprint("ck%010d", n));
-    }
-
-    partition_key make_pkey(sstring pk) {
-        return partition_key::from_single_value(*_s, data_value(pk).serialize());
-    }
-
-    void add_row(mutation& m, const clustering_key& key, sstring v) {
-        m.set_clustered_cell(key, to_bytes("v"), data_value(v), new_timestamp());
-    }
-
-    void add_static_row(mutation& m, sstring s1) {
-        m.set_static_cell(to_bytes("s1"), data_value(s1), new_timestamp());
-    }
-
-    range_tombstone delete_range(mutation& m, const query::clustering_range& range) {
-        auto bv_range = bound_view::from_range(range);
-        range_tombstone rt(bv_range.first, bv_range.second, tombstone(new_timestamp(), gc_clock::now()));
-        m.partition().apply_delete(*_s, rt);
-        return rt;
-    }
-
-    mutation new_mutation(sstring pk) {
-        return mutation(make_pkey(pk), _s);
-    }
-
-    schema_ptr schema() {
-        return _s;
-    }
-};
-
 static void test_streamed_mutation_forwarding_guarantees(populate_fn populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
 
@@ -205,6 +153,17 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn populate) {
     {
         auto sm = new_stream();
         sm.produces_static_row();
+        sm.produces_end_of_stream();
+    }
+
+    {
+        auto sm = new_stream();
+        sm.fwd_to(position_range(query::full_clustering_range));
+        for (int i = 0; i < n_keys; ++i) {
+            if (contains_key(i)) {
+                sm.produces_row_with_key(keys[i]);
+            }
+        }
         sm.produces_end_of_stream();
     }
 
@@ -563,29 +522,12 @@ static void test_range_queries(populate_fn populate) {
     test_slice(inclusive_token_range(128, partitions.size() - 1));
 }
 
-void ensure_monotonic_positions(streamed_mutation& sm) {
-    position_in_partition::less_compare less(*sm.schema());
-    mutation_fragment_opt prev;
-    for (;;) {
-        mutation_fragment_opt mfo = sm().get0();
-        if (!mfo) {
-            break;
-        }
-        if (prev) {
-            if (!less(prev->position(), mfo->position())) {
-                BOOST_FAIL(sprint("previous fragment has greater position: prev=%s, current=%s", *prev, *mfo));
-            }
-        }
-        prev = std::move(mfo);
-    }
-}
-
 void test_streamed_mutation_fragments_have_monotonic_positions(populate_fn populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
 
     for_each_mutation([] (const mutation& m) {
         streamed_mutation sm = streamed_mutation_from_mutation(m);
-        ensure_monotonic_positions(sm);
+        assert_that_stream(std::move(sm)).has_monotonic_positions();
     });
 }
 

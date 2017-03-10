@@ -480,6 +480,14 @@ mutation_fragment_opt range_tombstone_stream::get_next(const mutation_fragment& 
     return { };
 }
 
+mutation_fragment_opt range_tombstone_stream::get_next(position_in_partition_view upper_bound)
+{
+    if (!_list.empty()) {
+        return _cmp(_list.begin()->position(), upper_bound) ? do_get_next() : mutation_fragment_opt();
+    }
+    return { };
+}
+
 mutation_fragment_opt range_tombstone_stream::get_next()
 {
     if (!_list.empty()) {
@@ -498,6 +506,11 @@ void range_tombstone_stream::apply(const range_tombstone_list& list, const query
     for (const range_tombstone& rt : list.slice(_schema, range)) {
         _list.apply(_schema, rt);
     }
+}
+
+void range_tombstone_stream::reset() {
+    _inside_range_tombstone = false;
+    _list.clear();
 }
 
 streamed_mutation reverse_streamed_mutation(streamed_mutation sm) {
@@ -552,6 +565,25 @@ streamed_mutation reverse_streamed_mutation(streamed_mutation sm) {
     };
 
     return make_streamed_mutation<reversing_steamed_mutation>(std::move(sm));
+}
+
+streamed_mutation streamed_mutation_returning(schema_ptr s, dht::decorated_key key, std::vector<mutation_fragment> frags, tombstone t) {
+    class reader : public streamed_mutation::impl {
+    public:
+        explicit reader(schema_ptr s, dht::decorated_key key, std::vector<mutation_fragment> frags, tombstone t)
+            : streamed_mutation::impl(std::move(s), std::move(key), t)
+        {
+            for (auto&& f : frags) {
+                push_mutation_fragment(std::move(f));
+            }
+            _end_of_stream = true;
+        }
+
+        virtual future<> fill_buffer() override {
+            return make_ready_future<>();
+        }
+    };
+    return make_streamed_mutation<reader>(std::move(s), std::move(key), std::move(frags), t);
 }
 
 position_range position_range::from_range(const query::clustering_range& range) {

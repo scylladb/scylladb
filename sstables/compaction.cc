@@ -148,7 +148,7 @@ class compacting_sstable_writer {
     const schema& _schema;
     std::function<shared_sstable()> _creator;
     uint64_t _partitions_per_sstable;
-    uint64_t _max_sstable_size;
+    sstable_writer_config _cfg;
     uint32_t _sstable_level;
     db::replay_position _rp;
     std::vector<unsigned long> _ancestors;
@@ -165,12 +165,12 @@ private:
     }
 public:
     compacting_sstable_writer(const schema& s, std::function<shared_sstable()> creator, uint64_t partitions_per_sstable,
-                              uint64_t max_sstable_size, uint32_t sstable_level, db::replay_position rp,
+                              sstable_writer_config cfg, uint32_t sstable_level, db::replay_position rp,
                               std::vector<unsigned long> ancestors, compaction_info& info)
         : _schema(s)
         , _creator(creator)
         , _partitions_per_sstable(partitions_per_sstable)
-        , _max_sstable_size(max_sstable_size)
+        , _cfg(std::move(cfg))
         , _sstable_level(sstable_level)
         , _rp(rp)
         , _ancestors(std::move(ancestors))
@@ -192,7 +192,7 @@ public:
             }
 
             auto&& priority = service::get_local_compaction_priority();
-            _writer.emplace(_sst->get_writer(_schema, _partitions_per_sstable, _max_sstable_size, false, priority));
+            _writer.emplace(_sst->get_writer(_schema, _partitions_per_sstable, _cfg, priority));
         }
         _info.total_keys_written++;
         _writer->consume_new_partition(dk);
@@ -289,7 +289,9 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
         auto get_max_purgeable = [&cf, &selector, &compacting_set] (const dht::decorated_key& dk) {
             return get_max_purgeable_timestamp(cf, selector, compacting_set, dk);
         };
-        auto cr = compacting_sstable_writer(*schema, creator, partitions_per_sstable, max_sstable_size, sstable_level, rp, std::move(ancestors), *info);
+        sstable_writer_config cfg;
+        cfg.max_sstable_size = max_sstable_size;
+        auto cr = compacting_sstable_writer(*schema, creator, partitions_per_sstable, std::move(cfg), sstable_level, rp, std::move(ancestors), *info);
         auto cfc = make_stable_flattened_mutations_consumer<compact_for_compaction<compacting_sstable_writer>>(
                 *schema, gc_clock::now(), std::move(cr), get_max_purgeable);
 

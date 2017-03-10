@@ -32,6 +32,7 @@
 #include "index_reader.hh"
 #include "counters.hh"
 #include "utils/data_input.hh"
+#include "clustering_ranges_walker.hh"
 
 namespace sstables {
 
@@ -111,13 +112,13 @@ private:
     key_view _key;
     const io_priority_class* _pc = nullptr;
     const query::partition_slice& _slice;
-    bool _in_current_ck_range = false;
+    bool _out_of_range = false;
     stdx::optional<query::clustering_key_filter_ranges> _ck_ranges;
-    query::clustering_row_ranges::const_iterator _current_ck_range;
-    query::clustering_row_ranges::const_iterator _ck_range_end;
+    stdx::optional<clustering_ranges_walker> _ck_ranges_walker;
 
     bool _skip_partition = false;
-    bool _skip_clustering_row = false;
+    // When set, the fragment pending in _in_progress should not be emitted.
+    bool _skip_in_progress = false;
 
     // We don't have "end of clustering row" markers. So we know that the current
     // row has ended once we get something (e.g. a live cell) that belongs to another
@@ -126,12 +127,31 @@ private:
     // The finished row is moved to _ready so that upper layer can retrieve it and
     // the part of the new row goes to _in_progress and this is were we will continue
     // accumulating data once sstable reader is continued.
+    //
+    // _ready only holds fragments which are in the query range, but _in_progress
+    // not necessarily.
+    //
+    // _in_progress may be disengaged only before reading first fragment of partition
+    // or after all fragments of partition were consumed. Fast-forwarding within partition
+    // should not clear it, we rely on it being set to detect repeated tombstones.
     mutation_fragment_opt _in_progress;
     mutation_fragment_opt _ready;
 
     stdx::optional<new_mutation> _mutation;
-    bool _is_mutation_end = false;
+    bool _is_mutation_end = true;
+    position_range _fwd_range = position_range::full(); // Restricts the stream on top of _ck_ranges.
+    streamed_mutation::forwarding _fwd;
+    bool _after_fwd_range_start = false;
 
+    // Because of #1203 we may encounter sstables with range tombstones
+    // placed earlier than expected. We fix the ordering by loading range tombstones
+    // initially into _range_tombstones, until first row is encountered,
+    // and then merge the two streams in get_mutation_fragment().
+    //
+    // _range_tombstones holds only tombstones which are inside _ck_ranges and
+    // after current _fwd_range.start().
+    range_tombstone_stream _range_tombstones;
+    bool _first_row_encountered = false;
 public:
     struct column {
         bool is_static;
@@ -277,69 +297,67 @@ private:
         }
     }
 
+    // Returns true if and only if the position is inside requested ranges.
+    // Assumes that this and the other advance_to() are called with monotonic positions.
     // We rely on the fact that the first 'S' in SSTables stands for 'sorted'
     // and the clustering row keys are always in an ascending order.
-    bool is_in_range(const clustering_key_prefix& ck) {
-        // This is a wrong comparator to use here, but at the moment the correct
-        // one has a very serious disadvantage of not existing (see #1446).
-        clustering_key_prefix::prefix_equality_less_compare cmp(*_schema);
+    void advance_to(position_in_partition_view pos) {
+        position_in_partition::less_compare less(*_schema);
 
-        while (_current_ck_range != _ck_range_end) {
-            if (!_in_current_ck_range && _current_ck_range->start()) {
-                auto& start = *_current_ck_range->start();
-                if ((start.is_inclusive() && cmp(ck, start.value())) || (!start.is_inclusive() && !cmp(start.value(), ck))) {
-                    return false;
-                }
-            }
-            // All subsequent clustering keys are larger than the start of this
-            // range so there is no need to check that again.
-            _in_current_ck_range = true;
-
-            if (!_current_ck_range->end()) {
-                return true;
-            }
-
-            auto& end = *_current_ck_range->end();
-            if ((!end.is_inclusive() && cmp(ck, end.value())) || (end.is_inclusive() && !cmp(end.value(), ck))) {
-                return true;
-            }
-
-            ++_current_ck_range;
-            _in_current_ck_range = false;
+        if (!_after_fwd_range_start && less(pos, _fwd_range.start())) {
+            _skip_in_progress = true;
+            return;
         }
-        return false;
+
+        _after_fwd_range_start = true;
+
+        if (!less(pos, _fwd_range.end())) {
+            _out_of_range = true;
+            _skip_in_progress = false;
+            return;
+        }
+
+        _skip_in_progress = !pos.is_static_row() && !_ck_ranges_walker->advance_to(pos);
+        _out_of_range |= _ck_ranges_walker->out_of_range();
     }
 
-    // Returns true if and only if the range tombstone is relevant for requested ranges.
-    // Assumes that this and is_in_range() are called with monotonic positions, except before
-    // the first call to is_in_range(), due to #1203.
-    bool is_tombstone_in_range(const range_tombstone& rt) {
+    // Assumes that this and other advance_to() overloads are called with monotonic positions.
+    void advance_to(const range_tombstone& rt) {
         position_in_partition::less_compare less(*_schema);
         auto&& start = rt.position();
         auto&& end = rt.end_position();
 
-        auto i = _current_ck_range; // Cannot advance _current_ck_range due to #1203
-        while (i != _ck_range_end) {
-            position_in_partition_view range_start(position_in_partition_view::range_tag_t(), bound_view::from_range_start(*i));
-            if (less(end, range_start)) {
-                return false;
-            }
-
-            position_in_partition_view range_end(position_in_partition_view::range_tag_t(), bound_view::from_range_end(*i));
-            if (less(start, range_end)) {
-                return true;
-            }
-
-            ++i;
+        if (less(end, _fwd_range.start())) {
+            _skip_in_progress = true;
+            return;
         }
-        return false;
+
+        if (!less(start, _fwd_range.end())) {
+            _out_of_range = true;
+            _skip_in_progress = false; // It may become in range after next forwarding, so cannot drop it
+            return;
+        }
+
+        _skip_in_progress = !_ck_ranges_walker->advance_to(start, end);
+        _out_of_range |= _ck_ranges_walker->out_of_range();
+    }
+
+    void advance_to(const mutation_fragment& mf) {
+        if (mf.is_range_tombstone()) {
+            advance_to(mf.as_range_tombstone());
+        } else {
+            advance_to(mf.position());
+        }
     }
 
     void set_up_ck_ranges(const partition_key& pk) {
         _ck_ranges = query::clustering_key_filter_ranges::get_ranges(*_schema, _slice, pk);
-        _current_ck_range = _ck_ranges->begin();
-        _ck_range_end = _ck_ranges->end();
-        _in_current_ck_range = false;
+        _ck_ranges_walker = clustering_ranges_walker(*_schema, _ck_ranges->ranges());
+        _fwd_range = _fwd ? position_range::for_static_row() : position_range::full();
+        _out_of_range = false;
+        _after_fwd_range_start = false;
+        _range_tombstones.reset();
+        _first_row_encountered = false;
     }
 public:
     mutation_opt mut;
@@ -347,40 +365,46 @@ public:
     mp_row_consumer(const key& key,
                     const schema_ptr schema,
                     const query::partition_slice& slice,
-                    const io_priority_class& pc)
+                    const io_priority_class& pc,
+                    streamed_mutation::forwarding fwd)
             : _schema(schema)
             , _key(key_view(key))
             , _pc(&pc)
             , _slice(slice)
+            , _fwd(fwd)
+            , _range_tombstones(*_schema)
     {
         set_up_ck_ranges(partition_key::from_exploded(*_schema, key.explode(*_schema)));
     }
 
     mp_row_consumer(const key& key,
                     const schema_ptr schema,
-                    const io_priority_class& pc)
-            : mp_row_consumer(key, schema, query::full_slice, pc) { }
+                    const io_priority_class& pc,
+                    streamed_mutation::forwarding fwd)
+            : mp_row_consumer(key, schema, query::full_slice, pc, fwd) { }
 
     mp_row_consumer(const schema_ptr schema,
                     const query::partition_slice& slice,
-                    const io_priority_class& pc)
+                    const io_priority_class& pc,
+                    streamed_mutation::forwarding fwd)
             : _schema(schema)
             , _pc(&pc)
             , _slice(slice)
+            , _fwd(fwd)
+            , _range_tombstones(*_schema)
     { }
 
     mp_row_consumer(const schema_ptr schema,
-                    const io_priority_class& pc)
-            : mp_row_consumer(schema, query::full_slice, pc) { }
-
-    mp_row_consumer() : _slice(query::full_slice) {}
+                    const io_priority_class& pc,
+                    streamed_mutation::forwarding fwd)
+            : mp_row_consumer(schema, query::full_slice, pc, fwd) { }
 
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         if (_key.empty() || key == _key) {
             _mutation = new_mutation { partition_key::from_exploded(key.explode(*_schema)), tombstone(deltime) };
             _is_mutation_end = false;
             _skip_partition = false;
-            _skip_clustering_row = false;
+            _skip_in_progress = false;
             set_up_ck_ranges(_mutation->key);
             return proceed::no;
         } else {
@@ -393,34 +417,48 @@ public:
         // If _ready is already set we have a bug: get_mutation_fragment()
         // was not called, and below we will lose one clustering row!
         assert(!_ready);
-        if (!_skip_clustering_row) {
+        if (!_skip_in_progress) {
             _ready = move_and_disengage(_in_progress);
         } else {
             _in_progress = { };
             _ready = { };
         }
-        _skip_clustering_row = false;
+        _skip_in_progress = false;
     }
 
-    proceed flush_if_needed_for_range_tombstone() {
+    proceed flush_if_needed(range_tombstone&& rt) {
         proceed ret = proceed::yes;
         if (_in_progress) {
-            ret = _skip_clustering_row ? proceed::yes : proceed::no;
+            ret = _skip_in_progress ? proceed::yes : proceed::no;
             flush();
         }
+        advance_to(rt);
+        if (_out_of_range) {
+            ret = proceed::no;
+        }
+        _in_progress = mutation_fragment(std::move(rt));
         return ret;
     }
 
-
     proceed flush_if_needed(bool is_static, position_in_partition&& pos) {
+        // Part of workaround for #1203
+        if (!is_static && !_first_row_encountered) {
+            _first_row_encountered = true;
+            // from now on both range tombstones and rows should be in order
+            _ck_ranges_walker->reset();
+        }
+
         position_in_partition::equal_compare eq(*_schema);
         proceed ret = proceed::yes;
         if (_in_progress && !eq(_in_progress->position(), pos)) {
-            ret = _skip_clustering_row ? proceed::yes : proceed::no;
+            ret = _skip_in_progress ? proceed::yes : proceed::no;
             flush();
         }
         if (!_in_progress) {
-            _skip_clustering_row = !is_static && !is_in_range(pos.key());
+            advance_to(pos);
+            if (_out_of_range) {
+                ret = proceed::no;
+            }
             if (is_static) {
                 _in_progress = mutation_fragment(static_row());
             } else {
@@ -489,7 +527,7 @@ public:
 
         auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
         auto ret = flush_if_needed(col.is_static, clustering_prefix);
-        if (_skip_clustering_row) {
+        if (_skip_in_progress) {
             return ret;
         }
 
@@ -564,7 +602,7 @@ public:
     proceed consume_deleted_cell(column &col, int64_t timestamp, gc_clock::time_point ttl) {
         auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
         auto ret = flush_if_needed(col.is_static, clustering_prefix);
-        if (_skip_clustering_row) {
+        if (_skip_in_progress) {
             return ret;
         }
 
@@ -596,6 +634,7 @@ public:
     virtual proceed consume_row_end() override {
         flush();
         _is_mutation_end = true;
+        _out_of_range = true;
         return proceed::no;
     }
 
@@ -653,7 +692,7 @@ public:
             auto end_kind = end_marker_to_bound_kind(end_col);
             if (range_tombstone::is_single_clustering_row_tombstone(*_schema, start_ck, start_kind, end, end_kind)) {
                 auto ret = flush_if_needed(std::move(start_ck));
-                if (!_skip_clustering_row) {
+                if (!_skip_in_progress) {
                     _in_progress->as_mutable_clustering_row().apply(tombstone(deltime));
                 }
                 return ret;
@@ -664,22 +703,21 @@ public:
                 if (_in_progress && !less(_in_progress->position(), rt_pos)) {
                     return proceed::yes; // repeated tombstone, ignore
                 }
-                if (!is_tombstone_in_range(rt)) {
+                // Workaround for #1203
+                if (!_first_row_encountered) {
+                    if (!less(rt_pos, _fwd_range.start()) && _ck_ranges_walker->advance_to(rt_pos, rt.end_position())) {
+                        _range_tombstones.apply(std::move(rt));
+                    }
                     return proceed::yes;
                 }
-                if (flush_if_needed_for_range_tombstone() == proceed::yes) {
-                    _ready = mutation_fragment(std::move(rt));
-                } else {
-                    _in_progress = mutation_fragment(std::move(rt));
-                }
-                return proceed::no;
+                return flush_if_needed(std::move(rt));
             }
         } else {
             auto&& column = pop_back(start);
             auto cdef = _schema->get_column_definition(column);
             if (cdef && cdef->type->is_multi_cell() && deltime.marked_for_delete_at > cdef->dropped_at()) {
                 auto ret = flush_if_needed(cdef->is_static(), exploded_clustering_prefix(std::move(start)));
-                if (!_skip_clustering_row) {
+                if (!_skip_in_progress) {
                     update_pending_collection(cdef, tombstone(deltime));
                 }
                 return ret;
@@ -692,8 +730,15 @@ public:
         return *_pc;
     }
 
-    bool get_and_reset_is_mutation_end() {
-        return std::exchange(_is_mutation_end, false);
+    // Returns true if the consumer is positioned at partition boundary,
+    // meaning that after next read either get_mutation() will
+    // return engaged mutation or end of stream was reached.
+    bool is_mutation_end() const {
+        return _is_mutation_end;
+    }
+
+    bool is_out_of_range() const {
+        return _out_of_range;
     }
 
     stdx::optional<new_mutation> get_mutation() {
@@ -701,7 +746,23 @@ public:
     }
 
     mutation_fragment_opt get_mutation_fragment() {
-        return move_and_disengage(_ready);
+        // We're merging two streams here, one is _range_tombstones
+        // and the other is the main fragment stream represented by
+        // _ready and _out_of_range (which means end of stream).
+
+        if (_ready) {
+            auto mfo = _range_tombstones.get_next(*_ready);
+            if (mfo) {
+                return std::move(mfo);
+            }
+            return move_and_disengage(_ready);
+        }
+
+        if (_out_of_range) {
+            return _range_tombstones.get_next(_fwd_range.end());
+        }
+
+        return {};
     }
 
     void skip_partition() {
@@ -716,6 +777,31 @@ public:
         _pending_collection = { };
         _in_progress = { };
         _ready = { };
+        _is_mutation_end = true;
+    }
+
+    // Changes current fragment range. Only fragments relevant for
+    // current range are emitted by get_mutation_fragment().
+    //
+    // When there are no more fragments for current range,
+    // is_out_of_range() will return true.
+    //
+    // The new range must not overlap with the previous range and
+    // must be after it.
+    void fast_forward_to(position_range r) {
+        _fwd_range = std::move(r);
+        _out_of_range = _is_mutation_end;
+        _after_fwd_range_start = false;
+
+        _range_tombstones.forward_to(_fwd_range.start());
+
+        if (_ready && !_ready->relevant_for_range(*_schema, _fwd_range.start())) {
+            _ready = {};
+        }
+
+        if (_in_progress) {
+            advance_to(*_in_progress);
+        }
     }
 };
 
@@ -739,9 +825,9 @@ struct sstable_data_source {
     { }
 
     sstable_data_source(schema_ptr s, shared_sstable sst, const sstables::key& k, const io_priority_class& pc,
-            const query::partition_slice& slice, sstable::disk_read_range toread)
+            const query::partition_slice& slice, sstable::disk_read_range toread, streamed_mutation::forwarding fwd)
         : _sst(std::move(sst))
-        , _consumer(k, s, slice, pc)
+        , _consumer(k, s, slice, pc, fwd)
         , _context(_sst->data_consume_single_partition(_consumer, std::move(toread)))
     { }
 
@@ -756,62 +842,30 @@ struct sstable_data_source {
 class sstable_streamed_mutation : public streamed_mutation::impl {
     lw_shared_ptr<sstable_data_source> _ds;
     tombstone _t;
-    bool _finished = false;
-    range_tombstone_stream _range_tombstones;
-    mutation_fragment_opt _current_candidate;
-    mutation_fragment_opt _next_candidate;
-    stdx::optional<position_in_partition> _last_position;
     position_in_partition::less_compare _cmp;
     position_in_partition::equal_compare _eq;
 private:
     future<stdx::optional<mutation_fragment_opt>> read_next() {
-        // Because of #1203 we may encounter sstables with range tombstones
-        // placed earler than expected.
-        if (_next_candidate || (_current_candidate && _finished)) {
-            assert(_current_candidate);
-            auto mf = _range_tombstones.get_next(*_current_candidate);
-            if (!mf) {
-                mf = move_and_disengage(_current_candidate);
-                _current_candidate = move_and_disengage(_next_candidate);
-            }
+        auto mf = _ds->_consumer.get_mutation_fragment();
+        if (mf) {
             return make_ready_future<stdx::optional<mutation_fragment_opt>>(std::move(mf));
         }
-        if (_finished) {
-            // No need to update _last_position here. We've already read everything from the sstable.
-            return make_ready_future<stdx::optional<mutation_fragment_opt>>(_range_tombstones.get_next());
+        if (_ds->_consumer.is_out_of_range()) {
+            return make_ready_future<stdx::optional<mutation_fragment_opt>>(
+                stdx::optional<mutation_fragment_opt>(mutation_fragment_opt()));
         }
         return _ds->_context.read().then([this] {
-            _finished = _ds->_consumer.get_and_reset_is_mutation_end();
-            auto mf = _ds->_consumer.get_mutation_fragment();
-            if (mf) {
-                if (mf->is_range_tombstone()) {
-                    // If sstable uses promoted index it will repeat relevant range tombstones in
-                    // each block. Do not emit these duplicates as they will break the guarantee
-                    // that mutation fragment are produced in ascending order.
-                    if (!_last_position || !_cmp(mf->position(), *_last_position)) {
-                        _last_position = position_in_partition(mf->position());
-                        _range_tombstones.apply(std::move(*mf).as_range_tombstone());
-                    }
-                } else {
-                    // mp_row_consumer may produce mutation_fragments in parts if they are
-                    // interrupted by range tombstone duplicate. Make sure they are merged
-                    // before emitting them.
-                    _last_position = position_in_partition(mf->position());
-                    if (!_current_candidate) {
-                        _current_candidate = std::move(mf);
-                    } else if (_current_candidate && _eq(_current_candidate->position(), mf->position())) {
-                        _current_candidate->apply(*_schema, std::move(*mf));
-                    } else {
-                        _next_candidate = std::move(mf);
-                    }
-                }
-            }
             return stdx::optional<mutation_fragment_opt>();
         });
     }
 public:
     sstable_streamed_mutation(schema_ptr s, dht::decorated_key dk, tombstone t, lw_shared_ptr<sstable_data_source> ds)
-        : streamed_mutation::impl(s, std::move(dk), t), _ds(std::move(ds)), _t(t), _range_tombstones(*s), _cmp(*s), _eq(*s) { }
+        : streamed_mutation::impl(s, std::move(dk), t)
+        , _ds(std::move(ds))
+        , _t(t)
+        , _cmp(*s)
+        , _eq(*s)
+    { }
 
     virtual future<> fill_buffer() final override {
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
@@ -827,23 +881,25 @@ public:
         });
     }
 
+    future<> fast_forward_to(position_range range) override {
+        _end_of_stream = false;
+        forward_buffer_to(range.start());
+        _ds->_consumer.fast_forward_to(std::move(range));
+        return make_ready_future<>(); // FIXME: Skip using index
+    }
+
     static future<streamed_mutation> create(schema_ptr s, shared_sstable sst, const sstables::key& k,
                                             const query::partition_slice& slice,
                                             const io_priority_class& pc,
                                             sstable::disk_read_range toread,
                                             streamed_mutation::forwarding fwd)
     {
-        auto ds = make_lw_shared<sstable_data_source>(s, sst, k, pc, slice, std::move(toread));
-        return ds->_context.read().then([s, ds, fwd] {
+        auto ds = make_lw_shared<sstable_data_source>(s, sst, k, pc, slice, std::move(toread), fwd);
+        return ds->_context.read().then([s, ds] {
             auto mut = ds->_consumer.get_mutation();
             assert(mut);
             auto dk = dht::global_partitioner().decorate_key(*s, std::move(mut->key));
-            auto sm = make_streamed_mutation<sstable_streamed_mutation>(s, std::move(dk), mut->tomb, ds);
-            if (fwd) {
-                return make_forwardable(std::move(sm)); // FIXME: optimize
-            } else {
-                return std::move(sm);
-            }
+            return make_streamed_mutation<sstable_streamed_mutation>(s, std::move(dk), mut->tomb, ds);
         });
     }
 };
@@ -1091,12 +1147,6 @@ private:
     const io_priority_class& _pc;
     schema_ptr _schema;
     lw_shared_ptr<sstable_data_source> _ds;
-    // For some reason std::function requires functors to be copyable and that's
-    // why we cannot store mp_row_consumer in _get_data_source captured values.
-    // Instead we have this _consumer field here which is moved away by
-    // _get_data_source().
-    mp_row_consumer _consumer;
-    streamed_mutation::forwarding _fwd;
     std::function<future<lw_shared_ptr<sstable_data_source>> ()> _get_data_source;
 public:
     impl(shared_sstable sst, schema_ptr schema, sstable::disk_read_range toread,
@@ -1104,10 +1154,9 @@ public:
          streamed_mutation::forwarding fwd)
         : _pc(pc)
         , _schema(schema)
-        , _consumer(schema, query::full_slice, pc)
-        , _fwd(fwd)
-        , _get_data_source([this, sst = std::move(sst), toread] {
-            auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), std::move(toread), std::unique_ptr<index_reader>());
+        , _get_data_source([this, sst = std::move(sst), toread, &pc, fwd] {
+            auto consumer = mp_row_consumer(_schema, query::full_slice, pc, fwd);
+            auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(consumer), std::move(toread), std::unique_ptr<index_reader>());
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
     impl(shared_sstable sst, schema_ptr schema,
@@ -1115,10 +1164,9 @@ public:
          streamed_mutation::forwarding fwd)
         : _pc(pc)
         , _schema(schema)
-        , _consumer(schema, query::full_slice, pc)
-        , _fwd(fwd)
-        , _get_data_source([this, sst = std::move(sst)] {
-            auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer));
+        , _get_data_source([this, sst = std::move(sst), &pc, fwd] {
+            auto consumer = mp_row_consumer(_schema, query::full_slice, pc, fwd);
+            auto ds = make_lw_shared<sstable_data_source>(std::move(sst), std::move(consumer));
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
     impl(shared_sstable sst,
@@ -1129,19 +1177,17 @@ public:
          streamed_mutation::forwarding fwd)
         : _pc(pc)
         , _schema(schema)
-        , _consumer(schema, slice, pc)
-        , _fwd(fwd)
-        , _get_data_source([this, &pr, sst = std::move(sst)] () mutable {
+        , _get_data_source([this, &pr, sst = std::move(sst), &pc, &slice, fwd] () mutable {
             auto index = std::make_unique<index_reader>(sst->get_index_reader(_pc));
             auto f = index->get_disk_read_range(*_schema, pr);
-            return f.then([this, index = std::move(index), sst = std::move(sst)] (sstable::disk_read_range drr) mutable {
+            return f.then([this, index = std::move(index), sst = std::move(sst), &pc, &slice, fwd] (sstable::disk_read_range drr) mutable {
                 if (!drr.found_row()) {
                     _read_enabled = false;
                 }
-                return make_lw_shared<sstable_data_source>(std::move(sst), std::move(_consumer), std::move(drr), std::move(index));
+                auto consumer = mp_row_consumer(_schema, slice, pc, fwd);
+                return make_lw_shared<sstable_data_source>(std::move(sst), std::move(consumer), std::move(drr), std::move(index));
             });
         }) { }
-    impl() : _read_enabled(false), _pc(default_priority_class()), _get_data_source() { }
 
     // Reference to _consumer is passed to data_consume_rows() in the constructor so we must not allow move/copy
     impl(impl&&) = delete;
@@ -1179,23 +1225,27 @@ public:
     }
 private:
     future<streamed_mutation_opt> do_read() {
+        auto& consumer = _ds->_consumer;
+        if (!consumer.is_mutation_end()) {
+            // FIXME: use index to skip to the next partition.
+            // Skip to the next partition, the slow way.
+            consumer.skip_partition();
+            return _ds->_context.read().then([this] {
+                if (!_ds->_consumer.is_mutation_end()) {
+                    // FIXME: give more details from _context
+                    throw malformed_sstable_exception("skipped not to partition end", _ds->_sst->get_filename());
+                }
+                return do_read();
+            });
+        }
         return _ds->_context.read().then([this] {
             auto& consumer = _ds->_consumer;
             auto mut = consumer.get_mutation();
             if (!mut) {
-                if (consumer.get_mutation_fragment() || consumer.get_and_reset_is_mutation_end()) {
-                    // We are still in the middle of the previous mutation.
-                    consumer.skip_partition();
-                    return do_read();
-                } else {
-                    return make_ready_future<streamed_mutation_opt>();
-                }
+                return make_ready_future<streamed_mutation_opt>();
             }
             auto dk = dht::global_partitioner().decorate_key(*_schema, std::move(mut->key));
             auto sm = make_streamed_mutation<sstable_streamed_mutation>(_schema, std::move(dk), mut->tomb, _ds);
-            if (_fwd) {
-                sm = make_forwardable(std::move(sm)); // FIXME: optimize
-            }
             return make_ready_future<streamed_mutation_opt>(std::move(sm));
         });
     }
