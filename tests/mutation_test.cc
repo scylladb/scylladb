@@ -1449,3 +1449,61 @@ SEASTAR_TEST_CASE(test_trim_rows) {
         compact_and_expect_empty(m, ranges);
     });
 }
+
+SEASTAR_TEST_CASE(test_collection_cell_diff) {
+    return seastar::async([] {
+        auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+            {{"p", utf8_type}}, {}, {{"v", list_type_impl::get_instance(bytes_type, true)}}, {}, utf8_type));
+
+        auto& col = s->column_at(column_kind::regular_column, 0);
+        auto k = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s, to_bytes("key")));
+        mutation m1(k, s);
+        auto uuid = utils::UUID_gen::get_time_UUID_bytes();
+        collection_type_impl::mutation mcol1;
+        mcol1.cells.emplace_back(
+                bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size()),
+                atomic_cell::make_live(api::timestamp_type(1), to_bytes("element")));
+        m1.set_clustered_cell(clustering_key::make_empty(), col, list_type_impl::serialize_mutation_form(mcol1));
+
+        mutation m2(k, s);
+        collection_type_impl::mutation mcol2;
+        mcol2.tomb = tombstone(api::timestamp_type(2), gc_clock::now());
+        m2.set_clustered_cell(clustering_key::make_empty(), col, list_type_impl::serialize_mutation_form(mcol2));
+
+        mutation m12 = m1;
+        m12.apply(m2);
+
+        auto diff = m12.partition().difference(s, m1.partition());
+        BOOST_REQUIRE(!diff.empty());
+        BOOST_REQUIRE(m2.partition().equal(*s, diff));
+    });
+}
+
+SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
+    return seastar::async([] {
+        auto partitions_match = [] (const mutation_partition& mp1, const mutation_partition& mp2, const schema& s) {
+            // FIXME: Due to #2158, we compare only the rows and the partition tombstone.
+            return mp1.partition_tombstone() == mp2.partition_tombstone()
+                && std::equal(
+                    mp1.clustered_rows().begin(), mp1.clustered_rows().end(),
+                    mp2.clustered_rows().begin(), mp2.clustered_rows().end(),
+                    [&] (const rows_entry& e1, const rows_entry& e2) {
+                        return e1.equal(s, e2);
+                    });
+        };
+        for_each_mutation_pair([&partitions_match] (auto&& m1, auto&& m2, are_equal eq) {
+            auto s = m1.schema();
+            if (s != m2.schema()) {
+                return;
+            }
+            auto m12 = m1;
+            m12.apply(m2);
+            auto m12_with_diff = m1;
+            m12_with_diff.partition().apply(*s, m2.partition().difference(s, m1.partition()));
+            BOOST_REQUIRE(partitions_match(m12.partition(), m12_with_diff.partition(), *s));
+            BOOST_REQUIRE(partitions_match(mutation_partition{s}, m1.partition().difference(s, m1.partition()), *s));
+            BOOST_REQUIRE(partitions_match(m1.partition(), m1.partition().difference(s, mutation_partition{s}), *s));
+            BOOST_REQUIRE(partitions_match(mutation_partition{s}, mutation_partition{s}.difference(s, m1.partition()), *s));
+        });
+    });
+}
