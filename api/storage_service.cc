@@ -373,6 +373,12 @@ void set_storage_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(json_void());
     });
 
+    ss::force_terminate_all_repair_sessions_new.set(r, [](std::unique_ptr<request> req) {
+        return repair_abort_all(service::get_local_storage_service().db()).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
+
     ss::decommission.set(r, [](std::unique_ptr<request> req) {
         return service::get_local_storage_service().decommission().then([] {
             return make_ready_future<json::json_return_type>(json_void());
