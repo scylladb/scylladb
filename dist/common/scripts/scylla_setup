@@ -260,6 +260,7 @@ if [ $ENABLE_SERVICE -eq 1 ]; then
     if is_systemd; then
         systemctl enable scylla-server.service
         systemctl enable collectd.service
+        systemctl unmask scylla-fstrim.timer
     fi
     if [ $INTERACTIVE -eq 1 ] && [ ! -f /etc/scylla.d/housekeeping.cfg ]; then
         interactive_ask_service "Do you want to enable ScyllaDB version check?" "Answer yes to automatically start Scylla-housekeeping service that checks for a newer version periodically; answer no to skip this step." "yes" &&:

@@ -13,7 +13,11 @@ override_dh_installinit:
 	dh_installinit --no-start @@DH_INSTALLINIT@@
 	dh_installinit --no-start --name scylla-housekeeping-daily @@DH_INSTALLINIT@@
 	dh_installinit --no-start --name scylla-housekeeping-restart @@DH_INSTALLINIT@@
+	dh_installinit --no-start --name scylla-fstrim @@DH_INSTALLINIT@@
 	dh_installinit --no-start --name node-exporter @@DH_INSTALLINIT@@
+
+override_dh_installcron:
+	dh_installcron
 
 override_dh_strip:
 	dh_strip --dbg-package=scylla-server-dbg

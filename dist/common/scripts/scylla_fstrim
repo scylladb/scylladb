@@ -1,0 +1,52 @@
+#!/usr/bin/python
+#
+# Copyright 2017 ScyllaDB
+#
+
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+
+import os
+import sys
+import yaml
+import argparse
+import subprocess
+
+def find_mount_point(path):
+    path = os.path.abspath(path)
+    while not os.path.ismount(path):
+        path = os.path.dirname(path)
+    return path
+
+def main():
+    parser = argparse.ArgumentParser(description='Run fstrim on Scylla data partitions.')
+    parser.add_argument('-c', '--config', dest='config', action='store',
+                        default='/etc/scylla/scylla.yaml',
+                        help='path to scylla.yaml')
+    args = parser.parse_args()
+    s = open(args.config).read()
+    cfg = yaml.load(s)
+    mountpoints = set()
+    for d in cfg['data_file_directories']:
+        mountpoints.add(find_mount_point(d))
+
+    mountpoints.add(find_mount_point(cfg['commitlog_directory']))
+    for d in mountpoints:
+        print("Running fstrim on {} ...".format(d))
+        subprocess.check_call(["fstrim", d])
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,10 @@
+[Unit]
+Description=Scylla fstrim
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/scylla/scylla_fstrim
+
+[Install]
+WantedBy=multi-user.target
