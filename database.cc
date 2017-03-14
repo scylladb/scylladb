@@ -1758,7 +1758,7 @@ database::setup_metrics() {
     });
 
     _metrics.add_group("database", {
-        sm::make_gauge("requests_blocked_memory", [this] { return _dirty_memory_manager.region_group().blocked_requests(); },
+        sm::make_gauge("requests_blocked_memory_current", [this] { return _dirty_memory_manager.region_group().blocked_requests(); },
                        sm::description(
                            seastar::format("Holds the current number of requests blocked due to reaching the memory quota ({}B). "
                                            "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"database\" component.", _dirty_memory_manager.throttle_threshold()))),
