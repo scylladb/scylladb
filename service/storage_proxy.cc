@@ -482,7 +482,6 @@ inline uint64_t& storage_proxy::split_stats::get_ep_stat(gms::inet_address ep) {
 storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
     namespace sm = seastar::metrics;
-
     _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
         sm::make_histogram("read_latency", sm::description("The general read latency histogram"), [this]{return _stats.estimated_read.get_histogram();}),
         sm::make_histogram("write_latency", sm::description("The general write latency histogram"), [this]{return _stats.estimated_write.get_histogram();}),
@@ -492,7 +491,7 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
         sm::make_queue_length("background_writes", [this] { return _stats.background_writes; },
                        sm::description("number of currently pending background write requests")),
 
-        sm::make_queue_length("throttled_writes", [this] { return _throttled_writes.size(); },
+        sm::make_queue_length("current_throttled_writes", [this] { return _throttled_writes.size(); },
                        sm::description("number of currently throttled write requests")),
 
         sm::make_total_operations("throttled_writes", [this] { return _stats.throttled_writes; },
