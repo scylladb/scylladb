@@ -112,6 +112,11 @@ public:
         });
     }
 
+    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, const io_priority_class& pc) override {
+        return do_io_check(_error_handler, [&] {
+            return get_file_impl(_file)->dma_read_bulk(offset, range_size, pc);
+        });
+    }
 private:
     const io_error_handler& _error_handler;
     file _file;
