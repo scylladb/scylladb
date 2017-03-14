@@ -1530,28 +1530,31 @@ static bool maybe_write_in_user_memory(schema_ptr s, database& db) {
 }
 
 void make(database& db, bool durable, bool volatile_testing_only) {
-    auto ksm = make_lw_shared<keyspace_metadata>(NAME,
-            "org.apache.cassandra.locator.LocalStrategy",
-            std::map<sstring, sstring>{},
-            durable
-            );
-    auto kscfg = db.make_keyspace_config(*ksm);
-    kscfg.enable_disk_reads = !volatile_testing_only;
-    kscfg.enable_disk_writes = !volatile_testing_only;
-    kscfg.enable_commitlog = !volatile_testing_only;
-    kscfg.enable_cache = true;
-    // don't make system keyspace reads wait for user reads
-    kscfg.read_concurrency_config.sem = &db.system_keyspace_read_concurrency_sem();
-    kscfg.read_concurrency_config.timeout = {};
-    kscfg.read_concurrency_config.max_queue_length = std::numeric_limits<size_t>::max();
-    // don't make system keyspace writes wait for user writes (if under pressure)
-    kscfg.dirty_memory_manager = &db._system_dirty_memory_manager;
-    keyspace _ks{ksm, std::move(kscfg)};
-    auto rs(locator::abstract_replication_strategy::create_replication_strategy(NAME, "LocalStrategy", service::get_local_storage_service().get_token_metadata(), ksm->strategy_options()));
-    _ks.set_replication_strategy(std::move(rs));
-    db.add_keyspace(NAME, std::move(_ks));
-    auto& ks = db.find_keyspace(NAME);
     for (auto&& table : all_tables()) {
+        auto ks_name = table->ks_name();
+        if (!db.has_keyspace(ks_name)) {
+            auto ksm = make_lw_shared<keyspace_metadata>(ks_name,
+                    "org.apache.cassandra.locator.LocalStrategy",
+                    std::map<sstring, sstring>{},
+                    durable
+                    );
+            auto kscfg = db.make_keyspace_config(*ksm);
+            kscfg.enable_disk_reads = !volatile_testing_only;
+            kscfg.enable_disk_writes = !volatile_testing_only;
+            kscfg.enable_commitlog = !volatile_testing_only;
+            kscfg.enable_cache = true;
+            // don't make system keyspace reads wait for user reads
+            kscfg.read_concurrency_config.sem = &db.system_keyspace_read_concurrency_sem();
+            kscfg.read_concurrency_config.timeout = {};
+            kscfg.read_concurrency_config.max_queue_length = std::numeric_limits<size_t>::max();
+            // don't make system keyspace writes wait for user writes (if under pressure)
+            kscfg.dirty_memory_manager = &db._system_dirty_memory_manager;
+            keyspace _ks{ksm, std::move(kscfg)};
+            auto rs(locator::abstract_replication_strategy::create_replication_strategy(NAME, "LocalStrategy", service::get_local_storage_service().get_token_metadata(), ksm->strategy_options()));
+            _ks.set_replication_strategy(std::move(rs));
+            db.add_keyspace(ks_name, std::move(_ks));
+        }
+        auto& ks = db.find_keyspace(ks_name);
         auto cfg = ks.make_column_family_config(*table, db.get_config());
         if (maybe_write_in_user_memory(table, db)) {
             cfg.dirty_memory_manager = &db._dirty_memory_manager;

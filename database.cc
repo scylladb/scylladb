@@ -78,6 +78,14 @@ using namespace std::chrono_literals;
 
 logging::logger dblog("database");
 
+static const std::unordered_set<sstring> system_keyspaces = {
+                db::system_keyspace::NAME, db::schema_tables::NAME
+};
+
+static bool is_system_keyspace(const sstring& name) {
+    return system_keyspaces.find(name) != system_keyspaces.end();
+}
+
 // Slight extension to the flush_queue type.
 class column_family::memtable_flush_queue : public utils::flush_queue<db::replay_position> {
 public:
@@ -2131,7 +2139,7 @@ future<> distributed_loader::populate_keyspace(distributed<database>& db, sstrin
 static future<> populate(distributed<database>& db, sstring datadir) {
     return lister::scan_dir(datadir, { directory_entry_type::directory }, [&db] (lister::path datadir, directory_entry de) {
         auto& ks_name = de.name;
-        if (ks_name == "system") {
+        if (is_system_keyspace(ks_name)) {
             return make_ready_future<>();
         }
         return distributed_loader::populate_keyspace(db, datadir.native(), ks_name);
@@ -2156,7 +2164,7 @@ do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring
         return std::move(names);
     }).then([&proxy, cf_name, func = std::forward<Func>(func)] (std::set<sstring>&& names) mutable {
         return parallel_for_each(names.begin(), names.end(), [&proxy, cf_name, func = std::forward<Func>(func)] (sstring name) mutable {
-            if (name == "system") {
+            if (is_system_keyspace(name)) {
                 return make_ready_future<>();
             }
 
@@ -2232,18 +2240,21 @@ future<> distributed_loader::init_system_keyspace(distributed<database>& db) {
         // FIXME support multiple directories
         const auto& cfg = db.local().get_config();
         auto data_dir = cfg.data_file_directories()[0];
-        io_check(touch_directory, data_dir + "/" + db::system_keyspace::NAME).get();
-        distributed_loader::populate_keyspace(db, data_dir, db::system_keyspace::NAME).get();
 
-        db.invoke_on_all([] (database& db) {
-            auto& ks = db.find_keyspace(db::system_keyspace::NAME);
-            for (auto& pair : ks.metadata()->cf_meta_data()) {
-                auto cfm = pair.second;
-                auto& cf = db.find_column_family(cfm);
-                cf.mark_ready_for_writes();
-            }
-            return make_ready_future<>();
-        }).get();
+        for (auto ksname : system_keyspaces) {
+            io_check(touch_directory, data_dir + "/" + ksname).get();
+            distributed_loader::populate_keyspace(db, data_dir, ksname).get();
+
+            db.invoke_on_all([ksname] (database& db) {
+                auto& ks = db.find_keyspace(ksname);
+                for (auto& pair : ks.metadata()->cf_meta_data()) {
+                    auto cfm = pair.second;
+                    auto& cf = db.find_column_family(cfm);
+                    cf.mark_ready_for_writes();
+                }
+                return make_ready_future<>();
+            }).get();
+        }
     });
  }
 
@@ -2424,7 +2435,7 @@ bool database::has_keyspace(const sstring& name) const {
 std::vector<sstring>  database::get_non_system_keyspaces() const {
     std::vector<sstring> res;
     for (auto const &i : _keyspaces) {
-        if (i.first != db::system_keyspace::NAME) {
+        if (!is_system_keyspace(i.first)) {
             res.push_back(i.first);
         }
     }
@@ -2436,7 +2447,7 @@ std::vector<lw_shared_ptr<column_family>> database::get_non_system_column_famili
         get_column_families()
             | boost::adaptors::map_values
             | boost::adaptors::filtered([](const lw_shared_ptr<column_family>& cf) {
-                return cf->schema()->ks_name() != db::system_keyspace::NAME;
+                return !is_system_keyspace(cf->schema()->ks_name());
             }));
 }
 

@@ -2663,6 +2663,10 @@ std::vector<schema_ptr> all_tables() {
     return {
         keyspaces(), columnfamilies(), columns(), triggers(), usertypes(), functions(), aggregates(),
         views(), indexes(),
+
+        // v3 tables. Not used yet, but want created
+        v3::keyspaces(), v3::tables(), v3::columns(), v3::dropped_columns(), v3::triggers(),
+        v3::views(), v3::indexes(), v3::types(), v3::functions(), v3::aggregates(),
     };
 }
 
