@@ -225,6 +225,7 @@ public:
         bi::member_hook<cache_entry, cache_entry::cache_link_type, &cache_entry::_cache_link>,
         bi::constant_time_size<false>, // we need this to have bi::auto_unlink on hooks
         bi::compare<cache_entry::compare>>;
+    friend class autoupdating_underlying_reader;
     friend class single_partition_populating_reader;
     friend class cache_entry;
 public:
