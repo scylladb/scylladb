@@ -933,11 +933,11 @@ schema_ptr aggregates() {
 
 static future<> setup_version() {
     return gms::inet_address::lookup(qctx->db().get_config().rpc_address()).then([](gms::inet_address a) {
-        sstring req = "INSERT INTO system.%s (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address, supported_features) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        sstring req = sprint("INSERT INTO system.%s (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address, supported_features) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        , db::system_keyspace::LOCAL);
         auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
-        return execute_cql(req, db::system_keyspace::LOCAL,
-                             sstring(db::system_keyspace::LOCAL),
+        return execute_cql(req, sstring(db::system_keyspace::LOCAL),
                              version::release(),
                              cql3::query_processor::CQL_VERSION,
                              ::cassandra::thrift_version,
@@ -973,7 +973,7 @@ struct local_cache {
 static distributed<local_cache> _local_cache;
 
 static future<> build_dc_rack_info() {
-    return execute_cql("SELECT peer, data_center, rack from system.%s", PEERS).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
+    return execute_cql(sprint("SELECT peer, data_center, rack from system.%s", PEERS)).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
         return do_for_each(*msg, [] (auto& row) {
             // Not ideal to assume ipv4 here, but currently this is what the cql types wraps.
             net::ipv4_address peer = row.template get_as<net::ipv4_address>("peer");
@@ -995,8 +995,8 @@ static future<> build_dc_rack_info() {
 }
 
 static future<> build_bootstrap_info() {
-    sstring req = "SELECT bootstrapped FROM system.%s WHERE key = ? ";
-    return execute_cql(req, LOCAL, sstring(LOCAL)).then([] (auto msg) {
+    sstring req = sprint("SELECT bootstrapped FROM system.%s WHERE key = ? ", LOCAL);
+    return execute_cql(req, sstring(LOCAL)).then([] (auto msg) {
         static auto state_map = std::unordered_map<sstring, bootstrap_state>({
             { "NEEDS_BOOTSTRAP", bootstrap_state::NEEDS_BOOTSTRAP },
             { "COMPLETED", bootstrap_state::COMPLETED },
@@ -1243,9 +1243,9 @@ future<> update_tokens(gms::inet_address ep, std::unordered_set<dht::token> toke
         return remove_endpoint(ep);
     }
 
-    sstring req = "INSERT INTO system.%s (peer, tokens) VALUES (?, ?)";
+    sstring req = sprint("INSERT INTO system.%s (peer, tokens) VALUES (?, ?)", PEERS);
     auto set_type = set_type_impl::get_instance(utf8_type, true);
-    return execute_cql(req, PEERS, ep.addr(), make_set_value(set_type, prepare_tokens(tokens))).discard_result().then([] {
+    return execute_cql(req, ep.addr(), make_set_value(set_type, prepare_tokens(tokens))).discard_result().then([] {
         return force_blocking_flush(PEERS);
     });
 }
@@ -1267,8 +1267,8 @@ future<std::unordered_set<dht::token>> update_local_tokens(
 }
 
 future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> load_tokens() {
-    sstring req = "SELECT peer, tokens FROM system.%s";
-    return execute_cql(req, PEERS).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+    sstring req = sprint("SELECT peer, tokens FROM system.%s", PEERS);
+    return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         std::unordered_map<gms::inet_address, std::unordered_set<dht::token>> ret;
         for (auto& row : *cql_result) {
             auto peer = gms::inet_address(row.get_as<net::ipv4_address>("peer"));
@@ -1285,8 +1285,8 @@ future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> lo
 }
 
 future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids() {
-    sstring req = "SELECT peer, host_id FROM system.%s";
-    return execute_cql(req, PEERS).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+    sstring req = sprint("SELECT peer, host_id FROM system.%s", PEERS);
+    return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         std::unordered_map<gms::inet_address, utils::UUID> ret;
         for (auto& row : *cql_result) {
             auto peer = gms::inet_address(row.get_as<net::ipv4_address>("peer"));
@@ -1299,8 +1299,8 @@ future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids() {
 }
 
 future<std::unordered_map<gms::inet_address, sstring>> load_peer_features() {
-    sstring req = "SELECT peer, supported_features FROM system.%s";
-    return execute_cql(req, PEERS).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+    sstring req = sprint("SELECT peer, supported_features FROM system.%s", PEERS);
+    return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         std::unordered_map<gms::inet_address, sstring> ret;
         for (auto& row : *cql_result) {
             if (row.has("supported_features")) {
@@ -1313,16 +1313,15 @@ future<std::unordered_map<gms::inet_address, sstring>> load_peer_features() {
 }
 
 future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip) {
-    sstring req = "INSERT INTO system.%s (peer, preferred_ip) VALUES (?, ?)";
-    return execute_cql(req, PEERS, ep.addr(), preferred_ip.addr()).discard_result().then([] {
+    sstring req = sprint("INSERT INTO system.%s (peer, preferred_ip) VALUES (?, ?)", PEERS);
+    return execute_cql(req, ep.addr(), preferred_ip.addr()).discard_result().then([] {
         return force_blocking_flush(PEERS);
     });
 }
 
 future<std::unordered_map<gms::inet_address, gms::inet_address>> get_preferred_ips() {
-    sstring req = "SELECT peer, preferred_ip FROM system.%s";
-
-    return execute_cql(req, PEERS).then([] (::shared_ptr<cql3::untyped_result_set> cql_res_set) {
+    sstring req = sprint("SELECT peer, preferred_ip FROM system.%s", PEERS);
+    return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_res_set) {
         std::unordered_map<gms::inet_address, gms::inet_address> res;
 
         for (auto& r : *cql_res_set) {
@@ -1363,8 +1362,8 @@ future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value
 
     return update_cached_values(ep, column_name, value).then([ep, column_name, value] {
         sstring clause = sprint("(peer, %s) VALUES (?, ?)", column_name);
-        sstring req = "INSERT INTO system.%s " + clause;
-        return execute_cql(req, PEERS, ep.addr(), value).discard_result();
+        sstring req = sprint("INSERT INTO system.%s " + clause, PEERS);
+        return execute_cql(req, ep.addr(), value).discard_result();
     });
 }
 // sets are not needed, since tokens are updated by another method
@@ -1374,13 +1373,13 @@ template future<> update_peer_info<net::ipv4_address>(gms::inet_address ep, sstr
 
 future<> update_hints_dropped(gms::inet_address ep, utils::UUID time_period, int value) {
     // with 30 day TTL
-    sstring req = "UPDATE system.%s USING TTL 2592000 SET hints_dropped[ ? ] = ? WHERE peer = ?";
-    return execute_cql(req, PEER_EVENTS, time_period, value, ep.addr()).discard_result();
+    sstring req = sprint("UPDATE system.%s USING TTL 2592000 SET hints_dropped[ ? ] = ? WHERE peer = ?", PEER_EVENTS);
+    return execute_cql(req, time_period, value, ep.addr()).discard_result();
 }
 
 future<> update_schema_version(utils::UUID version) {
-    sstring req = "INSERT INTO system.%s (key, schema_version) VALUES (?, ?)";
-    return execute_cql(req, LOCAL, sstring(LOCAL), version).discard_result();
+    sstring req = sprint("INSERT INTO system.%s (key, schema_version) VALUES (?, ?)", LOCAL);
+    return execute_cql(req, sstring(LOCAL), version).discard_result();
 }
 
 /**
@@ -1390,8 +1389,8 @@ future<> remove_endpoint(gms::inet_address ep) {
     return _local_cache.invoke_on_all([ep] (local_cache& lc) {
         lc._cached_dc_rack_info.erase(ep);
     }).then([ep] {
-        sstring req = "DELETE FROM system.%s WHERE peer = ?";
-        return execute_cql(req, PEERS, ep.addr()).discard_result();
+        sstring req = sprint("DELETE FROM system.%s WHERE peer = ?", PEERS);
+        return execute_cql(req, ep.addr()).discard_result();
     }).then([] {
         return force_blocking_flush(PEERS);
     });
@@ -1405,9 +1404,9 @@ future<> update_tokens(std::unordered_set<dht::token> tokens) {
         throw std::invalid_argument("remove_endpoint should be used instead");
     }
 
-    sstring req = "INSERT INTO system.%s (key, tokens) VALUES (?, ?)";
+    sstring req = sprint("INSERT INTO system.%s (key, tokens) VALUES (?, ?)", LOCAL);
     auto set_type = set_type_impl::get_instance(utf8_type, true);
-    return execute_cql(req, LOCAL, sstring(LOCAL), make_set_value(set_type, prepare_tokens(tokens))).discard_result().then([] {
+    return execute_cql(req, sstring(LOCAL), make_set_value(set_type, prepare_tokens(tokens))).discard_result().then([] {
         return force_blocking_flush(LOCAL);
     });
 }
@@ -1429,12 +1428,12 @@ future<> force_blocking_flush(sstring cfname) {
  */
 future<> check_health() {
     using namespace transport::messages;
-    sstring req = "SELECT cluster_name FROM system.%s WHERE key=?";
-    return execute_cql(req, LOCAL, sstring(LOCAL)).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
+    sstring req = sprint("SELECT cluster_name FROM system.%s WHERE key=?", LOCAL);
+    return execute_cql(req, sstring(LOCAL)).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
         if (msg->empty() || !msg->one().has("cluster_name")) {
             // this is a brand new node
-            sstring ins_req = "INSERT INTO system.%s (key, cluster_name) VALUES (?, ?)";
-            return execute_cql(ins_req, LOCAL, sstring(LOCAL), qctx->db().get_config().cluster_name()).discard_result();
+            sstring ins_req = sprint("INSERT INTO system.%s (key, cluster_name) VALUES (?, ?)", LOCAL);
+            return execute_cql(ins_req, sstring(LOCAL), qctx->db().get_config().cluster_name()).discard_result();
         } else {
             auto saved_cluster_name = msg->one().get_as<sstring>("cluster_name");
             auto cluster_name = qctx->db().get_config().cluster_name();
@@ -1449,8 +1448,8 @@ future<> check_health() {
 }
 
 future<std::unordered_set<dht::token>> get_saved_tokens() {
-    sstring req = "SELECT tokens FROM system.%s WHERE key = ?";
-    return execute_cql(req, LOCAL, sstring(LOCAL)).then([] (auto msg) {
+    sstring req = sprint("SELECT tokens FROM system.%s WHERE key = ?", LOCAL);
+    return execute_cql(req, sstring(LOCAL)).then([] (auto msg) {
         if (msg->empty() || !msg->one().has("tokens")) {
             return make_ready_future<std::unordered_set<dht::token>>();
         }
@@ -1490,8 +1489,8 @@ future<> set_bootstrap_state(bootstrap_state state) {
 
     sstring state_name = state_to_name.at(state);
 
-    sstring req = "INSERT INTO system.%s (key, bootstrapped) VALUES (?, ?)";
-    return execute_cql(req, LOCAL, sstring(LOCAL), state_name).discard_result().then([state] {
+    sstring req = sprint("INSERT INTO system.%s (key, bootstrapped) VALUES (?, ?)", LOCAL);
+    return execute_cql(req, sstring(LOCAL), state_name).discard_result().then([state] {
         return force_blocking_flush(LOCAL).then([state] {
             return _local_cache.invoke_on_all([state] (local_cache& lc) {
                 lc._state = state;
@@ -1566,8 +1565,8 @@ void make(database& db, bool durable, bool volatile_testing_only) {
 
 future<utils::UUID> get_local_host_id() {
     using namespace transport::messages;
-    sstring req = "SELECT host_id FROM system.%s WHERE key=?";
-    return execute_cql(req, LOCAL, sstring(LOCAL)).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
+    sstring req = sprint("SELECT host_id FROM system.%s WHERE key=?", LOCAL);
+    return execute_cql(req, sstring(LOCAL)).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
         auto new_id = [] {
             auto host_id = utils::make_random_uuid();
             return set_local_host_id(host_id);
@@ -1582,8 +1581,8 @@ future<utils::UUID> get_local_host_id() {
 }
 
 future<utils::UUID> set_local_host_id(const utils::UUID& host_id) {
-    sstring req = "INSERT INTO system.%s (key, host_id) VALUES (?, ?)";
-    return execute_cql(req, LOCAL, sstring(LOCAL), host_id).then([] (auto msg) {
+    sstring req = sprint("INSERT INTO system.%s (key, host_id) VALUES (?, ?)", LOCAL);
+    return execute_cql(req, sstring(LOCAL), host_id).then([] (auto msg) {
         return force_blocking_flush(LOCAL);
     }).then([host_id] {
         return host_id;
@@ -1669,16 +1668,17 @@ future<> update_compaction_history(sstring ksname, sstring cfname, int64_t compa
 
     auto map_type = map_type_impl::get_instance(int32_type, long_type, true);
 
-    sstring req = "INSERT INTO system.%s (id, keyspace_name, columnfamily_name, compacted_at, bytes_in, bytes_out, rows_merged) VALUES (?, ?, ?, ?, ?, ?, ?)";
+    sstring req = sprint("INSERT INTO system.%s (id, keyspace_name, columnfamily_name, compacted_at, bytes_in, bytes_out, rows_merged) VALUES (?, ?, ?, ?, ?, ?, ?)"
+                    , COMPACTION_HISTORY);
 
-    return execute_cql(req, COMPACTION_HISTORY, utils::UUID_gen::get_time_UUID(), ksname, cfname, compacted_at, bytes_in, bytes_out,
+    return execute_cql(req, utils::UUID_gen::get_time_UUID(), ksname, cfname, compacted_at, bytes_in, bytes_out,
                        make_map_value(map_type, prepare_rows_merged(rows_merged))).discard_result();
 }
 
 future<std::vector<compaction_history_entry>> get_compaction_history()
 {
-    sstring req = "SELECT * from system.%s";
-    return execute_cql(req, COMPACTION_HISTORY).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
+    sstring req = sprint("SELECT * from system.%s", COMPACTION_HISTORY);
+    return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
         std::vector<compaction_history_entry> history;
 
         for (auto& row : *msg) {

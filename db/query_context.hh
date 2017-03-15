@@ -39,9 +39,7 @@ struct query_context {
     query_context(distributed<database>& db, distributed<cql3::query_processor>& qp) : _db(db), _qp(qp) {}
 
     template <typename... Args>
-    future<::shared_ptr<cql3::untyped_result_set>> execute_cql(sstring text, sstring cf, Args&&... args) {
-        // FIXME: Would be better not to use sprint here.
-        sstring req = sprint(text, cf);
+    future<::shared_ptr<cql3::untyped_result_set>> execute_cql(sstring req, Args&&... args) {
         return this->_qp.local().execute_internal(req, { data_value(std::forward<Args>(args))... });
     }
     database& db() {

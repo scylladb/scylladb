@@ -368,8 +368,8 @@ future<> save_system_keyspace_schema() {
     // delete old, possibly obsolete entries in schema tables
     return parallel_for_each(ALL, [ksm] (sstring cf) {
         auto deletion_timestamp = schema_creation_timestamp() - 1;
-        return db::execute_cql(sprint("DELETE FROM system.%%s USING TIMESTAMP %s WHERE keyspace_name = ?",
-            deletion_timestamp), cf, ksm->name()).discard_result();
+        return db::execute_cql(sprint("DELETE FROM system.%s USING TIMESTAMP %s WHERE keyspace_name = ?", cf,
+            deletion_timestamp), ksm->name()).discard_result();
     }).then([ksm] {
         auto mvec  = make_create_keyspace_mutations(ksm, schema_creation_timestamp(), true);
         return qctx->proxy().mutate_locally(std::move(mvec));
