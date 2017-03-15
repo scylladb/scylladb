@@ -44,6 +44,7 @@
 #include "net/ip.hh"
 #include "hashing.hh"
 #include <boost/multiprecision/cpp_int.hpp>  // FIXME: remove somehow
+#include "stdx.hh"
 
 class tuple_type_impl;
 class big_decimal;
