@@ -2914,8 +2914,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_cloc
     if (cf.views().empty()) {
         return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout);
     }
-    //FIXME: Avoid unfreezing here.
-    auto f = cf.push_view_replica_updates(s, m.unfreeze(s));
+    auto f = cf.push_view_replica_updates(s, m);
     return f.then([this, s = std::move(s), uuid = std::move(uuid), &m, timeout] {
         auto& cf = find_column_family(uuid);
         return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout);
@@ -3673,15 +3672,18 @@ future<std::vector<mutation>> column_family::generate_view_updates(const schema_
  * Given an update for the base table, calculates the set of potentially affected views,
  * generates the relevant updates, and sends them to the paired view replicas.
  */
-future<> column_family::push_view_replica_updates(const schema_ptr& base, mutation&& m) const {
-    auto views = affected_views(base, m);
+future<> column_family::push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm) const {
+    //FIXME: Avoid unfreezing here.
+    auto m = fm.unfreeze(s);
+    m.upgrade(schema());
+    auto views = affected_views(schema(), m);
     if (views.empty()) {
         return make_ready_future<>();
     }
     //FIXME: Read existing mutations
-    auto existing = streamed_mutation_from_mutation(mutation(m.decorated_key(), _schema));
+    auto existing = streamed_mutation_from_mutation(mutation(m.decorated_key(), schema()));
     auto base_token = m.token();
-    return generate_view_updates(base,
+    return generate_view_updates(schema(),
                 std::move(views),
                 streamed_mutation_from_mutation(std::move(m)),
                 std::move(existing)).then([base_token = std::move(base_token)] (auto&& updates) {
