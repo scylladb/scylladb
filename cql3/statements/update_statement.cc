@@ -58,7 +58,12 @@ bool update_statement::require_full_clustering_key() const {
     return true;
 }
 
-void update_statement::add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+bool update_statement::allow_clustering_key_slices() const {
+    return false;
+}
+
+void update_statement::add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params) {
+    exploded_clustering_prefix prefix(range.start() ? range.start()->value().explode() : std::vector<bytes>());
     if (s->is_dense()) {
         if (!prefix || (prefix.size() == 1 && prefix.components().front().empty())) {
             throw exceptions::invalid_request_exception(sprint("Missing PRIMARY KEY part %s", s->clustering_key_columns().begin()->name_as_text()));
@@ -142,9 +147,11 @@ insert_statement::prepare_internal(database& db, schema_ptr schema,
         throw exceptions::invalid_request_exception("No columns provided to INSERT");
     }
 
+    std::vector<::shared_ptr<relation>> relations;
     std::unordered_set<bytes> column_ids;
     for (size_t i = 0; i < _column_names.size(); i++) {
-        auto id = _column_names[i]->prepare_column_identifier(schema);
+        auto&& col = _column_names[i];
+        auto id = col->prepare_column_identifier(schema);
         auto def = get_column_definition(schema, *id);
         if (!def) {
             throw exceptions::invalid_request_exception(sprint("Unknown identifier %s", *id));
@@ -157,15 +164,14 @@ insert_statement::prepare_internal(database& db, schema_ptr schema,
         auto&& value = _column_values[i];
 
         if (def->is_primary_key()) {
-            auto t = value->prepare(db, keyspace(), def->column_specification);
-            t->collect_marker_specification(bound_names);
-            stmt->add_key_value(*def, std::move(t));
+            relations.push_back(::make_shared<single_column_relation>(col, operator_type::EQ, value));
         } else {
             auto operation = operation::set_value(value).prepare(db, keyspace(), *def);
             operation->collect_marker_specification(bound_names);
             stmt->add_operation(std::move(operation));
         };
     }
+    stmt->process_where_clause(db, relations, std::move(bound_names));
     return stmt;
 }
 
@@ -202,7 +208,7 @@ update_statement::prepare_internal(database& db, schema_ptr schema,
         stmt->add_operation(std::move(operation));
     }
 
-    stmt->process_where_clause(db, _where_clause, bound_names);
+    stmt->process_where_clause(db, _where_clause, std::move(bound_names));
     return stmt;
 }
 

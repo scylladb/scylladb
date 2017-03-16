@@ -43,6 +43,7 @@
 
 #include "cql3/restrictions/restriction.hh"
 #include "cql3/statements/raw/cf_statement.hh"
+#include "cql3/statements/bound.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/update_parameters.hh"
 #include "cql3/column_condition.hh"
@@ -50,6 +51,8 @@
 #include "cql3/attributes.hh"
 #include "cql3/operation.hh"
 #include "cql3/relation.hh"
+#include "cql3/restrictions/statement_restrictions.hh"
+#include "cql3/single_column_relation.hh"
 
 #include "db/consistency_level.hh"
 
@@ -90,7 +93,6 @@ public:
     const std::unique_ptr<attributes> attrs;
 
 protected:
-    std::unordered_map<const column_definition*, ::shared_ptr<restrictions::restriction>> _processed_keys;
     std::vector<::shared_ptr<operation>> _column_operations;
 private:
     // Separating normal and static conditions makes things somewhat easier
@@ -104,6 +106,7 @@ private:
 
     bool _sets_static_columns = false;
     bool _sets_regular_columns = false;
+    bool _sets_a_collection = false;
     std::experimental::optional<bool> _is_raw_counter_shard_write;
 
     const std::function<const column_definition&(::shared_ptr<column_condition>)> get_column_for_condition =
@@ -113,6 +116,7 @@ private:
 
     uint64_t* _cql_modification_counter_ptr = nullptr;
 
+    ::shared_ptr<restrictions::statement_restrictions> _restrictions;
 public:
     modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_, uint64_t* cql_stats_counter_ptr);
 
@@ -120,7 +124,9 @@ public:
 
     virtual bool require_full_clustering_key() const = 0;
 
-    virtual void add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) = 0;
+    virtual bool allow_clustering_key_slices() const = 0;
+
+    virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params) = 0;
 
     virtual uint32_t get_bound_terms() override;
 
@@ -177,29 +183,24 @@ public:
     bool is_raw_counter_shard_write() const {
         return _is_raw_counter_shard_write.value_or(false);
     }
-private:
-    void add_key_values(const column_definition& def, ::shared_ptr<restrictions::restriction> values);
 
-public:
-    void add_key_value(const column_definition& def, ::shared_ptr<term> value);
     void process_where_clause(database& db, std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names);
-    std::vector<partition_key> build_partition_keys(const query_options& options);
 
 private:
-    exploded_clustering_prefix create_exploded_clustering_prefix(const query_options& options);
-    exploded_clustering_prefix create_exploded_clustering_prefix_internal(const query_options& options);
+    dht::partition_range_vector build_partition_keys(const query_options& options);
+    query::clustering_row_ranges create_clustering_ranges(const query_options& options);
 
-protected:
-    const column_definition* get_first_empty_key();
-
+    bool applies_only_to_static_columns() const {
+        return _sets_static_columns && !_sets_regular_columns;
+    }
 public:
     bool requires_read();
 
 protected:
     future<update_parameters::prefetched_rows_type> read_required_rows(
                 distributed<service::storage_proxy>& proxy,
-                lw_shared_ptr<std::vector<partition_key>> keys,
-                lw_shared_ptr<exploded_clustering_prefix> prefix,
+                dht::partition_range_vector keys,
+                lw_shared_ptr<query::clustering_row_ranges> ranges,
                 bool local,
                 db::consistency_level cl,
                 tracing::trace_state_ptr trace_state);
@@ -353,8 +354,8 @@ public:
 public:
     future<std::unique_ptr<update_parameters>> make_update_parameters(
                 distributed<service::storage_proxy>& proxy,
-                lw_shared_ptr<std::vector<partition_key>> keys,
-                lw_shared_ptr<exploded_clustering_prefix> prefix,
+                lw_shared_ptr<dht::partition_range_vector> keys,
+                lw_shared_ptr<query::clustering_row_ranges> ranges,
                 const query_options& options,
                 bool local,
                 int64_t now,

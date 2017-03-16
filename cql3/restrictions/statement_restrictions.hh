@@ -157,14 +157,20 @@ public:
     ::shared_ptr<primary_key_restrictions<clustering_key_prefix>> get_clustering_columns_restrictions() const {
         return _clustering_columns_restrictions;
     }
-private:
-    void process_partition_key_restrictions(bool has_queriable_index);
 
     /**
      * Checks if the partition key has some unrestricted components.
      * @return <code>true</code> if the partition key has some unrestricted components, <code>false</code> otherwise.
      */
     bool has_partition_key_unrestricted_components() const;
+
+    /**
+     * Checks if the clustering key has some unrestricted components.
+     * @return <code>true</code> if the clustering key has some unrestricted components, <code>false</code> otherwise.
+     */
+    bool has_unrestricted_clustering_columns() const;
+private:
+    void process_partition_key_restrictions(bool has_queriable_index);
 
     /**
      * Returns the partition key components that are not restricted.
