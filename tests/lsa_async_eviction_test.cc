@@ -76,13 +76,16 @@ int main(int argc, char** argv) {
                 });
 
                 uint64_t counter = 0;
+                logalloc::allocating_section alloc_sect;
+                alloc_sect.set_lsa_reserve(0);
+                alloc_sect.set_std_reserve(0);
 
                 while (counter < obj_count) {
-                    auto obj = managed_bytes(managed_bytes::initialized_later(), obj_size);
-                    {
+                    alloc_sect(r, [&] {
+                        auto obj = managed_bytes(managed_bytes::initialized_later(), obj_size);
                         logalloc::reclaim_lock l(r);
                         refs.push_back(std::move(obj));
-                    }
+                    });
 
                     ++counter;
 
