@@ -583,7 +583,7 @@ future<stop_iteration> view_update_builder::on_results() {
             // We have an update where there was nothing before
             if (_update->is_range_tombstone()) {
                 _update_tombstone_tracker.apply(std::move(_update->as_range_tombstone()));
-            } else {
+            } else if (_update->is_clustering_row()) {
                 auto& update = _update->as_mutable_clustering_row();
                 apply_tracked_tombstones(_update_tombstone_tracker, update);
                 auto tombstone = _existing_tombstone_tracker.current_tombstone();
@@ -599,7 +599,7 @@ future<stop_iteration> view_update_builder::on_results() {
             // existing, or because we've fetched the existing row due to some partition/range deletion in the updates)
             if (_existing->is_range_tombstone()) {
                 _existing_tombstone_tracker.apply(std::move(_existing->as_range_tombstone()));
-            } else {
+            } else if (_existing->is_clustering_row()) {
                 auto& existing = _existing->as_mutable_clustering_row();
                 apply_tracked_tombstones(_existing_tombstone_tracker, existing);
                 auto tombstone = _update_tombstone_tracker.current_tombstone();
@@ -618,7 +618,7 @@ future<stop_iteration> view_update_builder::on_results() {
             assert(_existing->is_range_tombstone());
             _existing_tombstone_tracker.apply(std::move(*_existing).as_range_tombstone());
             _update_tombstone_tracker.apply(std::move(*_update).as_range_tombstone());
-        } else {
+        } else if (_update->is_clustering_row()) {
             assert(!_existing->is_range_tombstone());
             apply_tracked_tombstones(_update_tombstone_tracker, _update->as_mutable_clustering_row());
             apply_tracked_tombstones(_existing_tombstone_tracker, _existing->as_mutable_clustering_row());
@@ -630,7 +630,7 @@ future<stop_iteration> view_update_builder::on_results() {
     auto tombstone = _update_tombstone_tracker.current_tombstone();
     if (tombstone && _existing) {
         // We don't care if it's a range tombstone, as we're only looking for existing entries that get deleted
-        if (!_existing->is_range_tombstone()) {
+        if (_existing->is_clustering_row()) {
             auto& existing = _existing->as_clustering_row();
             auto update = clustering_row(existing.key(), row_tombstone(std::move(tombstone)), row_marker(), ::row());
             generate_update(std::move(update), { std::move(existing) });
@@ -639,7 +639,7 @@ future<stop_iteration> view_update_builder::on_results() {
     }
 
     // If we have updates and it's a range tombstone, it removes nothing pre-exisiting, so we can ignore it
-    if (_update && !_update->is_range_tombstone()) {
+    if (_update && _update->is_clustering_row()) {
         generate_update(std::move(*_update).as_clustering_row(), { });
         return advance_updates();
     }
