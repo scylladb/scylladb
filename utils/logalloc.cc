@@ -2165,6 +2165,14 @@ void allocating_section::on_alloc_failure() {
     }
 }
 
+void allocating_section::set_lsa_reserve(size_t reserve) {
+    _lsa_reserve = reserve;
+}
+
+void allocating_section::set_std_reserve(size_t reserve) {
+    _std_reserve = reserve;
+}
+
 #else
 
 void allocating_section::guard::enter(allocating_section& self) {

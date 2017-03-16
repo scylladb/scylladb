@@ -627,6 +627,9 @@ private:
     };
     void on_alloc_failure();
 public:
+    void set_lsa_reserve(size_t);
+    void set_std_reserve(size_t);
+
     //
     // Invokes func with reclaim_lock on region r. If LSA allocation fails
     // inside func it is retried after increasing LSA segment reserve. The
