@@ -67,6 +67,14 @@ functions::init() {
     declare(aggregate_fcts::make_max_function<int64_t>());
     declare(aggregate_fcts::make_min_function<int64_t>());
 
+    declare(aggregate_fcts::make_count_function<float>());
+    declare(aggregate_fcts::make_max_function<float>());
+    declare(aggregate_fcts::make_min_function<float>());
+
+    declare(aggregate_fcts::make_count_function<double>());
+    declare(aggregate_fcts::make_max_function<double>());
+    declare(aggregate_fcts::make_min_function<double>());
+
     //FIXME:
     //declare(aggregate_fcts::make_count_function<bytes>());
     //declare(aggregate_fcts::make_max_function<bytes>());
@@ -78,15 +86,17 @@ functions::init() {
     declare(make_blob_as_varchar_fct());
     declare(aggregate_fcts::make_sum_function<int32_t>());
     declare(aggregate_fcts::make_sum_function<int64_t>());
-    declare(aggregate_fcts::make_avg_function<int32_t>());
-    declare(aggregate_fcts::make_avg_function<int64_t>());
+    declare(aggregate_fcts::make_sum_function<float>());
+    declare(aggregate_fcts::make_sum_function<double>());
 #if 0
-    declare(AggregateFcts.sumFunctionForFloat);
-    declare(AggregateFcts.sumFunctionForDouble);
     declare(AggregateFcts.sumFunctionForDecimal);
     declare(AggregateFcts.sumFunctionForVarint);
-    declare(AggregateFcts.avgFunctionForFloat);
-    declare(AggregateFcts.avgFunctionForDouble);
+#endif
+    declare(aggregate_fcts::make_avg_function<int32_t>());
+    declare(aggregate_fcts::make_avg_function<int64_t>());
+    declare(aggregate_fcts::make_avg_function<float>());
+    declare(aggregate_fcts::make_avg_function<double>());
+#if 0
     declare(AggregateFcts.avgFunctionForVarint);
     declare(AggregateFcts.avgFunctionForDecimal);
 #endif

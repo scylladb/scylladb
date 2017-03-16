@@ -1166,6 +1166,18 @@ shared_ptr<const abstract_type> data_type_for<bool>() {
     return boolean_type;
 }
 
+template <>
+inline
+shared_ptr<const abstract_type> data_type_for<float>() {
+    return float_type;
+}
+
+template <>
+inline
+shared_ptr<const abstract_type> data_type_for<double>() {
+    return double_type;
+}
+
 namespace std {
 
 template <>
