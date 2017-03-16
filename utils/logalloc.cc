@@ -2217,14 +2217,6 @@ void allocating_section::on_alloc_failure() {
     }
 }
 
-void allocating_section::set_lsa_reserve(size_t reserve) {
-    _lsa_reserve = reserve;
-}
-
-void allocating_section::set_std_reserve(size_t reserve) {
-    _std_reserve = reserve;
-}
-
 #else
 
 void allocating_section::guard::enter(allocating_section& self) {
@@ -2235,6 +2227,14 @@ void allocating_section::on_alloc_failure() {
 }
 
 #endif
+
+void allocating_section::set_lsa_reserve(size_t reserve) {
+    _lsa_reserve = reserve;
+}
+
+void allocating_section::set_std_reserve(size_t reserve) {
+    _std_reserve = reserve;
+}
 
 void region_group::on_request_expiry::operator()(std::unique_ptr<allocating_function>& func) noexcept {
     func->fail(std::make_exception_ptr(timed_out_error()));
