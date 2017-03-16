@@ -239,11 +239,12 @@ public:
 
 static inline bool can_allocate_more_memory(size_t size)
 {
-    static constexpr size_t min_reserve = 16 * 1024 * 1024;
-    static constexpr size_t max_reserve = 64 * 1024 * 1024;
-    static const size_t std_mem_reserve
-        = std::min(max_reserve, std::max(memory::stats().total_memory() / 16, min_reserve));
-    return memory::stats().free_memory() > size + std_mem_reserve;
+    // We want to leave more free memory than just min_free_memory() in order to reduce
+    // the frequency of expensive segment-migrating reclaim() called by the seastar allocator.
+    static constexpr size_t min_gap = 1 * 1024 * 1024;
+    static constexpr size_t max_gap = 64 * 1024 * 1024;
+    static const size_t gap = std::min(max_gap, std::max(memory::stats().total_memory() / 16, min_gap));
+    return memory::stats().free_memory() > memory::min_free_memory() + size + gap;
 }
 
 // Segment zone is a contiguous area containing, potentially, a large number
