@@ -99,24 +99,6 @@ void mutation::set_cell(const exploded_clustering_prefix& prefix, const column_d
     }
 }
 
-std::experimental::optional<atomic_cell_or_collection>
-mutation::get_cell(const clustering_key& rkey, const column_definition& def) const {
-    if (def.is_static()) {
-        const atomic_cell_or_collection* cell = partition().static_row().find_cell(def.id);
-        if (!cell) {
-            return {};
-        }
-        return { *cell };
-    } else {
-        const row* r = partition().find_row(*schema(), rkey);
-        if (!r) {
-            return {};
-        }
-        const atomic_cell_or_collection* cell = r->find_cell(def.id);
-        return { *cell };
-    }
-}
-
 bool mutation::operator==(const mutation& m) const {
     return decorated_key().equal(*schema(), m.decorated_key())
            && partition().equal(*schema(), m.partition(), *m.schema());
