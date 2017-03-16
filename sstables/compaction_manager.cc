@@ -337,18 +337,25 @@ inline future<> compaction_manager::put_task_to_sleep(lw_shared_ptr<task>& task)
     return task->compaction_retry.retry();
 }
 
-static inline bool check_for_error(future<> f) {
-    bool error = false;
+inline bool compaction_manager::maybe_stop_on_error(future<> f) {
+    bool retry = false;
     try {
         f.get();
     } catch (sstables::compaction_stop_exception& e) {
+        // We want compaction stopped here to be retried because this may have
+        // happened at user request (using nodetool stop), and to mimic C*
+        // behavior, compaction is retried later on.
         cmlog.info("compaction info: {}", e.what());
-        error = true;
+        retry = true;
+    } catch (storage_io_error& e) {
+        cmlog.error("compaction failed due to storage io error: {}", e.what());
+        retry = false;
+        stop();
     } catch (...) {
         cmlog.error("compaction failed: {}", std::current_exception());
-        error = true;
+        retry = true;
     }
-    return error;
+    return retry;
 }
 
 void compaction_manager::submit(column_family* cf) {
@@ -386,10 +393,10 @@ void compaction_manager::submit(column_family* cf) {
             _stats.active_tasks--;
 
             if (!can_proceed(task)) {
-                check_for_error(std::move(f));
+                maybe_stop_on_error(std::move(f));
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
-            if (check_for_error(std::move(f))) {
+            if (maybe_stop_on_error(std::move(f))) {
                 _stats.errors++;
                 _stats.pending_tasks++;
                 return put_task_to_sleep(task).then([] {
@@ -441,10 +448,10 @@ future<> compaction_manager::perform_cleanup(column_family* cf) {
                 .then_wrapped([this, task, compacting = std::move(compacting)] (future<> f) mutable {
             _stats.active_tasks--;
             if (!can_proceed(task)) {
-                check_for_error(std::move(f));
+                maybe_stop_on_error(std::move(f));
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
-            if (check_for_error(std::move(f))) {
+            if (maybe_stop_on_error(std::move(f))) {
                 _stats.errors++;
                 _stats.pending_tasks++;
                 return put_task_to_sleep(task).then([] {

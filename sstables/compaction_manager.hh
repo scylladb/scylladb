@@ -105,6 +105,11 @@ private:
     inline bool check_for_cleanup(column_family *cf);
 
     inline future<> put_task_to_sleep(lw_shared_ptr<task>& task);
+
+    // Compaction manager stop itself if it finds an storage I/O error which results in
+    // stop of transportation services. It cannot make progress anyway.
+    // Returns true if error is judged not fatal, and compaction can be retried.
+    inline bool maybe_stop_on_error(future<> f);
 public:
     compaction_manager();
     ~compaction_manager();
