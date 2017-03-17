@@ -346,13 +346,13 @@ public:
  * Augments a schema with fields related to materialized views.
  * Effectively immutable.
  */
-class view_info final {
+class raw_view_info final {
     utils::UUID _base_id;
     sstring _base_name;
     bool _include_all_columns;
     sstring _where_clause;
 public:
-    view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause);
+    raw_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause);
 
     const utils::UUID& base_id() const {
         return _base_id;
@@ -370,12 +370,15 @@ public:
         return _where_clause;
     }
 
-    friend bool operator==(const view_info&, const view_info&);
-    friend std::ostream& operator<<(std::ostream& os, const view_info& view);
+    friend bool operator==(const raw_view_info&, const raw_view_info&);
+    friend std::ostream& operator<<(std::ostream& os, const raw_view_info& view);
 };
 
-bool operator==(const view_info&, const view_info&);
-std::ostream& operator<<(std::ostream& os, const view_info& view);
+bool operator==(const raw_view_info&, const raw_view_info&);
+std::ostream& operator<<(std::ostream& os, const raw_view_info& view);
+
+class view_info;
+
 /*
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
@@ -419,11 +422,11 @@ private:
         table_schema_version _version;
         std::unordered_map<sstring, api::timestamp_type> _dropped_columns;
         std::map<bytes, data_type> _collections;
-        stdx::optional<view_info> _view_info;
     };
     raw_schema _raw;
     thrift_schema _thrift;
     mutable schema_registry_entry* _registry_entry = nullptr;
+    std::unique_ptr<::view_info> _view_info;
 
     const std::array<column_count_type, 3> _offsets;
 
@@ -458,7 +461,7 @@ public:
 private:
     ::shared_ptr<cql3::column_specification> make_column_specification(const column_definition& def);
     void rebuild();
-    schema(const raw_schema&);
+    schema(const raw_schema&, stdx::optional<raw_view_info>);
 public:
     // deprecated, use schema_builder.
     schema(std::experimental::optional<utils::UUID> id,
@@ -629,11 +632,11 @@ public:
     const data_type& regular_column_name_type() const {
         return _raw._regular_column_name_type;
     }
-    const stdx::optional<::view_info>& view_info() const {
-        return _raw._view_info;
+    const std::unique_ptr<::view_info>& view_info() const {
+        return _view_info;
     }
     bool is_view() const {
-        return bool(_raw._view_info);
+        return bool(_view_info);
     }
     friend std::ostream& operator<<(std::ostream& os, const schema& s);
     friend bool operator==(const schema&, const schema&);

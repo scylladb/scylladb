@@ -69,6 +69,7 @@
 #include "service/priority_manager.hh"
 #include "cell_locking.hh"
 #include <seastar/core/execution_stage.hh>
+#include "view_info.hh"
 
 #include "checked-file-impl.hh"
 #include "disk-error-handler.hh"
@@ -2913,8 +2914,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_cloc
     if (cf.views().empty()) {
         return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout);
     }
-    //FIXME: Avoid unfreezing here.
-    auto f = cf.push_view_replica_updates(s, m.unfreeze(s));
+    auto f = cf.push_view_replica_updates(s, m);
     return f.then([this, s = std::move(s), uuid = std::move(uuid), &m, timeout] {
         auto& cf = find_column_family(uuid);
         return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout);
@@ -3612,35 +3612,35 @@ void column_family::set_schema(schema_ptr s) {
     trigger_compaction();
 }
 
-void column_family::update_view_schemas() {
-    _view_schemas = boost::copy_range<std::vector<view_ptr>>(_views | boost::adaptors::map_values | boost::adaptors::transformed([] (auto&& s) {
-        return view_ptr(s->schema());
-    }));
+static std::vector<view_ptr>::iterator find_view(std::vector<view_ptr>& views, const view_ptr& v) {
+    return std::find_if(views.begin(), views.end(), [&v] (auto&& e) {
+        return e->cf_name() == v->cf_name();
+    });
 }
-
 void column_family::add_or_update_view(view_ptr v) {
-    auto e = _views.emplace(v->cf_name(), make_lw_shared<db::view::view>(v, *schema()));
-    if (!e.second) {
-        e.first->second->update(v, *schema());
+    auto existing = find_view(_views, v);
+    if (existing != _views.end()) {
+        *existing = std::move(v);
+    } else {
+        _views.push_back(std::move(v));
     }
-    update_view_schemas();
 }
 
 void column_family::remove_view(view_ptr v) {
-    _views.erase(v->cf_name());
-    update_view_schemas();
+    auto existing = find_view(_views, v);
+    if (existing != _views.end()) {
+        _views.erase(existing);
+    }
 }
 
 const std::vector<view_ptr>& column_family::views() const {
-    return _view_schemas;
+    return _views;
 }
 
-std::vector<lw_shared_ptr<db::view::view>> column_family::affected_views(const schema_ptr& base, const mutation& update) const {
+std::vector<view_ptr> column_family::affected_views(const schema_ptr& base, const mutation& update) const {
     //FIXME: Avoid allocating a vector here; consider returning the boost iterator.
-    return boost::copy_range<std::vector<lw_shared_ptr<db::view::view>>>(_views
-            | boost::adaptors::map_values
-            | boost::adaptors::filtered([&, this] (auto&& view) {
-        return view->partition_key_matches(*base, update.decorated_key());
+    return boost::copy_range<std::vector<view_ptr>>(_views | boost::adaptors::filtered([&, this] (auto&& view) {
+        return db::view::partition_key_matches(*base, *view->view_info(), update.decorated_key());
     }));
 }
 
@@ -3658,7 +3658,7 @@ std::vector<lw_shared_ptr<db::view::view>> column_family::affected_views(const s
  * @return a future resolving to the mutations to apply to the views, which can be empty.
  */
 future<std::vector<mutation>> column_family::generate_view_updates(const schema_ptr& base,
-        std::vector<lw_shared_ptr<db::view::view>>&& views,
+        std::vector<view_ptr>&& views,
         streamed_mutation updates,
         streamed_mutation existings) const {
     // FIXME: Use the view_ptr which corresponds to the version of base. The current code
@@ -3672,15 +3672,18 @@ future<std::vector<mutation>> column_family::generate_view_updates(const schema_
  * Given an update for the base table, calculates the set of potentially affected views,
  * generates the relevant updates, and sends them to the paired view replicas.
  */
-future<> column_family::push_view_replica_updates(const schema_ptr& base, mutation&& m) const {
-    auto views = affected_views(base, m);
+future<> column_family::push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm) const {
+    //FIXME: Avoid unfreezing here.
+    auto m = fm.unfreeze(s);
+    m.upgrade(schema());
+    auto views = affected_views(schema(), m);
     if (views.empty()) {
         return make_ready_future<>();
     }
     //FIXME: Read existing mutations
-    auto existing = streamed_mutation_from_mutation(mutation(m.decorated_key(), _schema));
+    auto existing = streamed_mutation_from_mutation(mutation(m.decorated_key(), schema()));
     auto base_token = m.token();
-    return generate_view_updates(base,
+    return generate_view_updates(schema(),
                 std::move(views),
                 streamed_mutation_from_mutation(std::move(m)),
                 std::move(existing)).then([base_token = std::move(base_token)] (auto&& updates) {

@@ -31,6 +31,7 @@
 #include "schema_registry.hh"
 #include <boost/range/algorithm.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
+#include "view_info.hh"
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -169,7 +170,7 @@ schema::raw_schema::raw_schema(utils::UUID id)
     : _id(id)
 { }
 
-schema::schema(const raw_schema& raw)
+schema::schema(const raw_schema& raw, stdx::optional<raw_view_info> raw_view_info)
     : _raw(raw)
     , _offsets([this] {
         if (_raw._columns.size() > std::numeric_limits<column_count_type>::max()) {
@@ -263,6 +264,9 @@ schema::schema(const raw_schema& raw)
     }
 
     rebuild();
+    if (raw_view_info) {
+        _view_info = std::make_unique<::view_info>(*this, *raw_view_info);
+    }
 }
 
 schema::schema(std::experimental::optional<utils::UUID> id,
@@ -297,7 +301,7 @@ schema::schema(std::experimental::optional<utils::UUID> id,
         build_columns(regular_columns, column_kind::regular_column);
 
         return raw;
-    }())
+    }(), stdx::nullopt)
 {}
 
 schema::schema(const schema& o)
@@ -307,6 +311,9 @@ schema::schema(const schema& o)
     , _is_counter(o._is_counter)
 {
     rebuild();
+    if (o.is_view()) {
+        _view_info = std::make_unique<::view_info>(*this, o.view_info()->raw());
+    }
 }
 
 schema::~schema() {
@@ -366,7 +373,7 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._caching_options == y._raw._caching_options
         && x._raw._dropped_columns == y._raw._dropped_columns
         && x._raw._collections == y._raw._collections
-        && x._raw._view_info == y._raw._view_info;
+        && indirect_equal_to<std::unique_ptr<::view_info>>()(x._view_info, y._view_info);
 #if 0
         && Objects.equal(triggers, other.triggers)
 #endif
@@ -543,7 +550,11 @@ schema_builder::schema_builder(const sstring& ks_name, const sstring& cf_name,
 
 schema_builder::schema_builder(const schema_ptr s)
     : schema_builder(s->_raw)
-{}
+{
+    if (s->is_view()) {
+        _view_info = s->view_info()->raw();
+    }
+}
 
 schema_builder::schema_builder(const schema::raw_schema& raw)
     : _raw(raw)
@@ -714,7 +725,7 @@ void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
 }
 
 schema_builder& schema_builder::with_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause) {
-    _raw._view_info = view_info(std::move(base_id), std::move(base_name), include_all_columns, std::move(where_clause));
+    _view_info = raw_view_info(std::move(base_id), std::move(base_name), include_all_columns, std::move(where_clause));
     return *this;
 }
 
@@ -751,7 +762,7 @@ schema_ptr schema_builder::build() {
     }
 
     prepare_dense_schema(new_raw);
-    return make_lw_shared<schema>(schema(new_raw));
+    return make_lw_shared<schema>(schema(new_raw, _view_info));
 }
 
 schema_ptr schema_builder::build(compact_storage cp) {
@@ -999,21 +1010,21 @@ bool schema::equal_columns(const schema& other) const {
     return boost::equal(all_columns_in_select_order(), other.all_columns_in_select_order());
 }
 
-view_info::view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause)
+raw_view_info::raw_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause)
         : _base_id(std::move(base_id))
         , _base_name(std::move(base_name))
         , _include_all_columns(include_all_columns)
         , _where_clause(where_clause)
 { }
 
-bool operator==(const view_info& x, const view_info& y) {
+bool operator==(const raw_view_info& x, const raw_view_info& y) {
     return x._base_id == y._base_id
         && x._base_name == y._base_name
         && x._include_all_columns == y._include_all_columns
         && x._where_clause == y._where_clause;
 }
 
-std::ostream& operator<<(std::ostream& os, const view_info& view) {
+std::ostream& operator<<(std::ostream& os, const raw_view_info& view) {
     os << "ViewInfo{";
     os << "baseTableId=" << view._base_id;
     os << ", baseTableName=" << view._base_name;

@@ -43,6 +43,7 @@
 #include "cql3/statements/prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "validation.hh"
+#include "view_info.hh"
 
 namespace cql3 {
 
