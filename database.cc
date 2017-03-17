@@ -1337,13 +1337,20 @@ future<> column_family::cleanup_sstables(sstables::compaction_descriptor descrip
     auto owned_ranges = make_lw_shared<dht::token_range_vector>(std::move(r));
     auto sstables_to_cleanup = make_lw_shared<std::vector<sstables::shared_sstable>>(std::move(descriptor.sstables));
 
-    return parallel_for_each(*sstables_to_cleanup, [this, owned_ranges = std::move(owned_ranges), sstables_to_cleanup] (auto& sst) {
+    return do_for_each(*sstables_to_cleanup, [this, owned_ranges = std::move(owned_ranges), sstables_to_cleanup] (auto& sst) {
         if (!owned_ranges->empty() && !needs_cleanup(sst, owned_ranges, _schema)) {
            return make_ready_future<>();
         }
 
-        std::vector<sstables::shared_sstable> sstable_to_compact({ sst });
-        return this->compact_sstables(sstables::compaction_descriptor(std::move(sstable_to_compact), sst->get_sstable_level()), true);
+        // this semaphore ensures that only one cleanup will run per shard.
+        // That's to prevent node from running out of space when almost all sstables
+        // need cleanup, so if sstables are cleaned in parallel, we may need almost
+        // twice the disk space used by those sstables.
+        static thread_local semaphore sem(1);
+
+        return with_semaphore(sem, 1, [this, &sst] {
+            return this->compact_sstables(sstables::compaction_descriptor({ sst }, sst->get_sstable_level()), true);
+        });
     });
 }
 
