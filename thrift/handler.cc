@@ -1558,7 +1558,7 @@ private:
             auto it = row.iterator();
             auto cell = it.next_atomic_cell();
             if (cell && _current_cell_limit > 0) {
-                bytes column_name = composite::serialize_value(key.components(), _s.thrift().has_compound_comparator());
+                bytes column_name = composite::serialize_value(key.components(), _s.thrift().has_compound_comparator()).release_bytes();
                 Aggregator::on_column(_current_aggregation, column_name, *cell);
                 _current_cell_limit -= 1;
             }

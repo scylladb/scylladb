@@ -202,7 +202,7 @@ public:
             , _is_compound(is_compound)
     { }
 
-    composite(bytes&& b)
+    explicit composite(bytes&& b)
             : _bytes(std::move(b))
             , _is_compound(true)
     { }
@@ -305,12 +305,12 @@ public:
     }
 
     template<typename RangeOfSerializedComponents>
-    static bytes serialize_value(RangeOfSerializedComponents&& values, bool is_compound = true) {
+    static composite serialize_value(RangeOfSerializedComponents&& values, bool is_compound = true) {
         auto size = serialized_size(values, is_compound);
         bytes b(bytes::initialized_later(), size);
         auto i = b.begin();
         serialize_value(std::forward<decltype(values)>(values), i, is_compound);
-        return b;
+        return composite(std::move(b), is_compound);
     }
 
     class iterator : public std::iterator<std::input_iterator_tag, const component_view> {
@@ -406,6 +406,10 @@ public:
         return _bytes;
     }
 
+    bytes release_bytes() && {
+        return std::move(_bytes);
+    }
+
     size_t size() const {
         return _bytes.size();
     }
@@ -434,18 +438,18 @@ public:
 
     static composite from_exploded(const std::vector<bytes_view>& v, eoc marker = eoc::none) {
         if (v.size() == 0) {
-            return bytes(size_t(1), bytes::value_type(marker));
+            return composite(bytes(size_t(1), bytes::value_type(marker)));
         }
-        auto b = serialize_value(v);
-        b.back() = eoc_type(marker);
-        return composite(std::move(b));
+        composite c = serialize_value(v);
+        c._bytes.back() = eoc_type(marker);
+        return c;
     }
 
     static composite static_prefix(const schema& s) {
         static bytes static_marker(size_t(2), bytes::value_type(0xff));
 
         std::vector<bytes_view> sv(s.clustering_key_size());
-        return static_marker + serialize_value(sv);
+        return composite(static_marker + serialize_value(sv));
     }
 
     explicit operator bytes_view() const {

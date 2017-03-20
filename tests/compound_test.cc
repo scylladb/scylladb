@@ -263,7 +263,7 @@ BOOST_AUTO_TEST_CASE(test_enconding_of_singular_composite) {
     BOOST_REQUIRE_EQUAL(composite(bytes({'e', 'l', '1'}), false).components(),
                         components({std::make_pair(bytes("el1"), composite::eoc::none)}));
 
-    BOOST_REQUIRE_EQUAL(composite(composite::serialize_value(std::vector<bytes>({bytes({'e', 'l', '1'})}), false), false).components(),
+    BOOST_REQUIRE_EQUAL(composite::serialize_value(std::vector<bytes>({bytes({'e', 'l', '1'})}), false).components(),
                         components({std::make_pair(bytes("el1"), composite::eoc::none)}));
 }
 
@@ -285,7 +285,7 @@ BOOST_AUTO_TEST_CASE(test_enconding_of_static_composite) {
 }
 
 BOOST_AUTO_TEST_CASE(test_composite_serialize_value) {
-    BOOST_REQUIRE_EQUAL(composite::serialize_value(std::vector<bytes>({bytes({'e', 'l', '1'})})),
+    BOOST_REQUIRE_EQUAL(composite::serialize_value(std::vector<bytes>({bytes({'e', 'l', '1'})})).release_bytes(),
                         bytes({'\x00', '\x03', 'e', 'l', '1', '\x00'}));
 }
 
