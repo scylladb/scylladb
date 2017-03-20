@@ -104,6 +104,12 @@ namespace sstables {
             column_family& cf, std::function<shared_sstable()> creator,
             uint64_t max_sstable_size, uint32_t sstable_level, bool cleanup = false);
 
+    // Compacts a set of N shared sstables into M sstables. For every shard involved,
+    // i.e. which owns any of the sstables, a new unshared sstable is created.
+    future<std::vector<shared_sstable>> reshard_sstables(std::vector<shared_sstable> sstables,
+            column_family& cf, std::function<shared_sstable(shard_id)> creator,
+        uint64_t max_sstable_size, uint32_t sstable_level);
+
     // Return the most interesting bucket applying the size-tiered strategy.
     std::vector<sstables::shared_sstable>
     size_tiered_most_interesting_bucket(lw_shared_ptr<sstable_list> candidates);
