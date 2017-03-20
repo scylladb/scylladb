@@ -671,9 +671,9 @@ private:
     column_family(schema_ptr schema, config cfg, db::commitlog* cl, compaction_manager&, cell_locker_stats& cl_stats);
 public:
     column_family(schema_ptr schema, config cfg, db::commitlog& cl, compaction_manager& cm, cell_locker_stats& cl_stats)
-        : column_family(schema, std::move(cfg), &cl, cm, cl_stats) {set_metrics();}
+        : column_family(schema, std::move(cfg), &cl, cm, cl_stats) {}
     column_family(schema_ptr schema, config cfg, no_commitlog, compaction_manager& cm, cell_locker_stats& cl_stats)
-        : column_family(schema, std::move(cfg), nullptr, cm, cl_stats) {set_metrics();}
+        : column_family(schema, std::move(cfg), nullptr, cm, cl_stats) {}
     column_family(column_family&&) = delete; // 'this' is being captured during construction
     ~column_family();
     const schema_ptr& schema() const { return _schema; }
