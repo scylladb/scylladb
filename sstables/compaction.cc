@@ -144,78 +144,26 @@ static std::vector<shared_sstable> get_uncompacting_sstables(column_family& cf, 
     return not_compacted_sstables;
 }
 
+class compaction;
+
 class compacting_sstable_writer {
-    const schema& _schema;
-    std::function<shared_sstable()> _creator;
-    uint64_t _partitions_per_sstable;
-    sstable_writer_config _cfg;
-    uint32_t _sstable_level;
-    db::replay_position _rp;
-    std::vector<unsigned long> _ancestors;
-    compaction_info& _info;
+    compaction& _c;
     shared_sstable _sst;
     stdx::optional<sstable_writer> _writer;
 private:
-    void finish_sstable_write() {
-        _writer->consume_end_of_stream();
-        _writer = stdx::nullopt;
-
-        _sst->open_data().get0();
-        _info.end_size += _sst->data_size();
-    }
+    void finish_sstable_write();
 public:
-    compacting_sstable_writer(const schema& s, std::function<shared_sstable()> creator, uint64_t partitions_per_sstable,
-                              sstable_writer_config cfg, uint32_t sstable_level, db::replay_position rp,
-                              std::vector<unsigned long> ancestors, compaction_info& info)
-        : _schema(s)
-        , _creator(creator)
-        , _partitions_per_sstable(partitions_per_sstable)
-        , _cfg(std::move(cfg))
-        , _sstable_level(sstable_level)
-        , _rp(rp)
-        , _ancestors(std::move(ancestors))
-        , _info(info)
-    { }
+    explicit compacting_sstable_writer(compaction& c) : _c(c) {}
 
-    void consume_new_partition(const dht::decorated_key& dk) {
-        if (_info.is_stop_requested()) {
-            // Compaction manager will catch this exception and re-schedule the compaction.
-            throw compaction_stop_exception(_info.ks, _info.cf, _info.stop_requested);
-        }
-        if (!_writer) {
-            _sst = _creator();
-            _info.new_sstables.push_back(_sst);
-            _sst->get_metadata_collector().set_replay_position(_rp);
-            _sst->get_metadata_collector().sstable_level(_sstable_level);
-            for (auto ancestor : _ancestors) {
-                _sst->add_ancestor(ancestor);
-            }
-
-            auto&& priority = service::get_local_compaction_priority();
-            _writer.emplace(_sst->get_writer(_schema, _partitions_per_sstable, _cfg, priority));
-        }
-        _info.total_keys_written++;
-        _writer->consume_new_partition(dk);
-    }
+    void consume_new_partition(const dht::decorated_key& dk);
 
     void consume(tombstone t) { _writer->consume(t); }
     stop_iteration consume(static_row&& sr, tombstone, bool) { return _writer->consume(std::move(sr)); }
     stop_iteration consume(clustering_row&& cr, tombstone, bool) { return _writer->consume(std::move(cr)); }
     stop_iteration consume(range_tombstone&& rt) { return _writer->consume(std::move(rt)); }
 
-    stop_iteration consume_end_of_partition() {
-        auto ret = _writer->consume_end_of_partition();
-        if (ret == stop_iteration::yes) {
-            finish_sstable_write();
-        }
-        return ret;
-    }
-
-    void consume_end_of_stream() {
-        if (_writer) {
-            finish_sstable_write();
-        }
-    }
+    stop_iteration consume_end_of_partition();
+    void consume_end_of_stream();
 };
 
 class compaction {
@@ -331,11 +279,8 @@ private:
         };
     }
 
-    compacting_sstable_writer get_compacting_sstable_writer() const {
-        sstable_writer_config cfg;
-        cfg.max_sstable_size = _max_sstable_size;
-        return compacting_sstable_writer(*_cf.schema(), _creator, partitions_per_sstable(),
-            std::move(cfg), _sstable_level, _rp, _ancestors, *_info);
+    compacting_sstable_writer get_compacting_sstable_writer() {
+        return compacting_sstable_writer(*this);
     }
 
     const schema_ptr& schema() const {
@@ -343,7 +288,54 @@ private:
     }
 public:
     static future<std::vector<shared_sstable>> run(std::unique_ptr<compaction> c);
+
+    friend class compacting_sstable_writer;
 };
+
+void compacting_sstable_writer::finish_sstable_write() {
+    _writer->consume_end_of_stream();
+    _writer = stdx::nullopt;
+
+    _sst->open_data().get0();
+    _c._info->end_size += _sst->data_size();
+}
+
+void compacting_sstable_writer::consume_new_partition(const dht::decorated_key& dk) {
+    if (_c._info->is_stop_requested()) {
+        // Compaction manager will catch this exception and re-schedule the compaction.
+        throw compaction_stop_exception(_c._info->ks, _c._info->cf, _c._info->stop_requested);
+    }
+    if (!_writer) {
+        _sst = _c._creator();
+        _c._info->new_sstables.push_back(_sst);
+        _sst->get_metadata_collector().set_replay_position(_c._rp);
+        _sst->get_metadata_collector().sstable_level(_c._sstable_level);
+        for (auto ancestor : _c._ancestors) {
+            _sst->add_ancestor(ancestor);
+        }
+
+        auto&& priority = service::get_local_compaction_priority();
+        sstable_writer_config cfg;
+        cfg.max_sstable_size = _c._max_sstable_size;
+        _writer.emplace(_sst->get_writer(*(_c._cf.schema()), _c.partitions_per_sstable(), cfg, priority));
+    }
+    _c._info->total_keys_written++;
+    _writer->consume_new_partition(dk);
+}
+
+stop_iteration compacting_sstable_writer::consume_end_of_partition() {
+    auto ret = _writer->consume_end_of_partition();
+    if (ret == stop_iteration::yes) {
+        finish_sstable_write();
+    }
+    return ret;
+}
+
+void compacting_sstable_writer::consume_end_of_stream() {
+    if (_writer) {
+        finish_sstable_write();
+    }
+}
 
 class regular_compaction final : public compaction {
 public:
