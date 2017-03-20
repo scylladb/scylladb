@@ -87,6 +87,7 @@ install -m644 dist/common/systemd/*.service  $RPM_BUILD_ROOT%{_unitdir}/
 install -m644 dist/common/systemd/*.timer $RPM_BUILD_ROOT%{_unitdir}/
 install -m755 dist/common/scripts/* $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 seastar/scripts/posix_net_conf.sh  $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
+install -m755 seastar/scripts/perftune.py  $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 seastar/dpdk/tools/dpdk-devbind.py $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 build/release/scylla $RPM_BUILD_ROOT%{_bindir}
 install -m755 build/release/iotune $RPM_BUILD_ROOT%{_bindir}
@@ -183,6 +184,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/scylla_cpuscaling_setup
 %{_prefix}/lib/scylla/scylla_fstrim
 %{_prefix}/lib/scylla/posix_net_conf.sh
+%{_prefix}/lib/scylla/perftune.py
 %{_prefix}/lib/scylla/dpdk-devbind.py
 %{_prefix}/lib/scylla/dpdk-devbind.pyc
 %{_prefix}/lib/scylla/dpdk-devbind.pyo
