@@ -313,14 +313,14 @@ public:
         return composite(std::move(b), is_compound);
     }
 
+    static eoc to_eoc(int8_t eoc_byte) {
+        return eoc_byte == 0 ? eoc::none : (eoc_byte < 0 ? eoc::start : eoc::end);
+    }
+
     class iterator : public std::iterator<std::input_iterator_tag, const component_view> {
         bytes_view _v;
         component_view _current;
     private:
-        eoc to_eoc(int8_t eoc_byte) {
-            return eoc_byte == 0 ? eoc::none : (eoc_byte < 0 ? eoc::start : eoc::end);
-        }
-
         void read_current() {
             size_type len;
             {
@@ -507,6 +507,15 @@ public:
 
     boost::iterator_range<composite::iterator> components() const {
         return { begin(), end() };
+    }
+
+    composite::eoc last_eoc() const {
+        if (!_is_compound || _bytes.empty()) {
+            return composite::eoc::none;
+        }
+        bytes_view v(_bytes);
+        v.remove_prefix(v.size() - 1);
+        return composite::to_eoc(read_simple<composite::eoc_type>(v));
     }
 
     auto values() const {
