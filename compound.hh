@@ -130,10 +130,10 @@ public:
     bytes decompose_value(const value_type& values) {
         return serialize_value(values);
     }
-    class iterator : public std::iterator<std::input_iterator_tag, bytes_view> {
+    class iterator : public std::iterator<std::input_iterator_tag, const bytes_view> {
     private:
         bytes_view _v;
-        value_type _current;
+        bytes_view _current;
     private:
         void read_current() {
             size_type len;
