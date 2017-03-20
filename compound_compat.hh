@@ -313,6 +313,15 @@ public:
         return composite(std::move(b), is_compound);
     }
 
+    template<typename RangeOfSerializedComponents>
+    static composite serialize_static(const schema& s, RangeOfSerializedComponents&& values) {
+        // FIXME: Optimize
+        auto b = bytes(size_t(2), bytes::value_type(0xff));
+        std::vector<bytes_view> sv(s.clustering_key_size());
+        b += composite::serialize_value(boost::range::join(sv, std::forward<RangeOfSerializedComponents>(values)), true).release_bytes();
+        return composite(std::move(b));
+    }
+
     static eoc to_eoc(int8_t eoc_byte) {
         return eoc_byte == 0 ? eoc::none : (eoc_byte < 0 ? eoc::start : eoc::end);
     }
@@ -446,10 +455,7 @@ public:
     }
 
     static composite static_prefix(const schema& s) {
-        static bytes static_marker(size_t(2), bytes::value_type(0xff));
-
-        std::vector<bytes_view> sv(s.clustering_key_size());
-        return composite(static_marker + serialize_value(sv));
+        return serialize_static(s, std::vector<bytes_view>());
     }
 
     explicit operator bytes_view() const {
