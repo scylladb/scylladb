@@ -38,6 +38,6 @@ ADD commandlineparser.py /commandlineparser.py
 ADD docker-entrypoint.py /docker-entrypoint.py
 ENTRYPOINT ["/docker-entrypoint.py"]
 
-EXPOSE 10000 9042 9160 7000 7001
+EXPOSE 10000 9042 9160 9180 7000 7001
 VOLUME [ "/var/lib/scylla" ]
 RUN chown -R scylla.scylla /var/lib/scylla
