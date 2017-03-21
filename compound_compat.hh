@@ -466,6 +466,8 @@ public:
     friend inline std::ostream& operator<<(std::ostream& os, const std::pair<Component, eoc>& c) {
         return os << "{value=" << c.first << "; eoc=" << sprint("0x%02x", eoc_type(c.second) & 0xff) << "}";
     }
+
+    friend std::ostream& operator<<(std::ostream& os, const composite& v);
 };
 
 class composite_view final {
@@ -546,4 +548,13 @@ public:
 
     bool operator==(const composite_view& k) const { return k._bytes == _bytes && k._is_compound == _is_compound; }
     bool operator!=(const composite_view& k) const { return !(k == *this); }
+
+    friend inline std::ostream& operator<<(std::ostream& os, composite_view v) {
+        return os << "{" << ::join(", ", v.components()) << ", compound=" << v._is_compound << ", static=" << v.is_static() << "}";
+    }
 };
+
+inline
+std::ostream& operator<<(std::ostream& os, const composite& v) {
+    return os << composite_view(v);
+}
