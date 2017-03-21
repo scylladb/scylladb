@@ -972,6 +972,12 @@ sstables::sstable::read_row(schema_ptr schema,
     });
 }
 
+static inline void ensure_len(bytes_view v, size_t len) {
+    if (v.size() < len) {
+        throw malformed_sstable_exception(sprint("Expected {} bytes, but remaining is {}", len, v.size()));
+    }
+}
+
 template <typename T>
 static inline T read_be(const signed char* p) {
     return ::read_be<T>(reinterpret_cast<const char*>(p));
@@ -979,12 +985,14 @@ static inline T read_be(const signed char* p) {
 
 template<typename T>
 static inline T consume_be(bytes_view& p) {
+    ensure_len(p, sizeof(T));
     T i = read_be<T>(p.data());
     p.remove_prefix(sizeof(T));
     return i;
 }
 
 static inline bytes_view consume_bytes(bytes_view& p, size_t len) {
+    ensure_len(p, len);
     auto ret = bytes_view(p.data(), len);
     p.remove_prefix(len);
     return ret;
@@ -1035,6 +1043,7 @@ sstables::sstable::find_disk_ranges(
         }
         index_entry& ie = index_list[index_idx];
         if (ie.get_promoted_index_bytes().size() >= 16) {
+          try {
             auto&& pkey = partition_key::from_exploded(*schema, key.explode(*schema));
             auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*schema, slice, pkey);
             if (ck_ranges.size() == 1 && ck_ranges.begin()->is_full()) {
@@ -1069,36 +1078,16 @@ sstables::sstable::find_disk_ranges(
 
                 auto cmp = clustering_key_prefix::tri_compare(*schema);
                 while (num_blocks--) {
-                    if (data.size() < 2) {
-                        // When we break out of this loop, we give up on
-                        // using the promoted index, and fall back to
-                        // reading the entire partition.
-                        // FIXME: this and all other "break" cases below,
-                        // are errors. Log them (with rate limit) and count.
-                        break;
-                    }
                     uint16_t len = consume_be<uint16_t>(data);
-                    if (data.size() < len) {
-                        break;
-                    }
                     // The promoted index contains ranges of full column
                     // names, which may include a clustering key and column.
                     // But we only need to match the clustering key, because
                     // we got a clustering key range to search for.
                     auto start_ck = get_clustering_key(*schema,
                             consume_bytes(data, len));
-                    if (data.size() < 2) {
-                        break;
-                    }
                     len = consume_be<uint16_t>(data);
-                    if (data.size() < len) {
-                        break;
-                    }
                     auto end_ck = get_clustering_key(*schema,
                             consume_bytes(data, len));
-                    if (data.size() < 16) {
-                        break;
-                    }
                     uint64_t offset = consume_be<uint64_t>(data);
                     uint64_t width = consume_be<uint64_t>(data);
                     if (!found_range_start) {
@@ -1144,6 +1133,11 @@ sstables::sstable::find_disk_ranges(
             // fall back to reading the entire partition.
             // FIXME: support multiple ranges, and do not fall back to reading
             // the entire partition.
+          } catch (...) {
+              // Fall back to reading whole partition
+              sstlog.error("Failed to parse promoted index for sstable {}, page {}, index {}: {}", this->get_filename(),
+                  summary_idx, index_idx, std::current_exception());
+          }
         }
         // If we're still here there is no promoted index, or we had problems
         // using it, so just just find the entire partition's range.
