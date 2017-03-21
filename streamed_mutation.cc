@@ -272,6 +272,44 @@ streamed_mutation streamed_mutation_from_mutation(mutation m, streamed_mutation:
     return std::move(sm);
 }
 
+streamed_mutation streamed_mutation_from_forwarding_streamed_mutation(streamed_mutation&& sm)
+{
+    class reader final : public streamed_mutation::impl {
+        streamed_mutation _sm;
+        bool _static_row_done = false;
+    public:
+        explicit reader(streamed_mutation&& sm)
+            : streamed_mutation::impl(sm.schema(), sm.decorated_key(), sm.partition_tombstone())
+            , _sm(std::move(sm))
+        { }
+
+        virtual future<> fill_buffer() override {
+            if (!_static_row_done) {
+                _static_row_done = true;
+                return _sm().then([this] (auto&& mf) {
+                    if (mf) {
+                        this->push_mutation_fragment(std::move(*mf));
+                    }
+                    return _sm.fast_forward_to(query::clustering_range{}).then([this] {
+                        return this->fill_buffer();
+                    });
+                });
+            }
+            return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
+                return _sm().then([this] (auto&& mf) {
+                    if (mf) {
+                        this->push_mutation_fragment(std::move(*mf));
+                    } else {
+                        _end_of_stream = true;
+                    }
+                });
+            });
+        }
+    };
+
+    return make_streamed_mutation<reader>(std::move(sm));
+}
+
 streamed_mutation make_forwardable(streamed_mutation m) {
     class reader : public streamed_mutation::impl {
         streamed_mutation _sm;
