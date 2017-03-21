@@ -23,7 +23,7 @@
 #include "core/memory.hh"
 #include "core/do_with.hh"
 #include "core/future-util.hh"
-#include <seastar/core/scollectd.hh>
+#include <seastar/core/metrics.hh>
 #include <seastar/util/defer.hh>
 #include "memtable.hh"
 #include <chrono>
@@ -62,7 +62,7 @@ cache_tracker& global_cache_tracker() {
 }
 
 cache_tracker::cache_tracker() {
-    setup_collectd();
+    setup_metrics();
 
     _region.make_evictable([this] {
         return with_allocator(_region.allocator(), [this] {
@@ -109,74 +109,23 @@ cache_tracker::~cache_tracker() {
 }
 
 void
-cache_tracker::setup_collectd() {
-    _collectd_registrations = std::make_unique<scollectd::registrations>(scollectd::registrations({
-        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
-                , scollectd::per_cpu_plugin_instance
-                , "bytes", "used")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _region.occupancy().used_space(); })
-        ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
-                , scollectd::per_cpu_plugin_instance
-                , "bytes", "total")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _region.occupancy().total_space(); })
-        ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "hits")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _hits)
-        ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "misses")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _misses)
-        ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "uncached_wide_partitions")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _uncached_wide_partitions)
-        ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "insertions")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _insertions)
-        ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "concurrent_misses_same_key")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _concurrent_misses_same_key)
-        ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "merges")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _merges)
-        ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "evictions")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _evictions)
-        ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "wide_partition_evictions")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _wide_partition_evictions)
-        ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "wide_partition_mispopulations")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _wide_partition_mispopulations)
-        ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
-                , scollectd::per_cpu_plugin_instance
-                , "total_operations", "removals")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _removals)
-        ),
-        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
-                , scollectd::per_cpu_plugin_instance
-                , "objects", "partitions")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, _partitions)
-        ),
-    }));
+cache_tracker::setup_metrics() {
+    namespace sm = seastar::metrics;
+    _metrics.add_group("cache", {
+        sm::make_gauge("bytes_used", sm::description("current bytes used by the cache out of the total size of memory"), [this] { return _region.occupancy().used_space(); }),
+        sm::make_gauge("bytes_total", sm::description("total size of memory for the cache"), [this] { return _region.occupancy().total_space(); }),
+        sm::make_derive("total_operations_hits", sm::description("total number of operation hits"), _hits),
+        sm::make_derive("total_operations_misses", sm::description("total number of operation misses"), _misses),
+        sm::make_derive("total_operations_uncached_wide_partitions", sm::description("total number of operation of uncached wide partitions"), _uncached_wide_partitions),
+        sm::make_derive("total_operations_insertions", sm::description("total number of operation insert"), _insertions),
+        sm::make_derive("total_operations_concurrent_misses_same_key", sm::description("total number of operation with misses same key"), _concurrent_misses_same_key),
+        sm::make_derive("total_operations_merges", sm::description("total number of operation merged"), _merges),
+        sm::make_derive("total_operations_evictions", sm::description("total number of operation eviction"), _evictions),
+        sm::make_derive("total_operations_wide_partition_evictions", sm::description("total number of operation wide partition eviction"), _wide_partition_evictions),
+        sm::make_derive("total_operations_wide_partition_mispopulations", sm::description("total number of operation wide partition mispopulations"), _wide_partition_mispopulations),
+        sm::make_derive("total_operations_removals", sm::description("total number of operation removals"), _removals),
+        sm::make_gauge("objects_partitions", sm::description("total number of partition objects"),_partitions)
+    });
 }
 
 void cache_tracker::clear() {

@@ -35,12 +35,7 @@
 #include "partition_version.hh"
 #include "utils/estimated_histogram.hh"
 #include "tracing/trace_state.hh"
-
-namespace scollectd {
-
-struct registrations;
-
-}
+#include <seastar/core/metrics_registration.hh>
 
 namespace bi = boost::intrusive;
 
@@ -203,12 +198,12 @@ private:
     uint64_t _removals = 0;
     uint64_t _partitions = 0;
     uint64_t _modification_count = 0;
-    std::unique_ptr<scollectd::registrations> _collectd_registrations;
+    seastar::metrics::metric_groups _metrics;
     logalloc::region _region;
     lru_type _lru;
     lru_type _wide_partition_lru;
 private:
-    void setup_collectd();
+    void setup_metrics();
 public:
     cache_tracker();
     ~cache_tracker();
