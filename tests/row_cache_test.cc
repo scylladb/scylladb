@@ -101,9 +101,9 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying) {
         auto m = make_new_mutation(s);
 
         cache_tracker tracker;
-        row_cache cache(s, mutation_source([m] (schema_ptr s, const dht::partition_range&) {
+        row_cache cache(s, mutation_source([m] (schema_ptr s, const dht::partition_range&, const query::partition_slice&, const io_priority_class&, tracing::trace_state_ptr, streamed_mutation::forwarding fwd) {
             assert(m.schema() == s);
-            return make_reader_returning(m);
+            return make_reader_returning(m, std::move(fwd));
         }), tracker);
 
         assert_that(cache.make_reader(s, query::full_partition_range))
@@ -118,9 +118,9 @@ SEASTAR_TEST_CASE(test_cache_works_after_clearing) {
         auto m = make_new_mutation(s);
 
         cache_tracker tracker;
-        row_cache cache(s, mutation_source([m] (schema_ptr s, const dht::partition_range&) {
+        row_cache cache(s, mutation_source([m] (schema_ptr s, const dht::partition_range&, const query::partition_slice&, const io_priority_class&, tracing::trace_state_ptr, streamed_mutation::forwarding fwd) {
             assert(m.schema() == s);
-            return make_reader_returning(m);
+            return make_reader_returning(m, std::move(fwd));
         }), tracker);
 
         assert_that(cache.make_reader(s, query::full_partition_range))
@@ -161,7 +161,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_full_range)
         auto s = make_schema();
         int secondary_calls_count = 0;
         cache_tracker tracker;
-        row_cache cache(s, mutation_source([&secondary_calls_count] (schema_ptr s, const dht::partition_range& range) {
+        row_cache cache(s, mutation_source([&secondary_calls_count] (schema_ptr s, const dht::partition_range& range, const query::partition_slice&, const io_priority_class&, tracing::trace_state_ptr, streamed_mutation::forwarding fwd) {
             return make_counting_reader(make_empty_reader(), secondary_calls_count);
         }), tracker);
 
@@ -179,10 +179,10 @@ void test_cache_delegates_to_underlying_only_once_with_single_partition(schema_p
                                                                         const dht::partition_range& range) {
     int secondary_calls_count = 0;
     cache_tracker tracker;
-    row_cache cache(s, mutation_source([m, &secondary_calls_count] (schema_ptr s, const dht::partition_range& range) {
+    row_cache cache(s, mutation_source([m, &secondary_calls_count] (schema_ptr s, const dht::partition_range& range, const query::partition_slice&, const io_priority_class&, tracing::trace_state_ptr, streamed_mutation::forwarding fwd) {
         assert(m.schema() == s);
         if (range.contains(dht::ring_position(m.decorated_key()), dht::ring_position_comparator(*s))) {
-            return make_counting_reader(make_reader_returning(m), secondary_calls_count);
+            return make_counting_reader(make_reader_returning(m, std::move(fwd)), secondary_calls_count);
         } else {
             return make_counting_reader(make_empty_reader(), secondary_calls_count);
         }
@@ -275,8 +275,9 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
         }
 
         auto make_cache = [&tracker, &mt](schema_ptr s, int& secondary_calls_count) -> lw_shared_ptr<row_cache> {
-            auto secondary = mutation_source([&mt, &secondary_calls_count] (schema_ptr s, const dht::partition_range& range) {
-                return make_counting_reader(mt->as_data_source()(s, range), secondary_calls_count);
+            auto secondary = mutation_source([&mt, &secondary_calls_count] (schema_ptr s, const dht::partition_range& range,
+                    const query::partition_slice& slice, const io_priority_class& pc, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd) {
+                return make_counting_reader(mt->as_data_source()(s, range, slice, pc, std::move(trace), std::move(fwd)), secondary_calls_count);
             });
 
             return make_lw_shared<row_cache>(s, secondary, tracker);
@@ -284,8 +285,9 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
 
         auto make_ds = [&make_cache](schema_ptr s, int& secondary_calls_count) -> mutation_source {
             auto cache = make_cache(s, secondary_calls_count);
-            return mutation_source([cache] (schema_ptr s, const dht::partition_range& range) {
-                return cache->make_reader(s, range);
+            return mutation_source([cache] (schema_ptr s, const dht::partition_range& range,
+                    const query::partition_slice& slice, const io_priority_class& pc, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd) {
+                return cache->make_reader(s, range, slice, pc, std::move(trace), std::move(fwd));
             });
         };
 
@@ -408,8 +410,9 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
             };
 
             auto cache = make_cache(s, secondary_calls_count);
-            auto ds = mutation_source([cache] (schema_ptr s, const dht::partition_range& range) {
-                    return cache->make_reader(s, range);
+            auto ds = mutation_source([cache] (schema_ptr s, const dht::partition_range& range,
+                    const query::partition_slice& slice, const io_priority_class& pc, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd) {
+                    return cache->make_reader(s, range, slice, pc, std::move(trace), std::move(fwd));
             });
 
             test(ds, query::full_partition_range, partitions.size() + 1);
@@ -821,8 +824,9 @@ private:
             : _underlying(std::move(underlying))
         { }
 
-        mutation_reader make_reader(schema_ptr s, const dht::partition_range& pr) {
-            return make_mutation_reader<reader>(_throttle, _underlying(s, pr));
+        mutation_reader make_reader(schema_ptr s, const dht::partition_range& pr,
+                const query::partition_slice& slice, const io_priority_class& pc, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd) {
+            return make_mutation_reader<reader>(_throttle, _underlying(s, pr, slice, pc, std::move(trace), std::move(fwd)));
         }
 
         ::throttle& throttle() { return _throttle; }
@@ -842,8 +846,9 @@ public:
     }
 
     operator mutation_source() const {
-        return mutation_source([this] (schema_ptr s, const dht::partition_range& pr) {
-            return _impl->make_reader(std::move(s), pr);
+        return mutation_source([this] (schema_ptr s, const dht::partition_range& pr,
+                const query::partition_slice& slice, const io_priority_class& pc, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd) {
+            return _impl->make_reader(std::move(s), pr, slice, pc, std::move(trace), std::move(fwd));
         });
     }
 };
@@ -857,10 +862,11 @@ static std::vector<mutation> updated_ring(std::vector<mutation>& mutations) {
 }
 
 static mutation_source make_mutation_source(std::vector<lw_shared_ptr<memtable>>& memtables) {
-    return mutation_source([&memtables] (schema_ptr s, const dht::partition_range& pr) {
+    return mutation_source([&memtables] (schema_ptr s, const dht::partition_range& pr,
+            const query::partition_slice& slice, const io_priority_class& pc, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd) {
         std::vector<mutation_reader> readers;
         for (auto&& mt : memtables) {
-            readers.emplace_back(mt->make_reader(s, pr));
+            readers.emplace_back(mt->make_reader(s, pr, slice, pc, trace, fwd));
         }
         return make_combined_reader(std::move(readers));
     });
