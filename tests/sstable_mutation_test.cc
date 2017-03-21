@@ -598,7 +598,7 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone) {
                     BOOST_REQUIRE(rows.calculate_size() == 1);
                     for (auto e : rows) {
                         BOOST_REQUIRE(e.key().equal(*s, make_ckey("aaa", "bbb")));
-                        BOOST_REQUIRE(e.row().deleted_at().timestamp == 1459334681244989LL);
+                        BOOST_REQUIRE(e.row().deleted_at().tomb().timestamp == 1459334681244989LL);
                     }
 
                     return stop_iteration::no;
@@ -780,7 +780,7 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
                     BOOST_REQUIRE(rows.calculate_size() == 1);
                     for (auto e : rows) {
                         BOOST_REQUIRE(e.key().equal(*s, make_ckey("aaa", "bbb", "ccc")));
-                        BOOST_REQUIRE(e.row().deleted_at().timestamp == 1459438519958850LL);
+                        BOOST_REQUIRE(e.row().deleted_at().tomb().timestamp == 1459438519958850LL);
                     }
 
                     return stop_iteration::no;

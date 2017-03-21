@@ -103,6 +103,7 @@ class deletable_row stub [[writable]] {
     boost::variant<live_marker, expiring_marker, dead_marker, no_marker> marker;
     tombstone deleted_at;
     row cells;
+    tombstone shadowable_deleted_at [[version 1.8]] = deleted_at;
 };
 
 enum class bound_kind : uint8_t {

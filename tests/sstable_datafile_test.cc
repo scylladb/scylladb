@@ -1581,7 +1581,7 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.clustered_rows().calculate_size() == 1);
                         auto c_row = *(mp.clustered_rows().begin());
-                        BOOST_REQUIRE(c_row.row().deleted_at() == tomb);
+                        BOOST_REQUIRE(c_row.row().deleted_at().tomb() == tomb);
                     });
                 });
             });

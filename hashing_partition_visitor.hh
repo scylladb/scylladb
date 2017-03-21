@@ -63,7 +63,7 @@ public:
         rt.feed_hash(_h, _s);
     }
 
-    virtual void accept_row(clustering_key_view key, tombstone deleted_at, const row_marker& rm) {
+    virtual void accept_row(clustering_key_view key, const row_tombstone& deleted_at, const row_marker& rm) {
         key.feed_hash(_h, _s);
         feed_hash(_h, deleted_at);
         feed_hash(_h, rm);

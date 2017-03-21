@@ -45,6 +45,7 @@
 #include <boost/multiprecision/cpp_int.hpp>
 #include "utils/big_decimal.hh"
 #include "utils/date.h"
+#include "mutation_partition.hh"
 
 template<typename T>
 sstring time_point_to_string(const T& tp)
@@ -2141,11 +2142,11 @@ do_serialize_mutation_form(
     return collection_mutation{std::move(ret)};
 }
 
-bool collection_type_impl::mutation::compact_and_expire(tombstone base_tomb, gc_clock::time_point query_time,
+bool collection_type_impl::mutation::compact_and_expire(row_tombstone base_tomb, gc_clock::time_point query_time,
     can_gc_fn& can_gc, gc_clock::time_point gc_before)
 {
     bool any_live = false;
-    tomb.apply(base_tomb);
+    tomb.apply(base_tomb.regular());
     std::vector<std::pair<bytes, atomic_cell>> survivors;
     for (auto&& name_and_cell : cells) {
         atomic_cell& cell = name_and_cell.second;
@@ -2165,7 +2166,7 @@ bool collection_type_impl::mutation::compact_and_expire(tombstone base_tomb, gc_
             if (cannot_erase_cell()) {
                 survivors.emplace_back(std::move(name_and_cell));
             }
-        } else {
+        } else if (!cell.is_covered_by(base_tomb.shadowable().tomb(), false)) {
             any_live |= true;
             survivors.emplace_back(std::move(name_and_cell));
         }

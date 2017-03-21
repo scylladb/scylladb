@@ -189,6 +189,20 @@ static void write_tombstones(const schema& s, RowTombstones& row_tombstones, con
 }
 
 template<typename Writer>
+static auto write_tombstone(Writer&& writer, const tombstone& t) {
+    return std::move(writer).write_timestamp(t.timestamp).write_deletion_time(t.deletion_time);
+}
+
+template<typename Writer>
+static auto write_row(Writer&& writer, const schema& s, const clustering_key_prefix& key, const row& cells, const row_marker& m, const row_tombstone& t) {
+    auto marker_writer = std::move(writer).write_key(key);
+    auto deleted_at_writer = write_row_marker(std::move(marker_writer), m).start_deleted_at();
+    auto row_writer = write_tombstone(std::move(deleted_at_writer), t.regular()).end_deleted_at().start_cells();
+    auto shadowable_deleted_at_writer = write_row_cells(std::move(row_writer), cells, s, column_kind::regular_column).end_cells().start_shadowable_deleted_at();
+    return write_tombstone(std::move(shadowable_deleted_at_writer), t.shadowable().tomb()).end_shadowable_deleted_at().end_deletable_row();
+}
+
+template<typename Writer>
 void mutation_partition_serializer::write_serialized(Writer&& writer, const schema& s, const mutation_partition& mp)
 {
     auto srow_writer = std::move(writer).write_tomb(mp.partition_tombstone()).start_static_row();
@@ -196,15 +210,7 @@ void mutation_partition_serializer::write_serialized(Writer&& writer, const sche
     write_tombstones(s, row_tombstones, mp.row_tombstones());
     auto clustering_rows = std::move(row_tombstones).end_range_tombstones().start_rows();
     for (auto&& cr : mp.clustered_rows()) {
-        auto marker_writer = clustering_rows.add().write_key(cr.key());
-        auto deleted_at_writer = write_row_marker(std::move(marker_writer), cr.row().marker());
-        auto&& dt = cr.row().deleted_at();
-        auto row_writer = std::move(deleted_at_writer).start_deleted_at()
-                                                          .write_timestamp(dt.timestamp)
-                                                          .write_deletion_time(dt.deletion_time)
-                                                      .end_deleted_at()
-                                                      .start_cells();
-        write_row_cells(std::move(row_writer), cr.row().cells(), s, column_kind::regular_column).end_cells().end_deletable_row();
+        write_row(clustering_rows.add(), s, cr.key(), cr.row().cells(), cr.row().marker(), cr.row().deleted_at());
     }
     std::move(clustering_rows).end_rows().end_mutation_partition();
 }
@@ -243,15 +249,7 @@ void serialize_mutation_fragments(const schema& s, tombstone partition_tombstone
     auto clustering_rows = std::move(row_tombstones).end_range_tombstones().start_rows();
     while (!crs.empty()) {
         auto& cr = crs.front();
-        auto marker_writer = clustering_rows.add().write_key(cr.key());
-        auto deleted_at_writer = write_row_marker(std::move(marker_writer), cr.marker());
-        auto&& dt = cr.tomb();
-        auto row_writer = std::move(deleted_at_writer).start_deleted_at()
-                                                          .write_timestamp(dt.timestamp)
-                                                          .write_deletion_time(dt.deletion_time)
-                                                      .end_deleted_at()
-                                                      .start_cells();
-        write_row_cells(std::move(row_writer), cr.cells(), s, column_kind::regular_column).end_cells().end_deletable_row();
+        write_row(clustering_rows.add(), s, cr.key(), cr.cells(), cr.marker(), cr.tomb());
         crs.pop_front();
     }
     std::move(clustering_rows).end_rows().end_mutation_partition();

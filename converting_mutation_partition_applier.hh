@@ -94,7 +94,7 @@ public:
         _p.apply_row_tombstone(_p_schema, rt);
     }
 
-    virtual void accept_row(clustering_key_view key, tombstone deleted_at, const row_marker& rm) override {
+    virtual void accept_row(clustering_key_view key, const row_tombstone& deleted_at, const row_marker& rm) override {
         deletable_row& r = _p.clustered_row(_p_schema, key);
         r.apply(rm);
         r.apply(deleted_at);

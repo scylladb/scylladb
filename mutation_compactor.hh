@@ -104,6 +104,10 @@ private:
         return t.deletion_time < _gc_before && can_gc(t);
     };
 
+    bool can_purge_tombstone(const row_tombstone& t) {
+        return t.max_deletion_time() < _gc_before && can_gc(t.tomb());
+    };
+
     bool can_gc(tombstone t) {
         if (!sstable_compaction()) {
             return true;
@@ -172,7 +176,7 @@ public:
     stop_iteration consume(static_row&& sr) {
         auto current_tombstone = _range_tombstones.get_partition_tombstone();
         bool is_live = sr.cells().compact_and_expire(_schema, column_kind::static_column,
-                                                     current_tombstone,
+                                                     row_tombstone(current_tombstone),
                                                      _query_time, _can_gc, _gc_before);
         _static_row_live = is_live;
         if (is_live || (!only_live() && !sr.empty())) {
@@ -184,12 +188,12 @@ public:
 
     stop_iteration consume(clustering_row&& cr) {
         auto current_tombstone = _range_tombstones.tombstone_for_row(cr.key());
-        auto t = current_tombstone;
-        t.apply(cr.tomb());
-        if (cr.tomb() <= current_tombstone || can_purge_tombstone(cr.tomb())) {
+        auto t = cr.tomb();
+        if (t.tomb() <= current_tombstone || can_purge_tombstone(t)) {
             cr.remove_tombstone();
         }
-        bool is_live = cr.marker().compact_and_expire(t, _query_time, _can_gc, _gc_before);
+        t.apply(current_tombstone);
+        bool is_live = cr.marker().compact_and_expire(t.tomb(), _query_time, _can_gc, _gc_before);
         is_live |= cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, _can_gc, _gc_before);
         if (only_live() && is_live) {
             partition_is_not_empty();

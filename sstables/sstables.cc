@@ -1535,7 +1535,8 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
     // Before writing cells, range tombstone must be written if the row has any (deletable_row::t).
     if (clustered_row.tomb()) {
         maybe_flush_pi_block(out, clustering_key, {});
-        write_range_tombstone(out, clustering_key, clustering_key, {}, clustered_row.tomb());
+        //FIXME: Write a row_tombstone
+        write_range_tombstone(out, clustering_key, clustering_key, {}, clustered_row.tomb().tomb());
         // Because we currently may break a partition to promoted-index blocks
         // in the middle of a clustered row, we also need to track the current
         // row's tombstone - not just range tombstones - which may effect the
@@ -1544,7 +1545,7 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
         // following code can be dropped:
         _pi_write.tombstone_accumulator->apply(range_tombstone(
                 clustered_row.key(), bound_kind::incl_start,
-                clustered_row.key(), bound_kind::incl_end, clustered_row.tomb()));
+                clustered_row.key(), bound_kind::incl_end, clustered_row.tomb().tomb()));
     }
 
     if (schema.clustering_key_size()) {
