@@ -655,9 +655,9 @@ future<> cql_server::connection::process_request() {
                 auto bv = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
                 auto cpu = pick_request_cpu();
                 return smp::submit_to(cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state, tracing_requested] () mutable {
-                    return this->process_request_one(bv, op, stream, std::move(client_state), tracing_requested).then([](auto&& response) {
+                    return this->process_request_one(bv, op, stream, std::move(client_state), tracing_requested).then([tracing_requested] (auto&& response) {
                         auto& tracing_session_id_ptr = response.second.tracing_session_id_ptr();
-                        if (tracing_session_id_ptr) {
+                        if (tracing_requested == tracing_request_type::write_on_close && tracing_session_id_ptr) {
                             response.first->set_tracing_id(*tracing_session_id_ptr);
                         }
                         return std::make_pair(make_foreign(response.first), response.second);
