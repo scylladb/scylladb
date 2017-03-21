@@ -153,8 +153,8 @@ public:
     }
 };
 
-mutation_reader make_reader_returning(mutation m) {
-    return make_mutation_reader<reader_returning>(streamed_mutation_from_mutation(std::move(m)));
+mutation_reader make_reader_returning(mutation m, streamed_mutation::forwarding fwd) {
+    return make_mutation_reader<reader_returning>(streamed_mutation_from_mutation(std::move(m), std::move(fwd)));
 }
 
 mutation_reader make_reader_returning(streamed_mutation m) {

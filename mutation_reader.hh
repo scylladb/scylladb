@@ -159,7 +159,7 @@ public:
 mutation_reader make_combined_reader(std::vector<mutation_reader>);
 mutation_reader make_combined_reader(mutation_reader&& a, mutation_reader&& b);
 // reads from the input readers, in order
-mutation_reader make_reader_returning(mutation);
+mutation_reader make_reader_returning(mutation, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 mutation_reader make_reader_returning(streamed_mutation);
 mutation_reader make_reader_returning_many(std::vector<mutation>,
     const query::partition_slice& slice = query::full_slice,
