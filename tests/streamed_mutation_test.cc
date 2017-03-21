@@ -28,6 +28,7 @@
 #include "frozen_mutation.hh"
 #include "tests/test_services.hh"
 #include "schema_builder.hh"
+#include "total_order_check.hh"
 
 #include "disk-error-handler.hh"
 
@@ -353,3 +354,186 @@ SEASTAR_TEST_CASE(test_mutation_hash) {
     });
 }
 
+static
+composite cell_name(const schema& s, const clustering_key& ck, const column_definition& col) {
+    if (s.is_dense()) {
+        return composite::serialize_value(ck.components(s), s.is_compound());
+    } else {
+        const bytes_view column_name = col.name();
+        return composite::serialize_value(boost::range::join(
+                boost::make_iterator_range(ck.begin(s), ck.end(s)),
+                boost::make_iterator_range(&column_name, &column_name + 1)),
+            s.is_compound());
+    }
+}
+
+static
+composite cell_name_for_static_column(const schema& s, const column_definition& cdef) {
+    const bytes_view column_name = cdef.name();
+    return composite::serialize_static(s, boost::make_iterator_range(&column_name, &column_name + 1));
+}
+
+inline
+composite composite_for_key(const schema& s, const clustering_key& ck) {
+    return composite::serialize_value(ck.components(s), s.is_compound());
+}
+
+inline
+composite composite_before_key(const schema& s, const clustering_key& ck) {
+    return composite::serialize_value(ck.components(s), s.is_compound(), composite::eoc::start);
+}
+
+inline
+composite composite_after_prefixed(const schema& s, const clustering_key& ck) {
+    return composite::serialize_value(ck.components(s), s.is_compound(), composite::eoc::end);
+}
+
+inline
+position_in_partition position_for_row(const clustering_key& ck) {
+    return position_in_partition(position_in_partition::clustering_row_tag_t(), ck);
+}
+
+inline
+position_in_partition position_before(const clustering_key& ck) {
+    return position_in_partition(position_in_partition::range_tag_t(), bound_view(ck, bound_kind::incl_start));
+}
+
+inline
+position_in_partition position_after_prefixed(const clustering_key& ck) {
+    return position_in_partition(position_in_partition::range_tag_t(), bound_view(ck, bound_kind::incl_end));
+}
+
+SEASTAR_TEST_CASE(test_ordering_of_position_in_partition_and_composite_view) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck1", int32_type, column_kind::clustering_key)
+            .with_column("ck2", int32_type, column_kind::clustering_key)
+            .with_column("s1", int32_type, column_kind::static_column)
+            .with_column("v", int32_type)
+            .build();
+
+        const column_definition& v_def = *s->get_column_definition("v");
+        const column_definition& s_def = *s->get_column_definition("s1");
+
+        auto make_ck = [&] (int ck1, int ck2) {
+            std::vector<data_value> cells;
+            cells.push_back(data_value(ck1));
+            cells.push_back(data_value(ck2));
+            return clustering_key::from_deeply_exploded(*s, cells);
+        };
+
+        auto ck1 = make_ck(1, 2);
+        auto ck2 = make_ck(2, 1);
+        auto ck3 = make_ck(2, 3);
+        auto ck4 = make_ck(3, 1);
+
+        using cmp = position_in_partition::composite_tri_compare;
+        total_order_check<cmp, position_in_partition, composite>(cmp(*s))
+            .next(cell_name_for_static_column(*s, s_def))
+                .equal_to(position_range::full().start())
+            .next(position_before(ck1))
+                .equal_to(composite_before_key(*s, ck1))
+                .equal_to(composite_for_key(*s, ck1))
+                .equal_to(position_for_row(ck1))
+            .next(cell_name(*s, ck1, v_def))
+            .next(position_after_prefixed(ck1))
+                .equal_to(composite_after_prefixed(*s, ck1))
+            .next(position_before(ck2))
+                .equal_to(composite_before_key(*s, ck2))
+                .equal_to(composite_for_key(*s, ck2))
+                .equal_to(position_for_row(ck2))
+            .next(cell_name(*s, ck2, v_def))
+            .next(position_after_prefixed(ck2))
+                .equal_to(composite_after_prefixed(*s, ck2))
+            .next(position_before(ck3))
+                .equal_to(composite_before_key(*s, ck3))
+                .equal_to(composite_for_key(*s, ck3))
+                .equal_to(position_for_row(ck3))
+            .next(cell_name(*s, ck3, v_def))
+            .next(position_after_prefixed(ck3))
+                .equal_to(composite_after_prefixed(*s, ck3))
+            .next(position_before(ck4))
+                .equal_to(composite_before_key(*s, ck4))
+                .equal_to(composite_for_key(*s, ck4))
+                .equal_to(position_for_row(ck4))
+            .next(cell_name(*s, ck4, v_def))
+            .next(position_after_prefixed(ck4))
+                .equal_to(composite_after_prefixed(*s, ck4))
+            .next(position_range::full().end())
+            .check();
+    });
+}
+
+SEASTAR_TEST_CASE(test_ordering_of_position_in_partition_and_composite_view_in_a_dense_table) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck1", int32_type, column_kind::clustering_key)
+            .with_column("ck2", int32_type, column_kind::clustering_key)
+            .with_column("v", int32_type)
+            .set_is_dense(true)
+            .build();
+
+        auto make_ck = [&] (int ck1, stdx::optional<int> ck2 = stdx::nullopt) {
+            std::vector<data_value> cells;
+            cells.push_back(data_value(ck1));
+            if (ck2) {
+                cells.push_back(data_value(ck2));
+            }
+            return clustering_key::from_deeply_exploded(*s, cells);
+        };
+
+        auto ck1 = make_ck(1);
+        auto ck2 = make_ck(1, 2);
+        auto ck3 = make_ck(2);
+        auto ck4 = make_ck(2, 3);
+        auto ck5 = make_ck(2, 4);
+        auto ck6 = make_ck(3);
+
+        using cmp = position_in_partition::composite_tri_compare;
+        total_order_check<cmp, position_in_partition, composite>(cmp(*s))
+            .next(composite())
+            .next(position_range::full().start())
+            .next(position_before(ck1))
+                .equal_to(composite_before_key(*s, ck1))
+                .equal_to(composite_for_key(*s, ck1))
+                .equal_to(position_for_row(ck1))
+            // .next(position_after(ck1)) // FIXME: #1446
+            .next(position_before(ck2))
+                .equal_to(composite_before_key(*s, ck2))
+                .equal_to(composite_for_key(*s, ck2))
+                .equal_to(position_for_row(ck2))
+            .next(position_after_prefixed(ck2))
+                .equal_to(composite_after_prefixed(*s, ck2))
+            .next(position_after_prefixed(ck1)) // prefix of ck2
+                .equal_to(composite_after_prefixed(*s, ck1))
+            .next(position_before(ck3))
+                .equal_to(composite_before_key(*s, ck3))
+                .equal_to(composite_for_key(*s, ck3))
+                .equal_to(position_for_row(ck3))
+            // .next(position_after(ck3)) // FIXME: #1446
+            .next(position_before(ck4))
+                .equal_to(composite_before_key(*s, ck4))
+                .equal_to(composite_for_key(*s, ck4))
+                .equal_to(position_for_row(ck4))
+            .next(position_after_prefixed(ck4))
+                .equal_to(composite_after_prefixed(*s, ck4))
+            .next(position_before(ck5))
+                .equal_to(composite_before_key(*s, ck5))
+                .equal_to(composite_for_key(*s, ck5))
+                .equal_to(position_for_row(ck5))
+            .next(position_after_prefixed(ck5))
+                .equal_to(composite_after_prefixed(*s, ck5))
+            .next(position_after_prefixed(ck3)) // prefix of ck4-ck5
+                .equal_to(composite_after_prefixed(*s, ck3))
+            .next(position_before(ck6))
+                .equal_to(composite_before_key(*s, ck6))
+                .equal_to(composite_for_key(*s, ck6))
+                .equal_to(position_for_row(ck6))
+            .next(position_after_prefixed(ck6))
+                .equal_to(composite_after_prefixed(*s, ck6))
+            .next(position_range::full().end())
+            .check();
+    });
+}
