@@ -306,12 +306,16 @@ public:
         return f(const_cast<bytes&>(_bytes));
     }
 
+    // marker is ignored if !is_compound
     template<typename RangeOfSerializedComponents>
-    static composite serialize_value(RangeOfSerializedComponents&& values, bool is_compound = true) {
+    static composite serialize_value(RangeOfSerializedComponents&& values, bool is_compound = true, eoc marker = eoc::none) {
         auto size = serialized_size(values, is_compound);
         bytes b(bytes::initialized_later(), size);
         auto i = b.begin();
         serialize_value(std::forward<decltype(values)>(values), i, is_compound);
+        if (is_compound && !b.empty()) {
+            b.back() = eoc_type(marker);
+        }
         return composite(std::move(b), is_compound);
     }
 
@@ -451,9 +455,7 @@ public:
         if (v.size() == 0) {
             return composite(bytes(size_t(1), bytes::value_type(marker)));
         }
-        composite c = serialize_value(v);
-        c._bytes.back() = eoc_type(marker);
-        return c;
+        return serialize_value(v, true, marker);
     }
 
     static composite static_prefix(const schema& s) {
