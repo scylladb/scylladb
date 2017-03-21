@@ -24,7 +24,6 @@
 
 namespace api {
 
-using namespace scollectd;
 using namespace json;
 namespace hh = httpd::hinted_handoff_json;
 

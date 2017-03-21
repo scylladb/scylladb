@@ -26,7 +26,6 @@
 
 namespace api {
 
-using namespace scollectd;
 namespace cm = httpd::compaction_manager_json;
 using namespace json;
 
