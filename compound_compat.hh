@@ -184,6 +184,8 @@ bytes to_legacy(CompoundType& type, bytes_view packed) {
     return legacy_form;
 }
 
+class composite_view;
+
 // Represents a value serialized according to Origin's CompositeType.
 // If is_compound is true, then the value is one or more components encoded as:
 //
@@ -468,6 +470,13 @@ public:
     }
 
     friend std::ostream& operator<<(std::ostream& os, const composite& v);
+
+    struct tri_compare {
+        const std::vector<data_type>& _types;
+        tri_compare(const std::vector<data_type>& types) : _types(types) {}
+        int operator()(const composite&, const composite&) const;
+        int operator()(composite_view, composite_view) const;
+    };
 };
 
 class composite_view final {
@@ -557,4 +566,37 @@ public:
 inline
 std::ostream& operator<<(std::ostream& os, const composite& v) {
     return os << composite_view(v);
+}
+
+inline
+int composite::tri_compare::operator()(const composite& v1, const composite& v2) const {
+    return (*this)(composite_view(v1), composite_view(v2));
+}
+
+inline
+int composite::tri_compare::operator()(composite_view v1, composite_view v2) const {
+    // See org.apache.cassandra.db.composites.AbstractCType#compare
+    if (v1.empty()) {
+        return v2.empty() ? 0 : -1;
+    }
+    if (v2.empty()) {
+        return 1;
+    }
+    if (v1.is_static() != v2.is_static()) {
+        return v1.is_static() ? -1 : 1;
+    }
+    auto a_values = v1.components();
+    auto b_values = v2.components();
+    auto cmp = [&](const data_type& t, component_view c1, component_view c2) {
+        // First by value, then by EOC
+        auto r = t->compare(c1.first, c2.first);
+        if (r) {
+            return r;
+        }
+        return static_cast<int>(c1.second) - static_cast<int>(c2.second);
+    };
+    return lexicographical_tri_compare(_types.begin(), _types.end(),
+        a_values.begin(), a_values.end(),
+        b_values.begin(), b_values.end(),
+        cmp);
 }
