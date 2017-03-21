@@ -44,6 +44,30 @@ static inline bytes_view to_bytes_view(const temporary_buffer<char>& b) {
 
 namespace sstables {
 
+struct deletion_time {
+    int32_t local_deletion_time;
+    int64_t marked_for_delete_at;
+
+    template <typename Describer>
+    auto describe_type(Describer f) { return f(local_deletion_time, marked_for_delete_at); }
+
+    bool live() const {
+        return (local_deletion_time == std::numeric_limits<int32_t>::max()) &&
+               (marked_for_delete_at == std::numeric_limits<int64_t>::min());
+    }
+
+    bool operator==(const deletion_time& d) {
+        return local_deletion_time == d.local_deletion_time &&
+               marked_for_delete_at == d.marked_for_delete_at;
+    }
+    bool operator!=(const deletion_time& d) {
+        return !(*this == d);
+    }
+    explicit operator tombstone() {
+        return !live() ? tombstone(marked_for_delete_at, gc_clock::time_point(gc_clock::duration(local_deletion_time))) : tombstone();
+    }
+};
+
 struct option {
     disk_string<uint16_t> key;
     disk_string<uint16_t> value;
@@ -333,30 +357,6 @@ namespace sstables {
 struct statistics {
     disk_hash<uint32_t, metadata_type, uint32_t> hash;
     std::unordered_map<metadata_type, std::unique_ptr<metadata>> contents;
-};
-
-struct deletion_time {
-    int32_t local_deletion_time;
-    int64_t marked_for_delete_at;
-
-    template <typename Describer>
-    auto describe_type(Describer f) { return f(local_deletion_time, marked_for_delete_at); }
-
-    bool live() const {
-        return (local_deletion_time == std::numeric_limits<int32_t>::max()) &&
-               (marked_for_delete_at == std::numeric_limits<int64_t>::min());
-    }
-
-    bool operator==(const deletion_time& d) {
-        return local_deletion_time == d.local_deletion_time &&
-               marked_for_delete_at == d.marked_for_delete_at;
-    }
-    bool operator!=(const deletion_time& d) {
-        return !(*this == d);
-    }
-    explicit operator tombstone() {
-        return !live() ? tombstone(marked_for_delete_at, gc_clock::time_point(gc_clock::duration(local_deletion_time))) : tombstone();
-    }
 };
 
 enum class column_mask : uint8_t {
