@@ -58,30 +58,34 @@ class caching_options {
     caching_options() : _key_cache(default_key), _row_cache(default_row) {}
 public:
 
-    sstring to_sstring() const {
-        return json::to_json(std::map<sstring, sstring>({{ "keys", _key_cache }, { "rows_per_partition", _row_cache }}));
+    std::map<sstring, sstring> to_map() const {
+        return {{ "keys", _key_cache }, { "rows_per_partition", _row_cache }};
     }
 
-    static caching_options from_sstring(const sstring& str) {
-        auto map = json::to_map(str);
-        if (map.size() > 2) {
-            throw exceptions::configuration_exception("Invalid map: " + str); 
-        }
-        sstring k;
-        sstring r;
-        if (map.count("keys")) {
-            k = map.at("keys");
-        } else {
-            k = default_key;
-        }
+    sstring to_sstring() const {
+        return json::to_json(to_map());
+    }
 
-        if (map.count("rows_per_partition")) {
-            r = map.at("rows_per_partition");
-        } else {
-            r = default_row;
+    template<typename Map>
+    static caching_options from_map(const Map & map) {
+        sstring k = default_key;
+        sstring r = default_row;
+
+        for (auto& p : map) {
+            if (p.first == "keys") {
+                k = p.second;
+            } else if (p.first == "rows_per_partition") {
+                r = p.second;
+            } else {
+                throw exceptions::configuration_exception("Invalid caching option: " + p.first);
+            }
         }
         return caching_options(k, r);
     }
+    static caching_options from_sstring(const sstring& str) {
+        return from_map(json::to_map(str));
+    }
+
     bool operator==(const caching_options& other) const {
         return _key_cache == other._key_cache && _row_cache == other._row_cache;
     }
