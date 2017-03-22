@@ -685,7 +685,7 @@ SEASTAR_TEST_CASE(test_row_counting) {
 
         BOOST_REQUIRE_EQUAL(0, m.live_row_count());
 
-        m.partition().clustered_row(*s, ckey1).apply(api::timestamp_type(3));
+        m.partition().clustered_row(*s, ckey1).apply(row_marker(api::timestamp_type(3)));
 
         BOOST_REQUIRE_EQUAL(1, m.live_row_count());
 

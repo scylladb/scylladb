@@ -450,7 +450,7 @@ mutation_partition::apply_delete(const schema& schema, clustering_key_view key, 
 
 void
 mutation_partition::apply_insert(const schema& s, clustering_key_view key, api::timestamp_type created_at) {
-    clustered_row(s, key).apply(created_at);
+    clustered_row(s, key).apply(row_marker(created_at));
 }
 
 void mutation_partition::insert_row(const schema& s, const clustering_key& key, deletable_row&& row) {

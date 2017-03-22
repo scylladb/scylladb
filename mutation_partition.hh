@@ -295,11 +295,11 @@ class row_marker {
     gc_clock::time_point _expiry;
 public:
     row_marker() = default;
-    row_marker(api::timestamp_type created_at) : _timestamp(created_at) { }
+    explicit row_marker(api::timestamp_type created_at) : _timestamp(created_at) { }
     row_marker(api::timestamp_type created_at, gc_clock::duration ttl, gc_clock::time_point expiry)
         : _timestamp(created_at), _ttl(ttl), _expiry(expiry)
     { }
-    row_marker(tombstone deleted_at)
+    explicit row_marker(tombstone deleted_at)
         : _timestamp(deleted_at.timestamp), _ttl(dead), _expiry(deleted_at.deletion_time)
     { }
     bool is_missing() const {
