@@ -13,7 +13,6 @@ try:
     setup.developerMode()
     setup.cpuSet()
     setup.io()
-    setup.scyllaYAML()
     setup.cqlshrc()
     setup.arguments()
     os.system("/usr/bin/supervisord -c /etc/supervisord.conf")
