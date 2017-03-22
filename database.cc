@@ -2966,7 +2966,7 @@ void column_family::apply_streaming_big_mutation(schema_ptr m_schema, utils::UUI
 
 void
 column_family::check_valid_rp(const db::replay_position& rp) const {
-    if (rp < _highest_flushed_rp) {
+    if (rp != db::replay_position() && rp < _highest_flushed_rp) {
         throw replay_position_reordered_exception();
     }
 }
