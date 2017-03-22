@@ -220,6 +220,9 @@ public:
         assert(AllowPrefixes == allow_prefixes::yes);
         return std::distance(begin(v), end(v)) == (ssize_t)_types.size();
     }
+    bool is_empty(bytes_view v) const {
+        return begin(v) == end(v);
+    }
     void validate(bytes_view v) {
         // FIXME: implement
         warn(unimplemented::cause::VALIDATION);
