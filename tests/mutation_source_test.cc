@@ -85,7 +85,7 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populat
         mutation fwd_m = mutation_from_streamed_mutation(fwd_sm).get0();
         for (auto&& range : ranges) {
             BOOST_TEST_MESSAGE(sprint("fwd %s", range));
-            fwd_sm.fast_forward_to(position_range(range));
+            fwd_sm.fast_forward_to(position_range(range)).get();
             fwd_m += mutation_from_streamed_mutation(fwd_sm).get0();
         }
 
