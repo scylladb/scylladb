@@ -42,6 +42,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/util/log.hh>
 #include <map>
+#include <unordered_set>
 #include <chrono>
 
 #include "database.hh"
@@ -51,6 +52,7 @@
 #include "schema_builder.hh"
 #include "json.hh"
 #include "cql3/query_processor.hh"
+#include "utils/joinpoint.hh"
 
 static seastar::logger logger("legacy_schema_migrator");
 
@@ -61,6 +63,8 @@ namespace legacy_schema_migrator {
 
 class migrator {
 public:
+    static const std::unordered_set<sstring> legacy_schema_tables;
+
     migrator(cql3::query_processor& qp)
                     : _qp(qp) {
     }
@@ -513,12 +517,23 @@ public:
     }
 
     future<> unload_legacy_tables() {
-        return make_ready_future();
+        return _qp.db().invoke_on_all([](database& db) {
+            for (auto& cfname : legacy_schema_tables) {
+                auto& cf = db.find_column_family(db::system_keyspace::NAME, cfname);
+                db.remove(cf);
+            }
+        });
     }
 
     future<> truncate_legacy_tables() {
         logger.info("Truncating legacy schema tables");
-        return make_ready_future();
+        return do_with(utils::make_joinpoint([] { return db_clock::now();}),[this](auto& tsf) {
+            return _qp.db().invoke_on_all([&tsf](database& db) {
+                return parallel_for_each(legacy_schema_tables, [&db, &tsf](const sstring& cfname) {
+                    return db.truncate(db::system_keyspace::NAME, cfname, [&tsf] { return tsf.value(); });
+                });
+            });
+        });
     }
 
     future<> store_keyspaces_in_new_schema_tables() {
@@ -588,6 +603,16 @@ public:
 
     cql3::query_processor& _qp;
     std::vector<keyspace> _keyspaces;
+};
+
+const std::unordered_set<sstring> migrator::legacy_schema_tables = {
+                db::system_keyspace::legacy::KEYSPACES,
+                db::system_keyspace::legacy::COLUMNFAMILIES,
+                db::system_keyspace::legacy::COLUMNS,
+                db::system_keyspace::legacy::TRIGGERS,
+                db::system_keyspace::legacy::USERTYPES,
+                db::system_keyspace::legacy::FUNCTIONS,
+                db::system_keyspace::legacy::AGGREGATES,
 };
 
 }
