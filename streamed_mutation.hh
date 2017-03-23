@@ -412,6 +412,14 @@ public:
             }
         }
 
+    static position_in_partition before_all_clustered_rows() {
+        return {position_in_partition::range_tag_t(), bound_view::bottom()};
+    }
+
+    static position_in_partition after_all_clustered_rows() {
+        return {position_in_partition::range_tag_t(), bound_view::top()};
+    }
+
     bool is_static_row() const { return !_ck; }
     bool is_clustering_row() const { return _ck && !_bound_weight; }
 
@@ -605,7 +613,7 @@ public:
     static position_range full() {
         return {
             position_in_partition(position_in_partition::static_row_tag_t()),
-            position_in_partition(position_in_partition::range_tag_t(), bound_view::top())
+            position_in_partition::after_all_clustered_rows()
         };
     }
 
