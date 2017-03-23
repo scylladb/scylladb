@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 import os
+import sys
 import scyllasetup
 import logging
 import commandlineparser
 
-logging.basicConfig(filename="/var/log/scylla/docker-entrypoint.log", level=logging.DEBUG, format="%(message)s")
+logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format="%(message)s")
 
 try:
     arguments = commandlineparser.parse()
