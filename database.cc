@@ -1772,7 +1772,7 @@ future<> distributed_loader::load_new_sstables(distributed<database>& db, sstrin
             });
         };
         return distributed_loader::open_sstable(db, comps, cf_sstable_open);
-    }).then([&db, ks = std::move(ks), cf = std::move(cf)] {
+    }).then([&db, ks, cf] {
         return db.invoke_on_all([ks = std::move(ks), cfname = std::move(cf)] (database& db) {
             auto& cf = db.find_column_family(ks, cfname);
             // atomically load all opened sstables into column family.
@@ -1780,11 +1780,14 @@ future<> distributed_loader::load_new_sstables(distributed<database>& db, sstrin
                 cf.load_sstable(sst, true);
             }
             cf._sstables_opened_but_not_loaded.clear();
-            cf.start_rewrite();
             cf.trigger_compaction();
             // Drop entire cache for this column family because it may be populated
             // with stale data.
             return cf.get_row_cache().clear();
+        });
+    }).then([&db, ks, cf] () mutable {
+        return smp::submit_to(0, [&db, ks = std::move(ks), cf = std::move(cf)] () mutable {
+            distributed_loader::reshard(db, std::move(ks), std::move(cf));
         });
     });
 }

@@ -564,16 +564,14 @@ int main(int ac, char** av) {
             // all sstables in this CF were loaded on all shards - otherwise
             // we will have races between the compaction and loading processes
             // We also want to trigger regular compaction on boot.
+
+            for (auto& x : db.local().get_column_families()) {
+                column_family& cf = *(x.second);
+                distributed_loader::reshard(db, cf.schema()->ks_name(), cf.schema()->cf_name());
+            }
             db.invoke_on_all([&proxy] (database& db) {
-                // avoid excessive disk usage by making sure all shards reshard
-                // shared sstables in the same order. That's done by choosing
-                // column families in UUID order, and each individual column
-                // family will reshard shared sstables in generation order.
-                auto cfs = boost::copy_range<std::map<utils::UUID, lw_shared_ptr<column_family>>>(db.get_column_families());
-                for (auto& x : cfs) {
+                for (auto& x : db.get_column_families()) {
                     column_family& cf = *(x.second);
-                    // We start the rewrite, but do not wait for it.
-                    cf.start_rewrite();
                     cf.trigger_compaction();
                 }
             }).get();
