@@ -369,10 +369,23 @@ public:
     position_in_partition_view(range_tag_t, bound_view bv)
         : _bound_weight(weight(bv.kind)), _ck(&bv.prefix) { }
 
+    static position_in_partition_view for_range_start(const query::clustering_range&);
+    static position_in_partition_view for_range_end(const query::clustering_range&);
+
     bool is_static_row() const { return !_ck; }
 
     friend std::ostream& operator<<(std::ostream&, position_in_partition_view);
 };
+
+inline
+position_in_partition_view position_in_partition_view::for_range_start(const query::clustering_range& r) {
+    return {position_in_partition_view::range_tag_t(), bound_view::from_range_start(r)};
+}
+
+inline
+position_in_partition_view position_in_partition_view::for_range_end(const query::clustering_range& r) {
+    return {position_in_partition_view::range_tag_t(), bound_view::from_range_end(r)};
+}
 
 class position_in_partition {
     int _bound_weight = 0;
