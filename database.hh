@@ -505,7 +505,7 @@ private:
     // them (split the data belonging to this shard to a separate sstable),
     // but for correct compaction we need to start the compaction only after
     // reading all sstables.
-    std::vector<sstables::shared_sstable> _sstables_need_rewrite;
+    std::unordered_set<sstables::shared_sstable> _sstables_need_rewrite;
     // Control background fibers waiting for sstables to be deleted
     seastar::gate _sstable_deletion_gate;
     // There are situations in which we need to stop writing sstables. Flushers will take
@@ -790,6 +790,7 @@ public:
     lw_shared_ptr<sstable_list> get_sstables_including_compacted_undeleted() const;
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const;
     std::vector<sstables::shared_sstable> select_sstables(const dht::partition_range& range) const;
+    std::vector<sstables::shared_sstable> candidates_for_compaction() const;
     size_t sstables_count() const;
     std::vector<uint64_t> sstable_count_per_level() const;
     int64_t get_unleveled_sstables() const;

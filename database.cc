@@ -751,7 +751,7 @@ void column_family::load_sstable(sstables::shared_sstable& sst, bool reset_level
         // the sstables belonging to this CF, because we need all of
         // them to know which tombstones we can drop, and what
         // generation number is free.
-        _sstables_need_rewrite.push_back(sst);
+        _sstables_need_rewrite.insert(sst);
     }
     if (reset_level) {
         // When loading a migrated sstable, set level to 0 because
@@ -771,10 +771,11 @@ void column_family::start_rewrite() {
     // submit shared sstables in generation order to guarantee that all shards
     // owning a sstable will agree on its deletion nearly the same time,
     // therefore, reducing disk space requirements.
-    boost::sort(_sstables_need_rewrite, [] (const sstables::shared_sstable& x, const sstables::shared_sstable& y) {
+    auto sstables_need_rewrite = boost::copy_range<std::vector<sstables::shared_sstable>>(_sstables_need_rewrite);
+    boost::sort(sstables_need_rewrite, [] (const sstables::shared_sstable& x, const sstables::shared_sstable& y) {
         return x->generation() < y->generation();
     });
-    for (auto sst : _sstables_need_rewrite) {
+    for (auto& sst : sstables_need_rewrite) {
         dblog.info("Splitting {} for shard", sst->get_filename());
         _compaction_manager.submit_sstable_rewrite(this, sst);
     }
@@ -1427,6 +1428,11 @@ lw_shared_ptr<sstable_list> column_family::get_sstables() const {
 
 std::vector<sstables::shared_sstable> column_family::select_sstables(const dht::partition_range& range) const {
     return _sstables->select(range);
+}
+
+std::vector<sstables::shared_sstable> column_family::candidates_for_compaction() const {
+    return boost::copy_range<std::vector<sstables::shared_sstable>>(*get_sstables()
+        | boost::adaptors::filtered([this] (auto& sst) { return !_sstables_need_rewrite.count(sst); }));
 }
 
 // Gets the list of all sstables in the column family, including ones that are
