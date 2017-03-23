@@ -1171,6 +1171,31 @@ sstables::sstable::find_disk_ranges(
     });
 }
 
+void index_entry::parse_promoted_index(const schema& s) {
+    bytes_view data = get_promoted_index_bytes();
+    if (data.empty()) {
+        return;
+    }
+
+    sstables::deletion_time del_time;
+    del_time.local_deletion_time = consume_be<uint32_t>(data);
+    del_time.marked_for_delete_at = consume_be<uint64_t>(data);
+
+    auto num_blocks = consume_be<uint32_t>(data);
+    std::deque<promoted_index::entry> entries;
+    while (num_blocks--) {
+        uint16_t len = consume_be<uint16_t>(data);
+        auto start_ck = composite_view(consume_bytes(data, len), s.is_compound());
+        len = consume_be<uint16_t>(data);
+        auto end_ck = composite_view(consume_bytes(data, len), s.is_compound());
+        uint64_t offset = consume_be<uint64_t>(data);
+        uint64_t width = consume_be<uint64_t>(data);
+        entries.emplace_back(promoted_index::entry{start_ck, end_ck, offset, width});
+    }
+
+    _promoted_index = promoted_index{del_time, std::move(entries)};
+}
+
 class mutation_reader::impl {
 private:
     bool _read_enabled = true;

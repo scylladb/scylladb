@@ -93,10 +93,27 @@ enum class indexable_element {
     cell
 };
 
+// Exploded view of promoted index.
+// Contains pointers into external buffer, so that buffer must be kept alive
+// as long as this is used.
+struct promoted_index {
+    struct entry {
+        composite_view start;
+        composite_view end;
+        uint64_t offset;
+        uint64_t width;
+    };
+    deletion_time del_time;
+    std::deque<entry> entries;
+};
+
 class index_entry {
     temporary_buffer<char> _key;
     uint64_t _position;
-    temporary_buffer<char> _promoted_index;
+    temporary_buffer<char> _promoted_index_bytes;
+    stdx::optional<promoted_index> _promoted_index;
+private:
+    void parse_promoted_index(const schema&);
 public:
 
     bytes_view get_key_bytes() const {
@@ -112,17 +129,24 @@ public:
     }
 
     bytes_view get_promoted_index_bytes() const {
-        return to_bytes_view(_promoted_index);
+        return to_bytes_view(_promoted_index_bytes);
     }
 
     index_entry(temporary_buffer<char>&& key, uint64_t position, temporary_buffer<char>&& promoted_index)
-        : _key(std::move(key)), _position(position), _promoted_index(std::move(promoted_index)) {}
+        : _key(std::move(key)), _position(position), _promoted_index_bytes(std::move(promoted_index)) {}
 
     index_entry(const index_entry& o)
         : _key(o._key.get(), o._key.size())
         , _position(o._position)
-        , _promoted_index(o._promoted_index.get(), o._promoted_index.size())
+        , _promoted_index_bytes(o._promoted_index_bytes.get(), o._promoted_index_bytes.size())
     { }
+
+    promoted_index* get_promoted_index(const schema& s) {
+        if (!_promoted_index) {
+            parse_promoted_index(s);
+        }
+        return _promoted_index ? &*_promoted_index : nullptr;
+    }
 };
 
 struct summary_entry {
