@@ -304,8 +304,13 @@ private:
     void advance_to(position_in_partition_view pos) {
         position_in_partition::less_compare less(*_schema);
 
+        auto log = [&] {
+            sstlog.trace("mp_row_consumer {}: advance_to({}) => out_of_range={}, skip_in_progress={}", this, pos, _out_of_range, _skip_in_progress);
+        };
+
         if (!_after_fwd_range_start && less(pos, _fwd_range.start())) {
             _skip_in_progress = true;
+            log();
             return;
         }
 
@@ -314,11 +319,13 @@ private:
         if (!less(pos, _fwd_range.end())) {
             _out_of_range = true;
             _skip_in_progress = false;
+            log();
             return;
         }
 
         _skip_in_progress = !pos.is_static_row() && !_ck_ranges_walker->advance_to(pos);
         _out_of_range |= _ck_ranges_walker->out_of_range();
+        log();
     }
 
     // Assumes that this and other advance_to() overloads are called with monotonic positions.
@@ -327,19 +334,26 @@ private:
         auto&& start = rt.position();
         auto&& end = rt.end_position();
 
+        auto log = [&] {
+            sstlog.trace("mp_row_consumer {}: advance_to({}) => out_of_range={}, skip_in_progress={}", this, rt, _out_of_range, _skip_in_progress);
+        };
+
         if (less(end, _fwd_range.start())) {
             _skip_in_progress = true;
+            log();
             return;
         }
 
         if (!less(start, _fwd_range.end())) {
             _out_of_range = true;
             _skip_in_progress = false; // It may become in range after next forwarding, so cannot drop it
+            log();
             return;
         }
 
         _skip_in_progress = !_ck_ranges_walker->advance_to(start, end);
         _out_of_range |= _ck_ranges_walker->out_of_range();
+        log();
     }
 
     void advance_to(const mutation_fragment& mf) {
@@ -351,6 +365,7 @@ private:
     }
 
     void set_up_ck_ranges(const partition_key& pk) {
+        sstlog.trace("mp_row_consumer {}: set_up_ck_ranges({})", this, pk);
         _ck_ranges = query::clustering_key_filter_ranges::get_ranges(*_schema, _slice, pk);
         _ck_ranges_walker = clustering_ranges_walker(*_schema, _ck_ranges->ranges());
         _fwd_range = _fwd ? position_range::for_static_row() : position_range::full();
@@ -413,6 +428,7 @@ public:
     }
 
     void flush() {
+        sstlog.trace("mp_row_consumer {}: flush(in_progress={}, ready={}, skip={})", this, _in_progress, _ready, _skip_in_progress);
         flush_pending_collection(*_schema);
         // If _ready is already set we have a bug: get_mutation_fragment()
         // was not called, and below we will lose one clustering row!
@@ -427,6 +443,7 @@ public:
     }
 
     proceed flush_if_needed(range_tombstone&& rt) {
+        sstlog.trace("mp_row_consumer {}: flush_if_needed(in_progress={}, ready={}, skip={})", this, _in_progress, _ready, _skip_in_progress);
         proceed ret = proceed::yes;
         if (_in_progress) {
             ret = _skip_in_progress ? proceed::yes : proceed::no;
@@ -441,11 +458,14 @@ public:
     }
 
     proceed flush_if_needed(bool is_static, position_in_partition&& pos) {
+        sstlog.trace("mp_row_consumer {}: flush_if_needed({})", this, pos);
+
         // Part of workaround for #1203
         if (!is_static && !_first_row_encountered) {
             _first_row_encountered = true;
             // from now on both range tombstones and rows should be in order
             _ck_ranges_walker->reset();
+            sstlog.trace("mp_row_consumer {}: reset ck walker", this);
         }
 
         position_in_partition::equal_compare eq(*_schema);
@@ -774,6 +794,7 @@ public:
     }
 
     virtual void reset(indexable_element el) override {
+        sstlog.trace("mp_row_consumer {}: reset({})", this, static_cast<int>(el));
         _ready = {};
         if (el == indexable_element::partition) {
             _pending_collection = {};
@@ -808,6 +829,8 @@ public:
         if (_in_progress) {
             advance_to(*_in_progress);
         }
+
+        sstlog.trace("mp_row_consumer {}: fast_forward_to({}) => out_of_range={}, skip_in_progress={}", this, _fwd_range, _out_of_range, _skip_in_progress);
     }
 };
 

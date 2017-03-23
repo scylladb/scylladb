@@ -102,6 +102,7 @@ public:
             return row_consumer::proceed::yes;
         }
 #endif
+        sstlog.trace("data_consume_row_context {}: state={}, size={}", this, static_cast<int>(_state), data.size());
         switch (_state) {
         case state::ROW_START:
             // read 2-byte key length into _u16
@@ -442,6 +443,7 @@ public:
         return _ctx->fast_forward_to(begin, end);
     }
     future<> skip_to(indexable_element el, uint64_t begin) {
+        sstlog.trace("data_consume_rows_context {}: skip_to({} -> {}, el={})", _ctx.get(), _ctx->position(), begin, static_cast<int>(el));
         if (begin <= _ctx->position()) {
             return make_ready_future<>();
         }
