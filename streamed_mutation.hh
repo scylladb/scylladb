@@ -335,7 +335,7 @@ lexicographical_relation relation_for_upper_bound(composite_view v) {
 }
 
 class position_in_partition_view {
-    friend position_in_partition;
+    friend class position_in_partition;
 
     int _bound_weight = 0;
     const clustering_key_prefix* _ck; // nullptr for static row
