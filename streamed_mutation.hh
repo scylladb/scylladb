@@ -394,12 +394,16 @@ public:
     struct static_row_tag_t { };
     struct after_static_row_tag_t { };
     struct clustering_row_tag_t { };
+    struct after_clustering_row_tag_t { };
     struct range_tag_t { };
     using range_tombstone_tag_t = range_tag_t;
 
     explicit position_in_partition(static_row_tag_t) { }
     position_in_partition(clustering_row_tag_t, clustering_key_prefix ck)
         : _ck(std::move(ck)) { }
+    position_in_partition(after_clustering_row_tag_t, clustering_key_prefix ck)
+        // FIXME: Use lexicographical_relation::before_strictly_prefixed here. Refs #1446
+        : _bound_weight(1), _ck(std::move(ck)) { }
     position_in_partition(range_tag_t, bound_view bv)
         : _bound_weight(weight(bv.kind)), _ck(bv.prefix) { }
     position_in_partition(after_static_row_tag_t) :
@@ -418,6 +422,14 @@ public:
 
     static position_in_partition after_all_clustered_rows() {
         return {position_in_partition::range_tag_t(), bound_view::top()};
+    }
+
+    static position_in_partition after_key(clustering_key ck) {
+        return {after_clustering_row_tag_t(), std::move(ck)};
+    }
+
+    static position_in_partition for_key(clustering_key ck) {
+        return {clustering_row_tag_t(), std::move(ck)};
     }
 
     bool is_static_row() const { return !_ck; }
