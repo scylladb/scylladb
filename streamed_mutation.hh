@@ -629,6 +629,13 @@ public:
         };
     }
 
+    static position_range all_clustered_rows() {
+        return {
+            position_in_partition::before_all_clustered_rows(),
+            position_in_partition::after_all_clustered_rows()
+        };
+    }
+
     position_range(position_range&&) = default;
     position_range& operator=(position_range&&) = default;
     position_range(const position_range&) = default;
