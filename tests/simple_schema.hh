@@ -59,6 +59,12 @@ public:
         return make_ckey(sprint("ck%010d", n));
     }
 
+    // Make a partition key which is n-th in some arbitrary sequence of keys.
+    // There is no particular order for the keys, they're not in ring order.
+    dht::decorated_key make_pkey(uint32_t n) {
+        return make_pkey(sprint("pk%010d", n));
+    }
+
     dht::decorated_key make_pkey(sstring pk) {
         auto key = partition_key::from_single_value(*_s, data_value(pk).serialize());
         return dht::global_partitioner().decorate_key(*_s, key);
