@@ -335,9 +335,9 @@ shared_ptr<transport::event::schema_change> create_view_statement::change_event(
     return make_shared<transport::event::schema_change>(transport::event::schema_change::change_type::CREATED, transport::event::schema_change::target_type::TABLE, keyspace(), column_family());
 }
 
-shared_ptr<cql3::statements::prepared_statement>
+std::unique_ptr<cql3::statements::prepared_statement>
 create_view_statement::prepare(database& db, cql_stats& stats) {
-    return make_shared<prepared_statement>(make_shared<create_view_statement>(*this));
+    return std::make_unique<prepared_statement>(make_shared<create_view_statement>(*this));
 }
 
 }

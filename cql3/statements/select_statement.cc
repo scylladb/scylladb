@@ -424,7 +424,7 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
     , _limit(std::move(limit))
 { }
 
-::shared_ptr<prepared_statement> select_statement::prepare(database& db, cql_stats& stats, bool for_view) {
+std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_stats& stats, bool for_view) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto bound_names = get_bound_variables();
 
@@ -460,7 +460,7 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
         prepare_limit(db, bound_names),
         stats);
 
-    return ::make_shared<prepared>(std::move(stmt), std::move(*bound_names));
+    return std::make_unique<prepared>(std::move(stmt), std::move(*bound_names));
 }
 
 ::shared_ptr<restrictions::statement_restrictions>

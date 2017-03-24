@@ -156,9 +156,9 @@ future<bool> create_type_statement::announce_migration(distributed<service::stor
     return service::get_local_migration_manager().announce_new_type(type, is_local_only).then([] { return true; });
 }
 
-shared_ptr<cql3::statements::prepared_statement>
+std::unique_ptr<cql3::statements::prepared_statement>
 create_type_statement::prepare(database& db, cql_stats& stats) {
-    return make_shared<prepared_statement>(make_shared<create_type_statement>(*this));
+    return std::make_unique<prepared_statement>(make_shared<create_type_statement>(*this));
 }
 
 }

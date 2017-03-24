@@ -128,9 +128,9 @@ private:
     };
 #endif
 
-    std::unordered_map<bytes, ::shared_ptr<statements::prepared_statement>> _prepared_statements;
-    std::unordered_map<int32_t, ::shared_ptr<statements::prepared_statement>> _thrift_prepared_statements;
-    std::unordered_map<sstring, ::shared_ptr<statements::prepared_statement>> _internal_statements;
+    std::unordered_map<bytes, std::unique_ptr<statements::prepared_statement>> _prepared_statements;
+    std::unordered_map<int32_t, std::unique_ptr<statements::prepared_statement>> _thrift_prepared_statements;
+    std::unordered_map<sstring, std::unique_ptr<statements::prepared_statement>> _internal_statements;
 #if 0
 
     // A map for prepared statements used internally (which we don't want to mix with user statement, in particular we don't
@@ -221,20 +221,20 @@ private:
     }
 #endif
 public:
-    ::shared_ptr<statements::prepared_statement> get_prepared(const bytes& id) {
+    statements::prepared_statement::checked_weak_ptr get_prepared(const bytes& id) {
         auto it = _prepared_statements.find(id);
         if (it == _prepared_statements.end()) {
-            return ::shared_ptr<statements::prepared_statement>{};
+            return statements::prepared_statement::checked_weak_ptr();
         }
-        return it->second;
+        return it->second->checked_weak_from_this();
     }
 
-    ::shared_ptr<statements::prepared_statement> get_prepared_for_thrift(int32_t id) {
+    statements::prepared_statement::checked_weak_ptr get_prepared_for_thrift(int32_t id) {
         auto it = _thrift_prepared_statements.find(id);
         if (it == _thrift_prepared_statements.end()) {
-            return ::shared_ptr<statements::prepared_statement>{};
+            return statements::prepared_statement::checked_weak_ptr();
         }
-        return it->second;
+        return it->second->checked_weak_from_this();
     }
 #if 0
     public static void validateKey(ByteBuffer key) throws InvalidRequestException
@@ -340,23 +340,23 @@ public:
     }
 #endif
 private:
-    query_options make_internal_options(::shared_ptr<statements::prepared_statement>, const std::initializer_list<data_value>&, db::consistency_level = db::consistency_level::ONE);
+    query_options make_internal_options(const statements::prepared_statement::checked_weak_ptr& p, const std::initializer_list<data_value>&, db::consistency_level = db::consistency_level::ONE);
 public:
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const sstring& query_string,
             const std::initializer_list<data_value>& = { });
 
-    ::shared_ptr<statements::prepared_statement> prepare_internal(const sstring& query);
+    statements::prepared_statement::checked_weak_ptr prepare_internal(const sstring& query);
 
     future<::shared_ptr<untyped_result_set>> execute_internal(
-            ::shared_ptr<statements::prepared_statement>,
+            statements::prepared_statement::checked_weak_ptr p,
             const std::initializer_list<data_value>& = { });
 
     future<::shared_ptr<untyped_result_set>> process(
                     const sstring& query_string,
                     db::consistency_level, const std::initializer_list<data_value>& = { }, bool cache = false);
     future<::shared_ptr<untyped_result_set>> process(
-                    ::shared_ptr<statements::prepared_statement>,
+                    statements::prepared_statement::checked_weak_ptr p,
                     db::consistency_level, const std::initializer_list<data_value>& = { });
 
     /*
@@ -448,7 +448,7 @@ private:
     get_stored_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, bool for_thrift);
 
     future<::shared_ptr<transport::messages::result_message::prepared>>
-    store_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, ::shared_ptr<statements::prepared_statement> prepared, bool for_thrift);
+    store_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, std::unique_ptr<statements::prepared_statement> prepared, bool for_thrift);
 
     // Erases the statements for which filter returns true.
     template <typename Pred>
@@ -500,7 +500,7 @@ public:
     future<::shared_ptr<transport::messages::result_message>> process_batch(::shared_ptr<statements::batch_statement>,
             service::query_state& query_state, query_options& options);
 
-    ::shared_ptr<statements::prepared_statement> get_statement(const std::experimental::string_view& query,
+    std::unique_ptr<statements::prepared_statement> get_statement(const std::experimental::string_view& query,
             const service::client_state& client_state);
     static ::shared_ptr<statements::raw::parsed_statement> parse_statement(const std::experimental::string_view& query);
 

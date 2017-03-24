@@ -924,12 +924,14 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
     for ([[gnu::unused]] auto i : boost::irange(0u, n)) {
         const auto kind = read_byte(buf);
 
-        ::shared_ptr<cql3::statements::prepared_statement> ps;
+        std::unique_ptr<cql3::statements::prepared_statement> stmt_ptr;
+        cql3::statements::prepared_statement::checked_weak_ptr ps;
 
         switch (kind) {
         case 0: {
             auto query = read_long_string_view(buf).to_string();
-            ps = _server._query_processor.local().get_statement(query, client_state);
+            stmt_ptr = _server._query_processor.local().get_statement(query, client_state);
+            ps = stmt_ptr->checked_weak_from_this();
             break;
         }
         case 1: {
@@ -1114,7 +1116,6 @@ public:
     }
 
     virtual void visit(const messages::result_message::prepared::cql& m) override {
-        auto prepared = m.get_prepared();
         _response->write_int(0x0004);
         _response->write_short_bytes(m.get_id());
         _response->write(*m.metadata(), _version);

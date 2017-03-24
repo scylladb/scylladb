@@ -366,9 +366,9 @@ shared_ptr<transport::event::schema_change> alter_table_statement::change_event(
         transport::event::schema_change::target_type::TABLE, keyspace(), column_family());
 }
 
-shared_ptr<cql3::statements::prepared_statement>
+std::unique_ptr<cql3::statements::prepared_statement>
 cql3::statements::alter_table_statement::prepare(database& db, cql_stats& stats) {
-    return make_shared<prepared_statement>(make_shared<alter_table_statement>(*this));
+    return std::make_unique<prepared_statement>(make_shared<alter_table_statement>(*this));
 }
 
 }

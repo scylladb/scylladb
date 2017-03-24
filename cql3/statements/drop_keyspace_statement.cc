@@ -98,9 +98,9 @@ shared_ptr<transport::event::schema_change> drop_keyspace_statement::change_even
 
 }
 
-shared_ptr<cql3::statements::prepared_statement>
+std::unique_ptr<cql3::statements::prepared_statement>
 drop_keyspace_statement::prepare(database& db, cql_stats& stats) {
-    return make_shared<prepared_statement>(make_shared<drop_keyspace_statement>(*this));
+    return std::make_unique<prepared_statement>(make_shared<drop_keyspace_statement>(*this));
 }
 
 }

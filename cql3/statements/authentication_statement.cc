@@ -46,9 +46,9 @@ uint32_t cql3::statements::authentication_statement::get_bound_terms() {
     return 0;
 }
 
-::shared_ptr<cql3::statements::prepared_statement> cql3::statements::authentication_statement::prepare(
+std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::authentication_statement::prepare(
                 database& db, cql_stats& stats) {
-    return ::make_shared<prepared>(this->shared_from_this());
+    return std::make_unique<prepared>(this->shared_from_this());
 }
 
 bool cql3::statements::authentication_statement::uses_function(

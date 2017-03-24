@@ -112,9 +112,9 @@ shared_ptr<transport::event::schema_change> alter_view_statement::change_event()
                                              column_family());
 }
 
-shared_ptr<cql3::statements::prepared_statement>
+std::unique_ptr<cql3::statements::prepared_statement>
 alter_view_statement::prepare(database& db, cql_stats& stats) {
-    return make_shared<prepared_statement>(make_shared<alter_view_statement>(*this));
+    return std::make_unique<prepared_statement>(make_shared<alter_view_statement>(*this));
 }
 
 }

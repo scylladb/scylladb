@@ -123,9 +123,9 @@ shared_ptr<transport::event::schema_change> create_keyspace_statement::change_ev
     return make_shared<transport::event::schema_change>(transport::event::schema_change::change_type::CREATED, keyspace());
 }
 
-shared_ptr<cql3::statements::prepared_statement>
+std::unique_ptr<cql3::statements::prepared_statement>
 cql3::statements::create_keyspace_statement::prepare(database& db, cql_stats& stats) {
-    return make_shared<prepared_statement>(make_shared<create_keyspace_statement>(*this));
+    return std::make_unique<prepared_statement>(make_shared<create_keyspace_statement>(*this));
 }
 
 }
