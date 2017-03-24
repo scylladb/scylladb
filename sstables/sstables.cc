@@ -1479,6 +1479,35 @@ void sstable::write_row_marker(file_writer& out, const row_marker& marker, const
     }
 }
 
+void sstable::write_deletion_time(file_writer& out, const tombstone t) {
+    uint64_t timestamp = t.timestamp;
+    uint32_t deletion_time = t.deletion_time.time_since_epoch().count();
+
+    update_cell_stats(_c_stats, timestamp);
+    _c_stats.update_max_local_deletion_time(deletion_time);
+    _c_stats.tombstone_histogram.update(deletion_time);
+
+    write(out, deletion_time, timestamp);
+}
+
+void sstable::write_row_tombstone(file_writer& out, const composite& key, const row_tombstone t) {
+    if (!t) {
+        return;
+    }
+
+    auto write_tombstone = [&] (tombstone t, column_mask mask) {
+        write_column_name(out, key, {}, composite::eoc::start);
+        write(out, mask);
+        write_column_name(out, key, {}, composite::eoc::end);
+        write_deletion_time(out, t);
+    };
+
+    write_tombstone(t.regular(), column_mask::range_tombstone);
+    if (t.is_shadowable()) {
+        write_tombstone(t.shadowable().tomb(), column_mask::shadowable);
+    }
+}
+
 void sstable::write_range_tombstone(file_writer& out,
         const composite& start,
         bound_kind start_kind,
@@ -1500,14 +1529,7 @@ void sstable::write_range_tombstone(file_writer& out,
                     ? composite::eoc::start
                     : composite::eoc::end;
     write_column_name(out, end, suffix, end_marker);
-    uint64_t timestamp = t.timestamp;
-    uint32_t deletion_time = t.deletion_time.time_since_epoch().count();
-
-    update_cell_stats(_c_stats, timestamp);
-    _c_stats.update_max_local_deletion_time(deletion_time);
-    _c_stats.tombstone_histogram.update(deletion_time);
-
-    write(out, deletion_time, timestamp);
+    write_deletion_time(out, t);
 }
 
 void sstable::write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation_view collection) {
@@ -1535,8 +1557,7 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
     // Before writing cells, range tombstone must be written if the row has any (deletable_row::t).
     if (clustered_row.tomb()) {
         maybe_flush_pi_block(out, clustering_key, {});
-        //FIXME: Write a row_tombstone
-        write_range_tombstone(out, clustering_key, clustering_key, {}, clustered_row.tomb().tomb());
+        write_row_tombstone(out, clustering_key, clustered_row.tomb());
         // Because we currently may break a partition to promoted-index blocks
         // in the middle of a clustered row, we also need to track the current
         // row's tombstone - not just range tombstones - which may effect the

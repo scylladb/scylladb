@@ -593,6 +593,19 @@ public:
         return proceed::no;
     }
 
+    virtual proceed consume_shadowable_row_tombstone(bytes_view col_name, sstables::deletion_time deltime) override {
+        if (_skip_partition) {
+            return proceed::yes;
+        }
+        auto key = composite_view(column::fix_static_name(*_schema, col_name)).explode();
+        auto ck = clustering_key_prefix::from_exploded(std::move(key));
+        auto ret = flush_if_needed(std::move(ck));
+        if (!_skip_in_progress) {
+            _in_progress->as_mutable_clustering_row().apply(shadowable_tombstone(tombstone(deltime)));
+        }
+        return ret;
+    }
+
     static bound_kind start_marker_to_bound_kind(bytes_view component) {
         auto found = composite::eoc(component.back());
         switch (found) {

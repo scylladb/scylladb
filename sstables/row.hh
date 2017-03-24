@@ -75,6 +75,9 @@ public:
     // Consume a deleted cell (i.e., a cell tombstone).
     virtual proceed consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) = 0;
 
+    // Consume one row tombstone.
+    virtual proceed consume_shadowable_row_tombstone(bytes_view col_name, sstables::deletion_time deltime) = 0;
+
     // Consume one range tombstone.
     virtual proceed consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,

@@ -67,6 +67,7 @@ private:
     uint32_t _ttl, _expiration;
 
     bool _read_partial_row = false;
+    bool _shadowable;
 
 public:
     bool non_consuming() const {
@@ -188,9 +189,11 @@ public:
                 COUNTER_MASK = 0x04,
                 COUNTER_UPDATE_MASK = 0x08,
                 RANGE_TOMBSTONE_MASK = 0x10,
+                SHADOWABLE_MASK = 0x40,
             };
-            if (mask & RANGE_TOMBSTONE_MASK) {
+            if (mask & (RANGE_TOMBSTONE_MASK | SHADOWABLE_MASK)) {
                 _state = state::RANGE_TOMBSTONE;
+                _shadowable = (mask & SHADOWABLE_MASK) != 0;
             } else if (mask & COUNTER_MASK) {
                 _deleted = false;
                 _counter = true;
@@ -337,8 +340,9 @@ public:
             deletion_time del;
             del.local_deletion_time = _u32;
             del.marked_for_delete_at = _u64;
-            auto ret = _consumer.consume_range_tombstone(to_bytes_view(_key),
-                    to_bytes_view(_val), del);
+            auto ret = _shadowable
+                     ? _consumer.consume_shadowable_row_tombstone(to_bytes_view(_key), del)
+                     : _consumer.consume_range_tombstone(to_bytes_view(_key), to_bytes_view(_val), del);
             _key.release();
             _val.release();
             _state = state::ATOM_START;
