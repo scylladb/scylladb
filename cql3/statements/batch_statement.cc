@@ -263,7 +263,7 @@ void batch_statement::verify_batch_size(const std::vector<mutation>& mutations) 
 struct batch_statement_executor {
     static auto get() { return &batch_statement::do_execute; }
 };
-static thread_local auto batch_stage = seastar::make_execution_stage(batch_statement_executor::get());
+static thread_local auto batch_stage = seastar::make_execution_stage("cql3_batch", batch_statement_executor::get());
 
 future<shared_ptr<transport::messages::result_message>> batch_statement::execute(
         distributed<service::storage_proxy>& storage, service::query_state& state, const query_options& options) {

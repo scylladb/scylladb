@@ -621,7 +621,7 @@ future<> cql_server::connection::shutdown()
 struct process_request_executor {
     static auto get() { return &cql_server::connection::process_request_one; }
 };
-static thread_local auto process_request_stage = seastar::make_execution_stage(process_request_executor::get());
+static thread_local auto process_request_stage = seastar::make_execution_stage("transport", process_request_executor::get());
 
 future<> cql_server::connection::process_request() {
     return read_frame().then_wrapped([this] (future<std::experimental::optional<cql_binary_frame_v3>>&& v) {

@@ -1996,7 +1996,7 @@ static do_mutation_query(schema_ptr s,
     return consume_flattened(std::move(reader), std::move(cfq), is_reversed);
 }
 
-static thread_local auto mutation_query_stage = seastar::make_execution_stage(do_mutation_query);
+static thread_local auto mutation_query_stage = seastar::make_execution_stage("mutation_query", do_mutation_query);
 
 future<reconcilable_result>
 mutation_query(schema_ptr s,

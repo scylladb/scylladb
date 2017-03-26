@@ -231,7 +231,7 @@ bool select_statement::needs_post_query_ordering() const {
 struct select_statement_executor {
     static auto get() { return &select_statement::do_execute; }
 };
-static thread_local auto select_stage = seastar::make_execution_stage(select_statement_executor::get());
+static thread_local auto select_stage = seastar::make_execution_stage("cql3_select", select_statement_executor::get());
 
 future<shared_ptr<transport::messages::result_message>>
 select_statement::execute(distributed<service::storage_proxy>& proxy,

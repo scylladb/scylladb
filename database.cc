@@ -2512,7 +2512,7 @@ column_family::as_mutation_source() const {
     });
 }
 
-static thread_local auto data_query_stage = seastar::make_execution_stage(&column_family::query);
+static thread_local auto data_query_stage = seastar::make_execution_stage("data_query", &column_family::query);
 
 future<lw_shared_ptr<query::result>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state,
@@ -2931,7 +2931,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_cloc
 struct db_apply_executor {
     static auto get() { return &database::do_apply; }
 };
-static thread_local auto apply_stage = seastar::make_execution_stage(db_apply_executor::get());
+static thread_local auto apply_stage = seastar::make_execution_stage("db_apply", db_apply_executor::get());
 
 future<> database::apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
     if (dblog.is_enabled(logging::log_level::trace)) {

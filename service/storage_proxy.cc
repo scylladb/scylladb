@@ -1253,7 +1253,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 struct mutate_executor {
     static auto get() { return &storage_proxy::do_mutate; }
 };
-static thread_local auto mutate_stage = seastar::make_execution_stage(mutate_executor::get());
+static thread_local auto mutate_stage = seastar::make_execution_stage("storage_proxy_mutate", mutate_executor::get());
 
 /**
  * Use this method to have these Mutations applied

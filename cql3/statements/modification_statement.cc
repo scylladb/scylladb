@@ -464,7 +464,7 @@ modification_statement::build_partition_keys(const query_options& options) {
 struct modification_statement_executor {
     static auto get() { return &modification_statement::do_execute; }
 };
-static thread_local auto modify_stage = seastar::make_execution_stage(modification_statement_executor::get());
+static thread_local auto modify_stage = seastar::make_execution_stage("cql3_modification", modification_statement_executor::get());
 
 future<::shared_ptr<transport::messages::result_message>>
 modification_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) {
