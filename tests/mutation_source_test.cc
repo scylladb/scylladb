@@ -918,12 +918,13 @@ public:
                     if (col.is_atomic()) {
                         return atomic_cell::make_live(timestamp_dist(_gen), _blobs[value_blob_index_dist(_gen)]);
                     }
-                    static thread_local std::uniform_int_distribution<int> dist{1, 13};
+                    static thread_local std::uniform_int_distribution<int> element_dist{1, 13};
+                    static thread_local std::uniform_int_distribution<int64_t> uuid_ts_dist{-12219292800000L, -12219292800000L + 100};
                     collection_type_impl::mutation m;
-                    auto num_cells = dist(_gen);
+                    auto num_cells = element_dist(_gen);
                     m.cells.reserve(num_cells);
                     for (auto i = 0; i < num_cells; ++i) {
-                        auto uuid = utils::UUID_gen::get_time_UUID_bytes();
+                        auto uuid = utils::UUID_gen::min_time_UUID(uuid_ts_dist(_gen)).to_bytes();
                         m.cells.emplace_back(
                                 bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size()),
                                 atomic_cell::make_live(timestamp_dist(_gen), _blobs[value_blob_index_dist(_gen)]));
