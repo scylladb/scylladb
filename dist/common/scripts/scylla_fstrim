@@ -46,7 +46,9 @@ def main():
     mountpoints.add(find_mount_point(cfg['commitlog_directory']))
     for d in mountpoints:
         print("Running fstrim on {} ...".format(d))
-        subprocess.check_call(["fstrim", d])
+        res = subprocess.call(["fstrim", d])
+        if res != 0:
+            print("{} doesn't support TRIM.".format(d))
 
 if __name__ == "__main__":
     main()
