@@ -82,17 +82,6 @@ query_options::query_options(db::consistency_level consistency,
 {
 }
 
-query_options::query_options(query_options&& o, std::vector<std::vector<cql3::raw_value_view>> value_views)
-    : query_options(std::move(o))
-{
-    std::vector<query_options> tmp;
-    tmp.reserve(value_views.size());
-    std::transform(value_views.begin(), value_views.end(), std::back_inserter(tmp), [this](auto& vals) {
-        return query_options(_consistency, {}, vals, _skip_metadata, _options, _cql_serialization_format);
-    });
-    _batch_options = std::move(tmp);
-}
-
 query_options::query_options(db::consistency_level cl, std::vector<cql3::raw_value> values)
     : query_options(
           cl,

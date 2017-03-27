@@ -41,6 +41,7 @@
 
 #pragma once
 
+#include <seastar/util/gcc6-concepts.hh>
 #include "timestamp.hh"
 #include "bytes.hh"
 #include "db/consistency_level.hh"
@@ -77,6 +78,26 @@ private:
     const specific_options _options;
     cql_serialization_format _cql_serialization_format;
     std::experimental::optional<std::vector<query_options>> _batch_options;
+
+private:
+    /**
+     * @brief Batch query_options constructor.
+     *
+     * Requirements:
+     *   - @tparam OneMutationDataRange has a begin() and end() iterators.
+     *   - The values of @tparam OneMutationDataRange are of either raw_value_view or raw_value types.
+     *
+     * @param o Base query_options object. query_options objects for each statement in the batch will derive the values from it.
+     * @param values_ranges a vector of values ranges for each statement in the batch.
+     */
+    template<typename OneMutationDataRange>
+    GCC6_CONCEPT( requires requires (OneMutationDataRange range) {
+         std::begin(range);
+         std::end(range);
+    } && ( requires (OneMutationDataRange range) { { *range.begin() } -> raw_value_view; } ||
+           requires (OneMutationDataRange range) { { *range.begin() } -> raw_value; } ) )
+    explicit query_options(query_options&& o, std::vector<OneMutationDataRange> values_ranges);
+
 public:
     query_options(query_options&&) = default;
     query_options(const query_options&) = delete;
@@ -94,8 +115,25 @@ public:
                            specific_options options,
                            cql_serialization_format sf);
 
-    // Batch query_options constructor
-    explicit query_options(query_options&&, std::vector<std::vector<cql3::raw_value_view>> value_views);
+    /**
+     * @brief Batch query_options factory.
+     *
+     * Requirements:
+     *   - @tparam OneMutationDataRange has a begin() and end() iterators.
+     *   - The values of @tparam OneMutationDataRange are of either raw_value_view or raw_value types.
+     *
+     * @param o Base query_options object. query_options objects for each statement in the batch will derive the values from it.
+     * @param values_ranges a vector of values ranges for each statement in the batch.
+     */
+    template<typename OneMutationDataRange>
+    GCC6_CONCEPT( requires requires (OneMutationDataRange range) {
+         std::begin(range);
+         std::end(range);
+    } && ( requires (OneMutationDataRange range) { { *range.begin() } -> raw_value_view; } ||
+           requires (OneMutationDataRange range) { { *range.begin() } -> raw_value; } ) )
+    static query_options make_batch_options(query_options&& o, std::vector<OneMutationDataRange> values_ranges) {
+        return query_options(std::move(o), std::move(values_ranges));
+    }
 
     // It can't be const because of prepare()
     static thread_local query_options DEFAULT;
@@ -129,5 +167,22 @@ public:
 private:
     void fill_value_views();
 };
+
+template<typename OneMutationDataRange>
+GCC6_CONCEPT( requires requires (OneMutationDataRange range) {
+     std::begin(range);
+     std::end(range);
+} && ( requires (OneMutationDataRange range) { { *range.begin() } -> raw_value_view; } ||
+       requires (OneMutationDataRange range) { { *range.begin() } -> raw_value; } ) )
+query_options::query_options(query_options&& o, std::vector<OneMutationDataRange> values_ranges)
+    : query_options(std::move(o))
+{
+    std::vector<query_options> tmp;
+    tmp.reserve(values_ranges.size());
+    std::transform(values_ranges.begin(), values_ranges.end(), std::back_inserter(tmp), [this](auto& values_range) {
+        return query_options(_consistency, {}, std::move(values_range), _skip_metadata, _options, _cql_serialization_format);
+    });
+    _batch_options = std::move(tmp);
+}
 
 }

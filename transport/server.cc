@@ -971,7 +971,7 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
     auto q_state = std::make_unique<cql_query_state>(client_state);
     auto& query_state = q_state->query_state;
     // #563. CQL v2 encodes query_options in v1 format for batch requests.
-    q_state->options = std::make_unique<cql3::query_options>(std::move(*read_options(buf, _version < 3 ? 1 : _version)), std::move(values));
+    q_state->options = std::make_unique<cql3::query_options>(cql3::query_options::make_batch_options(std::move(*read_options(buf, _version < 3 ? 1 : _version)), std::move(values)));
     auto& options = *q_state->options;
 
     tracing::set_consistency_level(client_state.get_trace_state(), options.get_consistency());
