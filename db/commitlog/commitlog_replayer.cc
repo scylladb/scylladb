@@ -185,6 +185,24 @@ future<> db::commitlog_replayer::impl::init() {
             });
         });
     }).finally([this] {
+        // bugfix: the above map-reduce will not_ detect if sstables
+        // are _missing_ from a CF. And because of re-sharding, we can't
+        // just insert initial zeros into the maps, because we don't know
+        // how many shards there we're last time.
+        // However, this only affects global min pos, since
+        // for each CF, the worst that happens is that we have a missing
+        // entry -> empty replay_pos == min value. But calculating
+        // global min pos will be off, since we will only base it on
+        // existing sstables-per-shard.
+        // So, go through all CF:s and check, if a shard mapping does not
+        // have data for it, assume we must set global pos to zero.
+        for (auto&p : _qp.local().db().local().get_column_families()) {
+            for (auto&p1 : _rpm) { // for each shard
+                if (!p1.second.count(p.first)) {
+                    _min_pos[p1.first] = replay_position();
+                }
+            }
+        }
         for (auto&p : _min_pos) {
             logger.debug("minimum position for shard {}: {}", p.first, p.second);
         }
@@ -352,7 +370,8 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files) {
                 // TODO: or something. For now, we do this serialized per shard,
                 // to reduce mutation congestion. We could probably (says avi)
                 // do 2 segments in parallel or something, but lets use this first.
-                return do_for_each(map->begin(id), map->end(id), [this, total](const std::pair<unsigned, sstring>& p) {
+                auto range = map->equal_range(id);
+                return do_for_each(range.first, range.second, [this, total](const std::pair<unsigned, sstring>& p) {
                     auto&f = p.second;
                     logger.debug("Replaying {}", f);
                     return _impl->recover(f).then([f, total](impl::stats stats) {
