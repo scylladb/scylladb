@@ -2388,14 +2388,12 @@ bool database::update_column_family(schema_ptr new_schema) {
     return columns_changed;
 }
 
-future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf) {
-    auto uuid = find_uuid(ks_name, cf_name);
-    auto& ks = find_keyspace(ks_name);
-    auto cf = _column_families.at(uuid);
-    auto&& s = cf->schema();
-    _column_families.erase(uuid);
+void database::remove(const column_family& cf) {
+    auto s = cf.schema();
+    auto& ks = find_keyspace(s->ks_name());
+    _column_families.erase(s->id());
     ks.metadata()->remove_column_family(s);
-    _ks_cf_to_uuid.erase(std::make_pair(ks_name, cf_name));
+    _ks_cf_to_uuid.erase(std::make_pair(s->ks_name(), s->cf_name()));
     if (s->is_view()) {
         try {
             find_column_family(s->view_info()->base_id()).remove_view(view_ptr(s));
@@ -2403,6 +2401,13 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
             // Drop view mutations received after base table drop.
         }
     }
+}
+
+future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf) {
+    auto uuid = find_uuid(ks_name, cf_name);
+    auto cf = _column_families.at(uuid);
+    remove(*cf);
+    auto& ks = find_keyspace(ks_name);
     return truncate(ks, *cf, std::move(tsf)).then([this, cf] {
         return cf->stop();
     }).then([this, cf] {

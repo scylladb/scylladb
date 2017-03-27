@@ -1277,6 +1277,7 @@ public:
 
     bool update_column_family(schema_ptr s);
     future<> drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func);
+    void remove(const column_family&);
 
     const logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_manager.region_group();
