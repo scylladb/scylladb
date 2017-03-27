@@ -1614,7 +1614,7 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
         bool failed = false;
 
         work(file f, position_type o = 0)
-                : f(f), fin(make_file_input_stream(f, o, make_file_input_stream_options())), start_off(o) {
+                : f(f), fin(make_file_input_stream(f, 0, make_file_input_stream_options())), start_off(o) {
         }
         work(work&&) = default;
 
