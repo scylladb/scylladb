@@ -32,7 +32,7 @@ namespace sstables {
 class key_view {
     bytes_view _bytes;
 public:
-    key_view(bytes_view b) : _bytes(b) {}
+    explicit key_view(bytes_view b) : _bytes(b) {}
     key_view() : _bytes() {}
 
     std::vector<bytes> explode(const schema& s) const {

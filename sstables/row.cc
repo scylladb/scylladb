@@ -131,7 +131,7 @@ public:
             deletion_time del;
             del.local_deletion_time = _u32;
             del.marked_for_delete_at = _u64;
-            auto ret = _consumer.consume_row_start(to_bytes_view(_key), del);
+            auto ret = _consumer.consume_row_start(key_view(to_bytes_view(_key)), del);
             // after calling the consume function, we can release the
             // buffers we held for it.
             _key.release();

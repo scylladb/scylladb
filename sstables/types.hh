@@ -75,7 +75,7 @@ public:
     }
 
     key_view get_key() const {
-        return { get_key_bytes() };
+        return key_view{get_key_bytes()};
     }
 
     uint64_t position() const {
@@ -96,7 +96,7 @@ struct summary_entry {
     uint64_t position;
 
     key_view get_key() const {
-        return { key };
+        return key_view{key};
     }
 
     bool operator==(const summary_entry& x) const {
