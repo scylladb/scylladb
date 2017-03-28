@@ -351,6 +351,7 @@ class ring_position {
 public:
     enum class token_bound : int8_t { start = -1, end = 1 };
 private:
+    friend class ring_position_comparator;
     dht::token _token;
     token_bound _token_bound; // valid when !_key
     std::experimental::optional<partition_key> _key;

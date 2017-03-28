@@ -299,8 +299,8 @@ ring_position_range_vector_sharder::next(const schema& s) {
     return ret;
 }
 
-int ring_position_comparator::operator()(const ring_position& lh, const ring_position& rh) const {
-    return lh.tri_compare(s, rh);
+int ring_position::tri_compare(const schema& s, const ring_position& o) const {
+    return ring_position_comparator(s)(*this, o);
 }
 
 int token_comparator::operator()(const token& t1, const token& t2) const {
@@ -315,21 +315,21 @@ bool ring_position::less_compare(const schema& s, const ring_position& other) co
     return tri_compare(s, other) < 0;
 }
 
-int ring_position::tri_compare(const schema& s, const ring_position& o) const {
-    if (_token != o._token) {
-        return _token < o._token ? -1 : 1;
+int ring_position_comparator::operator()(const ring_position& lh, const ring_position& rh) const {
+    if (lh._token != rh._token) {
+        return lh._token < rh._token ? -1 : 1;
     }
 
-    if (_key && o._key) {
-        return _key->legacy_tri_compare(s, *o._key);
+    if (lh._key && rh._key) {
+        return lh._key->legacy_tri_compare(s, *rh._key);
     }
 
-    if (!_key && !o._key) {
-        return relation_to_keys() - o.relation_to_keys();
-    } else if (!_key) {
-        return relation_to_keys();
+    if (!lh._key && !rh._key) {
+        return lh.relation_to_keys() - rh.relation_to_keys();
+    } else if (!lh._key) {
+        return lh.relation_to_keys();
     } else {
-        return -o.relation_to_keys();
+        return -rh.relation_to_keys();
     }
 }
 
