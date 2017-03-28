@@ -78,6 +78,14 @@ batch_statement::batch_statement(int bound_terms, type type_,
 {
 }
 
+batch_statement::batch_statement(type type_,
+                                 std::vector<shared_ptr<modification_statement>> statements,
+                                 std::unique_ptr<attributes> attrs,
+                                 cql_stats& stats)
+    : batch_statement(-1, type_, std::move(statements), std::move(attrs), stats)
+{
+}
+
 bool batch_statement::uses_function(const sstring& ks_name, const sstring& function_name) const
 {
     return _attrs->uses_function(ks_name, function_name)
