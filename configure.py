@@ -649,7 +649,7 @@ warnings = [w
             for w in warnings
             if warning_supported(warning = w, compiler = args.cxx)]
 
-warnings = ' '.join(warnings)
+warnings = ' '.join(warnings + ['-Wno-error=deprecated-declarations'])
 
 dbgflag = debug_flag(args.cxx) if args.debuginfo else ''
 tests_link_rule = 'link' if args.tests_debuginfo else 'link_stripped'
