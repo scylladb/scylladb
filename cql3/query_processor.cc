@@ -212,13 +212,16 @@ query_processor::prepare(const std::experimental::string_view& query_string,
     if (existing) {
         return make_ready_future<::shared_ptr<transport::messages::result_message::prepared>>(existing);
     }
-    auto prepared = get_statement(query_string, client_state);
-    auto bound_terms = prepared->statement->get_bound_terms();
-    if (bound_terms > std::numeric_limits<uint16_t>::max()) {
-        throw exceptions::invalid_request_exception(sprint("Too many markers(?). %d markers exceed the allowed maximum of %d", bound_terms, std::numeric_limits<uint16_t>::max()));
-    }
-    assert(bound_terms == prepared->bound_names.size());
-    return store_prepared_statement(query_string, client_state.get_raw_keyspace(), std::move(prepared), for_thrift);
+
+    return futurize<::shared_ptr<transport::messages::result_message::prepared>>::apply([this, &query_string, &client_state, for_thrift] {
+        auto prepared = get_statement(query_string, client_state);
+        auto bound_terms = prepared->statement->get_bound_terms();
+        if (bound_terms > std::numeric_limits<uint16_t>::max()) {
+            throw exceptions::invalid_request_exception(sprint("Too many markers(?). %d markers exceed the allowed maximum of %d", bound_terms, std::numeric_limits<uint16_t>::max()));
+        }
+        assert(bound_terms == prepared->bound_names.size());
+        return store_prepared_statement(query_string, client_state.get_raw_keyspace(), std::move(prepared), for_thrift);
+    });
 }
 
 ::shared_ptr<transport::messages::result_message::prepared>
