@@ -319,6 +319,10 @@ public:
         : _cf(cf)
         , _what(sprint("%s.%s doesn't meet expected schema.", trace_keyspace_helper::KEYSPACE_NAME, _cf))
     { }
+    bad_column_family(const sstring& cf, const std::exception& e)
+        : _cf(cf)
+        , _what(sprint("%s.%s doesn't meet expected schema: %s", trace_keyspace_helper::KEYSPACE_NAME, _cf, e.what()))
+    { }
     const char* what() const noexcept override {
         return _what.c_str();
     }
