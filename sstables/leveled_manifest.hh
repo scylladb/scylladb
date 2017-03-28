@@ -55,12 +55,6 @@ class leveled_manifest {
      * or even OOMing when compacting highly overlapping sstables
      */
     static constexpr int MAX_COMPACTING_L0 = 32;
-    /**
-     * If we go this many rounds without compacting
-     * in the highest level, we start bringing in sstables from
-     * that level into lower level compactions
-     */
-    static constexpr int NO_COMPACTION_LIMIT = 25;
 
     schema_ptr _schema;
     std::vector<std::list<sstables::shared_sstable>> _generations;
@@ -70,6 +64,13 @@ class leveled_manifest {
 #endif
 
 public:
+    /**
+     * If we go this many rounds without compacting
+     * in the highest level, we start bringing in sstables from
+     * that level into lower level compactions
+     */
+    static constexpr int NO_COMPACTION_LIMIT = 25;
+
     static constexpr int MAX_LEVELS = 9; // log10(1000^3);
 
     leveled_manifest(column_family& cfs, int max_sstable_size_in_MB)
@@ -380,7 +381,7 @@ public:
                         if (!min || candidate_first.tri_compare(*_schema, *min) < 0) {
                             min = candidate_first;
                         }
-                        auto& candidate_last = candidate->get_first_decorated_key();
+                        auto& candidate_last = candidate->get_last_decorated_key();
                         if (!max || candidate_last.tri_compare(*_schema, *max) > 0) {
                             max = candidate_last;
                         }

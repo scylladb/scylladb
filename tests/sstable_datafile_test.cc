@@ -2128,6 +2128,45 @@ SEASTAR_TEST_CASE(leveled_07) {
     return make_ready_future<>();
 }
 
+SEASTAR_TEST_CASE(overlapping_starved_sstables_test) {
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
+
+    column_family::config cfg;
+    compaction_manager cm;
+    cell_locker_stats cl_stats;
+    cfg.enable_disk_writes = false;
+    cfg.enable_commitlog = false;
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
+    cf->mark_ready_for_writes();
+
+    auto key_and_token_pair = token_generation_for_current_shard(5);
+    auto min_key = key_and_token_pair[0].first;
+    auto max_sstable_size_in_mb = 1;
+    auto max_sstable_size_in_bytes = max_sstable_size_in_mb*1024*1024;
+
+    // we compact 2 sstables: 0->2 in L1 and 0->1 in L2, and rely on strategy
+    // to bring a sstable from level 3 that theoretically wasn't compacted
+    // for many rounds and won't introduce an overlap.
+    auto max_bytes_for_l1 = leveled_manifest::max_bytes_for_level(1, max_sstable_size_in_bytes);
+    add_sstable_for_leveled_test(cf, /*gen*/1, max_bytes_for_l1*1.1, /*level*/1, min_key, key_and_token_pair[2].first);
+    add_sstable_for_leveled_test(cf, /*gen*/2, max_sstable_size_in_bytes, /*level*/2, min_key, key_and_token_pair[1].first);
+    add_sstable_for_leveled_test(cf, /*gen*/3, max_sstable_size_in_bytes, /*level*/3, min_key, key_and_token_pair[1].first);
+
+    std::vector<stdx::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
+    std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
+    // make strategy think that level 3 wasn't compacted for many rounds
+    compaction_counter[3] = leveled_manifest::NO_COMPACTION_LIMIT+1;
+
+    auto candidates = get_candidates_for_leveled_strategy(*cf);
+    leveled_manifest manifest = leveled_manifest::create(*cf, candidates, max_sstable_size_in_mb);
+    auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
+    BOOST_REQUIRE(candidate.level == 2);
+    BOOST_REQUIRE(candidate.sstables.size() == 3);
+
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(check_overlapping) {
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
