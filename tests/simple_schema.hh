@@ -27,6 +27,7 @@
 #include "schema.hh"
 #include "keys.hh"
 #include "streamed_mutation.hh"
+#include "mutation.hh"
 
 // Helper for working with the following table:
 //
@@ -96,5 +97,15 @@ public:
 
     schema_ptr schema() {
         return _s;
+    }
+
+    // Creates a sequence of keys in ring order
+    std::vector<dht::decorated_key> make_pkeys(int n) {
+        std::vector<dht::decorated_key> keys;
+        for (int i = 0; i < n; ++i) {
+            keys.push_back(make_pkey(i));
+        }
+        std::sort(keys.begin(), keys.end(), dht::decorated_key::less_comparator(_s));
+        return keys;
     }
 };
