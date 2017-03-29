@@ -2189,7 +2189,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
         auto ksm = create_keyspace_from_schema_partition(v);
         return create_keyspace(ksm);
     }).then([&proxy, this] {
-        return do_parse_schema_tables(proxy, db::schema_tables::USERTYPES, [this, &proxy] (schema_result_value_type &v) {
+        return do_parse_schema_tables(proxy, db::schema_tables::TYPES, [this, &proxy] (schema_result_value_type &v) {
             auto&& user_types = create_types_from_schema_partition(v);
             auto& ks = this->find_keyspace(v.first);
             for (auto&& type : user_types) {
@@ -2206,7 +2206,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
             });
         });
     }).then([&proxy, this] {
-        return do_parse_schema_tables(proxy, db::schema_tables::COLUMNFAMILIES, [this, &proxy] (schema_result_value_type &v) {
+        return do_parse_schema_tables(proxy, db::schema_tables::TABLES, [this, &proxy] (schema_result_value_type &v) {
             return create_tables_from_tables_partition(proxy, v.second).then([this] (std::map<sstring, schema_ptr> tables) {
                 return parallel_for_each(tables.begin(), tables.end(), [this] (auto& t) {
                     return this->add_column_family_and_make_directory(t.second);

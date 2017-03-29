@@ -141,7 +141,7 @@ void schema::rebuild() {
     thrift()._compound = is_compound();
     thrift()._is_dynamic = clustering_key_size() > 0;
 
-    if (default_validator()->is_counter()) {
+    if (is_counter()) {
         for (auto&& cdef : boost::range::join(static_columns(), regular_columns())) {
             if (!cdef.type->is_counter()) {
                 throw exceptions::configuration_exception(sprint("Cannot add a non counter column (%s) in a counter column family", cdef.name_as_text()));
@@ -190,7 +190,6 @@ schema::schema(const raw_schema& raw, stdx::optional<raw_view_info> raw_view_inf
         };
     }())
     , _regular_columns_by_name(serialized_compare(_raw._regular_column_name_type))
-    , _is_counter(_raw._default_validator->is_counter())
 {
     struct name_compare {
         data_type type;
@@ -226,7 +225,7 @@ schema::schema(const raw_schema& raw, stdx::optional<raw_view_info> raw_view_inf
 
         auto dropped_at_it = _raw._dropped_columns.find(def.name_as_text());
         if (dropped_at_it != _raw._dropped_columns.end()) {
-            def._dropped_at = std::max(def._dropped_at, dropped_at_it->second);
+            def._dropped_at = std::max(def._dropped_at, dropped_at_it->second.timestamp);
         }
 
         def._thrift_bits = column_definition::thrift_bits();
@@ -302,7 +301,6 @@ schema::schema(const schema& o)
     : _raw(o._raw)
     , _offsets(o._offsets)
     , _regular_columns_by_name(serialized_compare(_raw._regular_column_name_type))
-    , _is_counter(o._is_counter)
 {
     rebuild();
     if (o.is_view()) {
@@ -368,7 +366,9 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._dropped_columns == y._raw._dropped_columns
         && x._raw._collections == y._raw._collections
         && indirect_equal_to<std::unique_ptr<::view_info>>()(x._view_info, y._view_info)
-        && x._raw._indices_by_name == y._raw._indices_by_name;
+        && x._raw._indices_by_name == y._raw._indices_by_name
+        && x._raw._is_counter == y._raw._is_counter
+        ;
 #if 0
         && Objects.equal(triggers, other.triggers)
 #endif
@@ -464,7 +464,6 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
     os << ",readRepairChance=" << s._raw._read_repair_chance;
     os << ",dcLocalReadRepairChance=" << s._raw._dc_local_read_repair_chance;
     os << ",gcGraceSeconds=" << s._raw._gc_grace_seconds;
-    os << ",defaultValidator=" << s._raw._default_validator->name();
     os << ",keyValidator=" << s.thrift_key_validator();
     os << ",minCompactionThreshold=" << s._raw._min_compaction_threshold;
     os << ",maxCompactionThreshold=" << s._raw._max_compaction_threshold;
@@ -513,7 +512,7 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
         if (n++ != 0) {
             os << ", ";
         }
-        os << dc.first << " : " << dc.second;
+        os << dc.first << " : { " << dc.second.type->name() << ", " << dc.second.timestamp << " }";
     }
     os << "}";
     os << ",collections={";
@@ -648,8 +647,8 @@ schema_builder& schema_builder::with_column(bytes name, data_type type, column_k
     if (type->is_multi_cell()) {
         with_collection(name, type);
     } else if (type->is_counter()) {
-        set_default_validator(counter_type);
-    }
+	    set_is_counter(true);
+	}
     return *this;
 }
 
@@ -660,19 +659,23 @@ schema_builder& schema_builder::without_column(bytes name)
     });
     assert(it != _raw._columns.end());
     auto now = api::new_timestamp();
-    auto ret = _raw._dropped_columns.emplace(it->name_as_text(), now);
+    auto ret = _raw._dropped_columns.emplace(it->name_as_text(), schema::dropped_column{it->type, now});
     if (!ret.second) {
-        ret.first->second = std::max(ret.first->second, now);
+        ret.first->second.timestamp = std::max(ret.first->second.timestamp, now);
     }
     _raw._columns.erase(it);
     return *this;
 }
 
-schema_builder& schema_builder::without_column(sstring name, api::timestamp_type timestamp)
+schema_builder& schema_builder::without_column(sstring name, api::timestamp_type timestamp) {
+    return without_column(std::move(name), bytes_type, timestamp);
+}
+
+schema_builder& schema_builder::without_column(sstring name, data_type type, api::timestamp_type timestamp)
 {
-    auto ret = _raw._dropped_columns.emplace(name, timestamp);
+    auto ret = _raw._dropped_columns.emplace(name, schema::dropped_column{type, timestamp});
     if (!ret.second) {
-        ret.first->second = std::max(ret.first->second, timestamp);
+        ret.first->second.timestamp = std::max(ret.first->second.timestamp, timestamp);
     }
     return *this;
 }
@@ -762,15 +765,64 @@ sstring schema_builder::default_names::compact_value_name() {
 }
 
 void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
-    if (raw._is_dense) {
-        auto regular_cols = std::count_if(raw._columns.begin(), raw._columns.end(), [](auto&& col) {
-            return col.kind == column_kind::regular_column;
-        });
-        // In Origin, dense CFs always have at least one regular column
-        if (regular_cols == 0) {
-            raw._columns.emplace_back(bytes(""), raw._regular_column_name_type, column_kind::regular_column, 0);
-        } else if (regular_cols > 1) {
-            throw exceptions::configuration_exception(sprint("Expecting exactly one regular column. Found %d", regular_cols));
+    auto is_dense = raw._is_dense;
+    auto is_compound = raw._is_compound;
+    auto is_static_compact = !is_dense && !is_compound;
+    auto is_compact_table = is_dense || !is_compound;
+
+
+    if (is_compact_table) {
+        auto count_kind = [&raw](column_kind kind) {
+            return std::count_if(raw._columns.begin(), raw._columns.end(), [kind](const column_definition& c) {
+                return c.kind == kind;
+            });
+        };
+
+        default_names names(raw);
+
+        if (is_static_compact) {
+            /**
+             * In origin v3 the general cql-ification of the "storage engine" means
+             * that "static compact" tables are expressed as all defined columns static,
+             * but with synthetic clustering + regular columns.
+             * We unfortunately need to play along with this, both because we want
+             * schema tables on disk to be compatible (and they are explicit).
+             * More to the point, we are, at least until we upgrade to version "m"
+             * sstables, stuck with having origins java tools reading our schema tables
+             * for table schemas (this btw applies to db drivers too, though maybe a little
+             * less), and it asserts badly if we don't uphold the origin table tweaks.
+             *
+             * So transform away...
+             *
+             */
+            if (!count_kind(column_kind::static_column)) {
+                assert(!count_kind(column_kind::clustering_key));
+                for (auto& c : raw._columns) {
+                    // Note that for "static" no-clustering compact storage we use static for the defined columns
+                    if (c.kind == column_kind::regular_column) {
+                        c.kind = column_kind::static_column;
+                    }
+                }
+                // Compact tables always have a clustering and a single regular value.
+                raw._columns.emplace_back(to_bytes(names.clustering_name()),
+                                utf8_type, column_kind::clustering_key, 0);
+                raw._columns.emplace_back(to_bytes(names.compact_value_name()),
+                                raw._is_counter ? counter_type : bytes_type,
+                                column_kind::regular_column, 0);
+            }
+        } else if (is_dense) {
+            auto regular_cols = count_kind(column_kind::regular_column);
+            // In Origin, dense CFs always have at least one regular column
+            if (regular_cols == 0) {
+                raw._columns.emplace_back(to_bytes(names.compact_value_name()),
+                                empty_type,
+                                column_kind::regular_column, 0);
+            } else if (regular_cols > 1) {
+                throw exceptions::configuration_exception(
+                                sprint(
+                                                "Expecting exactly one regular column. Found %d",
+                                                regular_cols));
+            }
         }
     }
 }
@@ -872,7 +924,7 @@ sstring to_sstring(const schema& s) {
     if (s.is_compound()) {
         return compound_name(s);
     } else if (s.clustering_key_size() == 1) {
-        assert(s.is_dense());
+        assert(s.is_dense() || s.is_static_compact_table());
         return s.clustering_key_columns().front().type->name();
     } else {
         return s.regular_column_name_type()->name();
@@ -1069,9 +1121,27 @@ schema::regular_columns() const {
             , _raw._columns.end());
 }
 
-const schema::columns_type&
-schema::all_columns_in_select_order() const {
-    return _raw._columns;
+schema::select_order_range schema::all_columns_in_select_order() const {
+    auto is_static_compact_table = this->is_static_compact_table();
+    auto no_non_pk_columns = is_compact_table()
+                    // Origin: && CompactTables.hasEmptyCompactValue(this);
+                    && regular_columns_count() == 1
+                    && [](const column_definition& c) {
+        // We use empty_type now to match origin, but earlier incarnations
+        // set name empty instead. check either.
+        return c.type == empty_type || c.name().empty();
+    }(regular_column_at(0));
+    auto pk_range = const_iterator_range_type(_raw._columns.begin(),
+                    _raw._columns.begin() + (is_static_compact_table ?
+                                    column_offset(column_kind::clustering_key) :
+                                    column_offset(column_kind::static_column)));
+    auto ck_v_range =
+                    (is_static_compact_table || no_non_pk_columns) ?
+                                    static_columns() :
+                                    const_iterator_range_type(
+                                                    static_columns().begin(),
+                                                    all_columns().end());
+    return boost::range::join(pk_range, ck_v_range);
 }
 
 uint32_t
@@ -1106,6 +1176,26 @@ bool schema::has_index(const sstring& index_name) const {
 
 std::vector<sstring> schema::index_names() const {
     return boost::copy_range<std::vector<sstring>>(_raw._indices_by_name | boost::adaptors::map_keys);
+}
+
+data_type schema::make_legacy_default_validator() const {
+    if (is_counter()) {
+        return counter_type;
+    }
+    if (is_compact_table()) {
+        // See CFMetaData.
+        if (is_super()) {
+            for (auto& c : regular_columns()) {
+                if (c.name().empty()) {
+                    return c.type;
+                }
+            }
+            assert("Invalid super column table definition, no 'dynamic' map column");
+        } else {
+            return regular_columns().begin()->type;
+        }
+    }
+    return bytes_type;
 }
 
 bool schema::is_synced() const {

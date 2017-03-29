@@ -70,7 +70,9 @@ void update_statement::add_update_for_key(mutation& m, const query::clustering_r
         }
         // An empty name for the value is what we use to recognize the case where there is not column
         // outside the PK, see CreateStatement.
-        if (s->regular_begin()->name().empty()) {
+        // Since v3 schema we use empty_type instead, see schema.cc.
+        auto rb = s->regular_begin();
+        if (rb->name().empty() || rb->type == empty_type) {
             // There is no column outside the PK. So no operation could have passed through validation
             assert(_column_operations.empty());
             constants::setter(*s->regular_begin(), make_shared(constants::value(cql3::raw_value::make_value(bytes())))).execute(m, prefix, params);

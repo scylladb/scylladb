@@ -74,17 +74,12 @@ public:
         return _raw._default_time_to_live;
     }
 
-    schema_builder& set_default_validator(const data_type& validator) {
-        _raw._default_validator = validator;
-        return *this;
-    }
-
     schema_builder& set_gc_grace_seconds(int32_t gc_grace_seconds) {
         _raw._gc_grace_seconds = gc_grace_seconds;
         return *this;
     }
 
-    int32_t get_gc_grace_seconds() {
+    int32_t get_gc_grace_seconds() const {
         return _raw._gc_grace_seconds;
     }
 
@@ -93,7 +88,7 @@ public:
         return *this;
     }
 
-    double get_dc_local_read_repair_chance() {
+    double get_dc_local_read_repair_chance() const {
         return _raw._dc_local_read_repair_chance;
     }
 
@@ -102,8 +97,17 @@ public:
         return *this;
     }
 
-    double get_read_repair_chance() {
+    double get_read_repair_chance() const {
         return _raw._read_repair_chance;
+    }
+
+    schema_builder& set_crc_check_chance(double chance) {
+        _raw._crc_check_chance = chance;
+        return *this;
+    }
+
+    double get_crc_check_chance() const {
+        return _raw._crc_check_chance;
     }
 
     schema_builder& set_min_compaction_threshold(int32_t t) {
@@ -111,7 +115,7 @@ public:
         return *this;
     }
 
-    int32_t get_min_compaction_threshold() {
+    int32_t get_min_compaction_threshold() const {
         return _raw._min_compaction_threshold;
     }
 
@@ -120,7 +124,7 @@ public:
         return *this;
     }
 
-    int32_t get_max_compaction_threshold() {
+    int32_t get_max_compaction_threshold() const {
         return _raw._max_compaction_threshold;
     }
 
@@ -129,7 +133,7 @@ public:
         return *this;
     }
 
-    int32_t get_min_index_interval() {
+    int32_t get_min_index_interval() const {
         return _raw._min_index_interval;
     }
 
@@ -138,7 +142,7 @@ public:
         return *this;
     }
 
-    int32_t get_max_index_interval() {
+    int32_t get_max_index_interval() const {
         return _raw._max_index_interval;
     }
 
@@ -156,7 +160,7 @@ public:
         return *this;
     }
 
-    const speculative_retry& get_speculative_retry() {
+    const speculative_retry& get_speculative_retry() const {
         return _raw._speculative_retry;
     }
 
@@ -197,6 +201,11 @@ public:
         return *this;
     }
 
+    schema_builder& set_is_counter(bool is_counter) {
+        _raw._is_counter = is_counter;
+        return *this;
+    }
+
     class default_names {
     public:
         default_names(const schema_builder&);
@@ -217,6 +226,7 @@ public:
     schema_builder& with_column(bytes name, data_type type, column_kind kind, column_id component_index);
     schema_builder& without_column(bytes name);
     schema_builder& without_column(sstring name, api::timestamp_type timestamp);
+    schema_builder& without_column(sstring name, data_type, api::timestamp_type timestamp);
     schema_builder& with_column_rename(bytes from, bytes to);
     schema_builder& with_altered_column_type(bytes name, data_type new_type);
 

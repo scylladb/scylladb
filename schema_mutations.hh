@@ -31,16 +31,19 @@ class schema_mutations {
     mutation _columnfamilies;
     mutation _columns;
     stdx::optional<mutation> _indices;
+    stdx::optional<mutation> _dropped_columns;
 public:
-    schema_mutations(mutation columnfamilies, mutation columns, stdx::optional<mutation> indices)
+    schema_mutations(mutation columnfamilies, mutation columns, stdx::optional<mutation> indices, stdx::optional<mutation> dropped_columns)
             : _columnfamilies(std::move(columnfamilies))
             , _columns(std::move(columns))
             , _indices(std::move(indices))
+            , _dropped_columns(std::move(dropped_columns))
     { }
     schema_mutations(canonical_mutation columnfamilies,
                      canonical_mutation columns,
                      bool is_view,
-                     stdx::optional<canonical_mutation> indices);
+                     stdx::optional<canonical_mutation> indices,
+                     stdx::optional<canonical_mutation> dropped_columns);
 
     schema_mutations(schema_mutations&&) = default;
     schema_mutations& operator=(schema_mutations&&) = default;
@@ -60,6 +63,9 @@ public:
     const stdx::optional<mutation>& indices_mutation() const {
         return _indices;
     }
+    const stdx::optional<mutation>& dropped_columns_mutation() const {
+        return _dropped_columns;
+    }
 
     canonical_mutation columnfamilies_canonical_mutation() const {
         return canonical_mutation(_columnfamilies);
@@ -72,6 +78,12 @@ public:
     stdx::optional<canonical_mutation> indices_canonical_mutation() const {
         if (_indices) {
             return canonical_mutation(_indices.value());
+        }
+        return {};
+    }
+    stdx::optional<canonical_mutation> dropped_columns_canonical_mutation() const {
+        if (_dropped_columns) {
+            return canonical_mutation(_dropped_columns.value());
         }
         return {};
     }

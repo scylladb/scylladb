@@ -39,6 +39,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <boost/range/adaptor/transformed.hpp>
+
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/selector_factories.hh"
 #include "cql3/result_set.hh"
@@ -203,14 +205,10 @@ protected:
 };
 
 ::shared_ptr<selection> selection::wildcard(schema_ptr schema) {
-    std::vector<const column_definition*> cds;
-    auto& columns = schema->all_columns_in_select_order();
-    cds.reserve(columns.size());
-    for (auto& c : columns) {
-        if (!schema->is_dense() || !c.is_regular() || !c.name().empty()) {
-            cds.emplace_back(&c);
-        }
-    }
+    auto columns = schema->all_columns_in_select_order();
+    auto cds = boost::copy_range<std::vector<const column_definition*>>(columns | boost::adaptors::transformed([](const column_definition& c) {
+        return &c;
+    }));
     return simple_selection::make(schema, std::move(cds), true);
 }
 

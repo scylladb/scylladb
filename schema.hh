@@ -387,6 +387,14 @@ class view_info;
  * Use global_schema_ptr for safe across-shard access.
  */
 class schema final : public enable_lw_shared_from_this<schema> {
+public:
+    struct dropped_column {
+        data_type type;
+        api::timestamp_type timestamp;
+        bool operator==(const dropped_column& rhs) const {
+            return type == rhs.type && timestamp == rhs.timestamp;
+        }
+    };
 private:
     // More complex fields are derived from these inside rebuild().
     // Contains only fields which can be safely default-copied.
@@ -400,16 +408,17 @@ private:
         std::vector<column_definition> _columns;
         sstring _comment;
         gc_clock::duration _default_time_to_live = gc_clock::duration::zero();
-        data_type _default_validator = bytes_type;
         data_type _regular_column_name_type;
         double _bloom_filter_fp_chance = 0.01;
         compression_parameters _compressor_params;
         bool _is_dense = false;
         bool _is_compound = true;
+        bool _is_counter = false;
         cf_type _type = cf_type::standard;
         int32_t _gc_grace_seconds = DEFAULT_GC_GRACE_SECONDS;
         double _dc_local_read_repair_chance = 0.1;
         double _read_repair_chance = 0.0;
+        double _crc_check_chance = 1;
         int32_t _min_compaction_threshold = DEFAULT_MIN_COMPACTION_THRESHOLD;
         int32_t _max_compaction_threshold = DEFAULT_MAX_COMPACTION_THRESHOLD;
         int32_t _min_index_interval = DEFAULT_MIN_INDEX_INTERVAL;
@@ -422,7 +431,7 @@ private:
         std::map<sstring, sstring> _compaction_strategy_options;
         caching_options _caching_options;
         table_schema_version _version;
-        std::unordered_map<sstring, api::timestamp_type> _dropped_columns;
+        std::unordered_map<sstring, dropped_column> _dropped_columns;
         std::map<bytes, data_type> _collections;
         std::unordered_map<sstring, index_metadata> _indices_by_name;
     };
@@ -442,7 +451,6 @@ private:
     lw_shared_ptr<compound_type<allow_prefixes::no>> _partition_key_type;
     lw_shared_ptr<compound_type<allow_prefixes::yes>> _clustering_key_type;
     column_mapping _column_mapping;
-    bool _is_counter = false;
     friend class schema_builder;
 public:
     using row_column_ids_are_ordered_by_name = std::true_type;
@@ -518,7 +526,7 @@ public:
         return _raw._comment;
     }
     bool is_counter() const {
-        return _is_counter;
+        return _raw._is_counter;
     }
 
     const cf_type type() const {
@@ -540,6 +548,9 @@ public:
 
     double read_repair_chance() const {
         return _raw._read_repair_chance;
+    }
+    double crc_check_chance() const {
+        return _raw._crc_check_chance;
     }
 
     int32_t min_compaction_threshold() const {
@@ -607,7 +618,11 @@ public:
     // Returns a range of column definitions
     const_iterator_range_type regular_columns() const;
     // Returns a range of column definitions
-    const columns_type& all_columns_in_select_order() const;
+
+    typedef boost::range::joined_range<const_iterator_range_type, const_iterator_range_type>
+        select_order_range;
+
+    select_order_range all_columns_in_select_order() const;
     uint32_t position(const column_definition& column) const;
 
     const columns_type& all_columns() const {
@@ -629,9 +644,9 @@ public:
     gc_clock::duration default_time_to_live() const {
         return _raw._default_time_to_live;
     }
-    const data_type& default_validator() const {
-        return _raw._default_validator;
-    }
+
+    data_type make_legacy_default_validator() const;
+
     const sstring& ks_name() const {
         return _raw._ks_name;
     }

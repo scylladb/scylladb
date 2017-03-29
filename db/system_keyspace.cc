@@ -1525,20 +1525,21 @@ set_index_removed(const sstring& ks_name, const sstring& index_name) {
 
 std::vector<schema_ptr> all_tables() {
     std::vector<schema_ptr> r;
-    auto legacy_tables = db::schema_tables::all_tables();
-    std::copy(legacy_tables.begin(), legacy_tables.end(), std::back_inserter(r));
-    r.push_back(built_indexes());
-    r.push_back(hints());
-    r.push_back(batchlog());
-    r.push_back(paxos());
-    r.push_back(local());
-    r.push_back(peers());
-    r.push_back(peer_events());
-    r.push_back(range_xfers());
-    r.push_back(compactions_in_progress());
-    r.push_back(compaction_history());
-    r.push_back(sstable_activity());
-    r.push_back(size_estimates());
+    auto schema_tables = db::schema_tables::all_tables();
+    std::copy(schema_tables.begin(), schema_tables.end(), std::back_inserter(r));
+    r.insert(r.end(), { built_indexes(), hints(), batchlog(), paxos(), local(),
+                    peers(), peer_events(), range_xfers(),
+                    compactions_in_progress(), compaction_history(),
+                    sstable_activity(), size_estimates(),
+    });
+    // legacy schema
+    r.insert(r.end(), {
+                    // TODO: once we migrate hints/batchlog and add convertor
+                    // legacy::hints(), legacy::batchlog(),
+                    legacy::keyspaces(), legacy::column_families(),
+                    legacy::columns(), legacy::triggers(), legacy::usertypes(),
+                    legacy::functions(), legacy::aggregates(), });
+
     return r;
 }
 

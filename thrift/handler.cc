@@ -1141,7 +1141,7 @@ private:
             }
             cf_def.__set_column_metadata(columns);
             cf_def.__set_gc_grace_seconds(s->gc_grace_seconds().count());
-            cf_def.__set_default_validation_class(s->default_validator()->name());
+            cf_def.__set_default_validation_class(s->make_legacy_default_validator()->name());
             cf_def.__set_min_compaction_threshold(s->min_compaction_threshold());
             cf_def.__set_max_compaction_threshold(s->max_compaction_threshold());
             cf_def.__set_key_validation_class(class_from_compound_type(*s->partition_key_type()));
@@ -1189,6 +1189,7 @@ private:
     static schema_ptr schema_from_thrift(const CfDef& cf_def, const sstring ks_name, std::experimental::optional<utils::UUID> id = { }) {
         thrift_validation::validate_cf_def(cf_def);
         schema_builder builder(ks_name, cf_def.name, id);
+        schema_builder::default_names names(builder);
 
         if (cf_def.__isset.key_validation_class) {
             auto pk_types = std::move(get_types(cf_def.key_validation_class).first);
@@ -1196,11 +1197,11 @@ private:
                 builder.with_column(to_bytes(cf_def.key_alias), std::move(pk_types.back()), column_kind::partition_key);
             } else {
                 for (uint32_t i = 0; i < pk_types.size(); ++i) {
-                    builder.with_column(to_bytes(sprint("key%d", i + 1)), std::move(pk_types[i]), column_kind::partition_key);
+                    builder.with_column(to_bytes(names.partition_key_name()), std::move(pk_types[i]), column_kind::partition_key);
                 }
             }
         } else {
-            builder.with_column(to_bytes("key"), bytes_type, column_kind::partition_key);
+            builder.with_column(to_bytes(names.partition_key_name()), bytes_type, column_kind::partition_key);
         }
 
         data_type regular_column_name_type;
@@ -1212,13 +1213,12 @@ private:
             auto ck_types = std::move(p.first);
             builder.set_is_compound(p.second);
             for (uint32_t i = 0; i < ck_types.size(); ++i) {
-                builder.with_column(to_bytes(sprint("column%d", i + 1)), std::move(ck_types[i]), column_kind::clustering_key);
+                builder.with_column(to_bytes(names.clustering_name()), std::move(ck_types[i]), column_kind::clustering_key);
             }
             auto&& vtype = cf_def.__isset.default_validation_class
                          ? db::marshal::type_parser::parse(to_sstring(cf_def.default_validation_class))
                          : bytes_type;
-            builder.set_default_validator(vtype);
-            builder.with_column(to_bytes("value"), std::move(vtype));
+            builder.with_column(to_bytes(names.compact_value_name()), std::move(vtype));
         } else {
             // Static CF
             builder.set_is_compound(false);
@@ -1233,6 +1233,10 @@ private:
                     builder.with_index(index.value());
                 }
             }
+            // CMH composite? Origin seemingly allows composite comparator_type.
+            builder.with_column(to_bytes(names.clustering_name()), regular_column_name_type, column_kind::clustering_key);
+            builder.with_column(to_bytes(names.compact_value_name()), db::marshal::type_parser::parse(to_sstring(cf_def.default_validation_class)));
+
         }
         builder.set_regular_column_name_type(regular_column_name_type);
         if (cf_def.__isset.comment) {
