@@ -2256,7 +2256,17 @@ future<> distributed_loader::init_system_keyspace(distributed<database>& db) {
             }).get();
         }
     });
- }
+}
+
+future<> distributed_loader::ensure_system_table_directories(distributed<database>& db) {
+    return parallel_for_each(system_keyspaces, [&db](sstring ksname) {
+        auto& ks = db.local().find_keyspace(ksname);
+        return parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
+            auto cfm = pair.second;
+            return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
+        });
+    });
+}
 
 future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db, distributed<service::storage_proxy>& proxy) {
     return seastar::async([&db, &proxy] {

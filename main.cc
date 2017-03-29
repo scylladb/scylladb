@@ -529,11 +529,9 @@ int main(int ac, char** av) {
             db::legacy_schema_migrator::migrate(qp.local()).get();
 
             supervisor::notify("loading sstables");
-            auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);
-            parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
-                auto cfm = pair.second;
-                return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
-            }).get();
+
+            distributed_loader::ensure_system_table_directories(db).get();
+
             supervisor::notify("loading sstables");
             distributed_loader::init_non_system_keyspaces(db, proxy).get();
             supervisor::notify("setting up system keyspace");
