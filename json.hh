@@ -44,15 +44,19 @@ inline sstring to_json(const Map& map) {
     return str;
 }
 
-inline std::map<sstring, sstring> to_map(const sstring& raw) {
+template<typename Map>
+inline Map to_map(const sstring& raw, Map&& map) {
     Json::Value root;
     Json::Reader reader;
     reader.parse(std::string{raw}, root);
-    std::map<sstring, sstring> map;
     for (auto&& member : root.getMemberNames()) {
         map.emplace(member, root[member].asString());
     }
-    return map;
+    return std::forward<Map>(map);
+}
+
+inline std::map<sstring, sstring> to_map(const sstring& raw) {
+    return to_map(raw, std::map<sstring, sstring>());
 }
 
 }
