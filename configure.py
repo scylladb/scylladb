@@ -183,6 +183,7 @@ scylla_tests = [
     'tests/perf/perf_hash',
     'tests/perf/perf_cql_parser',
     'tests/perf/perf_simple_query',
+    'tests/perf/perf_fast_forward',
     'tests/memory_footprint',
     'tests/perf/perf_sstable',
     'tests/cql_query_test',
@@ -614,6 +615,7 @@ tests_not_using_seastar_test_framework = set([
     'tests/perf/perf_cql_parser',
     'tests/message',
     'tests/perf/perf_simple_query',
+    'tests/perf/perf_fast_forward',
     'tests/memory_footprint',
     'tests/gossip',
     'tests/perf/perf_sstable',
@@ -649,7 +651,7 @@ warnings = [w
             for w in warnings
             if warning_supported(warning = w, compiler = args.cxx)]
 
-warnings = ' '.join(warnings)
+warnings = ' '.join(warnings + ['-Wno-error=deprecated-declarations'])
 
 dbgflag = debug_flag(args.cxx) if args.debuginfo else ''
 tests_link_rule = 'link' if args.tests_debuginfo else 'link_stripped'

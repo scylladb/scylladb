@@ -130,10 +130,10 @@ public:
     bytes decompose_value(const value_type& values) {
         return serialize_value(values);
     }
-    class iterator : public std::iterator<std::input_iterator_tag, bytes_view> {
+    class iterator : public std::iterator<std::input_iterator_tag, const bytes_view> {
     private:
         bytes_view _v;
-        value_type _current;
+        bytes_view _current;
     private:
         void read_current() {
             size_type len;
@@ -219,6 +219,9 @@ public:
     bool is_full(bytes_view v) const {
         assert(AllowPrefixes == allow_prefixes::yes);
         return std::distance(begin(v), end(v)) == (ssize_t)_types.size();
+    }
+    bool is_empty(bytes_view v) const {
+        return begin(v) == end(v);
     }
     void validate(bytes_view v) {
         // FIXME: implement

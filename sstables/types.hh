@@ -44,6 +44,30 @@ static inline bytes_view to_bytes_view(const temporary_buffer<char>& b) {
 
 namespace sstables {
 
+struct deletion_time {
+    int32_t local_deletion_time;
+    int64_t marked_for_delete_at;
+
+    template <typename Describer>
+    auto describe_type(Describer f) { return f(local_deletion_time, marked_for_delete_at); }
+
+    bool live() const {
+        return (local_deletion_time == std::numeric_limits<int32_t>::max()) &&
+               (marked_for_delete_at == std::numeric_limits<int64_t>::min());
+    }
+
+    bool operator==(const deletion_time& d) {
+        return local_deletion_time == d.local_deletion_time &&
+               marked_for_delete_at == d.marked_for_delete_at;
+    }
+    bool operator!=(const deletion_time& d) {
+        return !(*this == d);
+    }
+    explicit operator tombstone() {
+        return !live() ? tombstone(marked_for_delete_at, gc_clock::time_point(gc_clock::duration(local_deletion_time))) : tombstone();
+    }
+};
+
 struct option {
     disk_string<uint16_t> key;
     disk_string<uint16_t> value;
@@ -64,10 +88,32 @@ struct filter {
     explicit filter(int hashes, std::deque<uint64_t> buckets) : hashes(hashes), buckets({std::move(buckets)}) {}
 };
 
+enum class indexable_element {
+    partition,
+    cell
+};
+
+// Exploded view of promoted index.
+// Contains pointers into external buffer, so that buffer must be kept alive
+// as long as this is used.
+struct promoted_index {
+    struct entry {
+        composite_view start;
+        composite_view end;
+        uint64_t offset;
+        uint64_t width;
+    };
+    deletion_time del_time;
+    std::deque<entry> entries;
+};
+
 class index_entry {
     temporary_buffer<char> _key;
     uint64_t _position;
-    temporary_buffer<char> _promoted_index;
+    temporary_buffer<char> _promoted_index_bytes;
+    stdx::optional<promoted_index> _promoted_index;
+private:
+    void parse_promoted_index(const schema&);
 public:
 
     bytes_view get_key_bytes() const {
@@ -75,7 +121,7 @@ public:
     }
 
     key_view get_key() const {
-        return { get_key_bytes() };
+        return key_view{get_key_bytes()};
     }
 
     uint64_t position() const {
@@ -83,12 +129,24 @@ public:
     }
 
     bytes_view get_promoted_index_bytes() const {
-        return to_bytes_view(_promoted_index);
+        return to_bytes_view(_promoted_index_bytes);
     }
 
     index_entry(temporary_buffer<char>&& key, uint64_t position, temporary_buffer<char>&& promoted_index)
-        : _key(std::move(key)), _position(position), _promoted_index(std::move(promoted_index)) {}
+        : _key(std::move(key)), _position(position), _promoted_index_bytes(std::move(promoted_index)) {}
 
+    index_entry(const index_entry& o)
+        : _key(o._key.get(), o._key.size())
+        , _position(o._position)
+        , _promoted_index_bytes(o._promoted_index_bytes.get(), o._promoted_index_bytes.size())
+    { }
+
+    promoted_index* get_promoted_index(const schema& s) {
+        if (!_promoted_index) {
+            parse_promoted_index(s);
+        }
+        return _promoted_index ? &*_promoted_index : nullptr;
+    }
 };
 
 struct summary_entry {
@@ -96,7 +154,7 @@ struct summary_entry {
     uint64_t position;
 
     key_view get_key() const {
-        return { key };
+        return key_view{key};
     }
 
     bool operator==(const summary_entry& x) const {
@@ -323,30 +381,6 @@ namespace sstables {
 struct statistics {
     disk_hash<uint32_t, metadata_type, uint32_t> hash;
     std::unordered_map<metadata_type, std::unique_ptr<metadata>> contents;
-};
-
-struct deletion_time {
-    int32_t local_deletion_time;
-    int64_t marked_for_delete_at;
-
-    template <typename Describer>
-    auto describe_type(Describer f) { return f(local_deletion_time, marked_for_delete_at); }
-
-    bool live() const {
-        return (local_deletion_time == std::numeric_limits<int32_t>::max()) &&
-               (marked_for_delete_at == std::numeric_limits<int64_t>::min());
-    }
-
-    bool operator==(const deletion_time& d) {
-        return local_deletion_time == d.local_deletion_time &&
-               marked_for_delete_at == d.marked_for_delete_at;
-    }
-    bool operator!=(const deletion_time& d) {
-        return !(*this == d);
-    }
-    explicit operator tombstone() {
-        return !live() ? tombstone(marked_for_delete_at, gc_clock::time_point(gc_clock::duration(local_deletion_time))) : tombstone();
-    }
 };
 
 enum class column_mask : uint8_t {

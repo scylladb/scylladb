@@ -305,8 +305,15 @@ public:
         _remain = end - _stream_position;
 
         _prestate = prestate::NONE;
-        state_processor().reset(begin);
         return _input.skip(n);
+    }
+
+    future<> skip_to(size_t begin) {
+        return fast_forward_to(begin, _stream_position + _remain);
+    }
+
+    uint64_t position() const {
+        return _stream_position;
     }
 
     future<> close() {

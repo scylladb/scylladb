@@ -64,7 +64,7 @@ public:
 
         while (_current != _end) {
             if (!_in_current && _current->start()) {
-                position_in_partition_view range_start(position_in_partition_view::range_tag_t(), bound_view::from_range_start(*_current));
+                auto range_start = position_in_partition_view::for_range_start(*_current);
                 if (less(pos, range_start)) {
                     return false;
                 }
@@ -77,7 +77,7 @@ public:
                 return true;
             }
 
-            position_in_partition_view range_end(position_in_partition_view::range_tag_t(), bound_view::from_range_end(*_current));
+            auto range_end = position_in_partition_view::for_range_end(*_current);
             if (less(pos, range_end)) {
                 return true;
             }

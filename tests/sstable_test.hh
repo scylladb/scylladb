@@ -36,10 +36,6 @@ class column_family_test {
 public:
     column_family_test(lw_shared_ptr<column_family> cf) : _cf(cf) {}
 
-    void add_sstable(sstables::sstable&& sstable) {
-        _cf->_sstables->insert(make_lw_shared(std::move(sstable)));
-    }
-
     void add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
         _cf->_sstables->insert(std::move(sstable));
     }
@@ -126,8 +122,7 @@ public:
 
     static sstable_ptr make_test_sstable(size_t buffer_size, schema_ptr schema, sstring dir, unsigned long generation, sstable::version_types v,
             sstable::format_types f, gc_clock::time_point now = gc_clock::now()) {
-        auto sst = sstable(buffer_size, std::move(schema), dir, generation, v, f, now);
-        return make_lw_shared<sstable>(std::move(sst));
+        return make_lw_shared<sstable>(std::move(schema), dir, generation, v, f, now, default_io_error_handler_gen(), buffer_size);
     }
 
     // Used to create synthetic sstables for testing leveled compaction strategy.

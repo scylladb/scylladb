@@ -526,6 +526,10 @@ public:
         return TopLevel::get_compound_type(s)->is_full(base::_bytes);
     }
 
+    bool is_empty(const schema& s) const {
+        return TopLevel::get_compound_type(s)->is_empty(base::_bytes);
+    }
+
     // Can be called only if is_full()
     FullTopLevel to_full(const schema& s) const {
         return FullTopLevel::from_exploded(s, base::explode(s));

@@ -32,6 +32,8 @@
 #include "schema_builder.hh"
 
 #include "disk-error-handler.hh"
+#include "simple_schema.hh"
+#include "total_order_check.hh"
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
@@ -119,6 +121,76 @@ BOOST_AUTO_TEST_CASE(test_ring_position_is_comparable_with_decorated_key) {
     BOOST_REQUIRE(k2.tri_compare(*s, dht::ring_position::starting_at(k1._token)) > 0);
     BOOST_REQUIRE(k2.tri_compare(*s, dht::ring_position::ending_at(k1._token)) > 0);
     BOOST_REQUIRE(k2.tri_compare(*s, dht::ring_position(k1)) > 0);
+}
+
+BOOST_AUTO_TEST_CASE(test_ring_position_ordering) {
+    simple_schema table;
+    auto cmp = dht::ring_position_comparator(*table.schema());
+
+    std::vector<dht::decorated_key> keys = table.make_pkeys(6);
+
+    // Force keys[2-4] to share the same token
+    keys[2]._token = keys[3]._token = keys[4]._token;
+    std::sort(keys.begin() + 2, keys.begin() + 5, dht::ring_position_less_comparator(*table.schema()));
+
+    BOOST_TEST_MESSAGE(sprint("Keys: %s", keys));
+
+    auto positions = boost::copy_range<std::vector<dht::ring_position>>(keys);
+    auto views = boost::copy_range<std::vector<dht::ring_position_view>>(positions);
+
+    total_order_check<dht::ring_position_comparator, dht::ring_position, dht::ring_position_view, dht::decorated_key>(cmp)
+      .next(dht::ring_position_view::min())
+
+      .next(dht::ring_position(keys[0].token(), dht::ring_position::token_bound::start))
+          .equal_to(dht::ring_position_view(keys[0].token(), nullptr, -1))
+      .next(views[0])
+        .equal_to(keys[0])
+        .equal_to(positions[0])
+      .next(dht::ring_position_view::for_after_key(keys[0]))
+      .next(dht::ring_position(keys[0].token(), dht::ring_position::token_bound::end))
+        .equal_to(dht::ring_position_view(keys[0].token(), nullptr, 1))
+
+      .next(dht::ring_position(keys[1].token(), dht::ring_position::token_bound::start))
+          .equal_to(dht::ring_position_view(keys[1].token(), nullptr, -1))
+      .next(views[1])
+        .equal_to(keys[1])
+        .equal_to(positions[1])
+      .next(dht::ring_position_view::for_after_key(keys[1]))
+      .next(dht::ring_position(keys[1].token(), dht::ring_position::token_bound::end))
+        .equal_to(dht::ring_position_view(keys[1].token(), nullptr, 1))
+
+      .next(dht::ring_position(keys[2].token(), dht::ring_position::token_bound::start))
+          .equal_to(dht::ring_position_view(keys[2].token(), nullptr, -1))
+
+      .next(views[2])
+        .equal_to(keys[2])
+        .equal_to(positions[2])
+      .next(dht::ring_position_view::for_after_key(keys[2]))
+
+      .next(views[3])
+        .equal_to(keys[3])
+        .equal_to(positions[3])
+      .next(dht::ring_position_view::for_after_key(keys[3]))
+
+      .next(views[4])
+        .equal_to(keys[4])
+        .equal_to(positions[4])
+      .next(dht::ring_position_view::for_after_key(keys[4]))
+
+      .next(dht::ring_position(keys[4].token(), dht::ring_position::token_bound::end))
+        .equal_to(dht::ring_position_view(keys[4].token(), nullptr, 1))
+
+      .next(dht::ring_position(keys[5].token(), dht::ring_position::token_bound::start))
+        .equal_to(dht::ring_position_view(keys[5].token(), nullptr, -1))
+      .next(views[5])
+        .equal_to(keys[5])
+        .equal_to(positions[5])
+      .next(dht::ring_position_view::for_after_key(keys[5]))
+      .next(dht::ring_position(keys[5].token(), dht::ring_position::token_bound::end))
+        .equal_to(dht::ring_position_view(keys[5].token(), nullptr, 1))
+
+      .next(dht::ring_position_view::max())
+      .check();
 }
 
 BOOST_AUTO_TEST_CASE(test_token_no_wraparound_1) {

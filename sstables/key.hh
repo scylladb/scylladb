@@ -32,7 +32,7 @@ namespace sstables {
 class key_view {
     bytes_view _bytes;
 public:
-    key_view(bytes_view b) : _bytes(b) {}
+    explicit key_view(bytes_view b) : _bytes(b) {}
     key_view() : _bytes() {}
 
     std::vector<bytes> explode(const schema& s) const {
@@ -89,7 +89,7 @@ public:
     }
     template <typename RangeOfSerializedComponents>
     static key make_key(const schema& s, RangeOfSerializedComponents&& values) {
-        return key(composite::serialize_value(std::forward<decltype(values)>(values), is_compound(s)));
+        return key(composite::serialize_value(std::forward<decltype(values)>(values), is_compound(s)).release_bytes());
     }
     static key from_deeply_exploded(const schema& s, const std::vector<data_value>& v) {
         return make_key(s, v);

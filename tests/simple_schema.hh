@@ -27,6 +27,7 @@
 #include "schema.hh"
 #include "keys.hh"
 #include "streamed_mutation.hh"
+#include "mutation.hh"
 
 // Helper for working with the following table:
 //
@@ -56,6 +57,12 @@ public:
     // Make a clustering_key which is n-th in some arbitrary sequence of keys
     clustering_key make_ckey(uint32_t n) {
         return make_ckey(sprint("ck%010d", n));
+    }
+
+    // Make a partition key which is n-th in some arbitrary sequence of keys.
+    // There is no particular order for the keys, they're not in ring order.
+    dht::decorated_key make_pkey(uint32_t n) {
+        return make_pkey(sprint("pk%010d", n));
     }
 
     dht::decorated_key make_pkey(sstring pk) {
@@ -96,5 +103,15 @@ public:
 
     schema_ptr schema() {
         return _s;
+    }
+
+    // Creates a sequence of keys in ring order
+    std::vector<dht::decorated_key> make_pkeys(int n) {
+        std::vector<dht::decorated_key> keys;
+        for (int i = 0; i < n; ++i) {
+            keys.push_back(make_pkey(i));
+        }
+        std::sort(keys.begin(), keys.end(), dht::decorated_key::less_comparator(_s));
+        return keys;
     }
 };

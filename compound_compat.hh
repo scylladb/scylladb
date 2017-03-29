@@ -184,6 +184,8 @@ bytes to_legacy(CompoundType& type, bytes_view packed) {
     return legacy_form;
 }
 
+class composite_view;
+
 // Represents a value serialized according to Origin's CompositeType.
 // If is_compound is true, then the value is one or more components encoded as:
 //
@@ -202,7 +204,7 @@ public:
             , _is_compound(is_compound)
     { }
 
-    composite(bytes&& b)
+    explicit composite(bytes&& b)
             : _bytes(std::move(b))
             , _is_compound(true)
     { }
@@ -304,23 +306,36 @@ public:
         return f(const_cast<bytes&>(_bytes));
     }
 
+    // marker is ignored if !is_compound
     template<typename RangeOfSerializedComponents>
-    static bytes serialize_value(RangeOfSerializedComponents&& values, bool is_compound = true) {
+    static composite serialize_value(RangeOfSerializedComponents&& values, bool is_compound = true, eoc marker = eoc::none) {
         auto size = serialized_size(values, is_compound);
         bytes b(bytes::initialized_later(), size);
         auto i = b.begin();
         serialize_value(std::forward<decltype(values)>(values), i, is_compound);
-        return b;
+        if (is_compound && !b.empty()) {
+            b.back() = eoc_type(marker);
+        }
+        return composite(std::move(b), is_compound);
+    }
+
+    template<typename RangeOfSerializedComponents>
+    static composite serialize_static(const schema& s, RangeOfSerializedComponents&& values) {
+        // FIXME: Optimize
+        auto b = bytes(size_t(2), bytes::value_type(0xff));
+        std::vector<bytes_view> sv(s.clustering_key_size());
+        b += composite::serialize_value(boost::range::join(sv, std::forward<RangeOfSerializedComponents>(values)), true).release_bytes();
+        return composite(std::move(b));
+    }
+
+    static eoc to_eoc(int8_t eoc_byte) {
+        return eoc_byte == 0 ? eoc::none : (eoc_byte < 0 ? eoc::start : eoc::end);
     }
 
     class iterator : public std::iterator<std::input_iterator_tag, const component_view> {
         bytes_view _v;
         component_view _current;
     private:
-        eoc to_eoc(int8_t eoc_byte) {
-            return eoc_byte == 0 ? eoc::none : (eoc_byte < 0 ? eoc::start : eoc::end);
-        }
-
         void read_current() {
             size_type len;
             {
@@ -406,6 +421,10 @@ public:
         return _bytes;
     }
 
+    bytes release_bytes() && {
+        return std::move(_bytes);
+    }
+
     size_t size() const {
         return _bytes.size();
     }
@@ -434,18 +453,13 @@ public:
 
     static composite from_exploded(const std::vector<bytes_view>& v, eoc marker = eoc::none) {
         if (v.size() == 0) {
-            return bytes(size_t(1), bytes::value_type(marker));
+            return composite(bytes(size_t(1), bytes::value_type(marker)));
         }
-        auto b = serialize_value(v);
-        b.back() = eoc_type(marker);
-        return composite(std::move(b));
+        return serialize_value(v, true, marker);
     }
 
     static composite static_prefix(const schema& s) {
-        static bytes static_marker(size_t(2), bytes::value_type(0xff));
-
-        std::vector<bytes_view> sv(s.clustering_key_size());
-        return static_marker + serialize_value(sv);
+        return serialize_static(s, std::vector<bytes_view>());
     }
 
     explicit operator bytes_view() const {
@@ -456,6 +470,15 @@ public:
     friend inline std::ostream& operator<<(std::ostream& os, const std::pair<Component, eoc>& c) {
         return os << "{value=" << c.first << "; eoc=" << sprint("0x%02x", eoc_type(c.second) & 0xff) << "}";
     }
+
+    friend std::ostream& operator<<(std::ostream& os, const composite& v);
+
+    struct tri_compare {
+        const std::vector<data_type>& _types;
+        tri_compare(const std::vector<data_type>& types) : _types(types) {}
+        int operator()(const composite&, const composite&) const;
+        int operator()(composite_view, composite_view) const;
+    };
 };
 
 class composite_view final {
@@ -505,6 +528,15 @@ public:
         return { begin(), end() };
     }
 
+    composite::eoc last_eoc() const {
+        if (!_is_compound || _bytes.empty()) {
+            return composite::eoc::none;
+        }
+        bytes_view v(_bytes);
+        v.remove_prefix(v.size() - 1);
+        return composite::to_eoc(read_simple<composite::eoc_type>(v));
+    }
+
     auto values() const {
         return components() | boost::adaptors::transformed([](auto&& c) { return c.first; });
     }
@@ -527,4 +559,46 @@ public:
 
     bool operator==(const composite_view& k) const { return k._bytes == _bytes && k._is_compound == _is_compound; }
     bool operator!=(const composite_view& k) const { return !(k == *this); }
+
+    friend inline std::ostream& operator<<(std::ostream& os, composite_view v) {
+        return os << "{" << ::join(", ", v.components()) << ", compound=" << v._is_compound << ", static=" << v.is_static() << "}";
+    }
 };
+
+inline
+std::ostream& operator<<(std::ostream& os, const composite& v) {
+    return os << composite_view(v);
+}
+
+inline
+int composite::tri_compare::operator()(const composite& v1, const composite& v2) const {
+    return (*this)(composite_view(v1), composite_view(v2));
+}
+
+inline
+int composite::tri_compare::operator()(composite_view v1, composite_view v2) const {
+    // See org.apache.cassandra.db.composites.AbstractCType#compare
+    if (v1.empty()) {
+        return v2.empty() ? 0 : -1;
+    }
+    if (v2.empty()) {
+        return 1;
+    }
+    if (v1.is_static() != v2.is_static()) {
+        return v1.is_static() ? -1 : 1;
+    }
+    auto a_values = v1.components();
+    auto b_values = v2.components();
+    auto cmp = [&](const data_type& t, component_view c1, component_view c2) {
+        // First by value, then by EOC
+        auto r = t->compare(c1.first, c2.first);
+        if (r) {
+            return r;
+        }
+        return static_cast<int>(c1.second) - static_cast<int>(c2.second);
+    };
+    return lexicographical_tri_compare(_types.begin(), _types.end(),
+        a_values.begin(), a_values.end(),
+        b_values.begin(), b_values.end(),
+        cmp);
+}

@@ -57,6 +57,33 @@ shared_ptr<cql3_type> make_cql3_tuple_type(shared_ptr<const tuple_type_impl> t);
 
 }
 
+// Specifies position in a lexicographically ordered sequence
+// relative to some value.
+//
+// For example, if used with a value "bc" with lexicographical ordering on strings,
+// each enum value represents the following positions in an example sequence:
+//
+//   aa
+//   aaa
+//   b
+//   ba
+// --> before_all_prefixed
+//   bc
+// --> before_all_strictly_prefixed
+//   bca
+//   bcd
+// --> after_all_prefixed
+//   bd
+//   bda
+//   c
+//   ca
+//
+enum class lexicographical_relation : int8_t {
+    before_all_prefixed,
+    before_all_strictly_prefixed,
+    after_all_prefixed
+};
+
 // Like std::lexicographical_compare but injects values from shared sequence (types) to the comparator
 // Compare is an abstract_type-aware less comparator, which takes the type as first argument.
 template <typename TypesIterator, typename InputIt1, typename InputIt2, typename Compare>
@@ -87,7 +114,9 @@ template <typename TypesIterator, typename InputIt1, typename InputIt2, typename
 int lexicographical_tri_compare(TypesIterator types_first, TypesIterator types_last,
         InputIt1 first1, InputIt1 last1,
         InputIt2 first2, InputIt2 last2,
-        Compare comp) {
+        Compare comp,
+        lexicographical_relation relation1 = lexicographical_relation::before_all_strictly_prefixed,
+        lexicographical_relation relation2 = lexicographical_relation::before_all_strictly_prefixed) {
     while (types_first != types_last && first1 != last1 && first2 != last2) {
         auto c = comp(*types_first, *first1, *first2);
         if (c) {
@@ -99,10 +128,16 @@ int lexicographical_tri_compare(TypesIterator types_first, TypesIterator types_l
     }
     bool e1 = first1 == last1;
     bool e2 = first2 == last2;
-    if (e1 != e2) {
-        return e2 ? 1 : -1;
+    if (e1 && e2) {
+        return static_cast<int>(relation1) - static_cast<int>(relation2);
     }
-    return 0;
+    if (e2) {
+        return relation2 == lexicographical_relation::after_all_prefixed ? -1 : 1;
+    } else if (e1) {
+        return relation1 == lexicographical_relation::after_all_prefixed ? 1 : -1;
+    } else {
+        return 0;
+    }
 }
 
 // Trichotomic version of std::lexicographical_compare()
@@ -112,7 +147,9 @@ int lexicographical_tri_compare(TypesIterator types_first, TypesIterator types_l
 template <typename InputIt1, typename InputIt2, typename Compare>
 int lexicographical_tri_compare(InputIt1 first1, InputIt1 last1,
         InputIt2 first2, InputIt2 last2,
-        Compare comp) {
+        Compare comp,
+        lexicographical_relation relation1 = lexicographical_relation::before_all_strictly_prefixed,
+        lexicographical_relation relation2 = lexicographical_relation::before_all_strictly_prefixed) {
     while (first1 != last1 && first2 != last2) {
         auto c = comp(*first1, *first2);
         if (c) {
@@ -123,10 +160,14 @@ int lexicographical_tri_compare(InputIt1 first1, InputIt1 last1,
     }
     bool e1 = first1 == last1;
     bool e2 = first2 == last2;
-    if (e1 != e2) {
-        return e2 ? 1 : -1;
+    if (e1 == e2) {
+        return static_cast<int>(relation1) - static_cast<int>(relation2);
     }
-    return 0;
+    if (e2) {
+        return relation2 == lexicographical_relation::after_all_prefixed ? -1 : 1;
+    } else {
+        return relation1 == lexicographical_relation::after_all_prefixed ? 1 : -1;
+    }
 }
 
 // A trichotomic comparator for prefix equality total ordering.

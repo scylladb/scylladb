@@ -50,8 +50,11 @@
 #include "compound_compat.hh"
 #include "disk-error-handler.hh"
 #include "atomic_deletion.hh"
+#include "sstables/shared_index_lists.hh"
 
 namespace sstables {
+
+extern logging::logger sstlog;
 
 // data_consume_context is an object returned by sstable::data_consume_rows()
 // which allows knowing when the consumer stops reading, and starting it again
@@ -77,6 +80,8 @@ class data_consume_context {
 public:
     future<> read();
     future<> fast_forward_to(uint64_t begin, uint64_t end);
+    future<> skip_to(indexable_element, uint64_t begin);
+    uint64_t position() const;
     // Define (as defaults) the destructor and move operations in the source
     // file, so here we don't need to know the incomplete impl type.
     ~data_consume_context();
@@ -117,7 +122,6 @@ class sstable_writer;
 struct foreign_sstable_open_info;
 struct sstable_open_info;
 
-using index_list = std::vector<index_entry>;
 class index_reader;
 
 struct sstable_writer_config {
@@ -146,10 +150,12 @@ public:
     };
     enum class version_types { ka, la };
     enum class format_types { big };
+    static const size_t default_buffer_size = 128*1024;
 public:
     sstable(schema_ptr schema, sstring dir, int64_t generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now(),
-            io_error_handler_gen error_handler_gen = default_io_error_handler_gen())
-        : _schema(std::move(schema))
+            io_error_handler_gen error_handler_gen = default_io_error_handler_gen(), size_t buffer_size = default_buffer_size)
+        : sstable_buffer_size(buffer_size)
+        , _schema(std::move(schema))
         , _dir(std::move(dir))
         , _generation(generation)
         , _version(v)
@@ -425,20 +431,7 @@ public:
         stdx::optional<sstables::scylla_metadata> scylla_metadata;
     };
 private:
-    sstable(size_t wbuffer_size, schema_ptr schema, sstring dir, int64_t generation, version_types v, format_types f,
-            gc_clock::time_point now = gc_clock::now(), io_error_handler_gen error_handler_gen = default_io_error_handler_gen())
-        : sstable_buffer_size(wbuffer_size)
-        , _schema(std::move(schema))
-        , _dir(std::move(dir))
-        , _generation(generation)
-        , _version(v)
-        , _format(f)
-        , _now(now)
-        , _read_error_handler(error_handler_gen(sstable_read_error))
-        , _write_error_handler(error_handler_gen(sstable_write_error))
-    { }
-
-    size_t sstable_buffer_size = 128*1024;
+    size_t sstable_buffer_size = default_buffer_size;
 
     static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
     static std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
@@ -448,6 +441,7 @@ private:
     std::vector<sstring> _unrecognized_components;
 
     foreign_ptr<lw_shared_ptr<shareable_components>> _components = make_foreign(make_lw_shared<shareable_components>());
+    shared_index_lists _index_lists;
     bool _shared = true;  // across shards; safe default
     // NOTE: _collector and _c_stats are used to generation of statistics file
     // when writing a new sstable.
@@ -708,11 +702,6 @@ public:
 
     const std::vector<nonwrapping_range<bytes_view>>& clustering_components_ranges() const;
 
-    // Used to mark a sstable for deletion that is not relevant to the current shard.
-    // It doesn't mean that the sstable will be deleted, but that the sstable is not
-    // relevant to the current shard, thus can be deleted by the deletion manager.
-    static void mark_sstable_for_deletion(const schema_ptr& schema, sstring dir, int64_t generation, version_types v, format_types f);
-
     // returns all info needed for a sstable to be shared with other shards.
     static future<sstable_open_info> load_shared_components(const schema_ptr& s, sstring dir, int generation, version_types v, format_types f);
 
@@ -852,5 +841,7 @@ struct sstable_open_info {
     file data;
     file index;
 };
+
+void init_metrics();
 
 }

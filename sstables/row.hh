@@ -26,6 +26,7 @@
 #include "key.hh"
 #include "core/temporary_buffer.hh"
 #include "consumer.hh"
+#include "sstables/types.hh"
 
 // sstables::data_consume_row feeds the contents of a single row into a
 // row_consumer object:
@@ -84,11 +85,8 @@ public:
     // proceed consuming more data.
     virtual proceed consume_row_end() = 0;
 
-    // Called when the reader is fast forwarded.
-    // Clears all partially read data and prepares the consumer for a new
-    // partition. reset() call is always going to be followed by either another
-    // reset() or consume_row_start().
-    virtual void reset() = 0;
+    // Called when the reader is fast forwarded to given element.
+    virtual void reset(sstables::indexable_element) = 0;
 
     // Under which priority class to place I/O coming from this consumer
     virtual const io_priority_class& io_priority() = 0;

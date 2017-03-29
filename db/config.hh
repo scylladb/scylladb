@@ -87,8 +87,11 @@ public:
             _value = t;
             return *this;
         }
-        MyType & operator()(T&& t) {
+        MyType & operator()(T&& t, config_source src = config_source::None) {
             _value = std::move(t);
+            if (src > config_source::None) {
+                _source = src;
+            }
             return *this;
         }
         const T& operator()() const {

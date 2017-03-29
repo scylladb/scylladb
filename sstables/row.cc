@@ -102,6 +102,7 @@ public:
             return row_consumer::proceed::yes;
         }
 #endif
+        sstlog.trace("data_consume_row_context {}: state={}, size={}", this, static_cast<int>(_state), data.size());
         switch (_state) {
         case state::ROW_START:
             // read 2-byte key length into _u16
@@ -131,7 +132,7 @@ public:
             deletion_time del;
             del.local_deletion_time = _u32;
             del.marked_for_delete_at = _u64;
-            auto ret = _consumer.consume_row_start(to_bytes_view(_key), del);
+            auto ret = _consumer.consume_row_start(key_view(to_bytes_view(_key)), del);
             // after calling the consume function, we can release the
             // buffers we held for it.
             _key.release();
@@ -398,9 +399,18 @@ public:
         }
     }
 
-    void reset(uint64_t offset) {
-        _state = state::ROW_START;
-        _consumer.reset();
+    void reset(indexable_element el) {
+        switch (el) {
+        case indexable_element::partition:
+            _state = state::ROW_START;
+            break;
+        case indexable_element::cell:
+            _state = state::ATOM_START;
+            break;
+        default:
+            assert(0);
+        }
+        _consumer.reset(el);
     }
 };
 
@@ -429,7 +439,16 @@ public:
         return _ctx->consume_input(*_ctx);
     }
     future<> fast_forward_to(uint64_t begin, uint64_t end) {
+        _ctx->reset(indexable_element::partition);
         return _ctx->fast_forward_to(begin, end);
+    }
+    future<> skip_to(indexable_element el, uint64_t begin) {
+        sstlog.trace("data_consume_rows_context {}: skip_to({} -> {}, el={})", _ctx.get(), _ctx->position(), begin, static_cast<int>(el));
+        if (begin <= _ctx->position()) {
+            return make_ready_future<>();
+        }
+        _ctx->reset(el);
+        return _ctx->skip_to(begin);
     }
 };
 
@@ -447,6 +466,9 @@ future<> data_consume_context::read() {
 }
 future<> data_consume_context::fast_forward_to(uint64_t begin, uint64_t end) {
     return _pimpl->fast_forward_to(begin, end);
+}
+future<> data_consume_context::skip_to(indexable_element el, uint64_t begin) {
+    return _pimpl->skip_to(el, begin);
 }
 
 data_consume_context sstable::data_consume_rows(
