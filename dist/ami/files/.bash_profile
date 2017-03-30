@@ -80,6 +80,9 @@ else
 		echo "    ScyllaDB is active."
 		tput sgr0
 		echo
+		echo "$ nodetool status"
+		echo
+		nodetool status
 	else
 		if [ `is_supported_instance_type` -eq 0 ]; then
 			TYPE=`curl -s http://169.254.169.254/latest/meta-data/instance-type`
