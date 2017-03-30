@@ -29,6 +29,8 @@
 
 extern logging::logger startlog;
 
+class bad_configuration_error : public std::exception {};
+
 void init_storage_service(distributed<database>& db);
 void init_ms_fd_gossiper(sstring listen_address
                 , uint16_t storage_port

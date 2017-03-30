@@ -185,8 +185,6 @@ private:
         _locks;
 };
 
-class bad_configuration_error : public std::exception {};
-
 static
 void
 verify_rlimit(bool developer_mode) {

@@ -118,7 +118,12 @@ void init_ms_fd_gossiper(sstring listen_address_in
         sstring seeds_str = seed_provider.parameters.find("seeds")->second;
         while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
             auto seed = boost::trim_copy(seeds_str.substr(begin,next-begin));
-            seeds.emplace(gms::inet_address::lookup(std::move(seed)).get0());
+            try {
+                seeds.emplace(gms::inet_address::lookup(seed).get0());
+            } catch (...) {
+                startlog.error("Bad configuration: invalid value in 'seeds': '{}': {}", seed, std::current_exception());
+                throw bad_configuration_error();
+            }
             begin = next+1;
         }
     }
