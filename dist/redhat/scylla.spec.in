@@ -16,6 +16,17 @@ partitioned row DB.
 This package installs all required packages for ScyllaDB,  including
 scylla-server, scylla-jmx, scylla-tools.
 
+# this is needed to prevent python compilation error on CentOS (#2235)
+%global __os_install_post    \
+    /usr/lib/rpm/redhat/brp-compress \
+    %{!?__debug_package:\
+    /usr/lib/rpm/redhat/brp-strip %{__strip} \
+    /usr/lib/rpm/redhat/brp-strip-comment-note %{__strip} %{__objdump} \
+    } \
+    /usr/lib/rpm/redhat/brp-strip-static-archive %{__strip} \
+    %{!?__jar_repack:/usr/lib/rpm/redhat/brp-java-repack-jars} \
+%{nil}
+
 %files
 %defattr(-,root,root)
 
@@ -186,17 +197,11 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/posix_net_conf.sh
 %{_prefix}/lib/scylla/perftune.py
 %{_prefix}/lib/scylla/dpdk-devbind.py
-%{_prefix}/lib/scylla/dpdk-devbind.pyc
-%{_prefix}/lib/scylla/dpdk-devbind.pyo
 %{_prefix}/lib/scylla/hex2list.py
-%{_prefix}/lib/scylla/hex2list.pyc
-%{_prefix}/lib/scylla/hex2list.pyo
 %{_prefix}/lib/scylla/swagger-ui/dist/*
 %{_prefix}/lib/scylla/api/api-doc/*
 %{_prefix}/lib/scylla/scyllatop/*
 %{_prefix}/lib/scylla/scylla_config_get.py
-%{_prefix}/lib/scylla/scylla_config_get.pyc
-%{_prefix}/lib/scylla/scylla_config_get.pyo
 %{_prefix}/lib/scylla/scylla_lib.sh
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/data
