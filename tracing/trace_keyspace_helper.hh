@@ -139,7 +139,7 @@ private:
      * @return the monotonically increasing vlaue in 100s of ns based on the
      * given time stamp and on the "nanos" value of the previous event.
      */
-    wall_clock::time_point make_monotonic_UUID_tp(int64_t& last_event_nanos, wall_clock::time_point tp) {
+    static wall_clock::time_point make_monotonic_UUID_tp(int64_t& last_event_nanos, wall_clock::time_point tp) {
         using namespace std::chrono;
 
         auto tp_nanos = duration_cast<nanoseconds>(tp.time_since_epoch()).count() / 100;
@@ -281,7 +281,7 @@ private:
      * @return the amount of microseconds in a @param elapsed or a std::numeric_limits<int32_t>::max()
      * if their amount doesn't fit in the int32_t type.
      */
-    int32_t elapsed_to_micros(elapsed_clock::duration elapsed) {
+    static int32_t elapsed_to_micros(elapsed_clock::duration elapsed) {
         auto elapsed_micros = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
         if (elapsed_micros > std::numeric_limits<int32_t>::max()) {
             return std::numeric_limits<int32_t>::max();
