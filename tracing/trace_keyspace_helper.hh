@@ -56,10 +56,12 @@ class trace_keyspace_helper final : public i_tracing_backend_helper {
 public:
     static const sstring KEYSPACE_NAME;
     static const sstring SESSIONS;
+    static const sstring SESSIONS_TIME_IDX;
     static const sstring EVENTS;
 
     // Performance related tables
     static const sstring NODE_SLOW_QUERY_LOG;
+    static const sstring NODE_SLOW_QUERY_LOG_TIME_IDX;
 
 private:
     static constexpr int bad_column_family_message_period = 10000;
@@ -138,8 +140,10 @@ private:
     };
 
     table_helper _sessions;
+    table_helper _sessions_time_idx;
     table_helper _events;
     table_helper _slow_query_log;
+    table_helper _slow_query_log_time_idx;
 
     struct stats {
         uint64_t tracing_errors = 0;
@@ -240,6 +244,15 @@ private:
     static cql3::query_options make_session_mutation_data(const one_session_records& all_records_handle);
 
     /**
+     * Create a mutation data for a new session_idx record
+     *
+     * @param all_records_handle handle to access an object with all records of this session
+     *
+     * @return the relevant cql3::query_options object with the mutation data
+     */
+    static cql3::query_options make_session_time_idx_mutation_data(const one_session_records& all_records_handle);
+
+    /**
      * Create mutation for a new slow_query_log record
      *
      * @param all_records_handle handle to access an object with all records of this session
@@ -248,6 +261,16 @@ private:
      * @return the relevant mutation
      */
     static cql3::query_options make_slow_query_mutation_data(const one_session_records& all_records_handle, const utils::UUID& start_time_id);
+
+    /**
+     * Create mutation for a new slow_query_log_time_idx record
+     *
+     * @param all_records_handle handle to access an object with all records of this session
+     * @param start_time_id time UUID generated from the query start time
+     *
+     * @return the relevant mutation
+     */
+    static cql3::query_options make_slow_query_time_idx_mutation_data(const one_session_records& all_records_handle, const utils::UUID& start_time_id);
 
     /**
      * Create a mutation data for a new trace point record

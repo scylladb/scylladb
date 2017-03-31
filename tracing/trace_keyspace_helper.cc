@@ -51,9 +51,11 @@ static logging::logger logger("trace_keyspace_helper");
 
 const sstring trace_keyspace_helper::KEYSPACE_NAME("system_traces");
 const sstring trace_keyspace_helper::SESSIONS("sessions");
+const sstring trace_keyspace_helper::SESSIONS_TIME_IDX("sessions_time_idx");
 const sstring trace_keyspace_helper::EVENTS("events");
 
 const sstring trace_keyspace_helper::NODE_SLOW_QUERY_LOG("node_slow_log");
+const sstring trace_keyspace_helper::NODE_SLOW_QUERY_LOG_TIME_IDX("node_slow_log_time_idx");
 
 struct trace_keyspace_backend_sesssion_state final : public backend_session_state_base {
     int64_t last_nanos = 0;
@@ -87,6 +89,21 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                   "request,"
                                   "started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
                                   "USING TTL ?", KEYSPACE_NAME, SESSIONS))
+
+            , _sessions_time_idx(SESSIONS_TIME_IDX, *this,
+                                 sprint("CREATE TABLE IF NOT EXISTS %s.%s ("
+                                           "minute timestamp,"
+                                           "started_at timestamp,"
+                                           "session_id uuid,"
+                                           "PRIMARY KEY (minute, started_at, session_id)) "
+                                           "WITH default_time_to_live = 86400", KEYSPACE_NAME, SESSIONS_TIME_IDX),
+
+                                 sprint("INSERT INTO %s.%s ("
+                                           "minute,"
+                                           "started_at,"
+                                           "session_id) VALUES (?, ?, ?) "
+                                           "USING TTL ?", KEYSPACE_NAME, SESSIONS_TIME_IDX))
+
             , _events(EVENTS, *this,
                       sprint("CREATE TABLE IF NOT EXISTS %s.%s ("
                                 "session_id uuid,"
@@ -140,6 +157,26 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                         "table_names,"
                                         "username) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                                         "USING TTL ?", KEYSPACE_NAME, NODE_SLOW_QUERY_LOG))
+
+            , _slow_query_log_time_idx(NODE_SLOW_QUERY_LOG_TIME_IDX, *this,
+                                       sprint("CREATE TABLE IF NOT EXISTS %s.%s ("
+                                                 "minute timestamp,"
+                                                 "started_at timestamp,"
+                                                 "session_id uuid,"
+                                                 "start_time timeuuid,"
+                                                 "node_ip inet,"
+                                                 "shard int,"
+                                                 "PRIMARY KEY (minute, started_at, session_id)) "
+                                                 "WITH default_time_to_live = 86400", KEYSPACE_NAME, NODE_SLOW_QUERY_LOG_TIME_IDX),
+
+                                       sprint("INSERT INTO %s.%s ("
+                                                 "minute,"
+                                                 "started_at,"
+                                                 "session_id,"
+                                                 "start_time,"
+                                                 "node_ip,"
+                                                 "shard) VALUES (?, ?, ?, ?, ?, ?)"
+                                                 "USING TTL ?", KEYSPACE_NAME, NODE_SLOW_QUERY_LOG_TIME_IDX))
 {
     namespace sm = seastar::metrics;
 
@@ -205,8 +242,10 @@ future<> trace_keyspace_helper::start() {
 
             // Create tables
             _sessions.setup_table().get();
+            _sessions_time_idx.setup_table().get();
             _events.setup_table().get();
             _slow_query_log.setup_table().get();
+            _slow_query_log_time_idx.setup_table().get();
         });
     } else {
         return make_ready_future<>();
@@ -265,6 +304,23 @@ cql3::query_options trace_keyspace_helper::make_session_mutation_data(const one_
     return cql3::query_options(db::consistency_level::ANY, std::experimental::nullopt, std::move(values), false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
 }
 
+cql3::query_options trace_keyspace_helper::make_session_time_idx_mutation_data(const one_session_records& session_records) {
+    auto started_at_duration = session_records.session_rec.started_at.time_since_epoch();
+    // timestamp in minutes when the query began
+    auto minutes_in_millis = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::duration_cast<std::chrono::minutes>(started_at_duration)).count();
+    // timestamp when the query began
+    auto millis_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(started_at_duration).count();
+
+    std::vector<cql3::raw_value> values {
+        cql3::raw_value::make_value(timestamp_type->decompose(minutes_in_millis)),
+        cql3::raw_value::make_value(timestamp_type->decompose(millis_since_epoch)),
+        cql3::raw_value::make_value(uuid_type->decompose(session_records.session_id)),
+        cql3::raw_value::make_value(int32_type->decompose(int32_t(session_records.ttl.count())))
+    };
+
+    return cql3::query_options(db::consistency_level::ANY, std::experimental::nullopt, std::move(values), false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
+}
+
 cql3::query_options trace_keyspace_helper::make_slow_query_mutation_data(const one_session_records& session_records, const utils::UUID& start_time_id) {
     const session_record& record = session_records.session_rec;
     auto millis_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(record.started_at.time_since_epoch()).count();
@@ -300,6 +356,26 @@ cql3::query_options trace_keyspace_helper::make_slow_query_mutation_data(const o
         cql3::raw_value::make_value(make_set_value(my_set_type, set_type_impl::native_type(std::move(tables_names_vector))).serialize()),
         cql3::raw_value::make_value(utf8_type->decompose(record.username)),
         cql3::raw_value::make_value(int32_type->decompose((int32_t)(record.slow_query_record_ttl.count())))
+    });
+
+    return cql3::query_options(db::consistency_level::ANY, std::experimental::nullopt, std::move(values), false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
+}
+
+cql3::query_options trace_keyspace_helper::make_slow_query_time_idx_mutation_data(const one_session_records& session_records, const utils::UUID& start_time_id) {
+    auto started_at_duration = session_records.session_rec.started_at.time_since_epoch();
+    // timestamp in minutes when the query began
+    auto minutes_in_millis = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::duration_cast<std::chrono::minutes>(started_at_duration)).count();
+    // timestamp when the query began
+    auto millis_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(started_at_duration).count();
+
+    std::vector<cql3::raw_value> values({
+        cql3::raw_value::make_value(timestamp_type->decompose(minutes_in_millis)),
+        cql3::raw_value::make_value(timestamp_type->decompose(millis_since_epoch)),
+        cql3::raw_value::make_value(uuid_type->decompose(session_records.session_id)),
+        cql3::raw_value::make_value(timeuuid_type->decompose(start_time_id)),
+        cql3::raw_value::make_value(inet_addr_type->decompose(utils::fb_utilities::get_broadcast_address().addr())),
+        cql3::raw_value::make_value(int32_type->decompose(int32_t(engine().cpu_id()))),
+        cql3::raw_value::make_value(int32_type->decompose(int32_t(session_records.session_rec.slow_query_record_ttl.count())))
     });
 
     return cql3::query_options(db::consistency_level::ANY, std::experimental::nullopt, std::move(values), false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
@@ -376,12 +452,20 @@ future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_se
                     // if session is finished - store a session and a session time index entries
                     logger.trace("{}: going to store a session event", records->session_id);
                     return _sessions.insert(make_session_mutation_data, *records).then([this, records] {
+                        logger.trace("{}: going to store a {} entry", records->session_id, _sessions_time_idx.name());
+                        return _sessions_time_idx.insert(make_session_time_idx_mutation_data, *records);
+                    }).then([this, records] {
                         if (!records->do_log_slow_query) {
                             return now();
                         }
+
+                        // if slow query log is requested - store a slow query log and a slow query log time index entries
                         auto start_time_id = utils::UUID_gen::get_time_UUID(make_monotonic_UUID_tp(_slow_query_last_nanos, records->session_rec.started_at));
                         logger.trace("{}: going to store a slow query event", records->session_id);
-                        return _slow_query_log.insert(make_slow_query_mutation_data, *records, start_time_id);
+                        return _slow_query_log.insert(make_slow_query_mutation_data, *records, start_time_id).then([this, records, start_time_id] {
+                            logger.trace("{}: going to store a {} entry", records->session_id, _slow_query_log_time_idx.name());
+                            return _slow_query_log_time_idx.insert(make_slow_query_time_idx_mutation_data, *records, start_time_id);
+                        });
                     });
                 } else {
                     return now();
