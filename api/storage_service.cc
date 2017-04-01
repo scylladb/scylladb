@@ -802,10 +802,8 @@ void set_storage_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::get_metrics_load.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    ss::get_metrics_load.set(r, [&ctx](std::unique_ptr<request> req) {
+        return get_cf_stats(ctx, &column_family::stats::live_disk_space_used);
     });
 
     ss::get_exceptions.set(r, [](const_req req) {
