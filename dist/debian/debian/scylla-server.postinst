@@ -13,11 +13,16 @@ if [ "$1" = configure ]; then
     chown -R scylla:scylla /var/lib/scylla-housekeeping
 fi
 
-ln -sfT /etc/scylla /var/lib/scylla/conf
-
 grep -v api_ui_dir /etc/scylla/scylla.yaml | grep -v api_doc_dir > /tmp/scylla.yaml
 echo "api_ui_dir: /usr/lib/scylla/swagger-ui/dist/" >> /tmp/scylla.yaml
 echo "api_doc_dir: /usr/lib/scylla/api/api-doc/" >> /tmp/scylla.yaml
 mv /tmp/scylla.yaml /etc/scylla/scylla.yaml
+
+OPTIONS_FILE_DEF=`grep -e "^SCYLLA_ARGS" /etc/default/scylla-server |grep "\-\-options-file"`
+if [ -z "$OPTIONS_FILE_DEF" ]; then
+    . /etc/default/scylla-server
+    /usr/lib/scylla/scylla_sysconfig_setup --scylla-args '$SCYLLA_ARGS --options-file /etc/scylla/scylla.yaml'
+fi
+
 
 #DEBHELPER#

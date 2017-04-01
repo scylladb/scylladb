@@ -126,6 +126,15 @@ getent passwd scylla || /usr/sbin/useradd -g scylla -s /sbin/nologin -r -d %{_sh
 if [ -f /etc/systemd/coredump.conf ];then
     /usr/lib/scylla/scylla_coredump_setup
 fi
+# Add --options-file on sysconfig
+if [ $1 -eq 2 ]; then
+    OPTIONS_FILE_DEF=`grep -e "^SCYLLA_ARGS" /etc/sysconfig/scylla-server |grep "\-\-options-file"`
+    if [ -z "$OPTIONS_FILE_DEF" ]; then
+        . /etc/sysconfig/scylla-server
+        /usr/lib/scylla/scylla_sysconfig_setup --scylla-args '$SCYLLA_ARGS --options-file /etc/scylla/scylla.yaml'
+    fi
+fi
+
 %systemd_post scylla-server.service
 
 %preun server
@@ -139,7 +148,6 @@ if  [ -d /tmp/%{name}-%{version}-%{release} ]; then
     cp -a /tmp/%{name}-%{version}-%{release}/* /etc/scylla/
     rm -rf /tmp/%{name}-%{version}-%{release}/
 fi
-ln -sfT /etc/scylla /var/lib/scylla/conf
 systemctl restart collectd
 
 %clean
