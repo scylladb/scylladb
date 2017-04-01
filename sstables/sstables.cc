@@ -1236,6 +1236,12 @@ future<sstable_open_info> sstable::load_shared_components(const schema_ptr& s, s
     });
 }
 
+future<foreign_sstable_open_info> sstable::get_open_info() & {
+    return _components.copy().then([this] (auto c) mutable {
+        return foreign_sstable_open_info{std::move(c), this->get_shards_for_this_sstable(), _data_file.dup(), _index_file.dup()};
+    });
+}
+
 static void output_promoted_index_entry(bytes_ostream& promoted_index,
         const bytes& first_col,
         const bytes& last_col,

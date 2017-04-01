@@ -668,6 +668,10 @@ public:
 
     const std::vector<nonwrapping_range<bytes_view>>& clustering_components_ranges() const;
 
+    // get sstable open info from a loaded sstable, which can be used to quickly open a sstable
+    // at another shard.
+    future<foreign_sstable_open_info> get_open_info() &;
+
     // returns all info needed for a sstable to be shared with other shards.
     static future<sstable_open_info> load_shared_components(const schema_ptr& s, sstring dir, int generation, version_types v, format_types f);
 
