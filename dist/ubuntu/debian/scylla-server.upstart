@@ -41,6 +41,7 @@ script
         fi
         . "$i"
     done
+    export SCYLLA_CONF SCYLLA_HOME
     exec /usr/bin/scylla $SCYLLA_ARGS $SEASTAR_IO $DEV_MODE $CPUSET
 end script
 
