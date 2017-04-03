@@ -1,0 +1,35 @@
+#!/bin/bash -e
+#
+#  Copyright (C) 2017 ScyllaDB
+
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+
+. /usr/lib/scylla/scylla_lib.sh
+
+#
+# We need to setup fstrim using different scripts for each distribution,
+# as follows:
+#
+# - CentOS 7/RHEL 7/Fedora: use fstrim.timer that included the distribution
+# - Debian 8: use scylla-fstrim via /etc/cron.d
+# - Ubuntu 14.04: use scylla-fstrim via /etc/cron.d
+# - Ubuntu 16.04: use /etc/cron.weekly/fstrim that included the distribution
+#
+
+if is_redhat_variant; then
+    systemctl enable fstrim.timer
+fi

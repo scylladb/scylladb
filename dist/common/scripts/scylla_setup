@@ -14,7 +14,7 @@ if [ "`id -u`" -ne 0 ]; then
 fi
 
 print_usage() {
-    echo "scylla_setup --disks /dev/hda,/dev/hdb... --nic eth0 --ntp-domain centos --ami --setup-nic --developer-mode --no-kernel-check --no-verify-package --no-enable-service --no-selinux-setup --no-bootparam-setup --no-ntp-setup --no-raid-setup --no-coredump-setup --no-sysconfig-setup --no-cpuscaling-setup"
+    echo "scylla_setup --disks /dev/hda,/dev/hdb... --nic eth0 --ntp-domain centos --ami --setup-nic --developer-mode --no-kernel-check --no-verify-package --no-enable-service --no-selinux-setup --no-bootparam-setup --no-ntp-setup --no-raid-setup --no-coredump-setup --no-sysconfig-setup --no-cpuscaling-setup --no-fstrim-setup"
     echo "  --disks			specify disks for RAID"
     echo "  --nic				specify NIC"
     echo "  --ntp-domain			specify NTP domain"
@@ -34,6 +34,9 @@ print_usage() {
     echo "  --no-version-check		skip daily version check"
     echo "  --no-node-exporter        do not install the node exporter"
     echo "  --no-cpuscaling-setup      skip cpu scalling setup"
+    if is_redhat_variant; then
+        echo "  --no-fstrim-setup           skip fstrim setup"
+    fi
     exit 1
 }
 
@@ -132,6 +135,7 @@ SYSCONFIG_SETUP=1
 IO_SETUP=1
 NODE_EXPORTER=1
 CPUSCALING_SETUP=1
+FSTRIM_SETUP=1
 SELINUX_REBOOT_REQUIRED=0
 
 if [ $# -ne 0 ]; then
@@ -218,6 +222,10 @@ while [ $# -gt 0 ]; do
             CPUSCALING_SETUP=0
             shift 1
             ;;
+        "--no-fstrim-setup")
+            FSTRIM_SETUP=0
+            shift 1
+            ;;
         "-h" | "--help")
             print_usage
             shift 1
@@ -261,7 +269,6 @@ if [ $ENABLE_SERVICE -eq 1 ]; then
     if is_systemd; then
         systemctl enable scylla-server.service
         systemctl enable collectd.service
-        systemctl unmask scylla-fstrim.timer
     fi
     if [ $INTERACTIVE -eq 1 ] && [ ! -f /etc/scylla.d/housekeeping.cfg ]; then
         interactive_ask_service "Do you want to enable ScyllaDB version check?" "Answer yes to automatically start Scylla-housekeeping service that checks for a newer version periodically; answer no to skip this step." "yes" &&:
@@ -457,6 +464,16 @@ if [ $INTERACTIVE -eq 1 ]; then
 fi
 if [ $CPUSCALING_SETUP -eq 1 ]; then
     run_setup_script "CPU Scalling" /usr/lib/scylla/scylla_cpuscaling_setup
+fi
+
+if is_redhat_variant; then
+    if [ $INTERACTIVE -eq 1 ]; then
+        interactive_ask_service "Do you want to enable fstrim service?" "Answer yes to run fstrim on your SSD. Answer no to do nothing." "yes" &&:
+        FSTRIM_SETUP=$?
+    fi
+    if [ $FSTRIM_SETUP -eq 1 ]; then
+        run_setup_script "fstrim" /usr/lib/scylla/scylla_fstrim_setup
+    fi
 fi
 
 echo "ScyllaDB setup finished."

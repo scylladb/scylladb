@@ -87,10 +87,10 @@ if [ "$DISTRIBUTION" = "Debian" ]; then
     sed -i -e "s#@@INSTALL@@##g" debian/scylla-server.install
     sed -i -e "s#@@HKDOTTIMER_D@@#dist/common/systemd/scylla-housekeeping-daily.timer /lib/systemd/system#g" debian/scylla-server.install
     sed -i -e "s#@@HKDOTTIMER_R@@#dist/common/systemd/scylla-housekeeping-restart.timer /lib/systemd/system#g" debian/scylla-server.install
-    sed -i -e "s#@@FTDOTTIMER@@#dist/common/systemd/scylla-fstrim.timer /lib/systemd/system#g" debian/scylla-server.install
     sed -i -e "s#@@SYSCTL@@#dist/debian/sysctl.d/99-scylla.conf etc/sysctl.d#g" debian/scylla-server.install
     sed -i -e "s#@@SCRIPTS_SAVE_COREDUMP@@#dist/debian/scripts/scylla_save_coredump usr/lib/scylla#g" debian/scylla-server.install
-    sed -i -e "s#@@SCRIPTS_DELAY_FSTRIM@@##g" debian/scylla-server.install
+    sed -i -e "s#@@SCRIPTS_FSTRIM@@#dist/debian/scripts/scylla_fstrim usr/lib/scylla#g" debian/scylla-server.install
+    sed -i -e "s#@@SCRIPTS_DELAY_FSTRIM@@#dist/debian/scripts/scylla_delay_fstrim usr/lib/scylla#g" debian/scylla-server.install
 elif [ "$VERSION_ID" = "14.04" ]; then
     sed -i -e "s/@@REVISION@@/0ubuntu1/g" debian/changelog
     sed -i -e "s/@@DH_INSTALLINIT@@/--upstart-only/g" debian/rules
@@ -100,9 +100,9 @@ elif [ "$VERSION_ID" = "14.04" ]; then
     sed -i -e "s#@@INSTALL@@#dist/debian/sudoers.d/scylla etc/sudoers.d#g" debian/scylla-server.install
     sed -i -e "s#@@HKDOTTIMER_D@@##g" debian/scylla-server.install
     sed -i -e "s#@@HKDOTTIMER_R@@##g" debian/scylla-server.install
-    sed -i -e "s#@@FTDOTTIMER@@##g" debian/scylla-server.install
     sed -i -e "s#@@SYSCTL@@#dist/debian/sysctl.d/99-scylla.conf etc/sysctl.d#g" debian/scylla-server.install
     sed -i -e "s#@@SCRIPTS_SAVE_COREDUMP@@#dist/debian/scripts/scylla_save_coredump usr/lib/scylla#g" debian/scylla-server.install
+    sed -i -e "s#@@SCRIPTS_FSTRIM@@#dist/debian/scripts/scylla_fstrim usr/lib/scylla#g" debian/scylla-server.install
     sed -i -e "s#@@SCRIPTS_DELAY_FSTRIM@@#dist/debian/scripts/scylla_delay_fstrim usr/lib/scylla#g" debian/scylla-server.install
 else
     sed -i -e "s/@@REVISION@@/0ubuntu1/g" debian/changelog
@@ -113,9 +113,9 @@ else
     sed -i -e "s#@@INSTALL@@##g" debian/scylla-server.install
     sed -i -e "s#@@HKDOTTIMER_D@@#dist/common/systemd/scylla-housekeeping-daily.timer /lib/systemd/system#g" debian/scylla-server.install
     sed -i -e "s#@@HKDOTTIMER_R@@#dist/common/systemd/scylla-housekeeping-restart.timer /lib/systemd/system#g" debian/scylla-server.install
-    sed -i -e "s#@@FTDOTTIMER@@#dist/common/systemd/scylla-fstrim.timer /lib/systemd/system#g" debian/scylla-server.install
     sed -i -e "s#@@SYSCTL@@##g" debian/scylla-server.install
     sed -i -e "s#@@SCRIPTS_SAVE_COREDUMP@@##g" debian/scylla-server.install
+    sed -i -e "s#@@SCRIPTS_FSTRIM@@##g" debian/scylla-server.install
     sed -i -e "s#@@SCRIPTS_DELAY_FSTRIM@@##g" debian/scylla-server.install
 fi
 if [ $DIST -gt 0 ]; then
@@ -128,9 +128,8 @@ cp dist/common/systemd/scylla-server.service.in debian/scylla-server.service
 sed -i -e "s#@@SYSCONFDIR@@#/etc/default#g" debian/scylla-server.service
 cp dist/common/systemd/scylla-housekeeping-daily.service debian/scylla-server.scylla-housekeeping-daily.service
 cp dist/common/systemd/scylla-housekeeping-restart.service debian/scylla-server.scylla-housekeeping-restart.service
-cp dist/common/systemd/scylla-fstrim.service debian/scylla-server.scylla-fstrim.service
 cp dist/common/systemd/node-exporter.service debian/scylla-server.node-exporter.service
-if [ "$VERSION_ID" = "14.04" ]; then
+if [ "$DISTRIBUTION" = "Debian" ] || [ "$VERSION_ID" = "14.04" ]; then
     cp dist/debian/scylla-server.cron.d debian/
 fi
 

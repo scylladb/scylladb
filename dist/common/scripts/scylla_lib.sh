@@ -5,6 +5,10 @@ is_debian_variant() {
     [ -f /etc/debian_version ]
 }
 
+is_redhat_variant() {
+    [ -f /etc/redhat-release ]
+}
+
 is_systemd() {
     grep -q '^systemd$' /proc/1/comm
 }
