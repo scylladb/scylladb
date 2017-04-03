@@ -5,7 +5,7 @@
 . /usr/lib/scylla/scylla_lib.sh
 
 print_usage() {
-    echo "scylla-sysconfig-setup --nic eth0 --mode posix --nr-hugepages 64 --user scylla --group scylla --homedir /var/lib/scylla --confdir /etc/scylla --setup-nic --scylla-args <args>"
+    echo "scylla-sysconfig-setup --nic eth0 --mode posix --nr-hugepages 64 --user scylla --group scylla --homedir /var/lib/scylla --confdir /etc/scylla --setup-nic"
     echo "  --nic  specify NIC"
     echo "  --mode  network mode (posix, dpdk)"
     echo "  --nr-hugepages  number of hugepages"
@@ -15,7 +15,6 @@ print_usage() {
     echo "  --confdir  scylla config directory"
     echo "  --setup-nic  setup NIC's interrupts, RPS, XPS"
     echo "  --ami  AMI instance mode"
-    echo "  --scylla-args  scylla program arguments"
     exit 1
 }
 
@@ -59,10 +58,6 @@ while [ $# -gt 0 ]; do
         "--ami")
             AMI=yes
             shift 1
-            ;;
-        "--scylla-args")
-            SCYLLA_ARGS="$2"
-            shift 2
             ;;
         *)
             print_usage
