@@ -350,9 +350,14 @@ if [ $INTERACTIVE -eq 1 ]; then
             echo "Please select unmounted disks from the following list: $DEVS"
         fi
         while [ "$DEVS" != "" ]; do
+            echo "type 'cancel' to cancel RAID/XFS setup."
             echo "type 'done' to finish selection. Selected: $DISKS"
             echo -n "> "
             read dsk
+            if [ "$dsk" = "cancel" ]; then
+                RAID_SETUP=0
+                break
+            fi
             if [ "$dsk" = "done" ]; then
                 if [ "$DISKS" = "" ]; then
                     continue
