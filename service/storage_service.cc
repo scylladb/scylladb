@@ -3285,14 +3285,7 @@ static std::atomic<bool> isolated = { false };
 
 void storage_service::do_isolate_on_error(disk_error type)
 {
-    auto& cfg = _db.local().get_config();
-    bool must_isolate = cfg.disk_failure_policy() == "stop";
-
-    if (type == disk_error::commit) {
-        must_isolate = cfg.commit_failure_policy() == "stop";
-    }
-
-    if (must_isolate && !isolated.exchange(true)) {
+    if (!isolated.exchange(true)) {
         logger.warn("Shutting down communications due to I/O errors until operator intervention");
         // isolated protect us against multiple stops
         service::get_local_storage_service().stop_transport();

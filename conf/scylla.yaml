@@ -282,28 +282,6 @@ batch_size_fail_threshold_in_kb: 50
 #
 partitioner: org.apache.cassandra.dht.Murmur3Partitioner
 
-
-# policy for data disk failures:
-# die: shut down gossip and Thrift and kill the JVM for any fs errors or
-#      single-sstable errors, so the node can be replaced.
-# stop_paranoid: shut down gossip and Thrift even for single-sstable errors.
-# stop: shut down gossip and Thrift, leaving the node effectively dead, but
-#       can still be inspected via JMX.
-# best_effort: stop using the failed disk and respond to requests based on
-#              remaining available sstables.  This means you WILL see obsolete
-#              data at CL.ONE!
-# ignore: ignore fatal errors and let requests fail, as in pre-1.2 Scylla
-# disk_failure_policy: stop
-
-# policy for commit disk failures:
-# die: shut down gossip and Thrift and kill the JVM, so the node can be replaced.
-# stop: shut down gossip and Thrift, leaving the node effectively dead, but
-#       can still be inspected via JMX.
-# stop_commit: shutdown the commit log, letting writes collect but
-#              continuing to service reads, as in pre-2.0.5 Scylla
-# ignore: ignore fatal errors and let the batches fail
-# commit_failure_policy: stop
-
 # Maximum size of the key cache in memory.
 #
 # Each key cache hit saves 1 seek and each row cache hit saves 2 seeks at the
