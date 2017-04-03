@@ -82,7 +82,8 @@ verify_package() {
 
 list_block_devices() {
     if lsblk --help | grep -q -e '^\s*-p'; then
-        lsblk -pnr | awk '{ print $1 }'
+        # to skip ROM devices, drop 'rom'
+        lsblk -pnr | awk '$6 != "rom" { print $1 }'
     else
         ls -1 /dev/sd* /dev/hd* /dev/xvd* /dev/nvme* /dev/mapper/*  2>/dev/null|grep -v control
     fi
