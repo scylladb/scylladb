@@ -69,6 +69,7 @@ public:
     // actual type used, so Raw is a "not yet prepared" CQL3Type.
     class raw {
     public:
+        virtual ~raw() {}
         bool _frozen = false;
         virtual bool supports_freezing() const = 0;
         virtual bool is_collection() const;
