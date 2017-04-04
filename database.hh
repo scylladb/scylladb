@@ -579,6 +579,7 @@ private:
 
     // This function replaces new sstables by their ancestors, which are sstables that needed resharding.
     void replace_ancestors_needed_rewrite(std::vector<sstables::shared_sstable> new_sstables);
+    void remove_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancestors);
 private:
     mutation_source_opt _virtual_reader;
     // Creates a mutation reader which covers sstables.
@@ -794,6 +795,7 @@ public:
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const;
     std::vector<sstables::shared_sstable> select_sstables(const dht::partition_range& range) const;
     std::vector<sstables::shared_sstable> candidates_for_compaction() const;
+    std::vector<sstables::shared_sstable> sstables_need_rewrite() const;
     size_t sstables_count() const;
     std::vector<uint64_t> sstable_count_per_level() const;
     int64_t get_unleveled_sstables() const;
@@ -1295,6 +1297,7 @@ future<> update_schema_version_and_announce(distributed<service::storage_proxy>&
 
 class distributed_loader {
 public:
+    static void reshard(distributed<database>& db, sstring ks_name, sstring cf_name);
     static future<> open_sstable(distributed<database>& db, sstables::entry_descriptor comps,
         std::function<future<> (column_family&, sstables::foreign_sstable_open_info)> func);
     static future<> load_new_sstables(distributed<database>& db, sstring ks, sstring cf, std::vector<sstables::entry_descriptor> new_tables);
