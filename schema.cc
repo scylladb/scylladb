@@ -914,26 +914,23 @@ schema::regular_end() const {
     return regular_columns().end();
 }
 
+struct column_less_comparator {
+    bool operator()(const column_definition& def, const bytes& name) {
+        return def.name() < name;
+    }
+    bool operator()(const bytes& name, const column_definition& def) {
+        return name < def.name();
+    }
+};
+
 schema::const_iterator
 schema::regular_lower_bound(const bytes& name) const {
-    // TODO: use regular_columns and a version of std::lower_bound() with heterogeneous comparator
-    auto i = _regular_columns_by_name.lower_bound(name);
-    if (i == _regular_columns_by_name.end()) {
-        return regular_end();
-    } else {
-        return regular_begin() + i->second->id;
-    }
+    return boost::lower_bound(regular_columns(), name, column_less_comparator());
 }
 
 schema::const_iterator
 schema::regular_upper_bound(const bytes& name) const {
-    // TODO: use regular_columns and a version of std::upper_bound() with heterogeneous comparator
-    auto i = _regular_columns_by_name.upper_bound(name);
-    if (i == _regular_columns_by_name.end()) {
-        return regular_end();
-    } else {
-        return regular_begin() + i->second->id;
-    }
+    return boost::upper_bound(regular_columns(), name, column_less_comparator());
 }
 
 data_type
