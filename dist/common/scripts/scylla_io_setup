@@ -1,81 +1,87 @@
-#!/bin/bash
+#!/usr/bin/python
 
-. /usr/lib/scylla/scylla_lib.sh
+# Copyright (C) 2017 ScyllaDB
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-print_usage() {
-    echo "scylla_io_setup --ami"
-    echo "  --ami				setup AMI instance"
-    exit 1
-}
+import os
+import re
+from string import atoi
+import scylla_util
+import subprocess
+import argparse
+import yaml
+import logging
+import sys
 
-AMI_OPT=0
-while [ $# -gt 0 ]; do
-    case "$1" in
-        "--ami")
-            AMI_OPT=1
-            shift 1
-            ;;
-        *)
-            print_usage
-            ;;
-    esac
-done
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='IO Setup script for Scylla.')
+    parser.add_argument('--ami', dest='ami', action='store_true',
+                        help='configure AWS AMI')
+    args = parser.parse_args()
 
+    cpudata = scylla_util.scylla_cpuinfo()
+    if not scylla_util.is_developer_mode():
+        if args.ami:
+            idata = scylla_util.aws_instance()
+            nr_io_queues = cpudata.nr_shards()
 
-is_developer_mode() {
-    cat /etc/scylla.d/dev-mode.conf|egrep -c "\-\-developer-mode(\s+|=)(1|true)"
-}
+            if idata.instance_class() == "i3":
+                sysfs_file = "/sys/block/%s/queue/nr_requests"
+                max_seastar_shard_req = 128
+                max_sysfs_shard_req = sum([ atoi(file(sysfs_file % x).readline().strip()) for x in idata.ephemeral_disks() ])
+                # obtained running iotune multiple times against a single i3 disk.
+                max_iotune_disk = 192 * len(idata.ephemeral_disks())
+                nr_reqs = min(max_seastar_shard_req * cpudata.nr_shards(), max_sysfs_shard_req, max_iotune_disk)
+            elif idata.instance_class() == "i2":
+                nr_reqs = 32 * len(idata.ephemeral_disks())
+            else:
+                nr_reqs = 16 * max(len(idata.ephemeral_disks()), 2)
+            if nr_reqs/nr_io_queues < 4:
+                nr_io_queues = nr_reqs / 4
+            ioconf = file("/etc/scylla.d/io.conf", "w")
+            ioconf.write("SEASTAR_IO=\"--num-io-queues {} --max-io-requests {}\"\n".format(nr_io_queues, nr_reqs))
+        else:
+            if os.environ.has_key("SCYLLA_CONF"):
+                conf_dir = os.environ["SCYLLA_CONF"]
+            else:
+                conf_dir = "/etc/scylla"
+            cfg = yaml.load(open(os.path.join(conf_dir, "scylla.yaml")))
+            data_dirs = cfg["data_file_directories"]
+            if len(data_dirs) > 1:
+                logging.warn("%d data directories found. scylla_io_setup currently lacks support for it, and only %s will be evaluated",
+                             len(data_dirs), data_dirs[0])
 
-output_to_user()
-{
-    echo "$1"
-    logger -p user.err "$1"
-}
+            data_dir = data_dirs[0]
+            iotune_args = []
+            if cpudata.cpuset():
+                iotune_args += [ "--cpuset", ",".join(map(str, cpudata.cpuset())) ]
+            elif cpudata.smp():
+                iotune_args += [ "--smp", cpudata.smp() ]
 
-if [ `is_developer_mode` -eq 0 ]; then
-    SMP=`echo $CPUSET|grep smp|sed -e "s/^.*smp\(\s\+\|=\)\([^ ]*\).*$/\2/"`
-    CPUSET=`echo $CPUSET|grep cpuset|sed -e "s/^.*\(--cpuset\(\s\+\|=\)[^ ]*\).*$/\1/"`
-    if [ $AMI_OPT -eq 1 ]; then
-        NR_CPU=`cat /proc/cpuinfo |grep processor|wc -l`
-        NR_DISKS=`lsblk --list --nodeps --noheadings | grep -v xvda | grep xvd | wc -l`
-        TYPE=`curl http://169.254.169.254/latest/meta-data/instance-type|cut -d . -f 1`
+            try:
+                subprocess.check_call(["iotune",
+                                       "--evaluation-directory", data_dir,
+                                       "--format", "envfile",
+                                       "--options-file", "/etc/scylla.d/io.conf"] + iotune_args)
+            except Exception:
+                logging.error("%s did not pass validation tests, it may not be on XFS and/or has limited disk space.\n"
+                              "This is a non-supported setup, and performance is expected to be very bad.\n"
+                              "For better performance, placing your data on XFS-formatted directories is required.\n"
+                              "To override this error, enable developer mode as follow:\n"
+                              "sudo /usr/lib/scylla/scylla_dev_mode_setup --developer-mode 1", data_dir)
+                sys.exit(1)
 
-        if [ "$SMP" != "" ]; then
-            NR_CPU=$SMP
-        fi
-        NR_SHARDS=$NR_CPU
-        if [ $NR_CPU -ge 8 ] && [ "$SET_NIC" = "no" ]; then
-            NR_SHARDS=$((NR_CPU - 1))
-        fi
-        if [ $NR_DISKS -lt 2 ]; then NR_DISKS=2; fi
-
-        NR_REQS=$((32 * $NR_DISKS / 2))
-
-        NR_IO_QUEUES=$NR_SHARDS
-        if [ $(($NR_REQS/$NR_IO_QUEUES)) -lt 4 ]; then
-            NR_IO_QUEUES=$(($NR_REQS / 4))
-        fi
-
-        NR_IO_QUEUES=$((NR_IO_QUEUES>NR_SHARDS?NR_SHARDS:NR_IO_QUEUES))
-        NR_REQS=$(($(($NR_REQS / $NR_IO_QUEUES)) * $NR_IO_QUEUES))
-        if [ "$TYPE" = "i2" ]; then
-            NR_REQS=$(($NR_REQS * 2))
-        fi
-
-        echo "SEASTAR_IO=\"--num-io-queues $NR_IO_QUEUES --max-io-requests $NR_REQS\"" > /etc/scylla.d/io.conf
-    else
-        DATA_DIR=`/usr/lib/scylla/scylla_config_get.py --config $SCYLLA_CONF/scylla.yaml --get data_file_directories|head -n1`
-        IOTUNE_ARGS="$CPUSET"
-        if [ "$SMP" != "" ]; then
-            IOTUNE_ARGS="$IOTUNE_ARGS --smp $SMP"
-        fi
-        iotune --evaluation-directory $DATA_DIR --format envfile --options-file /etc/scylla.d/io.conf $IOTUNE_ARGS
-        if [ $? -ne 0 ]; then
-            output_to_user "/var/lib/scylla did not pass validation tests, it may not be on XFS and/or has limited disk space."
-            output_to_user "This is a non-supported setup, and performance is expected to be very bad."
-            output_to_user "For better performance, placing your data on XFS-formatted directories is required."
-            output_to_user "To override this error, enable developer mode as follow:"
-            output_to_user " sudo /usr/lib/scylla/scylla_dev_mode_setup --developer-mode 1"
-        fi
-    fi
-fi
