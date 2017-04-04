@@ -139,7 +139,7 @@ void schema::rebuild() {
     }
 
     thrift()._compound = is_compound();
-    thrift()._is_dynamic = clustering_key_size() > 0;
+    thrift()._is_dynamic = static_columns_count() == 0;
 
     if (is_counter()) {
         for (auto&& cdef : boost::range::join(static_columns(), regular_columns())) {
