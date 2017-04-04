@@ -96,10 +96,9 @@ def validate_and_fix(args):
     res = True
     if args.user:
         auth_provider = PlainTextAuthProvider(username=args.user, password=args.password)
-        cluster = Cluster(auth_provider=auth_provider)
+        cluster = Cluster(auth_provider=auth_provider, contact_points=[ args.node ], port=args.port)
     else:
-        cluster = Cluster()
-
+        cluster = Cluster(contact_points=[ args.node ], port=args.port)
 
     try:
         session = cluster.connect()
@@ -142,6 +141,8 @@ if __name__ == '__main__':
     argp = argparse.ArgumentParser(description = 'Validate distributed system keyspaces')
     argp.add_argument('--user', '-u')
     argp.add_argument('--password', '-p', default='none')
+    argp.add_argument('--node', default='127.0.0.1', help='Node to connect to.')
+    argp.add_argument('--port', default='9042', help='Port to connect to.')
 
     args = argp.parse_args()
     res = validate_and_fix(args)
