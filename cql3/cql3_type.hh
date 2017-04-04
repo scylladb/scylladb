@@ -75,6 +75,7 @@ public:
         virtual bool supports_freezing() const = 0;
         virtual bool is_collection() const;
         virtual bool is_counter() const;
+        virtual bool references_user_type(const sstring&) const;
         virtual std::experimental::optional<sstring> keyspace() const;
         virtual void freeze();
         virtual shared_ptr<cql3_type> prepare_internal(const sstring& keyspace, lw_shared_ptr<user_types_metadata>) = 0;

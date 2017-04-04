@@ -33,6 +33,10 @@ shared_ptr<cql3_type> cql3_type::raw::prepare(database& db, const sstring& keysp
     }
 }
 
+bool cql3_type::raw::references_user_type(const sstring& name) const {
+    return false;
+}
+
 class cql3_type::raw_type : public raw {
 private:
     shared_ptr<cql3_type> _type;
@@ -115,6 +119,10 @@ public:
         abort();
     }
 
+    bool references_user_type(const sstring& name) const override {
+        return (_keys && _keys->references_user_type(name)) || _values->references_user_type(name);
+    }
+
     virtual sstring to_string() const override {
         sstring start = _frozen ? "frozen<" : "";
         sstring end = _frozen ? ">" : "";
@@ -156,7 +164,10 @@ public:
         } else {
             _name.set_keyspace(keyspace);
         }
-
+        if (!user_types) {
+            // bootstrap mode.
+            throw exceptions::invalid_request_exception(sprint("Unknown type %s", _name));
+        }
         try {
             auto&& type = user_types->get_type(_name.get_user_type_name());
             if (!_frozen) {
@@ -167,7 +178,9 @@ public:
             throw exceptions::invalid_request_exception(sprint("Unknown type %s", _name));
         }
     }
-
+    bool references_user_type(const sstring& name) const override {
+        return _name.get_string_type_name() == name;
+    }
     virtual bool supports_freezing() const override {
         return true;
     }
@@ -211,6 +224,13 @@ public:
         }
         return make_cql3_tuple_type(tuple_type_impl::get_instance(std::move(ts)));
     }
+
+    bool references_user_type(const sstring& name) const override {
+        return std::any_of(_types.begin(), _types.end(), [&name](auto t) {
+            return t->references_user_type(name);
+        });
+    }
+
     virtual sstring to_string() const override {
         return sprint("tuple<%s>", join(", ", _types));
     }
