@@ -47,6 +47,7 @@
 #include "enum_set.hh"
 
 class database;
+class user_types_metadata;
 
 namespace cql3 {
 
@@ -76,7 +77,8 @@ public:
         virtual bool is_counter() const;
         virtual std::experimental::optional<sstring> keyspace() const;
         virtual void freeze();
-        virtual shared_ptr<cql3_type> prepare(database& db, const sstring& keyspace) = 0;
+        virtual shared_ptr<cql3_type> prepare_internal(const sstring& keyspace, lw_shared_ptr<user_types_metadata>) = 0;
+        virtual shared_ptr<cql3_type> prepare(database& db, const sstring& keyspace);
         static shared_ptr<raw> from(shared_ptr<cql3_type> type);
         static shared_ptr<raw> user_type(ut_name name);
         static shared_ptr<raw> map(shared_ptr<raw> t1, shared_ptr<raw> t2);
