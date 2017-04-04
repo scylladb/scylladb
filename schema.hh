@@ -578,6 +578,10 @@ public:
     const_iterator regular_end() const;
     const_iterator regular_lower_bound(const bytes& name) const;
     const_iterator regular_upper_bound(const bytes& name) const;
+    const_iterator static_begin() const;
+    const_iterator static_end() const;
+    const_iterator static_lower_bound(const bytes& name) const;
+    const_iterator static_upper_bound(const bytes& name) const;
     data_type column_name_type(const column_definition& def) const;
     const column_definition& regular_column_at(column_id id) const;
     const column_definition& static_column_at(column_id id) const;

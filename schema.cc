@@ -933,6 +933,25 @@ schema::regular_upper_bound(const bytes& name) const {
     return boost::upper_bound(regular_columns(), name, column_less_comparator());
 }
 
+schema::const_iterator
+schema::static_begin() const {
+    return static_columns().begin();
+}
+
+schema::const_iterator
+schema::static_end() const {
+    return static_columns().end();
+}
+
+schema::const_iterator
+schema::static_lower_bound(const bytes& name) const {
+    return boost::lower_bound(static_columns(), name, column_less_comparator());
+}
+
+schema::const_iterator
+schema::static_upper_bound(const bytes& name) const {
+    return boost::upper_bound(static_columns(), name, column_less_comparator());
+}
 data_type
 schema::column_name_type(const column_definition& def) const {
     return def.kind == column_kind::regular_column ? _raw._regular_column_name_type : utf8_type;
