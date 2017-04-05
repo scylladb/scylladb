@@ -29,16 +29,16 @@ def get(config, key):
     try:
         val = cfg[key]
     except KeyError:
-        print "key '%s' not found" % key
+        print("key '%s' not found" % key)
         sys.exit(1)
     if isinstance(val, list):
         for v in val:
-            print "%s" % v
+            print("%s" % v)
     elif isinstance(val, dict):
-        for k, v in val.items():
-            print "%s:%s" % (k, v)
+        for k, v in list(val.items()):
+            print("%s:%s" % (k, v))
     else:
-        print val
+        print(val)
 
 def main():
     parser = argparse.ArgumentParser(description='scylla.yaml config reader/writer from shellscript.')
