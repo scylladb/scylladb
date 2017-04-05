@@ -301,6 +301,7 @@ scylla_tests = [
     'tests/limiting_data_source_test',
     'tests/meta_test',
     'tests/imr_test',
+    'tests/partition_data_test',
 ]
 
 perf_tests = [
@@ -732,6 +733,7 @@ pure_boost_tests = set([
     'tests/cql_auth_syntax_test',
     'tests/meta_test',
     'tests/imr_test',
+    'tests/partition_data_test',
 ])
 
 tests_not_using_seastar_test_framework = set([
