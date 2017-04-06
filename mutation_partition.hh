@@ -485,6 +485,112 @@ struct appending_hash<shadowable_tombstone> {
     }
 };
 
+/*
+The rules for row_tombstones are as follows:
+  - The shadowable tombstone is always >= than the regular one;
+  - The regular tombstone works as expected;
+  - The shadowable tombstone doesn't erase or compact away the regular
+    row tombstone, nor dead cells;
+  - The shadowable tombstone can erase live cells, but only provided they
+    can be recovered (e.g., by including all cells in a MV update, both
+    updated cells and pre-existing ones);
+  - The shadowable tombstone can be erased or compacted away by a newer
+    row marker.
+*/
+class row_tombstone : public with_relational_operators<row_tombstone> {
+    tombstone _regular;
+    shadowable_tombstone _shadowable; // _shadowable is always >= _regular
+public:
+    explicit row_tombstone(tombstone regular, shadowable_tombstone shadowable)
+            : _regular(std::move(regular))
+            , _shadowable(std::move(shadowable)) {
+    }
+
+    explicit row_tombstone(tombstone regular)
+            : row_tombstone(regular, shadowable_tombstone(regular)) {
+    }
+
+    row_tombstone() = default;
+
+    int compare(const row_tombstone& t) const {
+        return _shadowable.compare(t._shadowable);
+    }
+
+    explicit operator bool() const {
+        return bool(_shadowable);
+    }
+
+    const tombstone& tomb() const {
+        return _shadowable.tomb();
+    }
+
+    const gc_clock::time_point max_deletion_time() const {
+        return std::max(_regular.deletion_time, _shadowable.tomb().deletion_time);
+    }
+
+    const tombstone& regular() const {
+        return _regular;
+    }
+
+    const shadowable_tombstone& shadowable() const {
+        return _shadowable;
+    }
+
+    bool is_shadowable() const {
+        return _shadowable.tomb() > _regular;
+    }
+
+    void maybe_shadow(const row_marker& marker) noexcept {
+        _shadowable.maybe_shadow(_regular, marker);
+    }
+
+    void apply(tombstone regular) noexcept {
+        _shadowable.apply(regular);
+        _regular.apply(regular);
+    }
+
+    void apply(shadowable_tombstone shadowable, row_marker marker) noexcept {
+        _shadowable.apply(shadowable.tomb());
+        _shadowable.maybe_shadow(_regular, marker);
+    }
+
+    void apply(row_tombstone t, row_marker marker) noexcept {
+        _regular.apply(t._regular);
+        _shadowable.apply(t._shadowable);
+        _shadowable.maybe_shadow(_regular, marker);
+    }
+
+    // See reversibly_mergeable.hh
+    void apply_reversibly(row_tombstone& t, row_marker marker) noexcept {
+        std::swap(*this, t);
+        apply(t, marker);
+    }
+
+    // See reversibly_mergeable.hh
+    void revert(row_tombstone& t) noexcept {
+        std::swap(*this, t);
+    }
+
+    friend std::ostream& operator<<(std::ostream& out, const row_tombstone& t) {
+        if (t) {
+            return out << "{row_tombstone: " << t._regular << (t.is_shadowable() ? t._shadowable : shadowable_tombstone()) << "}";
+        } else {
+            return out << "{row_tombstone: none}";
+        }
+    }
+};
+
+template<>
+struct appending_hash<row_tombstone> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const row_tombstone& t) const {
+        feed_hash(h, t.regular());
+        if (t.is_shadowable()) {
+            feed_hash(h, t.shadowable());
+        }
+    }
+};
+
 class deletable_row final {
     tombstone _deleted_at;
     row_marker _marker;
