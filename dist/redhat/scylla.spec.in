@@ -42,7 +42,7 @@ BuildRequires:  libaio-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-
 %{?fedora:BuildRequires: boost-devel ragel antlr3-tool antlr3-C++-devel python3 gcc-c++ libasan libubsan python3-pyparsing dnf-yum}
 %{?rhel:BuildRequires: scylla-libstdc++-static scylla-boost-devel scylla-boost-static scylla-ragel scylla-antlr3-tool scylla-antlr3-C++-devel python34 scylla-gcc-c++ >= 5.1.1, python34-pyparsing}
 Requires:       scylla-conf systemd-libs hwloc collectd PyYAML python-urwid pciutils pyparsing python-requests curl util-linux python-setuptools pciutils
-%{?rhel:Requires: python34 python34-PyYAML}
+%{?rhel:Requires: python34 python34-PyYAML python3-pyudev}
 Conflicts:      abrt
 
 %description server
