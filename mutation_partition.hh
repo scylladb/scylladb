@@ -42,6 +42,7 @@
 #include "range_tombstone_list.hh"
 #include "clustering_key_filter.hh"
 #include "intrusive_set_external_comparator.hh"
+#include "utils/with_relational_operators.hh"
 
 //
 // Container for cells of a row. Cells are identified by column_id.
@@ -412,6 +413,77 @@ struct appending_hash<row_marker> {
 };
 
 class clustering_row;
+
+class shadowable_tombstone : public with_relational_operators<shadowable_tombstone> {
+    tombstone _tomb;
+public:
+
+    explicit shadowable_tombstone(api::timestamp_type timestamp, gc_clock::time_point deletion_time)
+            : _tomb(timestamp, deletion_time) {
+    }
+
+    explicit shadowable_tombstone(tombstone tomb = tombstone())
+            : _tomb(std::move(tomb)) {
+    }
+
+    int compare(const shadowable_tombstone& t) const {
+        return _tomb.compare(t._tomb);
+    }
+
+    explicit operator bool() const {
+        return bool(_tomb);
+    }
+
+    const tombstone& tomb() const {
+        return _tomb;
+    }
+
+    // A shadowable row tombstone is valid only if the row has no live marker. In other words,
+    // the row tombstone is only valid as long as no newer insert is done (thus setting a
+    // live row marker; note that if the row timestamp set is lower than the tombstone's,
+    // then the tombstone remains in effect as usual). If a row has a shadowable tombstone
+    // with timestamp Ti and that row is updated with a timestamp Tj, such that Tj > Ti
+    // (and that update sets the row marker), then the shadowable tombstone is shadowed by
+    // that update. A concrete consequence is that if the update has cells with timestamp
+    // lower than Ti, then those cells are preserved (since the deletion is removed), and
+    // this is contrary to a regular, non-shadowable row tombstone where the tombstone is
+    // preserved and such cells are removed.
+    bool is_shadowed_by(const row_marker& marker) const {
+        return marker.is_live() && marker.timestamp() > _tomb.timestamp;
+    }
+
+    void maybe_shadow(tombstone t, row_marker marker) noexcept {
+        if (is_shadowed_by(marker)) {
+            _tomb = t;
+        }
+    }
+
+    void apply(tombstone t) noexcept {
+        _tomb.apply(t);
+    }
+
+    void apply(shadowable_tombstone t) noexcept {
+        _tomb.apply(t._tomb);
+    }
+
+    friend std::ostream& operator<<(std::ostream& out, const shadowable_tombstone& t) {
+        if (t) {
+            return out << "{shadowable tombstone: timestamp=" << t.tomb().timestamp
+                   << ", deletion_time=" << t.tomb().deletion_time.time_since_epoch().count()
+                   << "}";
+        } else {
+            return out << "{shadowable tombstone: none}";
+        }
+    }
+};
+
+template<>
+struct appending_hash<shadowable_tombstone> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const shadowable_tombstone& t) const {
+        feed_hash(h, t.tomb());
+    }
+};
 
 class deletable_row final {
     tombstone _deleted_at;
