@@ -7,17 +7,11 @@ fi
 
 # User specific environment and startup programs
 
+. /usr/lib/scylla/scylla_lib.sh
+
 PATH=$PATH:$HOME/.local/bin:$HOME/bin
 
 export PATH
-
-is_supported_instance_type() {
-	TYPE=`curl -s http://169.254.169.254/latest/meta-data/instance-type|cut -d . -f 1`
-	case $TYPE in
-		"m3"|"c3"|"i2") echo 1;;
-		*) echo 0;;
-	esac
-}
 
 echo
 echo '   _____            _ _       _____  ____  '
@@ -84,7 +78,7 @@ else
 		echo
 		nodetool status
 	else
-		if [ `is_supported_instance_type` -eq 0 ]; then
+		if [ `ec2_is_supported_instance_type` -eq 0 ]; then
 			TYPE=`curl -s http://169.254.169.254/latest/meta-data/instance-type`
 			tput setaf 1
 			tput bold

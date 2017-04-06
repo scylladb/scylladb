@@ -17,6 +17,14 @@ is_ec2() {
     [ -f /sys/hypervisor/uuid ] && [ "$(head -c 3 /sys/hypervisor/uuid)" = "ec2" ]
 }
 
+ec2_is_supported_instance_type() {
+    TYPE=`curl -s http://169.254.169.254/latest/meta-data/instance-type|cut -d . -f 1`
+    case $TYPE in
+           "m3"|"c3"|"i2"|"i3") echo 1;;
+            *) echo 0;;
+    esac
+}
+
 . /etc/os-release
 if is_debian_variant; then
     SYSCONFIG=/etc/default
