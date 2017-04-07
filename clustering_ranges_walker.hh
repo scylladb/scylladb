@@ -162,6 +162,34 @@ public:
         return false;
     }
 
+    // Returns true if the range tombstone expressed by start and end (as in position_range) overlaps
+    // with clustering ranges.
+    // No monotonicity restrictions on argument values across calls.
+    // Does not affect lower_bound().
+    // Idempotent.
+    bool contains_tombstone(position_in_partition_view start, position_in_partition_view end) const {
+        position_in_partition::less_compare less(_schema);
+
+        if (_trim && less(end, *_trim)) {
+            return false;
+        }
+
+        auto i = _current;
+        while (i != _end) {
+            auto range_start = position_in_partition_view::for_range_start(*i);
+            if (less(end, range_start)) {
+                return false;
+            }
+            auto range_end = position_in_partition_view::for_range_end(*i);
+            if (less(start, range_end)) {
+                return true;
+            }
+            ++i;
+        }
+
+        return false;
+    }
+
     // Returns true if advanced past all contained positions. Any later advance_to() until reset() will return false.
     bool out_of_range() const {
         return _current == _end;
