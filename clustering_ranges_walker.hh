@@ -38,12 +38,14 @@ class clustering_ranges_walker {
     position_in_partition_view _current_start;
     position_in_partition_view _current_end;
     stdx::optional<position_in_partition> _trim;
+    size_t _change_counter = 1;
 private:
     bool advance_to_next_range() {
         _in_current = false;
         if (!_current_start.is_static_row()) {
             ++_current;
         }
+        ++_change_counter;
         if (_current == _end) {
             return false;
         }
@@ -70,6 +72,7 @@ public:
         , _current_start(o._current_start)
         , _current_end(o._current_end)
         , _trim(std::move(o._trim))
+        , _change_counter(o._change_counter)
     { }
     clustering_ranges_walker& operator=(clustering_ranges_walker&& o) {
         if (this != &o) {
@@ -99,6 +102,7 @@ public:
                 _trim = std::move(pos);
                 _current_start = *_trim;
                 _in_current = false;
+                ++_change_counter;
                 break;
             }
         } while (advance_to_next_range());
@@ -166,6 +170,7 @@ public:
         _current_start = position_in_partition_view::for_static_row();
         _current_end = position_in_partition_view::before_all_clustered_rows();
         _in_current = true;
+        ++_change_counter;
         if (_trim) {
             trim_front(std::move(*_trim));
         }
@@ -174,5 +179,11 @@ public:
     // Can be called only when !out_of_range()
     position_in_partition_view lower_bound() const {
         return _current_start;
+    }
+
+    // When lower_bound() changes, this also does
+    // Always > 0.
+    size_t lower_bound_change_counter() const {
+        return _change_counter;
     }
 };
