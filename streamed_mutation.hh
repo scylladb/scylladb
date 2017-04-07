@@ -659,8 +659,10 @@ public:
         , _end(std::move(end))
     { }
 
-    const position_in_partition& start() const { return _start; }
-    const position_in_partition& end() const { return _end; }
+    const position_in_partition& start() const& { return _start; }
+    position_in_partition&& start() && { return std::move(_start); }
+    const position_in_partition& end() const& { return _end; }
+    position_in_partition&& end() && { return std::move(_end); }
     bool contains(const schema& s, position_in_partition_view pos) const;
     bool overlaps(const schema& s, position_in_partition_view start, position_in_partition_view end) const;
 
