@@ -353,7 +353,7 @@ private:
     void set_up_ck_ranges(const partition_key& pk) {
         sstlog.trace("mp_row_consumer {}: set_up_ck_ranges({})", this, pk);
         _ck_ranges = query::clustering_key_filter_ranges::get_ranges(*_schema, _slice, pk);
-        _ck_ranges_walker = clustering_ranges_walker(*_schema, _ck_ranges->ranges());
+        _ck_ranges_walker = clustering_ranges_walker(*_schema, _ck_ranges->ranges(), _schema->has_static_columns());
         _last_lower_bound_counter = 0;
         _fwd_end = _fwd ? position_in_partition::before_all_clustered_rows() : position_in_partition::after_all_clustered_rows();
         _out_of_range = false;
