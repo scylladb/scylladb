@@ -153,17 +153,20 @@ class scylla_cpuinfo:
         f = file("/etc/scylla.d/cpuset.conf", "ro")
         pattern = re.compile(_nocomment + r"CPUSET=\s*\"" + _reopt(_cpuset) + _reopt(_smp) + "\s*\"")
         grp = [ pattern.match(x) for x in f.readlines() if pattern.match(x) ]
-        # if more than one, use last
-        d = grp[-1].groupdict()
+        if not grp:
+            d = { "cpuset" : None, "smp" : None }
+        else:
+            # if more than one, use last
+            d = grp[-1].groupdict()
         actual_set = set()
         if d["cpuset"]:
             groups = d["cpuset"].split(",")
             for g in groups:
-                ends = [ string.atoi(x) for x in g.split("-") ]
+                ends = [ int(x) for x in g.split("-") ]
                 actual_set = actual_set.union(set(xrange(ends[0], ends[-1] +1)))
             d["cpuset"] = actual_set
         if d["smp"]:
-            d["smp"] = atoi(d["smp"])
+            d["smp"] = int(d["smp"])
         self._cpu_data = d;
 
     def __system_cpus(self):
@@ -175,7 +178,7 @@ class scylla_cpuinfo:
                 continue
             key, value = [ x.strip() for x in line.split(":") ]
             if key == "processor":
-                cur_proc = string.atoi(value)
+                cur_proc = int(value)
                 results[cur_proc] = {}
             results[cur_proc][key] = value
         return results
