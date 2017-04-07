@@ -892,6 +892,9 @@ public:
     }
 
     future<> advance_context(position_in_partition_view pos) {
+        if (pos.is_static_row()) {
+            return make_ready_future<>();
+        }
         return [this] {
             if (!_index_in_current) {
                 _index_in_current = true;
