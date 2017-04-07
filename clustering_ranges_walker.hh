@@ -37,6 +37,7 @@ class clustering_ranges_walker {
     bool _in_current; // next position is known to be >= _current_start
     position_in_partition_view _current_start;
     position_in_partition_view _current_end;
+    stdx::optional<position_in_partition> _trim;
 private:
     bool advance_to_next_range() {
         _in_current = false;
@@ -68,6 +69,7 @@ public:
         , _in_current(o._in_current)
         , _current_start(o._current_start)
         , _current_end(o._current_end)
+        , _trim(std::move(o._trim))
     { }
     clustering_ranges_walker& operator=(clustering_ranges_walker&& o) {
         if (this != &o) {
@@ -75,6 +77,31 @@ public:
             new (this) clustering_ranges_walker(std::move(o));
         }
         return *this;
+    }
+
+    // Excludes positions smaller than pos from the ranges.
+    // pos should be monotonic.
+    // No constraints between pos and positions passed to advance_to().
+    //
+    // After the invocation, when !out_of_range(), lower_bound() returns the smallest position still contained.
+    void trim_front(position_in_partition pos) {
+        position_in_partition::less_compare less(_schema);
+
+        if (_current == _end) {
+            return;
+        }
+
+        do {
+            if (!less(_current_start, pos)) {
+                break;
+            }
+            if (less(pos, _current_end)) {
+                _trim = std::move(pos);
+                _current_start = *_trim;
+                _in_current = false;
+                break;
+            }
+        } while (advance_to_next_range());
     }
 
     // Returns true if given position is contained.
@@ -133,10 +160,19 @@ public:
     }
 
     // Resets the state of the walker so that advance_to() can be now called for new sequence of positions.
+    // Any range trimmings still hold after this.
     void reset() {
         _current = _ranges.begin();
         _current_start = position_in_partition_view::for_static_row();
         _current_end = position_in_partition_view::before_all_clustered_rows();
         _in_current = true;
+        if (_trim) {
+            trim_front(std::move(*_trim));
+        }
+    }
+
+    // Can be called only when !out_of_range()
+    position_in_partition_view lower_bound() const {
+        return _current_start;
     }
 };
