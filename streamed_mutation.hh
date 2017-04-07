@@ -363,7 +363,7 @@ public:
     struct range_tag_t { };
     using range_tombstone_tag_t = range_tag_t;
 
-    explicit position_in_partition_view(static_row_tag_t) : _ck(nullptr) { }
+    position_in_partition_view(static_row_tag_t) : _ck(nullptr) { }
     position_in_partition_view(clustering_row_tag_t, const clustering_key_prefix& ck)
         : _ck(&ck) { }
     position_in_partition_view(range_tag_t, bound_view bv)
@@ -371,6 +371,14 @@ public:
 
     static position_in_partition_view for_range_start(const query::clustering_range&);
     static position_in_partition_view for_range_end(const query::clustering_range&);
+
+    static position_in_partition_view before_all_clustered_rows() {
+        return {range_tag_t(), bound_view::bottom()};
+    }
+
+    static position_in_partition_view for_static_row() {
+        return {static_row_tag_t()};
+    }
 
     bool is_static_row() const { return !_ck; }
 
