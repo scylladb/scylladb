@@ -808,6 +808,7 @@ struct sstable_data_source {
     data_consume_context _context;
     std::unique_ptr<index_reader> _lh_index; // For lower bound
     std::unique_ptr<index_reader> _rh_index; // For upper bound
+    bool _index_in_current_partition = false; // Whether _lh_index is in current partition
 
     sstable_data_source(shared_sstable sst, mp_row_consumer&& consumer)
         : _sst(std::move(sst))
@@ -856,7 +857,6 @@ class sstable_streamed_mutation : public streamed_mutation::impl {
     tombstone _t;
     position_in_partition::less_compare _cmp;
     position_in_partition::equal_compare _eq;
-    bool _index_in_current = false; // Whether _ds->_lh_index is in current partition;
 public:
     sstable_streamed_mutation(schema_ptr s, dht::decorated_key dk, tombstone t, lw_shared_ptr<sstable_data_source> ds)
         : streamed_mutation::impl(s, std::move(dk), t)
@@ -891,8 +891,8 @@ public:
             return make_ready_future<>();
         }
         return [this] {
-            if (!_index_in_current) {
-                _index_in_current = true;
+            if (!_ds->_index_in_current_partition) {
+                _ds->_index_in_current_partition = true;
                 return _ds->lh_index().advance_to(_key);
             }
             return make_ready_future();
@@ -1372,10 +1372,12 @@ public:
     }
 private:
     future<streamed_mutation_opt> do_read() {
+        _ds->_index_in_current_partition = false;
         auto& consumer = _ds->_consumer;
         if (!consumer.is_mutation_end()) {
             {
                 return _ds->lh_index().advance_to(dht::ring_position_view::for_after_key(*_key)).then([this] {
+                    _ds->_index_in_current_partition = true;
                     return _ds->_context.skip_to(_ds->_lh_index->element_kind(), _ds->_lh_index->data_file_position()).then([this] {
                         assert(_ds->_consumer.is_mutation_end());
                         return do_read();
