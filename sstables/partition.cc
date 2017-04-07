@@ -451,12 +451,7 @@ public:
         sstlog.trace("mp_row_consumer {}: flush_if_needed({})", this, pos);
 
         // Part of workaround for #1203
-        if (!is_static && !_first_row_encountered) {
-            _first_row_encountered = true;
-            // from now on both range tombstones and rows should be in order
-            _ck_ranges_walker->reset();
-            sstlog.trace("mp_row_consumer {}: reset ck walker", this);
-        }
+        _first_row_encountered = !is_static;
 
         position_in_partition::equal_compare eq(*_schema);
         proceed ret = proceed::yes;
@@ -719,7 +714,7 @@ public:
                 }
                 // Workaround for #1203
                 if (!_first_row_encountered) {
-                    if (_ck_ranges_walker->advance_to(rt_pos, rt.end_position())) {
+                    if (_ck_ranges_walker->contains_tombstone(rt_pos, rt.end_position())) {
                         _range_tombstones.apply(std::move(rt));
                     }
                     return proceed::yes;
