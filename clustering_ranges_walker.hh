@@ -28,13 +28,13 @@
 #include "streamed_mutation.hh"
 
 // Utility for in-order checking of overlap with position ranges.
-// Always includes the static row initially.
 class clustering_ranges_walker {
     const schema& _schema;
     const query::clustering_row_ranges& _ranges;
     query::clustering_row_ranges::const_iterator _current;
     query::clustering_row_ranges::const_iterator _end;
     bool _in_current; // next position is known to be >= _current_start
+    bool _with_static_row;
     position_in_partition_view _current_start;
     position_in_partition_view _current_end;
     stdx::optional<position_in_partition> _trim;
@@ -54,14 +54,17 @@ private:
         return true;
     }
 public:
-    clustering_ranges_walker(const schema& s, const query::clustering_row_ranges& ranges)
+    clustering_ranges_walker(const schema& s, const query::clustering_row_ranges& ranges, bool with_static_row = true)
         : _schema(s)
         , _ranges(ranges)
         , _current(ranges.begin())
         , _end(ranges.end())
-        , _in_current(true)
-        , _current_start(position_in_partition_view::for_static_row())
-        , _current_end(position_in_partition_view::before_all_clustered_rows())
+        , _in_current(with_static_row)
+        , _with_static_row(with_static_row)
+        , _current_start(with_static_row ? position_in_partition_view::for_static_row()
+                                         : position_in_partition_view::for_range_start(*_current))
+        , _current_end(with_static_row ? position_in_partition_view::before_all_clustered_rows()
+                                       : position_in_partition_view::for_range_end(*_current))
     { }
     clustering_ranges_walker(clustering_ranges_walker&& o) noexcept
         : _schema(o._schema)
@@ -69,6 +72,7 @@ public:
         , _current(o._current)
         , _end(o._end)
         , _in_current(o._in_current)
+        , _with_static_row(o._with_static_row)
         , _current_start(o._current_start)
         , _current_end(o._current_end)
         , _trim(std::move(o._trim))
@@ -166,13 +170,12 @@ public:
     // Resets the state of the walker so that advance_to() can be now called for new sequence of positions.
     // Any range trimmings still hold after this.
     void reset() {
-        _current = _ranges.begin();
-        _current_start = position_in_partition_view::for_static_row();
-        _current_end = position_in_partition_view::before_all_clustered_rows();
-        _in_current = true;
-        ++_change_counter;
-        if (_trim) {
-            trim_front(std::move(*_trim));
+        auto trim = std::move(_trim);
+        auto ctr = _change_counter;
+        *this = clustering_ranges_walker(_schema, _ranges, _with_static_row);
+        _change_counter = ctr + 1;
+        if (trim) {
+            trim_front(std::move(*trim));
         }
     }
 
