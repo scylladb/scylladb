@@ -182,6 +182,8 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/scylla_setup
 %{_prefix}/lib/scylla/node_exporter_install
 %{_sbindir}/node_exporter_install
+%{_prefix}/lib/scylla/node_health_check
+%{_sbindir}/node_health_check
 %{_prefix}/lib/scylla/scylla_coredump_setup
 %{_prefix}/lib/scylla/scylla_raid_setup
 %{_prefix}/lib/scylla/scylla_sysconfig_setup
