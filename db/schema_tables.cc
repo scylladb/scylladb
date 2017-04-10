@@ -1236,8 +1236,8 @@ static inline void ensure_type_is_unused(distributed<service::storage_proxy>& pr
     }
 
     for (auto&& cfm : ks.metadata()->cf_meta_data() | boost::adaptors::map_values) {
-        for (auto&& col : cfm->all_columns() | boost::adaptors::map_values) {
-            if (col->type->references_user_type(keyspace, name)) {
+        for (auto&& col : cfm->all_columns()) {
+            if (col.type->references_user_type(keyspace, name)) {
                 throw exceptions::invalid_request_exception(sprint("Cannot drop user type %s.%s as it is still used by table %s.%s", keyspace, type->get_name_as_string(), cfm->ks_name(), cfm->cf_name()));
             }
         }
@@ -1667,7 +1667,7 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
     mutation columns_mutation(pkey, columns());
     mutation indices_mutation(pkey, indexes());
     if (with_columns_and_triggers) {
-        for (auto&& column : table->all_columns_in_select_order()) {
+        for (auto&& column : table->all_columns()) {
             add_column_to_schema_mutation(table, column, timestamp, columns_mutation);
         }
         for (auto&& index : table->indices()) {
@@ -1718,13 +1718,13 @@ static void make_update_columns_mutations(schema_ptr old_table,
         std::vector<mutation>& mutations) {
     mutation columns_mutation(partition_key::from_singular(*columns(), old_table->ks_name()), columns());
 
-    auto diff = difference(old_table->all_columns(), new_table->all_columns());
+    auto diff = difference(old_table->columns_by_name(), new_table->columns_by_name());
 
     // columns that are no longer needed
     for (auto&& name : diff.entries_only_on_left) {
         // Thrift only knows about the REGULAR ColumnDefinition type, so don't consider other type
         // are being deleted just because they are not here.
-        const column_definition& column = *old_table->all_columns().at(name);
+        const column_definition& column = *old_table->columns_by_name().at(name);
         if (from_thrift && !column.is_regular()) {
             continue;
         }
@@ -1734,7 +1734,7 @@ static void make_update_columns_mutations(schema_ptr old_table,
 
     // newly added columns and old columns with updated attributes
     for (auto&& name : boost::range::join(diff.entries_differing, diff.entries_only_on_right)) {
-        const column_definition& column = *new_table->all_columns().at(name);
+        const column_definition& column = *new_table->columns_by_name().at(name);
         add_column_to_schema_mutation(new_table, column, timestamp, columns_mutation);
     }
 
@@ -1778,7 +1778,7 @@ static void make_drop_table_or_view_mutations(schema_ptr schema_table,
     auto ckey = clustering_key::from_singular(*schema_table, table_or_view->cf_name());
     m.partition().apply_delete(*schema_table, std::move(ckey), tombstone(timestamp, gc_clock::now()));
     mutations.emplace_back(m);
-    for (auto &column : table_or_view->all_columns_in_select_order()) {
+    for (auto &column : table_or_view->all_columns()) {
         drop_column_from_schema_mutation(table_or_view, column, timestamp, mutations);
     }
 }
@@ -2368,7 +2368,7 @@ static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type t
     mutation columns_mutation(pkey, columns());
     mutation index_mutation(pkey, indexes());
     if (with_columns) {
-        for (auto&& column : view->all_columns_in_select_order()) {
+        for (auto&& column : view->all_columns()) {
             add_column_to_schema_mutation(view, column, timestamp, columns_mutation);
         }
         for (auto&& index : view->indices()) {

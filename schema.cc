@@ -114,7 +114,7 @@ void schema::rebuild() {
     _columns_by_name.clear();
     _regular_columns_by_name.clear();
 
-    for (const column_definition& def : all_columns_in_select_order()) {
+    for (const column_definition& def : all_columns()) {
         _columns_by_name[def.name()] = &def;
     }
 
@@ -149,8 +149,8 @@ void schema::rebuild() {
         }
     } else {
         for (auto&& cdef : all_columns()) {
-            if (cdef.second->type->is_counter()) {
-                throw exceptions::configuration_exception(sprint("Cannot add a counter column (%s) in a non counter column family", cdef.second->name_as_text()));
+            if (cdef.type->is_counter()) {
+                throw exceptions::configuration_exception(sprint("Cannot add a counter column (%s) in a non counter column family", cdef.name_as_text()));
             }
         }
     }
@@ -334,7 +334,7 @@ sstring schema::thrift_key_validator() const {
 
 bool
 schema::has_multi_cell_collections() const {
-    return boost::algorithm::any_of(all_columns_in_select_order(), [] (const column_definition& cdef) {
+    return boost::algorithm::any_of(all_columns(), [] (const column_definition& cdef) {
         return cdef.type->is_collection() && cdef.type->is_multi_cell();
     });
 }
@@ -1113,7 +1113,7 @@ bool schema::is_synced() const {
 }
 
 bool schema::equal_columns(const schema& other) const {
-    return boost::equal(all_columns_in_select_order(), other.all_columns_in_select_order());
+    return boost::equal(all_columns(), other.all_columns());
 }
 
 raw_view_info::raw_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause)

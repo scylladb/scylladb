@@ -138,9 +138,9 @@ SEASTAR_TEST_CASE(test_column_is_dropped) {
             e.execute_cql("alter table tests.table1 add s1 int;").get();
 
             schema_ptr s = e.db().local().find_schema("tests", "table1");
-            BOOST_REQUIRE(s->all_columns().count(to_bytes("c1")));
-            BOOST_REQUIRE(!s->all_columns().count(to_bytes("c2")));
-            BOOST_REQUIRE(s->all_columns().count(to_bytes("s1")));
+            BOOST_REQUIRE(s->columns_by_name().count(to_bytes("c1")));
+            BOOST_REQUIRE(!s->columns_by_name().count(to_bytes("c2")));
+            BOOST_REQUIRE(s->columns_by_name().count(to_bytes("s1")));
         });
     });
 }

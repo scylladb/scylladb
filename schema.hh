@@ -610,7 +610,13 @@ public:
     const columns_type& all_columns_in_select_order() const;
     uint32_t position(const column_definition& column) const;
 
-    const auto& all_columns() const { return _columns_by_name; }
+    const columns_type& all_columns() const {
+        return _raw._columns;
+    }
+
+    const std::unordered_map<bytes, const column_definition*>& columns_by_name() const {
+        return _columns_by_name;
+    }
 
     const auto& dropped_columns() const {
         return _raw._dropped_columns;

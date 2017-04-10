@@ -279,18 +279,18 @@ future<shared_ptr<transport::event::schema_change>> create_view_statement::annou
     // the view because if we need to generate a tombstone, we have no way of knowing which value is currently being
     // used in the view and whether or not to generate a tombstone. In order to not surprise our users, we require
     // that they include all of the columns. We provide them with a list of all of the columns left to include.
-    for (auto* def : schema->all_columns() | boost::adaptors::map_values) {
-        bool included_def = included.empty() || included.find(def) != included.end();
-        if (included_def && def->is_static()) {
+    for (auto& def : schema->all_columns()) {
+        bool included_def = included.empty() || included.find(&def) != included.end();
+        if (included_def && def.is_static()) {
             throw exceptions::invalid_request_exception(sprint(
-                    "Unable to include static column '%s' which would be included by Materialized View SELECT * statement", *def));
+                    "Unable to include static column '%s' which would be included by Materialized View SELECT * statement", def));
         }
 
-        bool def_in_target_pk = std::find(target_primary_keys.begin(), target_primary_keys.end(), def) != target_primary_keys.end();
+        bool def_in_target_pk = std::find(target_primary_keys.begin(), target_primary_keys.end(), &def) != target_primary_keys.end();
         if (included_def && !def_in_target_pk) {
-            target_non_pk_columns.push_back(def);
-        } else if (def->is_primary_key() && !def_in_target_pk) {
-            missing_pk_columns.push_back(def);
+            target_non_pk_columns.push_back(&def);
+        } else if (def.is_primary_key() && !def_in_target_pk) {
+            missing_pk_columns.push_back(&def);
         }
     }
 
