@@ -107,13 +107,20 @@ struct promoted_index {
     std::deque<entry> entries;
 };
 
+class promoted_index_view {
+    bytes_view _bytes;
+public:
+    explicit promoted_index_view(bytes_view v) : _bytes(v) {}
+    sstables::deletion_time get_deletion_time() const;
+    promoted_index parse(const schema&) const;
+    explicit operator bool() const { return !_bytes.empty(); }
+};
+
 class index_entry {
     temporary_buffer<char> _key;
     uint64_t _position;
     temporary_buffer<char> _promoted_index_bytes;
     stdx::optional<promoted_index> _promoted_index;
-private:
-    void parse_promoted_index(const schema&);
 public:
 
     bytes_view get_key_bytes() const {
@@ -132,6 +139,10 @@ public:
         return to_bytes_view(_promoted_index_bytes);
     }
 
+    promoted_index_view get_promoted_index_view() const {
+        return promoted_index_view(get_promoted_index_bytes());
+    }
+
     index_entry(temporary_buffer<char>&& key, uint64_t position, temporary_buffer<char>&& promoted_index)
         : _key(std::move(key)), _position(position), _promoted_index_bytes(std::move(promoted_index)) {}
 
@@ -143,7 +154,10 @@ public:
 
     promoted_index* get_promoted_index(const schema& s) {
         if (!_promoted_index) {
-            parse_promoted_index(s);
+            auto v = get_promoted_index_view();
+            if (v) {
+                _promoted_index = v.parse(s);
+            }
         }
         return _promoted_index ? &*_promoted_index : nullptr;
     }
