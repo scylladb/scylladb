@@ -976,6 +976,18 @@ future<> mp_row_consumer::fast_forward_to(position_range r) {
         }
     }
 
+    if (_out_of_range) {
+        sstlog.trace("mp_row_consumer {}: _out_of_range=true", this);
+        return make_ready_future<>();
+    }
+
+    position_in_partition::less_compare less(*_schema);
+    if (!less(start, _fwd_end)) {
+        _out_of_range = true;
+        sstlog.trace("mp_row_consumer {}: no overlap with restrictions", this);
+        return make_ready_future<>();
+    }
+
     sstlog.trace("mp_row_consumer {}: advance_context({})", this, start);
     return _sm->advance_context(start);
 }
