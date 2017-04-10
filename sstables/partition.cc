@@ -812,12 +812,7 @@ public:
     // The new range must not overlap with the previous range and
     // must be after it.
     //
-    // Returns false if skipping is not necessary.
-    bool fast_forward_to(position_range);
-
-    const position_range& current_range() const {
-        return _fwd_range;
-    }
+    future<> fast_forward_to(position_range);
 };
 
 struct sstable_data_source {
@@ -899,17 +894,18 @@ public:
     future<> fast_forward_to(position_range range) override {
         _end_of_stream = false;
         forward_buffer_to(range.start());
-        if (!_ds->_consumer.fast_forward_to(std::move(range))) {
-            return make_ready_future<>();
-        }
+        return _ds->_consumer.fast_forward_to(std::move(range));
+    }
+
+    future<> advance_context(position_in_partition_view pos) {
         return [this] {
             if (!_index_in_current) {
                 _index_in_current = true;
                 return _ds->lh_index().advance_to(_key);
             }
             return make_ready_future();
-        }().then([this] {
-            return _ds->lh_index().advance_to(_ds->_consumer.current_range().start()).then([this] {
+        }().then([this, pos] {
+            return _ds->lh_index().advance_to(pos).then([this] {
                 index_reader& idx = *_ds->_lh_index;
                 return _ds->_context.skip_to(idx.element_kind(), idx.data_file_position());
             });
@@ -978,7 +974,7 @@ mp_row_consumer::push_ready_fragments() {
     return proceed::yes;
 }
 
-bool mp_row_consumer::fast_forward_to(position_range r) {
+future<> mp_row_consumer::fast_forward_to(position_range r) {
     _fwd_range = std::move(r);
     _out_of_range = _is_mutation_end;
     _after_fwd_range_start = false;
@@ -995,7 +991,12 @@ bool mp_row_consumer::fast_forward_to(position_range r) {
 
     sstlog.trace("mp_row_consumer {}: fast_forward_to({}) => out_of_range={}, skip_in_progress={}", this, _fwd_range, _out_of_range, _skip_in_progress);
 
-    return !_in_progress || _skip_in_progress;
+    if (!_in_progress || _skip_in_progress) {
+        sstlog.trace("mp_row_consumer {}: advance_context({})", this, _fwd_range.start());
+        return _sm->advance_context(_fwd_range.start());
+    }
+
+    return make_ready_future<>();
 }
 
 static int adjust_binary_search_index(int idx) {
