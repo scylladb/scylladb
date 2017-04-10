@@ -304,7 +304,64 @@ public:
             return _current_list ? _current_list.release() : index_list();
         });
     }
+
+    // Valid if partition_data_ready()
+    index_entry& current_partition_entry() {
+        assert(_current_list);
+        return (*_current_list)[_current_index_idx];
+    }
 public:
+    // Returns tombstone for current partition, if it was recorded in the sstable.
+    // It may be unavailable for old sstables for which this information was not generated.
+    // Can be called only when partition_data_ready().
+    stdx::optional<sstables::deletion_time> partition_tombstone() {
+        index_entry& e = current_partition_entry();
+        auto pi = e.get_promoted_index_view();
+        if (!pi) {
+            return stdx::nullopt;
+        }
+        return pi.get_deletion_time();
+    }
+
+    // Returns the key for current partition.
+    // Can be called only when partition_data_ready().
+    // The result is valid as long as index_reader is valid.
+    key_view partition_key() {
+        index_entry& e = current_partition_entry();
+        return e.get_key();
+    }
+
+    // Tells whether details about current partition can be accessed.
+    // If this returns false, you have to call read_partition_data().
+    //
+    // Calling read_partition_data() may involve doing I/O. The reason
+    // why control over this is exposed and not done under the hood is that
+    // in some cases it only makes sense to access partition details from index
+    // if it is readily available, and if it is not, we're better off obtaining
+    // them by continuing reading from sstable.
+    bool partition_data_ready() const {
+        return static_cast<bool>(_current_list);
+    }
+
+    // Ensures that partition_data_ready() returns true.
+    // Can be called only when !eof()
+    future<> read_partition_data() {
+        assert(!eof());
+        if (partition_data_ready()) {
+            return make_ready_future<>();
+        }
+        // The only case when _current_list may be missing is when the cursor is at the beginning
+        assert(_current_summary_idx == 0);
+        return advance_to_page(0);
+    }
+
+    future<> ensure_partition_data() {
+        if (partition_data_ready()) {
+            return make_ready_future<>();
+        }
+        return read_partition_data();
+    }
+
     // Forwards the cursor to given position in current partition.
     //
     // Note that the index within partition, unlike the partition index, doesn't cover all keys.
@@ -316,17 +373,16 @@ public:
     future<> advance_to(position_in_partition_view pos) {
         sstlog.trace("index {}: advance_to({}), current data_file_pos={}", this, pos, _data_file_position);
 
-        if (!_current_list) {
-            // Page is not read after advancing to the first partition.
-            return advance_to_page(_current_summary_idx).then([this, pos] {
+        if (!partition_data_ready()) {
+            return read_partition_data().then([this, pos] {
                 sstlog.trace("index {}: page done", this);
-                assert(_current_list);
+                assert(partition_data_ready());
                 return advance_to(pos);
             });
         }
 
         const schema& s = *_sstable->_schema;
-        index_entry& e = (*_current_list)[_current_index_idx];
+        index_entry& e = current_partition_entry();
         promoted_index* pi = nullptr;
         try {
             pi = e.get_promoted_index(s);
