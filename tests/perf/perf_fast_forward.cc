@@ -256,6 +256,24 @@ static test_result select_spread_rows(column_family& cf, int stride = 0, int n_r
     return {before, fragments};
 }
 
+static test_result slice_rows_single_key(column_family& cf, int offset = 0, int n_read = 1) {
+    auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
+    auto rd = cf.make_reader(cf.schema(), pr, query::full_slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
+
+    metrics_snapshot before;
+    streamed_mutation_opt smo = rd().get0();
+    assert(smo);
+    streamed_mutation& sm = *smo;
+    sm.fast_forward_to(position_range(
+        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset)),
+        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset + n_read)))).get();
+    uint64_t fragments = consume_all(sm);
+
+    fragments += consume_all(rd);
+
+    return {before, fragments};
+}
+
 // cf is for ks.small_part
 static test_result slice_partitions(column_family& cf, int n, int offset = 0, int n_read = 1) {
     auto keys = make_pkeys(cf.schema(), n + n_read);
@@ -462,6 +480,26 @@ int main(int argc, char** argv) {
                                 std::cout << sprint("%-7s %-7s ", "offset", "read") << test_result::table_header() << "\n";
                                 auto test = [&] (int offset, int read) {
                                     auto r = slice_rows(cf, offset, read);
+                                    std::cout << sprint("%-7d %-7d ", offset, read) << r.table_row() << "\n";
+                                };
+
+                                test(0, 1);
+                                test(0, 32);
+                                test(0, 256);
+                                test(0, 4096);
+
+                                test(cfg.n_rows / 2, 1);
+                                test(cfg.n_rows / 2, 32);
+                                test(cfg.n_rows / 2, 256);
+                                test(cfg.n_rows / 2, 4096);
+                            }
+
+                            {
+                                std::cout << "Testing slicing of large partition, single-partition reader:\n";
+                                std::cout << sprint("%-7s %-7s ", "offset", "read") << test_result::table_header()
+                                          << "\n";
+                                auto test = [&](int offset, int read) {
+                                    auto r = slice_rows_single_key(cf, offset, read);
                                     std::cout << sprint("%-7d %-7d ", offset, read) << r.table_row() << "\n";
                                 };
 
