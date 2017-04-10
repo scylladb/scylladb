@@ -306,6 +306,44 @@ struct table_config {
     int value_size;
 };
 
+static test_result test_forwarding_with_restriction(column_family& cf, table_config& cfg, bool single_partition) {
+    auto first_key = cfg.n_rows / 2;
+    auto slice = partition_slice_builder(*cf.schema())
+        .with_range(query::clustering_range::make_starting_with(clustering_key::from_singular(*cf.schema(), first_key)))
+        .build();
+
+    auto pr = single_partition ? dht::partition_range::make_singular(make_pkey(*cf.schema(), 0)) : query::full_partition_range;
+    auto rd = cf.make_reader(cf.schema(),
+        pr,
+        slice,
+        default_priority_class(),
+        nullptr,
+        streamed_mutation::forwarding::yes);
+
+    uint64_t fragments = 0;
+    metrics_snapshot before;
+    streamed_mutation_opt smo = rd().get0();
+    assert(smo);
+    streamed_mutation& sm = *smo;
+
+    fragments += consume_all(sm);
+
+    sm.fast_forward_to(position_range(
+        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), 1)),
+        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), 2)))).get();
+
+    fragments += consume_all(sm);
+
+    sm.fast_forward_to(position_range(
+        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), first_key - 2)),
+        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), first_key + 2)))).get();
+
+    fragments += consume_all(sm);
+
+    fragments += consume_all(rd);
+    return {before, fragments};
+}
+
 static void drop_keyspace_if_exists(cql_test_env& env, sstring name) {
     try {
         env.local_db().find_keyspace(name);
@@ -529,6 +567,13 @@ int main(int argc, char** argv) {
                                 test(cfg.n_rows / 8, 8);
                                 test(cfg.n_rows / 16, 16);
                                 test(2, cfg.n_rows / 2);
+                            }
+
+                            {
+                                std::cout << "Testing forwarding with clustering restriction in a large partition:\n";
+                                std::cout << sprint("%-7s ", "pk-scan") << test_result::table_header() << "\n";
+                                std::cout << sprint("%-7s ", "yes") << test_forwarding_with_restriction(cf, cfg, false).table_row() << "\n"
+                                    << sprint("%-7s ", "no")  << test_forwarding_with_restriction(cf, cfg, true).table_row() << "\n";
                             }
                         });
                     }).get();
