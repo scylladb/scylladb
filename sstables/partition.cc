@@ -813,25 +813,7 @@ public:
     // must be after it.
     //
     // Returns false if skipping is not necessary.
-    bool fast_forward_to(position_range r) {
-        _fwd_range = std::move(r);
-        _out_of_range = _is_mutation_end;
-        _after_fwd_range_start = false;
-
-        _range_tombstones.forward_to(_fwd_range.start());
-
-        if (_ready && !_ready->relevant_for_range(*_schema, _fwd_range.start())) {
-            _ready = {};
-        }
-
-        if (_in_progress) {
-            advance_to(*_in_progress);
-        }
-
-        sstlog.trace("mp_row_consumer {}: fast_forward_to({}) => out_of_range={}, skip_in_progress={}", this, _fwd_range, _out_of_range, _skip_in_progress);
-
-        return !_in_progress || _skip_in_progress;
-    }
+    bool fast_forward_to(position_range);
 
     const position_range& current_range() const {
         return _fwd_range;
@@ -994,6 +976,26 @@ mp_row_consumer::push_ready_fragments() {
     }
 
     return proceed::yes;
+}
+
+bool mp_row_consumer::fast_forward_to(position_range r) {
+    _fwd_range = std::move(r);
+    _out_of_range = _is_mutation_end;
+    _after_fwd_range_start = false;
+
+    _range_tombstones.forward_to(_fwd_range.start());
+
+    if (_ready && !_ready->relevant_for_range(*_schema, _fwd_range.start())) {
+        _ready = {};
+    }
+
+    if (_in_progress) {
+        advance_to(*_in_progress);
+    }
+
+    sstlog.trace("mp_row_consumer {}: fast_forward_to({}) => out_of_range={}, skip_in_progress={}", this, _fwd_range, _out_of_range, _skip_in_progress);
+
+    return !_in_progress || _skip_in_progress;
 }
 
 static int adjust_binary_search_index(int idx) {
