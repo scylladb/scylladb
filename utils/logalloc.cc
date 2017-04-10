@@ -316,7 +316,7 @@ public:
     // rebuild_free_segments_list() needs to be called afterwards to restore
     // valid state.
     size_t defragment_and_shrink_by(size_t);
-    bool migrate_all_segments(segment_zone& dst);
+    bool migrate_segments(segment_zone& dst, size_t to_migrate);
 
     void rebuild_free_segments_list() {
         _free_segments.clear_and_dispose([] (auto fseg) { fseg->~free_segment(); });
@@ -521,16 +521,17 @@ size_t segment_pool::reclaim_segments(size_t target) {
     _not_full_zones.clear();
     for (auto& zone : _all_zones | boost::adaptors::reversed) {
         _free_segments_in_zones -= zone.free_segment_count();
-        if (_free_segments_in_zones) {
+        auto to_reclaim = target - reclaimed_segments;
+        if (_free_segments_in_zones && zone.free_segment_count() < to_reclaim) {
             auto end = _all_zones.iterator_to(zone);
-            for (auto it = _all_zones.begin(); it != end; ++it) {
-                auto could_migrate = zone.migrate_all_segments(*it);
+            for (auto it = _all_zones.begin(); it != end && zone.free_segment_count() < to_reclaim; ++it) {
+                auto could_migrate = zone.migrate_segments(*it, to_reclaim - zone.free_segment_count());
                 if (zone.empty() || !could_migrate) {
                     break;
                 }
             }
         }
-        reclaimed_segments += zone.defragment_and_shrink_by(target - reclaimed_segments);
+        reclaimed_segments += zone.defragment_and_shrink_by(to_reclaim);
         if (reclaimed_segments >= target) {
             break;
         }
@@ -1919,13 +1920,13 @@ bool segment_zone::migrate_segment(size_t from, size_t to)
     return shard_segment_pool.migrate_segment(src, *this, dst, *this);
 }
 
-bool segment_zone::migrate_all_segments(segment_zone& dst_zone)
+bool segment_zone::migrate_segments(segment_zone& dst_zone, size_t to_migrate)
 {
     _free_segments.clear_and_dispose([] (auto fseg) { fseg->~free_segment(); });
     dst_zone._free_segments.clear_and_dispose([] (auto fseg) { fseg->~free_segment(); });
     auto used_pos = _segments.find_last_clear();
     auto free_pos = dst_zone._segments.find_first_set();
-    while (used_pos != utils::dynamic_bitset::npos && free_pos != utils::dynamic_bitset::npos) {
+    while (to_migrate-- && used_pos != utils::dynamic_bitset::npos && free_pos != utils::dynamic_bitset::npos) {
         auto src = segment_from_position(used_pos);
         auto dst = dst_zone.segment_from_position(free_pos);
         auto could_migrate = shard_segment_pool.migrate_segment(src, *this, dst, dst_zone);
