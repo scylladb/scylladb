@@ -970,16 +970,14 @@ future<> mp_row_consumer::fast_forward_to(position_range r) {
 
     if (_in_progress) {
         advance_to(*_in_progress);
+        if (!_skip_in_progress) {
+            sstlog.trace("mp_row_consumer {}: _in_progress in range", this);
+            return make_ready_future<>();
+        }
     }
 
-    sstlog.trace("mp_row_consumer {}: => out_of_range={}, skip_in_progress={}", this, _out_of_range, _skip_in_progress);
-
-    if (!_in_progress || _skip_in_progress) {
-        sstlog.trace("mp_row_consumer {}: advance_context({})", this, start);
-        return _sm->advance_context(start);
-    }
-
-    return make_ready_future<>();
+    sstlog.trace("mp_row_consumer {}: advance_context({})", this, start);
+    return _sm->advance_context(start);
 }
 
 static int adjust_binary_search_index(int idx) {
