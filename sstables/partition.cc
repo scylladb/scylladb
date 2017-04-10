@@ -1284,8 +1284,8 @@ public:
         : _pc(pc)
         , _schema(schema)
         , _get_data_source([this, &pr, sst = std::move(sst), &pc, &slice, fwd] () mutable {
-            auto lh_index = std::make_unique<index_reader>(sst->get_index_reader(_pc)); // lh = left hand
-            auto rh_index = std::make_unique<index_reader>(sst->get_index_reader(_pc));
+            auto lh_index = sst->get_index_reader(_pc); // lh = left hand
+            auto rh_index = sst->get_index_reader(_pc);
             auto f = seastar::when_all_succeed(lh_index->advance_to_start(pr), rh_index->advance_to_end(pr));
             return f.then([this, lh_index = std::move(lh_index), rh_index = std::move(rh_index), sst = std::move(sst), &pc, &slice, fwd] () mutable {
                 sstable::disk_read_range drr{lh_index->data_file_position(),
