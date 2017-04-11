@@ -455,7 +455,7 @@ public:
 class single_key_sstable_reader final : public mutation_reader::impl {
     column_family* _cf;
     schema_ptr _schema;
-    dht::ring_position _rp;
+    const dht::partition_range& _pr;
     sstables::key _key;
     std::vector<streamed_mutation> _mutations;
     bool _done = false;
@@ -472,15 +472,15 @@ public:
                               schema_ptr schema,
                               lw_shared_ptr<sstables::sstable_set> sstables,
                               utils::estimated_histogram& sstable_histogram,
-                              const partition_key& key,
+                              const dht::partition_range& pr, // must be singular
                               const query::partition_slice& slice,
                               const io_priority_class& pc,
                               tracing::trace_state_ptr trace_state,
                               streamed_mutation::forwarding fwd)
         : _cf(cf)
         , _schema(std::move(schema))
-        , _rp(dht::global_partitioner().decorate_key(*_schema, key))
-        , _key(sstables::key::from_partition_key(*_schema, key))
+        , _pr(pr)
+        , _key(sstables::key::from_partition_key(*_schema, *pr.start()->value().key()))
         , _sstables(std::move(sstables))
         , _sstable_histogram(sstable_histogram)
         , _pc(pc)
@@ -493,10 +493,10 @@ public:
         if (_done) {
             return make_ready_future<streamed_mutation_opt>();
         }
-        auto candidates = filter_sstable_for_reader(_sstables->select(dht::partition_range(_rp)), *_cf, _schema, _key, _slice);
+        auto candidates = filter_sstable_for_reader(_sstables->select(_pr), *_cf, _schema, _key, _slice);
         return parallel_for_each(std::move(candidates),
             [this](const lw_shared_ptr<sstables::sstable>& sstable) {
-                tracing::trace(_trace_state, "Reading key {} from sstable {}", *_rp.key(), seastar::value_of([&sstable] { return sstable->get_filename(); }));
+                tracing::trace(_trace_state, "Reading key {} from sstable {}", _pr, seastar::value_of([&sstable] { return sstable->get_filename(); }));
                 return sstable->read_row(_schema, _key, _slice, _pc, _fwd).then([this](auto smo) {
                     if (smo) {
                         _mutations.emplace_back(std::move(*smo));
@@ -541,7 +541,7 @@ column_family::make_sstable_reader(schema_ptr s,
             return make_empty_reader(); // range doesn't belong to this shard
         }
         return restrict_reader(make_mutation_reader<single_key_sstable_reader>(const_cast<column_family*>(this), std::move(s), _sstables,
-            _stats.estimated_sstable_per_read, *pos.key(), slice, pc, std::move(trace_state), fwd));
+            _stats.estimated_sstable_per_read, pr, slice, pc, std::move(trace_state), fwd));
     } else {
         // range_sstable_reader is not movable so we need to wrap it
         return restrict_reader(make_mutation_reader<range_sstable_reader>(std::move(s), _sstables, pr, slice, pc, std::move(trace_state), fwd));
