@@ -23,6 +23,7 @@
 #pragma once
 
 #include "sstables/sstables.hh"
+#include "sstables/binary_search.hh"
 #include "database.hh"
 #include "schema.hh"
 #include "schema_builder.hh"
@@ -92,7 +93,7 @@ public:
 
     template <typename T>
     int binary_search(const T& entries, const key& sk) {
-        return _sst->binary_search(entries, sk);
+        return sstables::binary_search(entries, sk);
     }
 
     void change_generation_number(int64_t generation) {

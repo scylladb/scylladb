@@ -578,14 +578,6 @@ private:
     // Returns data file position for an entry right after all entries mapped by given summary page.
     future<uint64_t> data_end_position(uint64_t summary_idx, const io_priority_class& pc);
 
-    template <typename T>
-    int binary_search(const T& entries, const key& sk, const dht::token& token);
-
-    template <typename T>
-    int binary_search(const T& entries, const key& sk) {
-        return binary_search(entries, sk, dht::global_partitioner().get_token(key_view(sk)));
-    }
-
     // find_disk_ranges finds the ranges of bytes we need to read from the
     // sstable to read the desired columns out of the given key. This range
     // may be the entire byte range of the given partition - as found using

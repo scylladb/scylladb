@@ -33,67 +33,9 @@
 #include "counters.hh"
 #include "utils/data_input.hh"
 #include "clustering_ranges_walker.hh"
+#include "binary_search.hh"
 
 namespace sstables {
-
-/**
- * @returns: >= 0, if key is found. That is the index where the key is found.
- *             -1, if key is not found, and is smaller than the first key in the list.
- *          <= -2, if key is not found, but is greater than one of the keys. By adding 2 and
- *                 negating, one can determine the index before which the key would have to
- *                 be inserted.
- *
- * Origin uses this slightly modified binary search for the Summary, that will
- * indicate in which bucket the element would be in case it is not a match.
- *
- * For the Index entries, it uses a "normal", java.lang binary search. Because
- * we have made the explicit decision to open code the comparator for
- * efficiency, using a separate binary search would be possible, but very
- * messy.
- *
- * It's easier to reuse the same code for both binary searches, and just ignore
- * the extra information when not needed.
- *
- * This code should work in all kinds of vectors in whose's elements is possible to aquire
- * a key view via get_key().
- */
-template <typename T>
-int sstable::binary_search(const T& entries, const key& sk, const dht::token& token) {
-    int low = 0, mid = entries.size(), high = mid - 1, result = -1;
-
-    auto& partitioner = dht::global_partitioner();
-
-    while (low <= high) {
-        // The token comparison should yield the right result most of the time.
-        // So we avoid expensive copying operations that happens at key
-        // creation by keeping only a key view, and then manually carrying out
-        // both parts of the comparison ourselves.
-        mid = low + ((high - low) >> 1);
-        key_view mid_key = entries[mid].get_key();
-        auto mid_token = partitioner.get_token(mid_key);
-
-        if (token == mid_token) {
-            result = sk.tri_compare(mid_key);
-        } else {
-            result = token < mid_token ? -1 : 1;
-        }
-
-        if (result > 0) {
-            low = mid + 1;
-        } else if (result < 0) {
-            high = mid - 1;
-        } else {
-            return mid;
-        }
-    }
-
-    return -mid - (result < 0 ? 1 : 2);
-}
-
-// Force generation, so we make it available outside this compilation unit without moving that
-// much code to .hh
-template int sstable::binary_search<>(const std::vector<summary_entry>& entries, const key& sk);
-template int sstable::binary_search<>(const std::vector<index_entry>& entries, const key& sk);
 
 static inline bytes pop_back(std::vector<bytes>& vec) {
     auto b = std::move(vec.back());
@@ -1146,7 +1088,7 @@ sstables::sstable::find_disk_ranges(
     }
 
     return read_indexes(summary_idx, pc).then([this, schema, &slice, &key, token, summary_idx, &pc] (auto index_list) {
-        auto index_idx = this->binary_search(index_list, key, token);
+        auto index_idx = binary_search(index_list, key, token);
         if (index_idx < 0) {
             return make_ready_future<disk_read_range>();
         }

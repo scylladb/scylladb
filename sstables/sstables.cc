@@ -55,6 +55,7 @@
 #include "utils/phased_barrier.hh"
 #include "range_tombstone_list.hh"
 #include "counters.hh"
+#include "binary_search.hh"
 
 #include "checked-file-impl.hh"
 #include "service/storage_service.hh"
