@@ -272,7 +272,14 @@ public:
     // returned in the result.
     future<streamed_mutation_opt> read_row(
         schema_ptr schema,
-        const key& k,
+        dht::ring_position_view key,
+        const query::partition_slice& slice = query::full_slice,
+        const io_priority_class& pc = default_priority_class(),
+        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+
+    future<streamed_mutation_opt> read_row(
+        schema_ptr schema,
+        const sstables::key& key,
         const query::partition_slice& slice = query::full_slice,
         const io_priority_class& pc = default_priority_class(),
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);

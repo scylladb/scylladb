@@ -497,7 +497,7 @@ public:
         return parallel_for_each(std::move(candidates),
             [this](const lw_shared_ptr<sstables::sstable>& sstable) {
                 tracing::trace(_trace_state, "Reading key {} from sstable {}", _pr, seastar::value_of([&sstable] { return sstable->get_filename(); }));
-                return sstable->read_row(_schema, _key, _slice, _pc, _fwd).then([this](auto smo) {
+                return sstable->read_row(_schema, _pr.start()->value(), _slice, _pc, _fwd).then([this](auto smo) {
                     if (smo) {
                         _mutations.emplace_back(std::move(*smo));
                     }
