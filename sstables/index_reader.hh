@@ -174,6 +174,12 @@ public:
 class index_reader {
     shared_sstable _sstable;
     shared_index_lists::list_ptr _current_list;
+
+    // We keep two pages alive so that when we have two index readers where
+    // one is catching up with the other, each page will be read only once.
+    // There is a case when a single advance_to() may need to read two pages.
+    shared_index_lists::list_ptr _prev_list;
+
     const io_priority_class& _pc;
 
     struct reader {
@@ -206,7 +212,7 @@ private:
     future<> advance_to_end() {
         _data_file_position = data_file_end();
         _element = indexable_element::partition;
-        _current_list = {};
+        _prev_list = std::move(_current_list);
         return close_reader().finally([this] {
             _reader = stdx::nullopt;
         });
@@ -255,6 +261,7 @@ private:
         };
 
         return _sstable->_index_lists.get_or_load(summary_idx, loader).then([this, summary_idx] (shared_index_lists::list_ptr ref) {
+            _prev_list = std::move(_current_list);
             _current_list = std::move(ref);
             _current_summary_idx = summary_idx;
             _current_index_idx = 0;
