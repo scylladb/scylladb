@@ -500,6 +500,8 @@ public:
         , _weight(weight)
     { }
 
+    const partition_key* key() const { return _key; }
+
     friend std::ostream& operator<<(std::ostream&, ring_position_view);
 };
 
