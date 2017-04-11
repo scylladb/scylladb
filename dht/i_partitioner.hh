@@ -460,6 +460,14 @@ public:
         return { maximum_token(), nullptr, 1 };
     }
 
+    bool is_min() const {
+        return _token.is_minimum();
+    }
+
+    bool is_max() const {
+        return _token.is_maximum();
+    }
+
     static ring_position_view for_range_start(const partition_range& r) {
         return r.start() ? ring_position_view(r.start()->value(), after_key(!r.start()->is_inclusive())) : min();
     }

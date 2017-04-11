@@ -210,6 +210,7 @@ class index_reader {
     indexable_element _element = indexable_element::partition;
 private:
     future<> advance_to_end() {
+        sstlog.trace("index {}: advance_to_end()", this);
         _data_file_position = data_file_end();
         _element = indexable_element::partition;
         _prev_list = std::move(_current_list);
@@ -444,6 +445,13 @@ public:
     // Must be called for non-decreasing positions.
     future<> advance_to(dht::ring_position_view pos) {
         sstlog.trace("index {}: advance_to({}), _previous_summary_idx={}, _current_summary_idx={}", this, pos, _previous_summary_idx, _current_summary_idx);
+
+        if (pos.is_min()) {
+            sstlog.trace("index {}: first entry", this);
+            return make_ready_future<>();
+        } else if (pos.is_max()) {
+            return advance_to_end();
+        }
 
         auto& summary = _sstable->get_summary();
         _previous_summary_idx = std::distance(std::begin(summary.entries),
