@@ -516,6 +516,28 @@ public:
         });
     }
 
+    // Moves the cursor to the beginning of next partition.
+    // Can be called only when !eof().
+    future<> advance_to_next_partition() {
+        sstlog.trace("index {}: advance_to_next_partition()", this);
+        if (!_current_list) {
+            return advance_to_page(0).then([this] {
+                return advance_to_next_partition();
+            });
+        }
+        if (_current_index_idx + 1 < _current_list->size()) {
+            ++_current_index_idx;
+            _data_file_position = (*_current_list)[_current_index_idx].position();
+            _element = indexable_element::partition;
+            return make_ready_future<>();
+        }
+        auto& summary = _sstable->get_summary();
+        if (_current_summary_idx + 1 < summary.header.size) {
+            return advance_to_page(_current_summary_idx + 1);
+        }
+        return advance_to_end();
+    }
+
     // Positions the cursor on the first partition which is not smaller than pos (like std::lower_bound).
     // Must be called for non-decreasing positions.
     future<> advance_to(dht::ring_position_view pos) {
