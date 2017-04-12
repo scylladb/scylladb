@@ -102,7 +102,7 @@ private:
 
 public:
     enum class kind : int8_t {
-        ASCII, BIGINT, BLOB, BOOLEAN, COUNTER, DECIMAL, DOUBLE, FLOAT, INT, SMALLINT, TINYINT, INET, TEXT, TIMESTAMP, UUID, VARCHAR, VARINT, TIMEUUID, DATE, TIME
+        ASCII, BIGINT, BLOB, BOOLEAN, COUNTER, DECIMAL, DOUBLE, EMPTY, FLOAT, INT, SMALLINT, TINYINT, INET, TEXT, TIMESTAMP, UUID, VARCHAR, VARINT, TIMEUUID, DATE, TIME
     };
     using kind_enum = super_enum<kind,
         kind::ASCII,
@@ -112,6 +112,7 @@ public:
         kind::COUNTER,
         kind::DECIMAL,
         kind::DOUBLE,
+        kind::EMPTY,
         kind::FLOAT,
         kind::INET,
         kind::INT,
@@ -137,6 +138,7 @@ public:
     static thread_local shared_ptr<cql3_type> blob;
     static thread_local shared_ptr<cql3_type> boolean;
     static thread_local shared_ptr<cql3_type> double_;
+    static thread_local shared_ptr<cql3_type> empty;
     static thread_local shared_ptr<cql3_type> float_;
     static thread_local shared_ptr<cql3_type> int_;
     static thread_local shared_ptr<cql3_type> smallint;

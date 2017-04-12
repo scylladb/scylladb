@@ -298,6 +298,7 @@ thread_local shared_ptr<cql3_type> cql3_type::bigint = make("bigint", long_type,
 thread_local shared_ptr<cql3_type> cql3_type::blob = make("blob", bytes_type, cql3_type::kind::BLOB);
 thread_local shared_ptr<cql3_type> cql3_type::boolean = make("boolean", boolean_type, cql3_type::kind::BOOLEAN);
 thread_local shared_ptr<cql3_type> cql3_type::double_ = make("double", double_type, cql3_type::kind::DOUBLE);
+thread_local shared_ptr<cql3_type> cql3_type::empty = make("empty", empty_type, cql3_type::kind::EMPTY);
 thread_local shared_ptr<cql3_type> cql3_type::float_ = make("float", float_type, cql3_type::kind::FLOAT);
 thread_local shared_ptr<cql3_type> cql3_type::int_ = make("int", int32_type, cql3_type::kind::INT);
 thread_local shared_ptr<cql3_type> cql3_type::smallint = make("smallint", short_type, cql3_type::kind::SMALLINT);
@@ -324,6 +325,7 @@ cql3_type::values() {
         cql3_type::counter,
         cql3_type::decimal,
         cql3_type::double_,
+        cql3_type::empty,
         cql3_type::float_,
         cql3_type::inet,
         cql3_type::int_,

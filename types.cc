@@ -1561,20 +1561,16 @@ struct empty_type_impl : abstract_type {
         return data_value::make_null(shared_from_this());
     }
     virtual sstring to_string(const bytes& b) const override {
-        // FIXME:
-        abort();
+        return "";
     }
     virtual bytes from_string(sstring_view text) const override {
-        // FIXME:
-        abort();
+        return {};
     }
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        // Can't happen
-        abort();
+        return cql3::cql3_type::empty;
     }
     virtual size_t native_value_size() const override {
-        // Can't happen
-        abort();
+        return 0;
     }
     virtual size_t native_value_alignment() const override {
         // Can't happen
@@ -1605,8 +1601,7 @@ struct empty_type_impl : abstract_type {
         abort();
     }
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
-        // Can't happen
-        abort();
+        return false;
     }
     virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
         // Can't happen
