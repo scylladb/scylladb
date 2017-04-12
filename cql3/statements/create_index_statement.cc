@@ -47,23 +47,30 @@
 #include "schema.hh"
 #include "schema_builder.hh"
 
-cql3::statements::create_index_statement::create_index_statement(
-        ::shared_ptr<cf_name> name, ::shared_ptr<index_name> index_name,
-        ::shared_ptr<index_target::raw> raw_target,
-        ::shared_ptr<index_prop_defs> properties, bool if_not_exists)
-        : schema_altering_statement(name), _index_name(index_name->get_idx()), _raw_target(
-                raw_target), _properties(properties), _if_not_exists(
-                if_not_exists) {
+namespace cql3 {
+
+namespace statements {
+
+create_index_statement::create_index_statement(::shared_ptr<cf_name> name,
+                                               ::shared_ptr<index_name> index_name,
+                                               ::shared_ptr<index_target::raw> raw_target,
+                                               ::shared_ptr<index_prop_defs> properties,
+                                               bool if_not_exists)
+    : schema_altering_statement(name)
+    , _index_name(index_name->get_idx())
+    , _raw_target(raw_target)
+    , _properties(properties)
+    , _if_not_exists(if_not_exists)
+{
 }
 
 future<>
-cql3::statements::create_index_statement::check_access(const service::client_state& state) {
+create_index_statement::check_access(const service::client_state& state) {
     return state.has_column_family_access(keyspace(), column_family(), auth::permission::ALTER);
 }
 
 void
-cql3::statements::create_index_statement::validate(distributed<service::storage_proxy>& proxy
-        , const service::client_state& state)
+create_index_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state)
 {
     auto schema = validation::validate_column_family(proxy.local().get_db().local(), keyspace(), column_family());
 
@@ -144,7 +151,6 @@ cql3::statements::create_index_statement::validate(distributed<service::storage_
 
     _properties->validate();
 
-
     // Origin TODO: we could lift that limitation
     if ((schema->is_dense() || !schema->thrift().has_compound_comparator()) && cd->kind != column_kind::regular_column) {
         throw exceptions::invalid_request_exception("Secondary indexes are not supported on PRIMARY KEY columns in COMPACT STORAGE tables");
@@ -168,7 +174,7 @@ cql3::statements::create_index_statement::validate(distributed<service::storage_
 }
 
 future<bool>
-cql3::statements::create_index_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
+create_index_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
     throw std::runtime_error("Indexes are not supported yet");
     auto schema = proxy.local().get_db().local().find_schema(keyspace(), column_family());
     auto target = _raw_target->prepare(schema);
@@ -207,8 +213,10 @@ cql3::statements::create_index_statement::announce_migration(distributed<service
 }
 
 shared_ptr<cql3::statements::prepared_statement>
-cql3::statements::create_index_statement::prepare(database& db, cql_stats& stats) {
+create_index_statement::prepare(database& db, cql_stats& stats) {
     return make_shared<prepared_statement>(make_shared<create_index_statement>(*this));
 }
 
+}
 
+}
