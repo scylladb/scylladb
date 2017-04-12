@@ -1315,98 +1315,106 @@ public:
             return read_partition();
         });
     }
-    future<> fast_forward_to(const dht::partition_range& pr) {
-        assert(_ds->_lh_index);
-        assert(_ds->_rh_index);
-        auto f1 = _ds->_lh_index->advance_to_start(pr);
-        auto f2 = _ds->_rh_index->advance_to_end(pr);
-        return seastar::when_all_succeed(std::move(f1), std::move(f2)).then([this] {
-            auto start = _ds->_lh_index->data_file_position();
-            auto end = _ds->_rh_index->data_file_position();
-            if (start != end) {
-                _read_enabled = true;
-                _ds->_index_in_current_partition = true;
-                return _ds->_context.fast_forward_to(start, end);
-            }
-            _ds->_index_in_current_partition = false;
-            _read_enabled = false;
-            return make_ready_future<>();
-        });
-    }
+    future<> fast_forward_to(const dht::partition_range& pr);
 private:
-    future<> advance_to_next_partition() {
-        _ds->_index_in_current_partition = false;
-        auto& consumer = _ds->_consumer;
-        if (consumer.is_mutation_end()) {
-            return make_ready_future<>();
-        }
-        return _ds->lh_index().advance_to(dht::ring_position_view::for_after_key(*_key)).then([this] {
+    future<> advance_to_next_partition();
+    future<streamed_mutation_opt> read_next_partition();
+    future<streamed_mutation_opt> read_partition();
+    future<streamed_mutation_opt> read_from_index();
+    future<streamed_mutation_opt> read_from_datafile();
+};
+
+future<> mutation_reader::impl::fast_forward_to(const dht::partition_range& pr) {
+    assert(_ds->_lh_index);
+    assert(_ds->_rh_index);
+    auto f1 = _ds->_lh_index->advance_to_start(pr);
+    auto f2 = _ds->_rh_index->advance_to_end(pr);
+    return seastar::when_all_succeed(std::move(f1), std::move(f2)).then([this] {
+        auto start = _ds->_lh_index->data_file_position();
+        auto end = _ds->_rh_index->data_file_position();
+        if (start != end) {
+            _read_enabled = true;
             _ds->_index_in_current_partition = true;
-            return _ds->_context.skip_to(_ds->_lh_index->element_kind(), _ds->_lh_index->data_file_position());
-        });
-    }
-
-    future<streamed_mutation_opt> read_next_partition() {
-        return advance_to_next_partition().then([this] {
-            return read_partition();
-        });
-    }
-
-    future<streamed_mutation_opt> read_partition() {
-        if (!_ds->_consumer.is_mutation_end()) {
-            // FIXME: give more details from _context
-            throw malformed_sstable_exception("consumer not at partition boundary", _ds->_sst->get_filename());
+            return _ds->_context.fast_forward_to(start, end);
         }
+        _ds->_index_in_current_partition = false;
+        _read_enabled = false;
+        return make_ready_future<>();
+    });
+}
 
-        // It's better to obtain partition information from the index if we already have it.
-        // We can save on IO if the user will skip past the front of partition immediately.
-        //
-        // It is also better to pay the cost of reading the index if we know that we will
-        // need to use the index anyway soon.
-        //
-        if (_ds->_index_in_current_partition) {
-            if (_ds->_lh_index->eof()) {
-                return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
-            }
-            if (_ds->_lh_index->partition_data_ready()) {
+future<> mutation_reader::impl::advance_to_next_partition() {
+    _ds->_index_in_current_partition = false;
+    auto& consumer = _ds->_consumer;
+    if (consumer.is_mutation_end()) {
+        return make_ready_future<>();
+    }
+    return _ds->lh_index().advance_to(dht::ring_position_view::for_after_key(*_key)).then([this] {
+        _ds->_index_in_current_partition = true;
+        return _ds->_context.skip_to(_ds->_lh_index->element_kind(), _ds->_lh_index->data_file_position());
+    });
+}
+
+future<streamed_mutation_opt> mutation_reader::impl::read_next_partition() {
+    return advance_to_next_partition().then([this] {
+        return read_partition();
+    });
+}
+
+future<streamed_mutation_opt> mutation_reader::impl::read_partition() {
+    if (!_ds->_consumer.is_mutation_end()) {
+        // FIXME: give more details from _context
+        throw malformed_sstable_exception("consumer not at partition boundary", _ds->_sst->get_filename());
+    }
+
+    // It's better to obtain partition information from the index if we already have it.
+    // We can save on IO if the user will skip past the front of partition immediately.
+    //
+    // It is also better to pay the cost of reading the index if we know that we will
+    // need to use the index anyway soon.
+    //
+    if (_ds->_index_in_current_partition) {
+        if (_ds->_lh_index->eof()) {
+            return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
+        }
+        if (_ds->_lh_index->partition_data_ready()) {
+            return read_from_index();
+        }
+        if (_will_likely_slice) {
+            return _ds->_lh_index->read_partition_data().then([this] {
                 return read_from_index();
-            }
-            if (_will_likely_slice) {
-                return _ds->_lh_index->read_partition_data().then([this] {
-                    return read_from_index();
-                });
-            }
+            });
         }
+    }
 
-        // FIXME: advance index to current partition if _will_likely_slice
+    // FIXME: advance index to current partition if _will_likely_slice
+    return read_from_datafile();
+}
+
+future<streamed_mutation_opt> mutation_reader::impl::read_from_index() {
+    auto tomb = _ds->_lh_index->partition_tombstone();
+    if (!tomb) {
         return read_from_datafile();
     }
+    auto pk = _ds->_lh_index->partition_key().to_partition_key(*_schema);
+    _key = dht::global_partitioner().decorate_key(*_schema, std::move(pk));
+    auto sm = make_streamed_mutation<sstable_streamed_mutation>(_schema, *_key, tombstone(*tomb), _ds);
+    _ds->_consumer.setup_for_partition(_key->key());
+    return make_ready_future<streamed_mutation_opt>(std::move(sm));
+}
 
-    future<streamed_mutation_opt> read_from_index() {
-        auto tomb = _ds->_lh_index->partition_tombstone();
-        if (!tomb) {
-            return read_from_datafile();
+future<streamed_mutation_opt> mutation_reader::impl::read_from_datafile() {
+    return _ds->_context.read().then([this] {
+        auto& consumer = _ds->_consumer;
+        auto mut = consumer.get_mutation();
+        if (!mut) {
+            return make_ready_future<streamed_mutation_opt>();
         }
-        auto pk = _ds->_lh_index->partition_key().to_partition_key(*_schema);
-        _key = dht::global_partitioner().decorate_key(*_schema, std::move(pk));
-        auto sm = make_streamed_mutation<sstable_streamed_mutation>(_schema, *_key, tombstone(*tomb), _ds);
-        _ds->_consumer.setup_for_partition(_key->key());
+        _key = dht::global_partitioner().decorate_key(*_schema, std::move(mut->key));
+        auto sm = make_streamed_mutation<sstable_streamed_mutation>(_schema, *_key, mut->tomb, _ds);
         return make_ready_future<streamed_mutation_opt>(std::move(sm));
-    }
-
-    future<streamed_mutation_opt> read_from_datafile() {
-        return _ds->_context.read().then([this] {
-            auto& consumer = _ds->_consumer;
-            auto mut = consumer.get_mutation();
-            if (!mut) {
-                return make_ready_future<streamed_mutation_opt>();
-            }
-            _key = dht::global_partitioner().decorate_key(*_schema, std::move(mut->key));
-            auto sm = make_streamed_mutation<sstable_streamed_mutation>(_schema, *_key, mut->tomb, _ds);
-            return make_ready_future<streamed_mutation_opt>(std::move(sm));
-        });
-    }
-};
+    });
+}
 
 mutation_reader::~mutation_reader() = default;
 mutation_reader::mutation_reader(mutation_reader&&) = default;
