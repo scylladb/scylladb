@@ -305,6 +305,21 @@ public:
         sstlog.trace("index {}: index_reader for {}", this, _sstable->get_filename());
     }
 
+    index_reader(const index_reader& r)
+        : _sstable(r._sstable)
+        , _current_list(r._current_list)
+        , _prev_list(r._prev_list)
+        , _pc(r._pc)
+        , _previous_summary_idx(r._previous_summary_idx)
+        , _current_summary_idx(r._current_summary_idx)
+        , _current_index_idx(r._current_index_idx)
+        , _current_pi_idx(r._current_pi_idx)
+        , _data_file_position(r._data_file_position)
+        , _element(r._element)
+    {
+        sstlog.trace("index {}: index_reader for {}", this, _sstable->get_filename());
+    }
+
     // Cannot be used twice on the same summary_idx and together with advance_to().
     [[deprecated]]
     future<index_list> get_index_entries(uint64_t summary_idx) {
