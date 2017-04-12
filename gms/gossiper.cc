@@ -1193,10 +1193,7 @@ void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
 
 // Runs inside seastar::async context
 void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& eps) {
-    std::experimental::optional<endpoint_state> local_ep_state;
-    if (endpoint_state_map.count(ep) > 0) {
-        local_ep_state = endpoint_state_map.at(ep);
-    }
+    auto eps_old = get_endpoint_state_for_endpoint(ep);
     if (!is_dead_state(eps) && !_in_shadow_round) {
         if (endpoint_state_map.count(ep))  {
             logger.debug("Node {} has restarted, now UP, status = {}", ep, get_gossip_status(eps));
@@ -1207,24 +1204,27 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     logger.trace("Adding endpoint state for {}, status = {}", ep, get_gossip_status(eps));
     endpoint_state_map[ep] = eps;
 
-    auto& ep_state = endpoint_state_map.at(ep);
-
-    if (local_ep_state) {
+    if (eps_old) {
         // the node restarted: it is up to the subscriber to take whatever action is necessary
-        _subscribers.for_each([ep, local_ep_state] (auto& subscriber) {
-            subscriber->on_restart(ep, *local_ep_state);
+        _subscribers.for_each([ep, eps_old] (auto& subscriber) {
+            subscriber->on_restart(ep, *eps_old);
         });
     }
 
+    auto& ep_state = endpoint_state_map.at(ep);
     if (!is_dead_state(ep_state)) {
         mark_alive(ep, ep_state);
     } else {
         logger.debug("Not marking {} alive due to dead state {}", ep, get_gossip_status(eps));
         mark_dead(ep, ep_state);
     }
-    _subscribers.for_each([ep, ep_state] (auto& subscriber) {
-        subscriber->on_join(ep, ep_state);
-    });
+
+    auto eps_new = get_endpoint_state_for_endpoint(ep);
+    if (eps_new) {
+        _subscribers.for_each([ep, eps_new] (auto& subscriber) {
+            subscriber->on_join(ep, *eps_new);
+        });
+    }
     // check this at the end so nodes will learn about the endpoint
     if (is_shutdown(ep)) {
         mark_as_shutdown(ep);
@@ -1399,9 +1399,11 @@ future<> gossiper::start_gossiping(int generation_nbr, std::map<application_stat
             local_state.add_application_state(entry.first, entry.second);
         }
 
+        auto generation = local_state.get_heart_beat_state().get_generation();
+
         //notify snitches that Gossiper is about to start
-        return locator::i_endpoint_snitch::get_local_snitch_ptr()->gossiper_starting().then([this, &local_state] {
-            logger.trace("gossip started with generation {}", local_state.get_heart_beat_state().get_generation());
+        return locator::i_endpoint_snitch::get_local_snitch_ptr()->gossiper_starting().then([this, generation] {
+            logger.trace("gossip started with generation {}", generation);
             _enabled = true;
             _nr_run = 0;
             _scheduled_gossip_task.arm(INTERVAL);
@@ -1498,16 +1500,19 @@ future<> gossiper::add_local_application_state(application_state state, versione
                 logger.error(err.c_str());
                 throw std::runtime_error(err);
             }
-            endpoint_state& ep_state = gossiper.endpoint_state_map.at(ep_addr);
+            endpoint_state ep_state_before = gossiper.endpoint_state_map.at(ep_addr);
             // Fire "before change" notifications:
-            gossiper.do_before_change_notifications(ep_addr, ep_state, state, value);
+            gossiper.do_before_change_notifications(ep_addr, ep_state_before, state, value);
             // Notifications may have taken some time, so preventively raise the version
             // of the new value, otherwise it could be ignored by the remote node
             // if another value with a newer version was received in the meantime:
             value = storage_service_value_factory().clone_with_higher_version(value);
             // Add to local application state and fire "on change" notifications:
-            ep_state.add_application_state(state, value);
-            gossiper.do_on_change_notifications(ep_addr, state, value);
+            if (gossiper.endpoint_state_map.count(ep_addr)) {
+                auto& ep_state = gossiper.endpoint_state_map.at(ep_addr);
+                ep_state.add_application_state(state, value);
+                gossiper.do_on_change_notifications(ep_addr, state, value);
+            }
         }).handle_exception([] (auto ep) {
             logger.warn("Fail to apply application_state: {}", ep);
         });
