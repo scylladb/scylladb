@@ -1335,9 +1335,11 @@ future<> sstable_data_source::fast_forward_to(const dht::partition_range& pr) {
 }
 
 future<> sstable_data_source::advance_to_next_partition() {
+    sstlog.trace("reader {}: advance_to_next_partition()", this);
     _index_in_current_partition = false;
     auto& consumer = _consumer;
     if (consumer.is_mutation_end()) {
+        sstlog.trace("reader {}: already at partition boundary", this);
         return make_ready_future<>();
     }
     return lh_index().advance_to(dht::ring_position_view::for_after_key(*_key)).then([this] {
@@ -1347,12 +1349,15 @@ future<> sstable_data_source::advance_to_next_partition() {
 }
 
 future<streamed_mutation_opt> sstable_data_source::read_next_partition() {
+    sstlog.trace("reader {}: read next partition", this);
     return advance_to_next_partition().then([this] {
         return read_partition();
     });
 }
 
 future<streamed_mutation_opt> sstable_data_source::read_partition() {
+    sstlog.trace("reader {}: reading partition", this);
+
     if (!_consumer.is_mutation_end()) {
         // FIXME: give more details from _context
         throw malformed_sstable_exception("consumer not at partition boundary", _sst->get_filename());
@@ -1370,6 +1375,7 @@ future<streamed_mutation_opt> sstable_data_source::read_partition() {
     //
     if (_index_in_current_partition) {
         if (_lh_index->eof()) {
+            sstlog.trace("reader {}: eof", this);
             return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
         }
         if (_lh_index->partition_data_ready()) {
@@ -1387,8 +1393,10 @@ future<streamed_mutation_opt> sstable_data_source::read_partition() {
 }
 
 future<streamed_mutation_opt> sstable_data_source::read_from_index() {
+    sstlog.trace("reader {}: read from index", this);
     auto tomb = _lh_index->partition_tombstone();
     if (!tomb) {
+        sstlog.trace("reader {}: no tombstone", this);
         return read_from_datafile();
     }
     auto pk = _lh_index->partition_key().to_partition_key(*_schema);
@@ -1399,10 +1407,12 @@ future<streamed_mutation_opt> sstable_data_source::read_from_index() {
 }
 
 future<streamed_mutation_opt> sstable_data_source::read_from_datafile() {
+    sstlog.trace("reader {}: read from data file", this);
     return _context.read().then([this] {
         auto& consumer = _consumer;
         auto mut = consumer.get_mutation();
         if (!mut) {
+            sstlog.trace("reader {}: eof", this);
             return make_ready_future<streamed_mutation_opt>();
         }
         _key = dht::global_partitioner().decorate_key(*_schema, std::move(mut->key));
