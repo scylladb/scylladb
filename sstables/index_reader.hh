@@ -456,6 +456,56 @@ public:
         return make_ready_future<>();
     }
 
+    // Forwards the cursor to a position which is greater than given position in current partition.
+    //
+    // Note that the index within partition, unlike the partition index, doesn't cover all keys.
+    // So this may not forward to the smallest position which is greater than pos.
+    //
+    // May advance to the next partition if it's not possible to find a suitable position inside
+    // current partition.
+    //
+    // Must be called only when !eof().
+    future<> advance_past(position_in_partition_view pos) {
+        sstlog.trace("index {}: advance_to({}), current data_file_pos={}", this, pos, _data_file_position);
+
+        if (!partition_data_ready()) {
+            return read_partition_data().then([this, pos] {
+                assert(partition_data_ready());
+                return advance_past(pos);
+            });
+        }
+
+        const schema& s = *_sstable->_schema;
+        index_entry& e = current_partition_entry();
+        promoted_index* pi = nullptr;
+        try {
+            pi = e.get_promoted_index(s);
+        } catch (...) {
+            sstlog.error("Failed to get promoted index for sstable {}, page {}, index {}: {}", _sstable->get_filename(),
+                _current_summary_idx, _current_index_idx, std::current_exception());
+        }
+        if (!pi || pi->entries.empty()) {
+            sstlog.trace("index {}: no promoted index", this);
+            return advance_to_next_partition();
+        }
+
+        auto cmp_with_start = [pos_cmp = position_in_partition::composite_less_compare(s)]
+            (position_in_partition_view pos, const promoted_index::entry& e) -> bool {
+            return pos_cmp(pos, e.start);
+        };
+
+        auto i = std::upper_bound(pi->entries.begin() + _current_pi_idx, pi->entries.end(), pos, cmp_with_start);
+        _current_pi_idx = std::distance(pi->entries.begin(), i);
+        if (i == pi->entries.end()) {
+            return advance_to_next_partition();
+        }
+
+        _data_file_position = e.position() + i->offset;
+        _element = indexable_element::cell;
+        sstlog.trace("index {}: skipped to cell", this);
+        return make_ready_future<>();
+    }
+
     // Positions the cursor on the first partition which is not smaller than pos (like std::lower_bound).
     // Must be called for non-decreasing positions.
     future<> advance_to(dht::ring_position_view pos) {
