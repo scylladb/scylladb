@@ -94,39 +94,11 @@ create_index_statement::validate(distributed<service::storage_proxy>& proxy, con
     bool is_frozen_collection = cd->type->is_collection() && !cd->type->is_multi_cell();
 
     if (is_frozen_collection) {
-        if (target->type != index_target::target_type::full) {
-            throw exceptions::invalid_request_exception(
-                    sprint("Cannot create index on %s of frozen<map> column %s",
-                            index_target::index_option(target->type),
-                            *target->column));
-        }
+        validate_for_frozen_collection(target);
     } else {
-        // validateNotFullIndex
-        if (target->type == index_target::target_type::full) {
-            throw exceptions::invalid_request_exception("full() indexes can only be created on frozen collections");
-        }
-        // validateIsValuesIndexIfTargetColumnNotCollection
-        if (!cd->type->is_collection()
-                && target->type != index_target::target_type::values) {
-            throw exceptions::invalid_request_exception(
-                    sprint(
-                            "Cannot create index on %s of column %s; only non-frozen collections support %s indexes",
-                            index_target::index_option(target->type),
-                            *target->column,
-                            index_target::index_option(target->type)));
-        }
-        // validateTargetColumnIsMapIfIndexInvolvesKeys
-        if (target->type == index_target::target_type::keys
-                || target->type == index_target::target_type::keys_and_values) {
-            if (!is_map) {
-                throw exceptions::invalid_request_exception(
-                        sprint(
-                                "Cannot create index on %s of column %s with non-map type",
-                                index_target::index_option(target->type),
-                                *target->column));
-
-            }
-        }
+        validate_not_full_index(target);
+        validate_is_values_index_if_target_column_not_collection(cd, target);
+        validate_target_column_is_map_if_index_involves_keys(is_map, target);
     }
 
     if (cd->idx_info.index_type != ::index_type::none) {
@@ -158,6 +130,48 @@ create_index_statement::validate(distributed<service::storage_proxy>& proxy, con
                 sprint(
                         "Cannot create secondary index on partition key column %s",
                         *target->column));
+    }
+}
+
+void create_index_statement::validate_for_frozen_collection(::shared_ptr<index_target> target) const
+{
+    if (target->type != index_target::target_type::full) {
+        throw exceptions::invalid_request_exception(
+                sprint("Cannot create index on %s of frozen<map> column %s",
+                        index_target::index_option(target->type),
+                        *target->column));
+    }
+}
+
+void create_index_statement::validate_not_full_index(::shared_ptr<index_target> target) const
+{
+    if (target->type == index_target::target_type::full) {
+        throw exceptions::invalid_request_exception("full() indexes can only be created on frozen collections");
+    }
+}
+
+void create_index_statement::validate_is_values_index_if_target_column_not_collection(
+        const column_definition* cd, ::shared_ptr<index_target> target) const
+{
+    if (!cd->type->is_collection()
+            && target->type != index_target::target_type::values) {
+        throw exceptions::invalid_request_exception(
+                sprint("Cannot create index on %s of column %s; only non-frozen collections support %s indexes",
+                       index_target::index_option(target->type),
+                       *target->column,
+                       index_target::index_option(target->type)));
+    }
+}
+
+void create_index_statement::validate_target_column_is_map_if_index_involves_keys(bool is_map, ::shared_ptr<index_target> target) const
+{
+    if (target->type == index_target::target_type::keys
+            || target->type == index_target::target_type::keys_and_values) {
+        if (!is_map) {
+            throw exceptions::invalid_request_exception(
+                    sprint("Cannot create index on %s of column %s with non-map type",
+                           index_target::index_option(target->type), *target->column));
+        }
     }
 }
 
