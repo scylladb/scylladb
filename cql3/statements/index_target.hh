@@ -81,5 +81,7 @@ struct index_target {
     };
 };
 
+sstring to_sstring(index_target::target_type type);
+
 }
 }

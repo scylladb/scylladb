@@ -101,6 +101,17 @@ index_target::raw::prepare(schema_ptr schema) {
     return ::make_shared<index_target>(column->prepare_column_identifier(schema), type);
 }
 
+sstring to_sstring(index_target::target_type type)
+{
+    switch (type) {
+    case index_target::target_type::keys: return "keys";
+    case index_target::target_type::keys_and_values: return "entries";
+    case index_target::target_type::values: return "values";
+    case index_target::target_type::full: return "full";
+    }
+    return "";
+}
+
 }
 
 }
