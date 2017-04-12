@@ -78,6 +78,10 @@ create_index_statement::validate(distributed<service::storage_proxy>& proxy, con
         throw exceptions::invalid_request_exception("Secondary indexes are not supported on counter tables");
     }
 
+    if (schema->is_view()) {
+        throw exceptions::invalid_request_exception("Secondary indexes are not supported on materialized views");
+    }
+
     // Added since we might as well fail fast if anyone is trying to insert java classes here...
     if (_properties->is_custom) {
         throw exceptions::invalid_request_exception("CUSTOM index not supported");
