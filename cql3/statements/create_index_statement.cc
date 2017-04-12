@@ -131,17 +131,6 @@ create_index_statement::validate(distributed<service::storage_proxy>& proxy, con
     }
 
     if (cd->idx_info.index_type != ::index_type::none) {
-        auto prev_type = index_target::from_column_definition(*cd);
-        if (is_map && target->type != prev_type) {
-            throw exceptions::invalid_request_exception(
-                    sprint(
-                            "Cannot create index on %s(%s): an index on %s(%s) already exists and indexing "
-                                    "a map on more than one dimension at the same time is not currently supported",
-                            index_target::index_option(target->type),
-                            *target->column,
-                            index_target::index_option(prev_type),
-                            *target->column));
-        }
         if (_if_not_exists) {
             return;
         } else {
