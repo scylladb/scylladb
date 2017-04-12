@@ -183,35 +183,16 @@ public:
     // row that we need to read from disk. Usually this is the whole byte
     // range covering a single sstable row, but in very large rows we might
     // want to only read a subset of the atoms which we know contains the
-    // columns we are looking for. When the range to be read does NOT include
-    // the entire row, the caller needs to supply the optional "row_info"
-    // containing information about the entire row (key and deletion time)
-    // which is normally read from the beginning of the row.
+    // columns we are looking for.
     struct disk_read_range {
         // TODO: this should become a vector of ranges
         uint64_t start;
         uint64_t end;
-        // When the range above does not cover the beginning of the sstable
-        // row, we need to supply information which is only available at the
-        // beginning of the row - the row's key and its tombstone if any.
-        struct row_info {
-            key k;
-            deletion_time deltime;
-        };
-        std::experimental::optional<row_info> ri;
         disk_read_range() : start(0), end(0) {}
         disk_read_range(uint64_t start, uint64_t end) :
             start(start), end(end) { }
-        disk_read_range(uint64_t start, uint64_t end, const key& key, const deletion_time& deltime) :
-            start(start), end(end), ri(row_info{key, deltime}) { }
         explicit operator bool() const {
             return start != end;
-        }
-        // found_row() is true if the row was found. This is not the same as
-        // operator bool(): It is possible that found_row() but the promoted
-        // index ruled out anything to read (in this case "ri" was set).
-        bool found_row() const {
-            return start != end || ri;
         }
     };
 
@@ -579,24 +560,6 @@ private:
     // This function is intended (and optimized for) random access, not
     // for iteration through all the rows.
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len, const io_priority_class& pc);
-
-    future<uint64_t> data_end_position(uint64_t summary_idx, uint64_t index_idx, const index_list& il, const io_priority_class& pc);
-
-    // Returns data file position for an entry right after all entries mapped by given summary page.
-    future<uint64_t> data_end_position(uint64_t summary_idx, const io_priority_class& pc);
-
-    // find_disk_ranges finds the ranges of bytes we need to read from the
-    // sstable to read the desired columns out of the given key. This range
-    // may be the entire byte range of the given partition - as found using
-    // the summary and index files - but if the index contains a "promoted
-    // index" (a sample of column positions for each key) it may be a smaller
-    // range. The returned range may contain columns beyond those requested
-    // in slice, so it is the reader's duty to use slice again
-    // when parsing the data read from the returned range.
-    future<disk_read_range> find_disk_ranges(schema_ptr schema,
-            const sstables::key& key,
-            const query::partition_slice& slice,
-            const io_priority_class& pc);
 
     future<summary_entry&> read_summary_entry(size_t i);
 

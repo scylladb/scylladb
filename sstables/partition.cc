@@ -982,38 +982,6 @@ future<> mp_row_consumer::maybe_skip() {
     return _sm->advance_context(pos);
 }
 
-static int adjust_binary_search_index(int idx) {
-    if (idx < 0) {
-        // binary search gives us the first index _greater_ than the key searched for,
-        // i.e., its insertion position
-        auto gt = (idx + 1) * -1;
-        idx = gt - 1;
-    }
-    return idx;
-}
-
-future<uint64_t> sstables::sstable::data_end_position(uint64_t summary_idx, uint64_t index_idx, const index_list& il,
-                                                      const io_priority_class& pc) {
-    if (uint64_t(index_idx + 1) < il.size()) {
-        return make_ready_future<uint64_t>(il[index_idx + 1].position());
-    }
-
-    return data_end_position(summary_idx, pc);
-}
-
-future<uint64_t> sstables::sstable::data_end_position(uint64_t summary_idx, const io_priority_class& pc) {
-    // We should only go to the end of the file if we are in the last summary group.
-    // Otherwise, we will determine the end position of the current data read by looking
-    // at the first index in the next summary group.
-    if (size_t(summary_idx + 1) >= _components->summary.entries.size()) {
-        return make_ready_future<uint64_t>(data_size());
-    }
-
-    return read_indexes(summary_idx + 1, pc).then([] (auto next_il) {
-        return next_il.front().position();
-    });
-}
-
 future<streamed_mutation_opt>
 sstables::sstable::read_row(schema_ptr schema,
                             const sstables::key& key,
