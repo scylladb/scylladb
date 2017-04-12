@@ -89,6 +89,18 @@ create_index_statement::validate(distributed<service::storage_proxy>& proxy, con
         throw exceptions::invalid_request_exception(sprint("No column definition found for column %s", *target->column));
     }
 
+    // Origin TODO: we could lift that limitation
+    if ((schema->is_dense() || !schema->thrift().has_compound_comparator()) && cd->kind != column_kind::regular_column) {
+        throw exceptions::invalid_request_exception("Secondary indexes are not supported on PRIMARY KEY columns in COMPACT STORAGE tables");
+    }
+
+    if (cd->kind == column_kind::partition_key && cd->is_on_all_components()) {
+        throw exceptions::invalid_request_exception(
+                sprint(
+                        "Cannot create secondary index on partition key column %s",
+                        *target->column));
+    }
+
     bool is_map = dynamic_cast<const collection_type_impl *>(cd->type.get()) != nullptr
             && dynamic_cast<const collection_type_impl *>(cd->type.get())->is_map();
     bool is_frozen_collection = cd->type->is_collection() && !cd->type->is_multi_cell();
@@ -110,18 +122,6 @@ create_index_statement::validate(distributed<service::storage_proxy>& proxy, con
     }
 
     _properties->validate();
-
-    // Origin TODO: we could lift that limitation
-    if ((schema->is_dense() || !schema->thrift().has_compound_comparator()) && cd->kind != column_kind::regular_column) {
-        throw exceptions::invalid_request_exception("Secondary indexes are not supported on PRIMARY KEY columns in COMPACT STORAGE tables");
-    }
-
-    if (cd->kind == column_kind::partition_key && cd->is_on_all_components()) {
-        throw exceptions::invalid_request_exception(
-                sprint(
-                        "Cannot create secondary index on partition key column %s",
-                        *target->column));
-    }
 }
 
 void create_index_statement::validate_for_frozen_collection(::shared_ptr<index_target> target) const
