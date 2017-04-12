@@ -116,15 +116,6 @@ create_index_statement::validate(distributed<service::storage_proxy>& proxy, con
         throw exceptions::invalid_request_exception("Secondary indexes are not supported on PRIMARY KEY columns in COMPACT STORAGE tables");
     }
 
-    // It would be possible to support 2ndary index on static columns (but not without modifications of at least ExtendedFilter and
-    // CompositesIndex) and maybe we should, but that means a query like:
-    //     SELECT * FROM foo WHERE static_column = 'bar'
-    // would pull the full partition every time the static column of partition is 'bar', which sounds like offering a
-    // fair potential for foot-shooting, so I prefer leaving that to a follow up ticket once we have identified cases where
-    // such indexing is actually useful.
-    if (cd->is_static()) {
-        throw exceptions::invalid_request_exception("Secondary indexes are not allowed on static columns");
-    }
     if (cd->kind == column_kind::partition_key && cd->is_on_all_components()) {
         throw exceptions::invalid_request_exception(
                 sprint(
