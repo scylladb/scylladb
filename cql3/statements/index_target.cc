@@ -49,6 +49,9 @@ namespace statements {
 
 using db::index::secondary_index;
 
+const sstring index_target::target_option_name = "target";
+const sstring index_target::custom_index_option_name = "class_name";
+
 sstring index_target::as_cql_string(schema_ptr schema) const {
     if (!schema->get_column_definition(column->name())->type->is_collection()) {
         return column->to_cql_string();

@@ -50,6 +50,9 @@ namespace cql3 {
 namespace statements {
 
 struct index_target {
+    static const sstring target_option_name;
+    static const sstring custom_index_option_name;
+
     enum class target_type {
         values, keys, keys_and_values, full
     };
