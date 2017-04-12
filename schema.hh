@@ -498,6 +498,12 @@ public:
     bool is_cql3_table() const {
         return !is_super() && !is_dense() && is_compound();
     }
+    bool is_compact_table() const {
+        return !is_cql3_table();
+    }
+    bool is_static_compact_table() const {
+        return !is_super() && !is_dense() && !is_compound();
+    }
 
     thrift_schema& thrift() {
         return _thrift;
