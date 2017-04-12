@@ -197,6 +197,20 @@ public:
         return *this;
     }
 
+    class default_names {
+    public:
+        default_names(const schema_builder&);
+        default_names(const schema::raw_schema&);
+
+        sstring partition_key_name();
+        sstring clustering_name();
+        sstring compact_value_name();
+    private:
+        sstring unique_name(const sstring&, size_t&, size_t) const;
+        const schema::raw_schema& _raw;
+        size_t _partition_index, _clustering_index, _compact_index;
+    };
+
     column_definition& find_column(const cql3::column_identifier&);
     schema_builder& with_column(const column_definition& c);
     schema_builder& with_column(bytes name, data_type type, column_kind kind = column_kind::regular_column);
@@ -227,5 +241,6 @@ public:
 
     schema_ptr build();
 private:
+    friend class default_names;
     void prepare_dense_schema(schema::raw_schema& raw);
 };

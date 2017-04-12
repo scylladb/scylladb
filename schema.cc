@@ -719,6 +719,48 @@ schema_builder& schema_builder::with_version(table_schema_version v) {
     return *this;
 }
 
+static const sstring default_partition_key_name = "key";
+static const sstring default_clustering_name = "column";
+static const sstring default_compact_value_name = "value";
+
+schema_builder::default_names::default_names(const schema_builder& builder)
+    : default_names(builder._raw)
+{}
+
+schema_builder::default_names::default_names(const schema::raw_schema& raw)
+    : _raw(raw)
+    , _partition_index(0)
+    , _clustering_index(1)
+    , _compact_index(0)
+{}
+
+sstring schema_builder::default_names::unique_name(const sstring& base, size_t& idx, size_t off) const {
+    for (;;) {
+        auto candidate = idx == 0 ? base : base + std::to_string(idx + off);
+        ++idx;
+        auto i = std::find_if(_raw._columns.begin(), _raw._columns.end(), [b = to_bytes(candidate)](const column_definition& c) {
+            return c.name() == b;
+        });
+        if (i == _raw._columns.end()) {
+            return candidate;
+        }
+    }
+}
+
+sstring schema_builder::default_names::partition_key_name() {
+    // For compatibility sake, we call the first alias 'key' rather than 'key1'. This
+    // is inconsistent with column alias, but it's probably not worth risking breaking compatibility now.
+    return unique_name(default_partition_key_name, _partition_index, 1);
+}
+
+sstring schema_builder::default_names::clustering_name() {
+    return unique_name(default_clustering_name, _clustering_index, 0);
+}
+
+sstring schema_builder::default_names::compact_value_name() {
+    return unique_name(default_compact_value_name, _compact_index, 0);
+}
+
 void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
     if (raw._is_dense) {
         auto regular_cols = std::count_if(raw._columns.begin(), raw._columns.end(), [](auto&& col) {
