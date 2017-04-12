@@ -124,7 +124,7 @@ static void merge_types(distributed<service::storage_proxy>& proxy,
     schema_result&& before,
     schema_result&& after);
 
-std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USERTYPES, VIEWS, FUNCTIONS, AGGREGATES };
+std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USERTYPES, VIEWS, INDEXES, FUNCTIONS, AGGREGATES };
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -419,6 +419,33 @@ future<> save_system_keyspace_schema() {
         return builder.build();
     }();
     return views;
+}
+
+/* static */ schema_ptr indexes() {
+    static thread_local auto indexes = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, INDEXES), NAME, INDEXES,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"table_name", utf8_type}, {"index_name", utf8_type}},
+        // regular columns
+        {
+            {"kind", utf8_type},
+            {"options", map_type_impl::get_instance(utf8_type, utf8_type, true)},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "secondary index definitions"
+        )));
+        builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
+        builder.with(schema_builder::compact_storage::no);
+        builder.with_version(generate_schema_version(builder.uuid()));
+        return builder.build();
+    }();
+    return indexes;
 }
 
 #if 0
@@ -2206,7 +2233,7 @@ data_type parse_type(sstring str)
 std::vector<schema_ptr> all_tables() {
     return {
         keyspaces(), columnfamilies(), columns(), triggers(), usertypes(), functions(), aggregates(),
-        views(),
+        views(), indexes(),
     };
 }
 
