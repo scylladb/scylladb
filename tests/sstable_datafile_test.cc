@@ -2284,11 +2284,37 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
             return m;
         };
 
+        auto make_expiring = [&] (partition_key key, bool ttl) {
+            mutation m(key, s);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)),
+                gc_clock::now().time_since_epoch().count(), gc_clock::duration(ttl));
+            return m;
+        };
+
         auto make_delete = [&] (partition_key key) {
             mutation m(key, s);
             tombstone tomb(next_timestamp(), gc_clock::now());
             m.partition().apply(tomb);
             return m;
+        };
+
+        auto assert_that_produces_dead_cell = [&] (auto& sst, partition_key& key) {
+            auto reader = make_lw_shared(sstable_reader(sst, s));
+            (*reader)().then([&key] (auto sm) {
+                return mutation_from_streamed_mutation(std::move(sm));
+            }).then([reader, s, &key] (mutation_opt m) {
+                BOOST_REQUIRE(m);
+                BOOST_REQUIRE(m->key().equal(*s, key));
+                auto& rows = m->partition().clustered_rows();
+                BOOST_REQUIRE_EQUAL(rows.calculate_size(), 1);
+                auto& row = rows.begin()->row();
+                auto& cells = row.cells();
+                BOOST_REQUIRE_EQUAL(cells.size(), 1);
+                BOOST_REQUIRE(!cells.cell_at(s->get_column_definition("value")->id).as_atomic_cell().is_live());
+                return (*reader)();
+            }).then([reader, s] (streamed_mutation_opt m) {
+                BOOST_REQUIRE(!m);
+            }).get();
         };
 
         auto alpha = partition_key::from_exploded(*s, {to_bytes("alpha")});
@@ -2365,6 +2391,52 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
             auto result = compact({sst1, sst2}, {sst1});
             BOOST_REQUIRE_EQUAL(1, result.size());
 
+            assert_that(sstable_reader(result[0], s))
+                    .produces(mut3)
+                    .produces_end_of_stream();
+        }
+
+        {
+            // check that expired cell will not be purged if it will ressurect overwritten data.
+            auto mut1 = make_insert(alpha);
+            auto mut2 = make_expiring(alpha, 1);
+
+            auto sst1 = make_sstable_containing(sst_gen, {mut1});
+            auto sst2 = make_sstable_containing(sst_gen, {mut2});
+
+            forward_jump_clocks(std::chrono::seconds(5));
+
+            auto result = compact({sst1, sst2}, {sst2});
+            BOOST_REQUIRE_EQUAL(1, result.size());
+            assert_that_produces_dead_cell(result[0], alpha);
+
+            result = compact({sst1, sst2}, {sst1, sst2});
+            BOOST_REQUIRE_EQUAL(0, result.size());
+        }
+        {
+            auto mut1 = make_insert(alpha);
+            auto mut2 = make_expiring(beta, 1);
+
+            auto sst1 = make_sstable_containing(sst_gen, {mut1});
+            auto sst2 = make_sstable_containing(sst_gen, {mut2});
+
+            forward_jump_clocks(std::chrono::seconds(5));
+
+            auto result = compact({sst1, sst2}, {sst2});
+            BOOST_REQUIRE_EQUAL(0, result.size());
+        }
+        {
+            auto mut1 = make_insert(alpha);
+            auto mut2 = make_expiring(alpha, 1);
+            auto mut3 = make_insert(beta);
+
+            auto sst1 = make_sstable_containing(sst_gen, {mut1});
+            auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3});
+
+            forward_jump_clocks(std::chrono::seconds(5));
+
+            auto result = compact({sst1, sst2}, {sst1, sst2});
+            BOOST_REQUIRE_EQUAL(1, result.size());
             assert_that(sstable_reader(result[0], s))
                     .produces(mut3)
                     .produces_end_of_stream();
