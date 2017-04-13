@@ -2152,14 +2152,20 @@ bool collection_type_impl::mutation::compact_and_expire(tombstone base_tomb, gc_
     std::vector<std::pair<bytes, atomic_cell>> survivors;
     for (auto&& name_and_cell : cells) {
         atomic_cell& cell = name_and_cell.second;
+        auto cannot_erase_cell = [&] {
+            return cell.deletion_time() >= gc_before || !can_gc(tombstone(cell.timestamp(), cell.deletion_time()));
+        };
+
         if (cell.is_covered_by(tomb, false)) {
             continue;
         }
         if (cell.has_expired(query_time)) {
-            survivors.emplace_back(std::make_pair(
-                std::move(name_and_cell.first), atomic_cell::make_dead(cell.timestamp(), cell.deletion_time())));
+            if (cannot_erase_cell()) {
+                survivors.emplace_back(std::make_pair(
+                    std::move(name_and_cell.first), atomic_cell::make_dead(cell.timestamp(), cell.deletion_time())));
+            }
         } else if (!cell.is_live()) {
-            if (cell.deletion_time() >= gc_before || !can_gc(tombstone(cell.timestamp(), cell.deletion_time()))) {
+            if (cannot_erase_cell()) {
                 survivors.emplace_back(std::move(name_and_cell));
             }
         } else {
