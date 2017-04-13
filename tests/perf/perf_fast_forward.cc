@@ -191,10 +191,9 @@ static test_result scan_with_stride_partitions(column_family& cf, int n, int n_r
     auto keys = make_pkeys(cf.schema(), n + n_read);
 
     int pk = 0;
-    auto rd = cf.make_reader(cf.schema(),
-        n_skip ? dht::partition_range::make_ending_with(dht::partition_range::bound(keys[0], false)) // covering none
-               : query::full_partition_range,
-        query::full_slice);
+    auto pr = n_skip ? dht::partition_range::make_ending_with(dht::partition_range::bound(keys[0], false)) // covering none
+                     : query::full_partition_range;
+    auto rd = cf.make_reader(cf.schema(), pr, query::full_slice);
 
     metrics_snapshot before;
 
