@@ -877,6 +877,13 @@ struct sstable_data_source {
         close(_lh_index);
         close(_rh_index);
     }
+
+    index_reader& lh_index() {
+        if (!_lh_index) {
+            _lh_index = _sst->get_index_reader(_consumer.io_priority());
+        }
+        return *_lh_index;
+    }
 };
 
 class sstable_streamed_mutation : public streamed_mutation::impl {
@@ -910,17 +917,17 @@ public:
     future<> fast_forward_to(position_range range) override {
         _end_of_stream = false;
         forward_buffer_to(range.start());
-        if (!_ds->_consumer.fast_forward_to(std::move(range)) || !_ds->_lh_index) {
+        if (!_ds->_consumer.fast_forward_to(std::move(range))) {
             return make_ready_future<>();
         }
         return [this] {
             if (!_index_in_current) {
                 _index_in_current = true;
-                return _ds->_lh_index->advance_to(_key);
+                return _ds->lh_index().advance_to(_key);
             }
             return make_ready_future();
         }().then([this] {
-            return _ds->_lh_index->advance_to(_ds->_consumer.current_range().start()).then([this] {
+            return _ds->lh_index().advance_to(_ds->_consumer.current_range().start()).then([this] {
                 index_reader& idx = *_ds->_lh_index;
                 return _ds->_context.skip_to(idx.element_kind(), idx.data_file_position());
             });
@@ -1341,23 +1348,14 @@ private:
     future<streamed_mutation_opt> do_read() {
         auto& consumer = _ds->_consumer;
         if (!consumer.is_mutation_end()) {
-            if (_ds->_lh_index) { // FIXME: Ensure the index is always there
-                return _ds->_lh_index->advance_to(dht::ring_position_view::for_after_key(*_key)).then([this] {
+            {
+                return _ds->lh_index().advance_to(dht::ring_position_view::for_after_key(*_key)).then([this] {
                     return _ds->_context.skip_to(_ds->_lh_index->element_kind(), _ds->_lh_index->data_file_position()).then([this] {
                         assert(_ds->_consumer.is_mutation_end());
                         return do_read();
                     });
                 });
             }
-            // Skip to the next partition, the slow way.
-            consumer.skip_partition();
-            return _ds->_context.read().then([this] {
-                if (!_ds->_consumer.is_mutation_end()) {
-                    // FIXME: give more details from _context
-                    throw malformed_sstable_exception("skipped not to partition end", _ds->_sst->get_filename());
-                }
-                return do_read();
-            });
         }
         return _ds->_context.read().then([this] {
             auto& consumer = _ds->_consumer;
