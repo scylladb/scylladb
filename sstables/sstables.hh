@@ -553,7 +553,6 @@ private:
     future<> create_data();
 
     future<index_list> read_indexes(uint64_t summary_idx, const io_priority_class& pc);
-    std::unique_ptr<index_reader> get_index_reader(const io_priority_class& pc);
 
     // Return an input_stream which reads exactly the specified byte range
     // from the data file (after uncompression, if the file is compressed).
@@ -620,6 +619,8 @@ private:
 
     stdx::optional<std::pair<uint64_t, uint64_t>> get_sample_indexes_for_range(const dht::token_range& range);
 public:
+    std::unique_ptr<index_reader> get_index_reader(const io_priority_class& pc);
+
     future<> read_toc();
 
     bool filter_has_key(const key& key) {
