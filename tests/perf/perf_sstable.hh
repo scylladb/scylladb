@@ -101,15 +101,17 @@ public:
 
     future<> stop() { return make_ready_future<>(); }
 
-    void fill_memtable() {
-        for (unsigned i = 0; i < _cfg.partitions; i++) {
-            auto key = partition_key::from_deeply_exploded(*s, { random_key() });
-            auto mut = mutation(key, s);
-            for (auto& cdef: s->regular_columns()) {
-                mut.set_clustered_cell(clustering_key::make_empty(), cdef, atomic_cell::make_live(0, utf8_type->decompose(random_column())));
+    future<> fill_memtable() {
+        auto idx = boost::irange(0, int(_cfg.partitions));
+        return do_for_each(idx.begin(), idx.end(), [this] (auto iteration) {
+            auto key = partition_key::from_deeply_exploded(*s, { this->random_key() });
+            auto mut = mutation(key, this->s);
+            for (auto& cdef: this->s->regular_columns()) {
+                mut.set_clustered_cell(clustering_key::make_empty(), cdef, atomic_cell::make_live(0, utf8_type->decompose(this->random_column())));
             }
-            _mt->apply(std::move(mut));
-        }
+            this->_mt->apply(std::move(mut));
+            return make_ready_future<>();
+        });
     }
 
     future<> load_sstables(unsigned iterations) {

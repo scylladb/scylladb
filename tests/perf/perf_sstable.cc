@@ -43,7 +43,7 @@ static unsigned parallelism = 1;
 
 future<> test_write(distributed<test_env>& dt) {
     return dt.invoke_on_all([] (test_env &t) {
-        t.fill_memtable();
+        return t.fill_memtable();
     }).then([&dt] {
         return time_runs(iterations, parallelism, dt, &test_env::flush_memtable);
     });
