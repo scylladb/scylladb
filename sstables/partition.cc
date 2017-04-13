@@ -1167,13 +1167,15 @@ future<> sstable_data_source::fast_forward_to(const dht::partition_range& pr) {
 
 future<> sstable_data_source::advance_to_next_partition() {
     sstlog.trace("reader {}: advance_to_next_partition()", this);
-    _index_in_current_partition = false;
     auto& consumer = _consumer;
     if (consumer.is_mutation_end()) {
         sstlog.trace("reader {}: already at partition boundary", this);
+        _index_in_current_partition = false;
         return make_ready_future<>();
     }
-    return lh_index().advance_to(dht::ring_position_view::for_after_key(*_key)).then([this] {
+    return (_index_in_current_partition
+            ? _lh_index->advance_to_next_partition()
+            : lh_index().advance_to(dht::ring_position_view::for_after_key(*_key))).then([this] {
         _index_in_current_partition = true;
         return _context.skip_to(_lh_index->element_kind(), _lh_index->data_file_position());
     });
