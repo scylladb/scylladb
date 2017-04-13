@@ -67,14 +67,14 @@ namespace statements {
 /** A <code>CREATE INDEX</code> statement parsed from a CQL query. */
 class create_index_statement : public schema_altering_statement {
     const sstring _index_name;
-    const ::shared_ptr<index_target::raw> _raw_target;
+    const std::vector<::shared_ptr<index_target::raw>> _raw_targets;
     const ::shared_ptr<index_prop_defs> _properties;
     const bool _if_not_exists;
 
 
 public:
     create_index_statement(::shared_ptr<cf_name> name, ::shared_ptr<index_name> index_name,
-            ::shared_ptr<index_target::raw> raw_target,
+            std::vector<::shared_ptr<index_target::raw>> raw_targets,
             ::shared_ptr<index_prop_defs> properties, bool if_not_exists);
 
     future<> check_access(const service::client_state& state) override;
@@ -94,6 +94,7 @@ private:
     void validate_is_values_index_if_target_column_not_collection(const column_definition* cd,
                                                                   ::shared_ptr<index_target> target) const;
     void validate_target_column_is_map_if_index_involves_keys(bool is_map, ::shared_ptr<index_target> target) const;
+    void validate_targets_for_multi_column_index(std::vector<::shared_ptr<index_target>> targets) const;
     static index_metadata make_index_metadata(schema_ptr schema,
                                               const std::vector<::shared_ptr<index_target>>& targets,
                                               const sstring& name,
