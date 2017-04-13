@@ -112,7 +112,7 @@ public:
 private:
     schema_ptr _schema;
     key_view _key;
-    const io_priority_class* _pc = nullptr;
+    const io_priority_class& _pc;
     const query::partition_slice& _slice;
     bool _out_of_range = false;
     stdx::optional<query::clustering_key_filter_ranges> _ck_ranges;
@@ -393,7 +393,7 @@ public:
                     streamed_mutation::forwarding fwd)
             : _schema(schema)
             , _key(key_view(key))
-            , _pc(&pc)
+            , _pc(pc)
             , _slice(slice)
             , _fwd(fwd)
             , _range_tombstones(*_schema)
@@ -412,7 +412,7 @@ public:
                     const io_priority_class& pc,
                     streamed_mutation::forwarding fwd)
             : _schema(schema)
-            , _pc(&pc)
+            , _pc(pc)
             , _slice(slice)
             , _fwd(fwd)
             , _range_tombstones(*_schema)
@@ -757,8 +757,7 @@ public:
         return proceed::yes;
     }
     virtual const io_priority_class& io_priority() override {
-        assert (_pc != nullptr);
-        return *_pc;
+        return _pc;
     }
 
     // Returns true if the consumer is positioned at partition boundary,
