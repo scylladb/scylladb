@@ -171,6 +171,11 @@ public:
     using cassandra_exception::cassandra_exception;
 };
 
+class invalidated_prepared_usage_attempt_exception : public exceptions::request_validation_exception {
+public:
+    invalidated_prepared_usage_attempt_exception() : request_validation_exception{exception_code::UNPREPARED, "Attempt to execute the invalidated prepared statement."} {}
+};
+
 class unauthorized_exception: public request_validation_exception {
 public:
     unauthorized_exception(sstring msg) noexcept

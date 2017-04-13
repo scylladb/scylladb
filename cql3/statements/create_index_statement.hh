@@ -87,7 +87,7 @@ public:
                 transport::event::schema_change::target_type::TABLE, keyspace(),
                 column_family());
     }
-    virtual shared_ptr<prepared> prepare(database& db, cql_stats& stats) override;
+    virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 };
 
 }

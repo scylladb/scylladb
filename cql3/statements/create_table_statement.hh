@@ -104,7 +104,7 @@ public:
 
     virtual shared_ptr<transport::event::schema_change> change_event() override;
 
-    virtual shared_ptr<prepared> prepare(database& db, cql_stats& stats) override;
+    virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 
     schema_ptr get_cf_meta_data();
 
@@ -137,7 +137,7 @@ private:
 public:
     raw_statement(::shared_ptr<cf_name> name, bool if_not_exists);
 
-    virtual ::shared_ptr<prepared> prepare(database& db, cql_stats& stats) override;
+    virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 
     cf_properties& properties() {
         return _properties;

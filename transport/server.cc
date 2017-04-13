@@ -924,12 +924,14 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
     for ([[gnu::unused]] auto i : boost::irange(0u, n)) {
         const auto kind = read_byte(buf);
 
-        ::shared_ptr<cql3::statements::prepared_statement> ps;
+        std::unique_ptr<cql3::statements::prepared_statement> stmt_ptr;
+        cql3::statements::prepared_statement::checked_weak_ptr ps;
 
         switch (kind) {
         case 0: {
             auto query = read_long_string_view(buf).to_string();
-            ps = _server._query_processor.local().get_statement(query, client_state);
+            stmt_ptr = _server._query_processor.local().get_statement(query, client_state);
+            ps = stmt_ptr->checked_weak_from_this();
             break;
         }
         case 1: {
@@ -969,14 +971,14 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
     auto q_state = std::make_unique<cql_query_state>(client_state);
     auto& query_state = q_state->query_state;
     // #563. CQL v2 encodes query_options in v1 format for batch requests.
-    q_state->options = std::make_unique<cql3::query_options>(std::move(*read_options(buf, _version < 3 ? 1 : _version)), std::move(values));
+    q_state->options = std::make_unique<cql3::query_options>(cql3::query_options::make_batch_options(std::move(*read_options(buf, _version < 3 ? 1 : _version)), std::move(values)));
     auto& options = *q_state->options;
 
     tracing::set_consistency_level(client_state.get_trace_state(), options.get_consistency());
     tracing::set_optional_serial_consistency_level(client_state.get_trace_state(), options.get_serial_consistency());
     tracing::trace(client_state.get_trace_state(), "Creating a batch statement");
 
-    auto batch = ::make_shared<cql3::statements::batch_statement>(-1, cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none(), _server._query_processor.local().get_cql_stats());
+    auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none(), _server._query_processor.local().get_cql_stats());
     return _server._query_processor.local().process_batch(batch, query_state, options).then([this, stream, batch] (auto msg) {
         return this->make_result(stream, msg);
     }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
@@ -1114,7 +1116,6 @@ public:
     }
 
     virtual void visit(const messages::result_message::prepared::cql& m) override {
-        auto prepared = m.get_prepared();
         _response->write_int(0x0004);
         _response->write_short_bytes(m.get_id());
         _response->write(*m.metadata(), _version);

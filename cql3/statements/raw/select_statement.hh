@@ -42,6 +42,7 @@
 #pragma once
 
 #include "cql3/statements/raw/cf_statement.hh"
+#include "cql3/statements/prepared_statement.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/raw_selector.hh"
@@ -100,10 +101,10 @@ public:
             std::vector<::shared_ptr<relation>> where_clause,
             ::shared_ptr<term::raw> limit);
 
-    virtual ::shared_ptr<prepared> prepare(database& db, cql_stats& stats) override {
+    virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override {
         return prepare(db, stats, false);
     }
-    ::shared_ptr<prepared> prepare(database& db, cql_stats& stats, bool for_view);
+    std::unique_ptr<prepared> prepare(database& db, cql_stats& stats, bool for_view);
 private:
     ::shared_ptr<restrictions::statement_restrictions> prepare_restrictions(
         database& db,

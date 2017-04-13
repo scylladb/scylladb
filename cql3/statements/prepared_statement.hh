@@ -48,6 +48,8 @@
 
 #include "core/shared_ptr.hh"
 
+#include <seastar/core/weak_ptr.hh>
+#include <seastar/core/checked_ptr.hh>
 #include <experimental/optional>
 #include <vector>
 
@@ -55,7 +57,16 @@ namespace cql3 {
 
 namespace statements {
 
-class prepared_statement {
+struct invalidated_prepared_usage_attempt {
+    void operator()() const {
+        throw exceptions::invalidated_prepared_usage_attempt_exception();
+    }
+};
+
+class prepared_statement : public weakly_referencable<prepared_statement> {
+public:
+    typedef seastar::checked_ptr<weak_ptr<prepared_statement>> checked_weak_ptr;
+
 public:
     sstring raw_cql_statement;
     const ::shared_ptr<cql_statement> statement;
@@ -68,6 +79,10 @@ public:
     prepared_statement(::shared_ptr<cql_statement> statement_, variable_specifications&& names);
 
     prepared_statement(::shared_ptr<cql_statement>&& statement_);
+
+    checked_weak_ptr checked_weak_from_this() {
+        return checked_weak_ptr(this->weak_from_this());
+    }
 };
 
 }

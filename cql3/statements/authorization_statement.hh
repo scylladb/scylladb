@@ -58,7 +58,7 @@ class authorization_statement : public raw::parsed_statement, public cql_stateme
 public:
     uint32_t get_bound_terms() override;
 
-    ::shared_ptr<prepared> prepare(database& db, cql_stats& stats) override;
+    std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 
     bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
 

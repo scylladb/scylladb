@@ -78,6 +78,14 @@ batch_statement::batch_statement(int bound_terms, type type_,
 {
 }
 
+batch_statement::batch_statement(type type_,
+                                 std::vector<shared_ptr<modification_statement>> statements,
+                                 std::unique_ptr<attributes> attrs,
+                                 cql_stats& stats)
+    : batch_statement(-1, type_, std::move(statements), std::move(attrs), stats)
+{
+}
+
 bool batch_statement::uses_function(const sstring& ks_name, const sstring& function_name) const
 {
     return _attrs->uses_function(ks_name, function_name)
@@ -402,7 +410,7 @@ future<shared_ptr<transport::messages::result_message>> batch_statement::execute
 
 namespace raw {
 
-shared_ptr<prepared_statement>
+std::unique_ptr<prepared_statement>
 batch_statement::prepare(database& db, cql_stats& stats) {
     auto&& bound_names = get_bound_variables();
 
@@ -417,7 +425,7 @@ batch_statement::prepare(database& db, cql_stats& stats) {
     cql3::statements::batch_statement batch_statement_(bound_names->size(), _type, std::move(statements), std::move(prep_attrs), stats);
     batch_statement_.validate();
 
-    return ::make_shared<prepared>(make_shared(std::move(batch_statement_)),
+    return std::make_unique<prepared>(make_shared(std::move(batch_statement_)),
                                                      bound_names->get_specifications());
 }
 

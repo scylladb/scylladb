@@ -37,18 +37,18 @@ namespace messages {
 
 class result_message::prepared : public result_message {
 private:
-    ::shared_ptr<cql3::statements::prepared_statement> _prepared;
+    cql3::statements::prepared_statement::checked_weak_ptr _prepared;
     ::shared_ptr<cql3::prepared_metadata> _metadata;
     ::shared_ptr<const cql3::metadata> _result_metadata;
 protected:
-    prepared(::shared_ptr<cql3::statements::prepared_statement> prepared)
-        : _prepared{prepared}
+    prepared(cql3::statements::prepared_statement::checked_weak_ptr prepared)
+        : _prepared(std::move(prepared))
         // FIXME: Populate partition key bind indices for prepared_metadata.
-        , _metadata{::make_shared<cql3::prepared_metadata>(prepared->bound_names, std::vector<uint16_t>())}
-        , _result_metadata{extract_result_metadata(prepared->statement)}
+        , _metadata{::make_shared<cql3::prepared_metadata>(_prepared->bound_names, std::vector<uint16_t>())}
+        , _result_metadata{extract_result_metadata(_prepared->statement)}
     { }
 public:
-    const ::shared_ptr<cql3::statements::prepared_statement>& get_prepared() const {
+    cql3::statements::prepared_statement::checked_weak_ptr& get_prepared() {
         return _prepared;
     }
 
@@ -116,8 +116,8 @@ public:
 class result_message::prepared::cql : public result_message::prepared {
     bytes _id;
 public:
-    cql(const bytes& id, ::shared_ptr<cql3::statements::prepared_statement> prepared)
-        : result_message::prepared(prepared)
+    cql(const bytes& id, cql3::statements::prepared_statement::checked_weak_ptr p)
+        : result_message::prepared(std::move(p))
         , _id{id}
     { }
 
@@ -141,8 +141,8 @@ public:
 class result_message::prepared::thrift : public result_message::prepared {
     int32_t _id;
 public:
-    thrift(int32_t id, ::shared_ptr<cql3::statements::prepared_statement> prepared)
-        : result_message::prepared(prepared)
+    thrift(int32_t id, cql3::statements::prepared_statement::checked_weak_ptr prepared)
+        : result_message::prepared(std::move(prepared))
         , _id{id}
     { }
 

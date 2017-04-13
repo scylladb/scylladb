@@ -212,13 +212,16 @@ query_processor::prepare(const std::experimental::string_view& query_string,
     if (existing) {
         return make_ready_future<::shared_ptr<transport::messages::result_message::prepared>>(existing);
     }
-    auto prepared = get_statement(query_string, client_state);
-    auto bound_terms = prepared->statement->get_bound_terms();
-    if (bound_terms > std::numeric_limits<uint16_t>::max()) {
-        throw exceptions::invalid_request_exception(sprint("Too many markers(?). %d markers exceed the allowed maximum of %d", bound_terms, std::numeric_limits<uint16_t>::max()));
-    }
-    assert(bound_terms == prepared->bound_names.size());
-    return store_prepared_statement(query_string, client_state.get_raw_keyspace(), std::move(prepared), for_thrift);
+
+    return futurize<::shared_ptr<transport::messages::result_message::prepared>>::apply([this, &query_string, &client_state, for_thrift] {
+        auto prepared = get_statement(query_string, client_state);
+        auto bound_terms = prepared->statement->get_bound_terms();
+        if (bound_terms > std::numeric_limits<uint16_t>::max()) {
+            throw exceptions::invalid_request_exception(sprint("Too many markers(?). %d markers exceed the allowed maximum of %d", bound_terms, std::numeric_limits<uint16_t>::max()));
+        }
+        assert(bound_terms == prepared->bound_names.size());
+        return store_prepared_statement(query_string, client_state.get_raw_keyspace(), std::move(prepared), for_thrift);
+    });
 }
 
 ::shared_ptr<transport::messages::result_message::prepared>
@@ -232,21 +235,21 @@ query_processor::get_stored_prepared_statement(const std::experimental::string_v
         if (it == _thrift_prepared_statements.end()) {
             return ::shared_ptr<result_message::prepared>();
         }
-        return ::make_shared<result_message::prepared::thrift>(statement_id, it->second);
+        return ::make_shared<result_message::prepared::thrift>(statement_id, it->second->checked_weak_from_this());
     } else {
         auto statement_id = compute_id(query_string, keyspace);
         auto it = _prepared_statements.find(statement_id);
         if (it == _prepared_statements.end()) {
             return ::shared_ptr<result_message::prepared>();
         }
-        return ::make_shared<result_message::prepared::cql>(statement_id, it->second);
+        return ::make_shared<result_message::prepared::cql>(statement_id, it->second->checked_weak_from_this());
     }
 }
 
 future<::shared_ptr<transport::messages::result_message::prepared>>
 query_processor::store_prepared_statement(const std::experimental::string_view& query_string,
                                           const sstring& keyspace,
-                                          ::shared_ptr<statements::prepared_statement> prepared,
+                                          std::unique_ptr<statements::prepared_statement> prepared,
                                           bool for_thrift)
 {
 #if 0
@@ -262,13 +265,13 @@ query_processor::store_prepared_statement(const std::experimental::string_view& 
     prepared->raw_cql_statement = query_string.data();
     if (for_thrift) {
         auto statement_id = compute_thrift_id(query_string, keyspace);
-        _thrift_prepared_statements.emplace(statement_id, prepared);
-        auto msg = ::make_shared<result_message::prepared::thrift>(statement_id, prepared);
+        auto msg = ::make_shared<result_message::prepared::thrift>(statement_id, prepared->checked_weak_from_this());
+        _thrift_prepared_statements.emplace(statement_id, std::move(prepared));
         return make_ready_future<::shared_ptr<result_message::prepared>>(std::move(msg));
     } else {
         auto statement_id = compute_id(query_string, keyspace);
-        _prepared_statements.emplace(statement_id, prepared);
-        auto msg = ::make_shared<result_message::prepared::cql>(statement_id, prepared);
+        auto msg = ::make_shared<result_message::prepared::cql>(statement_id, prepared->checked_weak_from_this());
+        _prepared_statements.emplace(statement_id, std::move(prepared));
         return make_ready_future<::shared_ptr<result_message::prepared>>(std::move(msg));
     }
 }
@@ -301,7 +304,7 @@ int32_t query_processor::compute_thrift_id(const std::experimental::string_view&
     return static_cast<int32_t>(h);
 }
 
-::shared_ptr<prepared_statement>
+std::unique_ptr<prepared_statement>
 query_processor::get_statement(const sstring_view& query, const service::client_state& client_state)
 {
 #if 0
@@ -340,7 +343,7 @@ query_processor::parse_statement(const sstring_view& query)
     }
 }
 
-query_options query_processor::make_internal_options(::shared_ptr<statements::prepared_statement> p,
+query_options query_processor::make_internal_options(const statements::prepared_statement::checked_weak_ptr& p,
                                                      const std::initializer_list<data_value>& values,
                                                      db::consistency_level cl)
 {
@@ -362,7 +365,7 @@ query_options query_processor::make_internal_options(::shared_ptr<statements::pr
     return query_options(cl, bound_values);
 }
 
-::shared_ptr<statements::prepared_statement> query_processor::prepare_internal(const sstring& query_string)
+statements::prepared_statement::checked_weak_ptr query_processor::prepare_internal(const sstring& query_string)
 {
     auto& p = _internal_statements[query_string];
     if (p == nullptr) {
@@ -370,7 +373,7 @@ query_options query_processor::make_internal_options(::shared_ptr<statements::pr
         np->statement->validate(_proxy, *_internal_state);
         p = std::move(np); // inserts it into map
     }
-    return p;
+    return p->checked_weak_from_this();
 }
 
 future<::shared_ptr<untyped_result_set>>
@@ -380,17 +383,16 @@ query_processor::execute_internal(const sstring& query_string,
     if (log.is_enabled(logging::log_level::trace)) {
         log.trace("execute_internal: \"{}\" ({})", query_string, ::join(", ", values));
     }
-    auto p = prepare_internal(query_string);
-    return execute_internal(p, values);
+    return execute_internal(prepare_internal(query_string), values);
 }
 
 future<::shared_ptr<untyped_result_set>>
-query_processor::execute_internal(::shared_ptr<statements::prepared_statement> p,
+query_processor::execute_internal(statements::prepared_statement::checked_weak_ptr p,
                                   const std::initializer_list<data_value>& values)
 {
     auto opts = make_internal_options(p, values);
     return do_with(std::move(opts), [this, p = std::move(p)](auto& opts) {
-        return p->statement->execute_internal(_proxy, *_internal_state, opts).then([p](auto msg) {
+        return p->statement->execute_internal(_proxy, *_internal_state, opts).then([stmt = p->statement](auto msg) {
             return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
         });
     });
@@ -402,21 +404,24 @@ query_processor::process(const sstring& query_string,
                          const std::initializer_list<data_value>& values,
                          bool cache)
 {
-    auto p = cache ? prepare_internal(query_string) : parse_statement(query_string)->prepare(_db.local(), _cql_stats);
-    if (!cache) {
+    if (cache) {
+        return process(prepare_internal(query_string), cl, values);
+    } else {
+        auto p = parse_statement(query_string)->prepare(_db.local(), _cql_stats);
         p->statement->validate(_proxy, *_internal_state);
+        auto checked_weak_ptr = p->checked_weak_from_this();
+        return process(std::move(checked_weak_ptr), cl, values).finally([p = std::move(p)] {});
     }
-    return process(p, cl, values);
 }
 
 future<::shared_ptr<untyped_result_set>>
-query_processor::process(::shared_ptr<statements::prepared_statement> p,
+query_processor::process(statements::prepared_statement::checked_weak_ptr p,
                          db::consistency_level cl,
                          const std::initializer_list<data_value>& values)
 {
     auto opts = make_internal_options(p, values, cl);
     return do_with(std::move(opts), [this, p = std::move(p)](auto & opts) {
-        return p->statement->execute(_proxy, *_internal_state, opts).then([p](auto msg) {
+        return p->statement->execute(_proxy, *_internal_state, opts).then([](auto msg) {
             return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
         });
     });
