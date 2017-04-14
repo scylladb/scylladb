@@ -109,39 +109,39 @@ future<> tracing::start_tracing() {
 
 trace_state_ptr tracing::create_session(trace_type type, trace_state_props_set props) {
     if (!started()) {
-        return trace_state_ptr();
+        return nullptr;
     }
 
     try {
         // Don't create a session if its records are likely to be dropped
         if (!may_create_new_session()) {
-            return trace_state_ptr();
+            return nullptr;
         }
 
         ++_active_sessions;
         return make_lw_shared<trace_state>(type, props);
     } catch (...) {
         // return an uninitialized state in case of any error (OOM?)
-        return trace_state_ptr();
+        return nullptr;
     }
 }
 
 trace_state_ptr tracing::create_session(const trace_info& secondary_session_info) {
     if (!started()) {
-        return trace_state_ptr();
+        return nullptr;
     }
 
     try {
         // Don't create a session if its records are likely to be dropped
         if (!may_create_new_session(secondary_session_info.session_id)) {
-            return trace_state_ptr();
+            return nullptr;
         }
 
         ++_active_sessions;
         return make_lw_shared<trace_state>(secondary_session_info);
     } catch (...) {
         // return an uninitialized state in case of any error (OOM?)
-        return trace_state_ptr();
+        return nullptr;
     }
 }
 
