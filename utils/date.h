@@ -1670,7 +1670,7 @@ inline
 date::year
 operator "" _y(unsigned long long y) NOEXCEPT
 {
-    return date::year(static_cast<int>(y));
+    return date::year(static_cast<int64_t>(y));
 }
 #endif  // !defined(_MSC_VER) || (_MSC_VER >= 1900)
 
@@ -4099,7 +4099,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
                     tm.tm_hour = static_cast<int>(hms.hours().count());
                     tm.tm_mday = static_cast<int>(static_cast<unsigned>(ymd.day()));
                     tm.tm_mon = static_cast<int>(static_cast<unsigned>(ymd.month()) - 1);
-                    tm.tm_year = static_cast<int>(ymd.year()) - 1900;
+                    tm.tm_year = static_cast<int64_t>(ymd.year()) - 1900;
                     tm.tm_wday = static_cast<int>(static_cast<unsigned>(weekday{ld}));
                     tm.tm_yday = static_cast<int>((ld - local_days(ymd.year()/1/1)).count());
                     CharT f[3] = {'%'};
@@ -4118,7 +4118,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
         case 'C':
             if (command)
             {
-                auto y = static_cast<int>(year_month_day{floor<days>(tp)}.year());
+                auto y = static_cast<int64_t>(year_month_day{floor<days>(tp)}.year());
                 if (modified == CharT{'E'})
                 {
                     tm.tm_year = y - 1900;
@@ -4197,7 +4197,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
                     os.width(2);
                     os << static_cast<unsigned>(ymd.day()) << CharT{'/'};
                     os.width(2);
-                    os << static_cast<int>(ymd.year()) % 100;
+                    os << static_cast<int64_t>(ymd.year()) % 100;
                 }
                 else
                 {
@@ -4243,7 +4243,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
                         os.fill('0');
                         os.flags(std::ios::dec | std::ios::right);
                         os.width(2);
-                        os << static_cast<int>(y) % 100;
+                        os << static_cast<int64_t>(y) % 100;
                     }
                 }
                 else
@@ -4536,7 +4536,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
                 if (modified == CharT{'O'})
                 {
                     const CharT f[] = {'%', modified, *fmt};
-                    tm.tm_year = static_cast<int>(ymd.year()) - 1900;
+                    tm.tm_year = static_cast<int64_t>(ymd.year()) - 1900;
                     tm.tm_wday = static_cast<int>(static_cast<unsigned>(weekday{ld}));
                     tm.tm_yday = static_cast<int>((ld - local_days(ymd.year()/1/1)).count());
                     facet.put(os, os, os.fill(), &tm, begin(f), end(f));
@@ -4573,7 +4573,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
                 {
                     const CharT f[] = {'%', modified, *fmt};
                     auto ymd = year_month_day{ld};
-                    tm.tm_year = static_cast<int>(ymd.year()) - 1900;
+                    tm.tm_year = static_cast<int64_t>(ymd.year()) - 1900;
                     tm.tm_wday = static_cast<int>(static_cast<unsigned>(weekday{ld}));
                     tm.tm_yday = static_cast<int>((ld - local_days(ymd.year()/1/1)).count());
                     facet.put(os, os, os.fill(), &tm, begin(f), end(f));
@@ -4636,7 +4636,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
                 if (modified == CharT{'O'})
                 {
                     const CharT f[] = {'%', modified, *fmt};
-                    tm.tm_year = static_cast<int>(ymd.year()) - 1900;
+                    tm.tm_year = static_cast<int64_t>(ymd.year()) - 1900;
                     tm.tm_wday = static_cast<int>(static_cast<unsigned>(weekday{ld}));
                     tm.tm_yday = static_cast<int>((ld - local_days(ymd.year()/1/1)).count());
                     facet.put(os, os, os.fill(), &tm, begin(f), end(f));
@@ -4668,7 +4668,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
         case 'y':
             if (command)
             {
-                auto y = static_cast<int>(year_month_day{floor<days>(tp)}.year());
+                auto y = static_cast<int64_t>(year_month_day{floor<days>(tp)}.year());
                 if (modified != CharT{})
                 {
                     const CharT f[] = {'%', modified, *fmt};
@@ -4695,7 +4695,7 @@ to_stream(std::basic_ostream<CharT, Traits>& os, const CharT* fmt,
                 if (modified == CharT{'E'})
                 {
                     const CharT f[] = {'%', modified, *fmt};
-                    tm.tm_year = static_cast<int>(y) - 1900;
+                    tm.tm_year = static_cast<int64_t>(y) - 1900;
                     facet.put(os, os, os.fill(), &tm, begin(f), end(f));
                     modified = CharT{};
                 }
@@ -5948,7 +5948,7 @@ parse(std::basic_istream<CharT, Traits>& is,
                                           (mon-thu) + weeks{V-1} +
                                           (weekday{static_cast<unsigned>(wd)}-mon)};
                 if (Y == not_a_year)
-                    Y = static_cast<int>(ymd.year());
+                    Y = static_cast<int64_t>(ymd.year());
                 else if (year{Y} != ymd.year())
                     goto broken;
                 if (m == 0)
@@ -5962,8 +5962,8 @@ parse(std::basic_istream<CharT, Traits>& is,
             }
             if (Y != not_a_year)
             {
-                if (!(static_cast<int>(year::min()) <= Y &&
-                      Y <= static_cast<int>(year::max())))
+                if (!(static_cast<int64_t>(year::min()) <= Y &&
+                      Y <= static_cast<int64_t>(year::max())))
                     goto broken;
                 if (j != 0)
                 {
