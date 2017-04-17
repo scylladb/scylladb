@@ -89,6 +89,8 @@ public:
     static future<inet_address> lookup(sstring);
 };
 
+std::ostream& operator<<(std::ostream& os, const inet_address& x);
+
 }
 
 namespace std {
