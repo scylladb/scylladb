@@ -72,7 +72,7 @@ std::vector<::shared_ptr<cql3::column_specification>> cql3::token_relation::to_r
         throw exceptions::invalid_request_exception(
                 sprint(
                         "The token function arguments must be in the partition key order: %s",
-                        ::to_string(column_defs)));
+                        std::to_string(column_defs)));
     }
     //auto* c = column_defs.front();
     return {::make_shared<column_specification>(schema->ks_name(), schema->cf_name(),

@@ -47,6 +47,8 @@ sstring join(sstring delimiter, Iterator begin, Iterator end) {
     return oss.str();
 }
 
+namespace std {
+
 template<typename Printable>
 static inline
 sstring
@@ -93,6 +95,8 @@ std::ostream& operator<<(std::ostream& os, const std::array<T, N>& items) {
     return os;
 }
 
+namespace experimental {
+
 template <typename T>
 std::ostream& operator<<(std::ostream& os, const std::experimental::optional<T>& opt) {
     if (opt) {
@@ -101,4 +105,8 @@ std::ostream& operator<<(std::ostream& os, const std::experimental::optional<T>&
         os << "{}";
     }
     return os;
+}
+
+}
+
 }

@@ -308,7 +308,7 @@ public:
     }
 
     virtual sstring to_string() const override  {
-        return sprint("IN(%s)", ::to_string(_values));
+        return sprint("IN(%s)", std::to_string(_values));
     }
 
 protected:
