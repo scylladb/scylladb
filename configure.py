@@ -645,6 +645,13 @@ deps['tests/anchorless_list_test'] = ['tests/anchorless_list_test.cc']
 warnings = [
     '-Wno-mismatched-tags',  # clang-only
     '-Wno-maybe-uninitialized', # false positives on gcc 5
+    '-Wno-tautological-compare',
+    '-Wno-parentheses-equality',
+    '-Wno-c++11-narrowing',
+    '-Wno-c++1z-extensions',
+    '-Wno-sometimes-uninitialized',
+    '-Wno-return-stack-address',
+    '-Wno-missing-braces',
     ]
 
 warnings = [w
