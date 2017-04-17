@@ -881,7 +881,7 @@ segment::occupancy() const {
 }
 
 inline void
-region_group_binomial_group_sanity_check(auto& bh) {
+region_group_binomial_group_sanity_check(const region_group::region_heap& bh) {
 #ifdef DEBUG
     bool failed = false;
     size_t last =  std::numeric_limits<size_t>::max();
