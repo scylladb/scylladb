@@ -1759,9 +1759,9 @@ static lw_shared_ptr<sstable> add_sstable_for_overlapping_test(lw_shared_ptr<col
     column_family_test(cf).add_sstable(sst);
     return sst;
 }
-static lw_shared_ptr<sstable> sstable_for_overlapping_test(const schema_ptr& schema, int64_t gen, sstring first_key, sstring last_key) {
+static lw_shared_ptr<sstable> sstable_for_overlapping_test(const schema_ptr& schema, int64_t gen, sstring first_key, sstring last_key, uint32_t level = 0) {
     auto sst = make_lw_shared<sstable>(schema, "", gen, la, big);
-    sstables::test(sst).set_values(std::move(first_key), std::move(last_key), {});
+    sstables::test(sst).set_values_for_leveled_strategy(0, level, 0, std::move(first_key), std::move(last_key));
     return sst;
 }
 
@@ -3632,29 +3632,52 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
     auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
     auto key_and_token_pair = token_generation_for_current_shard(8);
 
-    sstable_set set = cs.make_sstable_set(s);
-    set.insert(sstable_for_overlapping_test(s, 1, key_and_token_pair[0].first, key_and_token_pair[1].first));
-    set.insert(sstable_for_overlapping_test(s, 2, key_and_token_pair[0].first, key_and_token_pair[1].first));
-    set.insert(sstable_for_overlapping_test(s, 3, key_and_token_pair[3].first, key_and_token_pair[4].first));
-    set.insert(sstable_for_overlapping_test(s, 4, key_and_token_pair[4].first, key_and_token_pair[4].first));
-    set.insert(sstable_for_overlapping_test(s, 5, key_and_token_pair[4].first, key_and_token_pair[5].first));
-
-    sstable_set::incremental_selector selector = set.make_incremental_selector();
-    auto check = [&selector] (const dht::token& token, std::unordered_set<int64_t> expected_gens) {
+    auto check = [] (sstable_set::incremental_selector& selector, const dht::token& token, std::unordered_set<int64_t> expected_gens) {
         auto sstables = selector.select(token);
         BOOST_REQUIRE(sstables.size() == expected_gens.size());
         for (auto& sst : sstables) {
             BOOST_REQUIRE(expected_gens.count(sst->generation()) == 1);
         }
     };
-    check(key_and_token_pair[0].second, {1, 2});
-    check(key_and_token_pair[1].second, {1, 2});
-    check(key_and_token_pair[2].second, {});
-    check(key_and_token_pair[3].second, {3});
-    check(key_and_token_pair[4].second, {3, 4, 5});
-    check(key_and_token_pair[5].second, {5});
-    check(key_and_token_pair[6].second, {});
-    check(key_and_token_pair[7].second, {});
+
+    {
+        sstable_set set = cs.make_sstable_set(s);
+        set.insert(sstable_for_overlapping_test(s, 1, key_and_token_pair[0].first, key_and_token_pair[1].first, 1));
+        set.insert(sstable_for_overlapping_test(s, 2, key_and_token_pair[0].first, key_and_token_pair[1].first, 1));
+        set.insert(sstable_for_overlapping_test(s, 3, key_and_token_pair[3].first, key_and_token_pair[4].first, 1));
+        set.insert(sstable_for_overlapping_test(s, 4, key_and_token_pair[4].first, key_and_token_pair[4].first, 1));
+        set.insert(sstable_for_overlapping_test(s, 5, key_and_token_pair[4].first, key_and_token_pair[5].first, 1));
+
+        sstable_set::incremental_selector sel = set.make_incremental_selector();
+        check(sel, key_and_token_pair[0].second, {1, 2});
+        check(sel, key_and_token_pair[1].second, {1, 2});
+        check(sel, key_and_token_pair[2].second, {});
+        check(sel, key_and_token_pair[3].second, {3});
+        check(sel, key_and_token_pair[4].second, {3, 4, 5});
+        check(sel, key_and_token_pair[5].second, {5});
+        check(sel, key_and_token_pair[6].second, {});
+        check(sel, key_and_token_pair[7].second, {});
+    }
+
+    {
+        sstable_set set = cs.make_sstable_set(s);
+        set.insert(sstable_for_overlapping_test(s, 0, key_and_token_pair[0].first, key_and_token_pair[1].first, 0));
+        set.insert(sstable_for_overlapping_test(s, 1, key_and_token_pair[0].first, key_and_token_pair[1].first, 1));
+        set.insert(sstable_for_overlapping_test(s, 2, key_and_token_pair[0].first, key_and_token_pair[1].first, 1));
+        set.insert(sstable_for_overlapping_test(s, 3, key_and_token_pair[3].first, key_and_token_pair[4].first, 1));
+        set.insert(sstable_for_overlapping_test(s, 4, key_and_token_pair[4].first, key_and_token_pair[4].first, 1));
+        set.insert(sstable_for_overlapping_test(s, 5, key_and_token_pair[4].first, key_and_token_pair[5].first, 1));
+
+        sstable_set::incremental_selector sel = set.make_incremental_selector();
+        check(sel, key_and_token_pair[0].second, {0, 1, 2});
+        check(sel, key_and_token_pair[1].second, {0, 1, 2});
+        check(sel, key_and_token_pair[2].second, {0});
+        check(sel, key_and_token_pair[3].second, {0, 3});
+        check(sel, key_and_token_pair[4].second, {0, 3, 4, 5});
+        check(sel, key_and_token_pair[5].second, {0, 5});
+        check(sel, key_and_token_pair[6].second, {0});
+        check(sel, key_and_token_pair[7].second, {0});
+    }
 
     return make_ready_future<>();
 }
