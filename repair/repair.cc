@@ -738,7 +738,7 @@ static future<> repair_cf_range(repair_info& ri,
 
 // Repair a single local range, multiple column families.
 // Comparable to RepairSession in Origin
-static future<> repair_range(repair_info& ri, auto& range) {
+static future<> repair_range(repair_info& ri, const dht::token_range& range) {
     auto id = utils::UUID_gen::get_time_UUID();
     return do_with(get_neighbors(ri.db.local(), ri.keyspace, range, ri.data_centers, ri.hosts), [&ri, range, id] (const auto& neighbors) {
         logger.debug("[repair #{}] new session: will sync {} on range {} for {}.{}", id, neighbors, range, ri.keyspace, ri.cfs);
