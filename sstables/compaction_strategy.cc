@@ -191,7 +191,8 @@ class partitioned_sstable_set : public sstable_set_impl {
     using map_iterator = interval_map_type::const_iterator;
 private:
     schema_ptr _schema;
-    interval_map_type _sstables;
+    std::vector<shared_sstable> _unleveled_sstables;
+    interval_map_type _leveled_sstables;
 private:
     static interval_type make_interval(const schema& s, const query::partition_range& range) {
         return interval_type::closed(
@@ -207,16 +208,16 @@ private:
     }
     std::pair<map_iterator, map_iterator> query(const query::partition_range& range) const {
         if (range.start() && range.end()) {
-            return _sstables.equal_range(make_interval(range));
+            return _leveled_sstables.equal_range(make_interval(range));
         }
         else if (range.start() && !range.end()) {
             auto start = singular(range.start()->value());
-            return { _sstables.lower_bound(start), _sstables.end() };
+            return { _leveled_sstables.lower_bound(start), _leveled_sstables.end() };
         } else if (!range.start() && range.end()) {
             auto end = singular(range.end()->value());
-            return { _sstables.begin(), _sstables.upper_bound(end) };
+            return { _leveled_sstables.begin(), _leveled_sstables.upper_bound(end) };
         } else {
-            return { _sstables.begin(), _sstables.end() };
+            return { _leveled_sstables.begin(), _leveled_sstables.end() };
         }
     }
 public:
@@ -234,29 +235,39 @@ public:
         while (b != e) {
             boost::copy(b++->second, std::inserter(result, result.end()));
         }
-        return std::vector<shared_sstable>(result.begin(), result.end());
+        auto r = _unleveled_sstables;
+        r.insert(r.end(), result.begin(), result.end());
+        return r;
     }
     virtual void insert(shared_sstable sst) override {
-        auto first = sst->get_first_decorated_key().token();
-        auto last = sst->get_last_decorated_key().token();
-        using bound = query::partition_range::bound;
-        _sstables.add({
-                make_interval(
-                        query::partition_range(
-                                bound(dht::ring_position::starting_at(first)),
-                                bound(dht::ring_position::ending_at(last)))),
-                value_set({sst})});
+        if (sst->get_sstable_level() == 0) {
+            _unleveled_sstables.push_back(std::move(sst));
+        } else {
+            auto first = sst->get_first_decorated_key().token();
+            auto last = sst->get_last_decorated_key().token();
+            using bound = query::partition_range::bound;
+            _leveled_sstables.add({
+                    make_interval(
+                            query::partition_range(
+                                    bound(dht::ring_position::starting_at(first)),
+                                    bound(dht::ring_position::ending_at(last)))),
+                    value_set({sst})});
+        }
     }
     virtual void erase(shared_sstable sst) override {
-        auto first = sst->get_first_decorated_key().token();
-        auto last = sst->get_last_decorated_key().token();
-        using bound = query::partition_range::bound;
-        _sstables.subtract({
-                make_interval(
-                        query::partition_range(
-                                bound(dht::ring_position::starting_at(first)),
-                                bound(dht::ring_position::ending_at(last)))),
-                value_set({sst})});
+        if (sst->get_sstable_level() == 0) {
+            _unleveled_sstables.erase(std::remove(_unleveled_sstables.begin(), _unleveled_sstables.end(), sst), _unleveled_sstables.end());
+        } else {
+            auto first = sst->get_first_decorated_key().token();
+            auto last = sst->get_last_decorated_key().token();
+            using bound = query::partition_range::bound;
+            _leveled_sstables.subtract({
+                    make_interval(
+                            query::partition_range(
+                                    bound(dht::ring_position::starting_at(first)),
+                                    bound(dht::ring_position::ending_at(last)))),
+                    value_set({sst})});
+        }
     }
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
     class incremental_selector;
@@ -264,6 +275,7 @@ public:
 
 class partitioned_sstable_set::incremental_selector : public incremental_selector_impl {
     schema_ptr _schema;
+    const std::vector<shared_sstable>& _unleveled_sstables;
     map_iterator _it;
     const map_iterator _end;
 private:
@@ -272,32 +284,35 @@ private:
             {i.upper().token(), boost::icl::is_right_closed(i.bounds())});
     }
 public:
-    incremental_selector(schema_ptr schema, const interval_map_type& sstables)
+    incremental_selector(schema_ptr schema, const std::vector<shared_sstable>& unleveled_sstables, const interval_map_type& leveled_sstables)
         : _schema(std::move(schema))
-        , _it(sstables.begin())
-        , _end(sstables.end()) {
+        , _unleveled_sstables(unleveled_sstables)
+        , _it(leveled_sstables.begin())
+        , _end(leveled_sstables.end()) {
     }
     virtual std::pair<nonwrapping_range<dht::token>, std::vector<shared_sstable>> select(const dht::token& token) override {
         auto pr = query::partition_range::make(dht::ring_position::starting_at(token), dht::ring_position::ending_at(token));
         auto interval = make_interval(*_schema, std::move(pr));
+        auto ssts = _unleveled_sstables;
 
         while (_it != _end) {
             if (boost::icl::contains(_it->first, interval)) {
-                return std::make_pair(to_token_range(_it->first), std::vector<shared_sstable>(_it->second.begin(), _it->second.end()));
+                ssts.insert(ssts.end(), _it->second.begin(), _it->second.end());
+                return std::make_pair(to_token_range(_it->first), std::move(ssts));
             }
             // we don't want to skip current interval if token lies before it.
             if (boost::icl::lower_less(interval, _it->first)) {
                 return std::make_pair(nonwrapping_range<dht::token>::make({token, true}, {_it->first.lower().token(), false}),
-                    std::vector<shared_sstable>());
+                    std::move(ssts));
             }
             _it++;
         }
-        return std::make_pair(nonwrapping_range<dht::token>::make_open_ended_both_sides(), std::vector<shared_sstable>());
+        return std::make_pair(nonwrapping_range<dht::token>::make_open_ended_both_sides(), std::move(ssts));
     }
 };
 
 std::unique_ptr<incremental_selector_impl> partitioned_sstable_set::make_incremental_selector() const {
-    return std::make_unique<incremental_selector>(_schema, _sstables);
+    return std::make_unique<incremental_selector>(_schema, _unleveled_sstables, _leveled_sstables);
 }
 
 class compaction_strategy_impl {
