@@ -241,7 +241,7 @@ public:
     }
 
     virtual sstring to_string() const override {
-        return sprint("IN(%s)", ::to_string(_values));
+        return sprint("IN(%s)", std::to_string(_values));
     }
 };
 
@@ -461,7 +461,7 @@ public:
 
     virtual sstring to_string() const override {
         return sprint("CONTAINS(values=%s, keys=%s, entryKeys=%s, entryValues=%s)",
-            ::to_string(_values), ::to_string(_keys), ::to_string(_entry_keys), ::to_string(_entry_values));
+            std::to_string(_values), std::to_string(_keys), std::to_string(_entry_keys), std::to_string(_entry_values));
     }
 
     virtual bool has_bound(statements::bound b) const override {

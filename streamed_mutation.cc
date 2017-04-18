@@ -88,14 +88,20 @@ void mutation_fragment::destroy_data() noexcept
     }
 }
 
+namespace {
+
+struct get_key_visitor {
+    const clustering_key_prefix& operator()(const clustering_row& cr) { return cr.key(); }
+    const clustering_key_prefix& operator()(const range_tombstone& rt) { return rt.start; }
+    template <typename T>
+    const clustering_key_prefix& operator()(const T&) { abort(); }
+};
+
+}
+
 const clustering_key_prefix& mutation_fragment::key() const
 {
     assert(has_key());
-    struct get_key_visitor {
-        const clustering_key_prefix& operator()(const clustering_row& cr) { return cr.key(); }
-        const clustering_key_prefix& operator()(const range_tombstone& rt) { return rt.start; }
-        const clustering_key_prefix& operator()(...) { abort(); }
-    };
     return visit(get_key_visitor());
 }
 

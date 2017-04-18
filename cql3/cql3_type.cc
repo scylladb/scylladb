@@ -298,7 +298,7 @@ cql3_type::values() {
         cql3_type::decimal,
         cql3_type::double_,
         cql3_type::float_,
-        cql3_type:inet,
+        cql3_type::inet,
         cql3_type::int_,
         cql3_type::smallint,
         cql3_type::text,

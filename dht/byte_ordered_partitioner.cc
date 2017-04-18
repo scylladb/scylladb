@@ -117,7 +117,7 @@ token byte_ordered_partitioner::midpoint(const token& t1, const token& t2) const
     }
 
     std::vector<int8_t> t;
-    t.reserve(sigbytes + remainder ? 1 : 0);
+    t.reserve(sigbytes + (remainder ? 1 : 0));
     // E.g., mid = 0x123456, sigbytes = 4, remainder = true
     while (mid) {
         t.push_back(mid.convert_to<int8_t>());

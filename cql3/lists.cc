@@ -111,7 +111,7 @@ lists::literal::test_assignment(database& db, const sstring& keyspace, shared_pt
 
 sstring
 lists::literal::to_string() const {
-    return ::to_string(_elements);
+    return std::to_string(_elements);
 }
 
 lists::value

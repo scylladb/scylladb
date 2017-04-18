@@ -111,14 +111,6 @@ midpoint_unsigned_tokens(const token& t1, const token& t2) {
     return token{token::kind::key, std::move(avg)};
 }
 
-static inline unsigned char get_byte(bytes_view b, size_t off) {
-    if (off < b.size()) {
-        return b[off];
-    } else {
-        return 0;
-    }
-}
-
 int tri_compare(const token& t1, const token& t2) {
     if (t1._kind == t2._kind) {
         return global_partitioner().tri_compare(t1, t2);

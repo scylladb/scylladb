@@ -153,8 +153,8 @@ public:
     void trim(size_t limit);
 
     template<typename RowComparator>
-    void sort(RowComparator&& cmp) {
-        std::sort(_rows.begin(), _rows.end(), std::forward<RowComparator>(cmp));
+    void sort(const RowComparator& cmp) {
+        std::sort(_rows.begin(), _rows.end(), std::ref(cmp));
     }
 
     metadata& get_metadata();

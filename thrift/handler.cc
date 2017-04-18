@@ -1396,7 +1396,8 @@ private:
     }
     // Adds the column_ids from the specified range of column_definitions to the out vector,
     // according to the order defined by reversed.
-    static std::vector<column_id> add_columns(auto&& beg, auto&& end, bool reversed) {
+    template <typename Iterator>
+    static std::vector<column_id> add_columns(Iterator beg, Iterator end, bool reversed) {
         auto range = boost::make_iterator_range(std::move(beg), std::move(end))
                      | boost::adaptors::filtered(std::mem_fn(&column_definition::is_atomic))
                      | boost::adaptors::transformed(std::mem_fn(&column_definition::id));

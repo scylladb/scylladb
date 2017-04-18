@@ -93,7 +93,7 @@ def try_compile(compiler, source = '', flags = []):
 def warning_supported(warning, compiler):
     # gcc ignores -Wno-x even if it is not supported
     adjusted = re.sub('^-Wno-', '-W', warning)
-    return try_compile(flags = [adjusted], compiler = compiler)
+    return try_compile(flags = ['-Werror', adjusted], compiler = compiler)
 
 def debug_flag(compiler):
     src_with_auto = textwrap.dedent('''\
@@ -645,6 +645,13 @@ deps['tests/anchorless_list_test'] = ['tests/anchorless_list_test.cc']
 warnings = [
     '-Wno-mismatched-tags',  # clang-only
     '-Wno-maybe-uninitialized', # false positives on gcc 5
+    '-Wno-tautological-compare',
+    '-Wno-parentheses-equality',
+    '-Wno-c++11-narrowing',
+    '-Wno-c++1z-extensions',
+    '-Wno-sometimes-uninitialized',
+    '-Wno-return-stack-address',
+    '-Wno-missing-braces',
     ]
 
 warnings = [w

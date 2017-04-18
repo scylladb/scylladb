@@ -167,7 +167,8 @@ auto write_row_marker(Writer&& writer, const row_marker& marker)
 
 }
 
-static void write_tombstones(const schema& s, auto& row_tombstones, const range_tombstone_list& rt_list)
+template <typename RowTombstones>
+static void write_tombstones(const schema& s, RowTombstones& row_tombstones, const range_tombstone_list& rt_list)
 {
     if (service::get_local_storage_service().cluster_supports_range_tombstones()) {
         for (auto&& rt : rt_list) {

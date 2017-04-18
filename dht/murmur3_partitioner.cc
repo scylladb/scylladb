@@ -89,7 +89,7 @@ inline int64_t long_token(const token& t) {
 }
 
 sstring murmur3_partitioner::to_sstring(const token& t) const {
-    return ::to_sstring(long_token(t));
+    return ::to_sstring<sstring>(long_token(t));
 }
 
 dht::token murmur3_partitioner::from_sstring(const sstring& t) const {
