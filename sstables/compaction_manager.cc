@@ -242,11 +242,12 @@ void compaction_manager::submit_sstable_rewrite(column_family* cf, sstables::sha
     // sstable we are planning to work on:
     _compacting_sstables.insert(sst);
     auto task = make_lw_shared<compaction_manager::task>();
+    task->compacting_cf = cf;
     _tasks.push_back(task);
-    task->compaction_done = with_semaphore(sem, 1, [this, cf, sst] {
+    task->compaction_done = with_semaphore(sem, 1, [this, task, cf, sst] {
         _stats.active_tasks++;
-        if (_stopped) {
-            return make_ready_future<>();;
+        if (!can_proceed(task)) {
+            return make_ready_future<>();
         }
         return cf->compact_sstables(sstables::compaction_descriptor(
                 std::vector<sstables::shared_sstable>{sst},
@@ -469,6 +470,14 @@ future<> compaction_manager::perform_cleanup(column_family* cf) {
 }
 
 future<> compaction_manager::remove(column_family* cf) {
+    // FIXME: better way to iterate through compaction info for a given column family,
+    // although this path isn't performance sensitive.
+    for (auto& info : _compactions) {
+        if (cf->schema()->ks_name() == info->ks && cf->schema()->cf_name() == info->cf) {
+            info->stop("column family removal");
+        }
+    }
+
     // We need to guarantee that a task being stopped will not retry to compact
     // a column family being removed.
     auto tasks_to_stop = make_lw_shared<std::vector<lw_shared_ptr<task>>>();
