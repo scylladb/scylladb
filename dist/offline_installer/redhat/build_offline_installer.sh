@@ -18,14 +18,14 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-if [ ! -e dist/offline_installer/build_offline_installer.sh ]; then
+if [ ! -e dist/offline_installer/redhat/build_offline_installer.sh ]; then
     echo "run build_offline_installer.sh in top of scylla dir"
     exit 1
 fi
 
 print_usage() {
     echo "build_offline_installer.sh --repo [URL]"
-    echo "  --repo  repository for fetching scylla rpm, specify .repo/.list file URL"
+    echo "  --repo  repository for fetching scylla rpm, specify .repo file URL"
     exit 1
 }
 
@@ -78,7 +78,7 @@ sudo yum --nogpgcheck --releasever=7 --installroot=`pwd`/build/installroot insta
 sudo wget -P build/installroot/etc/yum.repos.d $REPO
 
 mkdir -p build/offline_installer
-cp dist/offline_installer/header build/offline_installer
+cp dist/offline_installer/redhat/header build/offline_installer
 sudo yumdownloader --installroot=`pwd`/build/installroot --archlist=x86_64 --destdir=build/offline_installer --resolve scylla
 # XXX: resolve option doesn't fetch some dependencies, need to manually fetch them
 sudo yumdownloader --installroot=`pwd`/build/installroot --archlist=x86_64 --destdir=build/offline_installer --resolve yajl.x86_64
