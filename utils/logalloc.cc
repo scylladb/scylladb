@@ -880,33 +880,6 @@ segment::occupancy() const {
     return { shard_segment_pool.descriptor(this)._free_space, segment::size };
 }
 
-inline void
-region_group_binomial_group_sanity_check(const region_group::region_heap& bh) {
-#ifdef DEBUG
-    bool failed = false;
-    size_t last =  std::numeric_limits<size_t>::max();
-    for (auto b = bh.ordered_begin(); b != bh.ordered_end(); b++) {
-        auto t = (*b)->evictable_occupancy().total_space();
-        if (!(t <= last)) {
-            failed = true;
-            break;
-        }
-        last = t;
-    }
-    if (!failed) {
-        return;
-    }
-
-    printf("Sanity checking FAILED, size %ld\n", bh.size());
-    for (auto b = bh.ordered_begin(); b != bh.ordered_end(); b++) {
-        auto r = (*b);
-        auto t = r->evictable_occupancy().total_space();
-        printf(" r = %p (id=%ld), occupancy = %ld\n",r, r->id(), t);
-    }
-    assert(0);
-#endif
-}
-
 //
 // For interface documentation see logalloc::region and allocation_strategy.
 //
@@ -1525,6 +1498,33 @@ public:
     friend class region_group;
     friend class region_group::region_evictable_occupancy_ascending_less_comparator;
 };
+
+inline void
+region_group_binomial_group_sanity_check(const region_group::region_heap& bh) {
+#ifdef DEBUG
+    bool failed = false;
+    size_t last =  std::numeric_limits<size_t>::max();
+    for (auto b = bh.ordered_begin(); b != bh.ordered_end(); b++) {
+        auto t = (*b)->evictable_occupancy().total_space();
+        if (!(t <= last)) {
+            failed = true;
+            break;
+        }
+        last = t;
+    }
+    if (!failed) {
+        return;
+    }
+
+    printf("Sanity checking FAILED, size %ld\n", bh.size());
+    for (auto b = bh.ordered_begin(); b != bh.ordered_end(); b++) {
+        auto r = (*b);
+        auto t = r->evictable_occupancy().total_space();
+        printf(" r = %p (id=%ld), occupancy = %ld\n",r, r->id(), t);
+    }
+    assert(0);
+#endif
+}
 
 void tracker::set_reclamation_step(size_t step_in_segments) {
     _impl->set_reclamation_step(step_in_segments);
