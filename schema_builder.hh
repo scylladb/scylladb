@@ -222,6 +222,9 @@ public:
         return with_view_info(base_schema.id(), base_schema.cf_name(), include_all_columns, where_clause);
     }
 
+    schema_builder& with_index(const index_metadata& im);
+    schema_builder& without_index(const sstring& name);
+
     // Equivalent to with(cp).build()
     schema_ptr build(compact_storage cp);
 

@@ -775,6 +775,19 @@ schema_builder& schema_builder::with_view_info(utils::UUID base_id, sstring base
     return *this;
 }
 
+schema_builder& schema_builder::with_index(const index_metadata& im) {
+    _raw._indices_by_name.emplace(im.name(), im);
+    return *this;
+}
+
+schema_builder& schema_builder::without_index(const sstring& name) {
+    const auto& it = _raw._indices_by_name.find(name);
+    if (it != _raw._indices_by_name.end()) {
+        _raw._indices_by_name.erase(name);
+    }
+    return *this;
+}
+
 schema_ptr schema_builder::build() {
     schema::raw_schema new_raw = _raw; // Copy so that build() remains idempotent.
 
