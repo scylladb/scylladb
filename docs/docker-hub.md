@@ -186,6 +186,18 @@ For example, to disable developer mode:
 $ docker run --name some-scylla -d scylladb/scylla --developer-mode 0
 ```
 
+### `--expirimental ENABLE`
+
+The `--expirimental` command line option enables Scylla's expirimental mode
+If no `--expirimental` command line option is defined, Scylla defaults to running with expirimental mode *disabled*.
+It is highly recommended to disable expirimental mode for production deployments to ensure Scylla is able to run with maximum performance.
+
+For example, to enable expirimental mode:
+
+```console
+$ docker run --name some-scylla -d scylladb/scylla --expirimental 1
+```
+
 # User Feedback
 
 ## Issues
