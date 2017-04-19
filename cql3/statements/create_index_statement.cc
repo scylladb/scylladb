@@ -48,6 +48,9 @@
 #include "schema.hh"
 #include "schema_builder.hh"
 
+#include <boost/range/adaptor/transformed.hpp>
+#include <boost/algorithm/string/join.hpp>
+
 namespace cql3 {
 
 namespace statements {
@@ -172,38 +175,37 @@ create_index_statement::announce_migration(distributed<service::storage_proxy>& 
     if (!service::get_local_storage_service().cluster_supports_indexes()) {
         throw exceptions::invalid_request_exception("Index support is not enabled");
     }
-    auto schema = proxy.local().get_db().local().find_schema(keyspace(), column_family());
+    auto& db = proxy.local().get_db().local();
+    auto schema = db.find_schema(keyspace(), column_family());
     auto target = _raw_target->prepare(schema);
-
-    schema_builder cfm(schema);
-
-    auto* cd = schema->get_column_definition(target->column->name());
-    index_info idx = cd->idx_info;
-
-    if (idx.index_type != ::index_type::none && _if_not_exists) {
-        return make_ready_future<bool>(false);
+    sstring accepted_name = _index_name;
+    if (accepted_name.empty()) {
+        std::experimental::optional<sstring> index_name_root;
+        index_name_root = target->column->to_string();
+        accepted_name = db.get_available_index_name(keyspace(), column_family(), index_name_root);
     }
+    index_metadata_kind kind;
+    index_options_map index_options;
     if (_properties->is_custom) {
-        idx.index_type = index_type::custom;
-        idx.index_options = _properties->get_options();
-    } else if (schema->thrift().has_compound_comparator()) {
-        index_options_map options;
-
-        if (cd->type->is_collection() && cd->type->is_multi_cell()) {
-            options[index_target::index_option(target->type)] = "";
-        }
-        idx.index_type = index_type::composites;
-        idx.index_options = options;
+        kind = index_metadata_kind::custom;
+        index_options = _properties->get_options();
     } else {
-        idx.index_type = index_type::keys;
-        idx.index_options = index_options_map();
+        kind = schema->is_compound() ? index_metadata_kind::composites : index_metadata_kind::keys;
     }
-
-    idx.index_name = _index_name;
-    cfm.add_default_index_names(proxy.local().get_db().local());
-
+    auto index = make_index_metadata(schema, { target }, accepted_name, kind, index_options);
+    auto existing_index = schema->find_index_noname(index);
+    if (existing_index) {
+        if (_if_not_exists) {
+            return make_ready_future<bool>(false);
+        } else {
+            throw exceptions::invalid_request_exception(
+                    sprint("Index %s is a duplicate of existing index %s", index.name(), existing_index.value().name()));
+        }
+    }
+    schema_builder builder{schema};
+    builder.with_index(index);
     return service::get_local_migration_manager().announce_column_family_update(
-            cfm.build(), false, {}, is_local_only).then([]() {
+            builder.build(), false, {}, is_local_only).then([]() {
         return make_ready_future<bool>(true);
     });
 }
@@ -211,6 +213,21 @@ create_index_statement::announce_migration(distributed<service::storage_proxy>& 
 std::unique_ptr<cql3::statements::prepared_statement>
 create_index_statement::prepare(database& db, cql_stats& stats) {
     return std::make_unique<prepared_statement>(make_shared<create_index_statement>(*this));
+}
+
+index_metadata create_index_statement::make_index_metadata(schema_ptr schema,
+                                                           const std::vector<::shared_ptr<index_target>>& targets,
+                                                           const sstring& name,
+                                                           index_metadata_kind kind,
+                                                           const index_options_map& options)
+{
+    index_options_map new_options = options;
+    auto target_option = boost::algorithm::join(targets | boost::adaptors::transformed(
+            [schema](const auto &target) -> sstring {
+                return target->as_cql_string(schema);
+            }), ",");
+    new_options.emplace(index_target::target_option_name, target_option);
+    return index_metadata{name, new_options, kind};
 }
 
 }

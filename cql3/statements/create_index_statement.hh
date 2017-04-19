@@ -94,6 +94,11 @@ private:
     void validate_is_values_index_if_target_column_not_collection(const column_definition* cd,
                                                                   ::shared_ptr<index_target> target) const;
     void validate_target_column_is_map_if_index_involves_keys(bool is_map, ::shared_ptr<index_target> target) const;
+    static index_metadata make_index_metadata(schema_ptr schema,
+                                              const std::vector<::shared_ptr<index_target>>& targets,
+                                              const sstring& name,
+                                              index_metadata_kind kind,
+                                              const index_options_map& options);
 };
 
 }
