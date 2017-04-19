@@ -3057,6 +3057,19 @@ operator<<(std::ostream& os, const atomic_cell& ac) {
     return os << atomic_cell_view(ac);
 }
 
+sstring database::get_available_index_name(const sstring &ks_name, const sstring &cf_name,
+                                           std::experimental::optional<sstring> index_name_root) const
+{
+    auto existing_names = existing_index_names(ks_name);
+    auto base_name = index_metadata::get_default_index_name(cf_name, index_name_root);
+    sstring accepted_name = base_name;
+    int i = 0;
+    while (existing_names.count(accepted_name) > 0) {
+        accepted_name = base_name + "_" + std::to_string(++i);
+    }
+    return accepted_name;
+}
+
 future<>
 database::stop() {
     return _compaction_manager.stop().then([this] {
