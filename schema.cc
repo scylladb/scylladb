@@ -1061,6 +1061,16 @@ schema::position(const column_definition& column) const {
     return clustering_key_size();
 }
 
+stdx::optional<index_metadata> schema::find_index_noname(const index_metadata& target) const {
+    const auto& it = boost::find_if(_raw._indices_by_name, [&] (auto&& e) {
+        return e.second.equals_noname(target);
+    });
+    if (it != _raw._indices_by_name.end()) {
+        return it->second;
+    }
+    return {};
+}
+
 bool schema::is_synced() const {
     return _registry_entry && _registry_entry->is_synced();
 }

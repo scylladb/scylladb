@@ -660,6 +660,8 @@ public:
     bool is_view() const {
         return bool(_view_info);
     }
+    // Search for an existing index with same kind and options.
+    stdx::optional<index_metadata> find_index_noname(const index_metadata& target) const;
     friend std::ostream& operator<<(std::ostream& os, const schema& s);
     friend bool operator==(const schema&, const schema&);
     const column_mapping& get_column_mapping() const;
