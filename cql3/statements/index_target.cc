@@ -49,6 +49,13 @@ namespace statements {
 
 using db::index::secondary_index;
 
+sstring index_target::as_cql_string(schema_ptr schema) const {
+    if (!schema->get_column_definition(column->name())->type->is_collection()) {
+        return column->to_cql_string();
+    }
+    return sprint("%s(%s)", to_sstring(type), column->to_cql_string());
+}
+
 sstring index_target::index_option(target_type type) {
     switch (type) {
         case target_type::keys: return secondary_index::index_keys_option_name;
