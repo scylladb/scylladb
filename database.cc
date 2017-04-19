@@ -3070,6 +3070,15 @@ sstring database::get_available_index_name(const sstring &ks_name, const sstring
     return accepted_name;
 }
 
+schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& index_name) const {
+    for (auto& schema : find_keyspace(ks_name).metadata()->tables()) {
+        if (schema->has_index(index_name)) {
+            return schema;
+        }
+    }
+    return nullptr;
+}
+
 future<>
 database::stop() {
     return _compaction_manager.stop().then([this] {
