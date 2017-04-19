@@ -373,7 +373,8 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._caching_options == y._raw._caching_options
         && x._raw._dropped_columns == y._raw._dropped_columns
         && x._raw._collections == y._raw._collections
-        && indirect_equal_to<std::unique_ptr<::view_info>>()(x._view_info, y._view_info);
+        && indirect_equal_to<std::unique_ptr<::view_info>>()(x._view_info, y._view_info)
+        && x._raw._indices_by_name == y._raw._indices_by_name;
 #if 0
         && Objects.equal(triggers, other.triggers)
 #endif
@@ -529,6 +530,15 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
             os << ", ";
         }
         os << c.first << " : " << c.second->name();
+    }
+    os << "}";
+    os << ",indices={";
+    n = 0;
+    for (auto& c : s._raw._indices_by_name) {
+        if (n++ != 0) {
+            os << ", ";
+        }
+        os << c.first << " : " << c.second.id();
     }
     os << "}";
     if (s.is_view()) {

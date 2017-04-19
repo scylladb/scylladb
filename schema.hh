@@ -443,6 +443,7 @@ private:
         table_schema_version _version;
         std::unordered_map<sstring, api::timestamp_type> _dropped_columns;
         std::map<bytes, data_type> _collections;
+        std::unordered_map<sstring, index_metadata> _indices_by_name;
     };
     raw_schema _raw;
     thrift_schema _thrift;
