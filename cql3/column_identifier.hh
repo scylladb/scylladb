@@ -80,6 +80,8 @@ public:
 
     sstring to_string() const;
 
+    sstring to_cql_string() const;
+
     friend std::ostream& operator<<(std::ostream& out, const column_identifier& i) {
         return out << i._text;
     }
