@@ -188,6 +188,27 @@ struct index_info {
     std::experimental::optional<index_options_map> index_options;
 };
 
+enum class index_metadata_kind {
+    keys,
+    custom,
+    composites,
+};
+
+class index_metadata final {
+    utils::UUID _id;
+    sstring _name;
+    index_metadata_kind _kind;
+    index_options_map _options;
+public:
+    index_metadata(const sstring& name, const index_options_map& options, index_metadata_kind kind);
+    bool operator==(const index_metadata& other) const;
+    bool equals_noname(const index_metadata& other) const;
+    const utils::UUID& id() const;
+    const sstring& name() const;
+    const index_metadata_kind kind() const;
+    const index_options_map& options() const;
+};
+
 class column_definition final {
 public:
     struct name_comparator {

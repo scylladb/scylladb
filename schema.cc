@@ -385,6 +385,42 @@ index_info::index_info(::index_type idx_type,
     : index_type(idx_type), index_name(idx_name), index_options(idx_options)
 {}
 
+index_metadata::index_metadata(const sstring& name,
+                               const index_options_map& options,
+                               index_metadata_kind kind)
+    : _id{utils::UUID_gen::get_name_UUID(name)}
+    , _name{name}
+    , _kind{kind}
+    , _options{options}
+{}
+
+bool index_metadata::operator==(const index_metadata& other) const {
+    return _id == other._id
+           && _name == other._name
+           && _kind == other._kind
+           && _options == other._options;
+}
+
+bool index_metadata::equals_noname(const index_metadata& other) const {
+    return _kind == other._kind && _options == other._options;
+}
+
+const utils::UUID& index_metadata::id() const {
+    return _id;
+}
+
+const sstring& index_metadata::name() const {
+    return _name;
+}
+
+const index_metadata_kind index_metadata::kind() const {
+    return _kind;
+}
+
+const index_options_map& index_metadata::options() const {
+    return _options;
+}
+
 column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, index_info idx, api::timestamp_type dropped_at)
         : _name(std::move(name))
         , _dropped_at(dropped_at)
