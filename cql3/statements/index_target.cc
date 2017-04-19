@@ -43,9 +43,13 @@
 #include "index_target.hh"
 #include "db/index/secondary_index.hh"
 
+namespace cql3 {
+
+namespace statements {
+
 using db::index::secondary_index;
 
-sstring cql3::statements::index_target::index_option(target_type type)  {
+sstring index_target::index_option(target_type type) {
     switch (type) {
         case target_type::keys: return secondary_index::index_keys_option_name;
         case target_type::keys_and_values: return secondary_index::index_entries_option_name;
@@ -54,8 +58,8 @@ sstring cql3::statements::index_target::index_option(target_type type)  {
     }
 }
 
-cql3::statements::index_target::target_type
-cql3::statements::index_target::from_column_definition(const column_definition& cd) {
+index_target::target_type
+index_target::from_column_definition(const column_definition &cd) {
     auto& opts = cd.idx_info.index_options;
 
     if (!opts) {
@@ -72,24 +76,31 @@ cql3::statements::index_target::from_column_definition(const column_definition& 
     }
 }
 
-::shared_ptr<cql3::statements::index_target::raw>
-cql3::statements::index_target::raw::values_of(::shared_ptr<column_identifier::raw> c) {
+::shared_ptr<index_target::raw>
+index_target::raw::values_of(::shared_ptr<column_identifier::raw> c) {
     return ::make_shared<raw>(c, target_type::values);
 }
-::shared_ptr<cql3::statements::index_target::raw>
-cql3::statements::index_target::raw::keys_of(::shared_ptr<column_identifier::raw> c) {
+
+::shared_ptr<index_target::raw>
+index_target::raw::keys_of(::shared_ptr<column_identifier::raw> c) {
     return ::make_shared<raw>(c, target_type::keys);
 }
-::shared_ptr<cql3::statements::index_target::raw>
-cql3::statements::index_target::raw::keys_and_values_of(::shared_ptr<column_identifier::raw> c) {
+
+::shared_ptr<index_target::raw>
+index_target::raw::keys_and_values_of(::shared_ptr<column_identifier::raw> c) {
     return ::make_shared<raw>(c, target_type::keys_and_values);
 }
-::shared_ptr<cql3::statements::index_target::raw>
-cql3::statements::index_target::raw::full_collection(::shared_ptr<column_identifier::raw> c) {
+
+::shared_ptr<index_target::raw>
+index_target::raw::full_collection(::shared_ptr<column_identifier::raw> c) {
     return ::make_shared<raw>(c, target_type::full);
 }
 
-::shared_ptr<cql3::statements::index_target>
-cql3::statements::index_target::raw::prepare(schema_ptr schema) {
+::shared_ptr<index_target>
+index_target::raw::prepare(schema_ptr schema) {
     return ::make_shared<index_target>(column->prepare_column_identifier(schema), type);
+}
+
+}
+
 }
