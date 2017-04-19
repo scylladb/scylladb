@@ -44,6 +44,7 @@
 #include "validation.hh"
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
+#include "service/storage_service.hh"
 #include "schema.hh"
 #include "schema_builder.hh"
 
@@ -168,7 +169,9 @@ void create_index_statement::validate_target_column_is_map_if_index_involves_key
 
 future<bool>
 create_index_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
-    throw std::runtime_error("Indexes are not supported yet");
+    if (!service::get_local_storage_service().cluster_supports_indexes()) {
+        throw exceptions::invalid_request_exception("Index support is not enabled");
+    }
     auto schema = proxy.local().get_db().local().find_schema(keyspace(), column_family());
     auto target = _raw_target->prepare(schema);
 
