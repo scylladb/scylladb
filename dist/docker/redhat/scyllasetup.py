@@ -14,6 +14,7 @@ class ScyllaSetup:
         self._smp = arguments.smp
         self._memory = arguments.memory
         self._overprovisioned = arguments.overprovisioned
+        self._expirimental = arguments.expirimental
 
     def _run(self, *args, **kwargs):
         logging.info('running: {}'.format(args))
@@ -44,6 +45,8 @@ class ScyllaSetup:
             args += [ "--smp %s" % self._smp ]
         if self._overprovisioned == "1":
             args += [ "--overprovisioned" ]
+        if self._expirimental == "1":
+            args += ["--expirimental=on"]
 
         if self._listenAddress is None:
             self._listenAddress = subprocess.check_output(['hostname', '-i']).decode('ascii').strip()
