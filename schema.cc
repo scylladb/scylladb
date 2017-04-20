@@ -632,50 +632,6 @@ column_definition& schema_builder::find_column(const cql3::column_identifier& c)
     throw std::invalid_argument(sprint("No such column %s", c.name()));
 }
 
-void schema_builder::add_default_index_names(database& db) {
-    auto s = db.find_schema(ks_name(), cf_name());
-
-    if (s) {
-        for (auto& sc : _raw._columns) {
-            if (sc.idx_info.index_type == index_type::none) {
-                continue;
-            }
-            auto* c = s->get_column_definition(sc.name());
-            if (c == nullptr || !c->idx_info.index_name) {
-                continue;
-            }
-            if (sc.idx_info.index_name
-                    && sc.idx_info.index_name != c->idx_info.index_name) {
-                throw exceptions::configuration_exception(
-                        sprint(
-                                "Can't modify index name: was '%s' changed to '%s'",
-                                *c->idx_info.index_name,
-                                *sc.idx_info.index_name));
-
-            }
-            sc.idx_info.index_name = c->idx_info.index_name;
-        }
-    }
-
-
-    auto existing_names = db.existing_index_names(ks_name());
-    for (auto& sc : _raw._columns) {
-        if (sc.idx_info.index_type != index_type::none && sc.idx_info.index_name) {
-            sstring base_name = cf_name() + "_" + *sc.idx_info.index_name + "_idx";
-            auto i = std::remove_if(base_name.begin(), base_name.end(), [](char c) {
-               return ::isspace(c);
-            });
-            base_name.erase(i, base_name.end());
-            auto index_name = base_name;
-            int n = 0;
-            while (existing_names.count(index_name)) {
-                index_name = base_name + "_" + to_sstring(++n);
-            }
-            sc.idx_info.index_name = index_name;
-        }
-    }
-}
-
 schema_builder& schema_builder::with_column(const column_definition& c) {
     return with_column(bytes(c.name()), data_type(c.type), index_info(c.idx_info), column_kind(c.kind), c.position());
 }

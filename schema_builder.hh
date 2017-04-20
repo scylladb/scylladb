@@ -215,8 +215,6 @@ public:
     schema_builder& with(compact_storage);
     schema_builder& with_version(table_schema_version);
 
-    void add_default_index_names(database&);
-
     schema_builder& with_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause);
     schema_builder& with_view_info(const schema& base_schema, bool include_all_columns, sstring where_clause) {
         return with_view_info(base_schema.id(), base_schema.cf_name(), include_all_columns, where_clause);
