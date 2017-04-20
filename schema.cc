@@ -423,6 +423,14 @@ const index_options_map& index_metadata::options() const {
     return _options;
 }
 
+sstring index_metadata::get_default_index_name(const sstring& cf_name,
+                                               std::experimental::optional<sstring> root) {
+    if (root) {
+        return cf_name + "_" + root.value() + "_idx";
+    }
+    return cf_name + "_idx";
+}
+
 column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, index_info idx, api::timestamp_type dropped_at)
         : _name(std::move(name))
         , _dropped_at(dropped_at)

@@ -207,6 +207,7 @@ public:
     const sstring& name() const;
     const index_metadata_kind kind() const;
     const index_options_map& options() const;
+    static sstring get_default_index_name(const sstring& cf_name, std::experimental::optional<sstring> root);
 };
 
 class column_definition final {
