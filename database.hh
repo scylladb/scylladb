@@ -902,7 +902,6 @@ private:
     future<bool> for_all_partitions(schema_ptr, Func&& func) const;
     void check_valid_rp(const db::replay_position&) const;
 public:
-    void start_rewrite();
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
     future<bool> for_all_partitions_slow(schema_ptr, std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const;

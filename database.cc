@@ -764,24 +764,6 @@ void column_family::load_sstable(sstables::shared_sstable& sst, bool reset_level
     add_sstable(sst, std::move(shards));
 }
 
-// load_sstable() wants to start rewriting sstables which are shared between
-// several shards, but we can't start any compaction before all the sstables
-// of this CF were loaded. So call this function to start rewrites, if any.
-void column_family::start_rewrite() {
-    // submit shared sstables in generation order to guarantee that all shards
-    // owning a sstable will agree on its deletion nearly the same time,
-    // therefore, reducing disk space requirements.
-    auto sstables_need_rewrite = boost::copy_range<std::vector<sstables::shared_sstable>>(_sstables_need_rewrite | boost::adaptors::map_values);
-    boost::sort(sstables_need_rewrite, [] (const sstables::shared_sstable& x, const sstables::shared_sstable& y) {
-        return x->generation() < y->generation();
-    });
-    for (auto& sst : sstables_need_rewrite) {
-        dblog.info("Splitting {} for shard", sst->get_filename());
-        _compaction_manager.submit_sstable_rewrite(this, sst);
-    }
-    _sstables_need_rewrite.clear();
-}
-
 void column_family::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, std::vector<unsigned>&& shards_for_the_sstable) {
     assert(!shards_for_the_sstable.empty());
     if (*boost::min_element(shards_for_the_sstable) == engine().cpu_id()) {
