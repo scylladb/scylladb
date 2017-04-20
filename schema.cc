@@ -29,6 +29,7 @@
 #include "db/marshal/type_parser.hh"
 #include "version.hh"
 #include "schema_registry.hh"
+#include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "view_info.hh"
@@ -1069,6 +1070,10 @@ stdx::optional<index_metadata> schema::find_index_noname(const index_metadata& t
         return it->second;
     }
     return {};
+}
+
+std::vector<sstring> schema::index_names() const {
+    return boost::copy_range<std::vector<sstring>>(_raw._indices_by_name | boost::adaptors::map_keys);
 }
 
 bool schema::is_synced() const {
