@@ -906,7 +906,6 @@ segment::occupancy() const {
 //
 class region_impl : public allocation_strategy {
     static constexpr float max_occupancy_for_compaction = 0.85; // FIXME: make configurable
-    static constexpr float max_occupancy_for_compaction_on_idle = 0.93; // FIXME: make configurable
 
     // single-byte flags
     struct obj_flags {
@@ -1248,10 +1247,7 @@ public:
     }
 
     bool is_idle_compactible() {
-        return _reclaiming_enabled
-            && (_closed_occupancy.free_space() >= 2 * segment::size)
-            && (_closed_occupancy.used_fraction() < max_occupancy_for_compaction_on_idle)
-            && (_segment_descs.contains_above_min());
+        return is_compactible();
     }
 
     virtual void* alloc(allocation_strategy::migrate_fn migrator, size_t size, size_t alignment) override {
