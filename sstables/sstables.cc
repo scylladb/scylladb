@@ -55,6 +55,7 @@
 #include "utils/phased_barrier.hh"
 #include "range_tombstone_list.hh"
 #include "counters.hh"
+#include "binary_search.hh"
 
 #include "checked-file-impl.hh"
 #include "service/storage_service.hh"
@@ -951,15 +952,15 @@ thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> dow
 thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_original_index_cache;
 
 future<index_list> sstable::read_indexes(uint64_t summary_idx, const io_priority_class& pc) {
-    return do_with(get_index_reader(pc), [summary_idx] (index_reader& ir) {
-        return ir.get_index_entries(summary_idx).finally([&ir] {
-            return ir.close();
+    return do_with(get_index_reader(pc), [summary_idx] (auto& ir_ptr) {
+        return ir_ptr->get_index_entries(summary_idx).finally([&ir_ptr] {
+            return ir_ptr->close();
         });
     });
 }
 
-index_reader sstable::get_index_reader(const io_priority_class& pc) {
-    return index_reader(shared_from_this(), pc);
+std::unique_ptr<index_reader> sstable::get_index_reader(const io_priority_class& pc) {
+    return std::make_unique<index_reader>(shared_from_this(), pc);
 }
 
 template <sstable::component_type Type, typename T>

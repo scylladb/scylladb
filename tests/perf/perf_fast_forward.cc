@@ -191,10 +191,9 @@ static test_result scan_with_stride_partitions(column_family& cf, int n, int n_r
     auto keys = make_pkeys(cf.schema(), n + n_read);
 
     int pk = 0;
-    auto rd = cf.make_reader(cf.schema(),
-        n_skip ? dht::partition_range::make_ending_with(dht::partition_range::bound(keys[0], false)) // covering none
-               : query::full_partition_range,
-        query::full_slice);
+    auto pr = n_skip ? dht::partition_range::make_ending_with(dht::partition_range::bound(keys[0], false)) // covering none
+                     : query::full_partition_range;
+    auto rd = cf.make_reader(cf.schema(), pr, query::full_slice);
 
     metrics_snapshot before;
 
@@ -236,6 +235,45 @@ static test_result slice_rows(column_family& cf, int offset = 0, int n_read = 1)
     return {before, fragments};
 }
 
+static test_result select_spread_rows(column_family& cf, int stride = 0, int n_read = 1) {
+    auto sb = partition_slice_builder(*cf.schema());
+    for (int i = 0; i < n_read; ++i) {
+        sb.with_range(query::clustering_range::make_singular(clustering_key::from_singular(*cf.schema(), i * stride)));
+    }
+
+    auto slice = sb.build();
+    auto rd = cf.make_reader(cf.schema(),
+        query::full_partition_range,
+        slice);
+
+    metrics_snapshot before;
+    streamed_mutation_opt smo = rd().get0();
+    assert(smo);
+    streamed_mutation& sm = *smo;
+    uint64_t fragments = consume_all(sm);
+    fragments += consume_all(rd);
+
+    return {before, fragments};
+}
+
+static test_result slice_rows_single_key(column_family& cf, int offset = 0, int n_read = 1) {
+    auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
+    auto rd = cf.make_reader(cf.schema(), pr, query::full_slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
+
+    metrics_snapshot before;
+    streamed_mutation_opt smo = rd().get0();
+    assert(smo);
+    streamed_mutation& sm = *smo;
+    sm.fast_forward_to(position_range(
+        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset)),
+        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset + n_read)))).get();
+    uint64_t fragments = consume_all(sm);
+
+    fragments += consume_all(rd);
+
+    return {before, fragments};
+}
+
 // cf is for ks.small_part
 static test_result slice_partitions(column_family& cf, int n, int offset = 0, int n_read = 1) {
     auto keys = make_pkeys(cf.schema(), n + n_read);
@@ -267,6 +305,44 @@ struct table_config {
     int n_rows;
     int value_size;
 };
+
+static test_result test_forwarding_with_restriction(column_family& cf, table_config& cfg, bool single_partition) {
+    auto first_key = cfg.n_rows / 2;
+    auto slice = partition_slice_builder(*cf.schema())
+        .with_range(query::clustering_range::make_starting_with(clustering_key::from_singular(*cf.schema(), first_key)))
+        .build();
+
+    auto pr = single_partition ? dht::partition_range::make_singular(make_pkey(*cf.schema(), 0)) : query::full_partition_range;
+    auto rd = cf.make_reader(cf.schema(),
+        pr,
+        slice,
+        default_priority_class(),
+        nullptr,
+        streamed_mutation::forwarding::yes);
+
+    uint64_t fragments = 0;
+    metrics_snapshot before;
+    streamed_mutation_opt smo = rd().get0();
+    assert(smo);
+    streamed_mutation& sm = *smo;
+
+    fragments += consume_all(sm);
+
+    sm.fast_forward_to(position_range(
+        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), 1)),
+        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), 2)))).get();
+
+    fragments += consume_all(sm);
+
+    sm.fast_forward_to(position_range(
+        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), first_key - 2)),
+        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), first_key + 2)))).get();
+
+    fragments += consume_all(sm);
+
+    fragments += consume_all(rd);
+    return {before, fragments};
+}
 
 static void drop_keyspace_if_exists(cql_test_env& env, sstring name) {
     try {
@@ -454,6 +530,50 @@ int main(int argc, char** argv) {
                                 test(cfg.n_rows / 2, 32);
                                 test(cfg.n_rows / 2, 256);
                                 test(cfg.n_rows / 2, 4096);
+                            }
+
+                            {
+                                std::cout << "Testing slicing of large partition, single-partition reader:\n";
+                                std::cout << sprint("%-7s %-7s ", "offset", "read") << test_result::table_header()
+                                          << "\n";
+                                auto test = [&](int offset, int read) {
+                                    auto r = slice_rows_single_key(cf, offset, read);
+                                    std::cout << sprint("%-7d %-7d ", offset, read) << r.table_row() << "\n";
+                                };
+
+                                test(0, 1);
+                                test(0, 32);
+                                test(0, 256);
+                                test(0, 4096);
+
+                                test(cfg.n_rows / 2, 1);
+                                test(cfg.n_rows / 2, 32);
+                                test(cfg.n_rows / 2, 256);
+                                test(cfg.n_rows / 2, 4096);
+                            }
+
+                            {
+                                std::cout << "Testing selecting few rows from a large partition:\n";
+                                std::cout << sprint("%-7s %-7s ", "stride", "rows") << test_result::table_header()
+                                          << "\n";
+                                auto test = [&](int stride, int read) {
+                                    auto r = select_spread_rows(cf, stride, read);
+                                    std::cout << sprint("%-7d %-7d ", stride, read) << r.table_row() << "\n";
+                                };
+
+                                test(cfg.n_rows / 1, 1);
+                                test(cfg.n_rows / 2, 2);
+                                test(cfg.n_rows / 4, 4);
+                                test(cfg.n_rows / 8, 8);
+                                test(cfg.n_rows / 16, 16);
+                                test(2, cfg.n_rows / 2);
+                            }
+
+                            {
+                                std::cout << "Testing forwarding with clustering restriction in a large partition:\n";
+                                std::cout << sprint("%-7s ", "pk-scan") << test_result::table_header() << "\n";
+                                std::cout << sprint("%-7s ", "yes") << test_forwarding_with_restriction(cf, cfg, false).table_row() << "\n"
+                                    << sprint("%-7s ", "no")  << test_forwarding_with_restriction(cf, cfg, true).table_row() << "\n";
                             }
                         });
                     }).get();

@@ -449,7 +449,8 @@ class ring_position_view {
     const partition_key* _key; // Can be nullptr
     int8_t _weight;
 public:
-    using after_key = bool_class<class after_key_tag>;
+    struct after_key_tag {};
+    using after_key = bool_class<after_key_tag>;
 
     static ring_position_view min() {
         return { minimum_token(), nullptr, -1 };
@@ -457,6 +458,14 @@ public:
 
     static ring_position_view max() {
         return { maximum_token(), nullptr, 1 };
+    }
+
+    bool is_min() const {
+        return _token.is_minimum();
+    }
+
+    bool is_max() const {
+        return _token.is_maximum();
     }
 
     static ring_position_view for_range_start(const partition_range& r) {
@@ -471,10 +480,20 @@ public:
         return ring_position_view(dk, after_key::yes);
     }
 
+    static ring_position_view for_after_key(dht::ring_position_view view) {
+        return ring_position_view(after_key_tag(), view);
+    }
+
     ring_position_view(const dht::ring_position& pos, after_key after = after_key::no)
         : _token(pos.token())
         , _key(pos.has_key() ? &*pos.key() : nullptr)
         , _weight(pos.has_key() ? bool(after) : pos.relation_to_keys())
+    { }
+
+    ring_position_view(after_key_tag, const ring_position_view& v)
+        : _token(v._token)
+        , _key(v._key)
+        , _weight(v._key ? 1 : v._weight)
     { }
 
     ring_position_view(const dht::decorated_key& key, after_key after_key = after_key::no)
@@ -488,6 +507,8 @@ public:
         , _key(key)
         , _weight(weight)
     { }
+
+    const partition_key* key() const { return _key; }
 
     friend std::ostream& operator<<(std::ostream&, ring_position_view);
 };
