@@ -803,6 +803,9 @@ struct foreign_sstable_open_info {
     std::vector<shard_id> owners;
     seastar::file_handle data;
     seastar::file_handle index;
+    uint64_t generation;
+    sstable::version_types version;
+    sstable::format_types format;
 };
 
 // can only be used locally
