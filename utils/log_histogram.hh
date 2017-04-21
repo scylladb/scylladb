@@ -30,23 +30,41 @@
 
 namespace bi = boost::intrusive;
 
+// Returns largest N such that 2^N <= v.
+// Undefined for v == 0.
 inline constexpr size_t pow2_rank(size_t v) {
     return std::numeric_limits<size_t>::digits - 1 - count_leading_zeros(v);
 }
 
+// Configures log_histogram.
+// Only values <= max_size can be inserted into the histogram.
+// log_histogram::contains_above_min() returns true if and only if the histogram contains any value >= min_size.
 struct log_histogram_options {
-    size_t min_size_shift;
+    size_t min_size;
     size_t sub_bucket_shift;
-    size_t max_size_shift;
+    size_t max_size;
 
-    constexpr log_histogram_options(size_t min_size_shift, size_t sub_bucket_shift, size_t max_size_shift)
-            : min_size_shift(min_size_shift)
+    constexpr log_histogram_options(size_t min_size, size_t sub_bucket_shift, size_t max_size)
+            : min_size(min_size)
             , sub_bucket_shift(sub_bucket_shift)
-            , max_size_shift(max_size_shift) {
+            , max_size(max_size) {
+        // Ensure that (value << sub_bucket_index) in bucket_of() doesn't overflow
+        assert(pow2_rank(max_size - min_size + 1) + sub_bucket_shift < std::numeric_limits<size_t>::digits);
+    }
+
+    constexpr size_t bucket_of(size_t value) const {
+        const auto min_mask = -size_t(value >= min_size); // 0 when below min_size, all bits on otherwise
+        value = value - min_size + 1;
+        const auto pow2_index = pow2_rank(value);
+        const auto bucket = (pow2_index + 1) & min_mask;
+        const auto unmasked_sub_bucket_index = (value << sub_bucket_shift) >> pow2_index;
+        const auto mask = ((1 << sub_bucket_shift) - 1) & min_mask;
+        const auto sub_bucket_index = unmasked_sub_bucket_index & mask;
+        return (bucket << sub_bucket_shift) - mask + sub_bucket_index;
     }
 
     constexpr size_t number_of_buckets() const {
-        return ((max_size_shift - min_size_shift) << sub_bucket_shift) + 2;
+        return bucket_of(max_size) + 1;
     }
 };
 
@@ -89,8 +107,8 @@ struct log_histogram_element_traits<T, opts, false> {
 /*
  * Histogram that stores elements in different buckets according to their size.
  * Values are mapped to a sequence of power-of-two ranges that are split in
- * 1 << opts.sub_bucket_shift sub-buckets. Values less than 1 << opts.min_size_shift
- * are placed in bucket 0, whereas values bigger than 1 << opts.max_size_shift are
+ * 1 << opts.sub_bucket_shift sub-buckets. Values less than opts.min_size
+ * are placed in bucket 0, whereas values bigger than opts.max_size are
  * not admitted. The histogram gives bigger precision to smaller values, with
  * precision decreasing as values get larger.
  */
@@ -158,6 +176,7 @@ public:
     bool empty() const {
         return _watermark == -1;
     }
+    // Returns true if and only if contains any value >= opts.min_size.
     bool contains_above_min() const {
         return _watermark > 0;
     }
@@ -198,7 +217,7 @@ public:
     }
     // Pushes a new element onto the histogram.
     void push(T& v) {
-        auto b = bucket_of(traits::hist_key(v));
+        auto b = opts.bucket_of(traits::hist_key(v));
         traits::cache_bucket(v, b);
         _buckets[b].push_front(v);
         _watermark = std::max(ssize_t(b), _watermark);
@@ -206,7 +225,7 @@ public:
     // Adjusts the histogram when the specified element becomes larger.
     void adjust_up(T& v) {
         auto b = traits::cached_bucket(v);
-        auto nb = bucket_of(traits::hist_key(v));
+        auto nb = opts.bucket_of(traits::hist_key(v));
         if (nb != b) {
             traits::cache_bucket(v, nb);
             _buckets[nb].splice(_buckets[nb].begin(), _buckets[b], _buckets[b].iterator_to(v));
@@ -230,14 +249,5 @@ public:
 private:
     void maybe_adjust_watermark() {
         while (_buckets[_watermark].empty() && --_watermark >= 0) ;
-    }
-    static typename log_histogram_bucket_index<opts>::type bucket_of(size_t value) {
-        const auto pow2_index = pow2_rank(value | (1 << (opts.min_size_shift - 1)));
-        const auto unmasked_sub_bucket_index = value >> (pow2_index - opts.sub_bucket_shift);
-        const auto bucket = pow2_index - opts.min_size_shift + 1;
-        const auto bigger = value >= (1 << opts.min_size_shift);
-        const auto mask = ((1 << opts.sub_bucket_shift) - 1) & -bigger;
-        const auto sub_bucket_index = unmasked_sub_bucket_index & mask;
-        return (bucket << opts.sub_bucket_shift) - mask + sub_bucket_index;
     }
 };

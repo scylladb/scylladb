@@ -177,7 +177,7 @@ static constexpr size_t max_managed_object_size = 1 << max_managed_object_size_s
 // Since we only compact if there's >= max_managed_object_size free space,
 // we use max_managed_object_size as the histogram's minimum size and put
 // everything below that value in the same bucket.
-extern constexpr log_histogram_options segment_descriptor_hist_options(max_managed_object_size_shift, 3, segment::size_shift);
+extern constexpr log_histogram_options segment_descriptor_hist_options(max_managed_object_size, 3, segment_size);
 
 struct segment_descriptor : public log_histogram_hook<segment_descriptor_hist_options> {
     bool _lsa_managed;
