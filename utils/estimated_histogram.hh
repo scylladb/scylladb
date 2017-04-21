@@ -46,6 +46,7 @@
 #include <vector>
 #include <chrono>
 #include "core/metrics_types.hh"
+#include <seastar/core/print.hh>
 
 namespace utils {
 
@@ -341,70 +342,64 @@ public:
     {
         return buckets.get(buckets.length() - 1) > 0;
     }
+#endif
 
-    /**
-     * log.debug() every record in the histogram
-     *
-     * @param log
-     */
-    public void log(Logger log)
-    {
+    friend std::ostream& operator<<(std::ostream& out, const estimated_histogram& h) {
         // only print overflow if there is any
-        int nameCount;
-        if (buckets.get(buckets.length() - 1) == 0)
-            nameCount = buckets.length() - 1;
-        else
-            nameCount = buckets.length();
-        String[] names = new String[nameCount];
+        size_t name_count;
+        if (h.buckets[h.buckets.size() - 1] == 0) {
+            name_count = h.buckets.size() - 1;
+        } else {
+            name_count = h.buckets.size();
+        }
+        std::vector<sstring> names;
+        names.reserve(name_count);
 
-        int maxNameLength = 0;
-        for (int i = 0; i < nameCount; i++)
-        {
-            names[i] = nameOfRange(bucketOffsets, i);
-            maxNameLength = Math.max(maxNameLength, names[i].length());
+        size_t max_name_len = 0;
+        for (size_t i = 0; i < name_count; i++) {
+            names.push_back(h.name_of_range(i));
+            max_name_len = std::max(max_name_len, names.back().size());
         }
 
-        // emit log records
-        String formatstr = "%" + maxNameLength + "s: %d";
-        for (int i = 0; i < nameCount; i++)
-        {
-            long count = buckets.get(i);
+        sstring formatstr = sprint("%%%ds: %%d\n", max_name_len);
+        for (size_t i = 0; i < name_count; i++) {
+            int64_t count = h.buckets[i];
             // sort-of-hack to not print empty ranges at the start that are only used to demarcate the
             // first populated range. for code clarity we don't omit this record from the maxNameLength
             // calculation, and accept the unnecessary whitespace prefixes that will occasionally occur
-            if (i == 0 && count == 0)
+            if (i == 0 && count == 0) {
                 continue;
-            log.debug(String.format(formatstr, names[i], count));
+            }
+            out << sprint(formatstr, names[i], count);
         }
+        return out;
     }
 
-    private static String nameOfRange(long[] bucketOffsets, int index)
-    {
-        StringBuilder sb = new StringBuilder();
-        appendRange(sb, bucketOffsets, index);
-        return sb.toString();
-    }
-
-    private static void appendRange(StringBuilder sb, long[] bucketOffsets, int index)
-    {
-        sb.append("[");
-        if (index == 0)
-            if (bucketOffsets[0] > 0)
+    sstring name_of_range(size_t index) const {
+        sstring s;
+        s += "[";
+        if (index == 0) {
+            if (bucket_offsets[0] > 0) {
                 // by original definition, this histogram is for values greater than zero only;
                 // if values of 0 or less are required, an entry of lb-1 must be inserted at the start
-                sb.append("1");
-            else
-                sb.append("-Inf");
-        else
-            sb.append(bucketOffsets[index - 1] + 1);
-        sb.append("..");
-        if (index == bucketOffsets.length)
-            sb.append("Inf");
-        else
-            sb.append(bucketOffsets[index]);
-        sb.append("]");
+                s += "1";
+            } else {
+                s += "-Inf";
+            }
+        } else {
+            s += sprint("%d", bucket_offsets[index - 1] + 1);
+        }
+        s += "..";
+        if (index == bucket_offsets.size()) {
+            s += "Inf";
+        } else {
+            s += sprint("%d", bucket_offsets[index]);
+        }
+        s += "]";
+        return s;
     }
 
+#if 0
     @Override
     public boolean equals(Object o)
     {
