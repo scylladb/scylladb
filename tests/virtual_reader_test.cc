@@ -44,7 +44,7 @@ thread_local disk_error_signal_type general_disk_error;
 
 SEASTAR_TEST_CASE(test_query_virtual_table) {
     return do_with_cql_env([] (auto& e) {
-        storage_service_for_tests ss_for_tests();
+        storage_service_for_tests ss_for_tests;
         auto ranges = db::size_estimates::size_estimates_mutation_reader::get_local_ranges().get0();
         auto start_token1 = utf8_type->to_string(ranges[3].start);
         auto start_token2 = utf8_type->to_string(ranges[5].start);
