@@ -231,7 +231,15 @@ segment_occupancy_descending_less_compare::operator()(segment* s1, segment* s2) 
     return s2->occupancy() < s1->occupancy();
 }
 
+static constexpr size_t max_managed_object_size = segment_size * 0.1;
+static constexpr size_t max_used_space_for_compaction = segment_size * 0.85;
+static constexpr size_t min_free_space_for_compaction = segment_size - max_used_space_for_compaction;
+static constexpr float max_occupancy_for_compaction = float(max_used_space_for_compaction) / segment_size;
+
 class segment_zone;
+
+static_assert(min_free_space_for_compaction >= max_managed_object_size,
+    "Segments which cannot fit max_managed_object_size must not be considered compactible for the sake of forward progress of compaction");
 
 struct segment_descriptor {
     bool _lsa_managed;
@@ -986,10 +994,6 @@ region_group_binomial_group_sanity_check(auto& bh) {
 // object.
 //
 class region_impl : public allocation_strategy {
-    static constexpr float max_occupancy_for_compaction = 0.85; // FIXME: make configurable
-    static constexpr float max_occupancy_for_compaction_on_idle = 0.93; // FIXME: make configurable
-    static constexpr size_t max_managed_object_size = segment::size * 0.1;
-
     // single-byte flags
     struct obj_flags {
         static constexpr uint8_t live_flag = 0x01;
@@ -1320,15 +1324,11 @@ public:
     bool is_compactible() const {
         return _reclaiming_enabled
             && (_closed_occupancy.free_space() >= 2 * segment::size)
-            && (_closed_occupancy.used_fraction() < max_occupancy_for_compaction)
-            && (_segments.top()->occupancy().free_space() >= max_managed_object_size);
+            && (_segments.top()->occupancy().free_space() >= min_free_space_for_compaction);
     }
 
     bool is_idle_compactible() {
-        return _reclaiming_enabled
-            && (_closed_occupancy.free_space() >= 2 * segment::size)
-            && (_closed_occupancy.used_fraction() < max_occupancy_for_compaction_on_idle)
-            && (_segments.top()->occupancy().free_space() >= max_managed_object_size);
+        return is_compactible();
     }
 
     virtual void* alloc(allocation_strategy::migrate_fn migrator, size_t size, size_t alignment) override {
@@ -1447,21 +1447,6 @@ public:
         return _segments.top()->occupancy();
     }
 
-    // Tries to release one full segment back to the segment pool.
-    void compact() {
-        if (!is_compactible()) {
-            return;
-        }
-
-        compaction_lock _(*this);
-
-        auto in_use = shard_segment_pool.segments_in_use();
-
-        while (shard_segment_pool.segments_in_use() >= in_use) {
-            compact_single_segment_locked();
-        }
-    }
-
     void compact_single_segment_locked() {
         segment* seg = _segments.top();
         logger.debug("Compacting segment {} from region {}, {}", seg, id(), seg->occupancy());
@@ -1471,8 +1456,8 @@ public:
         shard_segment_pool.on_segment_compaction();
     }
 
-    // Compacts only a single segment
-    void compact_on_idle() {
+    // Compacts a single segment
+    void compact() {
         compaction_lock _(*this);
         compact_single_segment_locked();
     }
@@ -1569,6 +1554,10 @@ public:
         _eviction_fn = std::move(fn);
     }
 
+    const eviction_fn& evictor() const {
+        return _eviction_fn;
+    }
+
     uint64_t reclaim_counter() const {
         return _reclaim_counter;
     }
@@ -1655,6 +1644,10 @@ memory::reclaiming_result region::evict_some() {
 
 void region::make_evictable(eviction_fn fn) {
     _impl->make_evictable(std::move(fn));
+}
+
+const eviction_fn& region::evictor() const {
+    return _impl->evictor();
 }
 
 allocation_strategy& region::allocator() {
@@ -1804,7 +1797,7 @@ reactor::idle_cpu_handler_result tracker::impl::compact_on_idle(reactor::work_wa
             return reactor::idle_cpu_handler_result::no_more_work;
         }
 
-        r->compact_on_idle();
+        r->compact();
 
         boost::range::push_heap(_regions, cmp);
     }

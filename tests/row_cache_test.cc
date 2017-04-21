@@ -764,6 +764,15 @@ SEASTAR_TEST_CASE(test_update_failure) {
             }
         }
 
+        auto ev = tracker.region().evictor();
+        tracker.region().make_evictable([ev, evicitons_left = int(10)] () mutable {
+            if (evicitons_left == 0) {
+                return memory::reclaiming_result::reclaimed_nothing;
+            }
+            --evicitons_left;
+            return ev();
+        });
+
         try {
             cache.update(*mt, [] (auto&& key) {
                 return partition_presence_checker_result::definitely_doesnt_exist;

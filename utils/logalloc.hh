@@ -591,6 +591,8 @@ public:
     // The function should free some space from this region.
     void make_evictable(eviction_fn);
 
+    const eviction_fn& evictor() const;
+
     friend class region_group;
     friend class allocating_section;
 };
