@@ -171,13 +171,18 @@ struct segment {
 
 class segment_zone;
 
-static constexpr size_t max_managed_object_size_shift = pow2_rank(segment::size * 0.1);
-static constexpr size_t max_managed_object_size = 1 << max_managed_object_size_shift;
+static constexpr size_t max_managed_object_size = segment_size * 0.1;
+static constexpr size_t max_used_space_for_compaction = segment_size * 0.85;
+static constexpr size_t min_free_space_for_compaction = segment_size - max_used_space_for_compaction;
+static constexpr float max_occupancy_for_compaction = float(max_used_space_for_compaction) / segment_size;
 
-// Since we only compact if there's >= max_managed_object_size free space,
-// we use max_managed_object_size as the histogram's minimum size and put
+static_assert(min_free_space_for_compaction >= max_managed_object_size,
+    "Segments which cannot fit max_managed_object_size must not be considered compactible for the sake of forward progress of compaction");
+
+// Since we only compact if there's >= min_free_space_for_compaction of free space,
+// we use min_free_space_for_compaction as the histogram's minimum size and put
 // everything below that value in the same bucket.
-extern constexpr log_histogram_options segment_descriptor_hist_options(max_managed_object_size_shift, 3, segment::size_shift);
+extern constexpr log_histogram_options segment_descriptor_hist_options(min_free_space_for_compaction, 3, segment_size);
 
 struct segment_descriptor : public log_histogram_hook<segment_descriptor_hist_options> {
     bool _lsa_managed;
@@ -905,9 +910,6 @@ segment::occupancy() const {
 // object.
 //
 class region_impl : public allocation_strategy {
-    static constexpr float max_occupancy_for_compaction = 0.85; // FIXME: make configurable
-    static constexpr float max_occupancy_for_compaction_on_idle = 0.93; // FIXME: make configurable
-
     // single-byte flags
     struct obj_flags {
         static constexpr uint8_t live_flag = 0x01;
@@ -1243,15 +1245,11 @@ public:
     bool is_compactible() const {
         return _reclaiming_enabled
             && (_closed_occupancy.free_space() >= 2 * segment::size)
-            && (_closed_occupancy.used_fraction() < max_occupancy_for_compaction)
-            && (_segment_descs.contains_above_min());
+            && _segment_descs.contains_above_min();
     }
 
     bool is_idle_compactible() {
-        return _reclaiming_enabled
-            && (_closed_occupancy.free_space() >= 2 * segment::size)
-            && (_closed_occupancy.used_fraction() < max_occupancy_for_compaction_on_idle)
-            && (_segment_descs.contains_above_min());
+        return is_compactible();
     }
 
     virtual void* alloc(allocation_strategy::migrate_fn migrator, size_t size, size_t alignment) override {
@@ -1370,20 +1368,6 @@ public:
         return _segment_descs.largest().occupancy();
     }
 
-    // Tries to release one full segment back to the segment pool.
-    void compact() {
-        if (!is_compactible()) {
-            return;
-        }
-
-        compaction_lock _(*this);
-
-        auto in_use = shard_segment_pool.segments_in_use();
-        while (shard_segment_pool.segments_in_use() >= in_use) {
-            compact_single_segment_locked();
-        }
-    }
-
     void compact_single_segment_locked() {
         auto& desc = _segment_descs.one_of_largest();
         _segment_descs.pop_one_of_largest();
@@ -1394,8 +1378,8 @@ public:
         shard_segment_pool.on_segment_compaction();
     }
 
-    // Compacts only a single segment
-    void compact_on_idle() {
+    // Compacts a single segment
+    void compact() {
         compaction_lock _(*this);
         compact_single_segment_locked();
     }
@@ -1488,6 +1472,10 @@ public:
     void make_evictable(eviction_fn fn) {
         _evictable = true;
         _eviction_fn = std::move(fn);
+    }
+
+    const eviction_fn& evictor() const {
+        return _eviction_fn;
     }
 
     uint64_t reclaim_counter() const {
@@ -1603,6 +1591,10 @@ memory::reclaiming_result region::evict_some() {
 
 void region::make_evictable(eviction_fn fn) {
     _impl->make_evictable(std::move(fn));
+}
+
+const eviction_fn& region::evictor() const {
+    return _impl->evictor();
 }
 
 allocation_strategy& region::allocator() {
@@ -1752,7 +1744,7 @@ reactor::idle_cpu_handler_result tracker::impl::compact_on_idle(reactor::work_wa
             return reactor::idle_cpu_handler_result::no_more_work;
         }
 
-        r->compact_on_idle();
+        r->compact();
 
         boost::range::push_heap(_regions, cmp);
     }
