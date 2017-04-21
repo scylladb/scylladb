@@ -43,6 +43,13 @@ namespace sstables {
             , max_sstable_bytes(max_sstable_bytes) {}
     };
 
+    struct resharding_descriptor {
+        std::vector<sstables::shared_sstable> sstables;
+        uint64_t max_sstable_bytes;
+        shard_id reshard_at;
+        uint32_t level;
+    };
+
     enum class compaction_type {
         Compaction = 0,
         Cleanup = 1,
