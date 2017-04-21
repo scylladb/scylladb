@@ -51,7 +51,8 @@ static clustering_key_prefix key(std::vector<int32_t> components) {
     return clustering_key_prefix::from_clustering_prefix(*s, exploded_clustering_prefix(std::move(exploded)));
 }
 
-static void assert_rt(auto&& expected, auto&& actual) {
+template<typename FirstType, typename SecondType>
+static void assert_rt(FirstType&& expected, SecondType&& actual) {
     BOOST_REQUIRE(expected.equal(*s, actual));
 }
 
