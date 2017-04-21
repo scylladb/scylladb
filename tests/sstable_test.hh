@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include "sstables/writer.hh"
 #include "sstables/sstables.hh"
 #include "sstables/binary_search.hh"
 #include "database.hh"
@@ -39,6 +40,18 @@ public:
 
     void add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
         _cf->_sstables->insert(std::move(sstable));
+    }
+
+    static void update_sstables_known_generation(column_family& cf, unsigned generation) {
+        cf.update_sstables_known_generation(generation);
+    }
+
+    static uint64_t calculate_generation_for_new_table(column_family& cf) {
+        return cf.calculate_generation_for_new_table();
+    }
+
+    static int64_t calculate_shard_from_sstable_generation(int64_t generation) {
+        return column_family::calculate_shard_from_sstable_generation(generation);
     }
 };
 
