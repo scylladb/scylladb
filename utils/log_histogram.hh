@@ -192,6 +192,11 @@ public:
     iterator end() {
         return iterator(*this, typename iterator::end_tag());
     }
+    // Returns a range of buckets starting from that with the smaller values.
+    // Each bucket is a range of const T&.
+    const auto& buckets() const {
+        return _buckets;
+    }
     // Pops one of the largest elements in the histogram.
     void pop_one_of_largest() {
         _buckets[_watermark].pop_front();
