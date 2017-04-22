@@ -51,6 +51,7 @@
 #include <ftw.h>
 #include <unistd.h>
 #include <boost/range/algorithm/find_if.hpp>
+#include <boost/algorithm/cxx11/all_of.hpp>
 
 using namespace sstables;
 
@@ -2088,42 +2089,44 @@ SEASTAR_TEST_CASE(leveled_06) {
     return make_ready_future<>();
 }
 
-SEASTAR_TEST_CASE(leveled_07) {
-    // Check that sstable, with level > 0, that overlaps with another in the same level is sent back to L0.
+SEASTAR_TEST_CASE(leveled_invariant_fix) {
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
 
     column_family::config cfg;
-    compaction_manager cm;
     cell_locker_stats cl_stats;
+    compaction_manager cm;
     cfg.enable_disk_writes = false;
     cfg.enable_commitlog = false;
     auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
     cf->mark_ready_for_writes();
 
-    auto key_and_token_pair = token_generation_for_current_shard(5);
+    auto sstables_no = s->max_compaction_threshold();
+    auto key_and_token_pair = token_generation_for_current_shard(sstables_no);
     auto min_key = key_and_token_pair[0].first;
     auto max_key = key_and_token_pair[key_and_token_pair.size()-1].first;
+    auto sstable_max_size = 1024*1024;
 
-    // Creating two sstables which key range overlap.
-    add_sstable_for_leveled_test(cf, /*gen*/1, /*data_size*/0, /*level*/1, min_key, max_key);
-    BOOST_REQUIRE(cf->get_sstables()->size() == 1);
+    // add non overlapping with min token to be discarded by strategy
+    add_sstable_for_leveled_test(cf, 0, sstable_max_size, /*level*/1, min_key, min_key);
 
-    add_sstable_for_leveled_test(cf, /*gen*/2, /*data_size*/0, /*level*/1, key_and_token_pair[1].first, max_key);
-    BOOST_REQUIRE(cf->get_sstables()->size() == 2);
+    for (auto i = 1; i < sstables_no-1; i++) {
+        add_sstable_for_leveled_test(cf, i, sstable_max_size, /*level*/1, key_and_token_pair[i].first, key_and_token_pair[i].first);
+    }
+    // add large token span sstable into level 1, which overlaps with all sstables added in loop above.
+    add_sstable_for_leveled_test(cf, sstables_no, sstable_max_size, 1, key_and_token_pair[1].first, max_key);
 
-    BOOST_REQUIRE(sstable_overlaps(cf, 1, 2) == true);
-
-    auto max_sstable_size_in_mb = 1;
     auto candidates = get_candidates_for_leveled_strategy(*cf);
-    leveled_manifest manifest = leveled_manifest::create(*cf, candidates, max_sstable_size_in_mb);
-    BOOST_REQUIRE(manifest.get_level_size(0) == 1);
-    BOOST_REQUIRE(manifest.get_level_size(1) == 1);
+    leveled_manifest manifest = leveled_manifest::create(*cf, candidates, 1);
+    std::vector<stdx::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
+    std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
 
-    auto& l0 = manifest.get_level(0);
-    auto& sst = l0.front();
-    BOOST_REQUIRE(sst->generation() == 2);
-    BOOST_REQUIRE(sst->get_sstable_level() == 0);
+    auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
+    BOOST_REQUIRE(candidate.level == 1);
+    BOOST_REQUIRE(candidate.sstables.size() == size_t(sstables_no-1));
+    BOOST_REQUIRE(boost::algorithm::all_of(candidate.sstables, [] (auto& sst) {
+        return sst->generation() != 0;
+    }));
 
     return make_ready_future<>();
 }
@@ -3677,6 +3680,46 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
         check(sel, key_and_token_pair[5].second, {0, 5});
         check(sel, key_and_token_pair[6].second, {0});
         check(sel, key_and_token_pair[7].second, {0});
+    }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(sstable_resharding_strategy_tests) {
+    // TODO: move it to sstable_resharding_test.cc. Unable to do so now because of linking issues
+    // when using sstables::stats_metadata at sstable_resharding_test.cc.
+
+    auto s = make_lw_shared(schema({}, "ks", "cf", {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
+    auto get_sstable = [&] (int64_t gen, sstring first_key, sstring last_key) mutable {
+        auto sst = make_lw_shared<sstable>(s, "", gen, sstables::sstable::version_types::ka, sstables::sstable::format_types::big);
+        stats_metadata stats = {};
+        stats.sstable_level = 1;
+        sstables::test(sst).set_values(std::move(first_key), std::move(last_key), std::move(stats));
+        return sst;
+    };
+
+    auto cm = make_lw_shared<compaction_manager>();
+    auto cl_stats = make_lw_shared<cell_locker_stats>();
+    auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm, *cl_stats);
+
+    auto tokens = token_generation_for_current_shard(2);
+    auto stcs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
+    auto lcs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
+
+    auto sst1 = get_sstable(1, tokens[0].first, tokens[1].first);
+    auto sst2 = get_sstable(2, tokens[1].first, tokens[1].first);
+
+    {
+        // TODO: sstable_test runs with smp::count == 1, thus we will not be able to stress it more
+        // until we move this test case to sstable_resharding_test.
+        auto descriptors = stcs.get_resharding_jobs(*cf, { sst1, sst2 });
+        BOOST_REQUIRE(descriptors.size() == 2);
+    }
+    {
+        auto ssts = std::vector<sstables::shared_sstable>{ sst1, sst2 };
+        auto descriptors = lcs.get_resharding_jobs(*cf, ssts);
+        auto expected_jobs = ssts.size()/smp::count + ssts.size()%smp::count;
+        BOOST_REQUIRE(descriptors.size() == expected_jobs);
     }
 
     return make_ready_future<>();

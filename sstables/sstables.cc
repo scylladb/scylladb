@@ -1236,6 +1236,13 @@ future<sstable_open_info> sstable::load_shared_components(const schema_ptr& s, s
     });
 }
 
+future<foreign_sstable_open_info> sstable::get_open_info() & {
+    return _components.copy().then([this] (auto c) mutable {
+        return foreign_sstable_open_info{std::move(c), this->get_shards_for_this_sstable(), _data_file.dup(), _index_file.dup(),
+            _generation, _version, _format};
+    });
+}
+
 static void output_promoted_index_entry(bytes_ostream& promoted_index,
         const bytes& first_col,
         const bytes& last_col,
@@ -1690,13 +1697,13 @@ populate_statistics_offsets(statistics& s) {
 
 static
 sharding_metadata
-create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key, const dht::decorated_key& last_key) {
+create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
     auto range = dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
     auto sharder = dht::ring_position_range_sharder(std::move(range));
     auto sm = sharding_metadata();
     auto rpras = sharder.next(*schema);
     while (rpras) {
-        if (rpras->shard == engine().cpu_id()) {
+        if (rpras->shard == shard) {
             // we know left/right are not infinite
             auto&& left = rpras->ring_range.start()->value();
             auto&& right = rpras->ring_range.end()->value();
@@ -1937,10 +1944,10 @@ sstable::read_scylla_metadata(const io_priority_class& pc) {
 }
 
 void
-sstable::write_scylla_metadata(const io_priority_class& pc) {
+sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard) {
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
-    auto sm = create_sharding_metadata(_schema, first_key, last_key);
+    auto sm = create_sharding_metadata(_schema, first_key, last_key, shard);
     _components->scylla_metadata.emplace();
     _components->scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(sm));
 
@@ -1987,12 +1994,13 @@ sstable_writer::~sstable_writer() {
 }
 
 sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
-                               const sstable_writer_config& cfg, const io_priority_class& pc)
+                               const sstable_writer_config& cfg, const io_priority_class& pc, shard_id shard)
     : _sst(sst)
     , _schema(s)
     , _pc(pc)
     , _backup(cfg.backup)
     , _leave_unsealed(cfg.leave_unsealed)
+    , _shard(shard)
 {
     _sst.generate_toc(_schema.get_compressor_params().get_compressor(), _schema.bloom_filter_fp_chance());
     _sst.write_toc(_pc);
@@ -2011,7 +2019,7 @@ void sstable_writer::consume_end_of_stream()
     _sst.write_filter(_pc);
     _sst.write_statistics(_pc);
     _sst.write_compression(_pc);
-    _sst.write_scylla_metadata(_pc);
+    _sst.write_scylla_metadata(_pc, _shard);
 
     if (!_leave_unsealed) {
         _sst.seal_sstable(_backup).get();
@@ -2031,9 +2039,9 @@ future<> sstable::seal_sstable(bool backup)
     });
 }
 
-sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partitions, const sstable_writer_config& cfg, const io_priority_class& pc)
+sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partitions, const sstable_writer_config& cfg, const io_priority_class& pc, shard_id shard)
 {
-    return sstable_writer(*this, s, estimated_partitions, cfg, pc);
+    return sstable_writer(*this, s, estimated_partitions, cfg, pc, shard);
 }
 
 future<> sstable::write_components(::mutation_reader mr,
@@ -2336,6 +2344,11 @@ double sstable::get_compression_ratio() const {
     } else {
         return metadata_collector::NO_COMPRESSION_RATIO;
     }
+}
+
+std::unordered_set<uint64_t> sstable::ancestors() const {
+    const compaction_metadata& cm = get_compaction_metadata();
+    return boost::copy_range<std::unordered_set<uint64_t>>(cm.ancestors.elements);
 }
 
 void sstable::set_sstable_level(uint32_t new_level) {

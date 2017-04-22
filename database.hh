@@ -505,7 +505,7 @@ private:
     // them (split the data belonging to this shard to a separate sstable),
     // but for correct compaction we need to start the compaction only after
     // reading all sstables.
-    std::vector<sstables::shared_sstable> _sstables_need_rewrite;
+    std::unordered_map<uint64_t, sstables::shared_sstable> _sstables_need_rewrite;
     // Control background fibers waiting for sstables to be deleted
     seastar::gate _sstable_deletion_gate;
     // There are situations in which we need to stop writing sstables. Flushers will take
@@ -576,6 +576,10 @@ private:
     void rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
                               const std::vector<sstables::shared_sstable>& sstables_to_remove);
     void rebuild_statistics();
+
+    // This function replaces new sstables by their ancestors, which are sstables that needed resharding.
+    void replace_ancestors_needed_rewrite(std::vector<sstables::shared_sstable> new_sstables);
+    void remove_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancestors);
 private:
     mutation_source_opt _virtual_reader;
     // Creates a mutation reader which covers sstables.
@@ -594,6 +598,14 @@ private:
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
     void do_trigger_compaction();
 public:
+    bool has_shared_sstables() const {
+        return bool(_sstables_need_rewrite.size());
+    }
+
+    sstring dir() const {
+        return _config.datadir;
+    }
+
     uint64_t failed_counter_applies_to_memtable() const {
         return _failed_counter_applies_to_memtable;
     }
@@ -782,6 +794,8 @@ public:
     lw_shared_ptr<sstable_list> get_sstables_including_compacted_undeleted() const;
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const;
     std::vector<sstables::shared_sstable> select_sstables(const dht::partition_range& range) const;
+    std::vector<sstables::shared_sstable> candidates_for_compaction() const;
+    std::vector<sstables::shared_sstable> sstables_need_rewrite() const;
     size_t sstables_count() const;
     std::vector<uint64_t> sstable_count_per_level() const;
     int64_t get_unleveled_sstables() const;
@@ -888,7 +902,6 @@ private:
     future<bool> for_all_partitions(schema_ptr, Func&& func) const;
     void check_valid_rp(const db::replay_position&) const;
 public:
-    void start_rewrite();
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
     future<bool> for_all_partitions_slow(schema_ptr, std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const;
@@ -1283,6 +1296,7 @@ future<> update_schema_version_and_announce(distributed<service::storage_proxy>&
 
 class distributed_loader {
 public:
+    static void reshard(distributed<database>& db, sstring ks_name, sstring cf_name);
     static future<> open_sstable(distributed<database>& db, sstables::entry_descriptor comps,
         std::function<future<> (column_family&, sstables::foreign_sstable_open_info)> func);
     static future<> load_new_sstables(distributed<database>& db, sstring ks, sstring cf, std::vector<sstables::entry_descriptor> new_tables);

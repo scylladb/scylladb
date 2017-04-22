@@ -129,6 +129,8 @@ public:
     // Stop all fibers. Ongoing compactions will be waited.
     future<> stop();
 
+    bool stopped() const { return _stopped; }
+
     // Submit a column family to be compacted.
     void submit(column_family* cf);
 

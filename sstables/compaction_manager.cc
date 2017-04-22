@@ -200,7 +200,7 @@ std::vector<sstables::shared_sstable> compaction_manager::get_candidates(const c
     std::vector<sstables::shared_sstable> candidates;
     candidates.reserve(cf.sstables_count());
     // Filter out sstables that are being compacted.
-    for (auto& sst : *cf.get_sstables()) {
+    for (auto& sst : cf.candidates_for_compaction()) {
         if (!_compacting_sstables.count(sst)) {
             candidates.push_back(sst);
         }

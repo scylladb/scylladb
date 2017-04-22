@@ -63,6 +63,10 @@ class leveled_manifest {
     private final SizeTieredCompactionStrategyOptions options;
 #endif
 
+    struct candidates_info {
+        std::vector<sstables::shared_sstable> candidates;
+        bool can_promote = true;
+    };
 public:
     /**
      * If we go this many rounds without compacting
@@ -103,11 +107,6 @@ public:
             manifest.add(sstable);
         }
 
-        for (auto i = 1U; i < manifest._generations.size(); i++) {
-            // send overlapping sstables (with level > 0) to level 0, if any.
-            manifest.repair_overlapping_sstables(i);
-        }
-
         return manifest;
     }
 
@@ -121,37 +120,36 @@ public:
         _generations[level].push_back(sstable);
     }
 
-    void repair_overlapping_sstables(int level) {
-        const sstables::sstable *previous = nullptr;
+    // Return first set of overlapping sstables for a given level.
+    // Assumes _generations[level] is already sorted by first key.
+    std::vector<sstables::shared_sstable> overlapping_sstables(int level) {
         const schema& s = *_schema;
-
-        _generations[level].sort([&s] (auto& i, auto& j) {
-            return i->compare_by_first_key(*j) < 0;
-        });
-
-        std::vector<sstables::shared_sstable> out_of_order_sstables;
+        std::unordered_set<sstables::shared_sstable> result;
+        stdx::optional<sstables::shared_sstable> previous;
+        stdx::optional<dht::decorated_key> last; // keeps track of highest last key in result.
 
         for (auto& current : _generations[level]) {
             auto current_first = current->get_first_decorated_key();
+            auto current_last = current->get_last_decorated_key();
 
-            if (previous != nullptr && current_first.tri_compare(s, previous->get_last_decorated_key()) <= 0) {
-
-                logger.warn("At level {}, {} [{}, {}] overlaps {} [{}, {}]. This could be caused by the fact that you have dropped " \
-                    "sstables from another node into the data directory. Sending back to L0.",
-                    level, previous->get_filename(), previous->get_first_partition_key(), previous->get_last_partition_key(),
-                    current->get_filename(), current->get_first_partition_key(), current->get_last_partition_key());
-
-                out_of_order_sstables.push_back(current);
-            } else {
-                previous = &*current;
+            if (previous && current_first.tri_compare(s, (*previous)->get_last_decorated_key()) <= 0) {
+                result.insert(*previous);
+                result.insert(current);
+            } else if (last && current_first.tri_compare(s, *last) <= 0) {
+                // current may also overlap on some sstable other than the previous one, if there's
+                // a large token span sstable that comes previously.
+                result.insert(current);
+            } else if (!result.empty()) {
+                // first overlapping set is returned when current doesn't overlap with it
+                break;
             }
-        }
 
-        if (!out_of_order_sstables.empty()) {
-            for (auto& sstable : out_of_order_sstables) {
-                send_back_to_L0(sstable);
+            if (!last || current_last.tri_compare(s, *last) > 0) {
+                last = std::move(current_last);
             }
+            previous = current;
         }
+        return std::vector<sstables::shared_sstable>(result.begin(), result.end());
     }
 
     /**
@@ -301,16 +299,18 @@ public:
                     }
                 }
                 // L0 is fine, proceed with this level
-                auto candidates = get_candidates_for(i, last_compacted_keys);
-                if (!candidates.empty()) {
-                    int next_level = get_next_level(candidates);
+                auto info = get_candidates_for(i, last_compacted_keys);
+                if (!info.candidates.empty()) {
+                    int next_level = get_next_level(info.candidates, info.can_promote);
 
-                    candidates = get_overlapping_starved_sstables(next_level, std::move(candidates), compaction_counter);
+                    if (info.can_promote) {
+                        info.candidates = get_overlapping_starved_sstables(next_level, std::move(info.candidates), compaction_counter);
+                    }
 #if 0
                     if (logger.isDebugEnabled())
                         logger.debug("Compaction candidates for L{} are {}", i, toString(candidates));
 #endif
-                    return sstables::compaction_descriptor(std::move(candidates), next_level, _max_sstable_size_in_bytes);
+                    return sstables::compaction_descriptor(std::move(info.candidates), next_level, _max_sstable_size_in_bytes);
                 }
                 else {
                     logger.debug("No compaction candidates for L{}", i);
@@ -322,12 +322,13 @@ public:
         if (get_level(0).empty()) {
             return sstables::compaction_descriptor();
         }
-        auto candidates = get_candidates_for(0, last_compacted_keys);
-        if (candidates.empty()) {
+
+        auto info = get_candidates_for(0, last_compacted_keys);
+        if (info.candidates.empty()) {
             return sstables::compaction_descriptor();
         }
-        auto next_level = get_next_level(candidates);
-        return sstables::compaction_descriptor(std::move(candidates), next_level, _max_sstable_size_in_bytes);
+        auto next_level = get_next_level(info.candidates, info.can_promote);
+        return sstables::compaction_descriptor(std::move(info.candidates), next_level, _max_sstable_size_in_bytes);
     }
 
 #if 0
@@ -527,7 +528,7 @@ public:
      * If no compactions are possible (because of concurrent compactions or because some sstables are blacklisted
      * for prior failure), will return an empty list.  Never returns null.
      */
-    std::vector<sstables::shared_sstable> get_candidates_for(int level, const std::vector<stdx::optional<dht::decorated_key>>& last_compacted_keys) {
+    candidates_info get_candidates_for(int level, const std::vector<stdx::optional<dht::decorated_key>>& last_compacted_keys) {
         const schema& s = *_schema;
         assert(!get_level(level).empty());
 
@@ -622,7 +623,7 @@ public:
             if (candidates.size() < 2) {
                 return {};
             } else {
-                return candidates;
+                return { candidates, true };
             }
         }
 
@@ -631,6 +632,16 @@ public:
         sstables.sort([&s] (auto& i, auto& j) {
             return i->compare_by_first_key(*j) < 0;
         });
+
+        // Restore invariant for current level, when a large token spanning sstable finds its
+        // way into a level higher than 0, due to resharding or refresh, by compacting first
+        // set of overlapping sstables. It means more than one compaction may be required for
+        // invariant to be restored.
+        auto overlapping_current_level = overlapping_sstables(level);
+        if (!overlapping_current_level.empty()) {
+            return { overlapping_current_level, false };
+        }
+
         int start = 0; // handles case where the prior compaction touched the very last range
         int idx = 0;
         for (auto& sstable : sstables) {
@@ -663,7 +674,7 @@ public:
             if (Sets.intersection(candidates, compacting).isEmpty())
                 return candidates;
 #endif
-            return candidates;
+            return { candidates, true };
         }
 
         // all the sstables were suspect or overlapped with something suspect
@@ -695,17 +706,16 @@ public:
     {
         return "Manifest@" + hashCode();
     }
-
-    public int getLevelCount()
-    {
-        for (int i = generations.length - 1; i >= 0; i--)
-        {
-            if (getLevel(i).size() > 0)
+#endif
+    uint32_t get_level_count() {
+        for (int i = _generations.size() - 1; i >= 0; i--) {
+            if (get_level(i).size() > 0) {
                 return i;
+            }
         }
         return 0;
     }
-
+#if 0
     public synchronized SortedSet<SSTableReader> getLevelSorted(int level, Comparator<SSTableReader> comparator)
     {
         return ImmutableSortedSet.copyOf(comparator, getLevel(level));
@@ -735,7 +745,7 @@ public:
         return tasks;
     }
 
-    int get_next_level(const std::vector<sstables::shared_sstable>& sstables) {
+    int get_next_level(const std::vector<sstables::shared_sstable>& sstables, bool can_promote = true) {
         int maximum_level = std::numeric_limits<int>::min();
         int minimum_level = std::numeric_limits<int>::max();
         auto total_bytes = get_total_bytes(sstables);
@@ -750,7 +760,7 @@ public:
         if (minimum_level == 0 && minimum_level == maximum_level && total_bytes < _max_sstable_size_in_bytes) {
             new_level = 0;
         } else {
-            new_level = minimum_level == maximum_level ? maximum_level + 1 : maximum_level;
+            new_level = (minimum_level == maximum_level && can_promote) ? maximum_level + 1 : maximum_level;
             assert(new_level > 0);
         }
         return new_level;

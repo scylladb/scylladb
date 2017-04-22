@@ -43,6 +43,13 @@ namespace sstables {
             , max_sstable_bytes(max_sstable_bytes) {}
     };
 
+    struct resharding_descriptor {
+        std::vector<sstables::shared_sstable> sstables;
+        uint64_t max_sstable_bytes;
+        shard_id reshard_at;
+        uint32_t level;
+    };
+
     enum class compaction_type {
         Compaction = 0,
         Cleanup = 1,
@@ -103,6 +110,12 @@ namespace sstables {
     future<std::vector<shared_sstable>> compact_sstables(std::vector<shared_sstable> sstables,
             column_family& cf, std::function<shared_sstable()> creator,
             uint64_t max_sstable_size, uint32_t sstable_level, bool cleanup = false);
+
+    // Compacts a set of N shared sstables into M sstables. For every shard involved,
+    // i.e. which owns any of the sstables, a new unshared sstable is created.
+    future<std::vector<shared_sstable>> reshard_sstables(std::vector<shared_sstable> sstables,
+            column_family& cf, std::function<shared_sstable(shard_id)> creator,
+        uint64_t max_sstable_size, uint32_t sstable_level);
 
     // Return the most interesting bucket applying the size-tiered strategy.
     std::vector<sstables::shared_sstable>
