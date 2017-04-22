@@ -101,6 +101,18 @@ public:
          }
     }
 
+    bool operator>(const UUID& v) const {
+        return v < *this;
+    }
+
+    bool operator<=(const UUID& v) const {
+        return !(*this > v);
+    }
+
+    bool operator>=(const UUID& v) const {
+        return !(*this < v);
+    }
+
     bytes to_bytes() const {
         bytes b(bytes::initialized_later(),16);
         auto i = b.begin();
