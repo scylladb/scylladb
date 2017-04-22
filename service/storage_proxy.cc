@@ -342,7 +342,7 @@ public:
                 auto pending_for_dc = boost::range::count_if(pending_endpoints, [&snitch_ptr, &dc] (gms::inet_address& ep){
                     return snitch_ptr->get_datacenter(ep) == dc;
                 });
-                _dc_responses.emplace(dc, db::local_quorum_for(ks, dc) + pending_for_dc).first;
+                _dc_responses.emplace(dc, db::local_quorum_for(ks, dc) + pending_for_dc);
                 _pending_endpoints += pending_for_dc;
             }
         }
