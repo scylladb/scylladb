@@ -1580,7 +1580,8 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
             //find throws no such keyspace if it is missing
             const keyspace& ks = ss._db.local().find_keyspace(keyspace_name);
             // This is ugly, but it follows origin
-            if (typeid(ks.get_replication_strategy()) == typeid(locator::local_strategy)) {
+            auto&& rs = ks.get_replication_strategy();  // clang complains about typeid(ks.get_replication_strategy());
+            if (typeid(rs) == typeid(locator::local_strategy)) {
                 throw std::runtime_error("Ownership values for keyspaces with LocalStrategy are meaningless");
             }
         } else {
