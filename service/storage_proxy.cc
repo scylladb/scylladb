@@ -2608,7 +2608,7 @@ public:
                 } else { // digest mismatch
                     if (is_datacenter_local(exec->_cl)) {
                         auto write_timeout = exec->_proxy->_db.local().get_config().write_request_timeout_in_ms() * 1000;
-                        auto delta = __int128_t(digest_resolver->last_modified()) - __int128_t(exec->_cmd->read_timestamp);
+                        auto delta = int64_t(digest_resolver->last_modified()) - int64_t(exec->_cmd->read_timestamp);
                         if (std::abs(delta) <= write_timeout) {
                             exec->_proxy->_stats.global_read_repairs_canceled_due_to_concurrent_write++;
                             // if CL is local and non matching data is modified less then write_timeout ms ago do only local repair
