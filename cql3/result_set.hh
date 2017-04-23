@@ -75,7 +75,7 @@ public:
     std::vector<::shared_ptr<column_specification>> names;
 
 private:
-    const uint32_t _column_count;
+    uint32_t _column_count;
     ::shared_ptr<const service::pager::paging_state> _paging_state;
 
 public:

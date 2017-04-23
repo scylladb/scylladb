@@ -44,8 +44,10 @@
 namespace cql3 {
 
 metadata::metadata(std::vector<::shared_ptr<column_specification>> names_)
-    : metadata(flag_enum_set(), std::move(names_), names_.size(), {})
-{ }
+        : _flags(flag_enum_set())
+        , names(std::move(names_)) {
+    _column_count = names.size();
+}
 
 metadata::metadata(flag_enum_set flags, std::vector<::shared_ptr<column_specification>> names_, uint32_t column_count,
         ::shared_ptr<const service::pager::paging_state> paging_state)
