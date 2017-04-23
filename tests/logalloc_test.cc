@@ -125,7 +125,7 @@ SEASTAR_TEST_CASE(test_compaction_with_multiple_regions) {
         // Can't reclaim anything yet
         BOOST_REQUIRE(shard_tracker().reclaim(quarter) == 0);
         
-        // Free 60% from the second pool
+        // Free 65% from the second pool
 
         // Shuffle, so that we don't free whole segments back to the pool
         // and there's nothing to reclaim.
@@ -133,7 +133,7 @@ SEASTAR_TEST_CASE(test_compaction_with_multiple_regions) {
 
         with_allocator(reg2.allocator(), [&] {
             auto it = allocated2.begin();
-            for (size_t i = 0; i < (count * 0.6); ++i) {
+            for (size_t i = 0; i < (count * 0.65); ++i) {
                 *it++ = {};
             }
         });
@@ -141,13 +141,13 @@ SEASTAR_TEST_CASE(test_compaction_with_multiple_regions) {
         BOOST_REQUIRE(shard_tracker().reclaim(quarter) >= quarter);
         BOOST_REQUIRE(shard_tracker().reclaim(quarter) < quarter);
 
-        // Free 60% from the first pool
+        // Free 65% from the first pool
 
         std::random_shuffle(allocated1.begin(), allocated1.end());
 
         with_allocator(reg1.allocator(), [&] {
             auto it = allocated1.begin();
-            for (size_t i = 0; i < (count * 0.6); ++i) {
+            for (size_t i = 0; i < (count * 0.65); ++i) {
                 *it++ = {};
             }
         });

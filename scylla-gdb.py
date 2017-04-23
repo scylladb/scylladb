@@ -1,6 +1,7 @@
 import gdb, gdb.printing, uuid, argparse
 from operator import attrgetter
 from collections import defaultdict
+import re
 
 def template_arguments(gdb_type):
     n = 0
@@ -604,6 +605,76 @@ def resolve(addr):
     names[addr] = name
     return name
 
+class lsa_object_descriptor(object):
+    @staticmethod
+    def decode(pos):
+        def next():
+            nonlocal pos
+            byte = pos.dereference() & 0xff
+            pos = pos + 1
+            return byte
+        start_pos = pos
+        b = next()
+        if not (b & 0x40):
+            raise Exception('object descriptor does not start with 0x40')
+        value = b & 0x3f
+        shift = 0
+        while not (b & 0x80):
+            shift += 6
+            b = next()
+            value |= (b & 0x3f) << shift
+        return lsa_object_descriptor(value, start_pos, pos)
+    mig_re = re.compile(r'.*<standard_migrator<(.*)>::object>')
+    vec_ext_re = re.compile(r'managed_vector<(.*), (.*u), (.*)>::external')
+    def __init__(self, value, desc_pos, obj_pos):
+        self.value = value
+        self.desc_pos = desc_pos
+        self.obj_pos = obj_pos
+    def is_live(self):
+        return (self.value & 1) == 1
+    def dead_size(self):
+        return self.value / 2
+    def migrator(self):
+        static_migrators = gdb.parse_and_eval("&'::debug::static_migrators'")
+        migrator = static_migrators['_M_impl']['_M_start'][self.value >> 1]
+        return migrator
+    def live_size(self):
+        mig = str(self.migrator())
+        m = re.match(self.mig_re, mig)
+        if m:
+            type = m.group(1)
+            external = self.vec_ext_re.match(type)
+            if type == 'blob_storage':
+                t = gdb.lookup_type('blob_storage')
+                blob = self.obj_pos.cast(t.pointer())
+                return t.sizeof + blob['frag_size']
+            elif external:
+                element_type = external.group(1)
+                count = external.group(2)
+                size_type = external.group(3)
+                vec_type = gdb.lookup_type('managed_vector<%s, %s, %s>' % (element_type, count, size_type))
+                # gdb doesn't see 'external' for some reason
+                backref_ptr = self.obj_pos.cast(vec_type.pointer().pointer())
+                vec = backref_ptr.dereference()
+                element_count = vec['_capacity']
+                element_type = gdb.lookup_type(element_type)
+                return backref_ptr.type.sizeof + element_count * element_type.sizeof
+            else:
+                return gdb.lookup_type(type).sizeof
+        return 0
+    def end_pos(self):
+        if self.is_live():
+            return self.obj_pos + self.live_size()
+        else:
+            return self.desc_pos + self.dead_size()
+    def __str__(self):
+        if self.is_live():
+            return '0x%x: live %s @ 0x%x' % (self.desc_pos, self.migrator(),
+                                             self.obj_pos)
+        else:
+            return '0x%x: dead size=%d' % (self.desc_pos, self.dead_size())
+        
+
 class scylla_lsa_segment(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla lsa-segment', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
@@ -613,24 +684,11 @@ class scylla_lsa_segment(gdb.Command):
         ptr = int(arg, 0)
         seg = gdb.parse_and_eval('(char*)(%d & ~(\'logalloc\'::segment::size - 1))' % (ptr))
         segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
-        obj_desc_size = int(gdb.parse_and_eval('sizeof(\'logalloc\'::region_impl::object_descriptor)'))
-        obj_desc_ptr = gdb.lookup_type('logalloc::region_impl::object_descriptor').pointer()
-        offset = 0
-        while offset < segment_size:
-            padding = seg[offset] >> 2
-            offset += padding
-            if seg[offset] & 2:
-                break;
-            flags = seg[offset]
-            desc = (seg + offset).reinterpret_cast(obj_desc_ptr)
-            offset += obj_desc_size;
-            addr = seg + offset
-            if flags & 1:
-                migrator_name = resolve(int(desc['_migrator'])) or ('0x%x' % (addr))
-                gdb.write('0x%x: live size=%d migrator=%s\n' % (addr, desc['_size'], migrator_name))
-            else:
-                gdb.write('0x%x: free size=%d\n' % (addr, desc['_size']))
-            offset += desc['_size'];
+        seg_end = seg + segment_size
+        while seg < seg_end:
+            desc = lsa_object_descriptor.decode(seg)
+            print(desc)
+            seg = desc.end_pos()
 
 class scylla_timers(gdb.Command):
     def __init__(self):

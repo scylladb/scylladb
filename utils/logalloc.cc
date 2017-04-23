@@ -43,6 +43,32 @@ namespace bi = boost::intrusive;
 
 standard_allocation_strategy standard_allocation_strategy_instance;
 
+static
+std::vector<const migrate_fn_type*>&
+static_migrators() {
+    static std::vector<const migrate_fn_type*> obj;
+    return obj;
+}
+
+namespace debug {
+
+std::vector<const migrate_fn_type*>* static_migrators = &::static_migrators();
+
+}
+
+
+uint32_t
+migrate_fn_type::register_migrator(const migrate_fn_type* m) {
+    static_migrators().push_back(m);
+    return static_migrators().size() - 1;
+}
+
+void
+migrate_fn_type::unregister_migrator(uint32_t index) {
+    static_migrators()[index] = nullptr;
+    // reuse freed slots? no need now
+}
+
 namespace logalloc {
 
 struct segment;
@@ -910,113 +936,129 @@ segment::occupancy() const {
 // object.
 //
 class region_impl : public allocation_strategy {
-    // single-byte flags
-    struct obj_flags {
-        static constexpr uint8_t live_flag = 0x01;
-        static constexpr uint8_t eos_flag = 0x02;
-        static constexpr size_t max_alignment = (0xff >> 2) + 1;
-
-        static uint8_t with_padding(uint8_t padding) {
-            assert(padding < max_alignment);
-            return uint8_t(padding << 2);
-        }
-
-        //
-        // bit 0: 0 = dead, 1 = live
-        // bit 1: when set, end-of-segment marker
-        // bits 2-7: The value represents padding in bytes between the end of previous object
-        //           and this object's descriptor. Must be smaller than object's alignment, so max alignment is 64.
-        uint8_t _value;
-
-        obj_flags(uint8_t value)
-            : _value(value)
-        { }
-
-        static obj_flags make_end_of_segment() {
-            return { eos_flag };
-        }
-
-        static obj_flags make_live(uint8_t padding) {
-            return obj_flags(live_flag | with_padding(padding));
-        }
-
-        static obj_flags make_padding(uint8_t padding) {
-            return obj_flags(with_padding(padding));
-        }
-
-        static obj_flags make_dead(uint8_t padding) {
-            return obj_flags(with_padding(padding));
-        }
-
-        // Number of bytes preceding this descriptor after the end of the previous object
-        uint8_t padding() const {
-            return _value >> 2;
-        }
-
-        bool is_live() const {
-            return _value & live_flag;
-        }
-
-        bool is_end_of_segment() const {
-            return _value & eos_flag;
-        }
-
-        void mark_dead() {
-            _value &= ~live_flag;
-        }
-    } __attribute__((packed));
-
+    // Serialized object descriptor format:
+    //  byte0 byte1 ... byte[n-1]
+    //  bit0-bit5: ULEB64 significand
+    //  bit6: 1 iff first byte
+    //  bit7: 1 iff last byte
+    // This format allows decoding both forwards and backwards (by scanning for bit7/bit6 respectively);
+    // backward decoding is needed to recover the descriptor from the object pointer when freeing.
+    //
+    // Significand interpretation (value = n):
+    //     even:  dead object, size n/2 (including descriptor)
+    //     odd:   migrate_fn_type at index n/2, from static_migrators()
     class object_descriptor {
     private:
-        obj_flags _flags;
-        uint8_t _alignment;
-        segment::size_type _size;
-        allocation_strategy::migrate_fn _migrator;
+        uint32_t _n;
+    private:
+        explicit object_descriptor(uint32_t n) : _n(n) {}
     public:
-        object_descriptor(allocation_strategy::migrate_fn migrator, segment::size_type size, uint8_t alignment, uint8_t padding)
-            : _flags(obj_flags::make_live(padding))
-            , _alignment(alignment)
-            , _size(size)
-            , _migrator(migrator)
+        object_descriptor(allocation_strategy::migrate_fn migrator)
+                : _n(migrator->index() * 2 + 1)
         { }
 
-        void mark_dead() {
-            _flags.mark_dead();
+        static object_descriptor make_dead(size_t size) {
+            return object_descriptor(size * 2);
         }
 
         allocation_strategy::migrate_fn migrator() const {
-            return _migrator;
+            return static_migrators()[_n / 2];
         }
 
         uint8_t alignment() const {
-            return _alignment;
+            return migrator()->align();
         }
 
-        segment::size_type size() const {
-            return _size;
+        // excluding descriptor
+        segment::size_type live_size(const void* obj) const {
+            return migrator()->size(obj);
         }
 
-        obj_flags flags() const {
-            return _flags;
+        // including descriptor
+        segment::size_type dead_size() const {
+            return _n / 2;
         }
 
         bool is_live() const {
-            return _flags.is_live();
+            return (_n & 1) == 1;
         }
 
-        bool is_end_of_segment() const {
-            return _flags.is_end_of_segment();
+        segment::size_type encoded_size() const {
+            return log2floor(_n) / 6 + 1; // 0 is illegal
         }
 
-        uint8_t padding() const {
-            return _flags.padding();
+        void encode(char*& pos) const {
+            uint64_t b = 64;
+            auto n = _n;
+            do {
+                b |= n & 63;
+                n >>= 6;
+                if (!n) {
+                    b |= 128;
+                }
+                *pos++ = b;
+                b = 0;
+            } while (n);
+        }
+
+        // non-canonical encoding to allow padding (for alignment); encoded_size must be
+        // sufficient (greater than this->encoded_size())
+        void encode(char*& pos, size_t encoded_size) const {
+            uint64_t b = 64;
+            auto n = _n;
+            do {
+                b |= n & 63;
+                n >>= 6;
+                if (!--encoded_size) {
+                    b |= 128;
+                }
+                *pos++ = b;
+                b = 0;
+            } while (encoded_size);
+        }
+
+        static object_descriptor decode_forwards(const char*& pos) {
+            unsigned n = 0;
+            unsigned shift = 0;
+            auto p = pos; // avoid aliasing; p++ doesn't touch memory
+            uint8_t b;
+            do {
+                b = *p++;
+                if (shift < 32) {
+                    // non-canonical encoding can cause large shift; undefined in C++
+                    n |= uint32_t(b & 63) << shift;
+                }
+                shift += 6;
+            } while ((b & 128) == 0);
+            pos = p;
+            return object_descriptor(n);
+        }
+
+        static object_descriptor decode_backwards(const char*& pos) {
+            unsigned n = 0;
+            uint8_t b;
+            auto p = pos; // avoid aliasing; --p doesn't touch memory
+            do {
+                b = *--p;
+                n = (n << 6) | (b & 63);
+            } while ((b & 64) == 0);
+            pos = p;
+            return object_descriptor(n);
         }
 
         friend std::ostream& operator<<(std::ostream& out, const object_descriptor& desc) {
-            return out << sprint("{flags = %x, migrator=%p, alignment=%d, size=%d}",
-                (int)desc._flags._value, (void*)desc._migrator, unsigned(desc._alignment), desc._size);
+            if (!desc.is_live()) {
+                return out << sprint("{free %d}", desc.dead_size());
+            } else {
+                auto m = desc.migrator();
+                auto x = reinterpret_cast<uintptr_t>(&desc) + sizeof(desc);
+                x = align_up(x, m->align());
+                auto obj = reinterpret_cast<const void*>(x);
+                return out << sprint("{migrator=%p, alignment=%d, size=%d}",
+                                      (void*)m, m->align(), m->size(obj));
+            }
         }
-    } __attribute__((packed));
+    };
 private:
     region* _region = nullptr;
     region_group* _group = nullptr;
@@ -1053,51 +1095,48 @@ private:
             _region._reclaiming_enabled = _prev;
         }
     };
-    void* alloc_small(allocation_strategy::migrate_fn migrator, segment::size_type size, size_t alignment) {
-        assert(alignment < obj_flags::max_alignment);
 
+    void* alloc_small(allocation_strategy::migrate_fn migrator, segment::size_type size, size_t alignment) {
         if (!_active) {
             _active = new_segment();
             _active_offset = 0;
         }
 
-        size_t obj_offset = align_up(_active_offset + sizeof(object_descriptor), alignment);
+        auto desc = object_descriptor(migrator);
+        auto desc_encoded_size = desc.encoded_size();
+
+        size_t obj_offset = align_up(_active_offset + desc_encoded_size, alignment);
         if (obj_offset + size > segment::size) {
             close_and_open();
             return alloc_small(migrator, size, alignment);
         }
 
-        auto descriptor_offset = obj_offset - sizeof(object_descriptor);
-        auto padding = descriptor_offset - _active_offset;
-
-        new (_active->at(_active_offset)) obj_flags(obj_flags::make_padding(padding));
-        new (_active->at(descriptor_offset)) object_descriptor(migrator, size, alignment, padding);
-
-        void* obj = _active->at(obj_offset);
+        auto old_active_offset = _active_offset;
+        auto pos = _active->at<char>(_active_offset);
+        // Use non-canonical encoding to allow for alignment pad
+        desc.encode(pos, obj_offset - _active_offset);
         _active_offset = obj_offset + size;
-        _active->record_alloc(size + sizeof(object_descriptor) + padding);
-        return obj;
+        _active->record_alloc(_active_offset - old_active_offset);
+        return pos;
     }
 
     template<typename Func>
     void for_each_live(segment* seg, Func&& func) {
         // scylla-gdb.py:scylla_lsa_segment is coupled with this implementation.
 
-        static_assert(std::is_same<void, std::result_of_t<Func(object_descriptor*, void*)>>::value, "bad Func signature");
+        static_assert(std::is_same<void, std::result_of_t<Func(const object_descriptor*, void*)>>::value, "bad Func signature");
 
-        size_t offset = 0;
-        while (offset < segment::size) {
-            object_descriptor* desc = seg->at<object_descriptor>(offset);
-            offset += desc->flags().padding();
-            desc = seg->at<object_descriptor>(offset);
-            if (desc->is_end_of_segment()) {
-                break;
+        auto pos = seg->at<const char>(0);
+        while (pos < seg->at<const char>(segment::size)) {
+            auto old_pos = pos;
+            const auto desc = object_descriptor::decode_forwards(pos);
+            if (desc.is_live()) {
+                auto size = desc.live_size(pos);
+                func(&desc, const_cast<char*>(pos));
+                pos += size;
+            } else {
+                pos = old_pos + desc.dead_size();
             }
-            offset += sizeof(object_descriptor);
-            if (desc->is_live()) {
-                func(desc, seg->at(offset));
-            }
-            offset += desc->size();
         }
     }
 
@@ -1106,7 +1145,9 @@ private:
             return;
         }
         if (_active_offset < segment::size) {
-            new (_active->at(_active_offset)) obj_flags(obj_flags::make_end_of_segment());
+            auto desc = object_descriptor::make_dead(segment::size - _active_offset);
+            auto pos =_active->at<char>(_active_offset);
+            desc.encode(pos);
         }
         logger.trace("Closing segment {}, used={}, waste={} [B]", _active, _active->occupancy(), segment::size - _active_offset);
         _closed_occupancy += _active->occupancy();
@@ -1143,9 +1184,10 @@ private:
     void compact(segment* seg, segment_descriptor& desc) {
         ++_reclaim_counter;
 
-        for_each_live(seg, [this] (object_descriptor* desc, void* obj) {
-            auto dst = alloc_small(desc->migrator(), desc->size(), desc->alignment());
-            desc->migrator()->migrate(obj, dst, desc->size());
+        for_each_live(seg, [this] (const object_descriptor* desc, void* obj) {
+            auto size = desc->live_size(obj);
+            auto dst = alloc_small(desc->migrator(), size, desc->alignment());
+            desc->migrator()->migrate(obj, dst);
         });
 
         free_segment(seg, desc);
@@ -1272,7 +1314,7 @@ public:
         }
     }
 
-    virtual void free(void* obj) noexcept override {
+    virtual void free(void* obj, size_t size) noexcept override {
         compaction_lock _(*this);
         segment* seg = shard_segment_pool.containing_segment(obj);
 
@@ -1284,20 +1326,25 @@ public:
                 _group->decrease_usage(_heap_handle, allocated_size);
             }
             shard_segment_pool.update_non_lsa_memory_in_use(-allocated_size);
-            standard_allocator().free(obj);
+            standard_allocator().free(obj, size);
             return;
         }
 
         segment_descriptor& seg_desc = shard_segment_pool.descriptor(seg);
 
-        auto desc = reinterpret_cast<object_descriptor*>(reinterpret_cast<uintptr_t>(obj) - sizeof(object_descriptor));
-        desc->mark_dead();
+        auto pos = reinterpret_cast<const char*>(obj);
+        auto old_pos = pos;
+        auto desc = object_descriptor::decode_backwards(pos);
+        auto dead_size = size + (old_pos - pos);
+        desc = object_descriptor::make_dead(dead_size);
+        auto npos = const_cast<char*>(pos);
+        desc.encode(npos);
 
         if (seg != _active) {
             _closed_occupancy -= seg->occupancy();
         }
 
-        seg_desc.record_free(desc->size() + sizeof(object_descriptor) + desc->padding());
+        seg_desc.record_free(dead_size);
 
         if (seg != _active) {
             if (seg_desc.is_empty()) {
@@ -1316,8 +1363,9 @@ public:
         if (!seg) {
             return standard_allocator().object_memory_size_in_allocator(obj);
         } else {
-            auto desc = reinterpret_cast<object_descriptor*>(reinterpret_cast<uintptr_t>(obj) - sizeof(object_descriptor));
-            return sizeof(object_descriptor) + desc->size();
+            auto pos = reinterpret_cast<const char*>(obj);
+            auto desc = object_descriptor::decode_backwards(pos);
+            return desc.encoded_size() + desc.live_size(obj);
         }
     }
 
@@ -1398,24 +1446,18 @@ public:
 
         size_t offset = 0;
         while (offset < segment_size) {
-            obj_flags* oflags = src->at<obj_flags>(offset);
-            new (dst->at(offset)) obj_flags(*oflags);
-            offset += oflags->padding();
-            if (oflags->is_end_of_segment() && !oflags->is_live()) {
-                break;
-            }
-
-            object_descriptor* desc = src->at<object_descriptor>(offset);
-            new (dst->at(offset)) object_descriptor(*desc);
-
-            offset += sizeof(object_descriptor);
-            if (desc->is_live()) {
-                desc->migrator()->migrate(src->at(offset),
-                    dst->at(offset), desc->size());
-            }
-            offset += desc->size();
-            if (desc->is_end_of_segment()) {
-                break;
+            auto pos = src->at<const char>(offset);
+            auto dpos = dst->at<char>(offset);
+            auto old_pos = pos;
+            auto desc = object_descriptor::decode_forwards(pos);
+            // Keep same size as before to maintain alignment
+            desc.encode(dpos, pos - old_pos);
+            if (desc.is_live()) {
+                offset += pos - old_pos;
+                offset += desc.live_size(pos);
+                desc.migrator()->migrate(const_cast<char*>(pos), dpos);
+            } else {
+                offset += desc.dead_size();
             }
         }
         shard_segment_pool.on_segment_migration();

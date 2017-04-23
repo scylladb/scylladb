@@ -416,3 +416,10 @@ struct hash<managed_bytes> {
 };
 
 }
+
+// blob_storage is a variable-size type
+inline
+size_t
+size_for_allocation_strategy(const blob_storage& bs) {
+    return sizeof(bs) + bs.frag_size;
+}

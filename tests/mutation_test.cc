@@ -774,8 +774,8 @@ public:
         return _delegate.alloc(mf, size, alignment);
     }
 
-    virtual void free(void* ptr) override {
-        _delegate.free(ptr);
+    virtual void free(void* ptr, size_t size) override {
+        _delegate.free(ptr, size);
     }
 
     virtual size_t object_memory_size_in_allocator(const void* obj) const noexcept override {
