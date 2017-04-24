@@ -527,7 +527,7 @@ class scylla_segment_descs(gdb.Command):
         addr = base
         for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
             if desc['_lsa_managed']:
-                gdb.write('0x%x: lsa free=%d region=0x%x zone=0x%x\n' % (addr, desc['_free_space'], desc['_region'], desc['_zone']))
+                gdb.write('0x%x: lsa free=%d region=0x%x zone=0x%x\n' % (addr, desc['_free_space'], int(desc['_region']), int(desc['_zone'])))
             else:
                 gdb.write('0x%x: std\n' % (addr))
             addr += segment_size
@@ -669,11 +669,11 @@ class lsa_object_descriptor(object):
             return self.desc_pos + self.dead_size()
     def __str__(self):
         if self.is_live():
-            return '0x%x: live %s @ 0x%x' % (self.desc_pos, self.migrator(),
-                                             self.obj_pos)
+            return '0x%x: live %s @ 0x%x' % (int(self.desc_pos), self.migrator(),
+                                             int(self.obj_pos))
         else:
-            return '0x%x: dead size=%d' % (self.desc_pos, self.dead_size())
-        
+            return '0x%x: dead size=%d' % (int(self.desc_pos), self.dead_size())
+
 
 class scylla_lsa_segment(gdb.Command):
     def __init__(self):
