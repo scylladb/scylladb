@@ -342,7 +342,7 @@ public:
                 auto pending_for_dc = boost::range::count_if(pending_endpoints, [&snitch_ptr, &dc] (gms::inet_address& ep){
                     return snitch_ptr->get_datacenter(ep) == dc;
                 });
-                _dc_responses.emplace(dc, db::local_quorum_for(ks, dc) + pending_for_dc).first;
+                _dc_responses.emplace(dc, db::local_quorum_for(ks, dc) + pending_for_dc);
                 _pending_endpoints += pending_for_dc;
             }
         }
@@ -1957,7 +1957,7 @@ class data_read_resolver : public abstract_read_resolver {
             const schema& _schema;
             less_compare_clustering _ck_cmp;
         public:
-            less_compare(const schema s, bool is_reversed)
+            less_compare(const schema& s, bool is_reversed)
                 : _schema(s), _ck_cmp(s, is_reversed) { }
 
             bool operator()(const primary_key& a, const primary_key& b) const {
@@ -2608,7 +2608,7 @@ public:
                 } else { // digest mismatch
                     if (is_datacenter_local(exec->_cl)) {
                         auto write_timeout = exec->_proxy->_db.local().get_config().write_request_timeout_in_ms() * 1000;
-                        auto delta = __int128_t(digest_resolver->last_modified()) - __int128_t(exec->_cmd->read_timestamp);
+                        auto delta = int64_t(digest_resolver->last_modified()) - int64_t(exec->_cmd->read_timestamp);
                         if (std::abs(delta) <= write_timeout) {
                             exec->_proxy->_stats.global_read_repairs_canceled_due_to_concurrent_write++;
                             // if CL is local and non matching data is modified less then write_timeout ms ago do only local repair

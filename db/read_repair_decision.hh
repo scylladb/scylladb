@@ -49,9 +49,7 @@ enum class read_repair_decision {
   DC_LOCAL
 };
 
-}
-
-static inline std::ostream&  operator<<(std::ostream& out, db::read_repair_decision d) {
+inline std::ostream&  operator<<(std::ostream& out, db::read_repair_decision d) {
     switch (d) {
     case db::read_repair_decision::NONE: out << "NONE"; break;
     case db::read_repair_decision::GLOBAL: out << "GLOBAL"; break;
@@ -59,4 +57,6 @@ static inline std::ostream&  operator<<(std::ostream& out, db::read_repair_decis
     default: out << "ERR"; break;
     }
     return out;
+}
+
 }

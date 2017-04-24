@@ -2765,8 +2765,6 @@ SEASTAR_TEST_CASE(test_counter_read) {
         // ----+----+----+-----
         //  0 |  0 | 13 | -92
 
-        using namespace stdx::literals;
-
         return seastar::async([] {
             auto s = schema_builder("ks", "counter_test")
                     .with_column("pk", int32_type, column_kind::partition_key)
@@ -2775,8 +2773,8 @@ SEASTAR_TEST_CASE(test_counter_read) {
                     .with_column("c2", counter_type)
                     .build();
 
-            auto node1 = counter_id(utils::UUID("8379ab99-4507-4ab1-805d-ac85a863092b"sv));
-            auto node2 = counter_id(utils::UUID("b8a6c3f3-e222-433f-9ce9-de56a8466e07"sv));
+            auto node1 = counter_id(utils::UUID("8379ab99-4507-4ab1-805d-ac85a863092b"));
+            auto node2 = counter_id(utils::UUID("b8a6c3f3-e222-433f-9ce9-de56a8466e07"));
 
             auto sst = make_lw_shared<sstable>(s, "tests/sstables/counter_test", 5, sstables::sstable::version_types::ka, big);
             sst->load().get();

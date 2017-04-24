@@ -754,7 +754,8 @@ class random_mutation_generator::impl {
     std::uniform_int_distribution<size_t> _ck_index_dist{0, n_blobs - 1};
     std::uniform_int_distribution<int> _bool_dist{0, 1};
 
-    static gc_clock::time_point expiry_dist(auto& gen) {
+    template <typename Generator>
+    static gc_clock::time_point expiry_dist(Generator& gen) {
         static thread_local std::uniform_int_distribution<int> dist(0, 2);
         return gc_clock::time_point() + std::chrono::seconds(dist(gen));
     }

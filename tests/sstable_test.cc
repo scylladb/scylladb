@@ -170,7 +170,7 @@ SEASTAR_TEST_CASE(small_summary_query_fail) {
 }
 
 SEASTAR_TEST_CASE(small_summary_query_negative_fail) {
-    return summary_query_fail<-2, 0, 5>(uncompressed_schema(), "tests/sstables/uncompressed", 1);
+    return summary_query_fail<-uint64_t(2), 0, 5>(uncompressed_schema(), "tests/sstables/uncompressed", 1);
 }
 
 SEASTAR_TEST_CASE(big_summary_query_0) {
@@ -193,7 +193,7 @@ SEASTAR_TEST_CASE(missing_summary_query_fail) {
 }
 
 SEASTAR_TEST_CASE(missing_summary_query_negative_fail) {
-    return summary_query_fail<-2, 0, 5>(uncompressed_schema(), "tests/sstables/uncompressed", 2);
+    return summary_query_fail<-uint64_t(2), 0, 5>(uncompressed_schema(), "tests/sstables/uncompressed", 2);
 }
 
 SEASTAR_TEST_CASE(missing_summary_interval_1_query_ok) {

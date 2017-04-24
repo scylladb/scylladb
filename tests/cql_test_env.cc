@@ -71,7 +71,7 @@ static future<> tst_init_ms_fd_gossiper(db::seed_provider_type seed_provider, ss
 
 class single_node_cql_env : public cql_test_env {
 public:
-    static auto constexpr ks_name = "ks";
+    static const char* ks_name;
     static std::atomic<bool> active;
 private:
     ::shared_ptr<distributed<database>> _db;
@@ -353,6 +353,7 @@ public:
     }
 };
 
+const char* single_node_cql_env::ks_name = "ks";
 std::atomic<bool> single_node_cql_env::active = { false };
 
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, const db::config& cfg_in) {

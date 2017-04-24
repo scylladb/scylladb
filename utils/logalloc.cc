@@ -200,7 +200,6 @@ class segment_zone;
 static constexpr size_t max_managed_object_size = segment_size * 0.1;
 static constexpr size_t max_used_space_for_compaction = segment_size * 0.85;
 static constexpr size_t min_free_space_for_compaction = segment_size - max_used_space_for_compaction;
-static constexpr float max_occupancy_for_compaction = float(max_used_space_for_compaction) / segment_size;
 
 static_assert(min_free_space_for_compaction >= max_managed_object_size,
     "Segments which cannot fit max_managed_object_size must not be considered compactible for the sake of forward progress of compaction");
