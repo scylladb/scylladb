@@ -903,7 +903,7 @@ sstables::sstable::find_disk_ranges(
                 uint64_t range_start_pos;
                 auto& range_end = ck_ranges.begin()->end();
 
-                auto cmp = clustering_key_prefix::tri_compare(*schema);
+                auto cmp = clustering_key_prefix::prefix_equal_tri_compare(*schema);
                 while (num_blocks--) {
                     if (data.size() < 2) {
                         // When we break out of this loop, we give up on
