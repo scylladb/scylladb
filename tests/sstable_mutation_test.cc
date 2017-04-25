@@ -356,30 +356,42 @@ SEASTAR_TEST_CASE(read_partial_range_2) {
     });
 }
 
+// Must be run in a seastar thread
+static
+void test_mutation_source(sstable_writer_config cfg, sstables::sstable::version_types version) {
+    std::vector<tmpdir> dirs;
+    run_mutation_source_tests([&dirs, &cfg, version] (schema_ptr s, const std::vector<mutation>& partitions) -> mutation_source {
+        tmpdir sstable_dir;
+        auto sst = make_lw_shared<sstables::sstable>(s,
+            sstable_dir.path,
+            1 /* generation */,
+            version,
+            sstables::sstable::format_types::big);
+        dirs.emplace_back(std::move(sstable_dir));
+
+        auto mt = make_lw_shared<memtable>(s);
+
+        for (auto&& m : partitions) {
+            mt->apply(m);
+        }
+
+        sst->write_components(mt->make_reader(s), partitions.size(), s, cfg).get();
+        sst->load().get();
+
+        return as_mutation_source(sst);
+    });
+}
+
+
 SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
     return seastar::async([] {
-        std::vector<tmpdir> dirs;
-
-        run_mutation_source_tests([&dirs] (schema_ptr s, const std::vector<mutation>& partitions) -> mutation_source {
-            tmpdir sstable_dir;
-            auto sst = make_lw_shared<sstables::sstable>(s,
-                sstable_dir.path,
-                1 /* generation */,
-                sstables::sstable::version_types::la,
-                sstables::sstable::format_types::big);
-            dirs.emplace_back(std::move(sstable_dir));
-
-            auto mt = make_lw_shared<memtable>(s);
-
-            for (auto&& m : partitions) {
-                mt->apply(m);
+        for (auto version : {sstables::sstable::version_types::ka, sstables::sstable::version_types::la}) {
+            for (auto index_block_size : {1, 128, 64*1024}) {
+                sstable_writer_config cfg;
+                cfg.promoted_index_block_size = index_block_size;
+                test_mutation_source(cfg, version);
             }
-
-            sst->write_components(*mt).get();
-            sst->load().get();
-
-            return as_mutation_source(sst);
-        });
+        }
     });
 }
 
