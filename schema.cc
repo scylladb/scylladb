@@ -1040,6 +1040,10 @@ std::vector<index_metadata> schema::indices() const {
     return boost::copy_range<std::vector<index_metadata>>(_raw._indices_by_name | boost::adaptors::map_values);
 }
 
+const std::unordered_map<sstring, index_metadata>& schema::all_indices() const {
+    return _raw._indices_by_name;
+}
+
 bool schema::has_index(const sstring& index_name) const {
     return _raw._indices_by_name.count(index_name) > 0;
 }

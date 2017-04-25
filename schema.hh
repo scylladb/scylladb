@@ -665,6 +665,7 @@ public:
     std::vector<sstring> index_names() const;
     // Returns all indices of this schema.
     std::vector<index_metadata> indices() const;
+    const std::unordered_map<sstring, index_metadata>& all_indices() const;
     // Search for an index with a given name.
     bool has_index(const sstring& index_name) const;
     // Search for an existing index with same kind and options.
