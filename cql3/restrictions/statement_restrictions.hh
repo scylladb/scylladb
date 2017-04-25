@@ -150,6 +150,13 @@ public:
         return _uses_secondary_indexing;
     }
 
+    ::shared_ptr<primary_key_restrictions<partition_key>> get_partition_key_restrictions() const {
+        return _partition_key_restrictions;
+    }
+
+    ::shared_ptr<primary_key_restrictions<clustering_key_prefix>> get_clustering_columns_restrictions() const {
+        return _clustering_columns_restrictions;
+    }
 private:
     void process_partition_key_restrictions(bool has_queriable_index);
 
