@@ -21,7 +21,7 @@ try:
 
 
     def signal_handler(sig, frame):
-        p.terminate()
+        p.send_signal(sig)
 
 
     [signal.signal(sig, signal_handler) for sig in [signal.SIGINT, signal.SIGTERM]]
