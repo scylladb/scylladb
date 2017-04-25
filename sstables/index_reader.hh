@@ -205,7 +205,7 @@ class index_reader {
     uint64_t _previous_summary_idx = 0;
     uint64_t _current_summary_idx = 0;
     uint64_t _current_index_idx = 0;
-    uint64_t _current_pi_idx = 0;
+    uint64_t _current_pi_idx = 0; // Points to upper bound of the cursor.
     uint64_t _data_file_position = 0;
     indexable_element _element = indexable_element::partition;
 private:
@@ -425,34 +425,25 @@ public:
             }
         }
 
-        auto cmp_with_end = [pos_cmp = position_in_partition::composite_less_compare(s)]
-                (const promoted_index::entry& e, position_in_partition_view pos) -> bool {
-            return pos_cmp(e.end, pos);
+        auto cmp_with_start = [pos_cmp = position_in_partition::composite_less_compare(s)]
+            (position_in_partition_view pos, const promoted_index::entry& e) -> bool {
+            return pos_cmp(pos, e.start);
         };
 
         // Optimize short skips which typically land in the same block
-        if (_current_pi_idx >= pi->entries.size() || !cmp_with_end(pi->entries[_current_pi_idx], pos)) {
+        if (_current_pi_idx >= pi->entries.size() || cmp_with_start(pos, pi->entries[_current_pi_idx])) {
             sstlog.trace("index {}: position in current block", this);
             return make_ready_future<>();
         }
 
-        auto i = std::lower_bound(pi->entries.begin() + _current_pi_idx, pi->entries.end(), pos, cmp_with_end);
+        auto i = std::upper_bound(pi->entries.begin() + _current_pi_idx, pi->entries.end(), pos, cmp_with_start);
         _current_pi_idx = std::distance(pi->entries.begin(), i);
-        if (i == pi->entries.end()) {
-            if (!pi->entries.empty()) {
-                // Skip to last block. Even though we know there are no rows in this block for the range
-                // we must skip to it in case it contains tombstones relevant for the requested range.
-                auto& last = pi->entries.back();
-                _data_file_position = e.position() + last.offset;
-                _element = indexable_element::cell;
-                sstlog.trace("index {}: skipping to last block", this);
-            }
-        } else {
-            _data_file_position = e.position() + i->offset;
-            _element = indexable_element::cell;
-            sstlog.trace("index {}: skipped to cell", this);
+        if (i != pi->entries.begin()) {
+            --i;
         }
-        sstlog.trace("index {}: data_file_pos={}", this, _data_file_position);
+        _data_file_position = e.position() + i->offset;
+        _element = indexable_element::cell;
+        sstlog.trace("index {}: skipped to cell, data_file_pos={}", this, _data_file_position);
         return make_ready_future<>();
     }
 
