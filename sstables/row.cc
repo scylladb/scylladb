@@ -66,9 +66,7 @@ private:
     bool _counter;
     uint32_t _ttl, _expiration;
 
-    bool _read_partial_row = false;
     bool _shadowable;
-
 public:
     bool non_consuming() const {
         return (((_state == state::DELETION_TIME_3)
@@ -368,15 +366,13 @@ public:
     }
 
     void verify_end_state() {
-        if (_read_partial_row) {
-            // If reading a partial row (i.e., when we have a clustering row
-            // filter and using a promoted index), we may be in ATOM_START
-            // state instead of ROW_START. In that case we did not read the
-            // end-of-row marker and consume_row_end() was never called.
-            if (_state == state::ATOM_START) {
-                _consumer.consume_row_end();
-                return;
-            }
+        // If reading a partial row (i.e., when we have a clustering row
+        // filter and using a promoted index), we may be in ATOM_START
+        // state instead of ROW_START. In that case we did not read the
+        // end-of-row marker and consume_row_end() was never called.
+        if (_state == state::ATOM_START) {
+            _consumer.consume_row_end();
+            return;
         }
         if (_state != state::ROW_START || _prestate != prestate::NONE) {
             throw malformed_sstable_exception("end of input, but not end of row");
