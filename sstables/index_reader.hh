@@ -443,7 +443,7 @@ public:
         }
         _data_file_position = e.position() + i->offset;
         _element = indexable_element::cell;
-        sstlog.trace("index {}: skipped to cell, data_file_pos={}", this, _data_file_position);
+        sstlog.trace("index {}: skipped to cell, _current_pi_idx={}, _data_file_position={}", this, _current_pi_idx, _data_file_position);
         return make_ready_future<>();
     }
 
@@ -457,7 +457,7 @@ public:
     //
     // Must be called only when !eof().
     future<> advance_past(position_in_partition_view pos) {
-        sstlog.trace("index {}: advance_to({}), current data_file_pos={}", this, pos, _data_file_position);
+        sstlog.trace("index {}: advance_past({}), current data_file_pos={}", this, pos, _data_file_position);
 
         if (!partition_data_ready()) {
             return read_partition_data().then([this, pos] {
@@ -493,7 +493,7 @@ public:
 
         _data_file_position = e.position() + i->offset;
         _element = indexable_element::cell;
-        sstlog.trace("index {}: skipped to cell", this);
+        sstlog.trace("index {}: skipped to cell, _current_pi_idx={}, _data_file_position={}", this, _current_pi_idx, _data_file_position);
         return make_ready_future<>();
     }
 
