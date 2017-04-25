@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-import os
-import sys
-import scyllasetup
 import logging
+import signal
+import subprocess
+import sys
+
 import commandlineparser
+import scyllasetup
 
 logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format="%(message)s")
 
@@ -15,6 +17,15 @@ try:
     setup.io()
     setup.cqlshrc()
     setup.arguments()
-    os.system("/usr/bin/supervisord -c /etc/supervisord.conf")
+    p = subprocess.Popen(["usr/bin/supervisord", "-c", "/etc/supervisord.conf"])
+
+
+    def signal_handler(sig, frame):
+        p.terminate()
+
+
+    [signal.signal(sig, signal_handler) for sig in [signal.SIGINT, signal.SIGTERM]]
+
+    p.wait()
 except:
     logging.exception('failed!')
