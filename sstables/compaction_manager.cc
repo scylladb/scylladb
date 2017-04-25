@@ -281,10 +281,10 @@ future<> compaction_manager::submit_major_compaction(column_family* cf) {
     // first take major compaction semaphore, then exclusely take compaction lock for column family.
     // it cannot be the other way around, or minor compaction for this column family would be
     // prevented while an ongoing major compaction doesn't release the semaphore.
-    task->compaction_done = with_semaphore(_major_compaction_sem, 1, [this, cf] {
-        return with_lock(_compaction_locks[cf].for_write(), [this, cf] {
+    task->compaction_done = with_semaphore(_major_compaction_sem, 1, [this, task, cf] {
+        return with_lock(_compaction_locks[cf].for_write(), [this, task, cf] {
             _stats.active_tasks++;
-            if (_stopped) {
+            if (!can_proceed(task)) {
                 return make_ready_future<>();
             }
 
