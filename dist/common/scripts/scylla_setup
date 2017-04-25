@@ -232,6 +232,9 @@ while [ $# -gt 0 ]; do
             print_usage
             shift 1
             ;;
+        *)
+            echo "Invalid option: $@"
+            print_usage
     esac
 done
 
