@@ -2031,7 +2031,7 @@ private:
             virtual void accept_static_cell(column_id, atomic_cell_view) override { }
             virtual void accept_static_cell(column_id, collection_mutation_view) override { }
             virtual void accept_row_tombstone(const range_tombstone&) override { }
-            virtual void accept_row(clustering_key_view key, tombstone, const row_marker&) override {
+            virtual void accept_row(clustering_key_view key, const row_tombstone&, const row_marker&) override {
                 if (!_is_reversed || !_last_ck) {
                     _last_ck = clustering_key(key);
                 }

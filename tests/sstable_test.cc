@@ -419,6 +419,11 @@ public:
         return proceed::yes;
     }
 
+    virtual proceed consume_shadowable_row_tombstone(bytes_view col_name, sstables::deletion_time deltime) override {
+        BOOST_FAIL("shdowable row tombstone wasn't expected");
+        abort(); // BOOST_FAIL is not marked as [[noreturn]].
+    }
+
     virtual proceed consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,
             sstables::deletion_time deltime) override {
@@ -529,6 +534,10 @@ public:
     }
     virtual proceed consume_row_end() override {
         count_row_end++;
+        return proceed::yes;
+    }
+    virtual proceed consume_shadowable_row_tombstone(bytes_view col_name, sstables::deletion_time deltime) override {
+        count_deleted_cell++;
         return proceed::yes;
     }
     virtual proceed consume_range_tombstone(

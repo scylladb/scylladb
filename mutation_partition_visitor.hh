@@ -27,6 +27,7 @@
 #include "keys.hh"
 
 class row_marker;
+class row_tombstone;
 
 // Guarantees:
 //
@@ -55,7 +56,7 @@ public:
 
     virtual void accept_row_tombstone(const range_tombstone&) = 0;
 
-    virtual void accept_row(clustering_key_view key, tombstone deleted_at, const row_marker& rm) = 0;
+    virtual void accept_row(clustering_key_view key, const row_tombstone& deleted_at, const row_marker& rm) = 0;
 
     virtual void accept_row_cell(column_id id, atomic_cell_view) = 0;
 

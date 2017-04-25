@@ -42,6 +42,7 @@
 #include "range_tombstone_list.hh"
 #include "clustering_key_filter.hh"
 #include "intrusive_set_external_comparator.hh"
+#include "utils/with_relational_operators.hh"
 
 //
 // Container for cells of a row. Cells are identified by column_id.
@@ -266,7 +267,7 @@ public:
     // Expires cells based on query_time. Expires tombstones based on gc_before
     // and max_purgeable. Removes cells covered by tomb.
     // Returns true iff there are any live cells left.
-    bool compact_and_expire(const schema& s, column_kind kind, tombstone tomb, gc_clock::time_point query_time,
+    bool compact_and_expire(const schema& s, column_kind kind, row_tombstone tomb, gc_clock::time_point query_time,
         can_gc_fn&, gc_clock::time_point gc_before);
 
     row difference(const schema&, column_kind, const row& other) const;
@@ -295,11 +296,11 @@ class row_marker {
     gc_clock::time_point _expiry;
 public:
     row_marker() = default;
-    row_marker(api::timestamp_type created_at) : _timestamp(created_at) { }
+    explicit row_marker(api::timestamp_type created_at) : _timestamp(created_at) { }
     row_marker(api::timestamp_type created_at, gc_clock::duration ttl, gc_clock::time_point expiry)
         : _timestamp(created_at), _ttl(ttl), _expiry(expiry)
     { }
-    row_marker(tombstone deleted_at)
+    explicit row_marker(tombstone deleted_at)
         : _timestamp(deleted_at.timestamp), _ttl(dead), _expiry(deleted_at.deletion_time)
     { }
     bool is_missing() const {
@@ -413,8 +414,185 @@ struct appending_hash<row_marker> {
 
 class clustering_row;
 
+class shadowable_tombstone : public with_relational_operators<shadowable_tombstone> {
+    tombstone _tomb;
+public:
+
+    explicit shadowable_tombstone(api::timestamp_type timestamp, gc_clock::time_point deletion_time)
+            : _tomb(timestamp, deletion_time) {
+    }
+
+    explicit shadowable_tombstone(tombstone tomb = tombstone())
+            : _tomb(std::move(tomb)) {
+    }
+
+    int compare(const shadowable_tombstone& t) const {
+        return _tomb.compare(t._tomb);
+    }
+
+    explicit operator bool() const {
+        return bool(_tomb);
+    }
+
+    const tombstone& tomb() const {
+        return _tomb;
+    }
+
+    // A shadowable row tombstone is valid only if the row has no live marker. In other words,
+    // the row tombstone is only valid as long as no newer insert is done (thus setting a
+    // live row marker; note that if the row timestamp set is lower than the tombstone's,
+    // then the tombstone remains in effect as usual). If a row has a shadowable tombstone
+    // with timestamp Ti and that row is updated with a timestamp Tj, such that Tj > Ti
+    // (and that update sets the row marker), then the shadowable tombstone is shadowed by
+    // that update. A concrete consequence is that if the update has cells with timestamp
+    // lower than Ti, then those cells are preserved (since the deletion is removed), and
+    // this is contrary to a regular, non-shadowable row tombstone where the tombstone is
+    // preserved and such cells are removed.
+    bool is_shadowed_by(const row_marker& marker) const {
+        return marker.is_live() && marker.timestamp() > _tomb.timestamp;
+    }
+
+    void maybe_shadow(tombstone t, row_marker marker) noexcept {
+        if (is_shadowed_by(marker)) {
+            _tomb = std::move(t);
+        }
+    }
+
+    void apply(tombstone t) noexcept {
+        _tomb.apply(t);
+    }
+
+    void apply(shadowable_tombstone t) noexcept {
+        _tomb.apply(t._tomb);
+    }
+
+    friend std::ostream& operator<<(std::ostream& out, const shadowable_tombstone& t) {
+        if (t) {
+            return out << "{shadowable tombstone: timestamp=" << t.tomb().timestamp
+                   << ", deletion_time=" << t.tomb().deletion_time.time_since_epoch().count()
+                   << "}";
+        } else {
+            return out << "{shadowable tombstone: none}";
+        }
+    }
+};
+
+template<>
+struct appending_hash<shadowable_tombstone> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const shadowable_tombstone& t) const {
+        feed_hash(h, t.tomb());
+    }
+};
+
+/*
+The rules for row_tombstones are as follows:
+  - The shadowable tombstone is always >= than the regular one;
+  - The regular tombstone works as expected;
+  - The shadowable tombstone doesn't erase or compact away the regular
+    row tombstone, nor dead cells;
+  - The shadowable tombstone can erase live cells, but only provided they
+    can be recovered (e.g., by including all cells in a MV update, both
+    updated cells and pre-existing ones);
+  - The shadowable tombstone can be erased or compacted away by a newer
+    row marker.
+*/
+class row_tombstone : public with_relational_operators<row_tombstone> {
+    tombstone _regular;
+    shadowable_tombstone _shadowable; // _shadowable is always >= _regular
+public:
+    explicit row_tombstone(tombstone regular, shadowable_tombstone shadowable)
+            : _regular(std::move(regular))
+            , _shadowable(std::move(shadowable)) {
+    }
+
+    explicit row_tombstone(tombstone regular)
+            : row_tombstone(regular, shadowable_tombstone(regular)) {
+    }
+
+    row_tombstone() = default;
+
+    int compare(const row_tombstone& t) const {
+        return _shadowable.compare(t._shadowable);
+    }
+
+    explicit operator bool() const {
+        return bool(_shadowable);
+    }
+
+    const tombstone& tomb() const {
+        return _shadowable.tomb();
+    }
+
+    const gc_clock::time_point max_deletion_time() const {
+        return std::max(_regular.deletion_time, _shadowable.tomb().deletion_time);
+    }
+
+    const tombstone& regular() const {
+        return _regular;
+    }
+
+    const shadowable_tombstone& shadowable() const {
+        return _shadowable;
+    }
+
+    bool is_shadowable() const {
+        return _shadowable.tomb() > _regular;
+    }
+
+    void maybe_shadow(const row_marker& marker) noexcept {
+        _shadowable.maybe_shadow(_regular, marker);
+    }
+
+    void apply(tombstone regular) noexcept {
+        _shadowable.apply(regular);
+        _regular.apply(regular);
+    }
+
+    void apply(shadowable_tombstone shadowable, row_marker marker) noexcept {
+        _shadowable.apply(shadowable.tomb());
+        _shadowable.maybe_shadow(_regular, marker);
+    }
+
+    void apply(row_tombstone t, row_marker marker) noexcept {
+        _regular.apply(t._regular);
+        _shadowable.apply(t._shadowable);
+        _shadowable.maybe_shadow(_regular, marker);
+    }
+
+    // See reversibly_mergeable.hh
+    void apply_reversibly(row_tombstone& t, row_marker marker) noexcept {
+        std::swap(*this, t);
+        apply(t, marker);
+    }
+
+    // See reversibly_mergeable.hh
+    void revert(row_tombstone& t) noexcept {
+        std::swap(*this, t);
+    }
+
+    friend std::ostream& operator<<(std::ostream& out, const row_tombstone& t) {
+        if (t) {
+            return out << "{row_tombstone: " << t._regular << (t.is_shadowable() ? t._shadowable : shadowable_tombstone()) << "}";
+        } else {
+            return out << "{row_tombstone: none}";
+        }
+    }
+};
+
+template<>
+struct appending_hash<row_tombstone> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const row_tombstone& t) const {
+        feed_hash(h, t.regular());
+        if (t.is_shadowable()) {
+            feed_hash(h, t.shadowable());
+        }
+    }
+};
+
 class deletable_row final {
-    tombstone _deleted_at;
+    row_tombstone _deleted_at;
     row_marker _marker;
     row _cells;
 public:
@@ -425,12 +603,21 @@ public:
         _deleted_at.apply(deleted_at);
     }
 
+    void apply(shadowable_tombstone deleted_at) {
+        _deleted_at.apply(deleted_at, _marker);
+    }
+
+    void apply(row_tombstone deleted_at) {
+        _deleted_at.apply(deleted_at, _marker);
+    }
+
     void apply(const row_marker& rm) {
         _marker.apply(rm);
+        _deleted_at.maybe_shadow(_marker);
     }
 
     void remove_tombstone() {
-        _deleted_at = tombstone();
+        _deleted_at = {};
     }
 
     // See reversibly_mergeable.hh
@@ -438,7 +625,7 @@ public:
     // See reversibly_mergeable.hh
     void revert(const schema& s, deletable_row& src);
 public:
-    tombstone deleted_at() const { return _deleted_at; }
+    row_tombstone deleted_at() const { return _deleted_at; }
     api::timestamp_type created_at() const { return _marker.timestamp(); }
     row_marker& marker() { return _marker; }
     const row_marker& marker() const { return _marker; }
@@ -486,7 +673,7 @@ public:
     const deletable_row& row() const {
         return _row;
     }
-    void apply(tombstone t) {
+    void apply(row_tombstone t) {
         _row.apply(t);
     }
     // See reversibly_mergeable.hh
@@ -698,8 +885,8 @@ public:
     range_tombstone_list& row_tombstones() { return _row_tombstones; }
     const row* find_row(const schema& s, const clustering_key& key) const;
     tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key) const;
-    tombstone tombstone_for_row(const schema& schema, const clustering_key& key) const;
-    tombstone tombstone_for_row(const schema& schema, const rows_entry& e) const;
+    row_tombstone tombstone_for_row(const schema& schema, const clustering_key& key) const;
+    row_tombstone tombstone_for_row(const schema& schema, const rows_entry& e) const;
     boost::iterator_range<rows_type::const_iterator> range(const schema& schema, const query::clustering_range& r) const;
     rows_type::const_iterator lower_bound(const schema& schema, const query::clustering_range& r) const;
     rows_type::const_iterator upper_bound(const schema& schema, const query::clustering_range& r) const;
@@ -729,15 +916,3 @@ private:
     void for_each_row(const schema& schema, const query::clustering_range& row_range, bool reversed, Func&& func) const;
     friend class counter_write_query_result_builder;
 };
-
-// A shadowable row tombstone is valid only if the row has no live marker. In other words,
-// the row tombstone is only valid as long as no newer insert is done (thus setting a
-// live row marker; note that if the row timestamp set is lower than the tombstone's,
-// then the tombstone remains in effect as usual). If a row has a shadowable tombstone
-// with timestamp Ti and that row is updated with a timestamp Tj, such that Tj > Ti
-// (and that update sets the row marker), then the shadowable tombstone is shadowed by
-// that update. A concrete consequence is that if the update has cells with timestamp
-// lower than Ti, then those cells are preserved (since the deletion is removed), and
-// this is contrary to a regular, non-shadowable row tombstone where the tombstone is
-// preserved and such cells are removed.
-bool row_tombstone_is_shadowed(const schema& schema, const tombstone& row_tombstone, const row_marker& marker);

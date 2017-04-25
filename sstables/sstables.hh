@@ -581,6 +581,8 @@ private:
         write_range_tombstone(out, start, bound_kind::incl_start, end, bound_kind::incl_end, std::move(suffix), std::move(t));
     }
     void write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation_view collection);
+    void write_row_tombstone(file_writer& out, const composite& key, const row_tombstone t);
+    void write_deletion_time(file_writer& out, const tombstone t);
 
     stdx::optional<std::pair<uint64_t, uint64_t>> get_sample_indexes_for_range(const dht::token_range& range);
 public:

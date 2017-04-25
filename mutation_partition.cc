@@ -387,22 +387,22 @@ mutation_partition::range_tombstone_for_row(const schema& schema, const clusteri
     return t;
 }
 
-tombstone
+row_tombstone
 mutation_partition::tombstone_for_row(const schema& schema, const clustering_key& key) const {
-    tombstone t = range_tombstone_for_row(schema, key);
+    row_tombstone t = row_tombstone(range_tombstone_for_row(schema, key));
 
     auto j = _rows.find(key, rows_entry::compare(schema));
     if (j != _rows.end()) {
-        t.apply(j->row().deleted_at());
+        t.apply(j->row().deleted_at(), j->row().marker());
     }
 
     return t;
 }
 
-tombstone
+row_tombstone
 mutation_partition::tombstone_for_row(const schema& schema, const rows_entry& e) const {
-    tombstone t = range_tombstone_for_row(schema, e.key());
-    t.apply(e.row().deleted_at());
+    row_tombstone t = e.row().deleted_at();
+    t.apply(range_tombstone_for_row(schema, e.key()));
     return t;
 }
 
@@ -450,7 +450,7 @@ mutation_partition::apply_delete(const schema& schema, clustering_key_view key, 
 
 void
 mutation_partition::apply_insert(const schema& s, clustering_key_view key, api::timestamp_type created_at) {
-    clustered_row(s, key).apply(created_at);
+    clustered_row(s, key).apply(row_marker(created_at));
 }
 
 void mutation_partition::insert_row(const schema& s, const clustering_key& key, deletable_row&& row) {
@@ -754,7 +754,7 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
             e.key().feed_hash(pw.digest(), s);
             ::feed_hash(pw.digest(), row_tombstone);
             auto t = hash_row_slice(pw.digest(), s, column_kind::regular_column, row.cells(), slice.regular_columns);
-            pw.last_modified() = std::max({pw.last_modified(), row_tombstone.timestamp, t});
+            pw.last_modified() = std::max({pw.last_modified(), row_tombstone.tomb().timestamp, t});
         }
 
         if (row.is_live(s)) {
@@ -882,11 +882,8 @@ deletable_row::equal(column_kind kind, const schema& s, const deletable_row& oth
 
 void deletable_row::apply_reversibly(const schema& s, deletable_row& src) {
     _cells.apply_reversibly(s, column_kind::regular_column, src._cells);
-    _deleted_at.apply_reversibly(src._deleted_at); // noexcept
     _marker.apply_reversibly(src._marker); // noexcept
-    if (row_tombstone_is_shadowed(s, _deleted_at, _marker)) {
-        remove_tombstone();
-    }
+    _deleted_at.apply_reversibly(src._deleted_at, _marker); // noexcept
 }
 
 void deletable_row::revert(const schema& s, deletable_row& src) {
@@ -1196,8 +1193,11 @@ uint32_t mutation_partition::do_compact(const schema& s,
     auto should_purge_tombstone = [&] (const tombstone& t) {
         return t.deletion_time < gc_before && can_gc(t);
     };
+    auto should_purge_row_tombstone = [&] (const row_tombstone& t) {
+        return t.max_deletion_time() < gc_before && can_gc(t.tomb());
+    };
 
-    bool static_row_live = _static_row.compact_and_expire(s, column_kind::static_column, _tombstone,
+    bool static_row_live = _static_row.compact_and_expire(s, column_kind::static_column, row_tombstone(_tombstone),
         query_time, can_gc, gc_before);
 
     uint32_t row_count = 0;
@@ -1205,12 +1205,12 @@ uint32_t mutation_partition::do_compact(const schema& s,
     auto row_callback = [&] (rows_entry& e) {
         deletable_row& row = e.row();
 
-        tombstone tomb = tombstone_for_row(s, e);
+        row_tombstone tomb = tombstone_for_row(s, e);
 
         bool is_live = row.cells().compact_and_expire(s, column_kind::regular_column, tomb, query_time, can_gc, gc_before);
-        is_live |= row.marker().compact_and_expire(tomb, query_time, can_gc, gc_before);
+        is_live |= row.marker().compact_and_expire(tomb.tomb(), query_time, can_gc, gc_before);
 
-        if (should_purge_tombstone(row.deleted_at())) {
+        if (should_purge_row_tombstone(row.deleted_at())) {
             row.remove_tombstone();
         }
 
@@ -1288,7 +1288,7 @@ deletable_row::is_live(const schema& s, tombstone base_tombstone, gc_clock::time
     // created with the 'insert' statement. If row marker is live, we know the
     // row is live. Otherwise, a row is considered live if it has any cell
     // which is live.
-    base_tombstone.apply(_deleted_at);
+    base_tombstone.apply(_deleted_at.tomb());
     return _marker.is_live(base_tombstone, query_time)
            || has_any_live_data(s, column_kind::regular_column, _cells, base_tombstone, query_time);
 }
@@ -1525,7 +1525,7 @@ void row::revert(const schema& s, column_kind kind, row& other) noexcept {
     });
 }
 
-bool row::compact_and_expire(const schema& s, column_kind kind, tombstone tomb, gc_clock::time_point query_time,
+bool row::compact_and_expire(const schema& s, column_kind kind, row_tombstone tomb, gc_clock::time_point query_time,
     can_gc_fn& can_gc, gc_clock::time_point gc_before)
 {
     bool any_live = false;
@@ -1538,7 +1538,7 @@ bool row::compact_and_expire(const schema& s, column_kind kind, tombstone tomb, 
                 return cell.deletion_time() < gc_before && can_gc(tombstone(cell.timestamp(), cell.deletion_time()));
             };
 
-            if (cell.is_covered_by(tomb, def.is_counter())) {
+            if (cell.is_covered_by(tomb.regular(), def.is_counter())) {
                 erase = true;
             } else if (cell.has_expired(query_time)) {
                 erase = can_erase_cell();
@@ -1547,8 +1547,10 @@ bool row::compact_and_expire(const schema& s, column_kind kind, tombstone tomb, 
                 }
             } else if (!cell.is_live()) {
                 erase = can_erase_cell();
+            } else if (cell.is_covered_by(tomb.shadowable().tomb(), def.is_counter())) {
+                erase = true;
             } else {
-                any_live |= true;
+                any_live = true;
             }
         } else {
             auto&& cell = c.as_collection_mutation();
@@ -1556,7 +1558,7 @@ bool row::compact_and_expire(const schema& s, column_kind kind, tombstone tomb, 
             auto m_view = ctype->deserialize_mutation_form(cell);
             collection_type_impl::mutation m = m_view.materialize();
             any_live |= m.compact_and_expire(tomb, query_time, can_gc, gc_before);
-            if (m.cells.empty() && m.tomb <= tomb) {
+            if (m.cells.empty() && m.tomb <= tomb.tomb()) {
                 erase = true;
             } else {
                 c = ctype->serialize_mutation_form(m);
@@ -1709,7 +1711,7 @@ public:
     // Requires that sr.has_any_live_data()
     stop_iteration consume(static_row&& sr, tombstone current_tombstone);
     // Requires that cr.has_any_live_data()
-    stop_iteration consume(clustering_row&& cr, tombstone current_tombstone);
+    stop_iteration consume(clustering_row&& cr, row_tombstone current_tombstone);
     stop_iteration consume(range_tombstone&&) { return stop_iteration::no; }
     uint32_t consume_end_of_stream();
 };
@@ -1764,7 +1766,7 @@ void mutation_querier::prepare_writers() {
     }
 }
 
-stop_iteration mutation_querier::consume(clustering_row&& cr, tombstone current_tombstone) {
+stop_iteration mutation_querier::consume(clustering_row&& cr, row_tombstone current_tombstone) {
     prepare_writers();
 
     const query::partition_slice& slice = _pw.slice();
@@ -1773,7 +1775,7 @@ stop_iteration mutation_querier::consume(clustering_row&& cr, tombstone current_
         cr.key().feed_hash(_pw.digest(), _schema);
         ::feed_hash(_pw.digest(), current_tombstone);
         auto t = hash_row_slice(_pw.digest(), _schema, column_kind::regular_column, cr.cells(), slice.regular_columns);
-        _pw.last_modified() = std::max({_pw.last_modified(), current_tombstone.timestamp, t});
+        _pw.last_modified() = std::max({_pw.last_modified(), current_tombstone.tomb().timestamp, t});
     }
 
     auto write_row = [&] (auto& rows_writer) {
@@ -1850,7 +1852,7 @@ public:
         _stop = _mutation_consumer->consume(std::move(sr), t) && _short_read_allowed;
         return _stop;
     }
-    stop_iteration consume(clustering_row&& cr, tombstone t,  bool) {
+    stop_iteration consume(clustering_row&& cr, row_tombstone t,  bool) {
         _stop = _mutation_consumer->consume(std::move(cr), t) && _short_read_allowed;
         return _stop;
     }
@@ -1937,7 +1939,7 @@ public:
         _memory_accounter.update(sr.memory_usage());
         return _mutation_consumer->consume(std::move(sr));
     }
-    stop_iteration consume(clustering_row&& cr, tombstone, bool is_alive) {
+    stop_iteration consume(clustering_row&& cr, row_tombstone, bool is_alive) {
         _live_rows += is_alive;
         auto stop = _memory_accounter.update_and_check(cr.memory_usage());
         if (is_alive) {
@@ -2020,10 +2022,6 @@ mutation_query(schema_ptr s,
                                 row_limit, partition_limit, query_time, std::move(accounter), std::move(trace_ptr));
 }
 
-bool row_tombstone_is_shadowed(const schema& schema, const tombstone& row_tombstone, const row_marker& marker) {
-    return schema.is_view() && marker.timestamp() > row_tombstone.timestamp;
-}
-
 deletable_row::deletable_row(clustering_row&& cr)
     : _deleted_at(cr.tomb())
     , _marker(std::move(cr.marker()))
@@ -2043,7 +2041,7 @@ public:
         _mutation->partition().static_row() = std::move(sr.cells());
         return stop_iteration::no;
     }
-    stop_iteration consume(clustering_row&& cr, tombstone,  bool) {
+    stop_iteration consume(clustering_row&& cr, row_tombstone,  bool) {
         _mutation->partition().insert_row(_schema, cr.key(), deletable_row(std::move(cr)));
         return stop_iteration::no;
     }

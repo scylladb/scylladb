@@ -404,6 +404,7 @@ enum class column_mask : uint8_t {
     counter = 0x04,
     counter_update = 0x08,
     range_tombstone = 0x10,
+    shadowable = 0x40
 };
 
 inline column_mask operator&(column_mask m1, column_mask m2) {

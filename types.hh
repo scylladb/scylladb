@@ -735,6 +735,8 @@ bool equal(data_type t, bytes_view e1, bytes_view e2) {
     return t->equal(e1, e2);
 }
 
+class row_tombstone;
+
 class collection_type_impl : public abstract_type {
     static logging::logger _logger;
     static thread_local std::unordered_map<data_type, shared_ptr<cql3::cql3_type>> _cql3_type_cache;  // initialized on demand
@@ -765,7 +767,7 @@ public:
         std::vector<std::pair<bytes, atomic_cell>> cells;
         // Expires cells based on query_time. Expires tombstones based on max_purgeable and gc_before.
         // Removes cells covered by tomb or this->tomb.
-        bool compact_and_expire(tombstone tomb, gc_clock::time_point query_time,
+        bool compact_and_expire(row_tombstone tomb, gc_clock::time_point query_time,
             can_gc_fn&, gc_clock::time_point gc_before);
     };
     struct mutation_view {

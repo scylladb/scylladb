@@ -42,23 +42,25 @@ class position_in_partition_view;
 
 class clustering_row {
     clustering_key_prefix _ck;
-    tombstone _t;
+    row_tombstone _t;
     row_marker _marker;
     row _cells;
 public:
     explicit clustering_row(clustering_key_prefix ck) : _ck(std::move(ck)) { }
-    clustering_row(clustering_key_prefix ck, tombstone t, row_marker marker, row cells)
-        : _ck(std::move(ck)), _t(t), _marker(std::move(marker)), _cells(std::move(cells)) { }
+    clustering_row(clustering_key_prefix ck, row_tombstone t, row_marker marker, row cells)
+            : _ck(std::move(ck)), _t(t), _marker(std::move(marker)), _cells(std::move(cells)) {
+        _t.maybe_shadow(marker);
+    }
     clustering_row(const rows_entry& re)
-        : _ck(re.key()), _t(re.row().deleted_at()), _marker(re.row().marker()), _cells(re.row().cells()) { }
+            : clustering_row(re.key(), re.row().deleted_at(), re.row().marker(), re.row().cells()) { }
     clustering_row(rows_entry&& re)
-        : _ck(std::move(re.key())), _t(re.row().deleted_at()), _marker(re.row().marker()), _cells(std::move(re.row().cells())) { }
+            : clustering_row(std::move(re.key()), re.row().deleted_at(), re.row().marker(), std::move(re.row().cells())) { }
 
     clustering_key_prefix& key() { return _ck; }
     const clustering_key_prefix& key() const { return _ck; }
 
-    tombstone tomb() const { return _t; }
-    void remove_tombstone() { _t = tombstone(); }
+    void remove_tombstone() { _t = {}; }
+    row_tombstone tomb() const { return _t; }
 
     const row_marker& marker() const { return _marker; }
     row_marker& marker() { return _marker; }
@@ -71,28 +73,32 @@ public:
     }
 
     void apply(const schema& s, clustering_row&& cr) {
-        _t.apply(cr._t);
         _marker.apply(std::move(cr._marker));
+        _t.apply(cr._t, _marker);
         _cells.apply(s, column_kind::regular_column, std::move(cr._cells));
-        maybe_shadow_deletion(s);
     }
     void apply(const schema& s, const clustering_row& cr) {
-        _t.apply(cr._t);
         _marker.apply(cr._marker);
+        _t.apply(cr._t, _marker);
         _cells.apply(s, column_kind::regular_column, cr._cells);
-        maybe_shadow_deletion(s);
     }
     void set_cell(const column_definition& def, atomic_cell_or_collection&& value) {
         _cells.apply(def, std::move(value));
     }
-    void apply(row_marker rm) { _marker.apply(std::move(rm)); }
-    void apply(tombstone t) { _t.apply(t); }
-
+    void apply(row_marker rm) {
+        _marker.apply(std::move(rm));
+        _t.maybe_shadow(_marker);
+    }
+    void apply(tombstone t) {
+        _t.apply(t);
+    }
+    void apply(shadowable_tombstone t) {
+        _t.apply(t, _marker);
+    }
     void apply(const schema& s, const rows_entry& r) {
-        _t.apply(r.row().deleted_at());
         _marker.apply(r.row().marker());
+        _t.apply(r.row().deleted_at(), _marker);
         _cells.apply(s, column_kind::regular_column, r.row().cells());
-        maybe_shadow_deletion(s);
     }
 
     position_in_partition_view position() const;
@@ -106,13 +112,6 @@ public:
     }
 
     friend std::ostream& operator<<(std::ostream& os, const clustering_row& row);
-
-private:
-    void maybe_shadow_deletion(const schema& s) {
-        if (row_tombstone_is_shadowed(s, _t, _marker)) {
-            _t = tombstone();
-        }
-    }
 };
 
 class static_row {

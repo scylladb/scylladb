@@ -784,17 +784,29 @@ def add_view(hout, info):
         """)).substitute({'type' : cls["name"]}))
 
     skip = "" if is_final(cls) else "ser::skip(in, boost::type<size_type>());"
+    local_names = {}
     for m in members:
+        name = get_member_name(m["name"])
+        local_names[name] = "this->" + name + "()"
         full_type = param_view_type(m["type"])
+        if "attribute" in m:
+            deflt = m["default"][0] if "default" in m else param_type(m["type"]) + "()"
+            if deflt in local_names:
+                deflt = local_names[deflt]
+            deser = Template("(in.size()>0) ? $func(in, boost::type<$typ>()) : $default").substitute(
+                    {'func' : DESERIALIZER, 'typ' : full_type, 'default': deflt})
+        else:
+            deser = Template("$func(in, boost::type<$typ>())").substitute({'func' : DESERIALIZER, 'typ' : full_type})
+
         fprintln(hout, Template(reindent(4, """
             auto $name() const {
-              return seastar::with_serialized_stream(v, [] (auto& v) {
+              return seastar::with_serialized_stream(v, [this] (auto& v) {
                auto in = v;
                $skip
-               return deserialize(in, boost::type<$type>());
+               return $deser;
               });
             }
-        """)).substitute({'name' : get_member_name(m["name"]), 'type' : full_type, 'skip' : skip}))
+        """)).substitute({'name' : name, 'type' : full_type, 'skip' : skip, 'deser' : deser}))
 
         skip = skip + Template("\n       ser::skip(in, boost::type<${type}>());").substitute({'type': full_type})
 

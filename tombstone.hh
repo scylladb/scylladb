@@ -26,12 +26,13 @@
 #include "timestamp.hh"
 #include "gc_clock.hh"
 #include "hashing.hh"
+#include "utils/with_relational_operators.hh"
 
 /**
  * Represents deletion operation. Can be commuted with other tombstones via apply() method.
  * Can be empty.
  */
-struct tombstone final {
+struct tombstone final : public with_relational_operators<tombstone> {
     api::timestamp_type timestamp;
     gc_clock::time_point deletion_time;
 
@@ -56,30 +57,6 @@ struct tombstone final {
         } else {
             return 0;
         }
-    }
-
-    bool operator<(const tombstone& t) const {
-        return compare(t) < 0;
-    }
-
-    bool operator<=(const tombstone& t) const {
-        return compare(t) <= 0;
-    }
-
-    bool operator>(const tombstone& t) const {
-        return compare(t) > 0;
-    }
-
-    bool operator>=(const tombstone& t) const {
-        return compare(t) >= 0;
-    }
-
-    bool operator==(const tombstone& t) const {
-        return compare(t) == 0;
-    }
-
-    bool operator!=(const tombstone& t) const {
-        return compare(t) != 0;
     }
 
     explicit operator bool() const {
