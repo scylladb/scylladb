@@ -78,10 +78,10 @@ void test_with_options() {
     BOOST_REQUIRE(count == (opts.max_size + 1));
 }
 
-constexpr log_histogram_options opts1{(1 << 4) + 3, 3, (1 << 6) + 2};
-constexpr log_histogram_options opts2{(1 << 4) + 2, 1, (1 << 17) + 2};
-constexpr log_histogram_options opts3{(1 << 4) + 1, 0, (1 << 17) + 2};
-constexpr log_histogram_options opts4{(1 << 4) + 0, 3, (1 << 17)};
+extern constexpr log_histogram_options opts1{(1 << 4) + 3, 3, (1 << 6) + 2};
+extern constexpr log_histogram_options opts2{(1 << 4) + 2, 1, (1 << 17) + 2};
+extern constexpr log_histogram_options opts3{(1 << 4) + 1, 0, (1 << 17) + 2};
+extern constexpr log_histogram_options opts4{(1 << 4) + 0, 3, (1 << 17)};
 
 template<>
 size_t hist_key<node<opts1>>(const node<opts1>& n) { return n.v; }
