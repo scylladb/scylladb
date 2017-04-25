@@ -1072,6 +1072,10 @@ stdx::optional<index_metadata> schema::find_index_noname(const index_metadata& t
     return {};
 }
 
+std::vector<index_metadata> schema::indices() const {
+    return boost::copy_range<std::vector<index_metadata>>(_raw._indices_by_name | boost::adaptors::map_values);
+}
+
 bool schema::has_index(const sstring& index_name) const {
     return _raw._indices_by_name.count(index_name) > 0;
 }
