@@ -1705,10 +1705,10 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                         for (auto& sst : new_sstables_for_shard) {
                             auto shards = sst->get_shards_for_this_sstable();
                             if (shards.size() != 1) {
-                                throw std::runtime_error(sprint("resharded sstable {} doesn't belong to only one shard", sst->get_filename()));
+                                throw std::runtime_error(sprint("resharded sstable %s doesn't belong to only one shard", sst->get_filename()));
                             }
                             if (shards.front() != shard) {
-                                throw std::runtime_error(sprint("resharded sstable {} should belong to shard {}", sst->get_filename(), shard));
+                                throw std::runtime_error(sprint("resharded sstable %s should belong to shard %d", sst->get_filename(), shard));
                             }
                         }
 
