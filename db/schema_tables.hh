@@ -127,6 +127,7 @@ void prepare_builder_from_table_row(schema_builder& builder, const query::result
 schema_ptr create_table_from_mutations(schema_mutations, std::experimental::optional<table_schema_version> version = {});
 
 void drop_column_from_schema_mutation(schema_ptr table, const column_definition& column, long timestamp, std::vector<mutation>& mutations);
+void drop_index_from_schema_mutation(schema_ptr table, const index_metadata& column, long timestamp, std::vector<mutation>& mutations);
 
 std::vector<column_definition> create_columns_from_column_rows(const query::result_set& rows,
                                                                const sstring& keyspace,
@@ -140,8 +141,17 @@ column_definition create_column_from_column_row(const query::result_set_row& row
                                                 AbstractType<?> rawComparator, */
                                                 bool is_super);
 
+std::vector<index_metadata> create_indices_from_index_rows(const query::result_set& rows,
+                                                           const sstring& keyspace,
+                                                           const sstring& table);
+
+index_metadata create_index_from_index_row(const query::result_set_row& row,
+                                                sstring keyspace,
+                                                sstring table);
 
 void add_column_to_schema_mutation(schema_ptr table, const column_definition& column, api::timestamp_type timestamp, mutation& mutation);
+
+void add_index_to_schema_mutation(schema_ptr table, const index_metadata& index, api::timestamp_type timestamp, mutation& mutation);
 
 view_ptr create_view_from_mutations(schema_mutations sm, std::experimental::optional<table_schema_version> version = {});
 
@@ -160,6 +170,9 @@ future<std::vector<mutation>> make_drop_view_mutations(lw_shared_ptr<keyspace_me
 sstring serialize_kind(column_kind kind);
 column_kind deserialize_kind(sstring kind);
 data_type parse_type(sstring str);
+
+sstring serialize_index_kind(index_metadata_kind kind);
+index_metadata_kind deserialize_index_kind(sstring kind);
 
 schema_ptr columns();
 schema_ptr columnfamilies();

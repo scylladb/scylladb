@@ -1355,22 +1355,50 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
     m.set_clustered_cell(ckey, "is_dense", table->is_dense(), timestamp);
 
     mutation columns_mutation(pkey, columns());
+    mutation indices_mutation(pkey, indexes());
     if (with_columns_and_triggers) {
         for (auto&& column : table->all_columns_in_select_order()) {
             add_column_to_schema_mutation(table, column, timestamp, columns_mutation);
         }
-
+        for (auto&& index : table->indices()) {
+            add_index_to_schema_mutation(table, index, timestamp, indices_mutation);
+        }
 #if 0
         for (TriggerDefinition trigger : table.getTriggers().values())
             addTriggerToSchemaMutation(table, trigger, timestamp, mutation);
 #endif
     }
-    return schema_mutations{std::move(m), std::move(columns_mutation)};
+    return schema_mutations{std::move(m), std::move(columns_mutation), std::move(indices_mutation)};
 }
 
 void add_table_or_view_to_schema_mutation(schema_ptr s, api::timestamp_type timestamp, bool with_columns, std::vector<mutation>& mutations)
 {
     make_schema_mutations(s, timestamp, with_columns).copy_to(mutations);
+}
+
+static void make_update_indices_mutations(
+        schema_ptr old_table,
+        schema_ptr new_table,
+        api::timestamp_type timestamp,
+        std::vector<mutation>& mutations)
+{
+    mutation indices_mutation(partition_key::from_singular(*indexes(), old_table->ks_name()), indexes());
+
+    auto diff = difference(old_table->all_indices(), new_table->all_indices());
+
+    // indices that are no longer needed
+    for (auto&& name : diff.entries_only_on_left) {
+        const index_metadata& index = old_table->all_indices().at(name);
+        drop_index_from_schema_mutation(old_table, index, timestamp, mutations);
+    }
+
+    // newly added indices and old indices with updated attributes
+    for (auto&& name : boost::range::join(diff.entries_differing, diff.entries_only_on_right)) {
+        const index_metadata& index = new_table->all_indices().at(name);
+        add_index_to_schema_mutation(new_table, index, timestamp, indices_mutation);
+    }
+
+    mutations.emplace_back(std::move(indices_mutation));
 }
 
 static void make_update_columns_mutations(schema_ptr old_table,
@@ -1411,7 +1439,7 @@ future<std::vector<mutation>> make_update_table_mutations(lw_shared_ptr<keyspace
 {
     std::vector<mutation> mutations;
     add_table_or_view_to_schema_mutation(new_table, timestamp, false, mutations);
-
+    make_update_indices_mutations(old_table, new_table, timestamp, mutations);
     make_update_columns_mutations(std::move(old_table), std::move(new_table), timestamp, from_thrift, mutations);
 
     warn(unimplemented::cause::TRIGGERS);
@@ -1468,8 +1496,11 @@ static future<schema_mutations> read_table_mutations(distributed<service::storag
     return read_schema_partition_for_table(proxy, s, table.keyspace_name, table.table_name)
         .then([&proxy, table] (mutation cf_m) {
             return read_schema_partition_for_table(proxy, columns(), table.keyspace_name, table.table_name)
-                .then([cf_m = std::move(cf_m)] (mutation col_m) {
-                    return schema_mutations{std::move(cf_m), std::move(col_m)};
+                .then([&proxy, table, cf_m = std::move(cf_m)] (mutation col_m) {
+                    return read_schema_partition_for_table(proxy, indexes(), table.keyspace_name, table.table_name)
+                        .then([cf_m = std::move(cf_m), col_m = std::move(col_m)] (mutation idx_m) {
+                            return schema_mutations{std::move(cf_m), std::move(col_m), std::move(idx_m)};
+                    });
                 });
 #if 0
         // FIXME:
@@ -1664,6 +1695,10 @@ schema_ptr create_table_from_mutations(schema_mutations sm, std::experimental::o
             fullRawComparator, */
             cf == cf_type::super);
 
+    std::vector<index_metadata> index_defs;
+    if (sm.indices_mutation()) {
+        index_defs = create_indices_from_index_rows(query::result_set(sm.indices_mutation().value()), ks_name, cf_name);
+    }
     bool is_dense;
     if (table_row.has("is_dense")) {
         is_dense = table_row.get_nonnull<bool>("is_dense");
@@ -1689,6 +1724,9 @@ schema_ptr create_table_from_mutations(schema_mutations sm, std::experimental::o
 
     for (auto&& cdef : column_defs) {
         builder.with_column(cdef);
+    }
+    for (auto&& index : index_defs) {
+        builder.with_index(index);
     }
     if (version) {
         builder.with_version(*version);
@@ -1755,6 +1793,60 @@ column_kind deserialize_kind(sstring kind) {
     } else {
         throw std::invalid_argument("unknown column kind: " + kind);
     }
+}
+
+sstring serialize_index_kind(index_metadata_kind kind)
+{
+    switch (kind) {
+    case index_metadata_kind::keys:       return "KEYS";
+    case index_metadata_kind::composites: return "COMPOSITES";
+    case index_metadata_kind::custom:     return "CUSTOM";
+    }
+    throw std::invalid_argument("unknown index kind");
+}
+
+index_metadata_kind deserialize_index_kind(sstring kind) {
+    if (kind == "KEYS") {
+        return index_metadata_kind::keys;
+    } else if (kind == "COMPOSITES") {
+        return index_metadata_kind::composites;
+    } else if (kind == "CUSTOM") {
+        return index_metadata_kind::custom;
+    } else {
+        throw std::invalid_argument("unknown column kind: " + kind);
+    }
+}
+
+void add_index_to_schema_mutation(schema_ptr table,
+                                  const index_metadata& index,
+                                  api::timestamp_type timestamp,
+                                  mutation& m)
+{
+    auto ckey = clustering_key::from_exploded(*m.schema(), {utf8_type->decompose(table->cf_name()), utf8_type->decompose(index.name())});
+    m.set_clustered_cell(ckey, "kind", serialize_index_kind(index.kind()), timestamp);
+    map_type_impl::mutation options;
+    auto options_column = m.schema()->get_column_definition("options");
+    if (!options_column) {
+        throw std::runtime_error(sprint("No 'options' column found in '%s.%s' table.", m.schema()->ks_name(), m.schema()->cf_name()));
+    }
+    auto options_type = static_pointer_cast<const map_type_impl>(options_column->type);
+    for (auto&& entry : index.options()) {
+        auto key = options_type->get_keys_type()->decompose(data_value(entry.first));
+        auto value = atomic_cell::make_live(timestamp, options_type->get_values_type()->decompose(entry.second));
+        options.cells.emplace_back(std::move(key), std::move(value));
+    }
+    atomic_cell_or_collection value = atomic_cell_or_collection::from_collection_mutation(options_type->serialize_mutation_form(std::move(options)));
+    m.set_clustered_cell(ckey, *options_column, std::move(value));
+}
+
+void drop_index_from_schema_mutation(schema_ptr table, const index_metadata& index, long timestamp, std::vector<mutation>& mutations)
+{
+    schema_ptr s = indexes();
+    auto pkey = partition_key::from_singular(*s, table->ks_name());
+    auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table->cf_name()), utf8_type->decompose(index.name())});
+    mutation m{pkey, s};
+    m.partition().apply_delete(*s, ckey, tombstone(timestamp, gc_clock::now()));
+    mutations.push_back(std::move(m));
 }
 
 void drop_column_from_schema_mutation(schema_ptr table, const column_definition& column, long timestamp, std::vector<mutation>& mutations)
@@ -1826,6 +1918,29 @@ column_definition create_column_from_column_row(const query::result_set_row& row
 #endif
     auto c = column_definition{utf8_type->decompose(name), validator, kind, component_index};
     return c;
+}
+
+std::vector<index_metadata> create_indices_from_index_rows(const query::result_set& rows,
+                                                           const sstring& keyspace,
+                                                           const sstring& table)
+{
+    return boost::copy_range<std::vector<index_metadata>>(rows.rows() | boost::adaptors::transformed([&keyspace, &table] (auto&& row) {
+        return create_index_from_index_row(row, keyspace, table);
+    }));
+}
+
+index_metadata create_index_from_index_row(const query::result_set_row& row,
+                                           sstring keyspace,
+                                           sstring table)
+{
+    auto index_name = row.get_nonnull<sstring>("index_name");
+    index_options_map options;
+    auto map = row.get_nonnull<map_type_impl::native_type>("options");
+    for (auto&& entry : map) {
+        options.emplace(value_cast<sstring>(entry.first), value_cast<sstring>(entry.second));
+    }
+    index_metadata_kind kind = deserialize_index_kind(row.get_nonnull<sstring>("kind"));
+    return index_metadata{index_name, options, kind};
 }
 
 /*
@@ -1941,12 +2056,16 @@ static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type t
                          atomic_cell_or_collection::from_collection_mutation(dropped_columns_type->serialize_mutation_form(std::move(dropped_columns))));
 
     mutation columns_mutation(pkey, columns());
+    mutation index_mutation(pkey, indexes());
     if (with_columns) {
         for (auto&& column : view->all_columns_in_select_order()) {
             add_column_to_schema_mutation(view, column, timestamp, columns_mutation);
         }
+        for (auto&& index : view->indices()) {
+            add_index_to_schema_mutation(view, index, timestamp, index_mutation);
+        }
     }
-    return schema_mutations{std::move(m), std::move(columns_mutation)};
+    return schema_mutations{std::move(m), std::move(columns_mutation), std::move(index_mutation)};
 }
 
 schema_mutations make_schema_mutations(schema_ptr s, api::timestamp_type timestamp, bool with_columns)
