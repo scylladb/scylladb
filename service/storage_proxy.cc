@@ -1405,7 +1405,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             auto key = partition_key::from_exploded(*schema, {uuid_type->decompose(_batch_uuid)});
             auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
             mutation m(key, schema);
-            m.partition().apply_delete(*schema, {}, tombstone(now, gc_clock::now()));
+            m.partition().apply_delete(*schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
 
             tracing::trace(_trace_state, "Sending a batchlog remove mutation");
             return send_batchlog_mutation(std::move(m), db::consistency_level::ANY).handle_exception([] (std::exception_ptr eptr) {

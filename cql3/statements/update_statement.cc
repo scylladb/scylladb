@@ -63,12 +63,11 @@ bool update_statement::allow_clustering_key_slices() const {
 }
 
 void update_statement::add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params) {
-    exploded_clustering_prefix prefix(range.start() ? range.start()->value().explode() : std::vector<bytes>());
+    auto prefix = range.start() ? std::move(range.start()->value()) : clustering_key_prefix::make_empty();
     if (s->is_dense()) {
-        if (!prefix || (prefix.size() == 1 && prefix.components().front().empty())) {
+        if (prefix.is_empty(*s)) {
             throw exceptions::invalid_request_exception(sprint("Missing PRIMARY KEY part %s", s->clustering_key_columns().begin()->name_as_text()));
         }
-
         // An empty name for the value is what we use to recognize the case where there is not column
         // outside the PK, see CreateStatement.
         if (s->regular_begin()->name().empty()) {
@@ -84,9 +83,9 @@ void update_statement::add_update_for_key(mutation& m, const query::clustering_r
     } else {
         // If there are static columns, there also must be clustering columns, in which
         // case empty prefix can only refer to the static row.
-        bool is_static_prefix = s->has_static_columns() && !prefix;
+        bool is_static_prefix = s->has_static_columns() && prefix.is_empty(*s);
         if (type == statement_type::INSERT && !is_static_prefix && s->is_cql3_table()) {
-            auto& row = m.partition().clustered_row(*s, clustering_key::from_clustering_prefix(*s, prefix));
+            auto& row = m.partition().clustered_row(*s, prefix);
             row.apply(row_marker(params.timestamp(), params.ttl(), params.expiry()));
         }
     }

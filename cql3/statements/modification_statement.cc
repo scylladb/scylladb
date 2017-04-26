@@ -267,7 +267,7 @@ public:
             add_cell(cells, _schema->static_column_at(id), static_row_iterator.next_collection_cell());
         }
 
-        _data.rows.emplace(std::make_pair(*_pkey, std::experimental::nullopt), std::move(cells));
+        _data.rows.emplace(std::make_pair(*_pkey, clustering_key_prefix::make_empty()), std::move(cells));
     }
 };
 

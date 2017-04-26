@@ -254,6 +254,9 @@ public:
         size_t operator()(const TopLevel& o) const {
             return _t->hash(o);
         }
+        size_t operator()(const TopLevelView& o) const {
+            return _t->hash(o.representation());
+        }
     };
 
     struct equality {

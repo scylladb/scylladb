@@ -419,17 +419,6 @@ mutation_partition::apply_row_tombstone(const schema& schema, range_tombstone rt
 }
 
 void
-mutation_partition::apply_delete(const schema& schema, const exploded_clustering_prefix& prefix, tombstone t) {
-    if (!prefix) {
-        apply(t);
-    } else if (prefix.is_full(schema)) {
-        apply_delete(schema, clustering_key::from_clustering_prefix(schema, prefix), t);
-    } else {
-        apply_row_tombstone(schema, clustering_key_prefix::from_clustering_prefix(schema, prefix), t);
-    }
-}
-
-void
 mutation_partition::apply_delete(const schema& schema, const clustering_key_prefix& prefix, tombstone t) {
     if (prefix.is_empty(schema)) {
         apply(t);

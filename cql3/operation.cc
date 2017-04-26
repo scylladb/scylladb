@@ -215,7 +215,7 @@ operation::set_counter_value_from_tuple_list::prepare(database& db, const sstrin
         bool is_raw_counter_shard_write() const override {
             return true;
         }
-        void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override {
+        void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
             const auto& value = _t->bind(params._options);
             auto&& list_value = dynamic_pointer_cast<lists::value>(value);
 

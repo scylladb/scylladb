@@ -778,7 +778,6 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
 public:
     void apply(tombstone t) { _tombstone.apply(t); }
-    void apply_delete(const schema& schema, const exploded_clustering_prefix& prefix, tombstone t);
     void apply_delete(const schema& schema, const clustering_key_prefix& prefix, tombstone t);
     void apply_delete(const schema& schema, range_tombstone rt);
     void apply_delete(const schema& schema, clustering_key_prefix&& prefix, tombstone t);

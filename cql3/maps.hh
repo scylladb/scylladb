@@ -116,7 +116,7 @@ public:
                 : operation(column, std::move(t)) {
         }
 
-        virtual void execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) override;
+        virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
     };
 
     class setter_by_key : public operation {
@@ -126,7 +126,7 @@ public:
             : operation(column, std::move(t)), _k(std::move(k)) {
         }
         virtual void collect_marker_specification(shared_ptr<variable_specifications> bound_names) override;
-        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
     class putter : public operation {
@@ -134,10 +134,10 @@ public:
         putter(const column_definition& column, shared_ptr<term> t)
             : operation(column, std::move(t)) {
         }
-        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
-    static void do_put(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params,
+    static void do_put(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params,
             shared_ptr<term> value, const column_definition& column);
 
     class discarder_by_key : public operation {
@@ -145,7 +145,7 @@ public:
         discarder_by_key(const column_definition& column, shared_ptr<term> k)
                 : operation(column, std::move(k)) {
         }
-        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 };
 

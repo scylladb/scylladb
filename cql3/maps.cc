@@ -269,7 +269,7 @@ maps::marker::bind(const query_options& options) {
 }
 
 void
-maps::setter::execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) {
+maps::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     auto value = _t->bind(params._options);
     if (value == constants::UNSET_VALUE) {
         return;
@@ -292,7 +292,7 @@ maps::setter_by_key::collect_marker_specification(shared_ptr<variable_specificat
 }
 
 void
-maps::setter_by_key::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+maps::setter_by_key::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     using exceptions::invalid_request_exception;
     assert(column.type->is_multi_cell()); // "Attempted to set a value for a single key on a frozen map"m
     auto key = _k->bind_and_get(params._options);
@@ -315,7 +315,7 @@ maps::setter_by_key::execute(mutation& m, const exploded_clustering_prefix& pref
 }
 
 void
-maps::putter::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+maps::putter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to add items to a frozen map";
     auto value = _t->bind(params._options);
     if (value != constants::UNSET_VALUE) {
@@ -324,7 +324,7 @@ maps::putter::execute(mutation& m, const exploded_clustering_prefix& prefix, con
 }
 
 void
-maps::do_put(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params,
+maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params,
         shared_ptr<term> value, const column_definition& column) {
     auto map_value = dynamic_pointer_cast<maps::value>(value);
     if (column.type->is_multi_cell()) {
@@ -353,7 +353,7 @@ maps::do_put(mutation& m, const exploded_clustering_prefix& prefix, const update
 }
 
 void
-maps::discarder_by_key::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+maps::discarder_by_key::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to delete a single key in a frozen map";
     auto&& key = _t->bind(params._options);
     if (!key) {
