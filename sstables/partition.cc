@@ -880,10 +880,12 @@ static inline bytes_view consume_bytes(bytes_view& p, size_t len) {
     return ret;
 }
 
-static inline clustering_key_prefix get_clustering_key(
-        const schema& schema, bytes_view col_name) {
-    mp_row_consumer::column col(schema, std::move(col_name), api::max_timestamp);
-    return std::move(col.clustering);
+static inline clustering_key_prefix get_clustering_key(const schema& s, composite_view col_name) {
+    auto components = col_name.explode();
+    if (components.size() > s.clustering_key_size()) {
+        components.resize(s.clustering_key_size());
+    }
+    return clustering_key_prefix(std::move(components));
 }
 
 static bool has_static_columns(const schema& schema, index_entry &ie) {
@@ -977,7 +979,7 @@ sstables::sstable::find_disk_ranges(
                     // But we only need to match the clustering key, because
                     // we got a clustering key range to search for.
                     auto start_ck = get_clustering_key(*schema,
-                            consume_bytes(data, len));
+                        composite_view(consume_bytes(data, len), schema->is_compound()));
                     if (data.size() < 2) {
                         break;
                     }
@@ -986,7 +988,7 @@ sstables::sstable::find_disk_ranges(
                         break;
                     }
                     auto end_ck = get_clustering_key(*schema,
-                            consume_bytes(data, len));
+                        composite_view(consume_bytes(data, len), schema->is_compound()));
                     if (data.size() < 16) {
                         break;
                     }
