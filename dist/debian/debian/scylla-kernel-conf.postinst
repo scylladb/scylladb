@@ -1,7 +1,13 @@
-#!/bin/sh
+#!/bin/bash
 
 set -e
 
-sysctl -p/etc/sysctl.d/99-scylla-sched.conf
+KVER=$(uname -r)
+
+if [[ $KVER =~ 3\.13\.0\-([0-9]+)-generic ]]; then
+    echo "kernel $KVER detected, skip running sysctl..."
+else
+    sysctl -p/etc/sysctl.d/99-scylla-sched.conf
+fi
 
 #DEBHELPER#
