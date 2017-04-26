@@ -79,14 +79,8 @@ public:
 
     future<> check_access(const service::client_state& state) override;
     void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
-    future<bool> announce_migration(distributed<service::storage_proxy>&, bool is_local_only) override;
+    future<::shared_ptr<transport::event::schema_change>> announce_migration(distributed<service::storage_proxy>&, bool is_local_only) override;
 
-    virtual shared_ptr<transport::event::schema_change> change_event() override {
-        return make_shared<transport::event::schema_change>(
-                transport::event::schema_change::change_type::UPDATED,
-                transport::event::schema_change::target_type::TABLE, keyspace(),
-                column_family());
-    }
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 private:
     void validate_for_frozen_collection(::shared_ptr<index_target> target) const;

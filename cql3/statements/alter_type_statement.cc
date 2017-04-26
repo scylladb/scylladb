@@ -71,16 +71,6 @@ void alter_type_statement::validate(distributed<service::storage_proxy>& proxy, 
     // It doesn't really change anything anyway.
 }
 
-shared_ptr<transport::event::schema_change> alter_type_statement::change_event()
-{
-    using namespace transport;
-
-    return make_shared<transport::event::schema_change>(event::schema_change::change_type::UPDATED,
-                                                        event::schema_change::target_type::TYPE,
-                                                        keyspace(),
-                                                        _name.get_string_type_name());
-}
-
 const sstring& alter_type_statement::keyspace() const
 {
     return _name.get_keyspace();
@@ -144,14 +134,19 @@ void alter_type_statement::do_announce_migration(database& db, ::keyspace& ks, b
     }
 }
 
-future<bool> alter_type_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<transport::event::schema_change>> alter_type_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
 {
     return seastar::async([this, &proxy, is_local_only] {
         auto&& db = proxy.local().get_db().local();
         try {
             auto&& ks = db.find_keyspace(keyspace());
             do_announce_migration(db, ks, is_local_only);
-            return true;
+            using namespace transport;
+            return make_shared<event::schema_change>(
+                    event::schema_change::change_type::UPDATED,
+                    event::schema_change::target_type::TYPE,
+                    keyspace(),
+                    _name.get_string_type_name());
         } catch (no_such_keyspace& e) {
             throw exceptions::invalid_request_exception(sprint("Cannot alter type in unknown keyspace %s", keyspace()));
         }

@@ -68,8 +68,7 @@ public:
     // Functions we need to override to subclass schema_altering_statement
     virtual future<> check_access(const service::client_state& state) override;
     virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
-    virtual future<bool> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) override;
-    virtual shared_ptr<transport::event::schema_change> change_event() override;
+    virtual future<shared_ptr<transport::event::schema_change>> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) override;
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 
     // FIXME: continue here. See create_table_statement.hh and CreateViewStatement.java

@@ -81,15 +81,7 @@ protected:
 
     virtual void prepare_keyspace(const service::client_state& state) override;
 
-    virtual shared_ptr<transport::event::schema_change> change_event() = 0;
-
-    /**
-     * Announces the migration to other nodes in the cluster.
-     * @return true if the execution of this statement resulted in a schema change, false otherwise (when IF NOT EXISTS
-     * is used, for example)
-     * @throws RequestValidationException
-     */
-    virtual future<bool> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) = 0;
+    virtual future<::shared_ptr<transport::event::schema_change>> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) = 0;
 
     virtual future<::shared_ptr<messages::result_message>>
     execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;

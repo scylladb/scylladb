@@ -157,7 +157,7 @@ static void validate_column_rename(const schema& schema, const column_identifier
     }
 }
 
-future<bool> alter_table_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<transport::event::schema_change>> alter_table_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
 {
     auto& db = proxy.local().get_db().local();
     auto schema = validation::validate_column_family(db, keyspace(), column_family());
@@ -355,15 +355,14 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
         break;
     }
 
-    return service::get_local_migration_manager().announce_column_family_update(cfm.build(), false, std::move(view_updates), is_local_only).then([] {
-        return true;
+    return service::get_local_migration_manager().announce_column_family_update(cfm.build(), false, std::move(view_updates), is_local_only).then([this] {
+        using namespace transport;
+        return make_shared<event::schema_change>(
+                event::schema_change::change_type::UPDATED,
+                event::schema_change::target_type::TABLE,
+                keyspace(),
+                column_family());
     });
-}
-
-shared_ptr<transport::event::schema_change> alter_table_statement::change_event()
-{
-    return make_shared<transport::event::schema_change>(transport::event::schema_change::change_type::UPDATED,
-        transport::event::schema_change::target_type::TABLE, keyspace(), column_family());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

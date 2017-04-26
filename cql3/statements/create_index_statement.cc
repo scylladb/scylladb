@@ -201,7 +201,7 @@ void create_index_statement::validate_targets_for_multi_column_index(std::vector
     }
 }
 
-future<bool>
+future<::shared_ptr<transport::event::schema_change>>
 create_index_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
     if (!service::get_local_storage_service().cluster_supports_indexes()) {
         throw exceptions::invalid_request_exception("Index support is not enabled");
@@ -232,7 +232,7 @@ create_index_statement::announce_migration(distributed<service::storage_proxy>& 
     auto existing_index = schema->find_index_noname(index);
     if (existing_index) {
         if (_if_not_exists) {
-            return make_ready_future<bool>(false);
+            return make_ready_future<::shared_ptr<transport::event::schema_change>>(nullptr);
         } else {
             throw exceptions::invalid_request_exception(
                     sprint("Index %s is a duplicate of existing index %s", index.name(), existing_index.value().name()));
@@ -241,8 +241,13 @@ create_index_statement::announce_migration(distributed<service::storage_proxy>& 
     schema_builder builder{schema};
     builder.with_index(index);
     return service::get_local_migration_manager().announce_column_family_update(
-            builder.build(), false, {}, is_local_only).then([]() {
-        return make_ready_future<bool>(true);
+            builder.build(), false, {}, is_local_only).then([this]() {
+        using namespace transport;
+        return make_shared<event::schema_change>(
+                event::schema_change::change_type::UPDATED,
+                event::schema_change::target_type::TABLE,
+                keyspace(),
+                column_family());
     });
 }
 
