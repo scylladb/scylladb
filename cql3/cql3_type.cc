@@ -24,6 +24,13 @@
 
 namespace cql3 {
 
+sstring cql3_type::to_string() const {
+    if (_type->is_user_type() || _type->is_tuple()) {
+        return "frozen<" + _name + ">";
+    }
+    return _name;
+}
+
 shared_ptr<cql3_type> cql3_type::raw::prepare(database& db, const sstring& keyspace) {
     try {
         auto&& ks = db.find_keyspace(keyspace);

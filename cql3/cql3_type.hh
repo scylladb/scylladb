@@ -64,7 +64,7 @@ public:
     bool is_counter() const { return _type->is_counter(); }
     bool is_native() const { return _native; }
     data_type get_type() const { return _type; }
-    sstring to_string() const { return _name; }
+    sstring to_string() const;
 
     // For UserTypes, we need to know the current keyspace to resolve the
     // actual type used, so Raw is a "not yet prepared" CQL3Type.
