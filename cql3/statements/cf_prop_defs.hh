@@ -70,6 +70,7 @@ public:
 
     static const sstring KW_COMPACTION;
     static const sstring KW_COMPRESSION;
+    static const sstring KW_CRC_CHECK_CHANCE;
 
     static const sstring COMPACTION_STRATEGY_CLASS_KEY;
 
