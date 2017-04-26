@@ -1161,17 +1161,17 @@ private:
         def.__set_durable_writes(meta->durable_writes());
         return std::move(def);
     }
-    static index_info index_info_from_thrift(const ColumnDef& def) {
+    static stdx::optional<index_metadata> index_metadata_from_thrift(const ColumnDef& def) {
         stdx::optional<sstring> idx_name;
         stdx::optional<std::unordered_map<sstring, sstring>> idx_opts;
-        auto idx_type = ::index_type::none;
+        stdx::optional<index_metadata_kind> idx_type;
         if (def.__isset.index_type) {
-            idx_type = [&def] {
+            idx_type = [&def]() -> stdx::optional<index_metadata_kind> {
                 switch (def.index_type) {
-                case IndexType::type::KEYS: return ::index_type::keys;
-                case IndexType::type::COMPOSITES: return ::index_type::composites;
-                case IndexType::type::CUSTOM: return ::index_type::custom;
-                default: return ::index_type::none;
+                    case IndexType::type::KEYS: return index_metadata_kind::keys;
+                    case IndexType::type::COMPOSITES: return index_metadata_kind::composites;
+                    case IndexType::type::CUSTOM: return index_metadata_kind::custom;
+                    default: return {};
                 };
             }();
         }
@@ -1181,7 +1181,10 @@ private:
         if (def.__isset.index_options) {
             idx_opts = std::unordered_map<sstring, sstring>(def.index_options.begin(), def.index_options.end());
         }
-        return index_info(idx_type, idx_name, idx_opts);
+        if (idx_name && idx_opts && idx_type) {
+            return index_metadata(idx_name.value(), idx_opts.value(), idx_type.value());
+        }
+        return {};
     }
     static schema_ptr schema_from_thrift(const CfDef& cf_def, const sstring ks_name, std::experimental::optional<utils::UUID> id = { }) {
         thrift_validation::validate_cf_def(cf_def);
@@ -1224,7 +1227,11 @@ private:
                 auto col_name = to_bytes(col_def.name);
                 regular_column_name_type->validate(col_name);
                 builder.with_column(std::move(col_name), db::marshal::type_parser::parse(to_sstring(col_def.validation_class)),
-                                    index_info_from_thrift(col_def), column_kind::regular_column);
+                                    index_info{}, column_kind::regular_column);
+                auto index = index_metadata_from_thrift(col_def);
+                if (index) {
+                    builder.with_index(index.value());
+                }
             }
         }
         builder.set_regular_column_name_type(regular_column_name_type);
