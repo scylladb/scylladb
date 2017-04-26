@@ -296,7 +296,7 @@ if [ $ENABLE_SERVICE -eq 1 ]; then
 fi
 
 CUR_VERSION=`scylla --version` || true
-if [ "$CUR_VERSION" != "" ] && [ "$UUID" != "" ]; then
+if [ "$CUR_VERSION" != "" ]; then
     NEW_VERSION=`sudo -u scylla /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid version --version $CUR_VERSION --mode i` || true
     if [ "$NEW_VERSION" != "" ]; then
        echo $NEW_VERSION
