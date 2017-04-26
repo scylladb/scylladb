@@ -122,7 +122,7 @@ std::vector<data_type> type_parser::get_type_parameters(bool multicell)
 
         try {
             list.emplace_back(do_parse(multicell));
-        } catch (exceptions::syntax_exception e) {
+        } catch (exceptions::syntax_exception& e) {
             // FIXME
 #if 0
             SyntaxException ex = new SyntaxException(String.format("Exception while parsing '%s' around char %d", str, idx));
@@ -166,7 +166,7 @@ std::tuple<sstring, bytes, std::vector<bytes>, std::vector<data_type>> type_pars
 
         try {
             field_types.emplace_back(do_parse(true));
-        } catch (exceptions::syntax_exception e) {
+        } catch (exceptions::syntax_exception& e) {
             // FIXME
 #if 0
             SyntaxException ex = new SyntaxException(String.format("Exception while parsing '%s' around char %d", str, idx));
