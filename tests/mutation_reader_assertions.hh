@@ -84,6 +84,18 @@ public:
         return *this;
     }
 
+    reader_assertions& produces_eos_or_empty_mutation() {
+        BOOST_TEST_MESSAGE("Expecting eos or empty mutation");
+        auto sm = _reader().get0();
+        mutation_opt mo = mutation_from_streamed_mutation(std::move(sm)).get0();
+        if (mo) {
+            if (!mo->partition().empty()) {
+                BOOST_FAIL(sprint("Mutation is not empty: %s", *mo));
+            }
+        }
+        return *this;
+    }
+
     reader_assertions& fast_forward_to(const dht::partition_range& pr) {
         _pr = pr;
         _reader.fast_forward_to(_pr).get0();
