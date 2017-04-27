@@ -169,6 +169,9 @@ public:
         ++(*_cql_modification_counter_ptr);
     }
 
+    const ::shared_ptr<restrictions::statement_restrictions>& restrictions() const {
+        return _restrictions;
+    }
 public:
     void add_condition(::shared_ptr<column_condition> cond);
 
