@@ -273,29 +273,52 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
 
     table.add_row(m, keys[10], "value");
 
-    auto slice = partition_slice_builder(*s)
-        .with_range(query::clustering_range::make(
-            query::clustering_range::bound(keys[2], true),
-            query::clustering_range::bound(keys[2], true)
-        ))
-        .with_range(query::clustering_range::make(
-            query::clustering_range::bound(keys[7], true),
-            query::clustering_range::bound(keys[9], true)
-        ))
-        .build();
-
+    auto pr = dht::partition_range::make_singular(m.decorated_key());
     mutation_source ms = populate(s, std::vector<mutation>({m}));
-    mutation_reader rd = ms(s, query::full_partition_range, slice);
 
-    streamed_mutation_opt smo = rd().get0();
-    BOOST_REQUIRE(bool(smo));
-    auto sm = assert_that_stream(std::move(*smo));
+    {
+        auto slice = partition_slice_builder(*s)
+            .with_range(query::clustering_range::make(
+                query::clustering_range::bound(keys[2], true),
+                query::clustering_range::bound(keys[2], true)
+            ))
+            .with_range(query::clustering_range::make(
+                query::clustering_range::bound(keys[7], true),
+                query::clustering_range::bound(keys[9], true)
+            ))
+            .build();
 
-    sm.produces_row_with_key(keys[2]);
-    sm.produces_range_tombstone(rt3);
-    sm.produces_row_with_key(keys[8]);
-    sm.produces_range_tombstone(rt4);
-    sm.produces_end_of_stream();
+        mutation_reader rd = ms(s, pr, slice);
+
+        streamed_mutation_opt smo = rd().get0();
+        BOOST_REQUIRE(bool(smo));
+        auto sm = assert_that_stream(std::move(*smo));
+
+        sm.produces_row_with_key(keys[2]);
+        sm.produces_range_tombstone(rt3);
+        sm.produces_row_with_key(keys[8]);
+        sm.produces_range_tombstone(rt4);
+        sm.produces_end_of_stream();
+    }
+
+    {
+        auto slice = partition_slice_builder(*s)
+            .with_range(query::clustering_range::make(
+                query::clustering_range::bound(keys[7], true),
+                query::clustering_range::bound(keys[9], true)
+            ))
+            .build();
+
+        mutation_reader rd = ms(s, pr, slice);
+
+        streamed_mutation_opt smo = rd().get0();
+        BOOST_REQUIRE(bool(smo));
+        assert_that_stream(std::move(*smo))
+            .produces_range_tombstone(rt3)
+            .produces_row_with_key(keys[8])
+            .produces_range_tombstone(rt4)
+            .produces_end_of_stream();
+    }
 }
 
 static void test_streamed_mutation_forwarding_across_range_tombstones(populate_fn populate) {
