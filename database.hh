@@ -195,8 +195,8 @@ public:
     //
     // We then set the soft limit to 80 % of the virtual dirty hard limit, which is equal to 40 % of
     // the user-supplied threshold.
-    dirty_memory_manager(database& db, size_t threshold)
-        : logalloc::region_group_reclaimer(threshold / 2, threshold * 0.40)
+    dirty_memory_manager(database& db, size_t threshold, double soft_limit)
+        : logalloc::region_group_reclaimer(threshold / 2, threshold * soft_limit / 2)
         , _db(&db)
         , _region_group(*this)
         , _flush_serializer(1)
