@@ -365,3 +365,72 @@ SEASTAR_TEST_CASE(test_counter_update_mutations) {
         BOOST_REQUIRE(!ac.is_live());
     });
 }
+
+SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+
+        auto s = get_schema();
+
+        auto pk = partition_key::from_single_value(*s, int32_type->decompose(0));
+        auto ck = clustering_key::from_single_value(*s, int32_type->decompose(0));
+        auto& col = *s->get_column_definition(utf8_type->decompose(sstring("c1")));
+        auto& scol = *s->get_column_definition(utf8_type->decompose(sstring("s1")));
+
+        auto c1 = atomic_cell::make_live_counter_update(api::new_timestamp(), 5);
+        auto s1 = atomic_cell::make_live_counter_update(api::new_timestamp(), 4);
+        mutation m1(pk, s);
+        m1.set_clustered_cell(ck, col, c1);
+        m1.set_static_cell(scol, s1);
+
+        auto c2 = atomic_cell::make_live_counter_update(api::new_timestamp(), 9);
+        auto s2 = atomic_cell::make_live_counter_update(api::new_timestamp(), 8);
+        mutation m2(pk, s);
+        m2.set_clustered_cell(ck, col, c2);
+        m2.set_static_cell(scol, s2);
+
+        auto c3 = atomic_cell::make_dead(api::new_timestamp() / 2, gc_clock::now());
+        mutation m3(pk, s);
+        m3.set_clustered_cell(ck, col, c3);
+        m3.set_static_cell(scol, c3);
+
+        auto m0 = m1;
+        transform_counter_updates_to_shards(m0, nullptr, 0);
+
+        auto empty = mutation(pk, s);
+        auto m = m1;
+        transform_counter_updates_to_shards(m, &empty, 0);
+        BOOST_REQUIRE_EQUAL(m, m0);
+
+        auto ac = get_counter_cell(m);
+        BOOST_REQUIRE(ac.is_live());
+        auto ccv = counter_cell_view(ac);
+        BOOST_REQUIRE_EQUAL(ccv.total_value(), 5);
+
+        ac = get_static_counter_cell(m);
+        BOOST_REQUIRE(ac.is_live());
+        ccv = counter_cell_view(ac);
+        BOOST_REQUIRE_EQUAL(ccv.total_value(), 4);
+
+        m = m2;
+        transform_counter_updates_to_shards(m, &m0, 0);
+
+        ac = get_counter_cell(m);
+        BOOST_REQUIRE(ac.is_live());
+        ccv = counter_cell_view(ac);
+        BOOST_REQUIRE_EQUAL(ccv.total_value(), 14);
+
+        ac = get_static_counter_cell(m);
+        BOOST_REQUIRE(ac.is_live());
+        ccv = counter_cell_view(ac);
+        BOOST_REQUIRE_EQUAL(ccv.total_value(), 12);
+
+        m = m3;
+        transform_counter_updates_to_shards(m, &m0, 0);
+        ac = get_counter_cell(m);
+        BOOST_REQUIRE(!ac.is_live());
+        ac = get_static_counter_cell(m);
+        BOOST_REQUIRE(!ac.is_live());
+    });
+}
+
