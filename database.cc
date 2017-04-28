@@ -1752,9 +1752,9 @@ database::database(const db::config& cfg)
     : _stats(make_lw_shared<db_stats>())
     , _cfg(std::make_unique<db::config>(cfg))
     // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
-    , _system_dirty_memory_manager(*this, 10 << 20)
-    , _dirty_memory_manager(*this, memory::stats().total_memory() * 0.45)
-    , _streaming_dirty_memory_manager(*this, memory::stats().total_memory() * 0.10)
+    , _system_dirty_memory_manager(*this, 10 << 20, cfg.virtual_dirty_soft_limit())
+    , _dirty_memory_manager(*this, memory::stats().total_memory() * 0.45, cfg.virtual_dirty_soft_limit())
+    , _streaming_dirty_memory_manager(*this, memory::stats().total_memory() * 0.10, cfg.virtual_dirty_soft_limit())
     , _version(empty_version)
     , _enable_incremental_backups(cfg.incremental_backups())
 {
