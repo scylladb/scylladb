@@ -123,7 +123,7 @@ public:
     }
 
     permissions_cache(const db::config& cfg)
-                    : _cache(cfg.permissions_cache_max_entries(), std::chrono::milliseconds(cfg.permissions_validity_in_ms()), std::chrono::milliseconds(cfg.permissions_update_interval_in_ms()),
+                    : _cache(cfg.permissions_cache_max_entries(), std::chrono::milliseconds(cfg.permissions_validity_in_ms()), std::chrono::milliseconds(cfg.permissions_update_interval_in_ms()), logger,
                         [] (const key_type& k) {
                             logger.debug("Refreshing permissions for {}", k.first.name());
                             return authorizer::get().authorize(::make_shared<authenticated_user>(k.first), k.second);
