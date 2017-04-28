@@ -46,16 +46,6 @@ sstring to_sstring(column_kind k) {
     throw std::invalid_argument("unknown column kind");
 }
 
-sstring to_sstring(index_type t) {
-    switch (t) {
-    case index_type::keys:       return "KEYS";
-    case index_type::custom:     return "CUSTOM";
-    case index_type::composites: return "COMPOSITES";
-    case index_type::none:       return "null";
-    }
-    throw std::invalid_argument("unknown index type");
-}
-
 bool is_compatible(column_kind k1, column_kind k2) {
     return k1 == k2;
 }

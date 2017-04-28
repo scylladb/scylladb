@@ -75,16 +75,6 @@ enum class column_kind { partition_key, clustering_key, static_column, regular_c
 sstring to_sstring(column_kind k);
 bool is_compatible(column_kind k1, column_kind k2);
 
-// CMH this is also manually defined in thrift gen file.
-enum class index_type {
-    keys,
-    custom,
-    composites,
-    none, // cwi: added none to avoid "optional" bs.
-};
-
-sstring to_sstring(index_type t);
-
 enum class cf_type : uint8_t {
     standard,
     super,
