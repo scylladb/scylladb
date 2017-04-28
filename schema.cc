@@ -381,12 +381,6 @@ bool operator==(const schema& x, const schema& y)
 #endif
 }
 
-index_info::index_info(::index_type idx_type,
-        std::experimental::optional<sstring> idx_name,
-        std::experimental::optional<index_options_map> idx_options)
-    : index_type(idx_type), index_name(idx_name), index_options(idx_options)
-{}
-
 index_metadata::index_metadata(const sstring& name,
                                const index_options_map& options,
                                index_metadata_kind kind)
@@ -431,7 +425,7 @@ sstring index_metadata::get_default_index_name(const sstring& cf_name,
     return cf_name + "_idx";
 }
 
-column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, index_info idx, api::timestamp_type dropped_at)
+column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, api::timestamp_type dropped_at)
         : _name(std::move(name))
         , _dropped_at(dropped_at)
         , _is_atomic(type->is_atomic())
@@ -439,7 +433,6 @@ column_definition::column_definition(bytes name, data_type type, column_kind kin
         , type(std::move(type))
         , id(component_index)
         , kind(kind)
-        , idx_info(std::move(idx))
 {}
 
 std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
@@ -448,8 +441,6 @@ std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
     os << ", type=" << cd.type->name();
     os << ", kind=" << to_sstring(cd.kind);
     os << ", componentIndex=" << (cd.has_component_index() ? std::to_string(cd.component_index()) : "null");
-    os << ", indexName=" << (cd.idx_info.index_name ? *cd.idx_info.index_name : "null");
-    os << ", indexType=" << to_sstring(cd.idx_info.index_type);
     os << ", droppedAt=" << cd._dropped_at;
     os << "}";
     return os;
@@ -633,20 +624,16 @@ column_definition& schema_builder::find_column(const cql3::column_identifier& c)
 }
 
 schema_builder& schema_builder::with_column(const column_definition& c) {
-    return with_column(bytes(c.name()), data_type(c.type), index_info(c.idx_info), column_kind(c.kind), c.position());
+    return with_column(bytes(c.name()), data_type(c.type), column_kind(c.kind), c.position());
 }
 
 schema_builder& schema_builder::with_column(bytes name, data_type type, column_kind kind) {
-    return with_column(name, type, index_info(), kind);
-}
-
-schema_builder& schema_builder::with_column(bytes name, data_type type, index_info info, column_kind kind) {
     // component_index will be determined by schema cosntructor
-    return with_column(name, type, info, kind, 0);
+    return with_column(name, type, kind, 0);
 }
 
-schema_builder& schema_builder::with_column(bytes name, data_type type, index_info info, column_kind kind, column_id component_index) {
-    _raw._columns.emplace_back(name, type, kind, component_index, info);
+schema_builder& schema_builder::with_column(bytes name, data_type type, column_kind kind, column_id component_index) {
+    _raw._columns.emplace_back(name, type, kind, component_index);
     if (type->is_multi_cell()) {
         with_collection(name, type);
     } else if (type->is_counter()) {
@@ -686,7 +673,7 @@ schema_builder& schema_builder::with_column_rename(bytes from, bytes to)
     });
     assert(it != _raw._columns.end());
     auto& def = *it;
-    column_definition new_def(to, def.type, def.kind, def.component_index(), def.idx_info);
+    column_definition new_def(to, def.type, def.kind, def.component_index());
     _raw._columns.erase(it);
     return with_column(new_def);
 }
@@ -728,7 +715,7 @@ void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
         });
         // In Origin, dense CFs always have at least one regular column
         if (regular_cols == 0) {
-            raw._columns.emplace_back(bytes(""), raw._regular_column_name_type, column_kind::regular_column, 0, index_info());
+            raw._columns.emplace_back(bytes(""), raw._regular_column_name_type, column_kind::regular_column, 0);
         } else if (regular_cols > 1) {
             throw exceptions::configuration_exception(sprint("Expecting exactly one regular column. Found %d", regular_cols));
         }

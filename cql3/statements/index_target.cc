@@ -68,24 +68,6 @@ sstring index_target::index_option(target_type type) {
     }
 }
 
-index_target::target_type
-index_target::from_column_definition(const column_definition &cd) {
-    auto& opts = cd.idx_info.index_options;
-
-    if (!opts) {
-        throw std::invalid_argument("No index options");
-    }
-    if (opts->count(secondary_index::index_keys_option_name)) {
-        return target_type::keys;
-    } else if (opts->count(secondary_index::index_entries_option_name)) {
-        return target_type::keys_and_values;
-    } else if (cd.type->is_collection() && !cd.type->is_multi_cell()) {
-        return target_type::full;
-    } else {
-        return target_type::values;
-    }
-}
-
 ::shared_ptr<index_target::raw>
 index_target::raw::values_of(::shared_ptr<column_identifier::raw> c) {
     return ::make_shared<raw>(c, target_type::values);

@@ -178,16 +178,6 @@ public:
 
 typedef std::unordered_map<sstring, sstring> index_options_map;
 
-struct index_info {
-    index_info(::index_type = ::index_type::none
-            , std::experimental::optional<sstring> index_name = std::experimental::optional<sstring>()
-            , std::experimental::optional<index_options_map> = std::experimental::optional<index_options_map>());
-
-    enum index_type index_type = ::index_type::none;
-    std::experimental::optional<sstring> index_name;
-    std::experimental::optional<index_options_map> index_options;
-};
-
 enum class index_metadata_kind {
     keys,
     custom,
@@ -235,7 +225,7 @@ private:
     friend class schema;
 public:
     column_definition(bytes name, data_type type, column_kind kind,
-        column_id component_index = 0, index_info = index_info(),
+        column_id component_index = 0,
         api::timestamp_type dropped_at = api::missing_timestamp);
 
     data_type type;
@@ -247,7 +237,6 @@ public:
 
     column_kind kind;
     ::shared_ptr<cql3::column_specification> column_specification;
-    index_info idx_info;
 
     bool is_static() const { return kind == column_kind::static_column; }
     bool is_regular() const { return kind == column_kind::regular_column; }
@@ -276,9 +265,6 @@ public:
         return 0;
     }
     bool is_on_all_components() const;
-    bool is_indexed() const {
-        return idx_info.index_type != index_type::none;
-    }
     bool is_part_of_cell_name() const {
         return is_regular() || is_static();
     }
@@ -479,7 +465,6 @@ public:
     struct column {
         bytes name;
         data_type type;
-        index_info idx_info;
     };
 private:
     ::shared_ptr<cql3::column_specification> make_column_specification(const column_definition& def);

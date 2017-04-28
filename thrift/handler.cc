@@ -1227,7 +1227,7 @@ private:
                 auto col_name = to_bytes(col_def.name);
                 regular_column_name_type->validate(col_name);
                 builder.with_column(std::move(col_name), db::marshal::type_parser::parse(to_sstring(col_def.validation_class)),
-                                    index_info{}, column_kind::regular_column);
+                                    column_kind::regular_column);
                 auto index = index_metadata_from_thrift(col_def);
                 if (index) {
                     builder.with_index(index.value());
