@@ -40,6 +40,7 @@
  */
 
 #include "cql3/statements/alter_table_statement.hh"
+#include "index/secondary_index_manager.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "validation.hh"
@@ -152,8 +153,16 @@ static void validate_column_rename(const schema& schema, const column_identifier
         throw exceptions::invalid_request_exception(sprint("Cannot rename non PRIMARY KEY part %s", from));
     }
 
-    if (def->is_indexed()) {
-        throw exceptions::invalid_request_exception(sprint("Cannot rename column %s because it is secondary indexed", from));
+    if (!schema.indices().empty()) {
+        auto& sim = secondary_index::get_secondary_index_manager();
+        auto dependent_indices = sim.local().get_dependent_indices(*def);
+        if (!dependent_indices.empty()) {
+            auto index_names = ::join(", ", dependent_indices | boost::adaptors::transformed([](const index_metadata& im) {
+                return im.name();
+            }));
+            throw exceptions::invalid_request_exception(
+                    sprint("Cannot rename column %s because it has dependent secondary indexes (%s)", from, index_names));
+        }
     }
 }
 
