@@ -650,7 +650,7 @@ void schema_builder::add_default_index_names(database& db) {
     }
 
 
-    auto existing_names = db.existing_index_names();
+    auto existing_names = db.existing_index_names(ks_name());
     for (auto& sc : _raw._columns) {
         if (sc.idx_info.index_type != index_type::none && sc.idx_info.index_name) {
             sstring base_name = cf_name() + "_" + *sc.idx_info.index_name + "_idx";

@@ -2385,14 +2385,13 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
 }
 
 std::set<sstring>
-database::existing_index_names(const sstring& cf_to_exclude) const {
+database::existing_index_names(const sstring& ks_name, const sstring& cf_to_exclude) const {
     std::set<sstring> names;
-    for (auto& entry : _column_families) {
-        auto& schema= *entry.second->schema();
-        if (!cf_to_exclude.empty() && schema.cf_name() == cf_to_exclude) {
+    for (auto& schema : find_keyspace(ks_name).metadata()->tables()) {
+        if (!cf_to_exclude.empty() && schema->cf_name() == cf_to_exclude) {
             continue;
         }
-        for (const auto& index_name : schema.index_names()) {
+        for (const auto& index_name : schema->index_names()) {
             names.emplace(index_name);
         }
     }
