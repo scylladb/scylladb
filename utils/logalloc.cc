@@ -290,7 +290,7 @@ static inline bool can_allocate_more_memory(size_t size)
 class segment_zone : public bi::set_base_hook<>, public bi::slist_base_hook<> {
     struct free_segment : public bi::slist_base_hook<> { };
 
-    static constexpr size_t initial_size = 64 * 1024;
+    static constexpr size_t maximum_size = 256;
     static constexpr size_t minimum_size = 16;
     static thread_local size_t next_attempt_size;
 
@@ -365,7 +365,7 @@ public:
     segment* base() const { return _base; }
 };
 
-thread_local size_t segment_zone::next_attempt_size = segment_zone::initial_size;
+thread_local size_t segment_zone::next_attempt_size = segment_zone::maximum_size;
 constexpr size_t segment_zone::minimum_size;
 
 std::unique_ptr<segment_zone> segment_zone::try_creating_zone()
@@ -387,7 +387,7 @@ std::unique_ptr<segment_zone> segment_zone::try_creating_zone()
         try {
             zone = std::make_unique<segment_zone>(static_cast<segment*>(ptr), size);
             logger.debug("Creating new zone @{}, size: {}", zone.get(), size);
-            next_attempt_size = std::max(size << 1, minimum_size);
+            next_attempt_size = std::min(std::max(size << 1, minimum_size), maximum_size);
             while (size--) {
                 auto seg = zone->segment_from_position(size);
                 zone->_free_segments.push_front(*new (seg) free_segment);
