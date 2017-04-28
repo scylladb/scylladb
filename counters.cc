@@ -216,8 +216,8 @@ stdx::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, at
 void transform_counter_updates_to_shards(mutation& m, const mutation* current_state, uint64_t clock_offset) {
     // FIXME: allow current_state to be frozen_mutation
 
-    auto transform_new_row_to_shards = [clock_offset] (auto& cr) {
-        cr.row().cells().for_each_cell([clock_offset] (auto, atomic_cell_or_collection& ac_o_c) {
+    auto transform_new_row_to_shards = [clock_offset] (auto& cells) {
+        cells.for_each_cell([clock_offset] (auto, atomic_cell_or_collection& ac_o_c) {
             auto acv = ac_o_c.as_atomic_cell();
             if (!acv.is_live()) {
                 return; // continue -- we are in lambda
@@ -229,28 +229,18 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
     };
 
     if (!current_state) {
+        transform_new_row_to_shards(m.partition().static_row());
         for (auto& cr : m.partition().clustered_rows()) {
-            transform_new_row_to_shards(cr);
+            transform_new_row_to_shards(cr.row().cells());
         }
         return;
     }
 
     clustering_key::less_compare cmp(*m.schema());
 
-    auto& cstate = current_state->partition();
-    auto it = cstate.clustered_rows().begin();
-    auto end = cstate.clustered_rows().end();
-    for (auto& cr : m.partition().clustered_rows()) {
-        while (it != end && cmp(it->key(), cr.key())) {
-            ++it;
-        }
-        if (it == end || cmp(cr.key(), it->key())) {
-            transform_new_row_to_shards(cr);
-            continue;
-        }
-
+    auto transform_row_to_shards = [clock_offset] (auto& transformee, auto& state) {
         std::deque<std::pair<column_id, counter_shard>> shards;
-        it->row().cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
+        state.for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
             auto acv = ac_o_c.as_atomic_cell();
             if (!acv.is_live()) {
                 return; // continue -- we are in lambda
@@ -263,7 +253,7 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
             shards.emplace_back(std::make_pair(id, counter_shard(*cs)));
         });
 
-        cr.row().cells().for_each_cell([&] (column_id id, atomic_cell_or_collection& ac_o_c) {
+        transformee.for_each_cell([&] (column_id id, atomic_cell_or_collection& ac_o_c) {
             auto acv = ac_o_c.as_atomic_cell();
             if (!acv.is_live()) {
                 return; // continue -- we are in lambda
@@ -284,5 +274,22 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
                 shards.pop_front();
             }
         });
+    };
+
+    transform_row_to_shards(m.partition().static_row(), current_state->partition().static_row());
+
+    auto& cstate = current_state->partition();
+    auto it = cstate.clustered_rows().begin();
+    auto end = cstate.clustered_rows().end();
+    for (auto& cr : m.partition().clustered_rows()) {
+        while (it != end && cmp(it->key(), cr.key())) {
+            ++it;
+        }
+        if (it == end || cmp(cr.key(), it->key())) {
+            transform_new_row_to_shards(cr.row().cells());
+            continue;
+        }
+
+        transform_row_to_shards(cr.row().cells(), it->row().cells());
     }
 }
