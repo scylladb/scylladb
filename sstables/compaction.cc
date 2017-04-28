@@ -170,27 +170,18 @@ class compaction {
 protected:
     column_family& _cf;
     std::vector<shared_sstable> _sstables;
-    std::function<shared_sstable()> _creator;
     uint64_t _max_sstable_size;
     uint32_t _sstable_level;
-    const sstable_set _set;
-    sstable_set::incremental_selector _selector;
     lw_shared_ptr<compaction_info> _info = make_lw_shared<compaction_info>();
     uint64_t _estimated_partitions = 0;
     std::vector<unsigned long> _ancestors;
     db::replay_position _rp;
-    shared_sstable _sst;
-    stdx::optional<sstable_writer> _writer;
 protected:
-    compaction(column_family& cf, std::vector<shared_sstable> sstables, std::function<shared_sstable()> creator,
-            uint64_t max_sstable_size, uint32_t sstable_level)
+    compaction(column_family& cf, std::vector<shared_sstable> sstables, uint64_t max_sstable_size, uint32_t sstable_level)
         : _cf(cf)
         , _sstables(std::move(sstables))
-        , _creator (std::move(creator))
         , _max_sstable_size(max_sstable_size)
         , _sstable_level(sstable_level)
-        , _set(cf.get_sstable_set())
-        , _selector(_set.make_incremental_selector())
     {
         _cf.get_compaction_manager().register_compaction(_info);
     }
@@ -285,9 +276,8 @@ private:
     virtual void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const = 0;
 
     virtual std::function<api::timestamp_type(const dht::decorated_key&)> max_purgeable_func() {
-        std::unordered_set<shared_sstable> compacting(_sstables.begin(), _sstables.end());
-        return [this, compacting = std::move(compacting)] (const dht::decorated_key& dk) {
-            return get_max_purgeable_timestamp(_cf, _selector, compacting, dk);
+        return [] (const dht::decorated_key& dk) {
+            return api::min_timestamp;
         };
     }
 
@@ -297,28 +287,12 @@ private:
         };
     }
 
-    virtual sstable_writer* select_sstable_writer(const dht::decorated_key& dk) {
-        if (!_writer) {
-            _sst = _creator();
-            setup_new_sstable(_sst);
-
-            auto&& priority = service::get_local_compaction_priority();
-            sstable_writer_config cfg;
-            cfg.max_sstable_size = _max_sstable_size;
-            _writer.emplace(_sst->get_writer(*_cf.schema(), partitions_per_sstable(), cfg, priority));
-        }
-        return &*_writer;
-    }
-
-    virtual void stop_sstable_writer() {
-        finish_new_sstable(_writer, _sst);
-    }
-
-    virtual void finish_sstable_writer() {
-        if (_writer) {
-            stop_sstable_writer();
-        }
-    }
+    // select a sstable writer based on decorated key.
+    virtual sstable_writer* select_sstable_writer(const dht::decorated_key& dk) = 0;
+    // stop current writer
+    virtual void stop_sstable_writer() = 0;
+    // finish all writers.
+    virtual void finish_sstable_writer() = 0;
 
     compacting_sstable_writer get_compacting_sstable_writer() {
         return compacting_sstable_writer(*this);
@@ -357,11 +331,22 @@ void compacting_sstable_writer::consume_end_of_stream() {
     _c.finish_sstable_writer();
 }
 
-class regular_compaction final : public compaction {
+class regular_compaction : public compaction {
+    std::function<shared_sstable()> _creator;
+    // store a clone of sstable set for column family, which needs to be alive for incremental selector.
+    const sstable_set _set;
+    // used to incrementally calculate max purgeable timestamp, as we iterate through decorated keys.
+    sstable_set::incremental_selector _selector;
+    // sstable being currently written.
+    shared_sstable _sst;
+    stdx::optional<sstable_writer> _writer;
 public:
     regular_compaction(column_family& cf, std::vector<shared_sstable> sstables, std::function<shared_sstable()> creator,
             uint64_t max_sstable_size, uint32_t sstable_level)
-        : compaction(cf, std::move(sstables), std::move(creator), max_sstable_size, sstable_level)
+        : compaction(cf, std::move(sstables), max_sstable_size, sstable_level)
+        , _creator(std::move(creator))
+        , _set(cf.get_sstable_set())
+        , _selector(_set.make_incremental_selector())
     {
     }
 
@@ -385,18 +370,48 @@ public:
             _info->start_size, _info->end_size, std::unordered_map<int32_t, int64_t>{}).get0();
     }
 
-    std::function<bool(const streamed_mutation& sm)> filter_func() const override {
+    virtual std::function<api::timestamp_type(const dht::decorated_key&)> max_purgeable_func() override {
+        std::unordered_set<shared_sstable> compacting(_sstables.begin(), _sstables.end());
+        return [this, compacting = std::move(compacting)] (const dht::decorated_key& dk) {
+            return get_max_purgeable_timestamp(_cf, _selector, compacting, dk);
+        };
+    }
+
+    virtual std::function<bool(const streamed_mutation& sm)> filter_func() const override {
         return [] (const streamed_mutation& sm) {
             return dht::shard_of(sm.decorated_key().token()) == engine().cpu_id();
         };
     }
+
+    virtual sstable_writer* select_sstable_writer(const dht::decorated_key& dk) override {
+        if (!_writer) {
+            _sst = _creator();
+            setup_new_sstable(_sst);
+
+            auto&& priority = service::get_local_compaction_priority();
+            sstable_writer_config cfg;
+            cfg.max_sstable_size = _max_sstable_size;
+            _writer.emplace(_sst->get_writer(*_cf.schema(), partitions_per_sstable(), cfg, priority));
+        }
+        return &*_writer;
+    }
+
+    virtual void stop_sstable_writer() override {
+        finish_new_sstable(_writer, _sst);
+    }
+
+    virtual void finish_sstable_writer() override {
+        if (_writer) {
+            stop_sstable_writer();
+        }
+    }
 };
 
-class cleanup_compaction final : public compaction {
+class cleanup_compaction final : public regular_compaction {
 public:
     cleanup_compaction(column_family& cf, std::vector<shared_sstable> sstables, std::function<shared_sstable()> creator,
             uint64_t max_sstable_size, uint32_t sstable_level)
-        : compaction(cf, std::move(sstables), std::move(creator), max_sstable_size, sstable_level)
+        : regular_compaction(cf, std::move(sstables), std::move(creator), max_sstable_size, sstable_level)
     {
         _info->type = compaction_type::Cleanup;
     }
@@ -433,7 +448,7 @@ class resharding_compaction final : public compaction {
 public:
     resharding_compaction(std::vector<shared_sstable> sstables, column_family& cf, std::function<shared_sstable(shard_id)> creator,
             uint64_t max_sstable_size, uint32_t sstable_level)
-        : compaction(cf, std::move(sstables), {}, max_sstable_size, sstable_level)
+        : compaction(cf, std::move(sstables), max_sstable_size, sstable_level)
         , _output_sstables(smp::count)
         , _sstable_creator(std::move(creator))
     {
@@ -445,12 +460,6 @@ public:
 
     void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const override {
         logger.info("Resharded {}", formatted_msg);
-    }
-
-    std::function<api::timestamp_type(const dht::decorated_key&)> max_purgeable_func() override {
-        return [] (const dht::decorated_key& dk) {
-            return api::min_timestamp;
-        };
     }
 
     sstable_writer* select_sstable_writer(const dht::decorated_key& dk) override {
