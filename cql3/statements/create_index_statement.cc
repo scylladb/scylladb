@@ -76,7 +76,8 @@ create_index_statement::check_access(const service::client_state& state) {
 void
 create_index_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state)
 {
-    auto schema = validation::validate_column_family(proxy.local().get_db().local(), keyspace(), column_family());
+    auto& db = proxy.local().get_db().local();
+    auto schema = validation::validate_column_family(db, keyspace(), column_family());
 
     if (schema->is_counter()) {
         throw exceptions::invalid_request_exception("Secondary indexes are not supported on counter tables");
@@ -132,13 +133,13 @@ create_index_statement::validate(distributed<service::storage_proxy>& proxy, con
             validate_is_values_index_if_target_column_not_collection(cd, target);
             validate_target_column_is_map_if_index_involves_keys(is_map, target);
         }
+    }
 
-        if (cd->idx_info.index_type != ::index_type::none) {
-            if (_if_not_exists) {
-                return;
-            } else {
-                throw exceptions::invalid_request_exception("Index already exists");
-            }
+    if (db.existing_index_names(keyspace()).count(_index_name) > 0) {
+        if (_if_not_exists) {
+            return;
+        } else {
+            throw exceptions::invalid_request_exception("Index already exists");
         }
     }
 
