@@ -158,6 +158,7 @@ public:
         _sst->_components->summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
         _sst->_components->summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
         _sst->set_first_and_last_keys();
+        _sst->_components->statistics.contents[metadata_type::Compaction] = std::make_unique<compaction_metadata>();
     }
 };
 

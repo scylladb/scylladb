@@ -47,6 +47,7 @@
 #include <boost/range/algorithm.hpp>
 #include <boost/range/adaptors.hpp>
 #include <boost/range/join.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
 
 #include "core/future-util.hh"
 #include "core/pipe.hh"
@@ -557,11 +558,22 @@ get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstab
         }
     }
 
+    auto compacted_undeleted_gens = boost::copy_range<std::unordered_set<int64_t>>(cf.compacted_undeleted_sstables()
+        | boost::adaptors::transformed(std::mem_fn(&sstables::sstable::generation)));
+    auto has_undeleted_ancestor = [&compacted_undeleted_gens] (auto& candidate) {
+        return boost::algorithm::any_of(candidate->ancestors(), [&compacted_undeleted_gens] (auto gen) {
+            return compacted_undeleted_gens.count(gen);
+        });
+    };
+
     // SStables that do not contain live data is added to list of possibly expired sstables.
     for (auto& candidate : compacting) {
         logger.debug("Checking if candidate of generation {} and max_deletion_time {} is expired, gc_before is {}",
                     candidate->generation(), candidate->get_stats_metadata().max_local_deletion_time, gc_before);
-        if (candidate->get_stats_metadata().max_local_deletion_time < gc_before) {
+        // A fully expired sstable which has an ancestor undeleted shouldn't be compacted because
+        // expired data won't be purged because undeleted sstables are taken into account when
+        // calculating max purgeable timestamp, and not doing it could lead to a compaction loop.
+        if (candidate->get_stats_metadata().max_local_deletion_time < gc_before && !has_undeleted_ancestor(candidate)) {
             logger.debug("Adding candidate of generation {} to list of possibly expired sstables", candidate->generation());
             candidates.push_back(candidate);
         } else {
