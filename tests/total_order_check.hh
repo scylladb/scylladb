@@ -24,6 +24,20 @@
 #include <vector>
 #include <boost/test/unit_test.hpp>
 
+template <typename ResultType, typename Visitor>
+struct boost_visitor_adapter : Visitor {
+    using result_type = ResultType;
+    boost_visitor_adapter(Visitor&& v) : Visitor(std::move(v)) {}
+};
+
+// Boost 1.55 requires that visitors expose a `result_type` member. This
+// function adds it.
+template <typename ResultType = void, typename Visitor>
+auto
+to_boost_visitor(Visitor&& v) {
+    return boost_visitor_adapter<ResultType, Visitor>(std::move(v));
+}
+
 template<typename Comparator, typename... T>
 class total_order_check {
     using element = boost::variant<T...>;
@@ -38,16 +52,16 @@ private:
     void check_order(const std::vector<element>& left, const std::vector<element>& right, int order) {
         for (const element& left_e : left) {
             for (const element& right_e : right) {
-                boost::apply_visitor([&] (auto&& a) {
-                    boost::apply_visitor([&] (auto&& b) {
+                boost::apply_visitor(to_boost_visitor([&] (auto&& a) {
+                    boost::apply_visitor(to_boost_visitor([&] (auto&& b) {
                         BOOST_TEST_MESSAGE(sprint("cmp(%s, %s) == %d", a, b, order));
                         auto r = _cmp(a, b);
                         auto actual = this->sgn(r);
                         if (actual != order) {
                             BOOST_FAIL(sprint("Expected cmp(%s, %s) == %d, but got %d", a, b, order, actual));
                         }
-                    }, right_e);
-                }, left_e);
+                    }), right_e);
+                }), left_e);
             }
         }
     }
