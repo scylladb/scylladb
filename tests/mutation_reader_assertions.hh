@@ -35,6 +35,7 @@ public:
     { }
 
     reader_assertions& produces(const dht::decorated_key& dk) {
+        BOOST_TEST_MESSAGE(sprint("Expecting key %s", dk));
         _reader().then([&] (auto sm) {
             if (!sm) {
                 BOOST_FAIL(sprint("Expected: %s, got end of stream", dk));
@@ -47,6 +48,7 @@ public:
     }
 
     reader_assertions& produces(mutation m) {
+        BOOST_TEST_MESSAGE(sprint("Expecting %s", m));
         _reader().then([] (auto sm) {
             return mutation_from_streamed_mutation(std::move(sm));
         }).then([this, m = std::move(m)] (mutation_opt&& mo) mutable {
@@ -74,6 +76,7 @@ public:
     }
 
     reader_assertions& produces_end_of_stream() {
+        BOOST_TEST_MESSAGE("Expecting end of stream");
         _reader().then([] (auto sm) {
             return mutation_from_streamed_mutation(std::move(sm));
         }).then([this] (mutation_opt&& mo) mutable {
@@ -81,6 +84,18 @@ public:
                 BOOST_FAIL(sprint("Expected end of stream, got %s", *mo));
             }
         }).get0();
+        return *this;
+    }
+
+    reader_assertions& produces_eos_or_empty_mutation() {
+        BOOST_TEST_MESSAGE("Expecting eos or empty mutation");
+        auto sm = _reader().get0();
+        mutation_opt mo = mutation_from_streamed_mutation(std::move(sm)).get0();
+        if (mo) {
+            if (!mo->partition().empty()) {
+                BOOST_FAIL(sprint("Mutation is not empty: %s", *mo));
+            }
+        }
         return *this;
     }
 

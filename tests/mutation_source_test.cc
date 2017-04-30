@@ -273,29 +273,52 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
 
     table.add_row(m, keys[10], "value");
 
-    auto slice = partition_slice_builder(*s)
-        .with_range(query::clustering_range::make(
-            query::clustering_range::bound(keys[2], true),
-            query::clustering_range::bound(keys[2], true)
-        ))
-        .with_range(query::clustering_range::make(
-            query::clustering_range::bound(keys[7], true),
-            query::clustering_range::bound(keys[9], true)
-        ))
-        .build();
-
+    auto pr = dht::partition_range::make_singular(m.decorated_key());
     mutation_source ms = populate(s, std::vector<mutation>({m}));
-    mutation_reader rd = ms(s, query::full_partition_range, slice);
 
-    streamed_mutation_opt smo = rd().get0();
-    BOOST_REQUIRE(bool(smo));
-    auto sm = assert_that_stream(std::move(*smo));
+    {
+        auto slice = partition_slice_builder(*s)
+            .with_range(query::clustering_range::make(
+                query::clustering_range::bound(keys[2], true),
+                query::clustering_range::bound(keys[2], true)
+            ))
+            .with_range(query::clustering_range::make(
+                query::clustering_range::bound(keys[7], true),
+                query::clustering_range::bound(keys[9], true)
+            ))
+            .build();
 
-    sm.produces_row_with_key(keys[2]);
-    sm.produces_range_tombstone(rt3);
-    sm.produces_row_with_key(keys[8]);
-    sm.produces_range_tombstone(rt4);
-    sm.produces_end_of_stream();
+        mutation_reader rd = ms(s, pr, slice);
+
+        streamed_mutation_opt smo = rd().get0();
+        BOOST_REQUIRE(bool(smo));
+        auto sm = assert_that_stream(std::move(*smo));
+
+        sm.produces_row_with_key(keys[2]);
+        sm.produces_range_tombstone(rt3);
+        sm.produces_row_with_key(keys[8]);
+        sm.produces_range_tombstone(rt4);
+        sm.produces_end_of_stream();
+    }
+
+    {
+        auto slice = partition_slice_builder(*s)
+            .with_range(query::clustering_range::make(
+                query::clustering_range::bound(keys[7], true),
+                query::clustering_range::bound(keys[9], true)
+            ))
+            .build();
+
+        mutation_reader rd = ms(s, pr, slice);
+
+        streamed_mutation_opt smo = rd().get0();
+        BOOST_REQUIRE(bool(smo));
+        assert_that_stream(std::move(*smo))
+            .produces_range_tombstone(rt3)
+            .produces_row_with_key(keys[8])
+            .produces_range_tombstone(rt4)
+            .produces_end_of_stream();
+    }
 }
 
 static void test_streamed_mutation_forwarding_across_range_tombstones(populate_fn populate) {
@@ -531,7 +554,118 @@ void test_streamed_mutation_fragments_have_monotonic_positions(populate_fn popul
     });
 }
 
+static void test_clustering_slices(populate_fn populate) {
+    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+    auto s = schema_builder("ks", "cf")
+        .with_column("key", bytes_type, column_kind::partition_key)
+        .with_column("c1", int32_type, column_kind::clustering_key)
+        .with_column("c2", int32_type, column_kind::clustering_key)
+        .with_column("c3", int32_type, column_kind::clustering_key)
+        .with_column("v", bytes_type)
+        .build();
+
+    auto make_ck = [&] (int ck1, stdx::optional<int> ck2 = stdx::nullopt, stdx::optional<int> ck3 = stdx::nullopt) {
+        std::vector<data_value> components;
+        components.push_back(data_value(ck1));
+        if (ck2) {
+            components.push_back(data_value(ck2));
+        }
+        if (ck3) {
+            components.push_back(data_value(ck3));
+        }
+        return clustering_key::from_deeply_exploded(*s, components);
+    };
+
+    auto pk = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s, to_bytes("key1")));
+
+    auto make_row = [&] (clustering_key k, int v) {
+        mutation m(pk, s);
+        m.set_clustered_cell(k, "v", data_value(bytes("v1")), v);
+        return m;
+    };
+
+    auto make_delete = [&] (const query::clustering_range& r) {
+        mutation m(pk, s);
+        auto bv_range = bound_view::from_range(r);
+        range_tombstone rt(bv_range.first, bv_range.second, tombstone(new_timestamp(), gc_clock::now()));
+        m.partition().apply_delete(*s, rt);
+        return m;
+    };
+
+    auto ck1 = make_ck(1, 1, 1);
+    auto ck2 = make_ck(1, 1, 2);
+    auto ck3 = make_ck(1, 2, 1);
+    auto ck4 = make_ck(1, 2, 2);
+    auto ck5 = make_ck(1, 3, 1);
+    auto ck6 = make_ck(2, 1, 1);
+    auto ck7 = make_ck(2, 1, 2);
+    auto ck8 = make_ck(3, 1, 1);
+
+    mutation row1 = make_row(ck1, 1);
+    mutation row2 = make_row(ck2, 2);
+    mutation row3 = make_row(ck3, 3);
+    mutation row4 = make_row(ck4, 4);
+    mutation del_1 = make_delete(query::clustering_range::make({make_ck(1, 2, 1), true}, {make_ck(2, 0, 0), true}));
+    mutation row5 = make_row(ck5, 5);
+    mutation del_2 = make_delete(query::clustering_range::make({make_ck(2, 1), true}, {make_ck(2), true}));
+    mutation row6 = make_row(ck6, 6);
+    mutation row7 = make_row(ck7, 7);
+    mutation del_3 = make_delete(query::clustering_range::make({make_ck(3), true}, {make_ck(3), true}));
+    mutation row8 = make_row(ck8, 8);
+
+    mutation m = row1 + row2 + row3 + row4 + row5 + row6 + row7 + del_1 + del_2 + row8 + del_3;
+
+    mutation_source ds = populate(s, {m});
+
+    auto pr = dht::partition_range::make_singular(pk);
+
+    {
+        auto slice = partition_slice_builder(*s)
+            .with_range(query::clustering_range::make_singular(make_ck(0)))
+            .build();
+        assert_that(ds(s, pr, slice))
+            .produces_eos_or_empty_mutation();
+    }
+
+    {
+        auto slice = partition_slice_builder(*s)
+            .with_range(query::clustering_range::make_singular(make_ck(1)))
+            .build();
+        assert_that(ds(s, pr, slice))
+            .produces(row1 + row2 + row3 + row4 + row5 + del_1)
+            .produces_end_of_stream();
+    }
+
+    {
+        auto slice = partition_slice_builder(*s)
+            .with_range(query::clustering_range::make_singular(make_ck(2)))
+            .build();
+        assert_that(ds(s, pr, slice))
+            .produces(row6 + row7 + del_1 + del_2)
+            .produces_end_of_stream();
+    }
+
+    {
+        auto slice = partition_slice_builder(*s)
+            .with_range(query::clustering_range::make_singular(make_ck(1, 2)))
+            .build();
+        assert_that(ds(s, pr, slice))
+            .produces(row3 + row4 + del_1)
+            .produces_end_of_stream();
+    }
+
+    {
+        auto slice = partition_slice_builder(*s)
+            .with_range(query::clustering_range::make_singular(make_ck(3)))
+            .build();
+        assert_that(ds(s, pr, slice))
+            .produces(row8 + del_3)
+            .produces_end_of_stream();
+    }
+}
+
 void run_mutation_source_tests(populate_fn populate) {
+    test_clustering_slices(populate);
     test_streamed_mutation_fragments_have_monotonic_positions(populate);
     test_streamed_mutation_forwarding_across_range_tombstones(populate);
     test_streamed_mutation_forwarding_guarantees(populate);
