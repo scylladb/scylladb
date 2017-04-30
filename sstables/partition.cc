@@ -826,10 +826,12 @@ static inline bytes_view consume_bytes(bytes_view& p, size_t len) {
     return ret;
 }
 
-static inline clustering_key_prefix get_clustering_key(
-        const schema& schema, bytes_view col_name) {
-    mp_row_consumer::column col(schema, std::move(col_name), api::max_timestamp);
-    return std::move(col.clustering);
+static inline clustering_key_prefix get_clustering_key(const schema& s, composite_view col_name) {
+    auto components = col_name.explode();
+    if (components.size() > s.clustering_key_size()) {
+        components.resize(s.clustering_key_size());
+    }
+    return clustering_key_prefix(std::move(components));
 }
 
 static bool has_static_columns(const schema& schema, index_entry &ie) {
@@ -901,6 +903,7 @@ sstables::sstable::find_disk_ranges(
                 auto& range_start = ck_ranges.begin()->start();
                 bool found_range_start = false;
                 uint64_t range_start_pos;
+                uint64_t prev_pos = 0;
                 auto& range_end = ck_ranges.begin()->end();
 
                 auto cmp = clustering_key_prefix::prefix_equal_tri_compare(*schema);
@@ -922,7 +925,7 @@ sstables::sstable::find_disk_ranges(
                     // But we only need to match the clustering key, because
                     // we got a clustering key range to search for.
                     auto start_ck = get_clustering_key(*schema,
-                            consume_bytes(data, len));
+                        composite_view(consume_bytes(data, len), schema->is_compound()));
                     if (data.size() < 2) {
                         break;
                     }
@@ -931,49 +934,50 @@ sstables::sstable::find_disk_ranges(
                         break;
                     }
                     auto end_ck = get_clustering_key(*schema,
-                            consume_bytes(data, len));
+                        composite_view(consume_bytes(data, len), schema->is_compound()));
                     if (data.size() < 16) {
                         break;
                     }
                     uint64_t offset = consume_be<uint64_t>(data);
                     uint64_t width = consume_be<uint64_t>(data);
-                    if (!found_range_start) {
-                        if (!range_start || cmp(range_start->value(), end_ck) <= 0) {
-                            range_start_pos = ie.position() + offset;
-                            found_range_start = true;
-                        }
-                    }
+                    uint64_t cur_pos = ie.position() + offset;
                     bool found_range_end = false;
                     uint64_t range_end_pos;
                     if (range_end) {
                         if (cmp(range_end->value(), start_ck) < 0) {
                             // this block is already past the range_end
                             found_range_end = true;
-                            range_end_pos = ie.position() + offset;
+                            range_end_pos = cur_pos;
                         } else if (cmp(range_end->value(), end_ck) < 0 || num_blocks == 0) {
                             // range_end is in the middle of this block.
                             // Note the strict inequality above is important:
                             // if range_end==end_ck the next block may contain
                             // still more items matching range_end.
                             found_range_end = true;
-                            range_end_pos = ie.position() + offset + width;
+                            range_end_pos = cur_pos + width;
                         }
                     } else if (num_blocks == 0) {
                         // When !range_end, read until the last block.
                         // In this case we could have also found the end of
                         // the partition using the index.
                         found_range_end = true;
-                        range_end_pos = ie.position() + offset + width;
+                        range_end_pos = cur_pos + width;
                     }
-                    if (found_range_end) {
-                        if (!found_range_start) {
-                            // return empty range
-                            range_start_pos = range_end_pos = 0;
+                    if (!found_range_start) {
+                        if (!range_start || cmp(range_start->value(), start_ck) <= 0) {
+                            range_start_pos = prev_pos ? prev_pos : cur_pos;
+                            found_range_start = true;
+                        } else if (found_range_end || num_blocks == 0) {
+                            range_start_pos = cur_pos;
+                            found_range_start = true;
                         }
+                    }
+                    if (found_range_end) { // found_range_end implies found_range_start
                         return make_ready_future<disk_read_range>(
                                 disk_read_range(range_start_pos, range_end_pos,
                                         key, deltime));
                     }
+                    prev_pos = cur_pos;
                 }
             }
             // Else, if more than one clustering-key range needs to be read,
