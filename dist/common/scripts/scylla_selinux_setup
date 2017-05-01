@@ -7,7 +7,6 @@
 if ! is_debian_variant; then
     if [ "`sestatus | awk '{print $3}'`" != "disabled" ]; then
         setenforce 0
-        sed -e "s/enforcing/disabled/" /etc/sysconfig/selinux > /tmp/selinux
-        mv /tmp/selinux /etc/sysconfig/
+        sed --follow-symlinks -i -e "s/^SELINUX=enforcing/SELINUX=disabled/" /etc/sysconfig/selinux
     fi
 fi
