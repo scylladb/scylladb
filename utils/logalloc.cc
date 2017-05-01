@@ -367,6 +367,7 @@ public:
 
 thread_local size_t segment_zone::next_attempt_size = segment_zone::maximum_size;
 constexpr size_t segment_zone::minimum_size;
+constexpr size_t segment_zone::maximum_size;
 
 std::unique_ptr<segment_zone> segment_zone::try_creating_zone()
 {
