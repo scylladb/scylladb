@@ -1499,6 +1499,30 @@ future<> set_bootstrap_state(bootstrap_state state) {
     });
 }
 
+future<bool>
+is_index_built(const sstring& ks_name, const sstring& index_name) {
+    auto req = sprint("SELECT index_name FROM %s.\"%s\" WHERE table_name=? AND index_name=?", NAME, BUILT_INDEXES);
+    return execute_cql(req, ks_name, index_name).then([](::shared_ptr<cql3::untyped_result_set> result) {
+        return make_ready_future<bool>(!result->empty());
+    });
+}
+
+future<>
+set_index_built(const sstring& ks_name, const sstring& index_name) {
+    auto req = sprint("INSERT INTO %s.\"%s\" (table_name, index_name) VALUES (?, ?)", NAME, BUILT_INDEXES);
+    return execute_cql(req, ks_name, index_name).discard_result().then([] {
+       return force_blocking_flush(BUILT_INDEXES);
+    });
+}
+
+future<>
+set_index_removed(const sstring& ks_name, const sstring& index_name) {
+    auto req = sprint("DELETE FROM %s.\"%s\" WHERE table_name = ? AND index_name = ?", NAME, BUILT_INDEXES);
+    return execute_cql(req, ks_name, index_name).discard_result().then([] {
+       return force_blocking_flush(BUILT_INDEXES);
+    });
+}
+
 std::vector<schema_ptr> all_tables() {
     std::vector<schema_ptr> r;
     auto legacy_tables = db::schema_tables::all_tables();

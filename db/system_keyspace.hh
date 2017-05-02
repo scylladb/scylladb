@@ -145,6 +145,13 @@ future<> update_hints_dropped(gms::inet_address ep, utils::UUID time_period, int
 std::vector<schema_ptr> all_tables();
 void make(database& db, bool durable, bool volatile_testing_only = false);
 
+future<bool>
+is_index_built(const sstring& ks_name, const sstring& index_name);
+future<>
+set_index_built(const sstring& ks_name, const sstring& index_name);
+future<>
+set_index_removed(const sstring& ks_name, const sstring& index_name);
+
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
 query_mutations(distributed<service::storage_proxy>& proxy, const sstring& cf_name);
 
