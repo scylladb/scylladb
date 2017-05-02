@@ -1135,6 +1135,15 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
     //     real_mark_alive(addr, local_state);
     //     return;
     // }
+    auto inserted = _pending_mark_alive_endpoints.insert(addr).second;
+    if (inserted) {
+        // The node is not in the _pending_mark_alive_endpoints
+        logger.debug("Mark Node {} alive with EchoMessage", addr);
+    } else {
+        // We are in the progress of marking this node alive
+        logger.debug("Node {} is being marked as up, ignoring duplicated mark alive operation", addr);
+        return;
+    }
 
     local_state.mark_dead();
     msg_addr id = get_msg_addr(addr);
@@ -1157,6 +1166,8 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
     } catch(...) {
         logger.warn("Fail to send EchoMessage to {}: {}", id, std::current_exception());
     }
+
+    _pending_mark_alive_endpoints.erase(addr);
 }
 
 // Runs inside seastar::async context
