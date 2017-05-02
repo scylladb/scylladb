@@ -1143,7 +1143,17 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
         ms().send_gossip_echo(id).get();
         logger.trace("Got EchoMessage Reply");
         set_last_processed_message_at();
-        real_mark_alive(id.addr, local_state);
+        // After sending echo message, the Node might not be in the
+        // endpoint_state_map anymore, use the reference of local_state
+        // might cause user-after-free
+        auto it = endpoint_state_map.find(addr);
+        if (it == endpoint_state_map.end()) {
+            logger.info("Node {} is not in endpoint_state_map anymore", addr);
+        } else {
+            endpoint_state& state = it->second;
+            logger.debug("Mark Node {} alive after EchoMessage", addr);
+            real_mark_alive(addr, state);
+        }
     } catch(...) {
         logger.warn("Fail to send EchoMessage to {}: {}", id, std::current_exception());
     }
