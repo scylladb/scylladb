@@ -75,6 +75,9 @@ enum class column_kind { partition_key, clustering_key, static_column, regular_c
 sstring to_sstring(column_kind k);
 bool is_compatible(column_kind k1, column_kind k2);
 
+
+sstring maybe_quote(sstring);
+
 enum class cf_type : uint8_t {
     standard,
     super,
@@ -237,6 +240,7 @@ public:
     bool is_counter() const { return _is_counter; }
     const sstring& name_as_text() const;
     const bytes& name() const;
+    sstring name_as_cql_string() const;
     friend std::ostream& operator<<(std::ostream& os, const column_definition& cd);
     friend std::ostream& operator<<(std::ostream& os, const column_definition* cd) {
         return cd != nullptr ? os << *cd : os << "(null)";

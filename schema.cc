@@ -33,6 +33,9 @@
 #include <boost/range/algorithm.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "view_info.hh"
+#include <regex>
+#include <iostream>
+#include <iterator>
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -546,6 +549,24 @@ column_definition::name_as_text() const {
 const bytes&
 column_definition::name() const {
     return _name;
+}
+
+sstring maybe_quote(sstring s) {
+    static const std::regex unquoted("\\w*");
+    static const std::regex double_quote("\"");
+
+    if (std::regex_match(s.begin(), s.end(), unquoted)) {
+        return s;
+    }
+    std::ostringstream ss;
+    ss << "\"";
+    std::regex_replace(std::ostreambuf_iterator<char>(ss), s.begin(), s.end(), double_quote, "\"\"");
+    ss << "\"";
+    return ss.str();
+}
+
+sstring column_definition::name_as_cql_string() const {
+    return maybe_quote(name_as_text());
 }
 
 bool column_definition::is_on_all_components() const {
