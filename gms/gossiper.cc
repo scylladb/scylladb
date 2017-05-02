@@ -1220,6 +1220,16 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     logger.trace("Adding endpoint state for {}, status = {}", ep, get_gossip_status(eps));
     endpoint_state_map[ep] = eps;
 
+    if (_in_shadow_round) {
+        // In shadow round, we only interested in the peer's endpoint_state,
+        // e.g., gossip features, host_id, tokens. No need to call the
+        // on_restart or on_join callbacks or to go through the mark alive
+        // procedure with EchoMessage gossip message. We will do them during
+        // normal gossip runs anyway.
+        logger.debug("In shadow round addr={}, eps={}", ep, eps);
+        return;
+    }
+
     if (eps_old) {
         // the node restarted: it is up to the subscriber to take whatever action is necessary
         _subscribers.for_each([ep, eps_old] (auto& subscriber) {
