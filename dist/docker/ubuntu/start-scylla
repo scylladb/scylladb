@@ -61,6 +61,12 @@ else
 	fi
 fi
 
+EXPERIMENTAL_ARG=""
+if [[ -n $SCYLLA_EXPERIMENTAL ]]
+then
+	EXPERIMENTAL_ARG="--experimental=on"
+fi
+
 if [ x"$SCYLLA_SEEDS" != "x" ];then
 	SEEDS="$SCYLLA_SEEDS"
 else
@@ -74,7 +80,7 @@ if [ x"$SCYLLA_BROADCAST_ADDRESS" != "x" ];then
 	sed -i "s/.*broadcast_address:.*/broadcast_address: $SCYLLA_BROADCAST_ADDRESS/g" /etc/scylla/scylla.yaml
 fi
 
-/usr/bin/scylla --log-to-syslog 1 --log-to-stdout 0 $DEV_MODE $SEASTAR_IO $CPU_SET --default-log-level info --options-file /etc/scylla/scylla.yaml --listen-address $SCYLLA_LISTEN_ADDRESS --rpc-address $SCYLLA_LISTEN_ADDRESS --network-stack posix &
+/usr/bin/scylla --log-to-syslog 1 --log-to-stdout 0 $DEV_MODE $SEASTAR_IO $CPU_SET --default-log-level info --options-file /etc/scylla/scylla.yaml --listen-address $SCYLLA_LISTEN_ADDRESS --rpc-address $SCYLLA_LISTEN_ADDRESS --network-stack $EXPERIMENTAL_ARG posix &
 
 source /etc/default/scylla-jmx
 export SCYLLA_HOME SCYLLA_CONF
