@@ -141,6 +141,11 @@ private:
     cache_type _cache;
 };
 
+std::ostream& operator<<(std::ostream& os, const std::pair<auth::authenticated_user, auth::data_resource>& p) {
+    os << "{user: " << p.first.name() << ", data_resource: " << p.second << "}";
+    return os;
+}
+
 static distributed<auth::auth::permissions_cache> perm_cache;
 
 /**

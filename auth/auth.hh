@@ -50,10 +50,9 @@
 #include "exceptions/exceptions.hh"
 #include "permission.hh"
 #include "data_resource.hh"
+#include "authenticated_user.hh"
 
 namespace auth {
-
-class authenticated_user;
 
 class auth {
 public:
@@ -122,3 +121,5 @@ public:
     static void schedule_when_up(scheduled_func);
 };
 }
+
+std::ostream& operator<<(std::ostream& os, const std::pair<auth::authenticated_user, auth::data_resource>& p);
