@@ -655,6 +655,7 @@ warnings = [
     '-Wno-sometimes-uninitialized',
     '-Wno-return-stack-address',
     '-Wno-missing-braces',
+    '-Wno-unused-lambda-capture',
     ]
 
 warnings = [w
