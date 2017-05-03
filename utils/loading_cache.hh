@@ -26,6 +26,8 @@
 
 #include <seastar/core/timer.hh>
 
+#include "utils/exceptions.hh"
+
 namespace utils {
 // Simple variant of the "LoadingCache" used for permissions in origin.
 
@@ -61,27 +63,34 @@ public:
     typedef typename map_type::iterator iterator;
 
     template<typename Func>
-    loading_cache(size_t max_size, std::chrono::milliseconds expiry,
-                    std::chrono::milliseconds refresh, logging::logger& logger, Func && load,
-                    const hasher& hf = hasher(), const key_equal& eql =
-                                    key_equal(), const allocator_type& a =
-                                    allocator_type())
-                    : _map(10, hf, eql, a), _max_size(max_size), _expiry(
-                                    expiry), _refresh(refresh), _logger(logger), _load(
-                                    std::forward<Func>(load)) {
+    loading_cache(size_t max_size, std::chrono::milliseconds expiry, std::chrono::milliseconds refresh, logging::logger& logger, Func&& load, const hasher& hf = hasher(), const key_equal& eql = key_equal(), const allocator_type& a = allocator_type())
+                : _map(10, hf, eql, a)
+                , _max_size(max_size)
+                , _expiry(expiry)
+                , _refresh(refresh)
+                , _logger(logger)
+                , _load(std::forward<Func>(load)) {
 
-        _period = _expiry;
+        // If expiration period is zero - caching is disabled
+        if (!caching_enabled()) {
+            return;
+        }
 
-        if (expiry == std::chrono::milliseconds() && _max_size != 0) {
-            _period = std::chrono::milliseconds(5000);
+        // Sanity check: if expiration period is given then non-zero refresh period and maximal size are required
+        if (_refresh == std::chrono::milliseconds(0) || _max_size == 0) {
+            throw exceptions::configuration_exception("loading_cache: caching is enabled but refresh period and/or max_size are zero");
         }
-        if (_period != std::chrono::milliseconds()) {
-            _timer.set_callback([this] { on_timer(); });
-            _timer.arm(_period);
-        }
+
+        _timer.set_callback([this] { on_timer(); });
+        _timer.arm(_refresh);
     }
 
     future<_Tp> get(const _Key & k) {
+        // If caching is disabled - always load in the foreground
+        if (!caching_enabled()) {
+            return _load(k);
+        }
+
         auto i = _map.find(k);
         if (i == _map.end()) {
             _logger.trace("{}: key not found - loading in the forground", k);
@@ -92,6 +101,10 @@ public:
     }
 
 private:
+    bool caching_enabled() const {
+        return _expiry != std::chrono::milliseconds(0);
+    }
+
     future<_Tp> load(const _Key& k) {
         return _load(k).then([this, k] (_Tp t) {
             auto i = _map.emplace(k, ts_value_type(std::move(t), loading_cache_clock_type::now()));
@@ -194,7 +207,7 @@ private:
             return now();
         }).finally([this, timer_start_tp] {
             _logger.trace("on_timer(): rearming");
-            _timer.arm(timer_start_tp + _period);
+            _timer.arm(timer_start_tp + _refresh);
         });
     }
 
@@ -202,7 +215,6 @@ private:
     size_t _max_size;
     std::chrono::milliseconds _expiry;
     std::chrono::milliseconds _refresh;
-    std::chrono::milliseconds _period;
     logging::logger& _logger;
     std::function<future<_Tp>(_Key)> _load;
     timer<lowres_clock> _timer;
