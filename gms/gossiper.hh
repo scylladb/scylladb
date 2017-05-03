@@ -187,6 +187,9 @@ private:
     std::set<inet_address> _live_endpoints;
     std::list<inet_address> _live_endpoints_just_added;
 
+    /* nodes are being marked as alive */
+    std::unordered_set<inet_address> _pending_mark_alive_endpoints;
+
     /* unreachable member set */
     std::map<inet_address, clk::time_point> _unreachable_endpoints;
 
