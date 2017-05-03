@@ -779,9 +779,10 @@ public:
 public:
     void apply(tombstone t) { _tombstone.apply(t); }
     void apply_delete(const schema& schema, const exploded_clustering_prefix& prefix, tombstone t);
+    void apply_delete(const schema& schema, const clustering_key_prefix& prefix, tombstone t);
     void apply_delete(const schema& schema, range_tombstone rt);
-    void apply_delete(const schema& schema, clustering_key&& key, tombstone t);
-    void apply_delete(const schema& schema, clustering_key_view key, tombstone t);
+    void apply_delete(const schema& schema, clustering_key_prefix&& prefix, tombstone t);
+    void apply_delete(const schema& schema, clustering_key_prefix_view prefix, tombstone t);
     // Equivalent to applying a mutation with an empty row, created with given timestamp
     void apply_insert(const schema& s, clustering_key_view, api::timestamp_type created_at);
     // prefix must not be full

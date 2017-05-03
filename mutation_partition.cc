@@ -430,6 +430,17 @@ mutation_partition::apply_delete(const schema& schema, const exploded_clustering
 }
 
 void
+mutation_partition::apply_delete(const schema& schema, const clustering_key_prefix& prefix, tombstone t) {
+    if (prefix.is_empty(schema)) {
+        apply(t);
+    } else if (prefix.is_full(schema)) {
+        clustered_row(schema, prefix).apply(t);
+    } else {
+        apply_row_tombstone(schema, prefix, t);
+    }
+}
+
+void
 mutation_partition::apply_delete(const schema& schema, range_tombstone rt) {
     if (range_tombstone::is_single_clustering_row_tombstone(schema, rt.start, rt.start_kind, rt.end, rt.end_kind)) {
         apply_delete(schema, std::move(rt.start), std::move(rt.tomb));
@@ -439,13 +450,25 @@ mutation_partition::apply_delete(const schema& schema, range_tombstone rt) {
 }
 
 void
-mutation_partition::apply_delete(const schema& schema, clustering_key&& key, tombstone t) {
-    clustered_row(schema, std::move(key)).apply(t);
+mutation_partition::apply_delete(const schema& schema, clustering_key&& prefix, tombstone t) {
+    if (prefix.is_empty(schema)) {
+        apply(t);
+    } else if (prefix.is_full(schema)) {
+        clustered_row(schema, std::move(prefix)).apply(t);
+    } else {
+        apply_row_tombstone(schema, std::move(prefix), t);
+    }
 }
 
 void
-mutation_partition::apply_delete(const schema& schema, clustering_key_view key, tombstone t) {
-    clustered_row(schema, key).apply(t);
+mutation_partition::apply_delete(const schema& schema, clustering_key_prefix_view prefix, tombstone t) {
+    if (prefix.is_empty(schema)) {
+        apply(t);
+    } else if (prefix.is_full(schema)) {
+        clustered_row(schema, prefix).apply(t);
+    } else {
+        apply_row_tombstone(schema, prefix, t);
+    }
 }
 
 void
