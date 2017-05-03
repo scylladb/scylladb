@@ -85,7 +85,7 @@ public:
         _timer.arm(_refresh);
     }
 
-    future<_Tp> get(const _Key & k) {
+    future<_Tp> get(const _Key& k) {
         // If caching is disabled - always load in the foreground
         if (!caching_enabled()) {
             return _load(k);
@@ -216,7 +216,7 @@ private:
     std::chrono::milliseconds _expiry;
     std::chrono::milliseconds _refresh;
     logging::logger& _logger;
-    std::function<future<_Tp>(_Key)> _load;
+    std::function<future<_Tp>(const _Key&)> _load;
     timer<lowres_clock> _timer;
 };
 
