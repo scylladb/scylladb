@@ -500,6 +500,9 @@ public:
     // Like advance_to(dht::ring_position_view), but returns information whether the key was found
     future<bool> advance_and_check_if_present(dht::ring_position_view key) {
         return advance_to(key).then([this, key] {
+            if (eof()) {
+                return make_ready_future<bool>(false);
+            }
             return ensure_partition_data().then([this, key] {
                 dht::ring_position_comparator cmp(*_sstable->_schema);
                 return cmp(key, partition_key()) == 0;
