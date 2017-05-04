@@ -378,13 +378,6 @@ public:
         return advance_to_page(0);
     }
 
-    future<> ensure_partition_data() {
-        if (partition_data_ready()) {
-            return make_ready_future<>();
-        }
-        return read_partition_data();
-    }
-
     // Forwards the cursor to given position in current partition.
     //
     // Note that the index within partition, unlike the partition index, doesn't cover all keys.
@@ -503,7 +496,7 @@ public:
             if (eof()) {
                 return make_ready_future<bool>(false);
             }
-            return ensure_partition_data().then([this, key] {
+            return read_partition_data().then([this, key] {
                 dht::ring_position_comparator cmp(*_sstable->_schema);
                 return cmp(key, partition_key()) == 0;
             });
