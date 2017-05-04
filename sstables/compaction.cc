@@ -150,8 +150,6 @@ class compaction;
 class compacting_sstable_writer {
     compaction& _c;
     sstable_writer* _writer = nullptr;
-private:
-    void finish_sstable_write();
 public:
     explicit compacting_sstable_writer(compaction& c) : _c(c) {}
 
