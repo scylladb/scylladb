@@ -119,11 +119,8 @@ namespace db {
 namespace view {
 
 bool partition_key_matches(const schema& base, const view_info& view, const dht::decorated_key& key) {
-    dht::ring_position rp(key);
-    auto& ranges = view.partition_ranges();
-    return std::any_of(ranges.begin(), ranges.end(), [&] (auto&& range) {
-        return range.contains(rp, dht::ring_position_comparator(base));
-    });
+    return view.select_statement().get_restrictions()->get_partition_key_restrictions()->is_satisfied_by(
+            base, key.key(), clustering_key_prefix::make_empty(), row(), cql3::query_options({ }), gc_clock::now());
 }
 
 bool clustering_prefix_matches(const schema& base, const view_info& view, const partition_key& key, const clustering_key_prefix& ck) {
