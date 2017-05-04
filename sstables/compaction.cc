@@ -244,7 +244,6 @@ private:
         _info->sstables = _sstables.size();
         _info->ks = schema->ks_name();
         _info->cf = schema->cf_name();
-        _info->type = compaction_type::Compaction;
         report_start(formatted_msg);
 
         return ::make_combined_reader(std::move(readers));
