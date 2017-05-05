@@ -443,11 +443,11 @@ void view_updates::generate_update(
     }
 
     auto* after = update.cells().find_cell(*col_id);
+    // Note: multi-cell columns can't be part of the primary key.
     if (existing) {
         auto* before = existing->cells().find_cell(*col_id);
-        if (before) {
-            if (after) {
-                // Note: multi-cell columns can't be part of the primary key.
+        if (before && before->as_atomic_cell().is_live()) {
+            if (after && after->as_atomic_cell().is_live()) {
                 auto cmp = compare_atomic_cell_for_merge(before->as_atomic_cell(), after->as_atomic_cell());
                 if (cmp == 0) {
                     update_entry(base_key, update, *existing, now);
@@ -462,7 +462,7 @@ void view_updates::generate_update(
     }
 
     // No existing row or the cell wasn't live
-    if (after) {
+    if (after && after->as_atomic_cell().is_live()) {
         create_entry(base_key, update, now);
     }
 }
