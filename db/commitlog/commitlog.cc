@@ -436,7 +436,8 @@ public:
             _segment_manager->totals.total_size_on_disk -= size_on_disk();
             _segment_manager->totals.total_size -= (size_on_disk() + _buffer.size());
             try {
-                commit_io_check(::unlink, _file_name.c_str());
+                commit_io_check([] (const char* fname) { ::unlink(fname); },
+                        _file_name.c_str());
             } catch (...) {
                 logger.error("Could not delete segment {}: {}", *this, std::current_exception());
             }
