@@ -250,7 +250,7 @@ public:
      *
      * @exception std::invalid_argument number of registers doesn't match.
      */
-    void merge(const HyperLogLog& other) throw (std::invalid_argument) {
+    void merge(const HyperLogLog& other) {
         if (m_ != other.m_) {
             std::stringstream ss;
             ss << "number of registers doesn't match: " << m_ << " != " << other.m_;
@@ -298,7 +298,7 @@ public:
      *
      * @exception std::runtime_error When failed to dump.
      */
-    void dump(std::ostream& os) const throw(std::runtime_error){
+    void dump(std::ostream& os) const {
         os.write((char*)&b_, sizeof(b_));
         os.write((char*)&M_[0], sizeof(M_[0]) * M_.size());
         if(os.fail()){
@@ -313,7 +313,7 @@ public:
      *
      * @exception std::runtime_error When failed to restore.
      */
-    void restore(std::istream& is) throw(std::runtime_error){
+    void restore(std::istream& is) {
         uint8_t b = 0;
         is.read((char*)&b, sizeof(b));
         HyperLogLog tempHLL(b);

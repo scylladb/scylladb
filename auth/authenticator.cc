@@ -72,7 +72,7 @@ sstring auth::authenticator::option_to_string(option opt) {
 static std::unique_ptr<auth::authenticator> global_authenticator;
 
 future<>
-auth::authenticator::setup(const sstring& type) throw (exceptions::configuration_exception) {
+auth::authenticator::setup(const sstring& type) {
     if (auth::auth::is_class_type(type, ALLOW_ALL_AUTHENTICATOR_NAME)) {
         class allow_all_authenticator : public authenticator {
         public:
@@ -88,16 +88,16 @@ auth::authenticator::setup(const sstring& type) throw (exceptions::configuration
             option_set alterable_options() const override {
                 return option_set();
             }
-            future<::shared_ptr<authenticated_user>> authenticate(const credentials_map& credentials) const throw(exceptions::authentication_exception) override {
+            future<::shared_ptr<authenticated_user>> authenticate(const credentials_map& credentials) const override {
                 return make_ready_future<::shared_ptr<authenticated_user>>(::make_shared<authenticated_user>());
             }
-            future<> create(sstring username, const option_map& options) throw(exceptions::request_validation_exception, exceptions::request_execution_exception) override {
+            future<> create(sstring username, const option_map& options) override {
                 return make_ready_future();
             }
-            future<> alter(sstring username, const option_map& options) throw(exceptions::request_validation_exception, exceptions::request_execution_exception) override {
+            future<> alter(sstring username, const option_map& options) override {
                 return make_ready_future();
             }
-            future<> drop(sstring username) throw(exceptions::request_validation_exception, exceptions::request_execution_exception) override {
+            future<> drop(sstring username) override {
                 return make_ready_future();
             }
             const resource_ids& protected_resources() const override {

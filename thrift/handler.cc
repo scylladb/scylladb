@@ -58,7 +58,7 @@ using namespace ::apache::thrift::protocol;
 using namespace ::apache::thrift::transport;
 using namespace ::apache::thrift::async;
 
-using namespace  ::org::apache::cassandra;
+using namespace  ::cassandra;
 
 using namespace thrift;
 
@@ -687,7 +687,7 @@ public:
     }
 
     void describe_version(tcxx::function<void(std::string const& _return)> cob) {
-        cob(org::apache::cassandra::thrift_version);
+        cob(::cassandra::thrift_version);
     }
 
     void do_describe_ring(tcxx::function<void(std::vector<TokenRange>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace, bool local) {

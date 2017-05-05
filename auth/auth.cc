@@ -331,14 +331,13 @@ future<bool> auth::auth::is_super_user(const sstring& username) {
                     });
 }
 
-future<> auth::auth::insert_user(const sstring& username, bool is_super)
-                throw (exceptions::request_execution_exception) {
+future<> auth::auth::insert_user(const sstring& username, bool is_super) {
     return cql3::get_local_query_processor().process(sprint("INSERT INTO %s.%s (%s, %s) VALUES (?, ?)",
                     AUTH_KS, USERS_CF, USER_NAME, SUPER),
                     consistency_for_user(username), { username, is_super }).discard_result();
 }
 
-future<> auth::auth::delete_user(const sstring& username) throw(exceptions::request_execution_exception) {
+future<> auth::auth::delete_user(const sstring& username) {
     return cql3::get_local_query_processor().process(sprint("DELETE FROM %s.%s WHERE %s = ?",
                     AUTH_KS, USERS_CF, USER_NAME),
                     consistency_for_user(username), { username }).discard_result();

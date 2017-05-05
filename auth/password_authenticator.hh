@@ -58,10 +58,10 @@ public:
     bool require_authentication() const override;
     option_set supported_options() const override;
     option_set alterable_options() const override;
-    future<::shared_ptr<authenticated_user>> authenticate(const credentials_map& credentials) const throw(exceptions::authentication_exception) override;
-    future<> create(sstring username, const option_map& options) throw(exceptions::request_validation_exception, exceptions::request_execution_exception) override;
-    future<> alter(sstring username, const option_map& options) throw(exceptions::request_validation_exception, exceptions::request_execution_exception) override;
-    future<> drop(sstring username) throw(exceptions::request_validation_exception, exceptions::request_execution_exception) override;
+    future<::shared_ptr<authenticated_user>> authenticate(const credentials_map& credentials) const override;
+    future<> create(sstring username, const option_map& options) override;
+    future<> alter(sstring username, const option_map& options) override;
+    future<> drop(sstring username) override;
     const resource_ids& protected_resources() const override;
     ::shared_ptr<sasl_challenge> new_sasl_challenge() const override;
 

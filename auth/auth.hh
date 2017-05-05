@@ -91,7 +91,7 @@ public:
      * @param isSuper User's new status.
      * @throws RequestExecutionException
      */
-    static future<> insert_user(const sstring& username, bool is_super) throw(exceptions::request_execution_exception);
+    static future<> insert_user(const sstring& username, bool is_super);
 
     /**
      * Deletes the user from AUTH_KS.USERS_CF.
@@ -99,7 +99,7 @@ public:
      * @param username Username to delete.
      * @throws RequestExecutionException
      */
-    static future<> delete_user(const sstring& username) throw(exceptions::request_execution_exception);
+    static future<> delete_user(const sstring& username);
 
     /**
      * Sets up Authenticator and Authorizer.
