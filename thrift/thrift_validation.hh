@@ -45,7 +45,7 @@
 #include "bytes.hh"
 #include "Cassandra.h"
 
-using namespace ::org::apache::cassandra;
+using namespace ::cassandra;
 
 #if 0
 import java.nio.ByteBuffer;

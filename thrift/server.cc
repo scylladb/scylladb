@@ -48,7 +48,7 @@ using namespace apache::thrift;
 using namespace apache::thrift::transport;
 using namespace apache::thrift::protocol;
 using namespace apache::thrift::async;
-using namespace org::apache::cassandra;
+using namespace ::cassandra;
 
 class thrift_stats {
     seastar::metrics::metric_groups _metrics;

@@ -32,13 +32,13 @@ class thrift_server;
 class thrift_stats;
 class database;
 
-namespace org { namespace apache { namespace cassandra {
+namespace cassandra {
 
 static const sstring thrift_version = "20.1.0";
 
 class CassandraCobSvIfFactory;
 
-}}}
+}
 
 namespace apache { namespace thrift { namespace protocol {
 
@@ -56,7 +56,7 @@ class TAsyncProcessorFactory;
 class thrift_server {
     std::vector<server_socket> _listeners;
     std::unique_ptr<thrift_stats> _stats;
-    boost::shared_ptr<org::apache::cassandra::CassandraCobSvIfFactory> _handler_factory;
+    boost::shared_ptr<::cassandra::CassandraCobSvIfFactory> _handler_factory;
     std::unique_ptr<apache::thrift::protocol::TProtocolFactory> _protocol_factory;
     boost::shared_ptr<apache::thrift::async::TAsyncProcessorFactory> _processor_factory;
     uint64_t _total_connections = 0;
