@@ -92,7 +92,7 @@ public:
      * For example, use this method to create any required keyspaces/column families.
      * Note: Only call from main thread.
      */
-    static future<> setup(const sstring& type) throw(exceptions::configuration_exception);
+    static future<> setup(const sstring& type);
 
     /**
      * Returns the system authenticator. Must have called setup before calling this.
@@ -129,7 +129,7 @@ public:
      *
      * @throws authentication_exception if credentials don't match any known user.
      */
-    virtual future<::shared_ptr<authenticated_user>> authenticate(const credentials_map& credentials) const throw(exceptions::authentication_exception) = 0;
+    virtual future<::shared_ptr<authenticated_user>> authenticate(const credentials_map& credentials) const = 0;
 
     /**
      * Called during execution of CREATE USER query (also may be called on startup, see seedSuperuserOptions method).
@@ -141,7 +141,7 @@ public:
      * @throws exceptions::request_validation_exception
      * @throws exceptions::request_execution_exception
      */
-    virtual future<> create(sstring username, const option_map& options) throw(exceptions::request_validation_exception, exceptions::request_execution_exception) = 0;
+    virtual future<> create(sstring username, const option_map& options) = 0;
 
     /**
      * Called during execution of ALTER USER query.
@@ -154,7 +154,7 @@ public:
      * @throws exceptions::request_validation_exception
      * @throws exceptions::request_execution_exception
      */
-    virtual future<> alter(sstring username, const option_map& options) throw(exceptions::request_validation_exception, exceptions::request_execution_exception) = 0;
+    virtual future<> alter(sstring username, const option_map& options) = 0;
 
 
     /**
@@ -164,7 +164,7 @@ public:
      * @throws exceptions::request_validation_exception
      * @throws exceptions::request_execution_exception
      */
-    virtual future<> drop(sstring username) throw(exceptions::request_validation_exception, exceptions::request_execution_exception) = 0;
+    virtual future<> drop(sstring username) = 0;
 
      /**
      * Set of resources that should be made inaccessible to users and only accessible internally.
@@ -177,9 +177,9 @@ public:
     class sasl_challenge {
     public:
         virtual ~sasl_challenge() {}
-        virtual bytes evaluate_response(bytes_view client_response) throw(exceptions::authentication_exception) = 0;
+        virtual bytes evaluate_response(bytes_view client_response) = 0;
         virtual bool is_complete() const = 0;
-        virtual future<::shared_ptr<authenticated_user>> get_authenticated_user() const throw(exceptions::authentication_exception) = 0;
+        virtual future<::shared_ptr<authenticated_user>> get_authenticated_user() const = 0;
     };
 
     /**

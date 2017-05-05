@@ -117,13 +117,13 @@ public:
      * @return keyspace of the resource.
      * @throws std::invalid_argument if it's the root-level resource.
      */
-    const sstring& keyspace() const throw(std::invalid_argument);
+    const sstring& keyspace() const;
 
     /**
      * @return column family of the resource.
      * @throws std::invalid_argument if it's not a cf-level resource.
      */
-    const sstring& column_family() const throw(std::invalid_argument);
+    const sstring& column_family() const;
 
     /**
      * @return Whether or not the resource has a parent in the hierarchy.
