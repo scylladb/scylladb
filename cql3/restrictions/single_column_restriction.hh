@@ -71,26 +71,6 @@ public:
         return _column_def;
     }
 
-    /**
-     * Whether the specified row satisfied this restriction.
-     * Assumes the row is live, but not all cells. If a cell
-     * isn't live and there's a restriction on its column,
-     * then the function returns false.
-     *
-     * @param schema the schema the row belongs to
-     * @param key the partition key
-     * @param ckey the clustering key
-     * @param cells the remaining row columns
-     * @return the restriction resulting of the merge
-     * @throws InvalidRequestException if the restrictions cannot be merged
-     */
-    virtual bool is_satisfied_by(const schema& schema,
-                                 const partition_key& key,
-                                 const clustering_key_prefix& ckey,
-                                 const row& cells,
-                                 const query_options& options,
-                                 gc_clock::time_point now) const = 0;
-
 #if 0
     @Override
     public void addIndexExpressionTo(List<IndexExpression> expressions,

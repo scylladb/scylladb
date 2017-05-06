@@ -85,6 +85,20 @@ public:
         do_merge_with(as_pkr);
     }
 
+    bool is_satisfied_by(const schema& schema,
+                         const partition_key& key,
+                         const clustering_key_prefix& ckey,
+                         const row& cells,
+                         const query_options& options,
+                         gc_clock::time_point now) const override {
+        for (auto&& range : bounds_ranges(options)) {
+            if (!range.contains(ckey, clustering_key_prefix::prefix_equal_tri_compare(schema))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
 protected:
     virtual void do_merge_with(::shared_ptr<primary_key_restrictions<clustering_key_prefix>> other) = 0;
 

@@ -90,6 +90,14 @@ public:
     sstring to_string() const override {
         return "Initial restrictions";
     }
+    virtual bool is_satisfied_by(const schema& schema,
+                                 const partition_key& key,
+                                 const clustering_key_prefix& ckey,
+                                 const row& cells,
+                                 const query_options& options,
+                                 gc_clock::time_point now) const override {
+        return true;
+    }
 };
 
 template<>
@@ -406,25 +414,34 @@ void statement_restrictions::validate_secondary_index_selections(bool selects_on
     }
 }
 
+static bytes_view_opt do_get_value(const schema& schema,
+        const column_definition& cdef,
+        const partition_key& key,
+        const clustering_key_prefix& ckey,
+        const row& cells,
+        gc_clock::time_point now) {
+    switch(cdef.kind) {
+        case column_kind::partition_key:
+            return key.get_component(schema, cdef.component_index());
+        case column_kind::clustering_key:
+            return ckey.get_component(schema, cdef.component_index());
+        default:
+            auto cell = cells.find_cell(cdef.id);
+            if (!cell) {
+                return stdx::nullopt;
+            }
+            assert(cdef.is_atomic());
+            auto c = cell->as_atomic_cell();
+            return c.is_dead(now) ? stdx::nullopt : bytes_view_opt(c.value());
+    }
+}
+
 bytes_view_opt single_column_restriction::get_value(const schema& schema,
         const partition_key& key,
         const clustering_key_prefix& ckey,
         const row& cells,
         gc_clock::time_point now) const {
-    switch(_column_def.kind) {
-    case column_kind::partition_key:
-        return key.get_component(schema, _column_def.component_index());
-    case column_kind::clustering_key:
-        return ckey.get_component(schema, _column_def.component_index());
-    default:
-        auto cell = cells.find_cell(_column_def.id);
-        if (!cell) {
-            return stdx::nullopt;
-        }
-        assert(_column_def.is_atomic());
-        auto c = cell->as_atomic_cell();
-        return c.is_dead(now) ? stdx::nullopt : bytes_view_opt(c.value());
-    }
+    return do_get_value(schema, _column_def, key, ckey, cells, std::move(now));
 }
 
 bool single_column_restriction::EQ::is_satisfied_by(const schema& schema,
@@ -463,6 +480,23 @@ bool single_column_restriction::IN::is_satisfied_by(const schema& schema,
     });
 }
 
+static query::range<bytes_view> to_range(const term_slice& slice, const query_options& options) {
+    using range_type = query::range<bytes_view>;
+    auto extract_bound = [&] (statements::bound bound) -> stdx::optional<range_type::bound> {
+        if (!slice.has_bound(bound)) {
+            return { };
+        }
+        auto value = slice.bound(bound)->bind_and_get(options);
+        if (!value) {
+            return { };
+        }
+        return { range_type::bound(*value, slice.is_inclusive(bound)) };
+    };
+    return range_type(
+        extract_bound(statements::bound::START),
+        extract_bound(statements::bound::END));
+}
+
 bool single_column_restriction::slice::is_satisfied_by(const schema& schema,
         const partition_key& key,
         const clustering_key_prefix& ckey,
@@ -476,26 +510,7 @@ bool single_column_restriction::slice::is_satisfied_by(const schema& schema,
     if (!cell_value) {
         return false;
     }
-
-    using range_type = query::range<bytes_view>;
-    auto extract_bound = [&] (statements::bound bound) -> stdx::optional<range_type::bound> {
-        if (!_slice.has_bound(bound)) {
-            return { };
-        }
-        auto value = _slice.bound(bound)->bind_and_get(options);
-        if (!value) {
-            return { };
-        }
-        return { range_type::bound(*value, _slice.is_inclusive(bound)) };
-    };
-    auto range = range_type(
-            extract_bound(statements::bound::START),
-            extract_bound(statements::bound::END));
-    if  (_column_def.type->is_reversed()) {
-        range.reverse();
-    }
-
-    return range.contains(*cell_value, _column_def.type->as_tri_comparator());
+    return to_range(_slice, options).contains(*cell_value, _column_def.type->as_tri_comparator());
 }
 
 bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
@@ -625,6 +640,47 @@ bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
     }
 
     return true;
+}
+
+bool token_restriction::EQ::is_satisfied_by(const schema& schema,
+        const partition_key& key,
+        const clustering_key_prefix& ckey,
+        const row& cells,
+        const query_options& options,
+        gc_clock::time_point now) const {
+    bool satisfied = false;
+    auto cdef = _column_definitions.begin();
+    for (auto&& operand : values(options)) {
+        if (operand) {
+            auto cell_value = do_get_value(schema, **cdef, key, ckey, cells, now);
+            satisfied = cell_value && (*cdef)->type->compare(*operand, *cell_value) == 0;
+        }
+        if (!satisfied) {
+            break;
+        }
+    }
+    return satisfied;
+}
+
+bool token_restriction::slice::is_satisfied_by(const schema& schema,
+        const partition_key& key,
+        const clustering_key_prefix& ckey,
+        const row& cells,
+        const query_options& options,
+        gc_clock::time_point now) const {
+    bool satisfied = false;
+    auto range = to_range(_slice, options);
+    for (auto* cdef : _column_definitions) {
+        auto cell_value = do_get_value(schema, *cdef, key, ckey, cells, now);
+        if (!cell_value) {
+            return false;
+        }
+        satisfied = range.contains(*cell_value, cdef->type->as_tri_comparator());
+        if (!satisfied) {
+            break;
+        }
+    }
+    return satisfied;
 }
 
 }
