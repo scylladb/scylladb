@@ -21,6 +21,7 @@
  */
 
 #include <boost/test/unit_test.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 #include "cql_assertions.hh"
 #include "transport/messages/result_message.hh"
 #include "to_string.hh"
@@ -87,6 +88,27 @@ rows_assertions::with_rows(std::initializer_list<std::initializer_list<bytes_opt
     if (actual_i != actual_end) {
         fail(sprint("Expected less rows (%d), got %d. Next row is: %s", rows.size(), _rows->rs().size(),
                     to_string(*actual_i)));
+    }
+    return {*this};
+}
+
+// Verifies that the result has the following rows and only those rows.
+rows_assertions
+rows_assertions::with_rows_ignore_order(std::initializer_list<std::initializer_list<bytes_opt>> rows) {
+    auto& actual = _rows->rs().rows();
+    for (auto&& expected : rows) {
+        auto found = std::find_if(std::begin(actual), std::end(actual), [&] (auto&& row) {
+            return std::equal(
+                    std::begin(row), std::end(row),
+                    std::begin(expected), std::end(expected));
+        });
+        if (found == std::end(actual)) {
+            fail(sprint("row %s not found in result set (%s)", to_string(expected),
+               ::join(", ", actual | boost::adaptors::transformed([] (auto& r) { return to_string(r); }))));
+        }
+    }
+    if (_rows->rs().size() != rows.size()) {
+        fail(sprint("Expected more rows (%d), got %d", _rows->rs().size(), rows.size()));
     }
     return {*this};
 }
