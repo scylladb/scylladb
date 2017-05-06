@@ -210,7 +210,7 @@ statement_restrictions::statement_restrictions(database& db,
             || nonprimary_key_restrictions->has_supporting_index(secondaryIndexManager);*/
 
     // At this point, the select statement if fully constructed, but we still have a few things to validate
-    process_partition_key_restrictions(has_queriable_index);
+    process_partition_key_restrictions(has_queriable_index, for_view);
 
     // Some but not all of the partition key columns have been specified;
     // hence we need turn these restrictions into index expressions.
@@ -307,7 +307,7 @@ bool statement_restrictions::uses_function(const sstring& ks_name, const sstring
             || _nonprimary_key_restrictions->uses_function(ks_name, function_name);
 }
 
-void statement_restrictions::process_partition_key_restrictions(bool has_queriable_index) {
+void statement_restrictions::process_partition_key_restrictions(bool has_queriable_index, bool for_view) {
     // If there is a queriable index, no special condition are required on the other restrictions.
     // But we still need to know 2 things:
     // - If we don't have a queriable index, is the query ok
@@ -317,7 +317,7 @@ void statement_restrictions::process_partition_key_restrictions(bool has_queriab
     if (_partition_key_restrictions->is_on_token()) {
         _is_key_range = true;
     } else if (has_partition_key_unrestricted_components()) {
-        if (!_partition_key_restrictions->empty()) {
+        if (!_partition_key_restrictions->empty() && !for_view) {
             if (!has_queriable_index) {
                 throw exceptions::invalid_request_exception(sprint("Partition key parts: %s must be restricted as other parts are",
                     join(", ", get_partition_key_unrestricted_components())));

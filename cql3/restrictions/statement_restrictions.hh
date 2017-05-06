@@ -172,7 +172,7 @@ public:
      */
     bool has_unrestricted_clustering_columns() const;
 private:
-    void process_partition_key_restrictions(bool has_queriable_index);
+    void process_partition_key_restrictions(bool has_queriable_index, bool for_view);
 
     /**
      * Returns the partition key components that are not restricted.
