@@ -1082,11 +1082,10 @@ std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_meta
     schema_ptr s = keyspaces();
     auto pkey = partition_key::from_singular(*s, keyspace->name());
     mutation m(pkey, s);
-    exploded_clustering_prefix ckey;
-    m.set_cell(ckey, "durable_writes", keyspace->durable_writes(), timestamp);
-    m.set_cell(ckey, "strategy_class", keyspace->strategy_name(), timestamp);
+    m.set_cell(clustering_key_prefix::make_empty(), "durable_writes", keyspace->durable_writes(), timestamp);
+    m.set_cell(clustering_key_prefix::make_empty(), "strategy_class", keyspace->strategy_name(), timestamp);
     auto raw = json::to_json(keyspace->strategy_options());
-    m.set_cell(ckey, "strategy_options", raw, timestamp);
+    m.set_cell(clustering_key_prefix::make_empty(), "strategy_options", raw, timestamp);
     mutations.emplace_back(std::move(m));
 
     if (with_tables_and_types_and_functions) {

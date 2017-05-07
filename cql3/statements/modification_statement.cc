@@ -43,13 +43,14 @@
 #include "cql3/statements/raw/modification_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/restrictions/single_column_restriction.hh"
-#include "cql3/single_column_relation.hh"
 #include "validation.hh"
 #include "core/shared_ptr.hh"
 #include "query-result-reader.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/adaptor/filtered.hpp>
+#include <boost/range/adaptor/map.hpp>
+#include <boost/range/adaptor/indirected.hpp>
 #include "service/storage_service.hh"
 #include <seastar/core/execution_stage.hh>
 
@@ -88,11 +89,8 @@ bool modification_statement::uses_function(const sstring& ks_name, const sstring
     if (attrs->uses_function(ks_name, function_name)) {
         return true;
     }
-    for (auto&& e : _processed_keys) {
-        auto r = e.second;
-        if (r && r->uses_function(ks_name, function_name)) {
-            return true;
-        }
+    if (_restrictions->uses_function(ks_name, function_name)) {
+        return true;
     }
     for (auto&& operation : _column_operations) {
         if (operation && operation->uses_function(ks_name, function_name)) {
@@ -170,15 +168,18 @@ future<> modification_statement::check_access(const service::client_state& state
 future<std::vector<mutation>>
 modification_statement::get_mutations(distributed<service::storage_proxy>& proxy, const query_options& options, bool local, int64_t now, tracing::trace_state_ptr trace_state) {
     auto keys = make_lw_shared(build_partition_keys(options));
-    auto prefix = make_lw_shared(create_exploded_clustering_prefix(options));
-    return make_update_parameters(proxy, keys, prefix, options, local, now, std::move(trace_state)).then(
-            [this, keys, prefix, now] (auto params_ptr) {
+    auto ranges = make_lw_shared(create_clustering_ranges(options));
+    return make_update_parameters(proxy, keys, ranges, options, local, now, std::move(trace_state)).then(
+            [this, keys, ranges, now] (auto params_ptr) {
                 std::vector<mutation> mutations;
                 mutations.reserve(keys->size());
                 for (auto key : *keys) {
-                    mutations.emplace_back(std::move(key), s);
+                    // We know key.start() must be defined since we only allow EQ relations on the partition key.
+                    mutations.emplace_back(std::move(*key.start()->value().key()), s);
                     auto& m = mutations.back();
-                    this->add_update_for_key(m, *prefix, *params_ptr);
+                    for (auto&& r : *ranges) {
+                        this->add_update_for_key(m, r, *params_ptr);
+                    }
                 }
                 return make_ready_future<decltype(mutations)>(std::move(mutations));
             });
@@ -187,13 +188,13 @@ modification_statement::get_mutations(distributed<service::storage_proxy>& proxy
 future<std::unique_ptr<update_parameters>>
 modification_statement::make_update_parameters(
         distributed<service::storage_proxy>& proxy,
-        lw_shared_ptr<std::vector<partition_key>> keys,
-        lw_shared_ptr<exploded_clustering_prefix> prefix,
+        lw_shared_ptr<dht::partition_range_vector> keys,
+        lw_shared_ptr<query::clustering_row_ranges> ranges,
         const query_options& options,
         bool local,
         int64_t now,
         tracing::trace_state_ptr trace_state) {
-    return read_required_rows(proxy, std::move(keys), std::move(prefix), local, options.get_consistency(), std::move(trace_state)).then(
+    return read_required_rows(proxy, *keys, std::move(ranges), local, options.get_consistency(), std::move(trace_state)).then(
             [this, &options, now] (auto rows) {
                 return make_ready_future<std::unique_ptr<update_parameters>>(
                         std::make_unique<update_parameters>(s, options,
@@ -266,15 +267,15 @@ public:
             add_cell(cells, _schema->static_column_at(id), static_row_iterator.next_collection_cell());
         }
 
-        _data.rows.emplace(std::make_pair(*_pkey, std::experimental::nullopt), std::move(cells));
+        _data.rows.emplace(std::make_pair(*_pkey, clustering_key_prefix::make_empty()), std::move(cells));
     }
 };
 
 future<update_parameters::prefetched_rows_type>
 modification_statement::read_required_rows(
         distributed<service::storage_proxy>& proxy,
-        lw_shared_ptr<std::vector<partition_key>> keys,
-        lw_shared_ptr<exploded_clustering_prefix> prefix,
+        dht::partition_range_vector keys,
+        lw_shared_ptr<query::clustering_row_ranges> ranges,
         bool local,
         db::consistency_level cl,
         tracing::trace_state_ptr trace_state) {
@@ -300,20 +301,16 @@ modification_statement::read_required_rows(
     boost::range::push_back(regular_cols, s->regular_columns()
         | boost::adaptors::filtered(is_collection) | boost::adaptors::transformed([] (auto&& col) { return col.id; }));
     query::partition_slice ps(
-            {query::clustering_range(clustering_key_prefix::from_clustering_prefix(*s, *prefix))},
+            *ranges,
             std::move(static_cols),
             std::move(regular_cols),
             query::partition_slice::option_set::of<
                 query::partition_slice::option::send_partition_key,
                 query::partition_slice::option::send_clustering_key,
                 query::partition_slice::option::collections_as_maps>());
-    dht::partition_range_vector pr;
-    for (auto&& pk : *keys) {
-        pr.emplace_back(dht::global_partitioner().decorate_key(*s, pk));
-    }
     query::read_command cmd(s->id(), s->version(), ps, std::numeric_limits<uint32_t>::max());
     // FIXME: ignoring "local"
-    return proxy.local().query(s, make_lw_shared(std::move(cmd)), std::move(pr), cl, std::move(trace_state)).then([this, ps] (auto result) {
+    return proxy.local().query(s, make_lw_shared(std::move(cmd)), std::move(keys), cl, std::move(trace_state)).then([this, ps] (auto result) {
         return query::result_view::do_with(*result, [&] (query::result_view v) {
             auto prefetched_rows = update_parameters::prefetched_rows_type({update_parameters::prefetch_data(s)});
             v.consume(ps, prefetch_data_builder(s, prefetched_rows.value(), ps));
@@ -322,54 +319,8 @@ modification_statement::read_required_rows(
     });
 }
 
-const column_definition*
-modification_statement::get_first_empty_key() {
-    for (auto& def : s->clustering_key_columns()) {
-        if (_processed_keys.find(&def) == _processed_keys.end()) {
-            return &def;
-        }
-    }
-    return {};
-}
-
-exploded_clustering_prefix
-modification_statement::create_exploded_clustering_prefix_internal(const query_options& options) {
-    std::vector<bytes> components;
-    const column_definition* first_empty_key = nullptr;
-
-    for (auto& def : s->clustering_key_columns()) {
-        auto i = _processed_keys.find(&def);
-        if (i == _processed_keys.end()) {
-            first_empty_key = &def;
-            // Tomek: Origin had "&& s->comparator->is_composite()" in the condition below.
-            // Comparator is a thrift concept, not CQL concept, and we want to avoid
-            // using thrift concepts here. I think it's safe to drop this here because the only
-            // case in which we would get a non-composite comparator here would be if the cell
-            // name type is SimpleSparse, which means:
-            //   (a) CQL compact table without clustering columns
-            //   (b) thrift static CF with non-composite comparator
-            // Those tables don't have clustering columns so we wouldn't reach this code, thus
-            // the check seems redundant.
-            if (require_full_clustering_key() && !s->is_dense()) {
-                throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name_as_text()));
-            }
-        } else if (first_empty_key) {
-            throw exceptions::invalid_request_exception(sprint("Missing PRIMARY KEY part %s since %s is set", first_empty_key->name_as_text(), def.name_as_text()));
-        } else {
-            auto values = i->second->values(options);
-            assert(values.size() == 1);
-            auto val = values[0];
-            if (!val) {
-                throw exceptions::invalid_request_exception(sprint("Invalid null value for clustering key part %s", def.name_as_text()));
-            }
-            components.push_back(*val);
-        }
-    }
-    return exploded_clustering_prefix(std::move(components));
-}
-
-exploded_clustering_prefix
-modification_statement::create_exploded_clustering_prefix(const query_options& options) {
+std::vector<query::clustering_range>
+modification_statement::create_clustering_ranges(const query_options& options) {
     // If the only updated/deleted columns are static, then we don't need clustering columns.
     // And in fact, unless it is an INSERT, we reject if clustering columns are provided as that
     // suggest something unintended. For instance, given:
@@ -380,22 +331,20 @@ modification_statement::create_exploded_clustering_prefix(const query_options& o
     //   UPDATE t SET s = 3 WHERE k = 0 AND v = 1
     //   DELETE v FROM t WHERE k = 0 AND v = 1
     // sounds like you don't really understand what your are doing.
-    if (_sets_static_columns && !_sets_regular_columns) {
+    if (applies_only_to_static_columns()) {
         // If we set no non-static columns, then it's fine not to have clustering columns
         if (_has_no_clustering_columns) {
-            return {};
+            return { query::clustering_range::make_open_ended_both_sides() };
         }
 
         // If we do have clustering columns however, then either it's an INSERT and the query is valid
         // but we still need to build a proper prefix, or it's not an INSERT, and then we want to reject
         // (see above)
         if (type != statement_type::INSERT) {
-            for (auto& def : s->clustering_key_columns()) {
-                if (_processed_keys.count(&def)) {
-                    throw exceptions::invalid_request_exception(sprint(
-                            "Invalid restriction on clustering column %s since the %s statement modifies only static columns",
-                            def.name_as_text(), type));
-                }
+            if (_restrictions->has_clustering_columns_restriction()) {
+                throw exceptions::invalid_request_exception(sprint(
+                    "Invalid restriction on clustering column %s since the %s statement modifies only static columns",
+                    _restrictions->get_clustering_columns_restrictions()->get_column_defs().front()->name_as_text(), type));
             }
 
             // we should get there as it contradicts _has_no_clustering_columns == false
@@ -403,62 +352,16 @@ modification_statement::create_exploded_clustering_prefix(const query_options& o
         }
     }
 
-    return create_exploded_clustering_prefix_internal(options);
+    return _restrictions->get_clustering_bounds(options);
 }
 
-std::vector<partition_key>
+dht::partition_range_vector
 modification_statement::build_partition_keys(const query_options& options) {
-    std::vector<partition_key> result;
-    std::vector<bytes> components;
-
-    auto remaining = s->partition_key_size();
-
-    for (auto& def : s->partition_key_columns()) {
-        auto i = _processed_keys.find(&def);
-        if (i == _processed_keys.end()) {
-            throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name_as_text()));
-        }
-
-        auto values = i->second->values(options);
-
-        if (remaining == 1) {
-            if (values.size() == 1) {
-                auto val = values[0];
-                if (!val) {
-                    throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name_as_text()));
-                }
-                components.push_back(*val);
-                auto key = partition_key::from_exploded(*s, components);
-                validation::validate_cql_key(s, key);
-                result.emplace_back(std::move(key));
-            } else {
-                for (auto&& val : values) {
-                    if (!val) {
-                        throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name_as_text()));
-                    }
-                    std::vector<bytes> full_components;
-                    full_components.reserve(components.size() + 1);
-                    auto i = std::copy(components.begin(), components.end(), std::back_inserter(full_components));
-                    *i = *val;
-                    auto key = partition_key::from_exploded(*s, full_components);
-                    validation::validate_cql_key(s, key);
-                    result.emplace_back(std::move(key));
-                }
-            }
-        } else {
-            if (values.size() != 1) {
-                throw exceptions::invalid_request_exception("IN is only supported on the last column of the partition key");
-            }
-            auto val = values[0];
-            if (!val) {
-                throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name_as_text()));
-            }
-            components.push_back(*val);
-        }
-
-        remaining--;
+    auto keys = _restrictions->get_partition_key_restrictions()->bounds_ranges(options);
+    for (auto&& k : keys) {
+        validation::validate_cql_key(s, *k.start()->value().key());
     }
-    return result;
+    return keys;
 }
 
 struct modification_statement_executor {
@@ -558,49 +461,54 @@ modification_statement::execute_internal(distributed<service::storage_proxy>& pr
 }
 
 void
-modification_statement::add_key_values(const column_definition& def, ::shared_ptr<restrictions::restriction> values) {
-    if (def.is_clustering_key()) {
-        _has_no_clustering_columns = false;
-    }
-
-    auto insert_result = _processed_keys.insert({&def, values});
-    if (!insert_result.second) {
-        throw exceptions::invalid_request_exception(sprint("Multiple definitions found for PRIMARY KEY part %s", def.name_as_text()));
-    }
-}
-
-void
-modification_statement::add_key_value(const column_definition& def, ::shared_ptr<term> value) {
-    add_key_values(def, ::make_shared<restrictions::single_column_restriction::EQ>(def, value));
-}
-
-void
 modification_statement::process_where_clause(database& db, std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names) {
-    for (auto&& relation : where_clause) {
-        if (relation->is_multi_column()) {
-            throw exceptions::invalid_request_exception(sprint("Multi-column relations cannot be used in WHERE clauses for UPDATE and DELETE statements: %s", relation->to_string()));
+    _restrictions = ::make_shared<restrictions::statement_restrictions>(
+            db, s, where_clause, std::move(names), applies_only_to_static_columns(), _sets_a_collection, false);
+    if (_restrictions->get_partition_key_restrictions()->is_on_token()) {
+        throw exceptions::invalid_request_exception(sprint("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: %s",
+                _restrictions->get_partition_key_restrictions()->to_string()));
+    }
+    if (!_restrictions->get_non_pk_restriction().empty()) {
+        auto column_names = ::join(", ", _restrictions->get_non_pk_restriction()
+                                         | boost::adaptors::map_keys
+                                         | boost::adaptors::indirected
+                                         | boost::adaptors::transformed(std::mem_fn(&column_definition::name)));
+        throw exceptions::invalid_request_exception(sprint("Invalid where clause contains non PRIMARY KEY columns: %s", column_names));
+    }
+    auto ck_restrictions = _restrictions->get_clustering_columns_restrictions();
+    if (ck_restrictions->is_slice() && !allow_clustering_key_slices()) {
+        throw exceptions::invalid_request_exception(sprint("Invalid operator in where clause %s", ck_restrictions->to_string()));
+    }
+    if (_restrictions->has_unrestricted_clustering_columns() && !applies_only_to_static_columns() && !s->is_dense()) {
+        // Tomek: Origin had "&& s->comparator->is_composite()" in the condition below.
+        // Comparator is a thrift concept, not CQL concept, and we want to avoid
+        // using thrift concepts here. I think it's safe to drop this here because the only
+        // case in which we would get a non-composite comparator here would be if the cell
+        // name type is SimpleSparse, which means:
+        //   (a) CQL compact table without clustering columns
+        //   (b) thrift static CF with non-composite comparator
+        // Those tables don't have clustering columns so we wouldn't reach this code, thus
+        // the check seems redundant.
+        if (require_full_clustering_key()) {
+            auto& col = s->column_at(column_kind::clustering_key, ck_restrictions->size());
+            throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", col.name_as_text()));
         }
-
-        auto rel = dynamic_pointer_cast<single_column_relation>(relation);
-        if (rel->on_token()) {
-            throw exceptions::invalid_request_exception(sprint("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: %s", relation->to_string()));
-        }
-
-        auto id = rel->get_entity()->prepare_column_identifier(s);
-        auto def = get_column_definition(s, *id);
-        if (!def) {
-            throw exceptions::invalid_request_exception(sprint("Unknown key identifier %s on  table %s", *id, s->cf_name()));
-        }
-
-        if (def->is_primary_key()) {
-            if (rel->is_EQ() || (def->is_partition_key() && rel->is_IN())) {
-                add_key_values(*def, rel->to_restriction(db, s, names));
-            } else {
-                throw exceptions::invalid_request_exception(sprint("Invalid operator %s for PRIMARY KEY part %s", rel->get_operator(), def->name_as_text()));
+        // In general, we can't modify specific columns if not all clustering columns have been specified.
+        // However, if we modify only static columns, it's fine since we won't really use the prefix anyway.
+        if (!ck_restrictions->is_slice()) {
+            auto& col = s->column_at(column_kind::clustering_key, ck_restrictions->size());
+            for (auto&& op : _column_operations) {
+                if (!op->column.is_static()) {
+                    throw exceptions::invalid_request_exception(sprint(
+                        "Primary key column '%s' must be specified in order to modify column '%s'",
+                        col.name_as_text(), op->column.name_as_text()));
+                }
             }
-        } else {
-            throw exceptions::invalid_request_exception(sprint("Non PRIMARY KEY %s found in where clause", def->name_as_text()));
         }
+    }
+    if (_restrictions->has_partition_key_unrestricted_components()) {
+        auto& col = s->column_at(column_kind::partition_key, _restrictions->get_partition_key_restrictions()->size());
+        throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", col.name_as_text()));
     }
 }
 
@@ -696,6 +604,7 @@ void modification_statement::add_operation(::shared_ptr<operation> op) {
         _sets_static_columns = true;
     } else {
         _sets_regular_columns = true;
+        _sets_a_collection |= op->column.type->is_collection();
     }
 
     if (op->column.is_counter()) {
@@ -715,6 +624,7 @@ void modification_statement::add_condition(::shared_ptr<column_condition> cond) 
         _static_conditions.emplace_back(std::move(cond));
     } else {
         _sets_regular_columns = true;
+        _sets_a_collection |= cond->column.type->is_collection();
         _column_conditions.emplace_back(std::move(cond));
     }
 }

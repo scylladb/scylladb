@@ -70,11 +70,10 @@ public:
 
     void set_static_cell(const column_definition& def, atomic_cell_or_collection&& value);
     void set_static_cell(const bytes& name, const data_value& value, api::timestamp_type timestamp, ttl_opt ttl = {});
-    void set_clustered_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection&& value);
     void set_clustered_cell(const clustering_key& key, const bytes& name, const data_value& value, api::timestamp_type timestamp, ttl_opt ttl = {});
     void set_clustered_cell(const clustering_key& key, const column_definition& def, atomic_cell_or_collection&& value);
-    void set_cell(const exploded_clustering_prefix& prefix, const bytes& name, const data_value& value, api::timestamp_type timestamp, ttl_opt ttl = {});
-    void set_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection&& value);
+    void set_cell(const clustering_key_prefix& prefix, const bytes& name, const data_value& value, api::timestamp_type timestamp, ttl_opt ttl = {});
+    void set_cell(const clustering_key_prefix& prefix, const column_definition& def, atomic_cell_or_collection&& value);
 
     // Upgrades this mutation to a newer schema. The new schema must
     // be obtained using only valid schema transformation:

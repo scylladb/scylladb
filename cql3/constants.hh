@@ -197,7 +197,7 @@ public:
     public:
         using operation::operation;
 
-        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override {
+        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
             auto value = _t->bind_and_get(params._options);
             if (value.is_null()) {
                 m.set_cell(prefix, column, std::move(make_dead_cell(params)));
@@ -210,7 +210,7 @@ public:
     struct adder final : operation {
         using operation::operation;
 
-        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override {
+        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
             auto value = _t->bind_and_get(params._options);
             if (value.is_null()) {
                 throw exceptions::invalid_request_exception("Invalid null value for counter increment");
@@ -225,7 +225,7 @@ public:
     struct subtracter final : operation {
         using operation::operation;
 
-        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override {
+        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
             auto value = _t->bind_and_get(params._options);
             if (value.is_null()) {
                 throw exceptions::invalid_request_exception("Invalid null value for counter increment");
@@ -246,7 +246,7 @@ public:
             : operation(column, {})
         { }
 
-        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 };
 

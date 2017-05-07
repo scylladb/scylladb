@@ -45,8 +45,8 @@ namespace cql3 {
 
 const update_parameters::prefetch_data::cell_list*
 update_parameters::get_prefetched_list(
-    partition_key pkey,
-    std::experimental::optional<clustering_key> ckey,
+    partition_key_view pkey,
+    clustering_key_view ckey,
     const column_definition& column) const
 {
     if (!_prefetched) {

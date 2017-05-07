@@ -242,7 +242,7 @@ lists::precision_time::get_next(db_clock::time_point millis) {
 }
 
 void
-lists::setter::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+lists::setter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     const auto& value = _t->bind(params._options);
     if (value == constants::UNSET_VALUE) {
         return;
@@ -270,14 +270,9 @@ lists::setter_by_index::collect_marker_specification(shared_ptr<variable_specifi
 }
 
 void
-lists::setter_by_index::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     // we should not get here for frozen lists
     assert(column.type->is_multi_cell()); // "Attempted to set an individual element on a frozen list";
-
-    std::experimental::optional<clustering_key> row_key;
-    if (!column.is_static()) {
-        row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
-    }
 
     auto index = _idx->bind_and_get(params._options);
     if (index.is_null()) {
@@ -292,7 +287,7 @@ lists::setter_by_index::execute(mutation& m, const exploded_clustering_prefix& p
     }
 
     auto idx = net::ntoh(int32_t(*unaligned_cast<int32_t>(index->begin())));
-    auto&& existing_list_opt = params.get_prefetched_list(m.key(), std::move(row_key), column);
+    auto&& existing_list_opt = params.get_prefetched_list(m.key().view(), prefix.view(), column);
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to set an element on a list which is null");
     }
@@ -327,14 +322,9 @@ lists::setter_by_uuid::requires_read() {
 }
 
 void
-lists::setter_by_uuid::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+lists::setter_by_uuid::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     // we should not get here for frozen lists
     assert(column.type->is_multi_cell()); // "Attempted to set an individual element on a frozen list";
-
-    std::experimental::optional<clustering_key> row_key;
-    if (!column.is_static()) {
-        row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
-    }
 
     auto index = _idx->bind_and_get(params._options);
     auto value = _t->bind_and_get(params._options);
@@ -355,7 +345,7 @@ lists::setter_by_uuid::execute(mutation& m, const exploded_clustering_prefix& pr
 }
 
 void
-lists::appender::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+lists::appender::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     const auto& value = _t->bind(params._options);
     if (value == constants::UNSET_VALUE) {
         return;
@@ -367,7 +357,7 @@ lists::appender::execute(mutation& m, const exploded_clustering_prefix& prefix, 
 void
 lists::do_append(shared_ptr<term> value,
         mutation& m,
-        const exploded_clustering_prefix& prefix,
+        const clustering_key_prefix& prefix,
         const column_definition& column,
         const update_parameters& params) {
     auto&& list_value = dynamic_pointer_cast<lists::value>(value);
@@ -401,7 +391,7 @@ lists::do_append(shared_ptr<term> value,
 }
 
 void
-lists::prepender::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+lists::prepender::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to prepend to a frozen list";
     auto&& value = _t->bind(params._options);
     if (!value || value == constants::UNSET_VALUE) {
@@ -433,15 +423,10 @@ lists::discarder::requires_read() {
 }
 
 void
-lists::discarder::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+lists::discarder::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to delete from a frozen list";
 
-    std::experimental::optional<clustering_key> row_key;
-    if (!column.is_static()) {
-        row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
-    }
-
-    auto&& existing_list = params.get_prefetched_list(m.key(), std::move(row_key), column);
+    auto&& existing_list = params.get_prefetched_list(m.key().view(), prefix.view(), column);
     // We want to call bind before possibly returning to reject queries where the value provided is not a list.
     auto&& value = _t->bind(params._options);
 
@@ -490,7 +475,7 @@ lists::discarder_by_index::requires_read() {
 }
 
 void
-lists::discarder_by_index::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+lists::discarder_by_index::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to delete an item by index from a frozen list";
     auto&& index = _t->bind(params._options);
     if (!index) {
@@ -504,11 +489,7 @@ lists::discarder_by_index::execute(mutation& m, const exploded_clustering_prefix
     auto cvalue = dynamic_pointer_cast<constants::value>(index);
     assert(cvalue);
 
-    std::experimental::optional<clustering_key> row_key;
-    if (!column.is_static()) {
-        row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
-    }
-    auto&& existing_list_opt = params.get_prefetched_list(m.key(), std::move(row_key), column);
+    auto&& existing_list_opt = params.get_prefetched_list(m.key().view(), prefix.view(), column);
     int32_t idx = read_simple_exactly<int32_t>(*cvalue->_bytes);
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to delete an element from a list which is null");

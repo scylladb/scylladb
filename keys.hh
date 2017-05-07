@@ -254,6 +254,9 @@ public:
         size_t operator()(const TopLevel& o) const {
             return _t->hash(o);
         }
+        size_t operator()(const TopLevelView& o) const {
+            return _t->hash(o.representation());
+        }
     };
 
     struct equality {
@@ -504,10 +507,20 @@ public:
 
 template <typename TopLevel, typename FullTopLevel>
 class prefix_compound_view_wrapper : public compound_view_wrapper<TopLevel> {
+    using base = compound_view_wrapper<TopLevel>;
 protected:
     prefix_compound_view_wrapper(bytes_view v)
         : compound_view_wrapper<TopLevel>(v)
     { }
+
+public:
+    bool is_full(const schema& s) const {
+        return TopLevel::get_compound_type(s)->is_full(base::_bytes);
+    }
+
+    bool is_empty(const schema& s) const {
+        return TopLevel::get_compound_type(s)->is_empty(base::_bytes);
+    }
 };
 
 template <typename TopLevel, typename TopLevelView, typename FullTopLevel>

@@ -224,7 +224,7 @@ sets::marker::bind(const query_options& options) {
 }
 
 void
-sets::setter::execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) {
+sets::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     const auto& value = _t->bind(params._options);
     if (value == constants::UNSET_VALUE) {
         return;
@@ -241,7 +241,7 @@ sets::setter::execute(mutation& m, const exploded_clustering_prefix& row_key, co
 }
 
 void
-sets::adder::execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) {
+sets::adder::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     const auto& value = _t->bind(params._options);
     if (value == constants::UNSET_VALUE) {
         return;
@@ -251,7 +251,7 @@ sets::adder::execute(mutation& m, const exploded_clustering_prefix& row_key, con
 }
 
 void
-sets::adder::do_add(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params,
+sets::adder::do_add(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params,
         shared_ptr<term> value, const column_definition& column) {
     auto set_value = dynamic_pointer_cast<sets::value>(std::move(value));
     auto set_type = dynamic_pointer_cast<const set_type_impl>(column.type);
@@ -281,7 +281,7 @@ sets::adder::do_add(mutation& m, const exploded_clustering_prefix& row_key, cons
 }
 
 void
-sets::discarder::execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) {
+sets::discarder::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to remove items from a frozen set";
 
     auto&& value = _t->bind(params._options);
@@ -305,7 +305,7 @@ sets::discarder::execute(mutation& m, const exploded_clustering_prefix& row_key,
                     ctype->serialize_mutation_form(mut)));
 }
 
-void sets::element_discarder::execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params)
+void sets::element_discarder::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params)
 {
     assert(column.type->is_multi_cell() && "Attempted to remove items from a frozen set");
     auto elt = _t->bind(params._options);

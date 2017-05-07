@@ -112,7 +112,7 @@ public:
         setter(const column_definition& column, shared_ptr<term> t)
                 : operation(column, std::move(t)) {
         }
-        virtual void execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) override;
+        virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
     };
 
     class adder : public operation {
@@ -120,8 +120,8 @@ public:
         adder(const column_definition& column, shared_ptr<term> t)
             : operation(column, std::move(t)) {
         }
-        virtual void execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) override;
-        static void do_add(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params,
+        virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
+        static void do_add(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params,
                 shared_ptr<term> value, const column_definition& column);
     };
 
@@ -131,14 +131,14 @@ public:
         discarder(const column_definition& column, shared_ptr<term> t)
             : operation(column, std::move(t)) {
         }
-        virtual void execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) override;
+        virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
     };
 
     class element_discarder : public operation {
     public:
         element_discarder(const column_definition& column, shared_ptr<term> t)
             : operation(column, std::move(t)) { }
-        virtual void execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) override;
+        virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
     };
 };
 

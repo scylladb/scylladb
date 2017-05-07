@@ -159,7 +159,7 @@ constants::literal::prepare(database& db, const sstring& keyspace, ::shared_ptr<
     return ::make_shared<value>(cql3::raw_value::make_value(parsed_value(receiver->type)));
 }
 
-void constants::deleter::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+void constants::deleter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     if (column.type->is_multi_cell()) {
         collection_type_impl::mutation coll_m;
         coll_m.tomb = params.make_tombstone();
