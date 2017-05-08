@@ -30,12 +30,17 @@
 class schema_mutations {
     mutation _columnfamilies;
     mutation _columns;
+    stdx::optional<mutation> _indices;
 public:
-    schema_mutations(mutation columnfamilies, mutation columns)
+    schema_mutations(mutation columnfamilies, mutation columns, stdx::optional<mutation> indices)
             : _columnfamilies(std::move(columnfamilies))
             , _columns(std::move(columns))
+            , _indices(std::move(indices))
     { }
-    schema_mutations(canonical_mutation columnfamilies, canonical_mutation columns, bool is_view);
+    schema_mutations(canonical_mutation columnfamilies,
+                     canonical_mutation columns,
+                     bool is_view,
+                     stdx::optional<canonical_mutation> indices);
 
     schema_mutations(schema_mutations&&) = default;
     schema_mutations& operator=(schema_mutations&&) = default;
@@ -52,12 +57,23 @@ public:
         return _columns;
     }
 
+    const stdx::optional<mutation>& indices_mutation() const {
+        return _indices;
+    }
+
     canonical_mutation columnfamilies_canonical_mutation() const {
         return canonical_mutation(_columnfamilies);
     }
 
     canonical_mutation columns_canonical_mutation() const {
         return canonical_mutation(_columns);
+    }
+
+    stdx::optional<canonical_mutation> indices_canonical_mutation() const {
+        if (_indices) {
+            return canonical_mutation(_indices.value());
+        }
+        return {};
     }
 
     bool is_view() const;

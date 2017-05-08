@@ -101,26 +101,24 @@ void create_keyspace_statement::validate(distributed<service::storage_proxy>&, c
 #endif
 }
 
-future<bool> create_keyspace_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<transport::event::schema_change>> create_keyspace_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
 {
     return make_ready_future<>().then([this, is_local_only] {
         return service::get_local_migration_manager().announce_new_keyspace(_attrs->as_ks_metadata(_name), is_local_only);
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();
-            return true;
+            using namespace transport;
+            return make_shared<event::schema_change>(
+                    event::schema_change::change_type::CREATED,
+                    this->keyspace());
         } catch (const exceptions::already_exists_exception& e) {
             if (_if_not_exists) {
-                return false;
+                return ::shared_ptr<transport::event::schema_change>();
             }
             throw e;
         }
     });
-}
-
-shared_ptr<transport::event::schema_change> create_keyspace_statement::change_event()
-{
-    return make_shared<transport::event::schema_change>(transport::event::schema_change::change_type::CREATED, keyspace());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

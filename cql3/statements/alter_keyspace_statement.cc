@@ -89,17 +89,14 @@ void cql3::statements::alter_keyspace_statement::validate(distributed<service::s
     }
 }
 
-future<bool> cql3::statements::alter_keyspace_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
+future<shared_ptr<transport::event::schema_change>> cql3::statements::alter_keyspace_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
     auto old_ksm = service::get_local_storage_proxy().get_db().local().find_keyspace(_name).metadata();
-    return service::get_local_migration_manager().announce_keyspace_update(_attrs->as_ks_metadata_update(old_ksm), is_local_only).then([] {
-       return true;
+    return service::get_local_migration_manager().announce_keyspace_update(_attrs->as_ks_metadata_update(old_ksm), is_local_only).then([this] {
+        using namespace transport;
+        return make_shared<event::schema_change>(
+                event::schema_change::change_type::UPDATED,
+                keyspace());
     });
-}
-
-shared_ptr<transport::event::schema_change> cql3::statements::alter_keyspace_statement::change_event() {
-    return make_shared<transport::event::schema_change>(
-                    transport::event::schema_change::change_type::UPDATED,
-                    keyspace());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

@@ -73,7 +73,7 @@ void alter_view_statement::validate(distributed<service::storage_proxy>&, const 
     // validated in announce_migration()
 }
 
-future<bool> alter_view_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<transport::event::schema_change>> alter_view_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
 {
     auto&& db = proxy.local().get_db().local();
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
@@ -97,19 +97,15 @@ future<bool> alter_view_statement::announce_migration(distributed<service::stora
                 "low might cause undelivered updates to expire before being replayed.");
     }
 
-    return service::get_local_migration_manager().announce_view_update(view_ptr(builder.build()), is_local_only).then([] {
-        return true;
+    return service::get_local_migration_manager().announce_view_update(view_ptr(builder.build()), is_local_only).then([this] {
+        using namespace transport;
+
+        return make_shared<event::schema_change>(
+                event::schema_change::change_type::UPDATED,
+                event::schema_change::target_type::TABLE,
+                keyspace(),
+                column_family());
     });
-}
-
-shared_ptr<transport::event::schema_change> alter_view_statement::change_event()
-{
-    using namespace transport;
-
-    return make_shared<event::schema_change>(event::schema_change::change_type::UPDATED,
-                                             event::schema_change::target_type::TABLE,
-                                             keyspace(),
-                                             column_family());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

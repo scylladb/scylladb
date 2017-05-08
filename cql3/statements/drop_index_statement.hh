@@ -17,7 +17,7 @@
  */
 
 /*
- * Copyright (C) 2015 ScyllaDB
+ * Copyright (C) 2017 ScyllaDB
  *
  * Modified by ScyllaDB
  */
@@ -41,52 +41,37 @@
 
 #pragma once
 
-#include "core/shared_ptr.hh"
-#include "cql3/column_identifier.hh"
-#include "db/index/secondary_index.hh"
+#include "cql3/statements/schema_altering_statement.hh"
+#include "cql3/index_name.hh"
+
+#include <seastar/core/distributed.hh>
+#include <seastar/core/shared_ptr.hh>
+
+#include <memory>
 
 namespace cql3 {
 
 namespace statements {
 
-struct index_target {
-    static const sstring target_option_name;
-    static const sstring custom_index_option_name;
+class drop_index_statement : public schema_altering_statement {
+    sstring _index_name;
+    bool _if_exists;
+public:
+    drop_index_statement(::shared_ptr<index_name> index_name, bool if_exists);
 
-    enum class target_type {
-        values, keys, keys_and_values, full
-    };
+    virtual const sstring& column_family() const override;
 
-    const ::shared_ptr<column_identifier> column;
-    const target_type type;
+    virtual future<> check_access(const service::client_state& state) override;
 
-    index_target(::shared_ptr<column_identifier> c, target_type t)
-            : column(c), type(t) {
-    }
+    virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
 
-    sstring as_cql_string(schema_ptr schema) const;
+    virtual future<shared_ptr<transport::event::schema_change>> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) override;
 
-    static sstring index_option(target_type type);
-    static target_type from_column_definition(const column_definition& cd);
-
-    class raw {
-    public:
-        const ::shared_ptr<column_identifier::raw> column;
-        const target_type type;
-
-        raw(::shared_ptr<column_identifier::raw> c, target_type t)
-                : column(c), type(t)
-        {}
-
-        static ::shared_ptr<raw> values_of(::shared_ptr<column_identifier::raw> c);
-        static ::shared_ptr<raw> keys_of(::shared_ptr<column_identifier::raw> c);
-        static ::shared_ptr<raw> keys_and_values_of(::shared_ptr<column_identifier::raw> c);
-        static ::shared_ptr<raw> full_collection(::shared_ptr<column_identifier::raw> c);
-        ::shared_ptr<index_target> prepare(schema_ptr);
-    };
+    virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
+private:
+    schema_ptr lookup_indexed_table() const;
 };
 
-sstring to_sstring(index_target::target_type type);
-
 }
+
 }

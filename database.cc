@@ -2626,17 +2626,14 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
 }
 
 std::set<sstring>
-database::existing_index_names(const sstring& cf_to_exclude) const {
+database::existing_index_names(const sstring& ks_name, const sstring& cf_to_exclude) const {
     std::set<sstring> names;
-    for (auto& p : _column_families) {
-        auto& cf = *p.second;
-        if (!cf_to_exclude.empty() && cf.schema()->cf_name() == cf_to_exclude) {
+    for (auto& schema : find_keyspace(ks_name).metadata()->tables()) {
+        if (!cf_to_exclude.empty() && schema->cf_name() == cf_to_exclude) {
             continue;
         }
-        for (auto& cd : cf.schema()->all_columns_in_select_order()) {
-            if (cd.idx_info.index_name) {
-                names.emplace(*cd.idx_info.index_name);
-            }
+        for (const auto& index_name : schema->index_names()) {
+            names.emplace(index_name);
         }
     }
     return names;
@@ -3299,6 +3296,28 @@ operator<<(std::ostream& os, const atomic_cell_view& acv) {
 std::ostream&
 operator<<(std::ostream& os, const atomic_cell& ac) {
     return os << atomic_cell_view(ac);
+}
+
+sstring database::get_available_index_name(const sstring &ks_name, const sstring &cf_name,
+                                           std::experimental::optional<sstring> index_name_root) const
+{
+    auto existing_names = existing_index_names(ks_name);
+    auto base_name = index_metadata::get_default_index_name(cf_name, index_name_root);
+    sstring accepted_name = base_name;
+    int i = 0;
+    while (existing_names.count(accepted_name) > 0) {
+        accepted_name = base_name + "_" + std::to_string(++i);
+    }
+    return accepted_name;
+}
+
+schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& index_name) const {
+    for (auto& schema : find_keyspace(ks_name).metadata()->tables()) {
+        if (schema->has_index(index_name)) {
+            return schema;
+        }
+    }
+    return nullptr;
 }
 
 future<>

@@ -200,8 +200,7 @@ public:
     column_definition& find_column(const cql3::column_identifier&);
     schema_builder& with_column(const column_definition& c);
     schema_builder& with_column(bytes name, data_type type, column_kind kind = column_kind::regular_column);
-    schema_builder& with_column(bytes name, data_type type, index_info info, column_kind kind = column_kind::regular_column);
-    schema_builder& with_column(bytes name, data_type type, index_info info, column_kind kind, column_id component_index);
+    schema_builder& with_column(bytes name, data_type type, column_kind kind, column_id component_index);
     schema_builder& without_column(bytes name);
     schema_builder& without_column(sstring name, api::timestamp_type timestamp);
     schema_builder& with_column_rename(bytes from, bytes to);
@@ -215,12 +214,13 @@ public:
     schema_builder& with(compact_storage);
     schema_builder& with_version(table_schema_version);
 
-    void add_default_index_names(database&);
-
     schema_builder& with_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause);
     schema_builder& with_view_info(const schema& base_schema, bool include_all_columns, sstring where_clause) {
         return with_view_info(base_schema.id(), base_schema.cf_name(), include_all_columns, where_clause);
     }
+
+    schema_builder& with_index(const index_metadata& im);
+    schema_builder& without_index(const sstring& name);
 
     // Equivalent to with(cp).build()
     schema_ptr build(compact_storage cp);
