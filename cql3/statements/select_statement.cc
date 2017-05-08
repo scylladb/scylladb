@@ -445,7 +445,9 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
         prepare_limit(db, bound_names),
         stats);
 
-    return ::make_shared<prepared>(std::move(stmt), std::move(*bound_names));
+    auto partition_key_bind_indices = bound_names->get_partition_key_bind_indexes(schema);
+
+    return ::make_shared<prepared>(std::move(stmt), std::move(*bound_names), std::move(partition_key_bind_indices));
 }
 
 ::shared_ptr<restrictions::statement_restrictions>

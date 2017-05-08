@@ -381,8 +381,18 @@ shared_ptr<prepared_statement>
 batch_statement::prepare(database& db, cql_stats& stats) {
     auto&& bound_names = get_bound_variables();
 
+    stdx::optional<sstring> first_ks;
+    stdx::optional<sstring> first_cf;
+    bool have_multiple_cfs = false;
+
     std::vector<shared_ptr<cql3::statements::modification_statement>> statements;
     for (auto&& parsed : _parsed_statements) {
+        if (!first_ks) {
+            first_ks = parsed->keyspace();
+            first_cf = parsed->column_family();
+        } else {
+            have_multiple_cfs = first_ks.value() != parsed->keyspace() || first_cf.value() != parsed->column_family();
+        }
         statements.push_back(parsed->prepare(db, bound_names, stats));
     }
 
@@ -392,8 +402,13 @@ batch_statement::prepare(database& db, cql_stats& stats) {
     cql3::statements::batch_statement batch_statement_(bound_names->size(), _type, std::move(statements), std::move(prep_attrs), stats);
     batch_statement_.validate();
 
+    std::vector<uint16_t> partition_key_bind_indices;
+    if (!have_multiple_cfs && batch_statement_.get_statements().size() > 0) {
+        partition_key_bind_indices = bound_names->get_partition_key_bind_indexes(batch_statement_.get_statements()[0]->s);
+    }
     return ::make_shared<prepared>(make_shared(std::move(batch_statement_)),
-                                                     bound_names->get_specifications());
+                                                     bound_names->get_specifications(),
+                                                     std::move(partition_key_bind_indices));
 }
 
 }

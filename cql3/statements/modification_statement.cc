@@ -597,9 +597,11 @@ namespace raw {
 
 ::shared_ptr<prepared_statement>
 modification_statement::modification_statement::prepare(database& db, cql_stats& stats) {
+    schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto bound_names = get_bound_variables();
     auto statement = prepare(db, bound_names, stats);
-    return ::make_shared<prepared>(std::move(statement), *bound_names);
+    auto partition_key_bind_indices = bound_names->get_partition_key_bind_indexes(schema);
+    return ::make_shared<prepared>(std::move(statement), *bound_names, std::move(partition_key_bind_indices));
 }
 
 ::shared_ptr<cql3::statements::modification_statement>

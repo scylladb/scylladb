@@ -80,6 +80,26 @@ public:
         return std::move(_specs);
     }
 
+    std::vector<uint16_t> get_partition_key_bind_indexes(schema_ptr schema) const {
+        auto count = schema->partition_key_columns().size();
+        std::vector<uint16_t> partition_key_positions(count, uint16_t(0));
+        std::vector<bool> set(count, false);
+        for (size_t i = 0; i < _specs.size(); i++) {
+            auto& target_column = _specs[i];
+            const auto* cdef = schema->get_column_definition(target_column->name->name());
+            if (cdef && cdef->is_partition_key()) {
+                partition_key_positions[cdef->position()] = i;
+                set[cdef->position()] = true;
+            }
+        }
+        for (bool b : set) {
+            if (!b) {
+                return {};
+            }
+        }
+        return partition_key_positions;
+    }
+
     void add(int32_t bind_index, ::shared_ptr<column_specification> spec) {
         auto name = _variable_names[bind_index];
         // Use the user name, if there is one
