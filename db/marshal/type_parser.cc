@@ -76,6 +76,13 @@ data_type type_parser::do_parse(bool multicell)
     skip_blank();
 
     sstring name = read_next_identifier();
+    if (name.empty()) {
+        if (!is_eos()) {
+            throw std::runtime_error("unknown type: " + _str);
+        }
+        return bytes_type;
+    }
+
     if (_str[_idx] == ':') {
         _idx++;
         try {
