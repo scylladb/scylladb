@@ -90,12 +90,7 @@ future<::shared_ptr<messages::result_message>>
 schema_altering_statement::execute0(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options, bool is_local_only) {
     // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
     // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)
-    return announce_migration(proxy, is_local_only).then([this] (bool did_change_schema) {
-        if (!did_change_schema) {
-            auto result = ::make_shared<messages::result_message::void_message>();
-            return make_ready_future<::shared_ptr<messages::result_message>>(result);
-        }
-        auto ce = this->change_event();
+    return announce_migration(proxy, is_local_only).then([this] (auto ce) {
         ::shared_ptr<messages::result_message> result;
         if (!ce) {
             result = ::make_shared<messages::result_message::void_message>();

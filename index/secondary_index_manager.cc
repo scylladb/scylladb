@@ -17,7 +17,7 @@
  */
 
 /*
- * Copyright (C) 2015 ScyllaDB
+ * Copyright (C) 2017 ScyllaDB
  *
  * Modified by ScyllaDB
  */
@@ -39,54 +39,15 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
+#include "index/secondary_index_manager.hh"
 
-#include "core/shared_ptr.hh"
-#include "cql3/column_identifier.hh"
-#include "db/index/secondary_index.hh"
+namespace secondary_index {
 
-namespace cql3 {
+seastar::sharded<secondary_index_manager> _the_secondary_index_manager;
 
-namespace statements {
-
-struct index_target {
-    static const sstring target_option_name;
-    static const sstring custom_index_option_name;
-
-    enum class target_type {
-        values, keys, keys_and_values, full
-    };
-
-    const ::shared_ptr<column_identifier> column;
-    const target_type type;
-
-    index_target(::shared_ptr<column_identifier> c, target_type t)
-            : column(c), type(t) {
-    }
-
-    sstring as_cql_string(schema_ptr schema) const;
-
-    static sstring index_option(target_type type);
-    static target_type from_column_definition(const column_definition& cd);
-
-    class raw {
-    public:
-        const ::shared_ptr<column_identifier::raw> column;
-        const target_type type;
-
-        raw(::shared_ptr<column_identifier::raw> c, target_type t)
-                : column(c), type(t)
-        {}
-
-        static ::shared_ptr<raw> values_of(::shared_ptr<column_identifier::raw> c);
-        static ::shared_ptr<raw> keys_of(::shared_ptr<column_identifier::raw> c);
-        static ::shared_ptr<raw> keys_and_values_of(::shared_ptr<column_identifier::raw> c);
-        static ::shared_ptr<raw> full_collection(::shared_ptr<column_identifier::raw> c);
-        ::shared_ptr<index_target> prepare(schema_ptr);
-    };
-};
-
-sstring to_sstring(index_target::target_type type);
-
+std::set<index_metadata> secondary_index_manager::get_dependent_indices(const column_definition& cdef) const {
+    // FIXME
+    return {};
 }
+
 }

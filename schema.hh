@@ -75,16 +75,6 @@ enum class column_kind { partition_key, clustering_key, static_column, regular_c
 sstring to_sstring(column_kind k);
 bool is_compatible(column_kind k1, column_kind k2);
 
-// CMH this is also manually defined in thrift gen file.
-enum class index_type {
-    keys,
-    custom,
-    composites,
-    none, // cwi: added none to avoid "optional" bs.
-};
-
-sstring to_sstring(index_type t);
-
 enum class cf_type : uint8_t {
     standard,
     super,
@@ -178,14 +168,26 @@ public:
 
 typedef std::unordered_map<sstring, sstring> index_options_map;
 
-struct index_info {
-    index_info(::index_type = ::index_type::none
-            , std::experimental::optional<sstring> index_name = std::experimental::optional<sstring>()
-            , std::experimental::optional<index_options_map> = std::experimental::optional<index_options_map>());
+enum class index_metadata_kind {
+    keys,
+    custom,
+    composites,
+};
 
-    enum index_type index_type = ::index_type::none;
-    std::experimental::optional<sstring> index_name;
-    std::experimental::optional<index_options_map> index_options;
+class index_metadata final {
+    utils::UUID _id;
+    sstring _name;
+    index_metadata_kind _kind;
+    index_options_map _options;
+public:
+    index_metadata(const sstring& name, const index_options_map& options, index_metadata_kind kind);
+    bool operator==(const index_metadata& other) const;
+    bool equals_noname(const index_metadata& other) const;
+    const utils::UUID& id() const;
+    const sstring& name() const;
+    const index_metadata_kind kind() const;
+    const index_options_map& options() const;
+    static sstring get_default_index_name(const sstring& cf_name, std::experimental::optional<sstring> root);
 };
 
 class column_definition final {
@@ -213,7 +215,7 @@ private:
     friend class schema;
 public:
     column_definition(bytes name, data_type type, column_kind kind,
-        column_id component_index = 0, index_info = index_info(),
+        column_id component_index = 0,
         api::timestamp_type dropped_at = api::missing_timestamp);
 
     data_type type;
@@ -225,7 +227,6 @@ public:
 
     column_kind kind;
     ::shared_ptr<cql3::column_specification> column_specification;
-    index_info idx_info;
 
     bool is_static() const { return kind == column_kind::static_column; }
     bool is_regular() const { return kind == column_kind::regular_column; }
@@ -254,9 +255,6 @@ public:
         return 0;
     }
     bool is_on_all_components() const;
-    bool is_indexed() const {
-        return idx_info.index_type != index_type::none;
-    }
     bool is_part_of_cell_name() const {
         return is_regular() || is_static();
     }
@@ -422,6 +420,7 @@ private:
         table_schema_version _version;
         std::unordered_map<sstring, api::timestamp_type> _dropped_columns;
         std::map<bytes, data_type> _collections;
+        std::unordered_map<sstring, index_metadata> _indices_by_name;
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -456,7 +455,6 @@ public:
     struct column {
         bytes name;
         data_type type;
-        index_info idx_info;
     };
 private:
     ::shared_ptr<cql3::column_specification> make_column_specification(const column_definition& def);
@@ -638,6 +636,15 @@ public:
     bool is_view() const {
         return bool(_view_info);
     }
+    // Returns all index names of this schema.
+    std::vector<sstring> index_names() const;
+    // Returns all indices of this schema.
+    std::vector<index_metadata> indices() const;
+    const std::unordered_map<sstring, index_metadata>& all_indices() const;
+    // Search for an index with a given name.
+    bool has_index(const sstring& index_name) const;
+    // Search for an existing index with same kind and options.
+    stdx::optional<index_metadata> find_index_noname(const index_metadata& target) const;
     friend std::ostream& operator<<(std::ostream& os, const schema& s);
     friend bool operator==(const schema&, const schema&);
     const column_mapping& get_column_mapping() const;

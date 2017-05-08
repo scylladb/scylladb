@@ -262,6 +262,7 @@ private:
     gms::feature _large_partitions_feature;
     gms::feature _materialized_views_feature;
     gms::feature _counters_feature;
+    gms::feature _indexes_feature;
 
 public:
     void enable_all_features() {
@@ -269,6 +270,7 @@ public:
         _large_partitions_feature.enable();
         _materialized_views_feature.enable();
         _counters_feature.enable();
+        _indexes_feature.enable();
     }
 
     void finish_bootstrapping() {
@@ -2229,6 +2231,10 @@ public:
 
     bool cluster_supports_counters() const {
         return bool(_counters_feature);
+    }
+
+    bool cluster_supports_indexes() const {
+        return bool(_indexes_feature);
     }
 };
 

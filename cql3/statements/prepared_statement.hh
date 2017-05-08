@@ -71,12 +71,13 @@ public:
     sstring raw_cql_statement;
     const ::shared_ptr<cql_statement> statement;
     const std::vector<::shared_ptr<column_specification>> bound_names;
+    std::vector<uint16_t> partition_key_bind_indices;
 
-    prepared_statement(::shared_ptr<cql_statement> statement_, std::vector<::shared_ptr<column_specification>> bound_names_);
+    prepared_statement(::shared_ptr<cql_statement> statement_, std::vector<::shared_ptr<column_specification>> bound_names_, std::vector<uint16_t> partition_key_bind_indices);
 
-    prepared_statement(::shared_ptr<cql_statement> statement_, const variable_specifications& names);
+    prepared_statement(::shared_ptr<cql_statement> statement_, const variable_specifications& names, const std::vector<uint16_t>& partition_key_bind_indices);
 
-    prepared_statement(::shared_ptr<cql_statement> statement_, variable_specifications&& names);
+    prepared_statement(::shared_ptr<cql_statement> statement_, variable_specifications&& names, std::vector<uint16_t>&& partition_key_bind_indices);
 
     prepared_statement(::shared_ptr<cql_statement>&& statement_);
 

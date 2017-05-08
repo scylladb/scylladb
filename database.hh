@@ -1216,7 +1216,10 @@ public:
     schema_ptr find_schema(const sstring& ks_name, const sstring& cf_name) const;
     schema_ptr find_schema(const utils::UUID&) const;
     bool has_schema(const sstring& ks_name, const sstring& cf_name) const;
-    std::set<sstring> existing_index_names(const sstring& cf_to_exclude = sstring()) const;
+    std::set<sstring> existing_index_names(const sstring& ks_name, const sstring& cf_to_exclude = sstring()) const;
+    sstring get_available_index_name(const sstring& ks_name, const sstring& cf_name,
+                                     std::experimental::optional<sstring> index_name_root) const;
+    schema_ptr find_indexed_table(const sstring& ks_name, const sstring& index_name) const;
     future<> stop();
     unsigned shard_of(const dht::token& t);
     unsigned shard_of(const mutation& m);

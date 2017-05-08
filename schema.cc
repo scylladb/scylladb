@@ -29,6 +29,7 @@
 #include "db/marshal/type_parser.hh"
 #include "version.hh"
 #include "schema_registry.hh"
+#include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include "view_info.hh"
@@ -43,16 +44,6 @@ sstring to_sstring(column_kind k) {
     case column_kind::regular_column: return "REGULAR";
     }
     throw std::invalid_argument("unknown column kind");
-}
-
-sstring to_sstring(index_type t) {
-    switch (t) {
-    case index_type::keys:       return "KEYS";
-    case index_type::custom:     return "CUSTOM";
-    case index_type::composites: return "COMPOSITES";
-    case index_type::none:       return "null";
-    }
-    throw std::invalid_argument("unknown index type");
 }
 
 bool is_compatible(column_kind k1, column_kind k2) {
@@ -373,19 +364,58 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._caching_options == y._raw._caching_options
         && x._raw._dropped_columns == y._raw._dropped_columns
         && x._raw._collections == y._raw._collections
-        && indirect_equal_to<std::unique_ptr<::view_info>>()(x._view_info, y._view_info);
+        && indirect_equal_to<std::unique_ptr<::view_info>>()(x._view_info, y._view_info)
+        && x._raw._indices_by_name == y._raw._indices_by_name;
 #if 0
         && Objects.equal(triggers, other.triggers)
 #endif
 }
 
-index_info::index_info(::index_type idx_type,
-        std::experimental::optional<sstring> idx_name,
-        std::experimental::optional<index_options_map> idx_options)
-    : index_type(idx_type), index_name(idx_name), index_options(idx_options)
+index_metadata::index_metadata(const sstring& name,
+                               const index_options_map& options,
+                               index_metadata_kind kind)
+    : _id{utils::UUID_gen::get_name_UUID(name)}
+    , _name{name}
+    , _kind{kind}
+    , _options{options}
 {}
 
-column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, index_info idx, api::timestamp_type dropped_at)
+bool index_metadata::operator==(const index_metadata& other) const {
+    return _id == other._id
+           && _name == other._name
+           && _kind == other._kind
+           && _options == other._options;
+}
+
+bool index_metadata::equals_noname(const index_metadata& other) const {
+    return _kind == other._kind && _options == other._options;
+}
+
+const utils::UUID& index_metadata::id() const {
+    return _id;
+}
+
+const sstring& index_metadata::name() const {
+    return _name;
+}
+
+const index_metadata_kind index_metadata::kind() const {
+    return _kind;
+}
+
+const index_options_map& index_metadata::options() const {
+    return _options;
+}
+
+sstring index_metadata::get_default_index_name(const sstring& cf_name,
+                                               std::experimental::optional<sstring> root) {
+    if (root) {
+        return cf_name + "_" + root.value() + "_idx";
+    }
+    return cf_name + "_idx";
+}
+
+column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, api::timestamp_type dropped_at)
         : _name(std::move(name))
         , _dropped_at(dropped_at)
         , _is_atomic(type->is_atomic())
@@ -393,7 +423,6 @@ column_definition::column_definition(bytes name, data_type type, column_kind kin
         , type(std::move(type))
         , id(component_index)
         , kind(kind)
-        , idx_info(std::move(idx))
 {}
 
 std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
@@ -402,8 +431,6 @@ std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
     os << ", type=" << cd.type->name();
     os << ", kind=" << to_sstring(cd.kind);
     os << ", componentIndex=" << (cd.has_component_index() ? std::to_string(cd.component_index()) : "null");
-    os << ", indexName=" << (cd.idx_info.index_name ? *cd.idx_info.index_name : "null");
-    os << ", indexType=" << to_sstring(cd.idx_info.index_type);
     os << ", droppedAt=" << cd._dropped_at;
     os << "}";
     return os;
@@ -495,6 +522,15 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
         os << c.first << " : " << c.second->name();
     }
     os << "}";
+    os << ",indices={";
+    n = 0;
+    for (auto& c : s._raw._indices_by_name) {
+        if (n++ != 0) {
+            os << ", ";
+        }
+        os << c.first << " : " << c.second.id();
+    }
+    os << "}";
     if (s.is_view()) {
         os << ", viewInfo=" << *s.view_info();
     }
@@ -577,65 +613,17 @@ column_definition& schema_builder::find_column(const cql3::column_identifier& c)
     throw std::invalid_argument(sprint("No such column %s", c.name()));
 }
 
-void schema_builder::add_default_index_names(database& db) {
-    auto s = db.find_schema(ks_name(), cf_name());
-
-    if (s) {
-        for (auto& sc : _raw._columns) {
-            if (sc.idx_info.index_type == index_type::none) {
-                continue;
-            }
-            auto* c = s->get_column_definition(sc.name());
-            if (c == nullptr || !c->idx_info.index_name) {
-                continue;
-            }
-            if (sc.idx_info.index_name
-                    && sc.idx_info.index_name != c->idx_info.index_name) {
-                throw exceptions::configuration_exception(
-                        sprint(
-                                "Can't modify index name: was '%s' changed to '%s'",
-                                *c->idx_info.index_name,
-                                *sc.idx_info.index_name));
-
-            }
-            sc.idx_info.index_name = c->idx_info.index_name;
-        }
-    }
-
-
-    auto existing_names = db.existing_index_names();
-    for (auto& sc : _raw._columns) {
-        if (sc.idx_info.index_type != index_type::none && sc.idx_info.index_name) {
-            sstring base_name = cf_name() + "_" + *sc.idx_info.index_name + "_idx";
-            auto i = std::remove_if(base_name.begin(), base_name.end(), [](char c) {
-               return ::isspace(c);
-            });
-            base_name.erase(i, base_name.end());
-            auto index_name = base_name;
-            int n = 0;
-            while (existing_names.count(index_name)) {
-                index_name = base_name + "_" + to_sstring(++n);
-            }
-            sc.idx_info.index_name = index_name;
-        }
-    }
-}
-
 schema_builder& schema_builder::with_column(const column_definition& c) {
-    return with_column(bytes(c.name()), data_type(c.type), index_info(c.idx_info), column_kind(c.kind), c.position());
+    return with_column(bytes(c.name()), data_type(c.type), column_kind(c.kind), c.position());
 }
 
 schema_builder& schema_builder::with_column(bytes name, data_type type, column_kind kind) {
-    return with_column(name, type, index_info(), kind);
-}
-
-schema_builder& schema_builder::with_column(bytes name, data_type type, index_info info, column_kind kind) {
     // component_index will be determined by schema cosntructor
-    return with_column(name, type, info, kind, 0);
+    return with_column(name, type, kind, 0);
 }
 
-schema_builder& schema_builder::with_column(bytes name, data_type type, index_info info, column_kind kind, column_id component_index) {
-    _raw._columns.emplace_back(name, type, kind, component_index, info);
+schema_builder& schema_builder::with_column(bytes name, data_type type, column_kind kind, column_id component_index) {
+    _raw._columns.emplace_back(name, type, kind, component_index);
     if (type->is_multi_cell()) {
         with_collection(name, type);
     } else if (type->is_counter()) {
@@ -675,7 +663,7 @@ schema_builder& schema_builder::with_column_rename(bytes from, bytes to)
     });
     assert(it != _raw._columns.end());
     auto& def = *it;
-    column_definition new_def(to, def.type, def.kind, def.component_index(), def.idx_info);
+    column_definition new_def(to, def.type, def.kind, def.component_index());
     _raw._columns.erase(it);
     return with_column(new_def);
 }
@@ -717,7 +705,7 @@ void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
         });
         // In Origin, dense CFs always have at least one regular column
         if (regular_cols == 0) {
-            raw._columns.emplace_back(bytes(""), raw._regular_column_name_type, column_kind::regular_column, 0, index_info());
+            raw._columns.emplace_back(bytes(""), raw._regular_column_name_type, column_kind::regular_column, 0);
         } else if (regular_cols > 1) {
             throw exceptions::configuration_exception(sprint("Expecting exactly one regular column. Found %d", regular_cols));
         }
@@ -726,6 +714,19 @@ void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
 
 schema_builder& schema_builder::with_view_info(utils::UUID base_id, sstring base_name, bool include_all_columns, sstring where_clause) {
     _view_info = raw_view_info(std::move(base_id), std::move(base_name), include_all_columns, std::move(where_clause));
+    return *this;
+}
+
+schema_builder& schema_builder::with_index(const index_metadata& im) {
+    _raw._indices_by_name.emplace(im.name(), im);
+    return *this;
+}
+
+schema_builder& schema_builder::without_index(const sstring& name) {
+    const auto& it = _raw._indices_by_name.find(name);
+    if (it != _raw._indices_by_name.end()) {
+        _raw._indices_by_name.erase(name);
+    }
     return *this;
 }
 
@@ -1000,6 +1001,32 @@ schema::position(const column_definition& column) const {
         return column.id;
     }
     return clustering_key_size();
+}
+
+stdx::optional<index_metadata> schema::find_index_noname(const index_metadata& target) const {
+    const auto& it = boost::find_if(_raw._indices_by_name, [&] (auto&& e) {
+        return e.second.equals_noname(target);
+    });
+    if (it != _raw._indices_by_name.end()) {
+        return it->second;
+    }
+    return {};
+}
+
+std::vector<index_metadata> schema::indices() const {
+    return boost::copy_range<std::vector<index_metadata>>(_raw._indices_by_name | boost::adaptors::map_values);
+}
+
+const std::unordered_map<sstring, index_metadata>& schema::all_indices() const {
+    return _raw._indices_by_name;
+}
+
+bool schema::has_index(const sstring& index_name) const {
+    return _raw._indices_by_name.count(index_name) > 0;
+}
+
+std::vector<sstring> schema::index_names() const {
+    return boost::copy_range<std::vector<sstring>>(_raw._indices_by_name | boost::adaptors::map_keys);
 }
 
 bool schema::is_synced() const {

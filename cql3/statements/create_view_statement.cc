@@ -139,7 +139,7 @@ static bool validate_primary_key(
     return false;
 }
 
-future<bool> create_view_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
+future<shared_ptr<transport::event::schema_change>> create_view_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
     // We need to make sure that:
     //  - primary key includes all columns in base table's primary key
     //  - make sure that the select statement does not have anything other than columns
@@ -321,18 +321,19 @@ future<bool> create_view_statement::announce_migration(distributed<service::stor
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();
-            return true;
+            using namespace transport;
+            return make_shared<event::schema_change>(
+                    event::schema_change::change_type::CREATED,
+                    event::schema_change::target_type::TABLE,
+                    this->keyspace(),
+                    this->column_family());
         } catch (const exceptions::already_exists_exception& e) {
             if (_if_not_exists) {
-                return false;
+                return ::shared_ptr<transport::event::schema_change>();
             }
             throw e;
         }
     });
-}
-
-shared_ptr<transport::event::schema_change> create_view_statement::change_event() {
-    return make_shared<transport::event::schema_change>(transport::event::schema_change::change_type::CREATED, transport::event::schema_change::target_type::TABLE, keyspace(), column_family());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

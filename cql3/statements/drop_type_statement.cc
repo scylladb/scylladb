@@ -84,22 +84,12 @@ void drop_type_statement::validate(distributed<service::storage_proxy>& proxy, c
     }
 }
 
-shared_ptr<transport::event::schema_change> drop_type_statement::change_event()
-{
-    using namespace transport;
-
-    return make_shared<transport::event::schema_change>(event::schema_change::change_type::DROPPED,
-                                                        event::schema_change::target_type::TYPE,
-                                                        keyspace(),
-                                                        _name.get_string_type_name());
-}
-
 const sstring& drop_type_statement::keyspace() const
 {
     return _name.get_keyspace();
 }
 
-future<bool> drop_type_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<transport::event::schema_change>> drop_type_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
 {
     auto&& db = proxy.local().get_db().local();
 
@@ -111,10 +101,18 @@ future<bool> drop_type_statement::announce_migration(distributed<service::storag
 
     // Can happen with if_exists
     if (to_drop == all_types.end()) {
-        return make_ready_future<bool>(false);
+        return make_ready_future<::shared_ptr<transport::event::schema_change>>();
     }
 
-    return service::get_local_migration_manager().announce_type_drop(to_drop->second, is_local_only).then([] { return true; });
+    return service::get_local_migration_manager().announce_type_drop(to_drop->second, is_local_only).then([this] {
+        using namespace transport;
+
+        return make_shared<event::schema_change>(
+                event::schema_change::change_type::DROPPED,
+                event::schema_change::target_type::TYPE,
+                keyspace(),
+                _name.get_string_type_name());
+    });
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

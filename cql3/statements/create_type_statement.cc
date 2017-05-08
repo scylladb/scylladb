@@ -107,16 +107,6 @@ void create_type_statement::check_for_duplicate_names(user_type type)
     }
 }
 
-shared_ptr<transport::event::schema_change> create_type_statement::change_event()
-{
-    using namespace transport;
-
-    return make_shared<transport::event::schema_change>(event::schema_change::change_type::CREATED,
-                                                        event::schema_change::target_type::TYPE,
-                                                        keyspace(),
-                                                        _name.get_string_type_name());
-}
-
 const sstring& create_type_statement::keyspace() const
 {
     return _name.get_keyspace();
@@ -139,7 +129,7 @@ inline user_type create_type_statement::create_type(database& db)
         std::move(field_names), std::move(field_types));
 }
 
-future<bool> create_type_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<transport::event::schema_change>> create_type_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
 {
     auto&& db = proxy.local().get_db().local();
 
@@ -148,12 +138,20 @@ future<bool> create_type_statement::announce_migration(distributed<service::stor
 
     // Can happen with if_not_exists
     if (type_exists_in(ks)) {
-        return make_ready_future<bool>(false);
+        return make_ready_future<::shared_ptr<transport::event::schema_change>>();
     }
 
     auto type = create_type(db);
     check_for_duplicate_names(type);
-    return service::get_local_migration_manager().announce_new_type(type, is_local_only).then([] { return true; });
+    return service::get_local_migration_manager().announce_new_type(type, is_local_only).then([this] {
+        using namespace transport;
+
+        return make_shared<event::schema_change>(
+                event::schema_change::change_type::CREATED,
+                event::schema_change::target_type::TYPE,
+                keyspace(),
+                _name.get_string_type_name());
+    });
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>

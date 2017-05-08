@@ -244,7 +244,7 @@ private:
             }
             void accept_new_partition(const partition_key& key, uint32_t row_count) {
                 logger.trace("Accepting partition: {} ({})", key, row_count);
-                total_rows += row_count;
+                total_rows += std::max(row_count, 1u);
                 last_pkey = key;
                 last_ckey = { };
                 visitor::accept_new_partition(key, row_count);

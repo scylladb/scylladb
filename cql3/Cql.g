@@ -46,6 +46,7 @@ options {
 #include "cql3/statements/drop_type_statement.hh"
 #include "cql3/statements/alter_type_statement.hh"
 #include "cql3/statements/property_definitions.hh"
+#include "cql3/statements/drop_index_statement.hh"
 #include "cql3/statements/drop_table_statement.hh"
 #include "cql3/statements/drop_view_statement.hh"
 #include "cql3/statements/truncate_statement.hh"
@@ -318,9 +319,7 @@ cqlStatement returns [shared_ptr<raw::parsed_statement> stmt]
     | st10=createIndexStatement        { $stmt = st10; }
     | st11=dropKeyspaceStatement       { $stmt = st11; }
     | st12=dropTableStatement          { $stmt = st12; }
-#if 0
     | st13=dropIndexStatement          { $stmt = st13; }
-#endif
     | st14=alterTableStatement         { $stmt = st14; }
     | st15=alterKeyspaceStatement      { $stmt = st15; }
     | st16=grantStatement              { $stmt = st16; }
@@ -778,12 +777,13 @@ createIndexStatement returns [::shared_ptr<create_index_statement> expr]
         auto props = make_shared<index_prop_defs>();
         bool if_not_exists = false;
         auto name = ::make_shared<cql3::index_name>();
+        std::vector<::shared_ptr<index_target::raw>> targets;
     }
     : K_CREATE (K_CUSTOM { props->is_custom = true; })? K_INDEX (K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
-        (idxName[name])? K_ON cf=columnFamilyName '(' id=indexIdent ')'
+        (idxName[name])? K_ON cf=columnFamilyName '(' (target1=indexIdent { targets.emplace_back(target1); } (',' target2=indexIdent { targets.emplace_back(target2); } )*)? ')'
         (K_USING cls=STRING_LITERAL { props->custom_class = sstring{$cls.text}; })?
         (K_WITH properties[props])?
-      { $expr = ::make_shared<create_index_statement>(cf, name, id, props, if_not_exists); }
+      { $expr = ::make_shared<create_index_statement>(cf, name, targets, props, if_not_exists); }
     ;
 
 indexIdent returns [::shared_ptr<index_target::raw> id]
@@ -957,16 +957,14 @@ dropViewStatement returns [::shared_ptr<drop_view_statement> stmt]
       { $stmt = ::make_shared<drop_view_statement>(cf, if_exists); }
     ;
 
-#if 0
 /**
  * DROP INDEX [IF EXISTS] <INDEX_NAME>
  */
-dropIndexStatement returns [DropIndexStatement expr]
-    @init { boolean ifExists = false; }
-    : K_DROP K_INDEX (K_IF K_EXISTS { ifExists = true; } )? index=indexName
-      { $expr = new DropIndexStatement(index, ifExists); }
+dropIndexStatement returns [::shared_ptr<drop_index_statement> expr]
+    @init { bool if_exists = false; }
+    : K_DROP K_INDEX (K_IF K_EXISTS { if_exists = true; } )? index=indexName
+      { $expr = ::make_shared<drop_index_statement>(index, if_exists); }
     ;
-#endif
 
 /**
   * TRUNCATE <CF>;

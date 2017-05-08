@@ -59,9 +59,7 @@ public:
 
     virtual const sstring& keyspace() const override;
 
-    virtual future<bool> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) override;
-
-    virtual shared_ptr<transport::event::schema_change> change_event() override;
+    virtual future<shared_ptr<transport::event::schema_change>> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) override;
 
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 };
