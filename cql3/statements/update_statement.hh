@@ -69,7 +69,9 @@ public:
 private:
     virtual bool require_full_clustering_key() const override;
 
-    virtual void add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
+    virtual bool allow_clustering_key_slices() const override;
+
+    virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params) override;
 };
 
 }

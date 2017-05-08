@@ -61,11 +61,6 @@ void mutation::set_static_cell(const bytes& name, const data_value& value, api::
     partition().static_row().apply(*column_def, atomic_cell::make_live(timestamp, column_def->type->decompose(value), ttl));
 }
 
-void mutation::set_clustered_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection&& value) {
-    auto& row = partition().clustered_row(*schema(), clustering_key::from_clustering_prefix(*schema(), prefix)).cells();
-    row.apply(def, std::move(value));
-}
-
 void mutation::set_clustered_cell(const clustering_key& key, const bytes& name, const data_value& value,
         api::timestamp_type timestamp, ttl_opt ttl) {
     auto column_def = schema()->get_column_definition(name);
@@ -80,7 +75,7 @@ void mutation::set_clustered_cell(const clustering_key& key, const column_defini
     row.apply(def, std::move(value));
 }
 
-void mutation::set_cell(const exploded_clustering_prefix& prefix, const bytes& name, const data_value& value,
+void mutation::set_cell(const clustering_key_prefix& prefix, const bytes& name, const data_value& value,
         api::timestamp_type timestamp, ttl_opt ttl) {
     auto column_def = schema()->get_column_definition(name);
     if (!column_def) {
@@ -89,7 +84,7 @@ void mutation::set_cell(const exploded_clustering_prefix& prefix, const bytes& n
     return set_cell(prefix, *column_def, atomic_cell::make_live(timestamp, column_def->type->decompose(value), ttl));
 }
 
-void mutation::set_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection&& value) {
+void mutation::set_cell(const clustering_key_prefix& prefix, const column_definition& def, atomic_cell_or_collection&& value) {
     if (def.is_static()) {
         set_static_cell(def, std::move(value));
     } else if (def.is_regular()) {

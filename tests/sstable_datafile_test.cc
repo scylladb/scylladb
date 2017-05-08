@@ -862,7 +862,7 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
         auto mt = make_lw_shared<memtable>(s);
 
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
-        auto cp = exploded_clustering_prefix({to_bytes("c1") });
+        auto cp = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
 
         mutation m(key, s);
 
@@ -899,7 +899,7 @@ static future<> sstable_compression_test(compressor c, unsigned generation) {
         auto mtp = make_lw_shared<memtable>(s);
 
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
-        auto cp = exploded_clustering_prefix({to_bytes("c1") });
+        auto cp = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
 
         mutation m(key, s);
 
@@ -1057,7 +1057,7 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
 
         BOOST_REQUIRE(cf->sstables_count() == generations->size());
         cf->trigger_compaction();
-        BOOST_REQUIRE(cm->get_stats().pending_tasks == 1);
+        BOOST_REQUIRE(cm->get_stats().pending_tasks == 1 || cm->get_stats().active_tasks == 1);
 
         // wait for submitted job to finish.
         auto end = [cm] { return cm->get_stats().pending_tasks == 0 && cm->get_stats().active_tasks == 0; };
@@ -1392,7 +1392,7 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         mutation m(key, s);
 
-        auto c_key = exploded_clustering_prefix({to_bytes("cl1") });
+        auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
         const column_definition& cl2 = *s->get_column_definition("cl2");
 
         m.set_clustered_cell(c_key, cl2, make_atomic_cell(bytes_type->decompose(data_value(to_bytes("cl2")))));
@@ -1407,8 +1407,7 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
                     }).then([sstp, s] (auto mutation) {
                         auto& mp = mutation->partition();
 
-                        auto exploded = exploded_clustering_prefix({"cl1"});
-                        auto clustering = clustering_key::from_clustering_prefix(*s, exploded);
+                        auto clustering = clustering_key_prefix::from_exploded(*s, {to_bytes("cl1")});
 
                         auto row = mp.clustered_row(*s, clustering);
                         match_live_cell(row.cells(), *s, "cl2", data_value(to_bytes("cl2")));
@@ -1429,8 +1428,7 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         mutation m(key, s);
 
-        auto exploded = exploded_clustering_prefix({"cl1", "cl2"});
-        auto c_key = clustering_key::from_clustering_prefix(*s, exploded);
+        auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("cl1"), to_bytes("cl2")});
 
         const column_definition& cl3 = *s->get_column_definition("cl3");
         m.set_clustered_cell(c_key, cl3, make_atomic_cell(bytes_type->decompose(data_value(to_bytes("cl3")))));
@@ -1444,8 +1442,7 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
                         return mutation_from_streamed_mutation(std::move(sm));
                     }).then([sstp, s] (auto mutation) {
                         auto& mp = mutation->partition();
-                        auto exploded = exploded_clustering_prefix({"cl1", "cl2"});
-                        auto clustering = clustering_key::from_clustering_prefix(*s, exploded);
+                        auto clustering = clustering_key_prefix::from_exploded(*s, {to_bytes("cl1"), to_bytes("cl2")});
 
                         auto row = mp.clustered_row(*s, clustering);
                         match_live_cell(row.cells(), *s, "cl3", data_value(to_bytes("cl3")));
@@ -3249,7 +3246,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
             .build();
         auto tmp = make_lw_shared<tmpdir>();
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
-        auto c_key = exploded_clustering_prefix({to_bytes("c1") });
+        auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
         const column_definition& r1_col = *s->get_column_definition("r1");
 
         {

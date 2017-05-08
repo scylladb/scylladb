@@ -146,7 +146,7 @@ public:
         setter(const column_definition& column, shared_ptr<term> t)
                 : operation(column, std::move(t)) {
         }
-        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
     class setter_by_index : public operation {
@@ -158,7 +158,7 @@ public:
         }
         virtual bool requires_read() override;
         virtual void collect_marker_specification(shared_ptr<variable_specifications> bound_names);
-        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
     class setter_by_uuid : public setter_by_index {
@@ -167,25 +167,25 @@ public:
             : setter_by_index(column, std::move(idx), std::move(t)) {
         }
         virtual bool requires_read() override;
-        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
     class appender : public operation {
     public:
         using operation::operation;
-        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
     static void do_append(shared_ptr<term> value,
             mutation& m,
-            const exploded_clustering_prefix& prefix,
+            const clustering_key_prefix& prefix,
             const column_definition& column,
             const update_parameters& params);
 
     class prepender : public operation {
     public:
         using operation::operation;
-        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
     class discarder : public operation {
@@ -194,7 +194,7 @@ public:
                 : operation(column, std::move(t)) {
         }
         virtual bool requires_read() override;
-        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
     class discarder_by_index : public operation {
@@ -203,7 +203,7 @@ public:
                 : operation(column, std::move(idx)) {
         }
         virtual bool requires_read() override;
-        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params);
+        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params);
     };
 };
 

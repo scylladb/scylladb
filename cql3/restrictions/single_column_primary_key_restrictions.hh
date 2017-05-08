@@ -46,6 +46,7 @@
 #include "cartesian_product.hh"
 #include "cql3/restrictions/primary_key_restrictions.hh"
 #include "cql3/restrictions/single_column_restrictions.hh"
+#include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 
@@ -94,6 +95,10 @@ public:
 
     virtual bool is_IN() const override {
         return _in;
+    }
+
+    virtual bool has_bound(statements::bound b) const override {
+        return boost::algorithm::all_of(_restrictions->restrictions(), [b] (auto&& r) { return r.second->has_bound(b); });
     }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {

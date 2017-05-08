@@ -576,7 +576,17 @@ static void test_clustering_slices(populate_fn populate) {
         return clustering_key::from_deeply_exploded(*s, components);
     };
 
-    auto pk = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s, to_bytes("key1")));
+    auto make_pk = [&] (sstring key) {
+        return dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s, to_bytes(key)));
+    };
+
+    std::vector<dht::decorated_key> keys;
+    for (int i = 0; i < 3; ++i) {
+        keys.push_back(make_pk(sprint("key%d", i)));
+    }
+    std::sort(keys.begin(), keys.end(), dht::ring_position_less_comparator(*s));
+
+    auto pk = keys[1];
 
     auto make_row = [&] (clustering_key k, int v) {
         mutation m(pk, s);
@@ -661,6 +671,18 @@ static void test_clustering_slices(populate_fn populate) {
         assert_that(ds(s, pr, slice))
             .produces(row8 + del_3)
             .produces_end_of_stream();
+    }
+
+    // Test out-of-range partition keys
+    {
+        auto pr = dht::partition_range::make_singular(keys[0]);
+        assert_that(ds(s, pr, query::full_slice))
+            .produces_eos_or_empty_mutation();
+    }
+    {
+        auto pr = dht::partition_range::make_singular(keys[2]);
+        assert_that(ds(s, pr, query::full_slice))
+            .produces_eos_or_empty_mutation();
     }
 }
 

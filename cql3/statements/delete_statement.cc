@@ -54,26 +54,25 @@ bool delete_statement::require_full_clustering_key() const {
     return false;
 }
 
-void delete_statement::add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+bool delete_statement::allow_clustering_key_slices() const {
+    return true;
+}
+
+void delete_statement::add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params) {
     if (_column_operations.empty()) {
-        m.partition().apply_delete(*s, prefix, params.make_tombstone());
+        if (s->clustering_key_size() == 0 || range.is_full()) {
+            m.partition().apply(params.make_tombstone());
+        } else if (range.is_singular()) {
+            m.partition().apply_delete(*s, range.start()->value(), params.make_tombstone());
+        } else {
+            auto bvs = bound_view::from_range(range);
+            m.partition().apply_delete(*s, range_tombstone(bvs.first, bvs.second, params.make_tombstone()));
+        }
         return;
     }
 
-    if (prefix.size() < s->clustering_key_size()) {
-        // In general, we can't delete specific columns if not all clustering columns have been specified.
-        // However, if we delete only static columns, it's fine since we won't really use the prefix anyway.
-        for (auto&& deletion : _column_operations) {
-            if (!deletion->column.is_static()) {
-                throw exceptions::invalid_request_exception(sprint(
-                    "Primary key column '%s' must be specified in order to delete column '%s'",
-                    get_first_empty_key()->name_as_text(), deletion->column.name_as_text()));
-            }
-        }
-    }
-
     for (auto&& op : _column_operations) {
-        op->execute(m, prefix, params);
+        op->execute(m, range.start() ? std::move(range.start()->value()) : clustering_key_prefix::make_empty(), params);
     }
 }
 
@@ -104,6 +103,10 @@ delete_statement::prepare_internal(database& db, schema_ptr schema, shared_ptr<v
     }
 
     stmt->process_where_clause(db, _where_clause, std::move(bound_names));
+    if (!stmt->restrictions()->get_clustering_columns_restrictions()->has_bound(bound::START)
+            || !stmt->restrictions()->get_clustering_columns_restrictions()->has_bound(bound::END)) {
+        throw exceptions::invalid_request_exception("A range deletion operation needs to specify both bounds");
+    }
     return stmt;
 }
 

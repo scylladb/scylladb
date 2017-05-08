@@ -14,6 +14,7 @@ class ScyllaSetup:
         self._smp = arguments.smp
         self._memory = arguments.memory
         self._overprovisioned = arguments.overprovisioned
+        self._experimental = arguments.experimental
 
     def _run(self, *args, **kwargs):
         logging.info('running: {}'.format(args))
@@ -61,6 +62,9 @@ class ScyllaSetup:
             args += ["--broadcast-address %s" %self._broadcastAddress ]
         if self._broadcastRpcAddress is not None:
             args += [ "--broadcast-rpc-address %s" %self._broadcastRpcAddress ]
+
+        if self._experimental == "1":
+            args += [ "--experimental=on" ]
 
         with open("/etc/scylla.d/docker.conf", "w") as cqlshrc:
             cqlshrc.write("SCYLLA_DOCKER_ARGS=\"%s\"\n" % " ".join(args))

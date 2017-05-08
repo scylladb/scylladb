@@ -201,8 +201,7 @@ auth::authenticator::option_set auth::password_authenticator::alterable_options(
 }
 
 future<::shared_ptr<auth::authenticated_user> > auth::password_authenticator::authenticate(
-                const credentials_map& credentials) const
-                                throw (exceptions::authentication_exception) {
+                const credentials_map& credentials) const {
     if (!credentials.count(USERNAME_KEY)) {
         throw exceptions::authentication_exception(sprint("Required key '%s' is missing", USERNAME_KEY));
     }
@@ -241,9 +240,7 @@ future<::shared_ptr<auth::authenticated_user> > auth::password_authenticator::au
 }
 
 future<> auth::password_authenticator::create(sstring username,
-                const option_map& options)
-                                throw (exceptions::request_validation_exception,
-                                exceptions::request_execution_exception) {
+                const option_map& options) {
     try {
         auto password = boost::any_cast<sstring>(options.at(option::PASSWORD));
         auto query = sprint("INSERT INTO %s.%s (%s, %s) VALUES (?, ?)",
@@ -256,9 +253,7 @@ future<> auth::password_authenticator::create(sstring username,
 }
 
 future<> auth::password_authenticator::alter(sstring username,
-                const option_map& options)
-                                throw (exceptions::request_validation_exception,
-                                exceptions::request_execution_exception) {
+                const option_map& options) {
     try {
         auto password = boost::any_cast<sstring>(options.at(option::PASSWORD));
         auto query = sprint("UPDATE %s.%s SET %s = ? WHERE %s = ?",
@@ -270,9 +265,7 @@ future<> auth::password_authenticator::alter(sstring username,
     }
 }
 
-future<> auth::password_authenticator::drop(sstring username)
-                throw (exceptions::request_validation_exception,
-                exceptions::request_execution_exception) {
+future<> auth::password_authenticator::drop(sstring username) {
     try {
         auto query = sprint("DELETE FROM %s.%s WHERE %s = ?",
                         auth::AUTH_KS, CREDENTIALS_CF, USER_NAME);
@@ -308,8 +301,7 @@ const auth::resource_ids& auth::password_authenticator::protected_resources() co
          * would expect
          * @throws javax.security.sasl.SaslException
          */
-        bytes evaluate_response(bytes_view client_response)
-                        throw (exceptions::authentication_exception) override {
+        bytes evaluate_response(bytes_view client_response) override {
             logger.debug("Decoding credentials from client token");
 
             sstring username, password;
@@ -347,8 +339,7 @@ const auth::resource_ids& auth::password_authenticator::protected_resources() co
         bool is_complete() const override {
             return _complete;
         }
-        future<::shared_ptr<authenticated_user>> get_authenticated_user() const
-                        throw (exceptions::authentication_exception) override {
+        future<::shared_ptr<authenticated_user>> get_authenticated_user() const override {
             return _authenticator.authenticate(_credentials);
         }
     private:

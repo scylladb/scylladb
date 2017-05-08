@@ -115,16 +115,14 @@ auth::data_resource auth::data_resource::get_parent() const {
     }
 }
 
-const sstring& auth::data_resource::keyspace() const
-                throw (std::invalid_argument) {
+const sstring& auth::data_resource::keyspace() const {
     if (is_root_level()) {
         throw std::invalid_argument("ROOT data resource has no keyspace");
     }
     return _ks;
 }
 
-const sstring& auth::data_resource::column_family() const
-                throw (std::invalid_argument) {
+const sstring& auth::data_resource::column_family() const {
     if (!is_column_family_level()) {
         throw std::invalid_argument(sprint("%s data resource has no column family", name()));
     }

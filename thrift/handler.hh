@@ -28,6 +28,6 @@
 #include "cql3/query_processor.hh"
 #include <memory>
 
-std::unique_ptr<org::apache::cassandra::CassandraCobSvIfFactory> create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp);
+std::unique_ptr<::cassandra::CassandraCobSvIfFactory> create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp);
 
 #endif /* APPS_SEASTAR_THRIFT_HANDLER_HH_ */

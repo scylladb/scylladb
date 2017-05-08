@@ -150,8 +150,6 @@ class compaction;
 class compacting_sstable_writer {
     compaction& _c;
     sstable_writer* _writer = nullptr;
-private:
-    void finish_sstable_write();
 public:
     explicit compacting_sstable_writer(compaction& c) : _c(c) {}
 
@@ -244,7 +242,6 @@ private:
         _info->sstables = _sstables.size();
         _info->ks = schema->ks_name();
         _info->cf = schema->cf_name();
-        _info->type = compaction_type::Compaction;
         report_start(formatted_msg);
 
         return ::make_combined_reader(std::move(readers));

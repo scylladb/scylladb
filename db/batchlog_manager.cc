@@ -162,9 +162,9 @@ mutation db::batchlog_manager::get_batch_log_mutation_for(const std::vector<muta
     }();
 
     mutation m(key, schema);
-    m.set_cell({}, to_bytes("version"), version, timestamp);
-    m.set_cell({}, to_bytes("written_at"), now, timestamp);
-    m.set_cell({}, to_bytes("data"), data_value(std::move(data)), timestamp);
+    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("version"), version, timestamp);
+    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("written_at"), now, timestamp);
+    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("data"), data_value(std::move(data)), timestamp);
 
     return m;
 }
@@ -286,7 +286,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
             auto key = partition_key::from_singular(*schema, id);
             mutation m(key, schema);
             auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
-            m.partition().apply_delete(*schema, {}, tombstone(now, gc_clock::now()));
+            m.partition().apply_delete(*schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
             return _qp.proxy().local().mutate_locally(m);
         });
     };

@@ -25,6 +25,7 @@
 #include <vector>
 #include <sstream>
 #include <unordered_set>
+#include <set>
 #include <experimental/optional>
 
 template<typename PrintableRange>

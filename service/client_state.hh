@@ -247,7 +247,7 @@ public:
     future<> ensure_has_permission(auth::permission, auth::data_resource) const;
 
     void validate_login() const;
-    void ensure_not_anonymous() const throw(exceptions::unauthorized_exception);
+    void ensure_not_anonymous() const; // unauthorized_exception on error
 
 #if 0
     public void ensureIsSuper(String message) throws UnauthorizedException

@@ -317,6 +317,10 @@ bool statement_restrictions::has_partition_key_unrestricted_components() const {
     return _partition_key_restrictions->size() < _schema->partition_key_size();
 }
 
+bool statement_restrictions::has_unrestricted_clustering_columns() const {
+    return _clustering_columns_restrictions->size() < _schema->clustering_key_size();
+}
+
 void statement_restrictions::process_clustering_columns_restrictions(bool has_queriable_index, bool select_a_collection) {
     if (!has_clustering_columns_restriction()) {
         return;

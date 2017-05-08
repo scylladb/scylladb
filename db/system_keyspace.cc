@@ -446,7 +446,7 @@ static future<> setup_version() {
                              sstring(db::system_keyspace::LOCAL),
                              version::release(),
                              cql3::query_processor::CQL_VERSION,
-                             org::apache::cassandra::thrift_version,
+                             ::cassandra::thrift_version,
                              to_sstring(cql_serialization_format::latest_version),
                              snitch->get_datacenter(utils::fb_utilities::get_broadcast_address()),
                              snitch->get_rack(utils::fb_utilities::get_broadcast_address()),

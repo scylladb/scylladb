@@ -1135,6 +1135,15 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
     //     real_mark_alive(addr, local_state);
     //     return;
     // }
+    auto inserted = _pending_mark_alive_endpoints.insert(addr).second;
+    if (inserted) {
+        // The node is not in the _pending_mark_alive_endpoints
+        logger.debug("Mark Node {} alive with EchoMessage", addr);
+    } else {
+        // We are in the progress of marking this node alive
+        logger.debug("Node {} is being marked as up, ignoring duplicated mark alive operation", addr);
+        return;
+    }
 
     local_state.mark_dead();
     msg_addr id = get_msg_addr(addr);
@@ -1143,10 +1152,22 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
         ms().send_gossip_echo(id).get();
         logger.trace("Got EchoMessage Reply");
         set_last_processed_message_at();
-        real_mark_alive(id.addr, local_state);
+        // After sending echo message, the Node might not be in the
+        // endpoint_state_map anymore, use the reference of local_state
+        // might cause user-after-free
+        auto it = endpoint_state_map.find(addr);
+        if (it == endpoint_state_map.end()) {
+            logger.info("Node {} is not in endpoint_state_map anymore", addr);
+        } else {
+            endpoint_state& state = it->second;
+            logger.debug("Mark Node {} alive after EchoMessage", addr);
+            real_mark_alive(addr, state);
+        }
     } catch(...) {
         logger.warn("Fail to send EchoMessage to {}: {}", id, std::current_exception());
     }
+
+    _pending_mark_alive_endpoints.erase(addr);
 }
 
 // Runs inside seastar::async context
@@ -1198,6 +1219,16 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     }
     logger.trace("Adding endpoint state for {}, status = {}", ep, get_gossip_status(eps));
     endpoint_state_map[ep] = eps;
+
+    if (_in_shadow_round) {
+        // In shadow round, we only interested in the peer's endpoint_state,
+        // e.g., gossip features, host_id, tokens. No need to call the
+        // on_restart or on_join callbacks or to go through the mark alive
+        // procedure with EchoMessage gossip message. We will do them during
+        // normal gossip runs anyway.
+        logger.debug("In shadow round addr={}, eps={}", ep, eps);
+        return;
+    }
 
     if (eps_old) {
         // the node restarted: it is up to the subscriber to take whatever action is necessary
