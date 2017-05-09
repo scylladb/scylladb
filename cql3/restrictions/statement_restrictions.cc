@@ -230,7 +230,7 @@ statement_restrictions::statement_restrictions(database& db,
         }
     }
 
-    process_clustering_columns_restrictions(has_queriable_index, select_a_collection);
+    process_clustering_columns_restrictions(has_queriable_index, select_a_collection, for_view);
 
     // Covers indexes on the first clustering column (among others).
     if (_is_key_range && has_queriable_clustering_column_index)
@@ -337,7 +337,7 @@ bool statement_restrictions::has_unrestricted_clustering_columns() const {
     return _clustering_columns_restrictions->size() < _schema->clustering_key_size();
 }
 
-void statement_restrictions::process_clustering_columns_restrictions(bool has_queriable_index, bool select_a_collection) {
+void statement_restrictions::process_clustering_columns_restrictions(bool has_queriable_index, bool select_a_collection, bool for_view) {
     if (!has_clustering_columns_restriction()) {
         return;
     }
@@ -357,7 +357,7 @@ void statement_restrictions::process_clustering_columns_restrictions(bool has_qu
         const column_definition* clustering_column = &(*clustering_columns_iter);
         ++clustering_columns_iter;
 
-        if (clustering_column != restricted_column) {
+        if (clustering_column != restricted_column && !for_view) {
             if (!has_queriable_index) {
                 throw exceptions::invalid_request_exception(sprint(
                     "PRIMARY KEY column \"%s\" cannot be restricted as preceding column \"%s\" is not restricted",
