@@ -381,6 +381,12 @@ public:
 
     bool is_static_row() const { return !_ck; }
 
+    // Returns true if all fragments that can be seen for given schema have
+    // positions >= than this.
+    bool is_before_all_fragments(const schema& s) const {
+        return !_ck || (!s.has_static_columns() && _bound_weight < 0 && _ck->is_empty(s));
+    }
+
     friend std::ostream& operator<<(std::ostream&, position_in_partition_view);
 };
 

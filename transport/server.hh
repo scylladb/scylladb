@@ -185,7 +185,7 @@ private:
         shared_ptr<cql_server::response> make_error(int16_t stream, exceptions::exception_code err, sstring msg);
         shared_ptr<cql_server::response> make_ready(int16_t stream);
         shared_ptr<cql_server::response> make_supported(int16_t stream);
-        shared_ptr<cql_server::response> make_result(int16_t stream, shared_ptr<transport::messages::result_message> msg);
+        shared_ptr<cql_server::response> make_result(int16_t stream, shared_ptr<transport::messages::result_message> msg, bool skip_metadata = false);
         shared_ptr<cql_server::response> make_topology_change_event(const transport::event::topology_change& event);
         shared_ptr<cql_server::response> make_status_change_event(const transport::event::status_change& event);
         shared_ptr<cql_server::response> make_schema_change_event(const transport::event::schema_change& event);

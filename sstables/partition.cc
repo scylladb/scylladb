@@ -875,7 +875,7 @@ public:
     }
 
     future<> advance_context(position_in_partition_view pos) {
-        if (pos.is_static_row()) {
+        if (pos.is_before_all_fragments(*_schema)) {
             return make_ready_future<>();
         }
         return [this] {

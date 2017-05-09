@@ -218,7 +218,7 @@ public:
     void write_string_map(std::map<sstring, sstring> string_map);
     void write_string_multimap(std::multimap<sstring, sstring> string_map);
     void write_value(bytes_opt value);
-    void write(const cql3::metadata& m);
+    void write(const cql3::metadata& m, bool skip = false);
     void write(const cql3::prepared_metadata& m, uint8_t version);
     future<> output(output_stream<char>& out, uint8_t version, cql_compression compression);
 
@@ -805,6 +805,7 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, byt
     auto& query_state = q_state->query_state;
     q_state->options = read_options(buf);
     auto& options = *q_state->options;
+    auto skip_metadata = options.skip_metadata();
 
     tracing::set_page_size(query_state.get_trace_state(), options.get_page_size());
     tracing::set_consistency_level(query_state.get_trace_state(), options.get_consistency());
@@ -814,9 +815,9 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, byt
 
     tracing::begin(query_state.get_trace_state(), "Execute CQL3 query", query_state.get_client_state().get_client_address());
 
-    return _server._query_processor.local().process(query, query_state, options).then([this, stream, buf = std::move(buf), &query_state] (auto msg) {
+    return _server._query_processor.local().process(query, query_state, options).then([this, stream, buf = std::move(buf), &query_state, skip_metadata] (auto msg) {
          tracing::trace(query_state.get_trace_state(), "Done processing - preparing a result");
-         return this->make_result(stream, msg);
+         return this->make_result(stream, msg, skip_metadata);
     }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
         /* Keep q_state alive. */
         return make_ready_future<response_type>(std::make_pair(response, query_state.get_client_state()));
@@ -877,6 +878,7 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
         q_state->options = read_options(buf);
     }
     auto& options = *q_state->options;
+    auto skip_metadata = options.skip_metadata();
     options.prepare(prepared->bound_names);
 
     tracing::set_page_size(client_state.get_trace_state(), options.get_page_size());
@@ -894,9 +896,9 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
         throw exceptions::invalid_request_exception("Invalid amount of bind variables");
     }
     tracing::trace(query_state.get_trace_state(), "Processing a statement");
-    return _server._query_processor.local().process_statement(stmt, query_state, options).then([this, stream, buf = std::move(buf), &query_state] (auto msg) {
+    return _server._query_processor.local().process_statement(stmt, query_state, options).then([this, stream, buf = std::move(buf), &query_state, skip_metadata] (auto msg) {
         tracing::trace(query_state.get_trace_state(), "Done processing - preparing a result");
-        return this->make_result(stream, msg);
+        return this->make_result(stream, msg, skip_metadata);
     }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
         /* Keep q_state alive. */
         return make_ready_future<response_type>(std::make_pair(response, query_state.get_client_state()));
@@ -1100,10 +1102,12 @@ class cql_server::fmt_visitor : public messages::result_message::visitor_base {
 private:
     uint8_t _version;
     shared_ptr<cql_server::response> _response;
+    bool _skip_metadata;
 public:
-    fmt_visitor(uint8_t version, shared_ptr<cql_server::response> response)
+    fmt_visitor(uint8_t version, shared_ptr<cql_server::response> response, bool skip_metadata)
         : _version{version}
         , _response{response}
+        , _skip_metadata{skip_metadata}
     { }
 
     virtual void visit(const messages::result_message::void_message&) override {
@@ -1141,7 +1145,7 @@ public:
     virtual void visit(const messages::result_message::rows& m) override {
         _response->write_int(0x0002);
         auto& rs = m.rs();
-        _response->write(rs.get_metadata());
+        _response->write(rs.get_metadata(), _skip_metadata);
         _response->write_int(rs.size());
         for (auto&& row : rs.rows()) {
             for (auto&& cell : row | boost::adaptors::sliced(0, rs.get_metadata().column_count())) {
@@ -1152,10 +1156,10 @@ public:
 };
 
 shared_ptr<cql_server::response>
-cql_server::connection::make_result(int16_t stream, shared_ptr<messages::result_message> msg)
+cql_server::connection::make_result(int16_t stream, shared_ptr<messages::result_message> msg, bool skip_metadata)
 {
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::RESULT);
-    fmt_visitor fmt{_version, response};
+    fmt_visitor fmt{_version, response, skip_metadata};
     msg->accept(fmt);
     return response;
 }
@@ -1856,12 +1860,16 @@ thread_local const type_codec::type_id_to_type_type type_codec::type_id_to_type 
     (type_id::TIME      , time_type)
     (type_id::INET      , inet_addr_type);
 
-void cql_server::response::write(const cql3::metadata& m) {
-    bool no_metadata = m.flags().contains<cql3::metadata::flag::NO_METADATA>();
+void cql_server::response::write(const cql3::metadata& m, bool no_metadata) {
+    auto flags = m.flags();
     bool global_tables_spec = m.flags().contains<cql3::metadata::flag::GLOBAL_TABLES_SPEC>();
     bool has_more_pages = m.flags().contains<cql3::metadata::flag::HAS_MORE_PAGES>();
 
-    write_int(m.flags().mask());
+    if (no_metadata) {
+        flags.set<cql3::metadata::flag::NO_METADATA>();
+    }
+
+    write_int(flags.mask());
     write_int(m.column_count());
 
     if (has_more_pages) {
