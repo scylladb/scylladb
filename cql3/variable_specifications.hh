@@ -55,59 +55,23 @@ private:
     std::vector<::shared_ptr<column_specification>> _specs;
 
 public:
-    variable_specifications(const std::vector<::shared_ptr<column_identifier>>& variable_names)
-        : _variable_names{variable_names}
-        , _specs{variable_names.size()}
-    { }
+    variable_specifications(const std::vector<::shared_ptr<column_identifier>>& variable_names);
 
     /**
      * Returns an empty instance of <code>VariableSpecifications</code>.
      * @return an empty instance of <code>VariableSpecifications</code>
      */
-    static ::shared_ptr<variable_specifications> empty() {
-        return ::make_shared<variable_specifications>(std::vector<::shared_ptr<column_identifier>>{});
-    }
+    static ::shared_ptr<variable_specifications> empty();
 
-    size_t size() const {
-        return _variable_names.size();
-    }
+    size_t size() const;
 
-    std::vector<::shared_ptr<column_specification>> get_specifications() const & {
-        return std::vector<::shared_ptr<column_specification>>(_specs.begin(), _specs.end());
-    }
+    std::vector<::shared_ptr<column_specification>> get_specifications() const &;
 
-    std::vector<::shared_ptr<column_specification>> get_specifications() && {
-        return std::move(_specs);
-    }
+    std::vector<::shared_ptr<column_specification>> get_specifications() &&;
 
-    std::vector<uint16_t> get_partition_key_bind_indexes(schema_ptr schema) const {
-        auto count = schema->partition_key_columns().size();
-        std::vector<uint16_t> partition_key_positions(count, uint16_t(0));
-        std::vector<bool> set(count, false);
-        for (size_t i = 0; i < _specs.size(); i++) {
-            auto& target_column = _specs[i];
-            const auto* cdef = schema->get_column_definition(target_column->name->name());
-            if (cdef && cdef->is_partition_key()) {
-                partition_key_positions[cdef->position()] = i;
-                set[cdef->position()] = true;
-            }
-        }
-        for (bool b : set) {
-            if (!b) {
-                return {};
-            }
-        }
-        return partition_key_positions;
-    }
+    std::vector<uint16_t> get_partition_key_bind_indexes(schema_ptr schema) const;
 
-    void add(int32_t bind_index, ::shared_ptr<column_specification> spec) {
-        auto name = _variable_names[bind_index];
-        // Use the user name, if there is one
-        if (name) {
-            spec = ::make_shared<column_specification>(spec->ks_name, spec->cf_name, name, spec->type);
-        }
-        _specs[bind_index] = spec;
-    }
+    void add(int32_t bind_index, ::shared_ptr<column_specification> spec);
 };
 
 }
