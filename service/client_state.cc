@@ -139,7 +139,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
 
         // we want to allow altering AUTH_KS and TRACING_KS.
         for (auto& n : { auth::auth::AUTH_KS, tracing::trace_keyspace_helper::KEYSPACE_NAME }) {
-            if (name == n && !resource.is_keyspace_level() && p != auth::permission::ALTER) {
+            if (name == n && p == auth::permission::DROP) {
                 throw exceptions::unauthorized_exception(sprint("Cannot %s %s", auth::permissions::to_string(p), resource));
             }
         }
