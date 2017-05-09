@@ -515,6 +515,12 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
         sm::make_total_operations("canceled_read_repairs", [this] { return _stats.global_read_repairs_canceled_due_to_concurrent_write; },
                        sm::description("number of global read repairs canceled due to a concurrent write")),
 
+        sm::make_total_operations("foreground_read_repair", [this] { return _stats.read_repair_repaired_blocking; },
+                      sm::description("number of foreground read repairs")),
+
+        sm::make_total_operations("background_read_repairs", [this] { return _stats.read_repair_repaired_background; },
+                       sm::description("number of background read repairs")),
+
         sm::make_total_operations("write_timeouts", [this] { return _stats.write_timeouts._count; },
                        sm::description("number of write request failed due to a timeout")),
 
