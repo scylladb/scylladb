@@ -124,12 +124,8 @@ bool partition_key_matches(const schema& base, const view_info& view, const dht:
 }
 
 bool clustering_prefix_matches(const schema& base, const view_info& view, const partition_key& key, const clustering_key_prefix& ck) {
-    bound_view::compare less(base);
-    auto& ranges = view.partition_slice().row_ranges(base, key);
-    return std::any_of(ranges.begin(), ranges.end(), [&] (auto&& range) {
-        auto bounds = bound_view::from_range(range);
-        return !less(ck, bounds.first) && !less(bounds.second, ck);
-    });
+    return view.select_statement().get_restrictions()->get_clustering_columns_restrictions()->is_satisfied_by(
+            base, key, ck, row(), cql3::query_options({ }), gc_clock::now());
 }
 
 bool may_be_affected_by(const schema& base, const view_info& view, const dht::decorated_key& key, const rows_entry& update) {
