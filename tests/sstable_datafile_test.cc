@@ -1392,7 +1392,7 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         mutation m(key, s);
 
-        auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
+        auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("cl1")});
         const column_definition& cl2 = *s->get_column_definition("cl2");
 
         m.set_clustered_cell(c_key, cl2, make_atomic_cell(bytes_type->decompose(data_value(to_bytes("cl2")))));
