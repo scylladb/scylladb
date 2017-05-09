@@ -2235,6 +2235,15 @@ public:
     stdx::optional<reconcilable_result> resolve(schema_ptr schema, const query::read_command& cmd, uint32_t original_row_limit, uint32_t original_per_partition_limit,
             uint32_t original_partition_limit) {
         assert(_data_results.size());
+
+        if (_data_results.size() == 1) {
+            // if there is a result only from one node there is nothing to reconcile
+            // should happen only for range reads since single key reads will not
+            // try to reconcile for CL=ONE
+            auto& p = _data_results[0].result;
+            return reconcilable_result(p->row_count(), p->partitions(), p->is_short_read());
+        }
+
         const auto& s = *schema;
 
         // return true if lh > rh
