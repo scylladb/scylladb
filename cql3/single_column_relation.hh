@@ -139,7 +139,7 @@ protected:
         }
 
         if (is_IN()) {
-            return sprint("%s IN %s", entity_as_string, std::to_string(_in_values));
+            return sprint("%s IN (%s)", entity_as_string, join(", ", _in_values));
         }
 
         return sprint("%s %s %s", entity_as_string, _relation_type, _value->to_string());
