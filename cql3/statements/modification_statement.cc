@@ -447,7 +447,7 @@ modification_statement::execute_internal(distributed<service::storage_proxy>& pr
 void
 modification_statement::process_where_clause(database& db, std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names) {
     _restrictions = ::make_shared<restrictions::statement_restrictions>(
-            db, s, where_clause, std::move(names), applies_only_to_static_columns(), _sets_a_collection, false);
+            db, s, type, where_clause, std::move(names), applies_only_to_static_columns(), _sets_a_collection, false);
     if (_restrictions->get_partition_key_restrictions()->is_on_token()) {
         throw exceptions::invalid_request_exception(sprint("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: %s",
                 _restrictions->get_partition_key_restrictions()->to_string()));

@@ -473,7 +473,7 @@ select_statement::prepare_restrictions(database& db,
                                        bool for_view)
 {
     try {
-        return ::make_shared<restrictions::statement_restrictions>(db, schema, std::move(_where_clause), bound_names,
+        return ::make_shared<restrictions::statement_restrictions>(db, schema, statement_type::SELECT, std::move(_where_clause), bound_names,
             selection->contains_only_static_columns(), selection->contains_a_collection(), for_view);
     } catch (const exceptions::unrecognized_entity_exception& e) {
         if (contains_alias(e.entity)) {
