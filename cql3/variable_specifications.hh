@@ -53,6 +53,7 @@ class variable_specifications final {
 private:
     std::vector<shared_ptr<column_identifier>> _variable_names;
     std::vector<::shared_ptr<column_specification>> _specs;
+    std::vector<::shared_ptr<column_specification>> _target_columns;
 
 public:
     variable_specifications(const std::vector<::shared_ptr<column_identifier>>& variable_names);

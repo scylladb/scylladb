@@ -46,6 +46,7 @@ namespace cql3 {
 variable_specifications::variable_specifications(const std::vector<::shared_ptr<column_identifier>>& variable_names)
     : _variable_names{variable_names}
     , _specs{variable_names.size()}
+    , _target_columns{variable_names.size()}
 { }
 
 ::shared_ptr<variable_specifications> variable_specifications::empty() {
@@ -68,8 +69,8 @@ std::vector<uint16_t> variable_specifications::get_partition_key_bind_indexes(sc
     auto count = schema->partition_key_columns().size();
     std::vector<uint16_t> partition_key_positions(count, uint16_t(0));
     std::vector<bool> set(count, false);
-    for (size_t i = 0; i < _specs.size(); i++) {
-        auto& target_column = _specs[i];
+    for (size_t i = 0; i < _target_columns.size(); i++) {
+        auto& target_column = _target_columns[i];
         const auto* cdef = schema->get_column_definition(target_column->name->name());
         if (cdef && cdef->is_partition_key()) {
             partition_key_positions[cdef->position()] = i;
@@ -85,6 +86,7 @@ std::vector<uint16_t> variable_specifications::get_partition_key_bind_indexes(sc
 }
 
 void variable_specifications::add(int32_t bind_index, ::shared_ptr<column_specification> spec) {
+    _target_columns[bind_index] = spec;
     auto name = _variable_names[bind_index];
     // Use the user name, if there is one
     if (name) {
