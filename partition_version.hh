@@ -180,15 +180,24 @@ public:
 class partition_entry;
 
 class partition_snapshot : public enable_lw_shared_from_this<partition_snapshot> {
+public:
+    // Only snapshots created with the same value of phase can point to the same version.
+    using phase_type = uint64_t;
+    static constexpr phase_type default_phase = 0;
+    static constexpr phase_type max_phase = std::numeric_limits<phase_type>::max();
+private:
     schema_ptr _schema;
     // Either _version or _entry is non-null.
     partition_version_ref _version;
     partition_entry* _entry;
+    phase_type _phase;
 
     friend class partition_entry;
 public:
-    explicit partition_snapshot(schema_ptr s, partition_entry* entry)
-        : _schema(std::move(s)), _entry(entry) { }
+    explicit partition_snapshot(schema_ptr s,
+                                partition_entry* entry,
+                                phase_type phase = default_phase)
+        : _schema(std::move(s)), _entry(entry), _phase(phase) { }
     partition_snapshot(const partition_snapshot&) = delete;
     partition_snapshot(partition_snapshot&&) = delete;
     partition_snapshot& operator=(const partition_snapshot&) = delete;
@@ -263,12 +272,29 @@ public:
     // succeeds the result will be as if the first attempt didn't fail.
     void apply(const schema& s, partition_entry&& pe, const schema& pe_schema);
 
+    // Ensures that the latest version can be populated with data from given phase
+    // by inserting a new version if necessary.
+    // Doesn't affect value or continuity of the partition.
+    // Returns a reference to the new latest version.
+    partition_version& open_version(const schema& s, partition_snapshot::phase_type phase = partition_snapshot::max_phase) {
+        if (_snapshot && _snapshot->_phase != phase) {
+            auto new_version = current_allocator().construct<partition_version>(mutation_partition(s.shared_from_this()));
+            new_version->partition().set_static_row_continuous(_version->partition().static_row_continuous());
+            new_version->insert_before(*_version);
+            set_version(new_version);
+            return *new_version;
+        }
+        return *_version;
+    }
+
     mutation_partition squashed(schema_ptr from, schema_ptr to);
 
     // needs to be called with reclaiming disabled
     void upgrade(schema_ptr from, schema_ptr to);
 
-    lw_shared_ptr<partition_snapshot> read(schema_ptr entry_schema);
+    // Snapshots with different values of phase will point to different partition_version objects.
+    lw_shared_ptr<partition_snapshot> read(schema_ptr entry_schema,
+        partition_snapshot::phase_type phase = partition_snapshot::default_phase);
 };
 
 inline partition_version_ref& partition_snapshot::version()
