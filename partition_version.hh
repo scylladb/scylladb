@@ -257,7 +257,6 @@ private:
 
     void set_version(partition_version*);
 
-    void apply(const schema& s, partition_version* pv, const schema& pv_schema);
     void apply_to_incomplete(const schema& s, partition_version* other);
 public:
     class rows_iterator;
@@ -293,10 +292,6 @@ public:
     // Assumes this instance and mp are fully continuous.
     void apply(const schema& s, const mutation_partition& mp, const schema& mp_schema);
 
-    // Same exception guarantees as:
-    // mutation_partition::apply(const schema&, mutation_partition&&, const schema&)
-    void apply(const schema& s, mutation_partition&& mp, const schema& mp_schema);
-
     // Strong exception guarantees.
     // Assumes this instance and mpv are fully continuous.
     void apply(const schema& s, mutation_partition_view mpv, const schema& mp_schema);
@@ -319,12 +314,6 @@ public:
     // such that if the operation is retried (possibly many times) and eventually
     // succeeds the result will be as if the first attempt didn't fail.
     void apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema);
-
-    // Weak exception guarantees.
-    // If an exception is thrown this and pe will be left in some valid states
-    // such that if the operation is retried (possibly many times) and eventually
-    // succeeds the result will be as if the first attempt didn't fail.
-    void apply(const schema& s, partition_entry&& pe, const schema& pe_schema);
 
     // Ensures that the latest version can be populated with data from given phase
     // by inserting a new version if necessary.

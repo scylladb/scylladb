@@ -206,20 +206,6 @@ void partition_entry::set_version(partition_version* new_version)
     _version = partition_version_ref(*new_version);
 }
 
-void partition_entry::apply(const schema& s, partition_version* pv, const schema& pv_schema)
-{
-    if (!_snapshot) {
-        _version->partition().apply(s, std::move(pv->partition()), pv_schema);
-        current_allocator().destroy(pv);
-    } else {
-        if (s.version() != pv_schema.version()) {
-            pv->partition().upgrade(pv_schema, s);
-        }
-        pv->insert_before(*_version);
-        set_version(pv);
-    }
-}
-
 void partition_entry::apply(const schema& s, const mutation_partition& mp, const schema& mp_schema)
 {
     if (!_snapshot) {
@@ -236,22 +222,6 @@ void partition_entry::apply(const schema& s, const mutation_partition& mp, const
     }
 }
 
-void partition_entry::apply(const schema& s, mutation_partition&& mp, const schema& mp_schema)
-{
-    if (!_snapshot) {
-        _version->partition().apply(s, std::move(mp), mp_schema);
-    } else {
-        if (s.version() != mp_schema.version()) {
-            apply(s, mp, mp_schema);
-        } else {
-            auto new_version = current_allocator().construct<partition_version>(std::move(mp));
-            new_version->insert_before(*_version);
-
-            set_version(new_version);
-        }
-    }
-}
-
 void partition_entry::apply(const schema& s, mutation_partition_view mpv, const schema& mp_schema)
 {
     if (!_snapshot) {
@@ -263,63 +233,6 @@ void partition_entry::apply(const schema& s, mutation_partition_view mpv, const 
         new_version->insert_before(*_version);
 
         set_version(new_version);
-    }
-}
-
-void partition_entry::apply(const schema& s, partition_entry&& pe, const schema& mp_schema)
-{
-    auto begin = &*pe._version;
-    auto snapshot = pe._snapshot;
-    if (pe._snapshot) {
-        pe._snapshot->_version = std::move(pe._version);
-        pe._snapshot->_entry = nullptr;
-        pe._snapshot = nullptr;
-    }
-    pe._version = { };
-
-    auto current = begin;
-    if (!current->next() && !current->is_referenced()) {
-        try {
-            apply(s, current, mp_schema);
-        } catch (...) {
-            pe._version = partition_version_ref(*current);
-            throw;
-        }
-        return;
-    }
-
-    try {
-        while (current && !current->is_referenced()) {
-            auto next = current->next();
-            apply(s, std::move(current->partition()), mp_schema);
-            // Leave current->partition() valid (albeit empty) in case we throw later.
-            current->partition() = mutation_partition(mp_schema.shared_from_this());
-            current = next;
-        }
-        while (current) {
-            auto next = current->next();
-            apply(s, current->partition(), mp_schema);
-            current = next;
-        }
-    } catch (...) {
-        if (snapshot) {
-            pe._snapshot = snapshot;
-            snapshot->_entry = &pe;
-            pe._version = std::move(snapshot->_version);
-        } else {
-            pe._version = partition_version_ref(*begin);
-        }
-        throw;
-    }
-
-    current = begin;
-    while (current && !current->is_referenced()) {
-        auto next = current->next();
-        current_allocator().destroy(current);
-        current = next;
-    }
-    if (current) {
-        current->back_reference().mark_as_unique_owner();
     }
 }
 
