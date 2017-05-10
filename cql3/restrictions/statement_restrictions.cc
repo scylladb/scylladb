@@ -272,7 +272,7 @@ statement_restrictions::statement_restrictions(database& db,
         _index_restrictions.push_back(_nonprimary_key_restrictions);
     }
 
-    if (_uses_secondary_indexing) {
+    if (_uses_secondary_indexing && !for_view) {
         fail(unimplemented::cause::INDEXES);
 #if 0
         validate_secondary_index_selections(selects_only_static_columns);
