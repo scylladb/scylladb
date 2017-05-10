@@ -84,7 +84,7 @@ void update_statement::add_update_for_key(mutation& m, const query::clustering_r
         // If there are static columns, there also must be clustering columns, in which
         // case empty prefix can only refer to the static row.
         bool is_static_prefix = s->has_static_columns() && prefix.is_empty(*s);
-        if (type == statement_type::INSERT && !is_static_prefix && s->is_cql3_table()) {
+        if (type.is_insert() && !is_static_prefix && s->is_cql3_table()) {
             auto& row = m.partition().clustered_row(*s, prefix);
             row.apply(row_marker(params.timestamp(), params.ttl(), params.expiry()));
         }
@@ -130,7 +130,6 @@ insert_statement::insert_statement(            ::shared_ptr<cf_name> name,
 insert_statement::prepare_internal(database& db, schema_ptr schema,
     ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats)
 {
-    using statement_type = cql3::statements::modification_statement::statement_type;
     auto stmt = ::make_shared<cql3::statements::update_statement>(statement_type::INSERT, bound_names->size(), schema, std::move(attrs), &stats.inserts);
 
     // Created from an INSERT
@@ -188,7 +187,6 @@ update_statement::update_statement(            ::shared_ptr<cf_name> name,
 update_statement::prepare_internal(database& db, schema_ptr schema,
     ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats)
 {
-    using statement_type = cql3::statements::modification_statement::statement_type;
     auto stmt = ::make_shared<cql3::statements::update_statement>(statement_type::UPDATE, bound_names->size(), schema, std::move(attrs), &stats.updates);
 
     for (auto&& entry : _updates) {

@@ -60,22 +60,6 @@ namespace statements {
 
 thread_local const ::shared_ptr<column_identifier> modification_statement::CAS_RESULT_COLUMN = ::make_shared<column_identifier>("[applied]", false);
 
-std::ostream&
-operator<<(std::ostream& out, modification_statement::statement_type t) {
-    switch (t) {
-        case modification_statement::statement_type::UPDATE:
-            out << "UPDATE";
-            break;
-        case modification_statement::statement_type::INSERT:
-            out << "INSERT";
-            break;
-        case modification_statement::statement_type::DELETE:
-            out << "DELETE";
-            break;
-    }
-    return out;
-}
-
 modification_statement::modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_, uint64_t* cql_stats_counter_ptr)
     : type{type_}
     , _bound_terms{bound_terms}
@@ -340,7 +324,7 @@ modification_statement::create_clustering_ranges(const query_options& options) {
         // If we do have clustering columns however, then either it's an INSERT and the query is valid
         // but we still need to build a proper prefix, or it's not an INSERT, and then we want to reject
         // (see above)
-        if (type != statement_type::INSERT) {
+        if (!type.is_insert()) {
             if (_restrictions->has_clustering_columns_restriction()) {
                 throw exceptions::invalid_request_exception(sprint(
                     "Invalid restriction on clustering column %s since the %s statement modifies only static columns",
@@ -660,6 +644,11 @@ bool modification_statement::has_conditions() {
 void modification_statement::validate_where_clause_for_conditions() {
     //  no-op by default
 }
+
+const statement_type statement_type::INSERT = statement_type(statement_type::type::insert);
+const statement_type statement_type::UPDATE = statement_type(statement_type::type::update);
+const statement_type statement_type::DELETE = statement_type(statement_type::type::del);
+const statement_type statement_type::SELECT = statement_type(statement_type::type::select);
 
 namespace raw {
 
