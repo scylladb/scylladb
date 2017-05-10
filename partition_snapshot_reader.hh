@@ -30,6 +30,26 @@ struct partition_snapshot_reader_dummy_accounter {
 };
 extern partition_snapshot_reader_dummy_accounter no_accounter;
 
+inline void maybe_merge_versions(lw_shared_ptr<partition_snapshot>& snp,
+                                 logalloc::region& lsa_region,
+                                 logalloc::allocating_section& read_section) {
+    if (!snp.owned()) {
+        return;
+    }
+    // If no one else is using this particular snapshot try to merge partition
+    // versions.
+    with_allocator(lsa_region.allocator(), [&snp, &lsa_region, &read_section] {
+        return with_linearized_managed_bytes([&snp, &lsa_region, &read_section] {
+            try {
+                read_section(lsa_region, [&snp] {
+                    snp->merge_partition_versions();
+                });
+            } catch (...) { }
+            snp = {};
+        });
+    });
+}
+
 template <typename MemoryAccounter = partition_snapshot_reader_dummy_accounter>
 class partition_snapshot_reader : public streamed_mutation::impl, public MemoryAccounter {
     struct rows_position {
@@ -227,21 +247,7 @@ public:
     }
 
     ~partition_snapshot_reader() {
-        if (!_snapshot.owned()) {
-            return;
-        }
-        // If no one else is using this particular snapshot try to merge partition
-        // versions.
-        with_allocator(_lsa_region.allocator(), [this] {
-            return with_linearized_managed_bytes([this] {
-                try {
-                    _read_section(_lsa_region, [this] {
-                        _snapshot->merge_partition_versions();
-                    });
-                } catch (...) { }
-                _snapshot = {};
-            });
-        });
+        maybe_merge_versions(_snapshot, _lsa_region, _read_section);
     }
 
     virtual future<> fill_buffer() override {
