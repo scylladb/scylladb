@@ -225,6 +225,11 @@ public:
     }
 
     unsigned version_count();
+
+    bool at_latest_version() const {
+        return _entry != nullptr;
+    }
+
     tombstone partition_tombstone() const;
     row static_row() const;
     mutation_partition squashed() const;
@@ -253,7 +258,9 @@ private:
     void set_version(partition_version*);
 
     void apply(const schema& s, partition_version* pv, const schema& pv_schema);
+    void apply_to_incomplete(const schema& s, partition_version* other);
 public:
+    class rows_iterator;
     partition_entry() = default;
     explicit partition_entry(mutation_partition mp);
     ~partition_entry();
@@ -293,6 +300,25 @@ public:
     // Strong exception guarantees.
     // Assumes this instance and mpv are fully continuous.
     void apply(const schema& s, mutation_partition_view mpv, const schema& mp_schema);
+
+    // Adds mutation_partition represented by "other" to the one represented
+    // by this entry.
+    //
+    // The argument must be fully-continuous.
+    //
+    // The rules of addition differ from that used by regular
+    // mutation_partition addition with regards to continuity. The continuity
+    // of the result is the same as in this instance. Information from "other"
+    // which is incomplete in this instance is dropped. In other words, this
+    // performs set intersection on continuity information, drops information
+    // which falls outside of the continuity range, and applies regular merging
+    // rules for the rest.
+    //
+    // Weak exception guarantees.
+    // If an exception is thrown this and pe will be left in some valid states
+    // such that if the operation is retried (possibly many times) and eventually
+    // succeeds the result will be as if the first attempt didn't fail.
+    void apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema);
 
     // Weak exception guarantees.
     // If an exception is thrown this and pe will be left in some valid states
