@@ -49,9 +49,9 @@ static atomic_cell make_atomic_cell(bytes value) {
 SEASTAR_TEST_CASE(test_execute_batch) {
     return do_with_cql_env([] (auto& e) {
         auto& qp = e.local_qp();
-        auto bp = make_lw_shared<db::batchlog_manager>(qp);
+        auto& bp =  db::get_batchlog_manager().local();
 
-        return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&qp, &e, bp] {
+        return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&qp, &e, &bp] () mutable {
             auto& db = e.local_db();
             auto s = db.find_schema("ks", "cf");
 
@@ -65,16 +65,16 @@ SEASTAR_TEST_CASE(test_execute_batch) {
             using namespace std::chrono_literals;
 
             auto version = net::messaging_service::current_version;
-            auto bm = bp->get_batch_log_mutation_for({ m }, s->id(), version, db_clock::now() - db_clock::duration(3h));
+            auto bm = bp.get_batch_log_mutation_for({ m }, s->id(), version, db_clock::now() - db_clock::duration(3h));
 
-            return qp.proxy().local().mutate_locally(bm).then([bp] {
-                return bp->count_all_batches().then([](auto n) {
+            return qp.proxy().local().mutate_locally(bm).then([&bp] () mutable {
+                return bp.count_all_batches().then([](auto n) {
                     BOOST_CHECK_EQUAL(n, 1);
-                }).then([bp] {
-                    return bp->do_batch_log_replay();
+                }).then([&bp] () mutable {
+                    return bp.do_batch_log_replay();
                 });
             });
-        }).then([&qp, bp] {
+        }).then([&qp] {
             return qp.execute_internal("select * from ks.cf where p1 = ? and c1 = ?;", { sstring("key1"), 1 }).then([](auto rs) {
                 BOOST_REQUIRE(!rs->empty());
                 auto i = rs->one().template get_as<int32_t>("r1");
