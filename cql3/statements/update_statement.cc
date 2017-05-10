@@ -65,7 +65,7 @@ bool update_statement::allow_clustering_key_slices() const {
 void update_statement::add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params) {
     auto prefix = range.start() ? std::move(range.start()->value()) : clustering_key_prefix::make_empty();
     if (s->is_dense()) {
-        if (prefix.is_empty(*s)) {
+        if (prefix.is_empty(*s) || prefix.components().front().empty()) {
             throw exceptions::invalid_request_exception(sprint("Missing PRIMARY KEY part %s", s->clustering_key_columns().begin()->name_as_text()));
         }
         // An empty name for the value is what we use to recognize the case where there is not column
