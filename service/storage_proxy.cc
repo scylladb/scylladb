@@ -1202,12 +1202,13 @@ gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& 
 
 template<typename Range>
 future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state) {
-    logger.trace("mutate_counters cl={}", cl);
-    mlogger.trace("counter mutations={}", mutations);
-
     if (boost::empty(mutations)) {
         return make_ready_future<>();
     }
+
+    logger.trace("mutate_counters cl={}", cl);
+    mlogger.trace("counter mutations={}", mutations);
+
 
     // Choose a leader for each mutation
     std::unordered_map<gms::inet_address, std::vector<frozen_mutation_and_schema>> leaders;
@@ -1300,11 +1301,13 @@ template<typename Range>
 future<>
 storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool counters, tracing::trace_state_ptr tr_state,
                                stdx::optional<clock_type::time_point> timeout_opt) {
-    logger.trace("mutate cl={}", cl);
-    mlogger.trace("mutations={}", mutations);
     if (boost::empty(mutations)) {
         return make_ready_future<>();
     }
+
+    logger.trace("mutate cl={}", cl);
+    mlogger.trace("mutations={}", mutations);
+
     // If counters is set it means that we are replicating counter shards. There
     // is no need for special handling anymore, since the leader has already
     // done its job, but we need to return correct db::write_type in case of
