@@ -317,7 +317,7 @@ modification_statement::create_clustering_ranges(const query_options& options) {
     // sounds like you don't really understand what your are doing.
     if (applies_only_to_static_columns()) {
         // If we set no non-static columns, then it's fine not to have clustering columns
-        if (_has_no_clustering_columns) {
+        if (!_restrictions->has_clustering_columns_restriction()) {
             return { query::clustering_range::make_open_ended_both_sides() };
         }
 
@@ -331,8 +331,8 @@ modification_statement::create_clustering_ranges(const query_options& options) {
                     _restrictions->get_clustering_columns_restrictions()->get_column_defs().front()->name_as_text(), type));
             }
 
-            // we should get there as it contradicts _has_no_clustering_columns == false
-            throw std::logic_error("contradicts _has_no_clustering_columns == false");
+            // we should get there as it contradicts !_restrictions->has_clustering_columns_restriction()
+            throw std::logic_error("contradicts !_restrictions->has_clustering_columns_restriction()");
         }
     }
 

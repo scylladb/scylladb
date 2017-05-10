@@ -101,8 +101,6 @@ private:
     bool _if_not_exists = false;
     bool _if_exists = false;
 
-    bool _has_no_clustering_columns = true;
-
     bool _sets_static_columns = false;
     bool _sets_regular_columns = false;
     bool _sets_a_collection = false;
