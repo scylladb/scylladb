@@ -156,7 +156,7 @@ std::ostream& operator<<(std::ostream& out, const decorated_key& dk) {
 }
 
 // FIXME: make it per-keyspace
-std::unique_ptr<i_partitioner> default_partitioner { new murmur3_partitioner };
+std::unique_ptr<i_partitioner> default_partitioner;
 
 void set_global_partitioner(const sstring& class_name, unsigned ignore_msb)
 {
@@ -172,6 +172,9 @@ void set_global_partitioner(const sstring& class_name, unsigned ignore_msb)
 
 i_partitioner&
 global_partitioner() {
+    if (!default_partitioner) {
+        default_partitioner = std::make_unique<murmur3_partitioner>(smp::count, 12);
+    }
     return *default_partitioner;
 }
 
