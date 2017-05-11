@@ -442,6 +442,9 @@ int main(int argc, char** argv) {
         ("populate", "populate the table")
         ("verbose", "Enables more logging")
         ("trace", "Enables trace-level logging")
+        ("enable-cache", "Enables cache")
+        ("keep-cache-across-test-groups", "Clears the cache between test groups")
+        ("keep-cache-across-test-cases", "Clears the cache between test cases in each test group")
         ("rows", bpo::value<int>()->default_value(1000000), "Number of CQL rows in a partition. Relevant only for population.")
         ("value-size", bpo::value<int>()->default_value(100), "Size of value stored in a cell. Relevant only for population.")
         ("name", bpo::value<std::string>()->default_value("default"), "Name of the configuration")
@@ -449,7 +452,7 @@ int main(int argc, char** argv) {
 
     return app.run(argc, argv, [&app] {
         db::config cfg;
-        cfg.enable_cache = false;
+        cfg.enable_cache = app.configuration().count("enable-cache");
         cfg.enable_commitlog = false;
         cfg.data_file_directories({ "./perf_large_partition_data" }, db::config::config_source::CommandLine);
 
@@ -476,18 +479,40 @@ int main(int argc, char** argv) {
                     column_family& cf = db.find_column_family("ks", "test");
 
                     auto cfg = read_config(env, name);
+                    bool cache_enabled = app.configuration().count("enable-cache");
+                    bool new_test_case = false;
 
                     std::cout << "Config: rows: " << cfg.n_rows << ", value size: " << cfg.value_size << "\n";
 
                     ::sleep(1s).get(); // wait for system table flushes to quiesce
 
+                    auto clear_cache = [] {
+                        global_cache_tracker().clear();
+                    };
+
+                    auto on_test_group = [&] {
+                        if (!app.configuration().count("keep-cache-across-test-groups")
+                            && !app.configuration().count("keep-cache-across-test-cases")) {
+                            clear_cache();
+                        }
+                    };
+
+                    auto on_test_case = [&] {
+                        new_test_case = true;
+                        if (!app.configuration().count("keep-cache-across-test-cases")) {
+                            clear_cache();
+                        }
+                    };
+
                     cf.run_with_compaction_disabled([&] {
                         return seastar::async([&] {
                             {
+                                on_test_group();
                                 std::cout << "Testing scanning large partition with skips. \n"
                                           << "Reads whole range interleaving reads with skips according to read-skip pattern:\n";
                                 std::cout << sprint("%-7s %-7s ", "read", "skip") << test_result::table_header() << "\n";
                                 auto test = [&] (int n_read, int n_skip) {
+                                    on_test_case();
                                     auto r = scan_rows_with_stride(cf, cfg.n_rows, n_read, n_skip);
                                     std::cout << sprint("%-7d %-7d ", n_read, n_skip) << r.table_row() << "\n";
                                 };
@@ -514,9 +539,11 @@ int main(int argc, char** argv) {
                             }
 
                             {
+                                on_test_group();
                                 std::cout << "Testing slicing of large partition:\n";
                                 std::cout << sprint("%-7s %-7s ", "offset", "read") << test_result::table_header() << "\n";
                                 auto test = [&] (int offset, int read) {
+                                    on_test_case();
                                     auto r = slice_rows(cf, offset, read);
                                     std::cout << sprint("%-7d %-7d ", offset, read) << r.table_row() << "\n";
                                 };
@@ -533,10 +560,12 @@ int main(int argc, char** argv) {
                             }
 
                             {
+                                on_test_group();
                                 std::cout << "Testing slicing of large partition, single-partition reader:\n";
                                 std::cout << sprint("%-7s %-7s ", "offset", "read") << test_result::table_header()
                                           << "\n";
                                 auto test = [&](int offset, int read) {
+                                    on_test_case();
                                     auto r = slice_rows_single_key(cf, offset, read);
                                     std::cout << sprint("%-7d %-7d ", offset, read) << r.table_row() << "\n";
                                 };
@@ -553,10 +582,12 @@ int main(int argc, char** argv) {
                             }
 
                             {
+                                on_test_group();
                                 std::cout << "Testing selecting few rows from a large partition:\n";
                                 std::cout << sprint("%-7s %-7s ", "stride", "rows") << test_result::table_header()
                                           << "\n";
                                 auto test = [&](int stride, int read) {
+                                    on_test_case();
                                     auto r = select_spread_rows(cf, stride, read);
                                     std::cout << sprint("%-7d %-7d ", stride, read) << r.table_row() << "\n";
                                 };
@@ -570,10 +601,13 @@ int main(int argc, char** argv) {
                             }
 
                             {
+                                on_test_group();
                                 std::cout << "Testing forwarding with clustering restriction in a large partition:\n";
                                 std::cout << sprint("%-7s ", "pk-scan") << test_result::table_header() << "\n";
-                                std::cout << sprint("%-7s ", "yes") << test_forwarding_with_restriction(cf, cfg, false).table_row() << "\n"
-                                    << sprint("%-7s ", "no")  << test_forwarding_with_restriction(cf, cfg, true).table_row() << "\n";
+                                on_test_case();
+                                std::cout << sprint("%-7s ", "yes") << test_forwarding_with_restriction(cf, cfg, false).table_row() << "\n";
+                                on_test_case();
+                                std::cout << sprint("%-7s ", "no")  << test_forwarding_with_restriction(cf, cfg, true).table_row() << "\n";
                             }
                         });
                     }).get();
@@ -582,10 +616,12 @@ int main(int argc, char** argv) {
                     cf2.run_with_compaction_disabled([&] {
                         return seastar::async([&] {
                             {
+                                on_test_group();
                                 std::cout << "Testing scanning small partitions with skips. \n"
                                           << "Reads whole range interleaving reads with skips according to read-skip pattern:\n";
                                 std::cout << sprint("%-7s %-7s ", "read", "skip") << test_result::table_header() << "\n";
                                 auto test = [&] (int n_read, int n_skip) {
+                                    on_test_case();
                                     auto r = scan_with_stride_partitions(cf2, cfg.n_rows, n_read, n_skip);
                                     std::cout << sprint("%-7d %-7d ", n_read, n_skip) << r.table_row() << "\n";
                                 };
@@ -612,9 +648,11 @@ int main(int argc, char** argv) {
                             }
 
                             {
+                                on_test_group();
                                 std::cout << "Testing slicing small partitions:\n";
                                 std::cout << sprint("%-7s %-7s ", "offset", "read") << test_result::table_header() << "\n";
                                 auto test = [&] (int offset, int read) {
+                                    on_test_case();
                                     auto r = slice_partitions(cf2, cfg.n_rows, offset, read);
                                     std::cout << sprint("%-7d %-7d ", offset, read) << r.table_row() << "\n";
                                 };
