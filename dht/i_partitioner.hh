@@ -610,6 +610,24 @@ public:
     stdx::optional<ring_position_exponential_sharder_result> next(const schema& s);
 };
 
+struct ring_position_exponential_vector_sharder_result : ring_position_exponential_sharder_result {
+    ring_position_exponential_vector_sharder_result(ring_position_exponential_sharder_result rpesr, unsigned element)
+            : ring_position_exponential_sharder_result(std::move(rpesr)), element(element) {}
+    unsigned element; // range within vector from which this result came
+};
+
+
+// given a vector of sorted, disjoint ring_position ranges, generates exponentially increasing
+// sets per-shard sub-ranges.  May be non-exponential when moving from one ring position range to another.
+class ring_position_exponential_vector_sharder {
+    std::deque<nonwrapping_range<ring_position>> _ranges;
+    stdx::optional<ring_position_exponential_sharder> _current_sharder;
+    unsigned _element = 0;
+public:
+    explicit ring_position_exponential_vector_sharder(const std::vector<nonwrapping_range<ring_position>>& ranges);
+    stdx::optional<ring_position_exponential_vector_sharder_result> next(const schema& s);
+};
+
 class ring_position_range_vector_sharder {
     using vec_type = dht::partition_range_vector;
     vec_type _ranges;
