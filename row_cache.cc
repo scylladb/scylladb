@@ -434,7 +434,7 @@ private:
         _last_key.reset(dk, _populate_phase);
 
         _large_partition_range = dht::partition_range::make_singular(dk);
-        _large_partition_reader = _cache._underlying(_schema, _large_partition_range, _slice, _pc, _trace_state);
+        _large_partition_reader = _cache._underlying(_schema, _large_partition_range, _slice, _pc, _trace_state, _fwd);
         return _large_partition_reader().then([this, dk = std::move(dk)] (auto smopt) mutable -> streamed_mutation_opt {
             _large_partition_reader = {};
             if (!smopt) {
