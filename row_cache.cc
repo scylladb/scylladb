@@ -1023,12 +1023,13 @@ future<streamed_mutation_opt> cache_entry::read_wide(row_cache& rc, schema_ptr s
                 : _range(std::move(pr))
                 , _reader(rc._underlying(s, _range, slice, pc))
         { }
+        range_and_underlyig_reader(range_and_underlyig_reader&&) = delete;
     };
     rc._tracker.on_uncached_wide_partition();
     auto pr = dht::partition_range::make_singular(_key);
-    return do_with(range_and_underlyig_reader(rc, s, std::move(pr), slice, pc), [] (auto& r_a_ur) {
-        return r_a_ur._reader();
-    });
+    auto rd_ptr = std::make_unique<range_and_underlyig_reader>(rc, s, std::move(pr), slice, pc);
+    auto& r_a_ur = *rd_ptr;
+    return r_a_ur._reader().finally([rd_ptr = std::move(rd_ptr)] {});
 }
 
 streamed_mutation cache_entry::read(row_cache& rc, const schema_ptr& s) {
