@@ -554,10 +554,11 @@ void test_partitioner_sharding(const dht::i_partitioner& part, unsigned shards, 
         BOOST_REQUIRE_EQUAL(part.shard_of(lim), i % shards);
         if (i != 0) {
             BOOST_REQUIRE_EQUAL(part.shard_of(prev_token(part, lim)), (i - 1) % shards);
-            BOOST_REQUIRE(part.is_equal(lim, part.token_for_next_shard(prev_token(part, lim))));
+            BOOST_REQUIRE(part.is_equal(lim, part.token_for_next_shard(prev_token(part, lim), i % shards)));
         }
         if (i != (shards << ignorebits) - 1) {
-            BOOST_REQUIRE_EQUAL(part.shard_of(part.token_for_next_shard(lim)), (i + 1) % shards);
+            auto next_shard = (i + 1) % shards;
+            BOOST_REQUIRE_EQUAL(part.shard_of(part.token_for_next_shard(lim, next_shard)), next_shard);
         }
     }
 }

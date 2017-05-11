@@ -23,11 +23,13 @@
 
 #include "i_partitioner.hh"
 #include "bytes.hh"
+#include <vector>
 
 namespace dht {
 
 class murmur3_partitioner final : public i_partitioner {
     unsigned _sharding_ignore_msb_bits;
+    std::vector<uint64_t> _shard_start = init_zero_based_shard_start(_shard_count, _sharding_ignore_msb_bits);
 public:
     murmur3_partitioner(unsigned shard_count = smp::count, unsigned sharding_ignore_msb_bits = 0)
             : i_partitioner(shard_count)
@@ -49,11 +51,14 @@ public:
     virtual dht::token from_bytes(bytes_view bytes) const override;
 
     virtual unsigned shard_of(const token& t) const override;
-    virtual token token_for_next_shard(const token& t) const override;
+    virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans) const override;
 private:
+    using uint128_t = unsigned __int128;
     static int64_t normalize(int64_t in);
     token get_token(bytes_view key);
     token get_token(uint64_t value) const;
+    static unsigned zero_based_shard_of(uint64_t zero_based_token, unsigned shards, unsigned sharding_ignore_msb_bits);
+    static std::vector<uint64_t> init_zero_based_shard_start(unsigned shards, unsigned sharding_ignore_msb_bits);
 };
 
 

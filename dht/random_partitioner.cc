@@ -22,6 +22,7 @@
 #include "md5_hasher.hh"
 #include "random_partitioner.hh"
 #include "utils/class_registrator.hh"
+#include "utils/div_ceil.hh"
 #include <boost/multiprecision/cpp_int.hpp>
 
 namespace dht {
@@ -222,21 +223,20 @@ unsigned random_partitioner::shard_of(const token& t) const {
 }
 
 token
-random_partitioner::token_for_next_shard(const token& t) const {
+random_partitioner::token_for_next_shard(const token& t, shard_id shard, unsigned spans) const {
+    if (_shard_count == 1) {
+        return maximum_token();
+    }
     switch (t._kind) {
         case token::kind::after_all_keys:
             return maximum_token();
         case token::kind::before_all_keys:
         case token::kind::key:
-            auto s = shard_of(t) + 1;
-            if (s == _shard_count) {
+            auto orig = shard_of(t);
+            if (shard <= orig || spans != 1) {
                 return maximum_token();
             }
-            auto t = (boost::multiprecision::uint256_t(s) << 127) / _shard_count;
-            // division truncates, so adjust
-            while (((t * _shard_count) >> 127) != s) {
-                ++t;
-            }
+            auto t = div_ceil(boost::multiprecision::uint256_t(shard) << 127, _shard_count);
             return cppint_to_token(t.convert_to<boost::multiprecision::uint128_t>());
     }
     assert(0);
