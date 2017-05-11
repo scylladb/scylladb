@@ -69,13 +69,23 @@ def create_uuid_file(fl):
     with open(args.uuid_file, 'w') as myfile:
         myfile.write(str(uuid.uuid1()) + "\n")
 
+def sanitize_version(version):
+    """
+    Newer setuptools don't like dashed version strings, trim it to avoid
+    false negative version_compare() checks.
+    """
+    if version and '-' in version:
+        return version.split('-', 1)[0]
+    else:
+        return version
+
 def check_version(ar):
     if config and (not config.has_option("housekeeping", "check-version") or not config.getboolean("housekeeping", "check-version")):
         return
     if ar.version and ar.version != '':
-        current_version = ar.version
+        current_version = sanitize_version(ar.version)
     else:
-        current_version = get_api('/storage_service/scylla_release_version')
+        current_version = sanitize_version(get_api('/storage_service/scylla_release_version'))
         if current_version == "":
             # API is down, nothing to do
             return
