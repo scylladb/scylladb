@@ -17,6 +17,7 @@ This package installs all required packages for ScyllaDB,  including
 scylla-server, scylla-jmx, scylla-tools.
 
 # this is needed to prevent python compilation error on CentOS (#2235)
+%if 0%{?rhel}
 %global __os_install_post    \
     /usr/lib/rpm/redhat/brp-compress \
     %{!?__debug_package:\
@@ -26,6 +27,17 @@ scylla-server, scylla-jmx, scylla-tools.
     /usr/lib/rpm/redhat/brp-strip-static-archive %{__strip} \
     %{!?__jar_repack:/usr/lib/rpm/redhat/brp-java-repack-jars} \
 %{nil}
+%else
+%global __os_install_post    \
+    /usr/lib/rpm/brp-compress \
+    %{!?__debug_package:\
+    /usr/lib/rpm/brp-strip %{__strip} \
+    /usr/lib/rpm/brp-strip-comment-note %{__strip} %{__objdump} \
+    } \
+    /usr/lib/rpm/brp-strip-static-archive %{__strip} \
+    /usr/lib/rpm/brp-python-hardlink \
+%{nil}
+%endif
 
 %files
 %defattr(-,root,root)
@@ -38,7 +50,7 @@ Group:          Applications/Databases
 Summary:        The Scylla database server
 License:        AGPLv3
 URL:            http://www.scylladb.com/
-BuildRequires:  libaio-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel xfsprogs-devel make gnutls-devel systemd-devel lksctp-tools-devel protobuf-devel protobuf-compiler libunwind-devel systemtap-sdt-devel ninja-build cmake
+BuildRequires:  libaio-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel xfsprogs-devel make gnutls-devel systemd-devel lksctp-tools-devel protobuf-devel protobuf-compiler libunwind-devel systemtap-sdt-devel ninja-build cmake python
 %{?fedora:BuildRequires: boost-devel ragel antlr3-tool antlr3-C++-devel python3 gcc-c++ libasan libubsan python3-pyparsing dnf-yum}
 %{?rhel:BuildRequires: scylla-libstdc++-static scylla-boost-devel scylla-boost-static scylla-ragel scylla-antlr3-tool scylla-antlr3-C++-devel python34 scylla-gcc-c++ >= 5.1.1, python34-pyparsing}
 Requires:       scylla-conf systemd-libs hwloc collectd PyYAML python-urwid pciutils pyparsing python-requests curl util-linux python-setuptools pciutils python3-pyudev
@@ -60,6 +72,7 @@ This package contains ScyllaDB server.
 ./configure.py --disable-xen --enable-dpdk --mode=release
 %endif
 %if 0%{?rhel}
+. /etc/profile.d/scylla.sh
 python3.4 ./configure.py --disable-xen --enable-dpdk --mode=release --static-stdc++ --static-boost --compiler=/opt/scylladb/bin/g++ --python python3.4
 %endif
 ninja-build %{?_smp_mflags} build/release/scylla build/release/iotune
