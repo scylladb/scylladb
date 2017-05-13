@@ -49,31 +49,35 @@ void show(std::stringstream &ss) {
 // is rotten" type of translation :-)
 int8_t back_and_forth_8(int8_t a) {
     std::stringstream buf;
-    serialize_int8(buf, a);
+    auto it = std::ostream_iterator<char>(buf);
+    serialize_int8(it, a);
     return deserialize_int8(buf);
 }
 int16_t back_and_forth_16(int16_t a) {
     std::stringstream buf;
-    serialize_int16(buf, a);
+    auto it = std::ostream_iterator<char>(buf);
+    serialize_int16(it, a);
     return deserialize_int16(buf);
 }
 int32_t back_and_forth_32(int32_t a) {
     std::stringstream buf;
-    serialize_int32(buf, a);
+    auto it = std::ostream_iterator<char>(buf);
+    serialize_int32(it, a);
     return deserialize_int32(buf);
 }
 int64_t back_and_forth_64(int64_t a) {
     std::stringstream buf;
-    serialize_int64(buf, a);
+    auto it = std::ostream_iterator<char>(buf);
+    serialize_int64(it, a);
     return deserialize_int64(buf);
 }
 sstring back_and_forth_sstring(sstring a) {
     std::stringstream buf;
-    serialize_string(buf, a);
+    auto it = std::ostream_iterator<char>(buf);
+    serialize_string(it, a);
     return deserialize_string(buf);
 }
 BOOST_AUTO_TEST_CASE(round_trip) {
-    std::stringstream out;
     BOOST_CHECK_EQUAL(back_and_forth_8('a'), 'a');
     BOOST_CHECK_EQUAL(back_and_forth_16(1), 1);
     BOOST_CHECK_EQUAL(back_and_forth_16(12345), 12345);
@@ -141,22 +145,28 @@ bool expect_bytes(std::stringstream &buf, std::initializer_list<unsigned char> c
 
 BOOST_AUTO_TEST_CASE(expected) {
     std::stringstream buf;
+    auto it = std::ostream_iterator<char>(buf);
 
-	serialize_int8(buf, 'a');
+	serialize_int8(it, 'a');
 	BOOST_CHECK(expect_bytes(buf, {97}));
 
-    serialize_int32(buf, 1234567);
+    it = std::ostream_iterator<char>(buf);
+    serialize_int32(it, 1234567);
     BOOST_CHECK(expect_bytes(buf, {0, 18, 214, 135}));
 
-    serialize_int16(buf, (uint16_t)12345);
+    it = std::ostream_iterator<char>(buf);
+    serialize_int16(it, (uint16_t)12345);
     BOOST_CHECK(expect_bytes(buf, {48, 57}));
 
-    serialize_int64(buf, 1234567890123UL);
+    it = std::ostream_iterator<char>(buf);
+    serialize_int64(it, 1234567890123UL);
     BOOST_CHECK(expect_bytes(buf, {0, 0, 1, 31, 113, 251, 4, 203}));
 
-    serialize_string(buf, "hello");
+    it = std::ostream_iterator<char>(buf);
+    serialize_string(it, "hello");
     BOOST_CHECK(expect_bytes(buf, {0, 5, 104, 101, 108, 108, 111}));
 
-    serialize_string(buf, sstring("hello"));
+    it = std::ostream_iterator<char>(buf);
+    serialize_string(it, sstring("hello"));
     BOOST_CHECK(expect_bytes(buf, {0, 5, 104, 101, 108, 108, 111}));
 }
