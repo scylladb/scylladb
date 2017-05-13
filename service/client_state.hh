@@ -122,10 +122,6 @@ public:
         return _trace_state_ptr;
     }
 
-    lw_shared_ptr<utils::UUID>& tracing_session_id_ptr() {
-        return _tracing_session_id;
-    }
-
     client_state(external_tag, const socket_address& remote_address = socket_address(), bool thrift = false)
             : _is_internal(false)
             , _is_thrift(thrift)
