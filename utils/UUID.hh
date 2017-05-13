@@ -113,12 +113,21 @@ public:
         return !(*this < v);
     }
 
-    bytes to_bytes() const {
-        bytes b(bytes::initialized_later(),16);
+    bytes serialize() const {
+        bytes b(bytes::initialized_later(), serialized_size());
         auto i = b.begin();
-        serialize_int64(i, most_sig_bits);
-        serialize_int64(i, least_sig_bits);
+        serialize(i);
         return b;
+    }
+
+    static size_t serialized_size() noexcept {
+        return 16;
+    }
+
+    template <typename CharOutputIterator>
+    void serialize(CharOutputIterator& out) const {
+        serialize_int64(out, most_sig_bits);
+        serialize_int64(out, least_sig_bits);
     }
 };
 

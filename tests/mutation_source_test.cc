@@ -1083,7 +1083,7 @@ public:
                     std::unordered_set<bytes> unique_cells;
                     unique_cells.reserve(num_cells);
                     for (auto i = 0; i < num_cells; ++i) {
-                        auto uuid = utils::UUID_gen::min_time_UUID(uuid_ts_dist(_gen)).to_bytes();
+                        auto uuid = utils::UUID_gen::min_time_UUID(uuid_ts_dist(_gen)).serialize();
                         if (unique_cells.emplace(uuid).second) {
                             m.cells.emplace_back(
                                 bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size()),

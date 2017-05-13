@@ -242,7 +242,7 @@ private:
         // If tracing was requested the response should contain a "tracing
         // session ID" which is a 16 bytes UUID.
         if (_tracing_id) {
-            extra_len += 16;
+            extra_len += utils::UUID::serialized_size();
             set_frame_flag(cql_frame_flags::tracing);
         }
 
@@ -256,7 +256,8 @@ private:
 
         // Tracing session ID should be the first thing in the responce "body".
         if (_tracing_id) {
-            std::memcpy(frame_buf.data() + sizeof(CqlFrameHeaderType), _tracing_id->to_bytes().data(), 16);
+            auto out = frame_buf.data() + sizeof(CqlFrameHeaderType);
+            _tracing_id->serialize(out);
         }
 
         return frame_buf;
