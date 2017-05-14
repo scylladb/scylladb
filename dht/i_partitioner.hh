@@ -180,7 +180,10 @@ public:
 using decorated_key_opt = std::experimental::optional<decorated_key>;
 
 class i_partitioner {
+protected:
+    unsigned _shard_count;
 public:
+    explicit i_partitioner(unsigned shard_count) : _shard_count(shard_count) {}
     virtual ~i_partitioner() {}
 
     /**
@@ -313,6 +316,13 @@ public:
      */
     bool is_less(const token& t1, const token& t2) const {
         return tri_compare(t1, t2) < 0;
+    }
+
+    /**
+     * @return number of shards configured for this partitioner
+     */
+    unsigned shard_count() const {
+        return _shard_count;
     }
 
     friend bool operator==(const token& t1, const token& t2);
