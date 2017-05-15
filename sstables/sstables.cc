@@ -2537,39 +2537,6 @@ remove_by_toc_name(sstring sstable_toc_name, const io_error_handler& error_handl
 }
 
 future<>
-sstable::mark_for_deletion_on_disk() {
-    mark_for_deletion();
-
-    auto toc_name = filename(component_type::TOC);
-    auto shard = std::hash<sstring>()(toc_name) % smp::count;
-
-    return smp::submit_to(shard, [this, toc_name] {
-        static thread_local std::unordered_set<sstring> renaming;
-
-        if (renaming.count(toc_name) > 0) {
-            return make_ready_future<>();
-        }
-
-        renaming.emplace(toc_name);
-
-        return seastar::async([this, toc_name] {
-            if (!sstable_write_io_check(file_exists, toc_name).get0()) {
-                return; // already gone
-            }
-
-            auto dir = dirname(toc_name);
-            auto toc_file = open_checked_file_dma(_read_error_handler, toc_name, open_flags::ro).get0();
-            sstring prefix = toc_name.substr(0, toc_name.size() - TOC_SUFFIX.size());
-            auto new_toc_name = prefix + TEMPORARY_TOC_SUFFIX;
-            sstable_write_io_check(rename_file, toc_name, new_toc_name).get();
-            fsync_directory(_write_error_handler, dir).get();
-        }).finally([toc_name] {
-            renaming.erase(toc_name);
-        });
-    });
-}
-
-future<>
 sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f) {
     return seastar::async([ks, cf, dir, generation, v, f] {
         const io_error_handler& error_handler = sstable_write_error_handler;
