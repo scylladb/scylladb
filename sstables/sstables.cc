@@ -1217,19 +1217,16 @@ future<> sstable::create_data() {
 // No need to set tunable priorities for it.
 future<> sstable::load() {
     return read_toc().then([this] {
-        return read_statistics(default_priority_class());
-    }).then([this] {
-        validate_min_max_metadata();
-        set_clustering_components_ranges();
-        return read_compression(default_priority_class());
-    }).then([this] {
-        return read_scylla_metadata(default_priority_class());
-    }).then([this] {
-        return read_filter(default_priority_class());
-    }).then([this] {;
-        return read_summary(default_priority_class());
-    }).then([this] {
-        return open_data();
+        return seastar::when_all_succeed(
+                read_statistics(default_priority_class()),
+                read_compression(default_priority_class()),
+                read_scylla_metadata(default_priority_class()),
+                read_filter(default_priority_class()),
+                read_summary(default_priority_class())).then([this] {
+            validate_min_max_metadata();
+            set_clustering_components_ranges();
+            return open_data();
+        });
     });
 }
 
