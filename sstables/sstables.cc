@@ -101,19 +101,28 @@ future<> await_background_jobs_on_all_shards() {
 }
 
 class random_access_reader {
-    input_stream<char> _in;
+    std::unique_ptr<input_stream<char>> _in;
+    seastar::gate _close_gate;
 protected:
     virtual input_stream<char> open_at(uint64_t pos) = 0;
 public:
     future<temporary_buffer<char>> read_exactly(size_t n) {
-        return _in.read_exactly(n);
+        return _in->read_exactly(n);
     }
     void seek(uint64_t pos) {
-        _in = open_at(pos);
+        if (_in) {
+            seastar::with_gate(_close_gate, [in = std::move(_in)] () mutable {
+                auto fut = in->close();
+                return fut.then([in = std::move(in)] {});
+            });
+        }
+        _in = std::make_unique<input_stream<char>>(open_at(pos));
     }
-    bool eof() { return _in.eof(); }
+    bool eof() { return _in->eof(); }
     virtual future<> close() {
-        return _in.close();
+        return _close_gate.close().then([this] {
+            return _in->close();
+        });
     }
     virtual ~random_access_reader() { }
 };
