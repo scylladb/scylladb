@@ -1512,6 +1512,8 @@ future<> distributed_loader::open_sstable(distributed<database>& db, sstables::e
 
     return db.invoke_on(column_family::calculate_shard_from_sstable_generation(comps.generation),
             [&db, comps = std::move(comps), func = std::move(func)] (database& local) {
+
+        return with_semaphore(local.sstable_load_concurrency_sem(), 1, [&db, &local, comps = std::move(comps), func = std::move(func)] {
         auto& cf = local.find_column_family(comps.ks, comps.cf);
 
         auto f = sstables::sstable::load_shared_components(cf.schema(), cf._config.datadir, comps.generation, comps.version, comps.format);
@@ -1524,6 +1526,7 @@ future<> distributed_loader::open_sstable(distributed<database>& db, sstables::e
                     return func(cf, sstables::foreign_sstable_open_info{std::move(components), owners, data, index});
                 });
             });
+        });
         });
     });
 }
