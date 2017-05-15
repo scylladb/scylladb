@@ -129,16 +129,20 @@ public:
 
 class file_random_access_reader : public random_access_reader {
     file _file;
+    uint64_t _file_size;
     size_t _buffer_size;
+    unsigned _read_ahead;
 public:
     virtual input_stream<char> open_at(uint64_t pos) override {
+        auto len = _file_size - pos;
         file_input_stream_options options;
         options.buffer_size = _buffer_size;
+        options.read_ahead = _read_ahead;
 
-        return make_file_input_stream(_file, pos, std::move(options));
+        return make_file_input_stream(_file, pos, len, std::move(options));
     }
-    explicit file_random_access_reader(file f, size_t buffer_size = 8192)
-        : _file(std::move(f)), _buffer_size(buffer_size)
+    explicit file_random_access_reader(file f, uint64_t file_size, size_t buffer_size = 8192, unsigned read_ahead = 4)
+        : _file(std::move(f)), _file_size(file_size), _buffer_size(buffer_size), _read_ahead(read_ahead)
     {
         seek(0);
     }
@@ -978,12 +982,15 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
     auto file_path = filename(Type);
     sstlog.debug(("Reading " + _component_map[Type] + " file {} ").c_str(), file_path);
     return open_file_dma(file_path, open_flags::ro).then([this, &component] (file fi) {
-        auto f = make_checked_file(_read_error_handler, fi);
-        auto r = make_lw_shared<file_random_access_reader>(std::move(f), sstable_buffer_size);
-        auto fut = parse(*r, component);
-        return fut.finally([r = std::move(r)] {
-            return r->close();
-        }).then([r] {});
+        auto fut = fi.size();
+        return fut.then([this, &component, fi = std::move(fi)] (uint64_t size) {
+            auto f = make_checked_file(_read_error_handler, fi);
+            auto r = make_lw_shared<file_random_access_reader>(std::move(f), size, sstable_buffer_size);
+            auto fut = parse(*r, component);
+            return fut.finally([r = std::move(r)] {
+                return r->close();
+            }).then([r] {});
+        });
     }).then_wrapped([this, file_path] (future<> f) {
         try {
             f.get();
