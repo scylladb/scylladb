@@ -639,6 +639,8 @@ public:
         // invariant to be restored.
         auto overlapping_current_level = overlapping_sstables(level);
         if (!overlapping_current_level.empty()) {
+            logger.info("Leveled compaction strategy is restoring invariant of level {} by compacting {} sstables on behalf of {}.{}",
+                level, overlapping_current_level.size(), s.ks_name(), s.cf_name());
             return { overlapping_current_level, false };
         }
 
