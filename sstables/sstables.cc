@@ -982,6 +982,7 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
             if (e.code() == std::error_code(ENOENT, std::system_category())) {
                 throw malformed_sstable_exception(file_path + ": file not found");
             }
+            throw;
         }
     });
 }
