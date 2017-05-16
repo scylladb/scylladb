@@ -367,10 +367,10 @@ public:
 
     void verify_end_state() {
         // If reading a partial row (i.e., when we have a clustering row
-        // filter and using a promoted index), we may be in ATOM_START
+        // filter and using a promoted index), we may be in ATOM_START or ATOM_START_2
         // state instead of ROW_START. In that case we did not read the
         // end-of-row marker and consume_row_end() was never called.
-        if (_state == state::ATOM_START) {
+        if (_state == state::ATOM_START || _state == state::ATOM_START_2) {
             _consumer.consume_row_end();
             return;
         }
