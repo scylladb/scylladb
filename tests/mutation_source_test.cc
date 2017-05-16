@@ -639,6 +639,31 @@ static void test_clustering_slices(populate_fn populate) {
 
     {
         auto slice = partition_slice_builder(*s)
+            .build();
+        auto rd = ds(s, pr, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
+        auto smo = rd().get0();
+        assert_that_stream(std::move(*smo))
+          .fwd_to(position_range(position_in_partition::for_key(ck1), position_in_partition::after_key(ck2)))
+          .produces_row_with_key(ck1)
+          .produces_row_with_key(ck2)
+          .produces_end_of_stream();
+    }
+
+    {
+        auto slice = partition_slice_builder(*s)
+            .build();
+        auto rd = ds(s, pr, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
+        auto smo = rd().get0();
+        assert_that_stream(std::move(*smo))
+          .produces_end_of_stream()
+          .fwd_to(position_range(position_in_partition::for_key(ck1), position_in_partition::after_key(ck2)))
+          .produces_row_with_key(ck1)
+          .produces_row_with_key(ck2)
+          .produces_end_of_stream();
+    }
+
+    {
+        auto slice = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(make_ck(1)))
             .build();
         assert_that(ds(s, pr, slice))
