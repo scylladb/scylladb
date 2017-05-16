@@ -343,13 +343,12 @@ public:
             : mp_row_consumer(schema, query::full_slice, pc, fwd) { }
 
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
-        if (_key.empty() || key == _key) {
-            _mutation = new_mutation { partition_key::from_exploded(key.explode(*_schema)), tombstone(deltime) };
-            setup_for_partition(_mutation->key);
-            return proceed::no;
-        } else {
-            throw malformed_sstable_exception(sprint("Key mismatch. Got %s while processing %s", to_hex(bytes_view(key)).c_str(), to_hex(bytes_view(_key)).c_str()));
+        if (!_is_mutation_end) {
+            return proceed::yes;
         }
+        _mutation = new_mutation{partition_key::from_exploded(key.explode(*_schema)), tombstone(deltime)};
+        setup_for_partition(_mutation->key);
+        return proceed::no;
     }
 
     void setup_for_partition(const partition_key& pk) {
