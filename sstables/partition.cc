@@ -53,7 +53,6 @@ public:
     };
 private:
     schema_ptr _schema;
-    key_view _key;
     const io_priority_class& _pc;
     const query::partition_slice& _slice;
     bool _out_of_range = false;
@@ -304,27 +303,6 @@ private:
     }
 public:
     mutation_opt mut;
-
-    mp_row_consumer(const key& key,
-                    const schema_ptr schema,
-                    const query::partition_slice& slice,
-                    const io_priority_class& pc,
-                    streamed_mutation::forwarding fwd)
-            : _schema(schema)
-            , _key(key_view(key))
-            , _pc(pc)
-            , _slice(slice)
-            , _fwd(fwd)
-            , _range_tombstones(*_schema)
-    {
-        set_up_ck_ranges(partition_key::from_exploded(*_schema, key.explode(*_schema)));
-    }
-
-    mp_row_consumer(const key& key,
-                    const schema_ptr schema,
-                    const io_priority_class& pc,
-                    streamed_mutation::forwarding fwd)
-            : mp_row_consumer(key, schema, query::full_slice, pc, fwd) { }
 
     mp_row_consumer(const schema_ptr schema,
                     const query::partition_slice& slice,
