@@ -307,7 +307,7 @@ class just_cache_scanning_reader final {
     row_cache& _cache;
     row_cache::partitions_type::iterator _it;
     row_cache::partitions_type::iterator _end;
-    const dht::partition_range& _range;
+    const dht::partition_range* _range;
     stdx::optional<dht::decorated_key> _last;
     uint64_t _last_reclaim_count;
     size_t _last_modification_count;
@@ -318,11 +318,11 @@ private:
     void update_iterators() {
         auto cmp = cache_entry::compare(_cache._schema);
         auto update_end = [&] {
-            if (_range.end()) {
-                if (_range.end()->is_inclusive()) {
-                    _end = _cache._partitions.upper_bound(_range.end()->value(), cmp);
+            if (_range->end()) {
+                if (_range->end()->is_inclusive()) {
+                    _end = _cache._partitions.upper_bound(_range->end()->value(), cmp);
                 } else {
-                    _end = _cache._partitions.lower_bound(_range.end()->value(), cmp);
+                    _end = _cache._partitions.lower_bound(_range->end()->value(), cmp);
                 }
             } else {
                 _end = _cache.partitions_end();
@@ -332,11 +332,11 @@ private:
         auto reclaim_count = _cache.get_cache_tracker().region().reclaim_counter();
         auto modification_count = _cache.get_cache_tracker().modification_count();
         if (!_last) {
-            if (_range.start()) {
-                if (_range.start()->is_inclusive()) {
-                    _it = _cache._partitions.lower_bound(_range.start()->value(), cmp);
+            if (_range->start()) {
+                if (_range->start()->is_inclusive()) {
+                    _it = _cache._partitions.lower_bound(_range->start()->value(), cmp);
                 } else {
-                    _it = _cache._partitions.upper_bound(_range.start()->value(), cmp);
+                    _it = _cache._partitions.upper_bound(_range->start()->value(), cmp);
                 }
             } else {
                 _it = _cache._partitions.begin();
@@ -360,7 +360,7 @@ public:
         const query::partition_slice& slice,
         const io_priority_class& pc,
         streamed_mutation::forwarding fwd)
-            : _schema(std::move(s)), _cache(cache), _range(range), _slice(slice), _pc(pc), _fwd(fwd)
+            : _schema(std::move(s)), _cache(cache), _range(&range), _slice(slice), _pc(pc), _fwd(fwd)
     { }
     future<cache_data> operator()() {
         return _cache._read_section(_cache._tracker.region(), [this] {
@@ -390,6 +390,11 @@ public:
             return make_ready_future<cache_data>(std::move(cd));
           });
         });
+    }
+    future<> fast_forward_to(const dht::partition_range& pr) {
+        _last = {};
+        _range = &pr;
+        return make_ready_future<>();
     }
 };
 
@@ -538,7 +543,7 @@ public:
 };
 
 class scanning_and_populating_reader final : public mutation_reader::impl {
-    const dht::partition_range& _pr;
+    const dht::partition_range* _pr;
     schema_ptr _schema;
     dht::partition_range _secondary_range;
 
@@ -560,7 +565,7 @@ private:
         if (!_first_element) {
             return false;
         }
-        return _pr.start() && _pr.start()->is_inclusive() && _pr.start()->value().equal(*_schema, dk);
+        return _pr->start() && _pr->start()->is_inclusive() && _pr->start()->value().equal(*_schema, dk);
     }
 
     future<streamed_mutation_opt> read_from_primary() {
@@ -575,10 +580,10 @@ private:
 
                 if (!_next_primary) {
                     if (!_last_key) {
-                        _secondary_range = _pr;
+                        _secondary_range = *_pr;
                     } else {
                         dht::ring_position_comparator cmp(*_schema);
-                        auto&& new_range = _pr.split_after(*_last_key, cmp);
+                        auto&& new_range = _pr->split_after(*_last_key, cmp);
                         if (!new_range) {
                             return make_ready_future<streamed_mutation_opt>();
                         }
@@ -588,10 +593,10 @@ private:
                     if (_last_key) {
                         _secondary_range = dht::partition_range::make({ *_last_key, false }, { _next_primary->decorated_key(), false });
                     } else {
-                        if (!_pr.start()) {
+                        if (!_pr->start()) {
                             _secondary_range = dht::partition_range::make_ending_with({ _next_primary->decorated_key(), false });
                         } else {
-                            _secondary_range = dht::partition_range::make(*_pr.start(), { _next_primary->decorated_key(), false });
+                            _secondary_range = dht::partition_range::make(*_pr->start(), { _next_primary->decorated_key(), false });
                         }
                     }
                 }
@@ -623,7 +628,7 @@ public:
                                     const io_priority_class& pc,
                                     tracing::trace_state_ptr trace_state,
                                     streamed_mutation::forwarding fwd)
-        : _pr(range)
+        : _pr(&range)
         , _schema(s)
         , _primary_reader(s, cache, range, slice, pc, fwd)
         , _secondary_reader(cache, s, slice, pc, trace_state, fwd)
@@ -636,6 +641,13 @@ public:
         } else {
             return read_from_primary();
         }
+    }
+
+    future<> fast_forward_to(const dht::partition_range& pr) {
+        _secondary_in_progress = false;
+        _first_element = true;
+        _pr = &pr;
+        return _primary_reader.fast_forward_to(pr);
     }
 };
 
