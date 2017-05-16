@@ -1910,7 +1910,7 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
                 return make_ready_future<>();
             });
         }).then([verifier, sstdir, descriptor, ks = std::move(ks), cf = std::move(cf)] {
-            return parallel_for_each(*verifier, [sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf), descriptor] (auto v) {
+            return do_for_each(*verifier, [sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf), descriptor, verifier] (auto v) {
                 if (v.second == status::has_temporary_toc_file) {
                     unsigned long gen = v.first;
                     assert(descriptor->version);
