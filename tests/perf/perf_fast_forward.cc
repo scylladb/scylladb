@@ -486,6 +486,12 @@ int main(int argc, char** argv) {
 
                     ::sleep(1s).get(); // wait for system table flushes to quiesce
 
+                    bool cancel = false;
+                    engine().at_exit([&] {
+                        cancel = true;
+                        return make_ready_future();
+                    });
+
                     auto clear_cache = [] {
                         global_cache_tracker().clear();
                     };
@@ -501,6 +507,9 @@ int main(int argc, char** argv) {
                         new_test_case = true;
                         if (!app.configuration().count("keep-cache-across-test-cases")) {
                             clear_cache();
+                        }
+                        if (cancel) {
+                            throw std::runtime_error("interrupted");
                         }
                     };
 
