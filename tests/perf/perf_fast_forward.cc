@@ -264,6 +264,11 @@ static test_result slice_rows(column_family& cf, int offset = 0, int n_read = 1)
     return {before, fragments};
 }
 
+static test_result test_reading_all(mutation_reader& rd) {
+    metrics_snapshot before;
+    return {before, consume_all(rd)};
+}
+
 static test_result select_spread_rows(column_family& cf, int stride = 0, int n_read = 1) {
     auto sb = partition_slice_builder(*cf.schema());
     for (int i = 0; i < n_read; ++i) {
@@ -275,14 +280,7 @@ static test_result select_spread_rows(column_family& cf, int stride = 0, int n_r
         query::full_partition_range,
         slice);
 
-    metrics_snapshot before;
-    streamed_mutation_opt smo = rd().get0();
-    assert(smo);
-    streamed_mutation& sm = *smo;
-    uint64_t fragments = consume_all(sm);
-    fragments += consume_all(rd);
-
-    return {before, fragments};
+    return test_reading_all(rd);
 }
 
 static test_result slice_rows_single_key(column_family& cf, int offset = 0, int n_read = 1) {
