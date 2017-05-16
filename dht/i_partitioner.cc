@@ -396,6 +396,35 @@ ring_position_range_vector_sharder::next(const schema& s) {
     return ret;
 }
 
+
+std::vector<partition_range>
+split_range_to_single_shard(const i_partitioner& partitioner, const schema& s, const partition_range& pr, shard_id shard) {
+    auto cmp = ring_position_comparator(s);
+    auto ret = std::vector<partition_range>();
+    auto next_shard = shard + 1 == partitioner.shard_count() ? 0 : shard + 1;
+    auto start_token = pr.start() ? pr.start()->value().token() : minimum_token();
+    auto start_shard = partitioner.shard_of(start_token);
+    auto start_boundary = start_shard == shard ? pr.start() : range_bound<ring_position>(ring_position::starting_at(partitioner.token_for_next_shard(start_token, shard)));
+    while (pr.overlaps(partition_range(start_boundary, {}), cmp)
+            && !(start_boundary && start_boundary->value().token() == maximum_token())) {
+        auto end_token = partitioner.token_for_next_shard(start_token, next_shard);
+        auto candidate = partition_range(std::move(start_boundary), range_bound<ring_position>(ring_position::starting_at(end_token), false));
+        auto intersection = pr.intersection(std::move(candidate), cmp);
+        if (intersection) {
+            ret.push_back(std::move(*intersection));
+        }
+        start_token = partitioner.token_for_next_shard(end_token, shard);
+        start_boundary = ring_position::starting_at(start_token);
+    }
+    return ret;
+}
+
+std::vector<partition_range>
+split_range_to_single_shard(const schema& s, const partition_range& pr, shard_id shard) {
+    return split_range_to_single_shard(global_partitioner(), s, pr, shard);
+}
+
+
 int ring_position::tri_compare(const schema& s, const ring_position& o) const {
     return ring_position_comparator(s)(*this, o);
 }
