@@ -231,7 +231,7 @@ public:
         return _opcode;
     }
 private:
-    std::vector<char> compress(const std::vector<char>& body, cql_compression compression);
+    void compress(cql_compression compression);
     std::vector<char> compress_lz4(const std::vector<char>& body);
     std::vector<char> compress_snappy(const std::vector<char>& body);
 
@@ -1510,8 +1510,7 @@ scattered_message<char> cql_server::response::make_message(uint8_t version) {
 future<>
 cql_server::response::output(output_stream<char>& out, uint8_t version, cql_compression compression) {
     if (compression != cql_compression::none) {
-        _body = compress(_body, compression);
-        set_frame_flag(cql_frame_flags::compression);
+        compress(compression);
     }
     auto frame = make_frame(version, _body.size());
     auto tmp = temporary_buffer<char>(frame.size());
@@ -1522,13 +1521,19 @@ cql_server::response::output(output_stream<char>& out, uint8_t version, cql_comp
     });
 }
 
-std::vector<char> cql_server::response::compress(const std::vector<char>& body, cql_compression compression)
+void cql_server::response::compress(cql_compression compression)
 {
     switch (compression) {
-    case cql_compression::lz4:    return compress_lz4(body);
-    case cql_compression::snappy: return compress_snappy(body);
-    default:                      throw std::invalid_argument("Invalid CQL compression algorithm");
+    case cql_compression::lz4:
+        _body = compress_lz4(_body);
+        break;
+    case cql_compression::snappy:
+        _body = compress_snappy(_body);
+        break;
+    default:
+        throw std::invalid_argument("Invalid CQL compression algorithm");
     }
+    set_frame_flag(cql_frame_flags::compression);
 }
 
 std::vector<char> cql_server::response::compress_lz4(const std::vector<char>& body)
