@@ -390,7 +390,7 @@ private:
 template<typename U>
 std::ostream& operator<<(std::ostream& out, const wrapping_range<U>& r) {
     if (r.is_singular()) {
-        return out << "==" << r.start()->value();
+        return out << "{" << r.start()->value() << "}";
     }
 
     if (!r.start()) {
