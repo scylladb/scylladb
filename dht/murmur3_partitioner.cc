@@ -119,6 +119,16 @@ inline int64_t long_token(const token& t) {
     return net::ntoh(*lp);
 }
 
+uint64_t
+murmur3_partitioner::unbias(const token& t) const {
+    return uint64_t(long_token(t)) + uint64_t(std::numeric_limits<int64_t>::min());
+}
+
+token
+murmur3_partitioner::bias(uint64_t n) const {
+    return get_token(n - uint64_t(std::numeric_limits<int64_t>::min()));
+}
+
 sstring murmur3_partitioner::to_sstring(const token& t) const {
     return ::to_sstring<sstring>(long_token(t));
 }
@@ -241,8 +251,7 @@ murmur3_partitioner::shard_of(const token& t) const {
         case token::kind::after_all_keys:
             return _shard_count - 1;
         case token::kind::key:
-            int64_t l = long_token(t);
-            uint64_t adjusted = uint64_t(l) + uint64_t(std::numeric_limits<int64_t>::min());
+            uint64_t adjusted = unbias(t);
             return zero_based_shard_of(adjusted, _shard_count, _sharding_ignore_msb_bits);
     }
     assert(0);
@@ -257,7 +266,7 @@ murmur3_partitioner::token_for_next_shard(const token& t, shard_id shard, unsign
         case token::kind::after_all_keys:
             return maximum_token();
         case token::kind::key:
-            n = uint64_t(long_token(t)) + uint64_t(std::numeric_limits<int64_t>::min());
+            n = unbias(t);
             break;
     }
     auto s = zero_based_shard_of(n, _shard_count, _sharding_ignore_msb_bits);
@@ -278,7 +287,7 @@ murmur3_partitioner::token_for_next_shard(const token& t, shard_id shard, unsign
         auto right_part = _shard_start[shard];
         n = left_part | right_part;
     }
-    return get_token(n + uint64_t(std::numeric_limits<int64_t>::min()));
+    return bias(n);
 }
 
 
