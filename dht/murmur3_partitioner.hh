@@ -35,7 +35,7 @@ public:
             // range breaks
             , _sharding_ignore_msb_bits(shard_count > 1 ? sharding_ignore_msb_bits : 0) {
     }
-    virtual const sstring name() { return "org.apache.cassandra.dht.Murmur3Partitioner"; }
+    virtual const sstring name() const { return "org.apache.cassandra.dht.Murmur3Partitioner"; }
     virtual token get_token(const schema& s, partition_key_view key) override;
     virtual token get_token(const sstables::key_view& key) override;
     virtual token get_random_token() override;

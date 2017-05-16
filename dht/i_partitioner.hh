@@ -275,7 +275,7 @@ public:
     /**
      * @return name of partitioner.
      */
-    virtual const sstring name() = 0;
+    virtual const sstring name() const = 0;
 
     /**
      * Calculates the shard that handles a particular token.

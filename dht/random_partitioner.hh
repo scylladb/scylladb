@@ -31,7 +31,7 @@ namespace dht {
 class random_partitioner final : public i_partitioner {
 public:
     random_partitioner(unsigned shard_count = smp::count, unsigned ignore_msb = 0) : i_partitioner(shard_count) {}
-    virtual const sstring name() { return "org.apache.cassandra.dht.RandomPartitioner"; }
+    virtual const sstring name() const { return "org.apache.cassandra.dht.RandomPartitioner"; }
     virtual token get_token(const schema& s, partition_key_view key) override;
     virtual token get_token(const sstables::key_view& key) override;
     virtual token get_random_token() override;
