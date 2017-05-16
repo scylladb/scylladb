@@ -186,6 +186,7 @@ cql_load_balance parse_load_balance(sstring value)
 class cql_server::response {
     int16_t           _stream;
     cql_binary_opcode _opcode;
+    uint8_t           _flags = 0; // a bitwise OR mask of zero or more cql_frame_flags values
     std::experimental::optional<utils::UUID> _tracing_id;
     std::vector<char> _body;
 public:
@@ -193,6 +194,10 @@ public:
         : _stream{stream}
         , _opcode{opcode}
     { }
+
+    void set_frame_flag(cql_frame_flags flag) noexcept {
+        _flags |= flag;
+    }
 
     void set_tracing_id(const utils::UUID& id) {
         _tracing_id = id;
@@ -231,20 +236,20 @@ private:
     std::vector<char> compress_snappy(const std::vector<char>& body);
 
     template <typename CqlFrameHeaderType>
-    sstring make_frame_one(uint8_t version, uint8_t flags, size_t length) {
+    sstring make_frame_one(uint8_t version, size_t length) {
         size_t extra_len = 0;
 
         // If tracing was requested the response should contain a "tracing
         // session ID" which is a 16 bytes UUID.
         if (_tracing_id) {
             extra_len += 16;
-            flags |= cql_frame_flags::tracing;
+            set_frame_flag(cql_frame_flags::tracing);
         }
 
         sstring frame_buf(sstring::initialized_later(), sizeof(CqlFrameHeaderType) + extra_len);
         auto* frame = reinterpret_cast<CqlFrameHeaderType*>(frame_buf.begin());
         frame->version = version | 0x80;
-        frame->flags   = flags;
+        frame->flags   = _flags;
         frame->opcode  = static_cast<uint8_t>(_opcode);
         frame->length  = htonl(length + extra_len);
         frame->stream = net::hton((decltype(frame->stream))_stream);
@@ -257,15 +262,15 @@ private:
         return frame_buf;
     }
 
-    sstring make_frame(uint8_t version, uint8_t flags, size_t length) {
+    sstring make_frame(uint8_t version, size_t length) {
         if (version > 0x04) {
             throw exceptions::protocol_exception(sprint("Invalid or unsupported protocol version: %d", version));
         }
 
         if (version > 0x02) {
-            return make_frame_one<cql_binary_frame_v3>(version, flags, length);
+            return make_frame_one<cql_binary_frame_v3>(version, length);
         } else {
-            return make_frame_one<cql_binary_frame_v1>(version, flags, length);
+            return make_frame_one<cql_binary_frame_v1>(version, length);
         }
     }
 };
@@ -1496,7 +1501,7 @@ cql3::raw_value_view cql_server::connection::read_value_view(bytes_view& buf) {
 scattered_message<char> cql_server::response::make_message(uint8_t version) {
     scattered_message<char> msg;
     sstring body{_body.data(), _body.size()};
-    sstring frame = make_frame(version, 0x00, body.size());
+    sstring frame = make_frame(version, _body.size());
     msg.append(std::move(frame));
     msg.append(std::move(body));
     return msg;
@@ -1504,12 +1509,11 @@ scattered_message<char> cql_server::response::make_message(uint8_t version) {
 
 future<>
 cql_server::response::output(output_stream<char>& out, uint8_t version, cql_compression compression) {
-    uint8_t flags = 0;
     if (compression != cql_compression::none) {
-        flags |= cql_frame_flags::compression;
         _body = compress(_body, compression);
+        set_frame_flag(cql_frame_flags::compression);
     }
-    auto frame = make_frame(version, flags, _body.size());
+    auto frame = make_frame(version, _body.size());
     auto tmp = temporary_buffer<char>(frame.size());
     std::copy_n(frame.begin(), frame.size(), tmp.get_write());
     auto f = out.write(tmp.get(), tmp.size());
