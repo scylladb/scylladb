@@ -188,7 +188,7 @@ std::vector<dht::decorated_key> make_pkeys(schema_ptr s, int n) {
 }
 
 static test_result scan_with_stride_partitions(column_family& cf, int n, int n_read = 1, int n_skip = 0) {
-    auto keys = make_pkeys(cf.schema(), n + n_read);
+    auto keys = make_pkeys(cf.schema(), n);
 
     int pk = 0;
     auto pr = n_skip ? dht::partition_range::make_ending_with(dht::partition_range::bound(keys[0], false)) // covering none
@@ -197,13 +197,17 @@ static test_result scan_with_stride_partitions(column_family& cf, int n, int n_r
 
     metrics_snapshot before;
 
+    if (n_skip) {
+        // FIXME: fast_forward_to() cannot be called on a reader from which nothing was read yet.
+        consume_all(rd);
+    }
+
     uint64_t fragments = 0;
     while (pk < n) {
-        // FIXME: fast_forward_to() cannot be called on a reader from which nothing was read yet.
-        if (pk && n_skip) {
+        if (n_skip) {
             rd.fast_forward_to(dht::partition_range(
                 dht::partition_range::bound(keys[pk], true),
-                dht::partition_range::bound(keys[pk + n_read], false)
+                dht::partition_range::bound(keys[std::min(n, pk + n_read) - 1], true)
             )).get();
         }
         fragments += consume_all(rd);
@@ -276,10 +280,11 @@ static test_result slice_rows_single_key(column_family& cf, int offset = 0, int 
 
 // cf is for ks.small_part
 static test_result slice_partitions(column_family& cf, int n, int offset = 0, int n_read = 1) {
-    auto keys = make_pkeys(cf.schema(), n + n_read);
+    auto keys = make_pkeys(cf.schema(), n);
+
     auto pr = dht::partition_range(
         dht::partition_range::bound(keys[offset], true),
-        dht::partition_range::bound(keys[offset + n_read], false)
+        dht::partition_range::bound(keys[std::min(n, offset + n_read) - 1], true)
     );
 
     auto rd = cf.make_reader(cf.schema(), pr, query::full_slice);
