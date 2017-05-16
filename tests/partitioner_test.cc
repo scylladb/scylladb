@@ -887,3 +887,34 @@ test_something_with_some_interesting_ranges_and_partitioners(std::function<void 
 BOOST_AUTO_TEST_CASE(test_exponential_sharders) {
     return test_something_with_some_interesting_ranges_and_partitioners(test_exponential_sharder);
 }
+
+static
+void
+do_test_split_range_to_single_shard(const dht::i_partitioner& part, const schema& s, const dht::partition_range& pr) {
+    dht::set_global_partitioner(part.name()); // so we can print tokens, also ring_position_comparator is not global_partitioner() clean
+
+    for (auto shard : boost::irange(0u, part.shard_count())) {
+        auto ranges = dht::split_range_to_single_shard(part, s, pr, shard);
+        auto sharder = dht::ring_position_range_sharder(part, pr);
+        auto x = sharder.next(s);
+        auto cmp = dht::ring_position_comparator(s);
+        auto reference_ranges = std::vector<dht::partition_range>();
+        while (x) {
+            if (x->shard == shard) {
+                reference_ranges.push_back(std::move(x->ring_range));
+            }
+            x = sharder.next(s);
+        }
+        BOOST_REQUIRE(ranges.size() == reference_ranges.size());
+        for (auto&& rs : boost::combine(ranges, reference_ranges)) {
+            auto&& r1 = normalize(boost::get<0>(rs));
+            auto&& r2 = normalize(boost::get<1>(rs));
+            BOOST_REQUIRE(r1.contains(r2, cmp));
+            BOOST_REQUIRE(r2.contains(r1, cmp));
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_split_range_single_shard) {
+    return test_something_with_some_interesting_ranges_and_partitioners(do_test_split_range_to_single_shard);
+}
