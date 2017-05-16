@@ -39,6 +39,13 @@ using namespace std::chrono_literals;
 
 reactor::io_stats s;
 
+static bool errors_found = false;
+
+static void print_error(const sstring& msg) {
+    std::cout << "^^^ ERROR: " << msg << "\n";
+    errors_found = true;
+}
+
 struct metrics_snapshot {
     std::chrono::high_resolution_clock::time_point hr_clock;
     steady_clock_type::duration busy_time;
@@ -116,6 +123,24 @@ struct test_result {
         });
     }
 };
+
+static void check_no_disk_reads(const test_result& r) {
+    if (r.aio_reads()) {
+        print_error("Expected no disk reads");
+    }
+}
+
+static void check_no_index_reads(const test_result& r) {
+    if (r.index_hits() || r.index_misses()) {
+        print_error("Expected no index reads");
+    }
+}
+
+static void check_fragment_count(const test_result& r, uint64_t expected) {
+    if (r.fragments_read != expected) {
+        print_error(sprint("Expected to read %d fragments", expected));
+    }
+}
 
 static
 uint64_t consume_all(streamed_mutation& sm) {
@@ -440,6 +465,12 @@ void populate(cql_test_env& env, table_config cfg) {
     }
 }
 
+// Number of fragments which is expected to be received by interleaving
+// n_read reads with n_skip skips when total number of fragments is n.
+static int count_for_skip_pattern(int n, int n_read, int n_skip) {
+    return n / (n_read + n_skip) * n_read + std::min(n % (n_read + n_skip), n_read);
+}
+
 int main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app_template app;
@@ -529,6 +560,7 @@ int main(int argc, char** argv) {
                                     on_test_case();
                                     auto r = scan_rows_with_stride(cf, cfg.n_rows, n_read, n_skip);
                                     std::cout << sprint("%-7d %-7d ", n_read, n_skip) << r.table_row() << "\n";
+                                    check_fragment_count(r, count_for_skip_pattern(cfg.n_rows, n_read, n_skip));
                                 };
 
                                 test(1, 0);
@@ -560,6 +592,7 @@ int main(int argc, char** argv) {
                                     on_test_case();
                                     auto r = slice_rows(cf, offset, read);
                                     std::cout << sprint("%-7d %-7d ", offset, read) << r.table_row() << "\n";
+                                    check_fragment_count(r, std::min(cfg.n_rows - offset, read));
                                 };
 
                                 test(0, 1);
@@ -582,6 +615,7 @@ int main(int argc, char** argv) {
                                     on_test_case();
                                     auto r = slice_rows_single_key(cf, offset, read);
                                     std::cout << sprint("%-7d %-7d ", offset, read) << r.table_row() << "\n";
+                                    check_fragment_count(r, std::min(cfg.n_rows - offset, read));
                                 };
 
                                 test(0, 1);
@@ -604,6 +638,7 @@ int main(int argc, char** argv) {
                                     on_test_case();
                                     auto r = select_spread_rows(cf, stride, read);
                                     std::cout << sprint("%-7d %-7d ", stride, read) << r.table_row() << "\n";
+                                    check_fragment_count(r, read);
                                 };
 
                                 test(cfg.n_rows / 1, 1);
@@ -618,10 +653,16 @@ int main(int argc, char** argv) {
                                 on_test_group();
                                 std::cout << "Testing forwarding with clustering restriction in a large partition:\n";
                                 std::cout << sprint("%-7s ", "pk-scan") << test_result::table_header() << "\n";
+
                                 on_test_case();
-                                std::cout << sprint("%-7s ", "yes") << test_forwarding_with_restriction(cf, cfg, false).table_row() << "\n";
+                                auto r = test_forwarding_with_restriction(cf, cfg, false);
+                                check_fragment_count(r, 2);
+                                std::cout << sprint("%-7s ", "yes") << r.table_row() << "\n";
+
                                 on_test_case();
-                                std::cout << sprint("%-7s ", "no")  << test_forwarding_with_restriction(cf, cfg, true).table_row() << "\n";
+                                r = test_forwarding_with_restriction(cf, cfg, true);
+                                check_fragment_count(r, 2);
+                                std::cout << sprint("%-7s ", "no")  << r.table_row() << "\n";
                             }
                         });
                     }).get();
@@ -638,9 +679,12 @@ int main(int argc, char** argv) {
                                     on_test_case();
                                     auto r = scan_with_stride_partitions(cf2, cfg.n_rows, n_read, n_skip);
                                     std::cout << sprint("%-7d %-7d ", n_read, n_skip) << r.table_row() << "\n";
+                                    check_fragment_count(r, count_for_skip_pattern(cfg.n_rows, n_read, n_skip));
+                                    return r;
                                 };
 
-                                test(1, 0);
+                                auto r = test(1, 0);
+                                check_no_index_reads(r);
 
                                 test(1, 1);
                                 test(1, 8);
@@ -669,6 +713,7 @@ int main(int argc, char** argv) {
                                     on_test_case();
                                     auto r = slice_partitions(cf2, cfg.n_rows, offset, read);
                                     std::cout << sprint("%-7d %-7d ", offset, read) << r.table_row() << "\n";
+                                    check_fragment_count(r, std::min(cfg.n_rows - offset, read));
                                 };
 
                                 test(0, 1);
@@ -685,6 +730,8 @@ int main(int argc, char** argv) {
                     }).get();
                 }
             });
-        }, cfg);
+        }, cfg).then([] {
+            return errors_found ? -1 : 0;
+        });
     });
 }
