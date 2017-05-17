@@ -520,7 +520,7 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
             return;
         }
         auto uuid = uuid1.get();
-        out = std::copy_n(uuid.to_bytes().begin(), sizeof(uuid), out);
+        uuid.serialize(out);
     }
     virtual size_t serialized_size(const void* value) const override {
         if (!value || from_value(value).empty()) {
@@ -583,7 +583,7 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
         if (v.version() != 1) {
             throw marshal_exception();
         }
-        return v.to_bytes();
+        return v.serialize();
     }
     virtual sstring to_string(const bytes& b) const override {
         auto v = deserialize(b);
@@ -972,8 +972,7 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
         if (!value) {
             return;
         }
-        auto& uuid = from_value(value);
-        out = std::copy_n(uuid.get().to_bytes().begin(), sizeof(uuid.get()), out);
+        from_value(value).get().serialize(out);
     }
     virtual size_t serialized_size(const void* value) const override {
         if (!value) {
@@ -1035,7 +1034,7 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
             throw marshal_exception();
         }
         utils::UUID v(s);
-        return v.to_bytes();
+        return v.serialize();
     }
     virtual sstring to_string(const bytes& b) const override {
         auto v = deserialize(b);

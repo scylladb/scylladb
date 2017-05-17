@@ -539,17 +539,17 @@ BOOST_AUTO_TEST_CASE(test_long_type_validation) {
 
 BOOST_AUTO_TEST_CASE(test_timeuuid_type_validation) {
     auto now = utils::UUID_gen::get_time_UUID();
-    timeuuid_type->validate(now.to_bytes());
+    timeuuid_type->validate(now.serialize());
     auto random = utils::make_random_uuid();
-    test_validation_fails(timeuuid_type, random.to_bytes());
+    test_validation_fails(timeuuid_type, random.serialize());
     test_validation_fails(timeuuid_type, from_hex("00"));
 }
 
 BOOST_AUTO_TEST_CASE(test_uuid_type_validation) {
     auto now = utils::UUID_gen::get_time_UUID();
-    uuid_type->validate(now.to_bytes());
+    uuid_type->validate(now.serialize());
     auto random = utils::make_random_uuid();
-    uuid_type->validate(random.to_bytes());
+    uuid_type->validate(random.serialize());
     test_validation_fails(uuid_type, from_hex("00"));
 }
 

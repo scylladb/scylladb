@@ -538,6 +538,13 @@ inline void add_table_name(const trace_state_ptr& p, const sstring& ks_name, con
     }
 }
 
+inline bool should_return_id_in_response(const trace_state_ptr& p) {
+    if (p) {
+        return p->write_on_close();
+    }
+    return false;
+}
+
 /**
  * A helper for conditional invoking trace_state::begin() functions.
  *

@@ -40,36 +40,65 @@
 
 #include <stdint.h>
 
+#include <seastar/util/gcc6-concepts.hh>
 #include "core/sstring.hh"
 #include "net/byteorder.hh"
 #include "bytes.hh"
 #include <iosfwd>
+#include <iterator>
 
 
 class UTFDataFormatException { };
 class EOFException { };
 
-inline
-void serialize_int8(std::ostream& out, uint8_t val) {
-    out.put(val);
-}
+static constexpr size_t serialize_int8_size = 1;
+static constexpr size_t serialize_bool_size = 1;
+static constexpr size_t serialize_int16_size = 2;
+static constexpr size_t serialize_int32_size = 4;
+static constexpr size_t serialize_int64_size = 8;
 
-inline
-void serialize_int8(std::ostream& out, int8_t val) {
-    out.put(val);
-}
+namespace internal {
 
+template <typename ExplicitIntegerType, typename CharOutputIterator, typename IntegerType>
+GCC6_CONCEPT(requires std::is_integral<ExplicitIntegerType>::value && std::is_integral<IntegerType>::value && requires (CharOutputIterator it) {
+    *it++ = 'a';
+})
 inline
-void serialize_int8(bytes::iterator& out, uint8_t val) {
-    uint8_t nval = net::hton(val);
+void serialize_int(CharOutputIterator& out, IntegerType val) {
+    ExplicitIntegerType nval = net::hton(ExplicitIntegerType(val));
     out = std::copy_n(reinterpret_cast<const char*>(&nval), sizeof(nval), out);
 }
 
-static constexpr size_t serialize_int8_size = 1;
+}
 
+template <typename CharOutputIterator>
 inline
-void serialize_int8(std::ostream& out, char val) {
-    out.put(val);
+void serialize_int8(CharOutputIterator& out, uint8_t val) {
+    internal::serialize_int<uint8_t>(out, val);
+}
+
+template <typename CharOutputIterator>
+inline
+void serialize_int16(CharOutputIterator& out, uint16_t val) {
+    internal::serialize_int<uint16_t>(out, val);
+}
+
+template <typename CharOutputIterator>
+inline
+void serialize_int32(CharOutputIterator& out, uint32_t val) {
+    internal::serialize_int<uint32_t>(out, val);
+}
+
+template <typename CharOutputIterator>
+inline
+void serialize_int64(CharOutputIterator& out, uint64_t val) {
+    internal::serialize_int<uint64_t>(out, val);
+}
+
+template <typename CharOutputIterator>
+inline
+void serialize_bool(CharOutputIterator& out, bool val) {
+    serialize_int8(out, val ? 1 : 0);
 }
 
 inline
@@ -83,43 +112,8 @@ int8_t deserialize_int8(std::istream& in) {
 }
 
 inline
-void serialize_bool(std::ostream& out, bool b) {
-    out.put(b ? (char)1 : (char)0);
-}
-
-static constexpr size_t serialize_bool_size = 1;
-
-inline
-void serialize_bool(bytes::iterator& out, bool val) {
-    serialize_int8(out, val ? 1 : 0);
-}
-
-inline
 bool deserialize_bool(std::istream& in) {
-    char ret;
-    if (in.get(ret)) {
-        return ret;
-    } else {
-        throw EOFException();
-    }
-}
-
-
-inline
-void serialize_int16(std::ostream& out, uint16_t val) {
-    out.put((char)((val >>  8) & 0xFF));
-    out.put((char)((val >>  0) & 0xFF));
-}
-
-inline
-void serialize_int16(std::ostream& out, int16_t val) {
-    serialize_int16(out, (uint16_t) val);
-}
-
-inline
-void serialize_int16(bytes::iterator& out, uint16_t val) {
-    uint16_t nval = net::hton(val);
-    out = std::copy_n(reinterpret_cast<const char*>(&nval), sizeof(nval), out);
+    return deserialize_int8(in);
 }
 
 inline
@@ -133,29 +127,6 @@ int16_t deserialize_int16(std::istream& in) {
     return  ((int16_t)(uint8_t)a1 << 8) | ((int16_t)(uint8_t)a2 << 0);
 }
 
-static constexpr size_t serialize_int16_size = 2;
-
-inline
-void serialize_int32(std::ostream& out, uint32_t val) {
-    out.put((char)((val >> 24) & 0xFF));
-    out.put((char)((val >> 16) & 0xFF));
-    out.put((char)((val >>  8) & 0xFF));
-    out.put((char)((val >>  0) & 0xFF));
-}
-
-inline
-void serialize_int32(std::ostream& out, int32_t val) {
-    serialize_int32(out, (uint32_t) val);
-}
-
-inline
-void serialize_int32(bytes::iterator& out, uint32_t val) {
-    uint32_t nval = net::hton(val);
-    out = std::copy_n(reinterpret_cast<const char*>(&nval), sizeof(nval), out);
-}
-
-static constexpr size_t serialize_int32_size = 4;
-
 inline
 int32_t deserialize_int32(std::istream& in) {
     char a1, a2, a3, a4;
@@ -168,31 +139,6 @@ int32_t deserialize_int32(std::istream& in) {
             ((int32_t)(uint8_t)a3 << 8) |
             ((int32_t)(uint8_t)a4 << 0);
 }
-
-inline
-void serialize_int64(std::ostream& out, uint64_t val) {
-    out.put((char)((val >> 56) & 0xFF));
-    out.put((char)((val >> 48) & 0xFF));
-    out.put((char)((val >> 40) & 0xFF));
-    out.put((char)((val >> 32) & 0xFF));
-    out.put((char)((val >> 24) & 0xFF));
-    out.put((char)((val >> 16) & 0xFF));
-    out.put((char)((val >>  8) & 0xFF));
-    out.put((char)((val >>  0) & 0xFF));
-}
-
-inline
-void serialize_int64(std::ostream& out, int64_t val) {
-    serialize_int64(out, (uint64_t) val);
-}
-
-inline
-void serialize_int64(bytes::iterator& out, uint64_t val) {
-    uint64_t nval = net::hton(val);
-    out = std::copy_n(reinterpret_cast<const char*>(&nval), sizeof(nval), out);
-}
-
-static constexpr size_t serialize_int64_size = 8;
 
 inline
 int64_t deserialize_int64(std::istream& in) {
@@ -222,8 +168,12 @@ int64_t deserialize_int64(std::istream& in) {
 // http://docs.oracle.com/javase/7/docs/api/java/io/DataInput.html#modified-utf-8)
 // For now we'll just assume those aren't in the string...
 // TODO: fix the compatibility with Java even in this case.
+template <typename CharOutputIterator>
+GCC6_CONCEPT(requires requires (CharOutputIterator it) {
+    *it++ = 'a';
+})
 inline
-void serialize_string(std::ostream& out, const sstring& s) {
+void serialize_string(CharOutputIterator& out, const sstring& s) {
     // Java specifies that nulls in the string need to be replaced by the
     // two bytes 0xC0, 0x80. Let's not bother with such transformation
     // now, but just verify wasn't needed.
@@ -237,33 +187,16 @@ void serialize_string(std::ostream& out, const sstring& s) {
         // can't serialize longer strings.
         throw UTFDataFormatException();
     }
-    serialize_int16(out, (uint16_t) s.size());
-    out.write(s.c_str(), s.size());
-}
-
-inline
-void serialize_string(bytes::iterator& out, const sstring& s) {
-    for (char c : s) {
-        if (c == '\0') {
-            throw UTFDataFormatException();
-        }
-    }
-    if (s.size() > std::numeric_limits<uint16_t>::max()) {
-        throw UTFDataFormatException();
-    }
-    serialize_int16(out, (uint16_t) s.size());
+    serialize_int16(out, s.size());
     out = std::copy(s.begin(), s.end(), out);
 }
 
+template <typename CharOutputIterator>
+GCC6_CONCEPT(requires requires (CharOutputIterator it) {
+    *it++ = 'a';
+})
 inline
-size_t serialize_string_size(const sstring& s) {;
-    // As above, this code is missing the case of modified utf-8
-    return serialize_int16_size + s.size();
-}
-
-
-inline
-void serialize_string(std::ostream& out, const char *s) {
+void serialize_string(CharOutputIterator& out, const char* s) {
     // TODO: like above, need to change UTF-8 when above 16-bit.
     auto len = strlen(s);
     if (len > std::numeric_limits<uint16_t>::max()) {
@@ -271,8 +204,14 @@ void serialize_string(std::ostream& out, const char *s) {
         // can't serialize longer strings.
         throw UTFDataFormatException();
     }
-    serialize_int16(out, (uint16_t) len);
-    out.write(s, len);
+    serialize_int16(out, len);
+    out = std::copy_n(s, len, out);
+}
+
+inline
+size_t serialize_string_size(const sstring& s) {;
+    // As above, this code is missing the case of modified utf-8
+    return serialize_int16_size + s.size();
 }
 
 inline

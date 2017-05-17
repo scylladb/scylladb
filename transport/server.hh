@@ -177,21 +177,21 @@ private:
         future<response_type> process_batch(uint16_t stream, bytes_view buf, service::client_state client_state);
         future<response_type> process_register(uint16_t stream, bytes_view buf, service::client_state client_state);
 
-        shared_ptr<cql_server::response> make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive);
-        shared_ptr<cql_server::response> make_read_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present);
-        shared_ptr<cql_server::response> make_mutation_write_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, db::write_type type);
-        shared_ptr<cql_server::response> make_already_exists_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring cf_name);
-        shared_ptr<cql_server::response> make_unprepared_error(int16_t stream, exceptions::exception_code err, sstring msg, bytes id);
-        shared_ptr<cql_server::response> make_error(int16_t stream, exceptions::exception_code err, sstring msg);
-        shared_ptr<cql_server::response> make_ready(int16_t stream);
-        shared_ptr<cql_server::response> make_supported(int16_t stream);
-        shared_ptr<cql_server::response> make_result(int16_t stream, shared_ptr<transport::messages::result_message> msg, bool skip_metadata = false);
+        shared_ptr<cql_server::response> make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive, const tracing::trace_state_ptr& tr_state);
+        shared_ptr<cql_server::response> make_read_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present, const tracing::trace_state_ptr& tr_state);
+        shared_ptr<cql_server::response> make_mutation_write_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, db::write_type type, const tracing::trace_state_ptr& tr_state);
+        shared_ptr<cql_server::response> make_already_exists_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring cf_name, const tracing::trace_state_ptr& tr_state);
+        shared_ptr<cql_server::response> make_unprepared_error(int16_t stream, exceptions::exception_code err, sstring msg, bytes id, const tracing::trace_state_ptr& tr_state);
+        shared_ptr<cql_server::response> make_error(int16_t stream, exceptions::exception_code err, sstring msg, const tracing::trace_state_ptr& tr_state);
+        shared_ptr<cql_server::response> make_ready(int16_t stream, const tracing::trace_state_ptr& tr_state);
+        shared_ptr<cql_server::response> make_supported(int16_t stream, const tracing::trace_state_ptr& tr_state);
+        shared_ptr<cql_server::response> make_result(int16_t stream, shared_ptr<transport::messages::result_message> msg, const tracing::trace_state_ptr& tr_state, bool skip_metadata = false);
         shared_ptr<cql_server::response> make_topology_change_event(const transport::event::topology_change& event);
         shared_ptr<cql_server::response> make_status_change_event(const transport::event::status_change& event);
         shared_ptr<cql_server::response> make_schema_change_event(const transport::event::schema_change& event);
-        shared_ptr<cql_server::response> make_autheticate(int16_t, const sstring&);
-        shared_ptr<cql_server::response> make_auth_success(int16_t, bytes);
-        shared_ptr<cql_server::response> make_auth_challenge(int16_t, bytes);
+        shared_ptr<cql_server::response> make_autheticate(int16_t, const sstring&, const tracing::trace_state_ptr& tr_state);
+        shared_ptr<cql_server::response> make_auth_success(int16_t, bytes, const tracing::trace_state_ptr& tr_state);
+        shared_ptr<cql_server::response> make_auth_challenge(int16_t, bytes, const tracing::trace_state_ptr& tr_state);
 
         future<> write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response, cql_compression compression = cql_compression::none);
 
