@@ -186,18 +186,23 @@ private:
     const uint32_t _normal_large_eviction_ratio = 1000;
     // Number of normal evictions to perform before we try to evict large partition
     uint32_t _normal_eviction_count = _normal_large_eviction_ratio;
-    uint64_t _hits = 0;
-    uint64_t _misses = 0;
-    uint64_t _uncached_wide_partitions = 0;
-    uint64_t _wide_partition_mispopulations = 0;
-    uint64_t _insertions = 0;
-    uint64_t _concurrent_misses_same_key = 0;
-    uint64_t _merges = 0;
-    uint64_t _evictions = 0;
-    uint64_t _wide_partition_evictions = 0;
-    uint64_t _removals = 0;
-    uint64_t _partitions = 0;
-    uint64_t _modification_count = 0;
+public:
+    struct stats {
+        uint64_t hits;
+        uint64_t misses;
+        uint64_t uncached_wide_partitions;
+        uint64_t wide_partition_mispopulations;
+        uint64_t insertions;
+        uint64_t concurrent_misses_same_key;
+        uint64_t merges;
+        uint64_t evictions;
+        uint64_t wide_partition_evictions;
+        uint64_t removals;
+        uint64_t partitions;
+        uint64_t modification_count;
+    };
+private:
+    stats _stats{};
     seastar::metrics::metric_groups _metrics;
     logalloc::region _region;
     lru_type _lru;
@@ -222,9 +227,10 @@ public:
     allocation_strategy& allocator();
     logalloc::region& region();
     const logalloc::region& region() const;
-    uint64_t modification_count() const { return _modification_count; }
-    uint64_t partitions() const { return _partitions; }
-    uint64_t uncached_wide_partitions() const { return _uncached_wide_partitions; }
+    uint64_t modification_count() const { return _stats.modification_count; }
+    uint64_t partitions() const { return _stats.partitions; }
+    uint64_t uncached_wide_partitions() const { return _stats.uncached_wide_partitions; }
+    const stats& get_stats() const { return _stats; }
 };
 
 // Returns a reference to shard-wide cache_tracker.

@@ -79,7 +79,7 @@ cache_tracker::cache_tracker() {
             if (!_wide_partition_lru.empty() && (_normal_eviction_count == 0 || _lru.empty())) {
                 evict_last(_wide_partition_lru);
                 _normal_eviction_count = _normal_large_eviction_ratio;
-                ++_wide_partition_evictions;
+                ++_stats.wide_partition_evictions;
             } else {
                 if (_lru.empty()) {
                     return memory::reclaiming_result::reclaimed_nothing;
@@ -89,9 +89,9 @@ cache_tracker::cache_tracker() {
                     --_normal_eviction_count;
                 }
             }
-            --_partitions;
-            ++_evictions;
-            ++_modification_count;
+            --_stats.partitions;
+            ++_stats.evictions;
+            ++_stats.modification_count;
             return memory::reclaiming_result::reclaimed_something;
            } catch (std::bad_alloc&) {
             // Bad luck, linearization during partition removal caused us to
@@ -114,17 +114,17 @@ cache_tracker::setup_metrics() {
     _metrics.add_group("cache", {
         sm::make_gauge("bytes_used", sm::description("current bytes used by the cache out of the total size of memory"), [this] { return _region.occupancy().used_space(); }),
         sm::make_gauge("bytes_total", sm::description("total size of memory for the cache"), [this] { return _region.occupancy().total_space(); }),
-        sm::make_derive("total_operations_hits", sm::description("total number of operation hits"), _hits),
-        sm::make_derive("total_operations_misses", sm::description("total number of operation misses"), _misses),
-        sm::make_derive("total_operations_uncached_wide_partitions", sm::description("total number of operation of uncached wide partitions"), _uncached_wide_partitions),
-        sm::make_derive("total_operations_insertions", sm::description("total number of operation insert"), _insertions),
-        sm::make_derive("total_operations_concurrent_misses_same_key", sm::description("total number of operation with misses same key"), _concurrent_misses_same_key),
-        sm::make_derive("total_operations_merges", sm::description("total number of operation merged"), _merges),
-        sm::make_derive("total_operations_evictions", sm::description("total number of operation eviction"), _evictions),
-        sm::make_derive("total_operations_wide_partition_evictions", sm::description("total number of operation wide partition eviction"), _wide_partition_evictions),
-        sm::make_derive("total_operations_wide_partition_mispopulations", sm::description("total number of operation wide partition mispopulations"), _wide_partition_mispopulations),
-        sm::make_derive("total_operations_removals", sm::description("total number of operation removals"), _removals),
-        sm::make_gauge("objects_partitions", sm::description("total number of partition objects"),_partitions)
+        sm::make_derive("total_operations_hits", sm::description("total number of operation hits"), _stats.hits),
+        sm::make_derive("total_operations_misses", sm::description("total number of operation misses"), _stats.misses),
+        sm::make_derive("total_operations_uncached_wide_partitions", sm::description("total number of operation of uncached wide partitions"), _stats.uncached_wide_partitions),
+        sm::make_derive("total_operations_insertions", sm::description("total number of operation insert"), _stats.insertions),
+        sm::make_derive("total_operations_concurrent_misses_same_key", sm::description("total number of operation with misses same key"), _stats.concurrent_misses_same_key),
+        sm::make_derive("total_operations_merges", sm::description("total number of operation merged"), _stats.merges),
+        sm::make_derive("total_operations_evictions", sm::description("total number of operation eviction"), _stats.evictions),
+        sm::make_derive("total_operations_wide_partition_evictions", sm::description("total number of operation wide partition eviction"), _stats.wide_partition_evictions),
+        sm::make_derive("total_operations_wide_partition_mispopulations", sm::description("total number of operation wide partition mispopulations"), _stats.wide_partition_mispopulations),
+        sm::make_derive("total_operations_removals", sm::description("total number of operation removals"), _stats.removals),
+        sm::make_gauge("objects_partitions", sm::description("total number of partition objects"), _stats.partitions)
     });
 }
 
@@ -146,9 +146,9 @@ void cache_tracker::clear() {
         clear(_lru);
         clear(_wide_partition_lru);
     });
-    _removals += _partitions;
-    _partitions = 0;
-    ++_modification_count;
+    _stats.removals += _stats.partitions;
+    _stats.partitions = 0;
+    ++_stats.modification_count;
 }
 
 void cache_tracker::touch(cache_entry& e) {
@@ -160,9 +160,9 @@ void cache_tracker::touch(cache_entry& e) {
 }
 
 void cache_tracker::insert(cache_entry& entry) {
-    ++_insertions;
-    ++_partitions;
-    ++_modification_count;
+    ++_stats.insertions;
+    ++_stats.partitions;
+    ++_stats.modification_count;
     if (entry.wide_partition()) {
         _wide_partition_lru.push_front(entry);
     } else {
@@ -179,33 +179,33 @@ void cache_tracker::mark_wide(cache_entry& entry) {
 }
 
 void cache_tracker::on_erase() {
-    --_partitions;
-    ++_removals;
-    ++_modification_count;
+    --_stats.partitions;
+    ++_stats.removals;
+    ++_stats.modification_count;
 }
 
 void cache_tracker::on_merge() {
-    ++_merges;
+    ++_stats.merges;
 }
 
 void cache_tracker::on_hit() {
-    ++_hits;
+    ++_stats.hits;
 }
 
 void cache_tracker::on_miss() {
-    ++_misses;
+    ++_stats.misses;
 }
 
 void cache_tracker::on_miss_already_populated() {
-    ++_concurrent_misses_same_key;
+    ++_stats.concurrent_misses_same_key;
 }
 
 void cache_tracker::on_uncached_wide_partition() {
-    ++_uncached_wide_partitions;
+    ++_stats.uncached_wide_partitions;
 }
 
 void cache_tracker::on_wide_partition_mispopulation() {
-    ++_wide_partition_mispopulations;
+    ++_stats.wide_partition_mispopulations;
 }
 
 allocation_strategy& cache_tracker::allocator() {
