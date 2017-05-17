@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=scylla
 Group=scylla
-ExecStart=/usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid -q -c /etc/scylla.d/housekeeping.cfg version --mode r
+ExecStart=/usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid -q --repo-files '/etc/yum.repos.d/scylla*.repo' -c /etc/scylla.d/housekeeping.cfg version --mode r
 
 [Install]
 WantedBy=multi-user.target
