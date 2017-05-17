@@ -1215,14 +1215,14 @@ future<> sstable::create_data() {
 
 // This interface is only used during tests, snapshot loading and early initialization.
 // No need to set tunable priorities for it.
-future<> sstable::load() {
-    return read_toc().then([this] {
+future<> sstable::load(const io_priority_class& pc) {
+    return read_toc().then([this, &pc] {
         return seastar::when_all_succeed(
-                read_statistics(default_priority_class()),
-                read_compression(default_priority_class()),
-                read_scylla_metadata(default_priority_class()),
-                read_filter(default_priority_class()),
-                read_summary(default_priority_class())).then([this] {
+                read_statistics(pc),
+                read_compression(pc),
+                read_scylla_metadata(pc),
+                read_filter(pc),
+                read_summary(pc)).then([this] {
             validate_min_max_metadata();
             set_clustering_components_ranges();
             return open_data();
@@ -1240,9 +1240,10 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) {
     });
 }
 
-future<sstable_open_info> sstable::load_shared_components(const schema_ptr& s, sstring dir, int generation, version_types v, format_types f) {
+future<sstable_open_info> sstable::load_shared_components(const schema_ptr& s, sstring dir, int generation, version_types v, format_types f,
+        const io_priority_class& pc) {
     auto sst = make_lw_shared<sstables::sstable>(s, dir, generation, v, f);
-    return sst->load().then([sst] () mutable {
+    return sst->load(pc).then([sst] () mutable {
         auto shards = sst->get_shards_for_this_sstable();
         auto info = sstable_open_info{make_lw_shared<shareable_components>(std::move(*sst->_components)),
             std::move(shards), std::move(sst->_data_file), std::move(sst->_index_file)};

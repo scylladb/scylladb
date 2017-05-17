@@ -236,7 +236,7 @@ public:
     // load all components from disk
     // this variant will be useful for testing purposes and also when loading
     // a new sstable from scratch for sharing its components.
-    future<> load();
+    future<> load(const io_priority_class& pc = default_priority_class());
     future<> open_data();
     future<> update_info_for_opened_data();
 
@@ -673,7 +673,8 @@ public:
     future<foreign_sstable_open_info> get_open_info() &;
 
     // returns all info needed for a sstable to be shared with other shards.
-    static future<sstable_open_info> load_shared_components(const schema_ptr& s, sstring dir, int generation, version_types v, format_types f);
+    static future<sstable_open_info> load_shared_components(const schema_ptr& s, sstring dir, int generation, version_types v, format_types f,
+        const io_priority_class& pc = default_priority_class());
 
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class

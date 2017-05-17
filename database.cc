@@ -1502,7 +1502,7 @@ static future<> invoke_all_with_ptr(distributed<Service>& s, PtrType ptr, Func&&
 }
 
 future<> distributed_loader::open_sstable(distributed<database>& db, sstables::entry_descriptor comps,
-        std::function<future<> (column_family&, sstables::foreign_sstable_open_info)> func) {
+        std::function<future<> (column_family&, sstables::foreign_sstable_open_info)> func, const io_priority_class& pc) {
     // loads components of a sstable from shard S and share it with all other
     // shards. Which shard a sstable will be opened at is decided using
     // calculate_shard_from_sstable_generation(), which is the inverse of
@@ -1511,12 +1511,12 @@ future<> distributed_loader::open_sstable(distributed<database>& db, sstables::e
     // to distribute evenly the resource usage among all shards.
 
     return db.invoke_on(column_family::calculate_shard_from_sstable_generation(comps.generation),
-            [&db, comps = std::move(comps), func = std::move(func)] (database& local) {
+            [&db, comps = std::move(comps), func = std::move(func), pc] (database& local) {
 
-        return with_semaphore(local.sstable_load_concurrency_sem(), 1, [&db, &local, comps = std::move(comps), func = std::move(func)] {
+        return with_semaphore(local.sstable_load_concurrency_sem(), 1, [&db, &local, comps = std::move(comps), func = std::move(func), pc] {
             auto& cf = local.find_column_family(comps.ks, comps.cf);
 
-            auto f = sstables::sstable::load_shared_components(cf.schema(), cf._config.datadir, comps.generation, comps.version, comps.format);
+            auto f = sstables::sstable::load_shared_components(cf.schema(), cf._config.datadir, comps.generation, comps.version, comps.format, pc);
             return f.then([&db, comps = std::move(comps), func = std::move(func)] (sstables::sstable_open_info info) {
                 // shared components loaded, now opening sstable in all shards with shared components
                 return do_with(std::move(info), [&db, comps = std::move(comps), func = std::move(func)] (auto& info) {
@@ -1764,7 +1764,7 @@ future<> distributed_loader::load_new_sstables(distributed<database>& db, sstrin
                 return make_ready_future<>();
             });
         };
-        return distributed_loader::open_sstable(db, comps, cf_sstable_open);
+        return distributed_loader::open_sstable(db, comps, cf_sstable_open, service::get_local_compaction_priority());
     }).then([&db, ks, cf] {
         return db.invoke_on_all([ks = std::move(ks), cfname = std::move(cf)] (database& db) {
             auto& cf = db.find_column_family(ks, cfname);
