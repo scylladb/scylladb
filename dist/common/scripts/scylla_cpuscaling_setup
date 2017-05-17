@@ -12,6 +12,16 @@ if is_debian_variant; then
         systemctl enable cpufrequtils.service
     fi
     service cpufrequtils start
+elif is_gentoo_variant; then
+    emerge -uq sys-power/cpupower
+    sed -e 's/--governor ondemand/--governor performance/g' -i /etc/conf.d/cpupower
+    if is_systemd; then
+        systemctl enable cpupower-frequency-set.service
+        systemctl start cpupower-frequency-set.service
+    else
+        rc-update add cpupower default
+        service cpupower start
+    fi
 else
     yum install -y cpupowerutils || true
     echo 'CPUPOWER_START_OPTS="frequency-set -g performance"' > /etc/sysconfig/cpupower
