@@ -1728,9 +1728,9 @@ populate_statistics_offsets(statistics& s) {
 static
 sharding_metadata
 create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
-    auto range = dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
+    auto prange = dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
     auto sm = sharding_metadata();
-    for (auto&& range : dht::split_range_to_single_shard(*schema, range, shard)) {
+    for (auto&& range : dht::split_range_to_single_shard(*schema, prange, shard)) {
         if (true) { // keep indentation
             // we know left/right are not infinite
             auto&& left = range.start()->value();
@@ -1739,7 +1739,7 @@ create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key,
             auto left_exclusive = !left.has_key() && left.bound() == dht::ring_position::token_bound::end;
             auto&& right_token = right.token();
             auto right_exclusive = !right.has_key() && right.bound() == dht::ring_position::token_bound::start;
-            sm.token_ranges.elements.push_back({
+            sm.token_ranges.elements.push_back(disk_token_range{
                 {left_exclusive, to_bytes(bytes_view(left_token._data))},
                 {right_exclusive, to_bytes(bytes_view(right_token._data))}});
         }
