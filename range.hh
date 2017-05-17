@@ -609,13 +609,13 @@ private:
     struct built_in_ : std_ {};
 
     template<typename Range, typename LessComparator,
-             typename = decltype(&std::remove_reference<Range>::type::lower_bound)>
+             typename = decltype(std::declval<Range>().lower_bound(std::declval<T>(), std::declval<LessComparator>()))>
     typename std::remove_reference<Range>::type::const_iterator do_lower_bound(const T& value, Range&& r, LessComparator&& cmp, built_in_) const {
         return r.lower_bound(value, std::forward<LessComparator>(cmp));
     }
 
     template<typename Range, typename LessComparator,
-             typename = decltype(&std::remove_reference<Range>::type::upper_bound)>
+             typename = decltype(std::declval<Range>().upper_bound(std::declval<T>(), std::declval<LessComparator>()))>
     typename std::remove_reference<Range>::type::const_iterator do_upper_bound(const T& value, Range&& r, LessComparator&& cmp, built_in_) const {
         return r.upper_bound(value, std::forward<LessComparator>(cmp));
     }
