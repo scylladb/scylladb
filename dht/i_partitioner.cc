@@ -412,7 +412,7 @@ split_range_to_single_shard(const i_partitioner& partitioner, const schema& s, c
             ret.push_back(std::move(*intersection));
         }
         start_token = partitioner.token_for_next_shard(end_token, shard);
-        start_boundary = ring_position::starting_at(start_token);
+        start_boundary = range_bound<ring_position>(ring_position::starting_at(start_token));
     }
     return ret;
 }
