@@ -81,7 +81,6 @@ namespace raw {
 ::shared_ptr<cql3::statements::modification_statement>
 delete_statement::prepare_internal(database& db, schema_ptr schema, shared_ptr<variable_specifications> bound_names,
         std::unique_ptr<attributes> attrs, cql_stats& stats) {
-    using statement_type = cql3::statements::modification_statement::statement_type;
     auto stmt = ::make_shared<cql3::statements::delete_statement>(statement_type::DELETE, bound_names->size(), schema, std::move(attrs), stats);
 
     for (auto&& deletion : _deletions) {

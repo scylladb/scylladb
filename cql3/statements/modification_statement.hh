@@ -53,6 +53,7 @@
 #include "cql3/relation.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/single_column_relation.hh"
+#include "cql3/statements/statement_type.hh"
 
 #include "db/consistency_level.hh"
 
@@ -81,8 +82,6 @@ private:
     static thread_local const ::shared_ptr<column_identifier> CAS_RESULT_COLUMN;
 
 public:
-    enum class statement_type { INSERT, UPDATE, DELETE };
-
     const statement_type type;
 
 private:
@@ -101,8 +100,6 @@ private:
 
     bool _if_not_exists = false;
     bool _if_exists = false;
-
-    bool _has_no_clustering_columns = true;
 
     bool _sets_static_columns = false;
     bool _sets_regular_columns = false;
@@ -373,8 +370,6 @@ protected:
     virtual void validate_where_clause_for_conditions();
     friend class raw::modification_statement;
 };
-
-std::ostream& operator<<(std::ostream& out, modification_statement::statement_type t);
 
 }
 

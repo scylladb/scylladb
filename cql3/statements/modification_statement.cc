@@ -60,22 +60,6 @@ namespace statements {
 
 thread_local const ::shared_ptr<column_identifier> modification_statement::CAS_RESULT_COLUMN = ::make_shared<column_identifier>("[applied]", false);
 
-std::ostream&
-operator<<(std::ostream& out, modification_statement::statement_type t) {
-    switch (t) {
-        case modification_statement::statement_type::UPDATE:
-            out << "UPDATE";
-            break;
-        case modification_statement::statement_type::INSERT:
-            out << "INSERT";
-            break;
-        case modification_statement::statement_type::DELETE:
-            out << "DELETE";
-            break;
-    }
-    return out;
-}
-
 modification_statement::modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_, uint64_t* cql_stats_counter_ptr)
     : type{type_}
     , _bound_terms{bound_terms}
@@ -333,22 +317,22 @@ modification_statement::create_clustering_ranges(const query_options& options) {
     // sounds like you don't really understand what your are doing.
     if (applies_only_to_static_columns()) {
         // If we set no non-static columns, then it's fine not to have clustering columns
-        if (_has_no_clustering_columns) {
+        if (!_restrictions->has_clustering_columns_restriction()) {
             return { query::clustering_range::make_open_ended_both_sides() };
         }
 
         // If we do have clustering columns however, then either it's an INSERT and the query is valid
         // but we still need to build a proper prefix, or it's not an INSERT, and then we want to reject
         // (see above)
-        if (type != statement_type::INSERT) {
+        if (!type.is_insert()) {
             if (_restrictions->has_clustering_columns_restriction()) {
                 throw exceptions::invalid_request_exception(sprint(
                     "Invalid restriction on clustering column %s since the %s statement modifies only static columns",
                     _restrictions->get_clustering_columns_restrictions()->get_column_defs().front()->name_as_text(), type));
             }
 
-            // we should get there as it contradicts _has_no_clustering_columns == false
-            throw std::logic_error("contradicts _has_no_clustering_columns == false");
+            // we should get there as it contradicts !_restrictions->has_clustering_columns_restriction()
+            throw std::logic_error("contradicts !_restrictions->has_clustering_columns_restriction()");
         }
     }
 
@@ -463,7 +447,7 @@ modification_statement::execute_internal(distributed<service::storage_proxy>& pr
 void
 modification_statement::process_where_clause(database& db, std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names) {
     _restrictions = ::make_shared<restrictions::statement_restrictions>(
-            db, s, where_clause, std::move(names), applies_only_to_static_columns(), _sets_a_collection, false);
+            db, s, type, where_clause, std::move(names), applies_only_to_static_columns(), _sets_a_collection, false);
     if (_restrictions->get_partition_key_restrictions()->is_on_token()) {
         throw exceptions::invalid_request_exception(sprint("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: %s",
                 _restrictions->get_partition_key_restrictions()->to_string()));
@@ -660,6 +644,11 @@ bool modification_statement::has_conditions() {
 void modification_statement::validate_where_clause_for_conditions() {
     //  no-op by default
 }
+
+const statement_type statement_type::INSERT = statement_type(statement_type::type::insert);
+const statement_type statement_type::UPDATE = statement_type(statement_type::type::update);
+const statement_type statement_type::DELETE = statement_type(statement_type::type::del);
+const statement_type statement_type::SELECT = statement_type(statement_type::type::select);
 
 namespace raw {
 

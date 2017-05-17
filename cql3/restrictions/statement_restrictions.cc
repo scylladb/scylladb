@@ -146,6 +146,7 @@ to_column_definition(const schema_ptr& schema, const ::shared_ptr<column_identif
 
 statement_restrictions::statement_restrictions(database& db,
         schema_ptr schema,
+        statements::statement_type type,
         const std::vector<::shared_ptr<relation>>& where_clause,
         ::shared_ptr<variable_specifications> bound_names,
         bool selects_only_static_columns,
@@ -210,8 +211,15 @@ statement_restrictions::statement_restrictions(database& db,
     }
 
     if (selects_only_static_columns && has_clustering_columns_restriction()) {
-        throw exceptions::invalid_request_exception(
-            "Cannot restrict clustering columns when selecting only static columns");
+        if (type.is_update() || type.is_delete()) {
+            throw exceptions::invalid_request_exception(sprint(
+                "Invalid restrictions on clustering columns since the %s statement modifies only static columns", type));
+        }
+
+        if (type.is_select()) {
+            throw exceptions::invalid_request_exception(
+                "Cannot restrict clustering columns when selecting only static columns");
+        }
     }
 
     process_clustering_columns_restrictions(has_queriable_index, select_a_collection);
