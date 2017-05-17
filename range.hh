@@ -28,6 +28,7 @@
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/adaptor/sliced.hpp>
 #include <boost/range/adaptor/transformed.hpp>
+#include <seastar/util/gcc6-concepts.hh>
 
 template<typename T>
 class range_bound {
@@ -351,19 +352,22 @@ public:
             return *this;
         }
     }
+    template<typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
+    static stdx::optional<typename wrapping_range<U>::bound> transform_bound(optional<bound> b, Transformer&& transformer) {
+        if (b) {
+            return { { transformer(std::move(*b).value()), b->is_inclusive() } };
+        };
+        return {};
+    }
     // Transforms this range into a new range of a different value type
     // Supplied transformer should transform value of type T (the old type) into value of type U (the new type).
     template<typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
     wrapping_range<U> transform(Transformer&& transformer) && {
-        auto t = [&transformer] (std::experimental::optional<bound>&& b)
-            -> std::experimental::optional<typename wrapping_range<U>::bound>
-        {
-            if (!b) {
-                return {};
-            }
-            return { { transformer(std::move(*b).value()), b->is_inclusive() } };
-        };
-        return wrapping_range<U>(t(std::move(_start)), t(std::move(_end)), _singular);
+        return wrapping_range<U>(transform_bound(std::move(_start), transformer), transform_bound(std::move(_end), transformer), _singular);
+    }
+    template<typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
+    wrapping_range<U> transform(Transformer&& transformer) const & {
+        return wrapping_range<U>(transform_bound(_start, transformer), transform_bound(_end, transformer), _singular);
     }
     template<typename Comparator>
     bool equal(const wrapping_range& other, Comparator&& cmp) const {
@@ -550,6 +554,10 @@ public:
     nonwrapping_range<U> transform(Transformer&& transformer) && {
         return nonwrapping_range<U>(std::move(_range).transform(std::forward<Transformer>(transformer)));
     }
+    template<typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
+    nonwrapping_range<U> transform(Transformer&& transformer) const & {
+        return nonwrapping_range<U>(_range.transform(std::forward<Transformer>(transformer)));
+    }
     template<typename Comparator>
     bool equal(const nonwrapping_range& other, Comparator&& cmp) const {
         return _range.equal(other._range, std::forward<Comparator>(cmp));
@@ -649,6 +657,21 @@ public:
         return boost::make_iterator_range(lower_bound(range, cmp), upper_bound(range, cmp));
     }
 
+    // Returns the intersection between this range and other.
+    template<typename Comparator>
+    stdx::optional<nonwrapping_range> intersection(const nonwrapping_range& other, Comparator&& cmp) const {
+        auto p = std::minmax(_range, other._range, [&cmp] (auto&& a, auto&& b) {
+            return wrapping_range<T>::less_than(a.start_bound(), b.start_bound(), cmp);
+        });
+        if (wrapping_range<T>::greater_than_or_equal(p.first.end_bound(), p.second.start_bound(), cmp)) {
+            auto& end = std::min(p.first.end_bound(), p.second.end_bound(), [&cmp] (auto&& a, auto&& b) {
+                return !wrapping_range<T>::greater_than_or_equal(a, b, cmp);
+            });
+            return nonwrapping_range(p.second.start(), end.b);
+        }
+        return {};
+    }
+
     template<typename U>
     friend std::ostream& operator<<(std::ostream& out, const nonwrapping_range<U>& r);
 };
@@ -660,6 +683,11 @@ std::ostream& operator<<(std::ostream& out, const nonwrapping_range<U>& r) {
 
 template<typename T>
 using range = wrapping_range<T>;
+
+GCC6_CONCEPT(
+template<template<typename> typename T, typename U>
+concept bool Range = std::is_same<T<U>, wrapping_range<U>>::value || std::is_same<T<U>, nonwrapping_range<U>>::value;
+)
 
 // Allow using range<T> in a hash table. The hash function 31 * left +
 // right is the same one used by Cassandra's AbstractBounds.hashCode().

@@ -842,10 +842,10 @@ public:
     future<> push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm) const;
 private:
     std::vector<view_ptr> affected_views(const schema_ptr& base, const mutation& update) const;
-    future<std::vector<mutation>> generate_view_updates(const schema_ptr& base,
+    future<> generate_and_propagate_view_updates(const schema_ptr& base,
             std::vector<view_ptr>&& views,
-            streamed_mutation updates,
-            streamed_mutation existings) const;
+            mutation&& m,
+            streamed_mutation_opt existings) const;
 
     // One does not need to wait on this future if all we are interested in, is
     // initiating the write.  The writes initiated here will eventually

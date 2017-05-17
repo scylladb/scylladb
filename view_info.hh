@@ -33,7 +33,8 @@ class view_info final {
     mutable shared_ptr<cql3::statements::select_statement> _select_statement;
     mutable stdx::optional<query::partition_slice> _partition_slice;
     mutable stdx::optional<dht::partition_range_vector> _partition_ranges;
-    mutable const column_definition* _base_non_pk_column_in_view_pk;
+    // Lazily initializes the column id of a regular base table included in the view's PK, if any.
+    mutable stdx::optional<stdx::optional<column_id>> _base_non_pk_column_in_view_pk;
 public:
     view_info(const schema& schema, const raw_view_info& raw_view_info);
 
@@ -61,7 +62,7 @@ public:
     const query::partition_slice& partition_slice() const;
     const dht::partition_range_vector& partition_ranges() const;
     const column_definition* view_column(const schema& base, column_id base_id) const;
-    const column_definition* base_non_pk_column_in_view_pk(const schema& base) const;
+    stdx::optional<column_id> base_non_pk_column_in_view_pk(const schema& base) const;
 
     friend bool operator==(const view_info& x, const view_info& y) {
         return x._raw == y._raw;
