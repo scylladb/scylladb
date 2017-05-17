@@ -53,6 +53,7 @@ struct metrics_snapshot {
     steady_clock_type::duration idle_time;
     reactor::io_stats io;
     sstables::shared_index_lists::stats index;
+    cache_tracker::stats cache;
 
     metrics_snapshot() {
         reactor& r = *local_engine;
@@ -61,6 +62,7 @@ struct metrics_snapshot {
         idle_time = r.total_idle_time();
         hr_clock = std::chrono::high_resolution_clock::now();
         index = sstables::shared_index_lists::shard_stats();
+        cache = global_cache_tracker().get_stats();
     }
 };
 
@@ -100,6 +102,10 @@ struct test_result {
     uint64_t index_misses() const { return after.index.misses - before.index.misses; }
     uint64_t index_blocks() const { return after.index.blocks - before.index.blocks; }
 
+    uint64_t cache_hits() const { return after.cache.hits - before.cache.hits; }
+    uint64_t cache_misses() const { return after.cache.misses - before.cache.misses; }
+    uint64_t cache_insertions() const { return after.cache.insertions - before.cache.insertions; }
+
     float cpu_utilization() const {
         auto busy_delta = after.busy_time.count() - before.busy_time.count();
         auto idle_delta = after.idle_time.count() - before.idle_time.count();
@@ -108,18 +114,21 @@ struct test_result {
 
     static auto table_header() {
         return make_printable([] (std::ostream& out) {
-            out << sprint("%10s %9s %10s %6s %10s %7s %7s %8s %8s %8s %6s",
+            out << sprint("%10s %9s %10s %6s %10s %7s %7s %8s %8s %8s %8s %8s %8s %6s",
                 "time [s]", "frags", "frag/s", "aio", "[KiB]", "blocked", "dropped",
-                "idx hit", "idx miss", "idx blk", "cpu");
+                "idx hit", "idx miss", "idx blk",
+                "c hit", "c miss", "c ins",
+                "cpu");
         });
     }
 
     auto table_row() {
         return make_printable([this] (std::ostream& out) {
-            out << sprint("%10.6f %9d %10.0f %6d %10d %7d %7d %8d %8d %8d %5.1f%%",
+            out << sprint("%10.6f %9d %10.0f %6d %10d %7d %7d %8d %8d %8d %8d %8d %8d %5.1f%%",
                 duration_in_seconds(), fragments_read, fragment_rate(),
                 aio_reads(), aio_read_bytes() / 1024, reads_blocked(), read_aheads_discarded(),
                 index_hits(), index_misses(), index_blocks(),
+                cache_hits(), cache_misses(), cache_insertions(),
                 cpu_utilization() * 100);
         });
     }
