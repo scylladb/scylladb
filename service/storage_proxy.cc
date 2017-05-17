@@ -3956,24 +3956,22 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
     auto shard_cmd = make_lw_shared<query::read_command>(*cmd);
     return do_with(cmd,
             shard_cmd,
-            1u,
             0u,
             false,
             static_cast<unsigned>(prs.size()),
             std::unordered_map<element_and_shard, partition_range_and_sort_key>{},
             mutation_result_merger{s, cmd},
-            dht::ring_position_range_vector_sharder{prs},
+            dht::ring_position_exponential_vector_sharder{prs},
             global_schema_ptr(s),
             tracing::global_trace_state_ptr(std::move(trace_state)),
             [this, s, max_size] (lw_shared_ptr<query::read_command>& cmd,
                     lw_shared_ptr<query::read_command>& shard_cmd,
-                    unsigned& shards_in_parallel,
                     unsigned& mutation_result_merger_key,
                     bool& no_more_ranges,
                     unsigned& partition_range_count,
                     std::unordered_map<element_and_shard, partition_range_and_sort_key>& shards_for_this_iteration,
                     mutation_result_merger& mrm,
-                    dht::ring_position_range_vector_sharder& rprs,
+                    dht::ring_position_exponential_vector_sharder& rpevs,
                     global_schema_ptr& gs,
                     tracing::global_trace_state_ptr& gt) {
       return _db.local().get_result_memory_limiter().new_mutation_read(max_size).then([&, s] (query::result_memory_accounter ma) {
@@ -3984,36 +3982,32 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
             // because we'll throw away most of the results.  So we'll exponentially increase
             // concurrency starting at 1, so we won't waste on dense tables and at most
             // `log(nr_shards) + ignore_msb_bits` latency multiplier for near-empty tables.
+            //
+            // We use the ring_position_exponential_vector_sharder to give us subranges that follow
+            // this scheme.
             shards_for_this_iteration.clear();
             // If we're reading from less than smp::count shards, then we can just append
             // each shard in order without sorting.  If we're reading from more, then
             // we'll read from some shards at least twice, so the partitions within will be
             // out-of-order wrt. other shards
+            auto this_iteration_subranges = rpevs.next(*s);
             auto retain_shard_order = true;
-            for (auto i = 0u; i < shards_in_parallel; ++i) {
-                auto now = rprs.next(*s);
-                if (!now) {
-                    no_more_ranges = true;
-                    break;
-                }
-                // Let's see if this is a new shard, or if we can expand an existing range
-                auto&& rng_ok = shards_for_this_iteration.emplace(element_and_shard{now->element, now->shard}, partition_range_and_sort_key{now->ring_range, i});
-                if (!rng_ok.second) {
-                    // We saw this shard already, enlarge the range (we know now->ring_range came from the same partition range;
-                    // otherwise it would have had a unique now->element).
-                    auto& rng = rng_ok.first->second.pr;
-                    rng = nonwrapping_range<dht::ring_position>(std::move(rng.start()), std::move(now->ring_range.end()));
-                    // This range is no longer ordered with respect to the others, so:
-                    retain_shard_order = false;
+            no_more_ranges = true;
+            if (this_iteration_subranges) {
+                no_more_ranges = false;
+                retain_shard_order = this_iteration_subranges->inorder;
+                auto sort_key = 0u;
+                for (auto&& now : this_iteration_subranges->per_shard_ranges) {
+                    shards_for_this_iteration.emplace(element_and_shard{this_iteration_subranges->element, now.shard}, partition_range_and_sort_key{now.ring_range, sort_key++});
                 }
             }
+
             auto key_base = mutation_result_merger_key;
 
             // prepare for next iteration
             // Each iteration uses a merger key that is either i in the loop above (so in the range [0, shards_in_parallel),
             // or, the element index in prs (so in the range [0, partition_range_count).  Make room for sufficient keys.
-            mutation_result_merger_key += std::max(shards_in_parallel, partition_range_count);
-            shards_in_parallel *= 2;
+            mutation_result_merger_key += std::max(smp::count, partition_range_count);
 
             shard_cmd->partition_limit = cmd->partition_limit - mrm.partition_count();
             shard_cmd->row_limit = cmd->row_limit - mrm.row_count();
