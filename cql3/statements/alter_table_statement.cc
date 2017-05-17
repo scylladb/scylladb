@@ -229,8 +229,13 @@ future<shared_ptr<transport::event::schema_change>> alter_table_statement::annou
                 throw exceptions::invalid_request_exception("Cannot use non-frozen collections with super column families");
             }
 
-            auto it = schema->collections().find(column_name->name());
-            if (it != schema->collections().end() && !type->is_compatible_with(*it->second)) {
+
+            // If there used to be a non-frozen collection column with the same name (that has been dropped),
+            // we could still have some data using the old type, and so we can't allow adding a collection
+            // with the same name unless the types are compatible (see #6276).
+            auto& dropped = schema->dropped_columns();
+            auto i = dropped.find(column_name->text());
+            if (i != dropped.end() && !type->is_compatible_with(*i->second.type)) {
                 throw exceptions::invalid_request_exception(sprint("Cannot add a collection with the name %s "
                     "because a collection with the same name and a different type has already been used in the past", column_name));
             }

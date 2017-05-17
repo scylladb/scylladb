@@ -1618,10 +1618,17 @@ void sstable::write_static_row(file_writer& out, const schema& schema, const row
             return;
         }
         assert(column_definition.is_static());
+        const auto& column_name = column_definition.name();
+        if (schema.is_compound()) {
+            auto sp = composite::static_prefix(schema);
+            maybe_flush_pi_block(out, sp, { bytes_view(column_name) });
+            write_column_name(out, sp, { bytes_view(column_name) });
+        } else {
+            assert(!schema.is_dense());
+            maybe_flush_pi_block(out, composite(), { bytes_view(column_name) });
+            write_column_name(out, bytes_view(column_name));
+        }
         atomic_cell_view cell = c.as_atomic_cell();
-        auto sp = composite::static_prefix(schema);
-        maybe_flush_pi_block(out, sp, { bytes_view(column_definition.name()) });
-        write_column_name(out, sp, { bytes_view(column_definition.name()) });
         write_cell(out, cell, column_definition);
     });
 }

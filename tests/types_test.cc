@@ -584,7 +584,7 @@ BOOST_AUTO_TEST_CASE(test_parse_valid_map) {
 BOOST_AUTO_TEST_CASE(test_parse_valid_tuple) {
     auto parser = db::marshal::type_parser("org.apache.cassandra.db.marshal.TupleType(org.apache.cassandra.db.marshal.Int32Type,org.apache.cassandra.db.marshal.Int32Type)");
     auto type = parser.parse();
-    BOOST_REQUIRE(type->as_cql3_type()->to_string() == "tuple<int, int>");
+    BOOST_REQUIRE(type->as_cql3_type()->to_string() == "frozen<tuple<int, int>>");
 }
 
 BOOST_AUTO_TEST_CASE(test_parse_invalid_tuple) {
@@ -624,7 +624,7 @@ BOOST_AUTO_TEST_CASE(test_parse_recursive_type) {
     sstring value("org.apache.cassandra.db.marshal.TupleType(org.apache.cassandra.db.marshal.Int32Type,org.apache.cassandra.db.marshal.Int32Type)");
     auto parser = db::marshal::type_parser("org.apache.cassandra.db.marshal.MapType(" + key + "," + value + ")");
     auto type = parser.parse();
-    BOOST_REQUIRE(type->as_cql3_type()->to_string() == "map<int, tuple<int, int>>");
+    BOOST_REQUIRE_EQUAL(type->as_cql3_type()->to_string(), "map<int, frozen<tuple<int, int>>>");
 }
 
 BOOST_AUTO_TEST_CASE(test_create_reversed_type) {

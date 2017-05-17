@@ -47,6 +47,7 @@
 #include "enum_set.hh"
 
 class database;
+class user_types_metadata;
 
 namespace cql3 {
 
@@ -63,19 +64,22 @@ public:
     bool is_counter() const { return _type->is_counter(); }
     bool is_native() const { return _native; }
     data_type get_type() const { return _type; }
-    sstring to_string() const { return _name; }
+    sstring to_string() const;
 
     // For UserTypes, we need to know the current keyspace to resolve the
     // actual type used, so Raw is a "not yet prepared" CQL3Type.
     class raw {
     public:
+        virtual ~raw() {}
         bool _frozen = false;
         virtual bool supports_freezing() const = 0;
         virtual bool is_collection() const;
         virtual bool is_counter() const;
+        virtual bool references_user_type(const sstring&) const;
         virtual std::experimental::optional<sstring> keyspace() const;
         virtual void freeze();
-        virtual shared_ptr<cql3_type> prepare(database& db, const sstring& keyspace) = 0;
+        virtual shared_ptr<cql3_type> prepare_internal(const sstring& keyspace, lw_shared_ptr<user_types_metadata>) = 0;
+        virtual shared_ptr<cql3_type> prepare(database& db, const sstring& keyspace);
         static shared_ptr<raw> from(shared_ptr<cql3_type> type);
         static shared_ptr<raw> user_type(ut_name name);
         static shared_ptr<raw> map(shared_ptr<raw> t1, shared_ptr<raw> t2);
@@ -98,7 +102,7 @@ private:
 
 public:
     enum class kind : int8_t {
-        ASCII, BIGINT, BLOB, BOOLEAN, COUNTER, DECIMAL, DOUBLE, FLOAT, INT, SMALLINT, TINYINT, INET, TEXT, TIMESTAMP, UUID, VARCHAR, VARINT, TIMEUUID, DATE, TIME
+        ASCII, BIGINT, BLOB, BOOLEAN, COUNTER, DECIMAL, DOUBLE, EMPTY, FLOAT, INT, SMALLINT, TINYINT, INET, TEXT, TIMESTAMP, UUID, VARCHAR, VARINT, TIMEUUID, DATE, TIME
     };
     using kind_enum = super_enum<kind,
         kind::ASCII,
@@ -108,6 +112,7 @@ public:
         kind::COUNTER,
         kind::DECIMAL,
         kind::DOUBLE,
+        kind::EMPTY,
         kind::FLOAT,
         kind::INET,
         kind::INT,
@@ -133,6 +138,7 @@ public:
     static thread_local shared_ptr<cql3_type> blob;
     static thread_local shared_ptr<cql3_type> boolean;
     static thread_local shared_ptr<cql3_type> double_;
+    static thread_local shared_ptr<cql3_type> empty;
     static thread_local shared_ptr<cql3_type> float_;
     static thread_local shared_ptr<cql3_type> int_;
     static thread_local shared_ptr<cql3_type> smallint;

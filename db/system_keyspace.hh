@@ -79,6 +79,34 @@ static constexpr auto COMPACTION_HISTORY = "compaction_history";
 static constexpr auto SSTABLE_ACTIVITY = "sstable_activity";
 static constexpr auto SIZE_ESTIMATES = "size_estimates";
 
+namespace v3 {
+static constexpr auto BATCHES = "batches";
+static constexpr auto PAXOS = "paxos";
+static constexpr auto BUILT_INDEXES = "IndexInfo";
+static constexpr auto LOCAL = "local";
+static constexpr auto PEERS = "peers";
+static constexpr auto PEER_EVENTS = "peer_events";
+static constexpr auto RANGE_XFERS = "range_xfers";
+static constexpr auto COMPACTION_HISTORY = "compaction_history";
+static constexpr auto SSTABLE_ACTIVITY = "sstable_activity";
+static constexpr auto SIZE_ESTIMATES = "size_estimates";
+static constexpr auto AVAILABLE_RANGES = "available_ranges";
+static constexpr auto VIEWS_BUILDS_IN_PROGRESS = "views_builds_in_progress";
+static constexpr auto BUILT_VIEWS = "built_views";
+}
+
+namespace legacy {
+static constexpr auto HINTS = "hints";
+static constexpr auto BATCHLOG = "batchlog";
+static constexpr auto KEYSPACES = "schema_keyspaces";
+static constexpr auto COLUMNFAMILIES = "schema_columnfamilies";
+static constexpr auto COLUMNS = "schema_columns";
+static constexpr auto TRIGGERS = "schema_triggers";
+static constexpr auto USERTYPES = "schema_usertypes";
+static constexpr auto FUNCTIONS = "schema_functions";
+static constexpr auto AGGREGATES = "schema_aggregates";
+}
+
 // Partition estimates for a given range of tokens.
 struct range_estimates {
     schema_ptr schema;
@@ -117,6 +145,13 @@ future<> update_hints_dropped(gms::inet_address ep, utils::UUID time_period, int
 std::vector<schema_ptr> all_tables();
 void make(database& db, bool durable, bool volatile_testing_only = false);
 
+future<bool>
+is_index_built(const sstring& ks_name, const sstring& index_name);
+future<>
+set_index_built(const sstring& ks_name, const sstring& index_name);
+future<>
+set_index_removed(const sstring& ks_name, const sstring& index_name);
+
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
 query_mutations(distributed<service::storage_proxy>& proxy, const sstring& cf_name);
 
@@ -131,6 +166,29 @@ future<lw_shared_ptr<query::result_set>> query(
     const sstring& cf_name,
     const dht::decorated_key& key,
     query::clustering_range row_ranges = query::clustering_range::make_open_ended_both_sides());
+
+/// overloads
+
+future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+query_mutations(distributed<service::storage_proxy>& proxy,
+                const sstring& ks_name,
+                const sstring& cf_name);
+
+// Returns all data from given system table.
+// Intended to be used by code which is not performance critical.
+future<lw_shared_ptr<query::result_set>> query(distributed<service::storage_proxy>& proxy,
+                const sstring& ks_name,
+                const sstring& cf_name);
+
+// Returns a slice of given system table.
+// Intended to be used by code which is not performance critical.
+future<lw_shared_ptr<query::result_set>> query(
+    distributed<service::storage_proxy>& proxy,
+    const sstring& ks_name,
+    const sstring& cf_name,
+    const dht::decorated_key& key,
+    query::clustering_range row_ranges = query::clustering_range::make_open_ended_both_sides());
+
 
 /**
  * Return a map of IP addresses containing a map of dc and rack info

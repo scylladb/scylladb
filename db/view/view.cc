@@ -63,8 +63,8 @@ cql3::statements::select_statement& view_info::select_statement() const {
     if (!_select_statement) {
         std::vector<sstring_view> included;
         if (!include_all_columns()) {
-            included.reserve(_schema.all_columns_in_select_order().size());
-            boost::transform(_schema.all_columns_in_select_order(), std::back_inserter(included), std::mem_fn(&column_definition::name_as_text));
+            included.reserve(_schema.all_columns().size());
+            boost::transform(_schema.all_columns(), std::back_inserter(included), std::mem_fn(&column_definition::name_as_text));
         }
         auto raw = cql3::util::build_select_statement(base_name(), where_clause(), std::move(included));
         raw->prepare_keyspace(_schema.ks_name());

@@ -1463,12 +1463,11 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         mutation m(key, s);
 
-        auto c_key = clustering_key::make_empty();
-
         const column_definition& cl1 = *s->get_column_definition("cl1");
-        m.set_clustered_cell(c_key, cl1, make_atomic_cell(bytes_type->decompose(data_value(to_bytes("cl1")))));
+
+        m.set_static_cell(cl1, make_atomic_cell(bytes_type->decompose(data_value(to_bytes("cl1")))));
         const column_definition& cl2 = *s->get_column_definition("cl2");
-        m.set_clustered_cell(c_key, cl2, make_atomic_cell(bytes_type->decompose(data_value(to_bytes("cl2")))));
+        m.set_static_cell(cl2, make_atomic_cell(bytes_type->decompose(data_value(to_bytes("cl2")))));
         mtp->apply(std::move(m));
 
         auto sst = make_lw_shared<sstable>(s, "tests/sstables/tests-temporary", 39, la, big);
@@ -1478,10 +1477,9 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
                     return sstp->read_row(s, key).then([] (auto sm) {
                         return mutation_from_streamed_mutation(std::move(sm));
                     }).then([sstp, s] (auto mutation) {
-                        auto& mp = mutation->partition();
-                        auto row = mp.clustered_row(*s, clustering_key::make_empty());
-                        match_live_cell(row.cells(), *s, "cl1", data_value(data_value(to_bytes("cl1"))));
-                        match_live_cell(row.cells(), *s, "cl2", data_value(data_value(to_bytes("cl2"))));
+                        auto row = mutation->partition().static_row();
+                        match_live_cell(row, *s, "cl1", data_value(data_value(to_bytes("cl1"))));
+                        match_live_cell(row, *s, "cl2", data_value(data_value(to_bytes("cl2"))));
                         return make_ready_future<>();
                     });
                 });

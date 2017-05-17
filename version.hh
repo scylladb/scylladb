@@ -37,7 +37,7 @@ public:
     }
 
     static version current() {
-        static version v(2, 2, 8);
+        static version v(3, 0, 8);
         return v;
     }
 

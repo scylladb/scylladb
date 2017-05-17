@@ -40,6 +40,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include <unordered_map>
+#include <experimental/optional>
 #include "bytes.hh"
 #include "types.hh"
 #include "transport/messages/result_message_base.hh"
@@ -68,6 +69,14 @@ public:
         T get_as(const sstring& name) const {
             return value_cast<T>(data_type_for<T>()->deserialize(get_blob(name)));
         }
+        template<typename T>
+        std::experimental::optional<T> get_opt(const sstring& name) const {
+            return has(name) ? get_as<T>(name) : std::experimental::optional<T>{};
+        }
+        template<typename T>
+        T get_or(const sstring& name, T t) const {
+            return has(name) ? get_as<T>(name) : t;
+        }
         // this could maybe be done as an overload of get_as (or something), but that just
         // muddles things for no real gain. Let user (us) attempt to know what he is doing instead.
         template<typename K, typename V, typename Iter>
@@ -89,6 +98,20 @@ public:
                         data_type_for<V>()) const {
             std::unordered_map<K, V, Rest...> res;
             get_map_data<K, V>(name, std::inserter(res, res.end()), keytype, valtype);
+            return res;
+        }
+        template<typename V, typename Iter>
+        void get_list_data(const sstring& name, Iter out, data_type valtype = data_type_for<V>()) const {
+            auto vec =
+                    value_cast<list_type_impl::native_type>(
+                            list_type_impl::get_instance(valtype, false)->deserialize(
+                                    get_blob(name)));
+            std::transform(vec.begin(), vec.end(), out, [](auto& v) { return value_cast<V>(v); });
+        }
+        template<typename V, typename ... Rest>
+        std::vector<V, Rest...> get_list(const sstring& name, data_type valtype = data_type_for<V>()) const {
+            std::vector<V, Rest...> res;
+            get_list_data<V>(name, std::back_inserter(res), valtype);
             return res;
         }
         template<typename V, typename Iter>

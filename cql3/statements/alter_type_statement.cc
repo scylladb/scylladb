@@ -105,12 +105,12 @@ void alter_type_statement::do_announce_migration(database& db, ::keyspace& ks, b
     for (auto&& schema : ks.metadata()->cf_meta_data() | boost::adaptors::map_values) {
         auto cfm = schema_builder(schema);
         bool modified = false;
-        for (auto&& column : schema->all_columns() | boost::adaptors::map_values) {
-            auto t_opt = column->type->update_user_type(updated);
+        for (auto&& column : schema->all_columns()) {
+            auto t_opt = column.type->update_user_type(updated);
             if (t_opt) {
                 modified = true;
                 // We need to update this column
-                cfm.with_altered_column_type(column->name(), *t_opt);
+                cfm.with_altered_column_type(column.name(), *t_opt);
             }
         }
         if (modified) {

@@ -24,6 +24,26 @@
 
 namespace cql3 {
 
+sstring cql3_type::to_string() const {
+    if (_type->is_user_type() || _type->is_tuple()) {
+        return "frozen<" + _name + ">";
+    }
+    return _name;
+}
+
+shared_ptr<cql3_type> cql3_type::raw::prepare(database& db, const sstring& keyspace) {
+    try {
+        auto&& ks = db.find_keyspace(keyspace);
+        return prepare_internal(keyspace, ks.metadata()->user_types());
+    } catch (no_such_keyspace& nsk) {
+        throw exceptions::invalid_request_exception("Unknown keyspace " + keyspace);
+    }
+}
+
+bool cql3_type::raw::references_user_type(const sstring& name) const {
+    return false;
+}
+
 class cql3_type::raw_type : public raw {
 private:
     shared_ptr<cql3_type> _type;
@@ -33,6 +53,9 @@ public:
     { }
 public:
     virtual shared_ptr<cql3_type> prepare(database& db, const sstring& keyspace) {
+        return _type;
+    }
+    shared_ptr<cql3_type> prepare_internal(const sstring&, lw_shared_ptr<user_types_metadata>) override {
         return _type;
     }
 
@@ -76,7 +99,7 @@ public:
         return true;
     }
 
-    virtual shared_ptr<cql3_type> prepare(database& db, const sstring& keyspace) override {
+    virtual shared_ptr<cql3_type> prepare_internal(const sstring& keyspace, lw_shared_ptr<user_types_metadata> user_types) override {
         assert(_values); // "Got null values type for a collection";
 
         if (!_frozen && _values->supports_freezing() && !_values->_frozen) {
@@ -93,14 +116,18 @@ public:
         }
 
         if (_kind == &collection_type_impl::kind::list) {
-            return make_shared(cql3_type(to_string(), list_type_impl::get_instance(_values->prepare(db, keyspace)->get_type(), !_frozen), false));
+            return make_shared(cql3_type(to_string(), list_type_impl::get_instance(_values->prepare_internal(keyspace, user_types)->get_type(), !_frozen), false));
         } else if (_kind == &collection_type_impl::kind::set) {
-            return make_shared(cql3_type(to_string(), set_type_impl::get_instance(_values->prepare(db, keyspace)->get_type(), !_frozen), false));
+            return make_shared(cql3_type(to_string(), set_type_impl::get_instance(_values->prepare_internal(keyspace, user_types)->get_type(), !_frozen), false));
         } else if (_kind == &collection_type_impl::kind::map) {
             assert(_keys); // "Got null keys type for a collection";
-            return make_shared(cql3_type(to_string(), map_type_impl::get_instance(_keys->prepare(db, keyspace)->get_type(), _values->prepare(db, keyspace)->get_type(), !_frozen), false));
+            return make_shared(cql3_type(to_string(), map_type_impl::get_instance(_keys->prepare_internal(keyspace, user_types)->get_type(), _values->prepare_internal(keyspace, user_types)->get_type(), !_frozen), false));
         }
         abort();
+    }
+
+    bool references_user_type(const sstring& name) const override {
+        return (_keys && _keys->references_user_type(name)) || _values->references_user_type(name);
     }
 
     virtual sstring to_string() const override {
@@ -132,7 +159,7 @@ public:
         _frozen = true;
     }
 
-    virtual shared_ptr<cql3_type> prepare(database& db, const sstring& keyspace) override {
+    virtual shared_ptr<cql3_type> prepare_internal(const sstring& keyspace, lw_shared_ptr<user_types_metadata> user_types) override {
         if (_name.has_keyspace()) {
             // The provided keyspace is the one of the current statement this is part of. If it's different from the keyspace of
             // the UTName, we reject since we want to limit user types to their own keyspace (see #6643)
@@ -144,23 +171,23 @@ public:
         } else {
             _name.set_keyspace(keyspace);
         }
-
+        if (!user_types) {
+            // bootstrap mode.
+            throw exceptions::invalid_request_exception(sprint("Unknown type %s", _name));
+        }
         try {
-            auto&& ks = db.find_keyspace(_name.get_keyspace());
-            try {
-                auto&& type = ks.metadata()->user_types()->get_type(_name.get_user_type_name());
-                if (!_frozen) {
-                    throw exceptions::invalid_request_exception("Non-frozen User-Defined types are not supported, please use frozen<>");
-                }
-                return make_shared<cql3_type>(_name.to_string(), std::move(type));
-            } catch (std::out_of_range& e) {
-                throw exceptions::invalid_request_exception(sprint("Unknown type %s", _name));
+            auto&& type = user_types->get_type(_name.get_user_type_name());
+            if (!_frozen) {
+                throw exceptions::invalid_request_exception("Non-frozen User-Defined types are not supported, please use frozen<>");
             }
-        } catch (no_such_keyspace& nsk) {
-            throw exceptions::invalid_request_exception("Unknown keyspace " + _name.get_keyspace());
+            return make_shared<cql3_type>(_name.to_string(), std::move(type));
+        } catch (std::out_of_range& e) {
+            throw exceptions::invalid_request_exception(sprint("Unknown type %s", _name));
         }
     }
-
+    bool references_user_type(const sstring& name) const override {
+        return _name.get_string_type_name() == name;
+    }
     virtual bool supports_freezing() const override {
         return true;
     }
@@ -191,7 +218,7 @@ public:
         }
         _frozen = true;
     }
-    virtual shared_ptr<cql3_type> prepare(database& db, const sstring& keyspace) override {
+    virtual shared_ptr<cql3_type> prepare_internal(const sstring& keyspace, lw_shared_ptr<user_types_metadata> user_types) override {
         if (!_frozen) {
             freeze();
         }
@@ -200,10 +227,17 @@ public:
             if (t->is_counter()) {
                 throw exceptions::invalid_request_exception("Counters are not allowed inside tuples");
             }
-            ts.push_back(t->prepare(db, keyspace)->get_type());
+            ts.push_back(t->prepare_internal(keyspace, user_types)->get_type());
         }
         return make_cql3_tuple_type(tuple_type_impl::get_instance(std::move(ts)));
     }
+
+    bool references_user_type(const sstring& name) const override {
+        return std::any_of(_types.begin(), _types.end(), [&name](auto t) {
+            return t->references_user_type(name);
+        });
+    }
+
     virtual sstring to_string() const override {
         return sprint("tuple<%s>", join(", ", _types));
     }
@@ -271,6 +305,7 @@ thread_local shared_ptr<cql3_type> cql3_type::bigint = make("bigint", long_type,
 thread_local shared_ptr<cql3_type> cql3_type::blob = make("blob", bytes_type, cql3_type::kind::BLOB);
 thread_local shared_ptr<cql3_type> cql3_type::boolean = make("boolean", boolean_type, cql3_type::kind::BOOLEAN);
 thread_local shared_ptr<cql3_type> cql3_type::double_ = make("double", double_type, cql3_type::kind::DOUBLE);
+thread_local shared_ptr<cql3_type> cql3_type::empty = make("empty", empty_type, cql3_type::kind::EMPTY);
 thread_local shared_ptr<cql3_type> cql3_type::float_ = make("float", float_type, cql3_type::kind::FLOAT);
 thread_local shared_ptr<cql3_type> cql3_type::int_ = make("int", int32_type, cql3_type::kind::INT);
 thread_local shared_ptr<cql3_type> cql3_type::smallint = make("smallint", short_type, cql3_type::kind::SMALLINT);
@@ -297,6 +332,7 @@ cql3_type::values() {
         cql3_type::counter,
         cql3_type::decimal,
         cql3_type::double_,
+        cql3_type::empty,
         cql3_type::float_,
         cql3_type::inet,
         cql3_type::int_,

@@ -1277,6 +1277,7 @@ public:
 
     bool update_column_family(schema_ptr s);
     future<> drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func);
+    void remove(const column_family&);
 
     const logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_manager.region_group();
@@ -1308,6 +1309,7 @@ public:
     static future<> populate_column_family(distributed<database>& db, sstring sstdir, sstring ks, sstring cf);
     static future<> populate_keyspace(distributed<database>& db, sstring datadir, sstring ks_name);
     static future<> init_system_keyspace(distributed<database>& db);
+    static future<> ensure_system_table_directories(distributed<database>& db);
     static future<> init_non_system_keyspaces(distributed<database>& db, distributed<service::storage_proxy>& proxy);
 };
 

@@ -61,6 +61,7 @@ const sstring cf_prop_defs::KW_MEMTABLE_FLUSH_PERIOD = "memtable_flush_period_in
 
 const sstring cf_prop_defs::KW_COMPACTION = "compaction";
 const sstring cf_prop_defs::KW_COMPRESSION = "compression";
+const sstring cf_prop_defs::KW_CRC_CHECK_CHANCE = "crc_check_chance";
 
 const sstring cf_prop_defs::COMPACTION_STRATEGY_CLASS_KEY = "class";
 
@@ -76,7 +77,7 @@ void cf_prop_defs::validate() {
         KW_GCGRACESECONDS, KW_CACHING, KW_DEFAULT_TIME_TO_LIVE,
         KW_MIN_INDEX_INTERVAL, KW_MAX_INDEX_INTERVAL, KW_SPECULATIVE_RETRY,
         KW_BF_FP_CHANCE, KW_MEMTABLE_FLUSH_PERIOD, KW_COMPACTION,
-        KW_COMPRESSION,
+        KW_COMPRESSION, KW_CRC_CHECK_CHANCE
     });
     static std::set<sstring> obsolete_keywords({
         sstring("index_interval"),

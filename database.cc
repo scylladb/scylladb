@@ -78,6 +78,14 @@ using namespace std::chrono_literals;
 
 logging::logger dblog("database");
 
+static const std::unordered_set<sstring> system_keyspaces = {
+                db::system_keyspace::NAME, db::schema_tables::NAME
+};
+
+static bool is_system_keyspace(const sstring& name) {
+    return system_keyspaces.find(name) != system_keyspaces.end();
+}
+
 // Slight extension to the flush_queue type.
 class column_family::memtable_flush_queue : public utils::flush_queue<db::replay_position> {
 public:
@@ -2131,7 +2139,7 @@ future<> distributed_loader::populate_keyspace(distributed<database>& db, sstrin
 static future<> populate(distributed<database>& db, sstring datadir) {
     return lister::scan_dir(datadir, { directory_entry_type::directory }, [&db] (lister::path datadir, directory_entry de) {
         auto& ks_name = de.name;
-        if (ks_name == "system") {
+        if (is_system_keyspace(ks_name)) {
             return make_ready_future<>();
         }
         return distributed_loader::populate_keyspace(db, datadir.native(), ks_name);
@@ -2140,14 +2148,14 @@ static future<> populate(distributed<database>& db, sstring datadir) {
 
 template <typename Func>
 static future<>
-do_parse_system_tables(distributed<service::storage_proxy>& proxy, const sstring& _cf_name, Func&& func) {
+do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring& _cf_name, Func&& func) {
     using namespace db::schema_tables;
     static_assert(std::is_same<future<>, std::result_of_t<Func(schema_result_value_type&)>>::value,
                   "bad Func signature");
 
 
     auto cf_name = make_lw_shared<sstring>(_cf_name);
-    return db::system_keyspace::query(proxy, *cf_name).then([] (auto rs) {
+    return db::system_keyspace::query(proxy, db::schema_tables::NAME, *cf_name).then([] (auto rs) {
         auto names = std::set<sstring>();
         for (auto& r : rs->rows()) {
             auto keyspace_name = r.template get_nonnull<sstring>("keyspace_name");
@@ -2156,7 +2164,7 @@ do_parse_system_tables(distributed<service::storage_proxy>& proxy, const sstring
         return std::move(names);
     }).then([&proxy, cf_name, func = std::forward<Func>(func)] (std::set<sstring>&& names) mutable {
         return parallel_for_each(names.begin(), names.end(), [&proxy, cf_name, func = std::forward<Func>(func)] (sstring name) mutable {
-            if (name == "system") {
+            if (is_system_keyspace(name)) {
                 return make_ready_future<>();
             }
 
@@ -2177,11 +2185,11 @@ do_parse_system_tables(distributed<service::storage_proxy>& proxy, const sstring
 
 future<> database::parse_system_tables(distributed<service::storage_proxy>& proxy) {
     using namespace db::schema_tables;
-    return do_parse_system_tables(proxy, db::schema_tables::KEYSPACES, [this] (schema_result_value_type &v) {
+    return do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, [this] (schema_result_value_type &v) {
         auto ksm = create_keyspace_from_schema_partition(v);
         return create_keyspace(ksm);
     }).then([&proxy, this] {
-        return do_parse_system_tables(proxy, db::schema_tables::USERTYPES, [this, &proxy] (schema_result_value_type &v) {
+        return do_parse_schema_tables(proxy, db::schema_tables::TYPES, [this, &proxy] (schema_result_value_type &v) {
             auto&& user_types = create_types_from_schema_partition(v);
             auto& ks = this->find_keyspace(v.first);
             for (auto&& type : user_types) {
@@ -2190,7 +2198,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
             return make_ready_future<>();
         });
     }).then([&proxy, this] {
-        return do_parse_system_tables(proxy, db::schema_tables::VIEWS, [this, &proxy] (schema_result_value_type &v) {
+        return do_parse_schema_tables(proxy, db::schema_tables::VIEWS, [this, &proxy] (schema_result_value_type &v) {
             return create_views_from_schema_partition(proxy, v.second).then([this] (std::vector<view_ptr> views) {
                 return parallel_for_each(views.begin(), views.end(), [this] (auto&& v) {
                     return this->add_column_family_and_make_directory(v);
@@ -2198,7 +2206,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
             });
         });
     }).then([&proxy, this] {
-        return do_parse_system_tables(proxy, db::schema_tables::COLUMNFAMILIES, [this, &proxy] (schema_result_value_type &v) {
+        return do_parse_schema_tables(proxy, db::schema_tables::TABLES, [this, &proxy] (schema_result_value_type &v) {
             return create_tables_from_tables_partition(proxy, v.second).then([this] (std::map<sstring, schema_ptr> tables) {
                 return parallel_for_each(tables.begin(), tables.end(), [this] (auto& t) {
                     return this->add_column_family_and_make_directory(t.second);
@@ -2232,20 +2240,33 @@ future<> distributed_loader::init_system_keyspace(distributed<database>& db) {
         // FIXME support multiple directories
         const auto& cfg = db.local().get_config();
         auto data_dir = cfg.data_file_directories()[0];
-        io_check(touch_directory, data_dir + "/" + db::system_keyspace::NAME).get();
-        distributed_loader::populate_keyspace(db, data_dir, db::system_keyspace::NAME).get();
 
-        db.invoke_on_all([] (database& db) {
-            auto& ks = db.find_keyspace(db::system_keyspace::NAME);
-            for (auto& pair : ks.metadata()->cf_meta_data()) {
-                auto cfm = pair.second;
-                auto& cf = db.find_column_family(cfm);
-                cf.mark_ready_for_writes();
-            }
-            return make_ready_future<>();
-        }).get();
+        for (auto ksname : system_keyspaces) {
+            io_check(touch_directory, data_dir + "/" + ksname).get();
+            distributed_loader::populate_keyspace(db, data_dir, ksname).get();
+
+            db.invoke_on_all([ksname] (database& db) {
+                auto& ks = db.find_keyspace(ksname);
+                for (auto& pair : ks.metadata()->cf_meta_data()) {
+                    auto cfm = pair.second;
+                    auto& cf = db.find_column_family(cfm);
+                    cf.mark_ready_for_writes();
+                }
+                return make_ready_future<>();
+            }).get();
+        }
     });
- }
+}
+
+future<> distributed_loader::ensure_system_table_directories(distributed<database>& db) {
+    return parallel_for_each(system_keyspaces, [&db](sstring ksname) {
+        auto& ks = db.local().find_keyspace(ksname);
+        return parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
+            auto cfm = pair.second;
+            return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
+        });
+    });
+}
 
 future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db, distributed<service::storage_proxy>& proxy) {
     return seastar::async([&db, &proxy] {
@@ -2367,14 +2388,12 @@ bool database::update_column_family(schema_ptr new_schema) {
     return columns_changed;
 }
 
-future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf) {
-    auto uuid = find_uuid(ks_name, cf_name);
-    auto& ks = find_keyspace(ks_name);
-    auto cf = _column_families.at(uuid);
-    auto&& s = cf->schema();
-    _column_families.erase(uuid);
+void database::remove(const column_family& cf) {
+    auto s = cf.schema();
+    auto& ks = find_keyspace(s->ks_name());
+    _column_families.erase(s->id());
     ks.metadata()->remove_column_family(s);
-    _ks_cf_to_uuid.erase(std::make_pair(ks_name, cf_name));
+    _ks_cf_to_uuid.erase(std::make_pair(s->ks_name(), s->cf_name()));
     if (s->is_view()) {
         try {
             find_column_family(s->view_info()->base_id()).remove_view(view_ptr(s));
@@ -2382,6 +2401,13 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
             // Drop view mutations received after base table drop.
         }
     }
+}
+
+future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf) {
+    auto uuid = find_uuid(ks_name, cf_name);
+    auto cf = _column_families.at(uuid);
+    remove(*cf);
+    auto& ks = find_keyspace(ks_name);
     return truncate(ks, *cf, std::move(tsf)).then([this, cf] {
         return cf->stop();
     }).then([this, cf] {
@@ -2424,7 +2450,7 @@ bool database::has_keyspace(const sstring& name) const {
 std::vector<sstring>  database::get_non_system_keyspaces() const {
     std::vector<sstring> res;
     for (auto const &i : _keyspaces) {
-        if (i.first != db::system_keyspace::NAME) {
+        if (!is_system_keyspace(i.first)) {
             res.push_back(i.first);
         }
     }
@@ -2436,7 +2462,7 @@ std::vector<lw_shared_ptr<column_family>> database::get_non_system_column_famili
         get_column_families()
             | boost::adaptors::map_values
             | boost::adaptors::filtered([](const lw_shared_ptr<column_family>& cf) {
-                return cf->schema()->ks_name() != db::system_keyspace::NAME;
+                return !is_system_keyspace(cf->schema()->ks_name());
             }));
 }
 
@@ -2955,7 +2981,7 @@ void column_family::apply_streaming_big_mutation(schema_ptr m_schema, utils::UUI
 
 void
 column_family::check_valid_rp(const db::replay_position& rp) const {
-    if (rp < _highest_flushed_rp) {
+    if (rp != db::replay_position() && rp < _highest_flushed_rp) {
         throw replay_position_reordered_exception();
     }
 }

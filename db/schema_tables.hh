@@ -59,15 +59,29 @@ namespace schema_tables {
 using schema_result = std::map<sstring, lw_shared_ptr<query::result_set>>;
 using schema_result_value_type = std::pair<sstring, lw_shared_ptr<query::result_set>>;
 
-static constexpr auto KEYSPACES = "schema_keyspaces";
-static constexpr auto COLUMNFAMILIES = "schema_columnfamilies";
-static constexpr auto COLUMNS = "schema_columns";
-static constexpr auto TRIGGERS = "schema_triggers";
-static constexpr auto USERTYPES = "schema_usertypes";
-static constexpr auto FUNCTIONS = "schema_functions";
-static constexpr auto AGGREGATES = "schema_aggregates";
+namespace v3 {
+
+static constexpr auto NAME = "system_schema";
+static constexpr auto KEYSPACES = "keyspaces";
+static constexpr auto TABLES = "tables";
+static constexpr auto COLUMNS = "columns";
+static constexpr auto DROPPED_COLUMNS = "dropped_columns";
+static constexpr auto TRIGGERS = "triggers";
 static constexpr auto VIEWS = "views";
+static constexpr auto TYPES = "types";
+static constexpr auto FUNCTIONS = "functions";
+static constexpr auto AGGREGATES = "aggregates";
 static constexpr auto INDEXES = "indexes";
+
+schema_ptr columns();
+schema_ptr dropped_columns();
+schema_ptr indexes();
+schema_ptr tables();
+schema_ptr views();
+
+}
+
+using namespace v3;
 
 extern std::vector<const char*> ALL;
 
@@ -86,8 +100,6 @@ future<mutation> read_keyspace_mutation(distributed<service::storage_proxy>&, co
 future<> merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations);
 
 future<> merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush);
-
-future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush);
 
 future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after);
 
@@ -118,42 +130,9 @@ future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distri
 
 future<std::vector<mutation>> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp);
 
-future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table);
-
-future<schema_ptr> create_table_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row);
-
-void prepare_builder_from_table_row(schema_builder& builder, const query::result_set_row& table_row);
-
 schema_ptr create_table_from_mutations(schema_mutations, std::experimental::optional<table_schema_version> version = {});
 
-void drop_column_from_schema_mutation(schema_ptr table, const column_definition& column, long timestamp, std::vector<mutation>& mutations);
-void drop_index_from_schema_mutation(schema_ptr table, const index_metadata& column, long timestamp, std::vector<mutation>& mutations);
-
-std::vector<column_definition> create_columns_from_column_rows(const query::result_set& rows,
-                                                               const sstring& keyspace,
-                                                               const sstring& table,/*,
-                                                               AbstractType<?> rawComparator, */
-                                                               bool is_super);
-
-column_definition create_column_from_column_row(const query::result_set_row& row,
-                                                sstring keyspace,
-                                                sstring table, /*,
-                                                AbstractType<?> rawComparator, */
-                                                bool is_super);
-
-std::vector<index_metadata> create_indices_from_index_rows(const query::result_set& rows,
-                                                           const sstring& keyspace,
-                                                           const sstring& table);
-
-index_metadata create_index_from_index_row(const query::result_set_row& row,
-                                                sstring keyspace,
-                                                sstring table);
-
-void add_column_to_schema_mutation(schema_ptr table, const column_definition& column, api::timestamp_type timestamp, mutation& mutation);
-
-void add_index_to_schema_mutation(schema_ptr table, const index_metadata& index, api::timestamp_type timestamp, mutation& mutation);
-
-view_ptr create_view_from_mutations(schema_mutations sm, std::experimental::optional<table_schema_version> version = {});
+view_ptr create_view_from_mutations(schema_mutations, std::experimental::optional<table_schema_version> version = {});
 
 future<std::vector<view_ptr>> create_views_from_schema_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result);
 
@@ -173,11 +152,6 @@ data_type parse_type(sstring str);
 
 sstring serialize_index_kind(index_metadata_kind kind);
 index_metadata_kind deserialize_index_kind(sstring kind);
-
-schema_ptr columns();
-schema_ptr columnfamilies();
-schema_ptr views();
-schema_ptr indexes();
 
 template<typename Hasher>
 void feed_hash_for_schema_digest(Hasher& h, const mutation& m) {
