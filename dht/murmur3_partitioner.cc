@@ -24,8 +24,39 @@
 #include "sstables/key.hh"
 #include "utils/class_registrator.hh"
 #include <boost/lexical_cast.hpp>
+#include <boost/range/irange.hpp>
 
 namespace dht {
+
+inline
+unsigned
+murmur3_partitioner::zero_based_shard_of(uint64_t token, unsigned shards, unsigned sharding_ignore_msb_bits) {
+    // This is the master function, the inverses have to match it wrt. rounding errors.
+    token <<= sharding_ignore_msb_bits;
+    // Treat "token" as a fraction in the interval [0, 1); compute:
+    //    shard = floor((0.token) * shards)
+    return (uint128_t(token) * shards) >> 64;
+}
+
+std::vector<uint64_t>
+murmur3_partitioner::init_zero_based_shard_start(unsigned shards, unsigned sharding_ignore_msb_bits) {
+    // computes the inverse of zero_based_shard_of(). ret[s] will return the smallest token that belongs to s
+    if (shards == 1) {
+        // Avoid the while loops below getting confused finding the "edge" between two nonexistent shards
+        return std::vector<uint64_t>(1, uint64_t(0));
+    }
+    auto ret = std::vector<uint64_t>(shards);
+    for (auto s : boost::irange<unsigned>(0, shards)) {
+        uint64_t token = (uint128_t(s) << 64) / shards;
+        token >>= sharding_ignore_msb_bits;   // leftmost bits are ignored by zero_based_shard_of
+        // token is the start of the next shard, and can be slightly before due to rounding errors; adjust
+        while (zero_based_shard_of(token, shards, sharding_ignore_msb_bits) != s) {
+            ++token;
+        }
+        ret[s] = token;
+    }
+    return ret;
+}
 
 inline
 int64_t
@@ -86,6 +117,16 @@ inline int64_t long_token(const token& t) {
     auto ptr = t._data.begin();
     auto lp = unaligned_cast<const int64_t *>(ptr);
     return net::ntoh(*lp);
+}
+
+uint64_t
+murmur3_partitioner::unbias(const token& t) const {
+    return uint64_t(long_token(t)) + uint64_t(std::numeric_limits<int64_t>::min());
+}
+
+token
+murmur3_partitioner::bias(uint64_t n) const {
+    return get_token(n - uint64_t(std::numeric_limits<int64_t>::min()));
 }
 
 sstring murmur3_partitioner::to_sstring(const token& t) const {
@@ -210,46 +251,43 @@ murmur3_partitioner::shard_of(const token& t) const {
         case token::kind::after_all_keys:
             return _shard_count - 1;
         case token::kind::key:
-            int64_t l = long_token(t);
-            // treat l as a fraction between 0 and 1 and use 128-bit arithmetic to
-            // divide that range evenly among shards:
-            uint64_t adjusted = uint64_t(l) + uint64_t(std::numeric_limits<int64_t>::min());
-            adjusted <<= _sharding_ignore_msb_bits;
-            return (__int128(adjusted) * _shard_count) >> 64;
+            uint64_t adjusted = unbias(t);
+            return zero_based_shard_of(adjusted, _shard_count, _sharding_ignore_msb_bits);
     }
     assert(0);
 }
 
 token
-murmur3_partitioner::token_for_next_shard(const token& t) const {
+murmur3_partitioner::token_for_next_shard(const token& t, shard_id shard, unsigned spans) const {
+    uint64_t n = 0;
     switch (t._kind) {
         case token::kind::before_all_keys:
-            return token_for_next_shard(get_token(std::numeric_limits<int64_t>::min() + 1));
+            break;
         case token::kind::after_all_keys:
             return maximum_token();
         case token::kind::key:
-            if (long_token(t) == std::numeric_limits<int64_t>::min()) {
-                return token_for_next_shard(get_token(std::numeric_limits<int64_t>::min() + 1));
-            }
-            using uint128 = unsigned __int128;
-            auto s = shard_of(t) + 1;
-            s = s < _shard_count ? s : 0;
-            int64_t l = long_token(t);
-            // treat l as a fraction between 0 and 1 and use 128-bit arithmetic to
-            // divide that range evenly among shards:
-            uint64_t adjusted = uint64_t(l) + uint64_t(std::numeric_limits<int64_t>::min());
-            auto mul = align_up(uint128(adjusted) * _shard_count + 1, uint128(1) << (64 - _sharding_ignore_msb_bits));
-            if (mul >> 64 == _shard_count) {
-                return maximum_token();
-            }
-            uint64_t e = mul / _shard_count;
-            while (((uint128(e << _sharding_ignore_msb_bits) * _shard_count) >> 64) != s) {
-                // division will round down, so correct for it
-                ++e;
-            }
-            return get_token(e + uint64_t(std::numeric_limits<int64_t>::min()));
+            n = unbias(t);
+            break;
     }
-    assert(0);
+    auto s = zero_based_shard_of(n, _shard_count, _sharding_ignore_msb_bits);
+
+    if (!_sharding_ignore_msb_bits) {
+        // This ought to be the same as the else branch, but avoids shifts by 64
+        n = _shard_start[shard];
+        if (spans > 1 || shard <= s) {
+            return maximum_token();
+        }
+    } else {
+        auto left_part = n >> (64 - _sharding_ignore_msb_bits);
+        left_part += spans - unsigned(shard > s);
+        if (left_part >= (1u << _sharding_ignore_msb_bits)) {
+            return maximum_token();
+        }
+        left_part <<= (64 - _sharding_ignore_msb_bits);
+        auto right_part = _shard_start[shard];
+        n = left_part | right_part;
+    }
+    return bias(n);
 }
 
 

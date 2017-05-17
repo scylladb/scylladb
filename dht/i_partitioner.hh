@@ -180,7 +180,10 @@ public:
 using decorated_key_opt = std::experimental::optional<decorated_key>;
 
 class i_partitioner {
+protected:
+    unsigned _shard_count;
 public:
+    explicit i_partitioner(unsigned shard_count) : _shard_count(shard_count) {}
     virtual ~i_partitioner() {}
 
     /**
@@ -272,7 +275,7 @@ public:
     /**
      * @return name of partitioner.
      */
-    virtual const sstring name() = 0;
+    virtual const sstring name() const = 0;
 
     /**
      * Calculates the shard that handles a particular token.
@@ -280,9 +283,17 @@ public:
     virtual unsigned shard_of(const token& t) const = 0;
 
     /**
-     * Gets the first token greater than `t` that is not in the same shard as `t`.
+     * Gets the first token greater than `t` that is in shard `shard`, and is a shard boundary (its first token).
+     *
+     * If the `spans` parameter is greater than zero, the result is the same as if the function
+     * is called `spans` times, each time applied to its return value, but efficiently. This allows
+     * selecting ranges that include multiple round trips around the 0..smp::count-1 shard span:
+     *
+     *     token_for_next_shard(t, shard, spans) == token_for_next_shard(token_for_shard(t, shard, 1), spans - 1)
+     *
+     * On overflow, maximum_token() is returned.
      */
-    virtual token token_for_next_shard(const token& t) const = 0;
+    virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const = 0;
 
     /**
      * Gets the first shard of the minimum token.
@@ -313,6 +324,13 @@ public:
      */
     bool is_less(const token& t1, const token& t2) const {
         return tri_compare(t1, t2) < 0;
+    }
+
+    /**
+     * @return number of shards configured for this partitioner
+     */
+    unsigned shard_count() const {
+        return _shard_count;
     }
 
     friend bool operator==(const token& t1, const token& t2);
@@ -572,6 +590,44 @@ struct ring_position_range_and_shard_and_element : ring_position_range_and_shard
     unsigned element;
 };
 
+struct ring_position_exponential_sharder_result {
+    std::vector<ring_position_range_and_shard> per_shard_ranges;
+    bool inorder = true;
+};
+
+// given a ring_position range, generates exponentially increasing
+// sets per-shard sub-ranges
+class ring_position_exponential_sharder {
+    const i_partitioner& _partitioner;
+    partition_range _range;
+    unsigned _spans_per_iteration = 1;
+    unsigned _first_shard = 0;
+    unsigned _next_shard = 0;
+    std::vector<stdx::optional<token>> _last_ends; // index = shard
+public:
+    explicit ring_position_exponential_sharder(partition_range pr);
+    explicit ring_position_exponential_sharder(const i_partitioner& partitioner, partition_range pr);
+    stdx::optional<ring_position_exponential_sharder_result> next(const schema& s);
+};
+
+struct ring_position_exponential_vector_sharder_result : ring_position_exponential_sharder_result {
+    ring_position_exponential_vector_sharder_result(ring_position_exponential_sharder_result rpesr, unsigned element)
+            : ring_position_exponential_sharder_result(std::move(rpesr)), element(element) {}
+    unsigned element; // range within vector from which this result came
+};
+
+
+// given a vector of sorted, disjoint ring_position ranges, generates exponentially increasing
+// sets per-shard sub-ranges.  May be non-exponential when moving from one ring position range to another.
+class ring_position_exponential_vector_sharder {
+    std::deque<nonwrapping_range<ring_position>> _ranges;
+    stdx::optional<ring_position_exponential_sharder> _current_sharder;
+    unsigned _element = 0;
+public:
+    explicit ring_position_exponential_vector_sharder(const std::vector<nonwrapping_range<ring_position>>& ranges);
+    stdx::optional<ring_position_exponential_vector_sharder_result> next(const schema& s);
+};
+
 class ring_position_range_vector_sharder {
     using vec_type = dht::partition_range_vector;
     vec_type _ranges;
@@ -599,6 +655,10 @@ split_range_to_shards(dht::partition_range pr, const schema& s);
 // are also sorted and disjoint.
 std::map<unsigned, dht::partition_range_vector>
 split_ranges_to_shards(const dht::token_range_vector& ranges, const schema& s);
+
+// Intersect a partition_range with a shard and return the the resulting sub-ranges, in sorted order
+std::vector<partition_range> split_range_to_single_shard(const schema& s, const dht::partition_range& pr, shard_id shard);
+std::vector<partition_range> split_range_to_single_shard(const i_partitioner& partitioner, const schema& s, const dht::partition_range& pr, shard_id shard);
 
 } // dht
 

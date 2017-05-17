@@ -1729,14 +1729,12 @@ static
 sharding_metadata
 create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
     auto range = dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
-    auto sharder = dht::ring_position_range_sharder(std::move(range));
     auto sm = sharding_metadata();
-    auto rpras = sharder.next(*schema);
-    while (rpras) {
-        if (rpras->shard == shard) {
+    for (auto&& range : dht::split_range_to_single_shard(*schema, range, shard)) {
+        if (true) { // keep indentation
             // we know left/right are not infinite
-            auto&& left = rpras->ring_range.start()->value();
-            auto&& right = rpras->ring_range.end()->value();
+            auto&& left = range.start()->value();
+            auto&& right = range.end()->value();
             auto&& left_token = left.token();
             auto left_exclusive = !left.has_key() && left.bound() == dht::ring_position::token_bound::end;
             auto&& right_token = right.token();
@@ -1745,7 +1743,6 @@ create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key,
                 {left_exclusive, to_bytes(bytes_view(left_token._data))},
                 {right_exclusive, to_bytes(bytes_view(right_token._data))}});
         }
-        rpras = sharder.next(*schema);
     }
     return sm;
 }

@@ -22,6 +22,7 @@
 #define BOOST_TEST_MODULE core
 
 #include <boost/test/unit_test.hpp>
+#include <boost/algorithm/cxx11/all_of.hpp>
 
 #include "dht/i_partitioner.hh"
 #include "dht/murmur3_partitioner.hh"
@@ -30,6 +31,7 @@
 #include "schema.hh"
 #include "types.hh"
 #include "schema_builder.hh"
+#include "utils/div_ceil.hh"
 
 #include "disk-error-handler.hh"
 #include "simple_schema.hh"
@@ -37,6 +39,16 @@
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
+
+
+template <typename... Args>
+static
+void
+debug(Args&&... args) {
+    if (false) {
+        print(std::forward<Args>(args)...);
+    }
+}
 
 static dht::token token_from_long(uint64_t value) {
     auto t = net::hton(value);
@@ -554,10 +566,11 @@ void test_partitioner_sharding(const dht::i_partitioner& part, unsigned shards, 
         BOOST_REQUIRE_EQUAL(part.shard_of(lim), i % shards);
         if (i != 0) {
             BOOST_REQUIRE_EQUAL(part.shard_of(prev_token(part, lim)), (i - 1) % shards);
-            BOOST_REQUIRE(part.is_equal(lim, part.token_for_next_shard(prev_token(part, lim))));
+            BOOST_REQUIRE(part.is_equal(lim, part.token_for_next_shard(prev_token(part, lim), i % shards)));
         }
         if (i != (shards << ignorebits) - 1) {
-            BOOST_REQUIRE_EQUAL(part.shard_of(part.token_for_next_shard(lim)), (i + 1) % shards);
+            auto next_shard = (i + 1) % shards;
+            BOOST_REQUIRE_EQUAL(part.shard_of(part.token_for_next_shard(lim, next_shard)), next_shard);
         }
     }
 }
@@ -692,3 +705,216 @@ BOOST_AUTO_TEST_CASE(test_byte_ordered_partitioner) {
     test_partitioner_sharding(bop1s, 1, bop1s_shard_limits, prev_token);
 }
 
+
+static
+dht::partition_range
+normalize(dht::partition_range pr) {
+    auto start = pr.start();
+    if (start && start->value().token() == dht::minimum_token()) {
+        start = stdx::nullopt;
+    }
+    auto end = pr.end();
+    if (end && end->value().token() == dht::maximum_token()) {
+        end = stdx::nullopt;
+    }
+    return dht::partition_range(start, end);
+};
+
+static
+void
+test_exponential_sharder(const dht::i_partitioner& part, const schema& s, const dht::partition_range& pr) {
+
+    dht::set_global_partitioner(part.name()); // so we can print tokens, also ring_position_comparator is not global_partitioner() clean
+
+    // Step 1: run the exponential sharder fully, and collect all results
+
+    debug("input range: %s\n", pr);
+    auto results = std::vector<dht::ring_position_exponential_sharder_result>();
+    auto sharder = dht::ring_position_exponential_sharder(part, pr);
+    auto partial_result = sharder.next(s);
+    while (partial_result) {
+        results.push_back(std::move(*partial_result));
+        partial_result = sharder.next(s);
+    }
+
+    // Step 2: "de-exponentialize" the result by fragmenting large ranges
+
+    struct fragmented_sharder_result {
+        bool inorder;
+        struct shard_result {
+            shard_id shard;
+            std::vector<dht::partition_range> ranges;
+        };
+        std::vector<shard_result> shards;
+    };
+    auto fragmented_results = std::vector<fragmented_sharder_result>();
+    for (auto&& partial_result : results) {
+        auto fsr = fragmented_sharder_result();
+        fsr.inorder = partial_result.inorder;
+        debug("looking at partial result\n");
+        for (auto&& per_shard_range : partial_result.per_shard_ranges) {
+            debug("partial_result: looking at %s (shard %d)\n", per_shard_range.ring_range, per_shard_range.shard);
+            auto sr = fragmented_sharder_result::shard_result();
+            sr.shard = per_shard_range.shard;
+            auto sharder = dht::ring_position_range_sharder(part, per_shard_range.ring_range);
+            auto next = sharder.next(s);
+            while (next) {
+                debug("seeing: shard %d frag %s\n", next->shard, next->ring_range);
+                if (next->shard == sr.shard) {
+                    debug("fragmented to %d\n", next->ring_range);
+                    sr.ranges.push_back(std::move(next->ring_range));
+                }
+                next = sharder.next(s);
+            }
+            fsr.shards.push_back(std::move(sr));
+        }
+        fragmented_results.push_back(std::move(fsr));
+    }
+
+    // Step 3: collect all fragmented ranges
+
+    auto all_fragments = std::vector<dht::partition_range>();
+    for (auto&& fr : fragmented_results) {
+        for (auto&& sr : fr.shards) {
+            for (auto&& f : sr.ranges) {
+                all_fragments.push_back(f);
+            }
+        }
+    }
+
+    // Step 4: verify no overlaps
+
+    bool no_overlaps = true;
+    if (all_fragments.size() > 1) {
+        for (auto i : boost::irange<size_t>(1, all_fragments.size() - 1)) {
+            for (auto j : boost::irange<size_t>(0, i)) {
+                no_overlaps &= !all_fragments[i].overlaps(all_fragments[j], dht::ring_position_comparator(s));
+            }
+        }
+    }
+    BOOST_REQUIRE(no_overlaps);  // We OOM if BOOST_REQUIRE() is run in the inner loop
+
+    // Step 5: verify all fragments are contiguous
+
+    auto rplc = dht::ring_position_less_comparator(s);
+    auto rptc = dht::ring_position_comparator(s);
+    boost::sort(all_fragments, [&] (const dht::partition_range& a, const dht::partition_range b) {
+        if (!a.start() || !b.start()) {
+            return unsigned(bool(a.start())) < unsigned(bool(b.start()));
+        } else {
+            return rplc(a.start()->value(), b.start()->value());
+        }
+    });
+    auto not_adjacent = [&] (const dht::partition_range& a, const dht::partition_range b) {
+        return !a.end() || !b.start() || rptc(a.end()->value(), b.start()->value()) != 0;
+    };
+    BOOST_REQUIRE(boost::adjacent_find(all_fragments, not_adjacent) == all_fragments.end());
+
+    // Step 6: verify inorder is accurate; allow a false negative
+
+    for (auto&& fsr : fragmented_results) {
+        auto has_one_fragment = [] (const fragmented_sharder_result::shard_result& sr) {
+            return sr.ranges.size() <= 1;  // the sharder may return a range that does not intersect the shard
+        };
+        BOOST_REQUIRE(!fsr.inorder || boost::algorithm::all_of(fsr.shards, has_one_fragment));
+    }
+
+    // Step 7: verify that the fragmented range matches the input range (since the fragments are
+    //         contiguous, we need only test the edges).
+
+    auto reconstructed = normalize(dht::partition_range(all_fragments.front().start(), all_fragments.back().end()));
+    auto original = normalize(pr);
+    debug("original %s reconstructed %s\n", original, reconstructed);
+    BOOST_REQUIRE(original.contains(reconstructed, rptc) && reconstructed.contains(original, rptc));
+
+    // Step 8: verify exponentiality
+    debug("sizes %d %d\n", results.size(), 1 + log2ceil(div_ceil(all_fragments.size(), part.shard_count())) + log2ceil(part.shard_count()));
+    BOOST_REQUIRE(results.size() <= 1 + log2ceil(div_ceil(all_fragments.size(), part.shard_count())) + log2ceil(part.shard_count()));
+}
+
+static
+void
+test_something_with_some_interesting_ranges_and_partitioners(std::function<void (const dht::i_partitioner&, const schema&, const dht::partition_range&)> func_to_test) {
+    auto s = schema_builder("ks", "cf")
+        .with_column("c1", int32_type, column_kind::partition_key)
+        .with_column("c2", int32_type, column_kind::partition_key)
+        .with_column("v", int32_type)
+        .build();
+    auto some_murmur3_partitioners = {
+            dht::murmur3_partitioner(1, 0),
+            dht::murmur3_partitioner(7, 4),
+            dht::murmur3_partitioner(4, 0),
+            dht::murmur3_partitioner(32, 8),  // More, and we OOM since memory isn't configured
+    };
+    auto some_random_partitioners = {
+            dht::random_partitioner(1),
+            dht::random_partitioner(3),
+    };
+    auto some_byte_ordered_partitioners = {
+            dht::byte_ordered_partitioner(1),
+            dht::byte_ordered_partitioner(7),
+    };
+    auto t1 = token_from_long(int64_t(-0x7fff'ffff'ffff'fffe));
+    auto t2 = token_from_long(int64_t(-1));
+    auto t3 = token_from_long(int64_t(1));
+    auto t4 = token_from_long(int64_t(0x7fff'ffff'ffff'fffe));
+    auto some_murmur3_ranges = {
+            dht::partition_range::make_open_ended_both_sides(),
+            dht::partition_range::make_starting_with(dht::ring_position::starting_at(t1)),
+            dht::partition_range::make_starting_with(dht::ring_position::starting_at(t2)),
+            dht::partition_range::make_starting_with(dht::ring_position::ending_at(t3)),
+            dht::partition_range::make_starting_with(dht::ring_position::starting_at(t4)),
+            dht::partition_range::make_ending_with(dht::ring_position::starting_at(t1)),
+            dht::partition_range::make_ending_with(dht::ring_position::starting_at(t2)),
+            dht::partition_range::make_ending_with(dht::ring_position::starting_at(t3)),
+            dht::partition_range::make_ending_with(dht::ring_position::starting_at(t4)),
+            dht::partition_range(dht::ring_position::starting_at(t2), dht::ring_position::ending_at(t3)),
+            dht::partition_range(dht::ring_position::ending_at(t1), dht::ring_position::starting_at(t4)),
+    };
+    for (auto&& part : some_murmur3_partitioners) {
+        for (auto&& range : some_murmur3_ranges) {
+            func_to_test(part, *s, range);
+        }
+    }
+    for (auto&& part : some_random_partitioners) {
+        func_to_test(part, *s, dht::partition_range::make_open_ended_both_sides());
+    }
+    for (auto&& part : some_byte_ordered_partitioners) {
+        func_to_test(part, *s, dht::partition_range::make_open_ended_both_sides());
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_exponential_sharders) {
+    return test_something_with_some_interesting_ranges_and_partitioners(test_exponential_sharder);
+}
+
+static
+void
+do_test_split_range_to_single_shard(const dht::i_partitioner& part, const schema& s, const dht::partition_range& pr) {
+    dht::set_global_partitioner(part.name()); // so we can print tokens, also ring_position_comparator is not global_partitioner() clean
+
+    for (auto shard : boost::irange(0u, part.shard_count())) {
+        auto ranges = dht::split_range_to_single_shard(part, s, pr, shard);
+        auto sharder = dht::ring_position_range_sharder(part, pr);
+        auto x = sharder.next(s);
+        auto cmp = dht::ring_position_comparator(s);
+        auto reference_ranges = std::vector<dht::partition_range>();
+        while (x) {
+            if (x->shard == shard) {
+                reference_ranges.push_back(std::move(x->ring_range));
+            }
+            x = sharder.next(s);
+        }
+        BOOST_REQUIRE(ranges.size() == reference_ranges.size());
+        for (auto&& rs : boost::combine(ranges, reference_ranges)) {
+            auto&& r1 = normalize(boost::get<0>(rs));
+            auto&& r2 = normalize(boost::get<1>(rs));
+            BOOST_REQUIRE(r1.contains(r2, cmp));
+            BOOST_REQUIRE(r2.contains(r1, cmp));
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_split_range_single_shard) {
+    return test_something_with_some_interesting_ranges_and_partitioners(do_test_split_range_to_single_shard);
+}
