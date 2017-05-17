@@ -1629,7 +1629,7 @@ future<> column_family::populate(sstring sstdir) {
                 return make_ready_future<>();
             });
         }).then([verifier, sstdir, descriptor, this] {
-            return parallel_for_each(*verifier, [sstdir = std::move(sstdir), descriptor, this] (auto v) {
+            return do_for_each(*verifier, [sstdir = std::move(sstdir), descriptor, this, verifier] (auto v) {
                 if (v.second == status::has_temporary_toc_file) {
                     unsigned long gen = v.first;
                     assert(descriptor->version);
