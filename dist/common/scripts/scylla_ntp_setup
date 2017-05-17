@@ -35,6 +35,16 @@ if is_debian_variant; then
     fi
     ntpdate `cat /etc/ntp.conf |egrep "^server"|head -n1|awk '{print $2}'`
     service ntp start
+elif is_gentoo_variant; then
+    emerge -uq net-misc/ntp
+    pidof ntpd &>/dev/null || ntpdate `cat /etc/ntp.conf |grep "^server"|head -n1|awk '{print $2}'`
+    if is_systemd; then
+        systemctl enable sntpd.service
+        systemctl start sntpd.service
+    else
+        rc-update add ntpd default
+        service ntpd start
+    fi
 else
     yum install -y ntp ntpdate || true
     if [ "$DOMAIN" != "" ]; then
