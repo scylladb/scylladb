@@ -7,6 +7,8 @@
 if [ ! -f /sbin/mkfs.xfs ]; then
     if is_debian_variant; then
         apt-get install -y xfsprogs
+    elif is_gentoo_variant; then
+        emerge -uq sys-fs/xfsprogs
     else
         yum install -y xfsprogs
     fi
