@@ -32,7 +32,7 @@ done
 if [ "$ID" = "ubuntu" ] && [ "$VERSION_ID" != "16.04" ]; then
     apt-get remove -y apport-noui
     sysctl -p /etc/sysctl.d/99-scylla.conf
-elif [ "$ID" = "debian" ]; then
+elif [ "$ID" = "debian" ] || [ "$ID" = "gentoo" ]; then
     sysctl -p /etc/sysctl.d/99-scylla.conf
 else
     if [ "$ID" = "ubuntu" ]; then
