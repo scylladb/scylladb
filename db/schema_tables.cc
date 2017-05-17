@@ -1753,9 +1753,11 @@ static void prepare_builder_from_table_row(schema_builder& builder, const query:
     if (table_row.has("compaction")) {
         auto map = get_map<sstring, sstring>(table_row, "compaction");
 
-        if (map.count("class")) {
+        auto i = map.find("class");
+        if (i != map.end()) {
             try {
-                builder.set_compaction_strategy(sstables::compaction_strategy::type(map["class"]));
+                builder.set_compaction_strategy(sstables::compaction_strategy::type(i->second));
+                map.erase(i);
             } catch (const exceptions::configuration_exception& e) {
                 // If compaction strategy class isn't supported, fallback to size tiered.
                 logger.warn("Falling back to size-tiered compaction strategy after the problem: {}", e.what());
