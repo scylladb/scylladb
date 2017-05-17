@@ -53,7 +53,6 @@ public:
     };
 private:
     schema_ptr _schema;
-    key_view _key;
     const io_priority_class& _pc;
     const query::partition_slice& _slice;
     bool _out_of_range = false;
@@ -310,27 +309,6 @@ private:
 public:
     mutation_opt mut;
 
-    mp_row_consumer(const key& key,
-                    const schema_ptr schema,
-                    const query::partition_slice& slice,
-                    const io_priority_class& pc,
-                    streamed_mutation::forwarding fwd)
-            : _schema(schema)
-            , _key(key_view(key))
-            , _pc(pc)
-            , _slice(slice)
-            , _fwd(fwd)
-            , _range_tombstones(*_schema)
-    {
-        set_up_ck_ranges(partition_key::from_exploded(*_schema, key.explode(*_schema)));
-    }
-
-    mp_row_consumer(const key& key,
-                    const schema_ptr schema,
-                    const io_priority_class& pc,
-                    streamed_mutation::forwarding fwd)
-            : mp_row_consumer(key, schema, query::full_slice, pc, fwd) { }
-
     mp_row_consumer(const schema_ptr schema,
                     const query::partition_slice& slice,
                     const io_priority_class& pc,
@@ -348,13 +326,12 @@ public:
             : mp_row_consumer(schema, query::full_slice, pc, fwd) { }
 
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
-        if (_key.empty() || key == _key) {
-            _mutation = new_mutation { partition_key::from_exploded(key.explode(*_schema)), tombstone(deltime) };
-            setup_for_partition(_mutation->key);
-            return proceed::no;
-        } else {
-            throw malformed_sstable_exception(sprint("Key mismatch. Got %s while processing %s", to_hex(bytes_view(key)).c_str(), to_hex(bytes_view(_key)).c_str()));
+        if (!_is_mutation_end) {
+            return proceed::yes;
         }
+        _mutation = new_mutation{partition_key::from_exploded(key.explode(*_schema)), tombstone(deltime)};
+        setup_for_partition(_mutation->key);
+        return proceed::no;
     }
 
     void setup_for_partition(const partition_key& pk) {
