@@ -151,6 +151,7 @@ if __name__ == "__main__":
                             '-c1 -m1G'.split()))
         test_to_run.append(('build/release/tests/sstable_test', 'boost', ['-c1']))
         test_to_run.append(('build/release/tests/view_schema_test', 'boost', ['-c1']))
+        test_to_run.append(('build/release/tests/row_cache_stress_test', 'other', '-c1 -m1G --seconds 10'.split()))
     if 'debug' in modes_to_run:
         test_to_run.append(('build/debug/tests/sstable_test', 'boost', ['-c1']))
         test_to_run.append(('build/debug/tests/view_schema_test', 'boost', ['-c1']))
