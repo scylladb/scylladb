@@ -676,7 +676,7 @@ public:
             , "org.apache.cassandra.auth.AllowAllAuthorizer" \
             , "org.apache.cassandra.auth.CassandraAuthorizer" \
     )   \
-    val(permissions_validity_in_ms, uint32_t, 2000, Used,     \
+    val(permissions_validity_in_ms, uint32_t, 10000, Used,     \
             "How long permissions in cache remain valid. Depending on the authorizer, such as CassandraAuthorizer, fetching permissions can be resource intensive. This setting disabled when set to 0 or when AllowAllAuthorizer is set.\n"  \
             "Related information: Object permissions"   \
     )   \

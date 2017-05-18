@@ -123,22 +123,11 @@ public:
     }
 
     permissions_cache(const db::config& cfg)
-                    : _cache(cfg.permissions_cache_max_entries(), expiry(cfg),
-                                    std::chrono::milliseconds(
-                                                    cfg.permissions_validity_in_ms()),
-                                    [](const key_type& k) {
-                                        logger.debug("Refreshing permissions for {}", k.first.name());
-                                        return authorizer::get().authorize(::make_shared<authenticated_user>(k.first), k.second);
-                                    }) {
-    }
-
-    static std::chrono::milliseconds expiry(const db::config& cfg) {
-        auto exp = cfg.permissions_update_interval_in_ms();
-        if (exp == 0 || exp == std::numeric_limits<uint32_t>::max()) {
-            exp = cfg.permissions_validity_in_ms();
-        }
-        return std::chrono::milliseconds(exp);
-    }
+                    : _cache(cfg.permissions_cache_max_entries(), std::chrono::milliseconds(cfg.permissions_validity_in_ms()), std::chrono::milliseconds(cfg.permissions_update_interval_in_ms()), logger,
+                        [] (const key_type& k) {
+                            logger.debug("Refreshing permissions for {}", k.first.name());
+                            return authorizer::get().authorize(::make_shared<authenticated_user>(k.first), k.second);
+                        }) {}
 
     future<> stop() {
         return make_ready_future<>();
@@ -151,6 +140,11 @@ public:
 private:
     cache_type _cache;
 };
+
+std::ostream& operator<<(std::ostream& os, const std::pair<auth::authenticated_user, auth::data_resource>& p) {
+    os << "{user: " << p.first.name() << ", data_resource: " << p.second << "}";
+    return os;
+}
 
 static distributed<auth::auth::permissions_cache> perm_cache;
 
