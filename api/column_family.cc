@@ -182,15 +182,6 @@ static int64_t max_row_size(column_family& cf) {
     return res;
 }
 
-static double update_ratio(double acc, double f, double total) {
-    if (f && !total) {
-        throw bad_param_exception("total should include all elements");
-    } else if (total) {
-        acc += f / total;
-    }
-    return acc;
-}
-
 static integral_ratio_holder mean_row_size(column_family& cf) {
     integral_ratio_holder res;
     for (auto i: *cf.get_sstables() ) {
@@ -281,6 +272,16 @@ static std::vector<uint64_t> concat_sstable_count_per_level(std::vector<uint64_t
         a[i] += b[i];
     }
     return a;
+}
+
+ratio_holder filter_false_positive_as_ratio_holder(const sstables::shared_sstable& sst) {
+    double f = sst->filter_get_false_positive();
+    return ratio_holder(f + sst->filter_get_true_positive(), f);
+}
+
+ratio_holder filter_recent_false_positive_as_ratio_holder(const sstables::shared_sstable& sst) {
+    double f = sst->filter_get_recent_false_positive();
+    return ratio_holder(f + sst->filter_get_recent_true_positive(), f);
 }
 
 void set_column_family(http_context& ctx, routes& r) {
@@ -604,39 +605,27 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_bloom_filter_false_ratio.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], double(0), [] (column_family& cf) {
-            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), double(0), [](double s, auto& sst) {
-                double f = sst->filter_get_false_positive();
-                return update_ratio(s, f, f + sst->filter_get_true_positive());
-            });
-        }, std::plus<double>());
+        return map_reduce_cf(ctx, req->param["name"], ratio_holder(), [] (column_family& cf) {
+            return boost::accumulate(*cf.get_sstables() | boost::adaptors::transformed(filter_false_positive_as_ratio_holder), ratio_holder());
+        }, std::plus<>());
     });
 
     cf::get_all_bloom_filter_false_ratio.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, double(0), [] (column_family& cf) {
-            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), double(0), [](double s, auto& sst) {
-                double f = sst->filter_get_false_positive();
-                return update_ratio(s, f, f + sst->filter_get_true_positive());
-            });
-        }, std::plus<double>());
+        return map_reduce_cf(ctx, ratio_holder(), [] (column_family& cf) {
+            return boost::accumulate(*cf.get_sstables() | boost::adaptors::transformed(filter_false_positive_as_ratio_holder), ratio_holder());
+        }, std::plus<>());
     });
 
     cf::get_recent_bloom_filter_false_ratio.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, req->param["name"], double(0), [] (column_family& cf) {
-            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), double(0), [](double s, auto& sst) {
-                double f = sst->filter_get_recent_false_positive();
-                return update_ratio(s, f, f + sst->filter_get_recent_true_positive());
-            });
-        }, std::plus<double>());
+        return map_reduce_cf(ctx, req->param["name"], ratio_holder(), [] (column_family& cf) {
+            return boost::accumulate(*cf.get_sstables() | boost::adaptors::transformed(filter_recent_false_positive_as_ratio_holder), ratio_holder());
+        }, std::plus<>());
     });
 
     cf::get_all_recent_bloom_filter_false_ratio.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_reduce_cf(ctx, double(0), [] (column_family& cf) {
-            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), double(0), [](double s, auto& sst) {
-                double f = sst->filter_get_recent_false_positive();
-                return update_ratio(s, f, f + sst->filter_get_recent_true_positive());
-            });
-        }, std::plus<double>());
+        return map_reduce_cf(ctx, ratio_holder(), [] (column_family& cf) {
+            return boost::accumulate(*cf.get_sstables() | boost::adaptors::transformed(filter_recent_false_positive_as_ratio_holder), ratio_holder());
+        }, std::plus<>());
     });
 
     cf::get_bloom_filter_disk_space_used.set(r, [&ctx] (std::unique_ptr<request> req) {
