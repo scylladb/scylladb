@@ -32,7 +32,7 @@
 
 // Helper for working with the following table:
 //
-//   CREATE TABLE ks.cf (pk utf8, ck utf8, v utf8, s1 utf8 static, PRIMARY KEY (pk, ck));
+//   CREATE TABLE ks.cf (pk text, ck text, v text, s1 text static, PRIMARY KEY (pk, ck));
 //
 class simple_schema {
     schema_ptr _s;
