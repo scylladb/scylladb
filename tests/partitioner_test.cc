@@ -858,6 +858,9 @@ test_something_with_some_interesting_ranges_and_partitioners(std::function<void 
     auto t2 = token_from_long(int64_t(-1));
     auto t3 = token_from_long(int64_t(1));
     auto t4 = token_from_long(int64_t(0x7fff'ffff'ffff'fffe));
+    auto make_bound = [] (dht::ring_position rp) {
+        return stdx::make_optional(range_bound<dht::ring_position>(std::move(rp)));
+    };
     auto some_murmur3_ranges = {
             dht::partition_range::make_open_ended_both_sides(),
             dht::partition_range::make_starting_with(dht::ring_position::starting_at(t1)),
@@ -868,8 +871,8 @@ test_something_with_some_interesting_ranges_and_partitioners(std::function<void 
             dht::partition_range::make_ending_with(dht::ring_position::starting_at(t2)),
             dht::partition_range::make_ending_with(dht::ring_position::starting_at(t3)),
             dht::partition_range::make_ending_with(dht::ring_position::starting_at(t4)),
-            dht::partition_range(dht::ring_position::starting_at(t2), dht::ring_position::ending_at(t3)),
-            dht::partition_range(dht::ring_position::ending_at(t1), dht::ring_position::starting_at(t4)),
+            dht::partition_range(make_bound(dht::ring_position::starting_at(t2)), make_bound(dht::ring_position::ending_at(t3))),
+            dht::partition_range(make_bound(dht::ring_position::ending_at(t1)), make_bound(dht::ring_position::starting_at(t4))),
     };
     for (auto&& part : some_murmur3_partitioners) {
         for (auto&& range : some_murmur3_ranges) {
