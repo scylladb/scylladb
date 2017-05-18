@@ -130,4 +130,13 @@ public:
         std::sort(keys.begin(), keys.end(), dht::decorated_key::less_comparator(_s));
         return keys;
     }
+
+    // Returns n clustering keys in their natural order
+    std::vector<clustering_key> make_ckeys(int n) {
+        std::vector<clustering_key> keys;
+        for (int i = 0; i < n; ++i) {
+            keys.push_back(make_ckey(i));
+        }
+        return keys;
+    }
 };
