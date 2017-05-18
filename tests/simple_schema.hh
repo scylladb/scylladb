@@ -28,6 +28,7 @@
 #include "keys.hh"
 #include "streamed_mutation.hh"
 #include "mutation.hh"
+#include "schema_builder.hh"
 
 // Helper for working with the following table:
 //
