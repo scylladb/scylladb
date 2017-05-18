@@ -74,6 +74,8 @@ interactive_ask_service() {
 verify_package() {
     if is_debian_variant; then
         dpkg -s $1 > /dev/null 2>&1 &&:
+    elif is_gentoo_variant; then
+        find /var/db/pkg/dev-db -type d -name "${1}-*" | egrep -q ".*"
     else
         rpm -q $1 > /dev/null 2>&1 &&:
     fi
@@ -269,6 +271,9 @@ if [ $ENABLE_SERVICE -eq 1 ]; then
     if is_systemd; then
         systemctl enable scylla-server.service
         systemctl enable collectd.service
+    elif is_gentoo_variant; then
+        rc-update add scylla-server default
+        rc-update add collectd default
     fi
     if [ $INTERACTIVE -eq 1 ] && [ ! -f /etc/scylla.d/housekeeping.cfg ]; then
         interactive_ask_service "Do you want to enable ScyllaDB version check?" "Answer yes to automatically start Scylla-housekeeping service that checks for a newer version periodically; answer no to skip this step." "yes" &&:
@@ -304,7 +309,9 @@ if [ "$CUR_VERSION" != "" ]; then
 fi
 
 # scylla_selinux_setup only supports Red Hat variants
-if ! is_debian_variant; then
+if is_debian_variant || is_gentoo_variant; then
+    echo "scylla_selinux_setup only supports Red Hat variants"
+else
     if [ $INTERACTIVE -eq 1 ]; then
         interactive_ask_service "Do you want to disable SELinux?" "Answer yes to disable SELinux and improve performance; answer no to keep it activated." "yes" &&:
         SELINUX_SETUP=$?

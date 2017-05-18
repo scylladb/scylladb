@@ -9,6 +9,10 @@ is_redhat_variant() {
     [ -f /etc/redhat-release ]
 }
 
+is_gentoo_variant() {
+    [ -f /etc/gentoo-release ]
+}
+
 is_systemd() {
     grep -q '^systemd$' /proc/1/comm
 }
@@ -26,7 +30,7 @@ ec2_is_supported_instance_type() {
 }
 
 . /etc/os-release
-if is_debian_variant; then
+if is_debian_variant || is_gentoo_variant; then
     SYSCONFIG=/etc/default
 else
     SYSCONFIG=/etc/sysconfig

@@ -22,26 +22,37 @@ if [ "`id -u`" -ne 0 ]; then
     exit 1
 fi
 
-if [ -f /usr/bin/node_exporter ]; then
+if [ -f /usr/bin/node_exporter ] || [ -f /usr/bin/prometheus-node_exporter ]; then
     echo "node_exporter already installed"
     exit 1
 fi
 
-version=0.12.0
-dir=/usr/lib/scylla/Prometheus/node_exporter
-mkdir -p $dir
-cd $dir
-curl -L https://github.com/prometheus/node_exporter/releases/download/$version/node_exporter-$version.linux-amd64.tar.gz -o $dir/node_exporter-$version.linux-amd64.tar.gz
-tar -xvzf $dir/node_exporter-$version.linux-amd64.tar.gz
-rm $dir/node_exporter-$version.linux-amd64.tar.gz
-ln -s $dir/node_exporter-$version.linux-amd64/node_exporter /usr/bin
-. /etc/os-release
+. /usr/lib/scylla/scylla_lib.sh
 
- if [ "$(cat /proc/1/comm)" = "systemd" ]; then
-    systemctl enable node-exporter
-    systemctl start node-exporter
+if is_gentoo_variant; then
+    emerge -uq net-analyzer/prometheus-node_exporter
+    if is_systemd; then
+       echo "net-analyzer/prometheus-node_exporter does not install systemd service files, please fill a bug if you need them."
+    else
+        rc-update add prometheus-node_exporter default
+        service prometheus-node_exporter start
+    fi
 else
-    cat <<EOT >> /etc/init/node_exporter.conf
+    version=0.12.0
+    dir=/usr/lib/scylla/Prometheus/node_exporter
+    mkdir -p $dir
+    cd $dir
+    curl -L https://github.com/prometheus/node_exporter/releases/download/$version/node_exporter-$version.linux-amd64.tar.gz -o $dir/node_exporter-$version.linux-amd64.tar.gz
+    tar -xvzf $dir/node_exporter-$version.linux-amd64.tar.gz
+    rm $dir/node_exporter-$version.linux-amd64.tar.gz
+    ln -s $dir/node_exporter-$version.linux-amd64/node_exporter /usr/bin
+    . /etc/os-release
+
+     if is_systemd; then
+        systemctl enable node-exporter
+        systemctl start node-exporter
+    else
+        cat <<EOT >> /etc/init/node_exporter.conf
 # Run node_exporter
 
 start on startup
@@ -50,7 +61,8 @@ script
    /usr/bin/node_exporter
 end script
 EOT
-    service node_exporter start
+        service node_exporter start
+    fi
 fi
 
 printf "node_exporter successfully installed\n"

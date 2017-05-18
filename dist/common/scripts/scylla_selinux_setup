@@ -4,7 +4,9 @@
 
 . /usr/lib/scylla/scylla_lib.sh
 
-if ! is_debian_variant; then
+if is_debian_variant || is_gentoo_variant; then
+    echo "scylla_selinux_setup only supports Red Hat variants"
+else
     if [ "`sestatus | awk '{print $3}'`" != "disabled" ]; then
         setenforce 0
         sed --follow-symlinks -i -e "s/^SELINUX=enforcing/SELINUX=disabled/" /etc/sysconfig/selinux
