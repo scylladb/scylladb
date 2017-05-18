@@ -29,6 +29,7 @@
 #include "streamed_mutation.hh"
 #include "mutation.hh"
 #include "schema_builder.hh"
+#include "streamed_mutation.hh"
 
 // Helper for working with the following table:
 //
@@ -37,6 +38,7 @@
 class simple_schema {
     schema_ptr _s;
     api::timestamp_type _timestamp = api::min_timestamp;
+    const column_definition& _v_def;
 private:
     api::timestamp_type new_timestamp() {
         return _timestamp++;
@@ -49,6 +51,7 @@ public:
             .with_column("s1", utf8_type, column_kind::static_column)
             .with_column("v", utf8_type)
             .build())
+        , _v_def(*_s->get_column_definition(to_bytes("v")))
     { }
 
     clustering_key make_ckey(sstring ck) {
@@ -72,7 +75,19 @@ public:
     }
 
     void add_row(mutation& m, const clustering_key& key, sstring v) {
-        m.set_clustered_cell(key, to_bytes("v"), data_value(v), new_timestamp());
+        m.set_clustered_cell(key, _v_def, atomic_cell::make_live(new_timestamp(), data_value(v).serialize()));
+    }
+
+    std::pair<sstring, api::timestamp_type> get_value(const clustering_row& row) {
+        auto cell = row.cells().find_cell(_v_def.id);
+        if (!cell) {
+            throw std::runtime_error("cell not found");
+        }
+        atomic_cell_view ac = cell->as_atomic_cell();
+        if (!ac.is_live()) {
+            throw std::runtime_error("cell is dead");
+        }
+        return std::make_pair(value_cast<sstring>(utf8_type->deserialize(ac.value())), ac.timestamp());
     }
 
     mutation_fragment make_row(const clustering_key& key, sstring v) {
