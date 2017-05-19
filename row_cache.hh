@@ -71,6 +71,7 @@ class cache_entry {
     lru_link_type _lru_link;
     cache_link_type _cache_link;
     friend class size_calculator;
+
 public:
     friend class row_cache;
     friend class cache_tracker;
@@ -86,19 +87,29 @@ public:
         : _schema(std::move(s))
         , _key(key)
         , _pe(p)
-    { }
+    {
+        _pe.version()->partition().ensure_last_dummy(*_schema);
+    }
 
     cache_entry(schema_ptr s, dht::decorated_key&& key, mutation_partition&& p) noexcept
         : _schema(std::move(s))
         , _key(std::move(key))
         , _pe(std::move(p))
-    { }
+    {
+        _pe.version()->partition().ensure_last_dummy(*_schema);
+    }
 
+    // It is assumed that pe is fully continuous
     cache_entry(schema_ptr s, dht::decorated_key&& key, partition_entry&& pe) noexcept
         : _schema(std::move(s))
         , _key(std::move(key))
         , _pe(std::move(pe))
-    { }
+    {
+        // If we can assume that _pe is fully continuous, we don't need to check all versions
+        // to determine what the continuity is.
+        // This doesn't change value and doesn't invalidate iterators, so can be called even with a snapshot.
+        _pe.version()->partition().ensure_last_dummy(*_schema);
+    }
 
     cache_entry(cache_entry&&) noexcept;
 
