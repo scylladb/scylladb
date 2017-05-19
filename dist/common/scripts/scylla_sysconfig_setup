@@ -5,7 +5,7 @@
 . /usr/lib/scylla/scylla_lib.sh
 
 print_usage() {
-    echo "scylla-sysconfig-setup --nic eth0 --mode posix --nr-hugepages 64 --user scylla --group scylla --homedir /var/lib/scylla --confdir /etc/scylla --setup-nic"
+    echo "scylla_sysconfig_setup --nic eth0 --mode posix --nr-hugepages 64 --user scylla --group scylla --homedir /var/lib/scylla --confdir /etc/scylla --setup-nic"
     echo "  --nic  specify NIC"
     echo "  --mode  network mode (posix, dpdk)"
     echo "  --nr-hugepages  number of hugepages"
