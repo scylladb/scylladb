@@ -910,6 +910,11 @@ rows_entry::equal(const schema& s, const rows_entry& other) const {
     return equal(s, other, s);
 }
 
+position_in_partition_view rows_entry::position() const {
+    return position_in_partition_view(
+        position_in_partition_view::clustering_row_tag_t(), _key);
+}
+
 bool
 rows_entry::equal(const schema& s, const rows_entry& other, const schema& other_schema) const {
     return key().equal(s, other.key()) // Only representation-compatible changes are allowed

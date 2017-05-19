@@ -33,6 +33,7 @@
 #include "schema.hh"
 #include "tombstone.hh"
 #include "keys.hh"
+#include "position_in_partition.hh"
 #include "atomic_cell_or_collection.hh"
 #include "query-result.hh"
 #include "mutation_partition_view.hh"
@@ -673,6 +674,7 @@ public:
     const deletable_row& row() const {
         return _row;
     }
+    position_in_partition_view position() const;
     void apply(row_tombstone t) {
         _row.apply(t);
     }
