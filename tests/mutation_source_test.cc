@@ -761,7 +761,6 @@ static mutation_sets generate_mutation_sets() {
 
         auto m1 = mutation(partition_key::from_single_value(*s1, to_bytes("key1")), s1);
         auto m2 = mutation(partition_key::from_single_value(*s2, to_bytes("key1")), s2);
-
         result.equal.emplace_back(mutations{m1, m2});
 
         clustering_key ck1 = clustering_key::from_deeply_exploded(*s1, {data_value(bytes("ck1_0")), data_value(bytes("ck1_1"))});
@@ -838,6 +837,14 @@ static mutation_sets generate_mutation_sets() {
             m1.set_static_cell("static_col_2", data_value(bytes("static_col_value")), ts);
             result.unequal.emplace_back(mutations{m1, m2});
             m2.set_static_cell("static_col_2", data_value(bytes("static_col_value")), ts);
+            result.equal.emplace_back(mutations{m1, m2});
+        }
+
+        {
+            m1.partition().ensure_last_dummy(*m1.schema());
+            result.equal.emplace_back(mutations{m1, m2});
+
+            m2.partition().ensure_last_dummy(*m2.schema());
             result.equal.emplace_back(mutations{m1, m2});
         }
 
