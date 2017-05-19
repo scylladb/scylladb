@@ -5,7 +5,7 @@
 . /usr/lib/scylla/scylla_lib.sh
 
 print_usage() {
-    echo "scylla-raid-setup --disks /dev/hda,/dev/hdb... --raiddev /dev/md0 --update-fstab --root /var/lib/scylla --volume-role [all|data|commitlog]"
+    echo "scylla_raid_setup --disks /dev/hda,/dev/hdb... --raiddev /dev/md0 --update-fstab --root /var/lib/scylla --volume-role [all|data|commitlog]"
     echo "  --disks	specify disks for RAID"
     echo "  --raiddev	MD device name for RAID"
     echo "  --update-fstab update /etc/fstab for RAID"
