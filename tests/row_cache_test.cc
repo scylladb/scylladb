@@ -1141,6 +1141,7 @@ SEASTAR_TEST_CASE(test_mvcc) {
             mt1->apply(m2);
 
             auto m12 = m1 + m2;
+            mt->apply(m2);
 
             stdx::optional<mutation_reader> mt1_reader_opt;
             stdx::optional<streamed_mutation_opt> mt1_reader_sm_opt;
