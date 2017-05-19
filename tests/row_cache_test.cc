@@ -1117,12 +1117,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
 
 SEASTAR_TEST_CASE(test_mvcc) {
     return seastar::async([] {
-        auto no_difference = [] (auto& m1, auto& m2) {
-            return m1.partition().difference(m1.schema(), m2.partition()).empty()
-                && m2.partition().difference(m1.schema(), m1.partition()).empty();
-        };
-
-        auto test = [&no_difference] (const mutation& m1, const mutation& m2, bool with_active_memtable_reader) {
+        auto test = [&] (const mutation& m1, const mutation& m2, bool with_active_memtable_reader) {
             auto s = m1.schema();
 
             auto mt = make_lw_shared<memtable>(s);
@@ -1145,8 +1140,7 @@ SEASTAR_TEST_CASE(test_mvcc) {
             auto mt1 = make_lw_shared<memtable>(s);
             mt1->apply(m2);
 
-            auto m12 = m1;
-            m12.apply(m2);
+            auto m12 = m1 + m2;
 
             stdx::optional<mutation_reader> mt1_reader_opt;
             stdx::optional<streamed_mutation_opt> mt1_reader_sm_opt;
@@ -1169,38 +1163,28 @@ SEASTAR_TEST_CASE(test_mvcc) {
             BOOST_REQUIRE(sm5);
             BOOST_REQUIRE(eq(sm5->key(), pk));
 
-            stdx::optional<position_in_partition> previous;
-            position_in_partition::less_compare cmp(*sm3->schema());
-            auto mf = (*sm3)().get0();
-            while (mf) {
-                if (previous) {
-                    BOOST_REQUIRE(cmp(*previous, mf->position()));
-                }
-                previous = position_in_partition(mf->position());
-                mf = (*sm3)().get0();
-            }
-            sm3 = { };
+            assert_that_stream(std::move(*sm3)).has_monotonic_positions();
 
             if (with_active_memtable_reader) {
                 assert(mt1_reader_sm_opt);
                 auto mt1_reader_mutation = mutation_from_streamed_mutation(std::move(*mt1_reader_sm_opt)).get0();
                 BOOST_REQUIRE(mt1_reader_mutation);
-                BOOST_REQUIRE(no_difference(m2, *mt1_reader_mutation));
+                assert_that(*mt1_reader_mutation).is_equal_to(m2);
             }
 
             auto m_4 = mutation_from_streamed_mutation(std::move(sm4)).get0();
-            BOOST_REQUIRE(no_difference(m12, *m_4));
+            assert_that(*m_4).is_equal_to(m12);
 
             auto m_1 = mutation_from_streamed_mutation(std::move(sm1)).get0();
-            BOOST_REQUIRE(no_difference(m1, *m_1));
+            assert_that(*m_1).is_equal_to(m1);
 
             cache.clear().get0();
 
             auto m_2 = mutation_from_streamed_mutation(std::move(sm2)).get0();
-            BOOST_REQUIRE(no_difference(m1, *m_2));
+            assert_that(*m_2).is_equal_to(m1);
 
             auto m_5 = mutation_from_streamed_mutation(std::move(sm5)).get0();
-            BOOST_REQUIRE(no_difference(m12, *m_5));
+            assert_that(*m_5).is_equal_to(m12);
         };
 
         for_each_mutation_pair([&] (const mutation& m1, const mutation& m2_, are_equal) {
