@@ -472,8 +472,7 @@ mutation_fragment_opt range_tombstone_stream::do_get_next()
 mutation_fragment_opt range_tombstone_stream::get_next(const rows_entry& re)
 {
     if (!_list.empty()) {
-        position_in_partition_view view(position_in_partition_view::clustering_row_tag_t(), re.key());
-        return !_cmp(view, _list.begin()->position()) ? do_get_next() : mutation_fragment_opt();
+        return !_cmp(re.position(), _list.begin()->position()) ? do_get_next() : mutation_fragment_opt();
     }
     return { };
 }

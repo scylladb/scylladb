@@ -917,7 +917,8 @@ position_in_partition_view rows_entry::position() const {
 
 bool
 rows_entry::equal(const schema& s, const rows_entry& other, const schema& other_schema) const {
-    return key().equal(s, other.key()) // Only representation-compatible changes are allowed
+    position_in_partition::equal_compare eq(s);
+    return eq(position(), other.position())
            && row().equal(column_kind::regular_column, s, other.row(), other_schema);
 }
 

@@ -689,23 +689,36 @@ public:
     bool empty() const {
         return _row.empty();
     }
+    struct tri_compare {
+        position_in_partition::tri_compare _c;
+        explicit tri_compare(const schema& s) : _c(s) {}
+        int operator()(const rows_entry& e1, const rows_entry& e2) const {
+            return _c(e1.position(), e2.position());
+        }
+        int operator()(const clustering_key& key, const rows_entry& e) const {
+            return _c(position_in_partition_view::for_key(key), e.position());
+        }
+        int operator()(const rows_entry& e, const clustering_key& key) const {
+            return _c(e.position(), position_in_partition_view::for_key(key));
+        }
+    };
     struct compare {
-        clustering_key::less_compare _c;
-        compare(const schema& s) : _c(s) {}
+        tri_compare _c;
+        explicit compare(const schema& s) : _c(s) {}
         bool operator()(const rows_entry& e1, const rows_entry& e2) const {
-            return _c(e1._key, e2._key);
+            return _c(e1, e2) < 0;
         }
         bool operator()(const clustering_key& key, const rows_entry& e) const {
-            return _c(key, e._key);
+            return _c(key, e) < 0;
         }
         bool operator()(const rows_entry& e, const clustering_key& key) const {
-            return _c(e._key, key);
+            return _c(e, key) < 0;
         }
         bool operator()(const clustering_key_view& key, const rows_entry& e) const {
-            return _c(key, e._key);
+            return _c(key, e) < 0;
         }
         bool operator()(const rows_entry& e, const clustering_key_view& key) const {
-            return _c(e._key, key);
+            return _c(e, key) < 0;
         }
     };
     template <typename Comparator>
