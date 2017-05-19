@@ -701,6 +701,15 @@ public:
         int operator()(const rows_entry& e, const clustering_key& key) const {
             return _c(e.position(), position_in_partition_view::for_key(key));
         }
+        int operator()(const rows_entry& e, position_in_partition_view p) const {
+            return _c(e.position(), p);
+        }
+        int operator()(position_in_partition_view p, const rows_entry& e) const {
+            return _c(p, e.position());
+        }
+        int operator()(position_in_partition_view p1, position_in_partition_view p2) const {
+            return _c(p1, p2);
+        }
     };
     struct compare {
         tri_compare _c;
@@ -719,6 +728,12 @@ public:
         }
         bool operator()(const rows_entry& e, const clustering_key_view& key) const {
             return _c(e, key) < 0;
+        }
+        bool operator()(const rows_entry& e, position_in_partition_view p) const {
+            return _c(e.position(), p) < 0;
+        }
+        bool operator()(position_in_partition_view p, const rows_entry& e) const {
+            return _c(p, e.position()) < 0;
         }
     };
     template <typename Comparator>
