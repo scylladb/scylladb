@@ -615,6 +615,89 @@ void verify_has(row_cache& cache, const mutation& m) {
     assert_that(reader().get0()).has_mutation().is_equal_to(m);
 }
 
+void test_sliced_read_row_presence(mutation_reader reader, schema_ptr s, std::deque<int> expected)
+{
+    clustering_key::equality ck_eq(*s);
+
+    auto smopt = reader().get0();
+    BOOST_REQUIRE(smopt);
+    auto mfopt = (*smopt)().get0();
+    while (mfopt) {
+        if (mfopt->is_clustering_row()) {
+            BOOST_REQUIRE(!expected.empty());
+            auto expected_ck = expected.front();
+            auto ck = clustering_key_prefix::from_single_value(*s, int32_type->decompose(expected_ck));
+            expected.pop_front();
+            auto& cr = mfopt->as_clustering_row();
+            if (!ck_eq(cr.key(), ck)) {
+                BOOST_FAIL(sprint("Expected %s, but got %s", ck, cr.key()));
+            }
+        }
+        mfopt = (*smopt)().get0();
+    }
+    BOOST_REQUIRE(expected.empty());
+    BOOST_REQUIRE(!reader().get0());
+}
+
+SEASTAR_TEST_CASE(test_single_partition_update) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("v", int32_type)
+            .build();
+        auto pk = partition_key::from_exploded(*s, { int32_type->decompose(100) });
+        auto dk = dht::global_partitioner().decorate_key(*s, pk);
+        auto range = dht::partition_range::make_singular(dk);
+        auto make_ck = [&s] (int v) {
+            return clustering_key_prefix::from_single_value(*s, int32_type->decompose(v));
+        };
+        auto ck1 = make_ck(1);
+        auto ck2 = make_ck(2);
+        auto ck3 = make_ck(3);
+        auto ck4 = make_ck(4);
+        auto ck7 = make_ck(7);
+        memtable_snapshot_source cache_mt(s);
+        {
+            mutation m(pk, s);
+            m.set_clustered_cell(ck1, "v", data_value(101), 1);
+            m.set_clustered_cell(ck2, "v", data_value(101), 1);
+            m.set_clustered_cell(ck4, "v", data_value(101), 1);
+            m.set_clustered_cell(ck7, "v", data_value(101), 1);
+            cache_mt.apply(m);
+        }
+
+        cache_tracker tracker;
+        row_cache cache(s, snapshot_source([&] { return cache_mt(); }), tracker);
+
+        {
+            auto slice = partition_slice_builder(*s)
+                .with_range(query::clustering_range::make_ending_with(ck1))
+                .with_range(query::clustering_range::make_starting_with(ck4))
+                .build();
+            auto reader = cache.make_reader(s, range, slice);
+            test_sliced_read_row_presence(std::move(reader), s, {1, 4, 7});
+        }
+
+        auto mt = make_lw_shared<memtable>(s);
+        {
+            mutation m(pk, s);
+            m.set_clustered_cell(ck3, "v", data_value(101), 1);
+            mt->apply(m);
+            cache_mt.apply(m);
+        }
+        cache.update(*mt, [] (auto&& key) {
+            return partition_presence_checker_result::maybe_exists;
+        }).get();
+
+        {
+            auto reader = cache.make_reader(s, range);
+            test_sliced_read_row_presence(std::move(reader), s, {1, 2, 3, 4, 7});
+        }
+
+    });
+}
+
 SEASTAR_TEST_CASE(test_update) {
     return seastar::async([] {
         auto s = make_schema();
@@ -1230,26 +1313,6 @@ SEASTAR_TEST_CASE(test_mvcc) {
             test(m1, m2, true);
         });
     });
-}
-
-void test_sliced_read_row_presence(mutation_reader reader, schema_ptr s, std::deque<int> expected)
-{
-    clustering_key::equality ck_eq(*s);
-
-    auto smopt = reader().get0();
-    BOOST_REQUIRE(smopt);
-    auto mfopt = (*smopt)().get0();
-    while (mfopt) {
-        if (mfopt->is_clustering_row()) {
-            BOOST_REQUIRE(!expected.empty());
-            auto& cr = mfopt->as_clustering_row();
-            BOOST_REQUIRE(ck_eq(cr.key(), clustering_key_prefix::from_single_value(*s, int32_type->decompose(expected.front()))));
-            expected.pop_front();
-        }
-        mfopt = (*smopt)().get0();
-    }
-    BOOST_REQUIRE(expected.empty());
-    BOOST_REQUIRE(!reader().get0());
 }
 
 SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
