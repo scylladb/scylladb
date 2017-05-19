@@ -241,6 +241,10 @@ public:
         return *this;
     }
 
+    partition_version_ref& version() {
+        return _version;
+    }
+
     // Strong exception guarantees.
     // Assumes this instance and mp are fully continuous.
     void apply(const schema& s, const mutation_partition& mp, const schema& mp_schema);
