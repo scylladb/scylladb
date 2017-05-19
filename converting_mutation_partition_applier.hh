@@ -22,6 +22,7 @@
 #pragma once
 
 #include "mutation_partition_view.hh"
+#include "mutation_partition.hh"
 #include "schema.hh"
 
 // Mutation partition visitor which applies visited data into
@@ -94,8 +95,8 @@ public:
         _p.apply_row_tombstone(_p_schema, rt);
     }
 
-    virtual void accept_row(clustering_key_view key, const row_tombstone& deleted_at, const row_marker& rm) override {
-        deletable_row& r = _p.clustered_row(_p_schema, key);
+    virtual void accept_row(position_in_partition_view key, const row_tombstone& deleted_at, const row_marker& rm, is_dummy dummy, is_continuous continuous) override {
+        deletable_row& r = _p.clustered_row(_p_schema, key, dummy, continuous);
         r.apply(rm);
         r.apply(deleted_at);
         _current_row = &r;

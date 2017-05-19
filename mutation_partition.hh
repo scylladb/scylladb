@@ -643,14 +643,39 @@ class rows_entry {
     intrusive_set_external_comparator_member_hook _link;
     clustering_key _key;
     deletable_row _row;
+    struct flags {
+        bool _continuous : 1; // See doc of is_continuous.
+        bool _dummy : 1;
+        bool _last : 1;
+        bool _erased : 1; // Used only temporarily during apply_reversibly(). Refs #2012.
+        flags() : _continuous(true), _dummy(false), _last(false), _erased(false) { }
+    } _flags{};
     friend class mutation_partition;
 public:
+    struct erased_tag {};
+    rows_entry(erased_tag, const rows_entry& e)
+        : _key(e._key)
+    {
+        _flags._erased = true;
+        _flags._last = e._flags._last;
+    }
     explicit rows_entry(clustering_key&& key)
         : _key(std::move(key))
     { }
     explicit rows_entry(const clustering_key& key)
         : _key(key)
     { }
+    rows_entry(const schema& s, position_in_partition_view pos, is_dummy dummy, is_continuous continuous)
+        : _key(pos.key())
+    {
+        if (!pos.is_clustering_row()) {
+            assert(bool(dummy));
+            assert(pos.is_after_all_clustered_rows(s)); // FIXME: Support insertion at any position
+            _flags._last = true;
+        }
+        _flags._dummy = bool(dummy);
+        _flags._continuous = bool(continuous);
+    }
     rows_entry(const clustering_key& key, deletable_row&& row)
         : _key(key), _row(std::move(row))
     { }
@@ -661,10 +686,13 @@ public:
     rows_entry(const rows_entry& e)
         : _key(e._key)
         , _row(e._row)
+        , _flags(e._flags)
     { }
+    // Valid only if !dummy()
     clustering_key& key() {
         return _key;
     }
+    // Valid only if !dummy()
     const clustering_key& key() const {
         return _key;
     }
@@ -675,6 +703,10 @@ public:
         return _row;
     }
     position_in_partition_view position() const;
+    is_continuous continuous() const { return is_continuous(_flags._continuous); }
+    void set_continuous(bool value) { _flags._continuous = value; }
+    void set_continuous(is_continuous value) { set_continuous(bool(value)); }
+    is_dummy dummy() const { return is_dummy(_flags._dummy); }
     void apply(row_tombstone t) {
         _row.apply(t);
     }
@@ -688,6 +720,9 @@ public:
     }
     bool empty() const {
         return _row.empty();
+    }
+    bool erased() const {
+        return _flags._erased;
     }
     struct tri_compare {
         position_in_partition::tri_compare _c;
@@ -742,10 +777,16 @@ public:
         delegating_compare(Comparator&& c) : _c(std::move(c)) {}
         template <typename Comparable>
         bool operator()(const Comparable& v, const rows_entry& e) const {
+            if (e._flags._last) {
+                return true;
+            }
             return _c(v, e._key);
         }
         template <typename Comparable>
         bool operator()(const rows_entry& e, const Comparable& v) const {
+            if (e._flags._last) {
+                return false;
+            }
             return _c(e._key, v);
         }
     };
@@ -758,6 +799,47 @@ public:
     bool equal(const schema& s, const rows_entry& other, const schema& other_schema) const;
 };
 
+// Represents a set of writes made to a single partition.
+//
+// The object is schema-dependent. Each instance is governed by some
+// specific schema version. Accessors require a reference to the schema object
+// of that version.
+//
+// There is an operation of addition defined on mutation_partition objects
+// (also called "apply"), which gives as a result an object representing the
+// sum of writes contained in the addends. For instances governed by the same
+// schema, addition is commutative and associative.
+//
+// In addition to representing writes, the object supports specifying a set of
+// partition elements called "continuity". This set can be used to represent
+// lack of information about certain parts of the partition. It can be
+// specified which ranges of clustering keys belong to that set. We say that a
+// key range is continuous if all keys in that range belong to the continuity
+// set, and discontinuous otherwise. By default everything is continuous.
+// The static row may be also continuous or not.
+// Partition tombstone is always continuous.
+//
+// Continuity is ignored by instance equality. It's also transient, not
+// preserved by serialization.
+//
+// Continuity is represented internally using flags on row entries. The key
+// range between two consecutive entries (both ends exclusive) is continuous
+// if and only if rows_entry::continuous() is true for the later entry. The
+// range starting after the last entry is assumed to be continuous. The range
+// corresponding to the key of the entry is continuous if and only if
+// rows_entry::dummy() is false.
+//
+// Adding two fully-continuous instances gives a fully-continuous instance.
+// Continuity doesn't affect how the write part is added.
+//
+// Addition of continuity is not commutative in general, but is associative.
+// Continuity flags on objects representing the same thing (e.g. rows_entry
+// with the same key) are merged such that the information stored in the left-
+// hand operand wins. Flags on objects which are present only in one of the
+// operands are transferred as-is. Such merging rules are useful for layering
+// information in MVCC, where newer versions specify continuity with respect
+// to the combined set of rows in all prior versions, not just in their
+// versions.
 class mutation_partition final {
 public:
     using rows_type = intrusive_set_external_comparator<rows_entry, &rows_entry::_link>;
@@ -766,6 +848,7 @@ public:
 private:
     tombstone _tombstone;
     row _static_row;
+    bool _static_row_continuous = true;
     rows_type _rows;
     // Contains only strict prefixes so that we don't have to lookup full keys
     // in both _row_tombstones and _rows.
@@ -775,6 +858,12 @@ private:
     friend class converting_mutation_partition_applier;
 public:
     struct copy_comparators_only {};
+    struct incomplete_tag {};
+    // Constructs an empty instance which is fully discontinuous except for the partition tombstone.
+    mutation_partition(incomplete_tag, const schema& s, tombstone);
+    static mutation_partition make_incomplete(const schema& s, tombstone t = {}) {
+        return mutation_partition(incomplete_tag(), s, t);
+    }
     mutation_partition(schema_ptr s)
         : _rows()
         , _row_tombstones(*s)
@@ -792,6 +881,7 @@ public:
     mutation_partition& operator=(mutation_partition&& x) noexcept;
     bool equal(const schema&, const mutation_partition&) const;
     bool equal(const schema& this_schema, const mutation_partition& p, const schema& p_schema) const;
+    bool equal_continuity(const schema&, const mutation_partition&) const;
     // Consistent with equal()
     template<typename Hasher>
     void feed_hash(Hasher& h, const schema& s) const {
@@ -800,6 +890,12 @@ public:
     }
     friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
 public:
+    // Makes sure there is a dummy entry after all clustered rows. Doesn't affect continuity.
+    // Doesn't invalidate iterators.
+    void ensure_last_dummy(const schema&);
+    bool static_row_continuous() const { return _static_row_continuous; }
+    void set_static_row_continuous(bool value) { _static_row_continuous = value; }
+    bool is_fully_continuous() const;
     void apply(tombstone t) { _tombstone.apply(t); }
     void apply_delete(const schema& schema, const clustering_key_prefix& prefix, tombstone t);
     void apply_delete(const schema& schema, range_tombstone rt);
@@ -896,7 +992,8 @@ public:
 public:
     deletable_row& clustered_row(const schema& s, const clustering_key& key);
     deletable_row& clustered_row(const schema& s, clustering_key&& key);
-    deletable_row& clustered_row(const schema& s, const clustering_key_view& key);
+    deletable_row& clustered_row(const schema& s, clustering_key_view key);
+    deletable_row& clustered_row(const schema& s, position_in_partition_view pos, is_dummy, is_continuous);
 public:
     tombstone partition_tombstone() const { return _tombstone; }
     row& static_row() { return _static_row; }
@@ -909,6 +1006,7 @@ public:
     const row* find_row(const schema& s, const clustering_key& key) const;
     tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key) const;
     row_tombstone tombstone_for_row(const schema& schema, const clustering_key& key) const;
+    // Can be called only for non-dummy entries
     row_tombstone tombstone_for_row(const schema& schema, const rows_entry& e) const;
     boost::iterator_range<rows_type::const_iterator> range(const schema& schema, const query::clustering_range& r) const;
     rows_type::const_iterator lower_bound(const schema& schema, const query::clustering_range& r) const;
@@ -916,6 +1014,11 @@ public:
     rows_type::iterator lower_bound(const schema& schema, const query::clustering_range& r);
     rows_type::iterator upper_bound(const schema& schema, const query::clustering_range& r);
     boost::iterator_range<rows_type::iterator> range(const schema& schema, const query::clustering_range& r);
+    // Returns an iterator range of rows_entry, with only non-dummy entries.
+    auto non_dummy_rows() const {
+        return boost::make_iterator_range(_rows.begin(), _rows.end())
+            | boost::adaptors::filtered([] (const rows_entry& e) { return bool(!e.dummy()); });
+    }
     // Writes this partition using supplied query result writer.
     // The partition should be first compacted with compact_for_query(), otherwise
     // results may include data which is deleted/expired.

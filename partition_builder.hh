@@ -56,8 +56,8 @@ public:
         _partition.apply_row_tombstone(_schema, rt);
     }
 
-    virtual void accept_row(clustering_key_view key, const row_tombstone& deleted_at, const row_marker& rm) override {
-        deletable_row& r = _partition.clustered_row(_schema, key);
+    virtual void accept_row(position_in_partition_view key, const row_tombstone& deleted_at, const row_marker& rm, is_dummy dummy, is_continuous continuous) override {
+        deletable_row& r = _partition.clustered_row(_schema, key, dummy, continuous);
         r.apply(rm);
         r.apply(deleted_at);
         _current_row = &r;

@@ -147,13 +147,16 @@ private:
     }
 
     mutation_fragment_opt read_next() {
-        if (has_more_rows()) {
+        while (has_more_rows()) {
             auto mf = _range_tombstones.get_next(peek_row());
             if (mf) {
                 return mf;
             }
-
-            clustering_row result = pop_clustering_row();
+            const rows_entry& e = pop_clustering_row();
+            if (e.dummy()) {
+                continue;
+            }
+            clustering_row result = e;
             while (has_more_rows() && _eq(peek_row().position(), result.position())) {
                 result.apply(*_schema, pop_clustering_row());
             }

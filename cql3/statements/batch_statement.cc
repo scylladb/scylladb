@@ -233,7 +233,7 @@ void batch_statement::verify_batch_size(const std::vector<mutation>& mutations) 
             size += v.data.size();
         }
         void accept_row_tombstone(const range_tombstone&) override {}
-        void accept_row(clustering_key_view, const row_tombstone&, const row_marker&) override {}
+        void accept_row(position_in_partition_view, const row_tombstone&, const row_marker&, is_dummy, is_continuous) override {}
         void accept_row_cell(column_id, atomic_cell_view v) override {
             size += v.value().size();
         }

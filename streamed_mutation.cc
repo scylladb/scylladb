@@ -165,10 +165,16 @@ streamed_mutation streamed_mutation_from_mutation(mutation m, streamed_mutation:
     private:
         void prepare_next_clustering_row() {
             auto& crs = _mutation.partition().clustered_rows();
-            auto re = crs.unlink_leftmost_without_rebalance();
-            if (re) {
+            while (true) {
+                auto re = crs.unlink_leftmost_without_rebalance();
+                if (!re) {
+                    break;
+                }
                 auto re_deleter = defer([re] { current_deleter<rows_entry>()(re); });
-                _cr = mutation_fragment(std::move(*re));
+                if (!re->dummy()) {
+                    _cr = mutation_fragment(std::move(*re));
+                    break;
+                }
             }
         }
         void prepare_next_range_tombstone() {
