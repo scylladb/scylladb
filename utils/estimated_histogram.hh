@@ -130,7 +130,8 @@ public:
     }
 
     void clear() {
-        buckets.resize(buckets.size(), 0);
+        std::fill(buckets.begin(), buckets.end(), 0);
+        _count = 0;
     }
     /**
      * Increments the count of the bucket closest to n, rounding UP.
