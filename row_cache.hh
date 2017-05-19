@@ -77,11 +77,18 @@ public:
     friend class cache_tracker;
 
     struct dummy_entry_tag{};
+    struct incomplete_tag{};
+
     cache_entry(dummy_entry_tag)
         : _key{dht::token(), partition_key::make_empty()}
     {
         _flags._dummy_entry = true;
     }
+
+    // Creates an entry which is fully discontinuous, except for the partition tombstone.
+    cache_entry(incomplete_tag, schema_ptr s, const dht::decorated_key& key, tombstone t)
+        : cache_entry(s, key, mutation_partition::make_incomplete(*s, t))
+    { }
 
     cache_entry(schema_ptr s, const dht::decorated_key& key, const mutation_partition& p)
         : _schema(std::move(s))
