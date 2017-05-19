@@ -39,7 +39,7 @@ class simple_schema {
     schema_ptr _s;
     api::timestamp_type _timestamp = api::min_timestamp;
     const column_definition& _v_def;
-private:
+public:
     api::timestamp_type new_timestamp() {
         return _timestamp++;
     }
