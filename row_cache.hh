@@ -258,6 +258,7 @@ public:
     friend class cache::lsa_manager;
     friend class cache::read_context;
     friend class partition_range_cursor;
+    friend class cache_tester;
 public:
     struct stats {
         utils::timed_rate_moving_average hits;

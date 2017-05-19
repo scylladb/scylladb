@@ -53,6 +53,7 @@ boost_tests = [
     'canonical_mutation_test',
     'gossiping_property_file_snitch_test',
     'row_cache_test',
+    'cache_streamed_mutation_test',
     'network_topology_strategy_test',
     'query_processor_test',
     'batchlog_manager_test',

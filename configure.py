@@ -184,6 +184,7 @@ scylla_tests = [
     'tests/perf/perf_cql_parser',
     'tests/perf/perf_simple_query',
     'tests/perf/perf_fast_forward',
+    'tests/cache_streamed_mutation_test',
     'tests/memory_footprint',
     'tests/perf/perf_sstable',
     'tests/cql_query_test',
