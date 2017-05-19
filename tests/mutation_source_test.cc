@@ -941,6 +941,7 @@ class random_mutation_generator::impl {
     std::vector<bytes> _blobs;
     std::uniform_int_distribution<size_t> _ck_index_dist{0, n_blobs - 1};
     std::uniform_int_distribution<int> _bool_dist{0, 1};
+    std::uniform_int_distribution<int> _not_dummy_dist{0, 19};
 
     template <typename Generator>
     static gc_clock::time_point expiry_dist(Generator& gen) {
@@ -1171,9 +1172,14 @@ public:
         size_t row_count = row_count_dist(_gen);
         for (size_t i = 0; i < row_count; ++i) {
             auto ckey = make_random_key();
-            deletable_row& row = m.partition().clustered_row(*_schema, ckey);
-            set_random_cells(row.cells(), column_kind::regular_column);
-            row.marker() = random_row_marker();
+            is_continuous continuous = is_continuous(_bool_dist(_gen));
+            if (_not_dummy_dist(_gen)) {
+                deletable_row& row = m.partition().clustered_row(*_schema, ckey, is_dummy::no, continuous);
+                set_random_cells(row.cells(), column_kind::regular_column);
+                row.marker() = random_row_marker();
+            } else {
+                m.partition().clustered_row(*_schema, ckey, is_dummy::yes, continuous);
+            }
         }
 
         size_t range_tombstone_count = row_count_dist(_gen);
@@ -1187,6 +1193,12 @@ public:
             m.partition().apply_row_tombstone(*_schema,
                     range_tombstone(std::move(start), std::move(end), random_tombstone()));
         }
+
+        if (_bool_dist(_gen)) {
+            m.partition().ensure_last_dummy(*_schema);
+            m.partition().clustered_rows().rbegin()->set_continuous(is_continuous(_bool_dist(_gen)));
+        }
+
         return m;
     }
 };
