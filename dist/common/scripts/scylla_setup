@@ -33,7 +33,7 @@ print_usage() {
     echo "  --no-io-setup		skip IO configuration setup"
     echo "  --no-version-check		skip daily version check"
     echo "  --no-node-exporter        do not install the node exporter"
-    echo "  --no-cpuscaling-setup      skip cpu scalling setup"
+    echo "  --no-cpuscaling-setup      skip cpu scaling setup"
     if is_redhat_variant; then
         echo "  --no-fstrim-setup           skip fstrim setup"
     fi
@@ -466,11 +466,11 @@ if [ $DEV_MODE -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to setup CPU scalling governor?" "Answer yes to  set CPU scalling governor to performance at boot time. Answer no to do nothing." "yes" &&:
+    interactive_ask_service "Do you want to setup CPU scaling governor?" "Answer yes to  set CPU scaling governor to performance at boot time. Answer no to do nothing." "yes" &&:
     CPUSCALING_SETUP=$?
 fi
 if [ $CPUSCALING_SETUP -eq 1 ]; then
-    run_setup_script "CPU Scalling" /usr/lib/scylla/scylla_cpuscaling_setup
+    run_setup_script "CPU scaling" /usr/lib/scylla/scylla_cpuscaling_setup
 fi
 
 if is_redhat_variant; then
