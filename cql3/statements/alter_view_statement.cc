@@ -97,6 +97,13 @@ future<shared_ptr<transport::event::schema_change>> alter_view_statement::announ
                 "low might cause undelivered updates to expire before being replayed.");
     }
 
+    if (builder.default_time_to_live().count() > 0) {
+        throw exceptions::invalid_request_exception(
+                "Cannot set or alter default_time_to_live for a materialized view. "
+                "Data in a materialized view always expire at the same time than "
+                "the corresponding data in the parent table.");
+    }
+
     return service::get_local_migration_manager().announce_view_update(view_ptr(builder.build()), is_local_only).then([this] {
         using namespace transport;
 

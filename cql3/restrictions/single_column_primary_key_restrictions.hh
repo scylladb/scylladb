@@ -336,6 +336,17 @@ public:
     sstring to_string() const override {
         return sprint("Restrictions(%s)", join(", ", get_column_defs()));
     }
+
+    virtual bool is_satisfied_by(const schema& schema,
+                                 const partition_key& key,
+                                 const clustering_key_prefix& ckey,
+                                 const row& cells,
+                                 const query_options& options,
+                                 gc_clock::time_point now) const override {
+        return boost::algorithm::all_of(
+            _restrictions->restrictions() | boost::adaptors::map_values,
+            [&] (auto&& r) { return r->is_satisfied_by(schema, key, ckey, cells, options, now); });
+    }
 };
 
 template<>

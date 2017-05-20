@@ -172,7 +172,7 @@ public:
      */
     bool has_unrestricted_clustering_columns() const;
 private:
-    void process_partition_key_restrictions(bool has_queriable_index);
+    void process_partition_key_restrictions(bool has_queriable_index, bool for_view);
 
     /**
      * Returns the partition key components that are not restricted.
@@ -187,7 +187,7 @@ private:
      * @param select_a_collection <code>true</code> if the query should return a collection column
      * @throws InvalidRequestException if the request is invalid
      */
-    void process_clustering_columns_restrictions(bool has_queriable_index, bool select_a_collection);
+    void process_clustering_columns_restrictions(bool has_queriable_index, bool select_a_collection, bool for_view);
 
     /**
      * Returns the <code>Restrictions</code> for the specified type of columns.

@@ -119,20 +119,13 @@ namespace db {
 namespace view {
 
 bool partition_key_matches(const schema& base, const view_info& view, const dht::decorated_key& key) {
-    dht::ring_position rp(key);
-    auto& ranges = view.partition_ranges();
-    return std::any_of(ranges.begin(), ranges.end(), [&] (auto&& range) {
-        return range.contains(rp, dht::ring_position_comparator(base));
-    });
+    return view.select_statement().get_restrictions()->get_partition_key_restrictions()->is_satisfied_by(
+            base, key.key(), clustering_key_prefix::make_empty(), row(), cql3::query_options({ }), gc_clock::now());
 }
 
 bool clustering_prefix_matches(const schema& base, const view_info& view, const partition_key& key, const clustering_key_prefix& ck) {
-    bound_view::compare less(base);
-    auto& ranges = view.partition_slice().row_ranges(base, key);
-    return std::any_of(ranges.begin(), ranges.end(), [&] (auto&& range) {
-        auto bounds = bound_view::from_range(range);
-        return !less(ck, bounds.first) && !less(bounds.second, ck);
-    });
+    return view.select_statement().get_restrictions()->get_clustering_columns_restrictions()->is_satisfied_by(
+            base, key, ck, row(), cql3::query_options({ }), gc_clock::now());
 }
 
 bool may_be_affected_by(const schema& base, const view_info& view, const dht::decorated_key& key, const rows_entry& update) {
@@ -223,12 +216,12 @@ private:
     row_marker compute_row_marker(const clustering_row& base_row) const;
     deletable_row& get_view_row(const partition_key& base_key, const clustering_row& update);
     void create_entry(const partition_key& base_key, const clustering_row& update, gc_clock::time_point now);
-    void delete_old_entry(const partition_key& base_key, const clustering_row& existing, gc_clock::time_point now);
-    void do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, gc_clock::time_point now);
+    void delete_old_entry(const partition_key& base_key, const clustering_row& existing, const row_tombstone& t, gc_clock::time_point now);
+    void do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const row_tombstone& t, gc_clock::time_point now);
     void update_entry(const partition_key& base_key, const clustering_row& update, const clustering_row& existing, gc_clock::time_point now);
     void replace_entry(const partition_key& base_key, const clustering_row& update, const clustering_row& existing, gc_clock::time_point now) {
         create_entry(base_key, update, now);
-        delete_old_entry(base_key, existing, now);
+        delete_old_entry(base_key, existing, row_tombstone(), now);
     }
 };
 
@@ -350,15 +343,19 @@ void view_updates::create_entry(const partition_key& base_key, const clustering_
  * Deletes the view entry corresponding to the provided base row.
  * This method checks that the base row does match the view filter before bothering.
  */
-void view_updates::delete_old_entry(const partition_key& base_key, const clustering_row& existing, gc_clock::time_point now) {
+void view_updates::delete_old_entry(const partition_key& base_key, const clustering_row& existing, const row_tombstone& t, gc_clock::time_point now) {
     // Before deleting an old entry, make sure it was matching the view filter
     // (otherwise there is nothing to delete)
     if (matches_view_filter(*_base, _view_info, base_key, existing, now)) {
-        do_delete_old_entry(base_key, existing, now);
+        do_delete_old_entry(base_key, existing, t, now);
     }
 }
 
-void view_updates::do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, gc_clock::time_point now) {
+void view_updates::do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const row_tombstone& t, gc_clock::time_point now) {
+    if (t) {
+        get_view_row(base_key, existing).apply(t);
+        return;
+    }
     // We delete the old row using a shadowable row tombstone, making sure that
     // the tombstone deletes everything in the row (or it might still show up).
     // FIXME: If the entry is "resurrected" by a later update, we would need to
@@ -399,7 +396,7 @@ void view_updates::update_entry(const partition_key& base_key, const clustering_
         return;
     }
     if (!matches_view_filter(*_base, _view_info, base_key, update, now)) {
-        do_delete_old_entry(base_key, existing, now);
+        do_delete_old_entry(base_key, existing, row_tombstone(), now);
         return;
     }
 
@@ -432,7 +429,7 @@ void view_updates::generate_update(
         // The view key is necessarily the same pre and post update.
         if (existing && !existing->empty()) {
             if (update.empty()) {
-                delete_old_entry(base_key, *existing, now);
+                delete_old_entry(base_key, *existing, update.tomb(), now);
             } else {
                 update_entry(base_key, update, *existing, now);
             }
@@ -443,11 +440,11 @@ void view_updates::generate_update(
     }
 
     auto* after = update.cells().find_cell(*col_id);
+    // Note: multi-cell columns can't be part of the primary key.
     if (existing) {
         auto* before = existing->cells().find_cell(*col_id);
-        if (before) {
-            if (after) {
-                // Note: multi-cell columns can't be part of the primary key.
+        if (before && before->as_atomic_cell().is_live()) {
+            if (after && after->as_atomic_cell().is_live()) {
                 auto cmp = compare_atomic_cell_for_merge(before->as_atomic_cell(), after->as_atomic_cell());
                 if (cmp == 0) {
                     update_entry(base_key, update, *existing, now);
@@ -455,14 +452,14 @@ void view_updates::generate_update(
                     replace_entry(base_key, update, *existing, now);
                 }
             } else {
-                delete_old_entry(base_key, *existing, now);
+                delete_old_entry(base_key, *existing, update.tomb(), now);
             }
             return;
         }
     }
 
     // No existing row or the cell wasn't live
-    if (after) {
+    if (after && after->as_atomic_cell().is_live()) {
         create_entry(base_key, update, now);
     }
 }
@@ -583,7 +580,7 @@ future<stop_iteration> view_update_builder::on_results() {
             // We have an update where there was nothing before
             if (_update->is_range_tombstone()) {
                 _update_tombstone_tracker.apply(std::move(_update->as_range_tombstone()));
-            } else {
+            } else if (_update->is_clustering_row()) {
                 auto& update = _update->as_mutable_clustering_row();
                 apply_tracked_tombstones(_update_tombstone_tracker, update);
                 auto tombstone = _existing_tombstone_tracker.current_tombstone();
@@ -599,7 +596,7 @@ future<stop_iteration> view_update_builder::on_results() {
             // existing, or because we've fetched the existing row due to some partition/range deletion in the updates)
             if (_existing->is_range_tombstone()) {
                 _existing_tombstone_tracker.apply(std::move(_existing->as_range_tombstone()));
-            } else {
+            } else if (_existing->is_clustering_row()) {
                 auto& existing = _existing->as_mutable_clustering_row();
                 apply_tracked_tombstones(_existing_tombstone_tracker, existing);
                 auto tombstone = _update_tombstone_tracker.current_tombstone();
@@ -618,7 +615,7 @@ future<stop_iteration> view_update_builder::on_results() {
             assert(_existing->is_range_tombstone());
             _existing_tombstone_tracker.apply(std::move(*_existing).as_range_tombstone());
             _update_tombstone_tracker.apply(std::move(*_update).as_range_tombstone());
-        } else {
+        } else if (_update->is_clustering_row()) {
             assert(!_existing->is_range_tombstone());
             apply_tracked_tombstones(_update_tombstone_tracker, _update->as_mutable_clustering_row());
             apply_tracked_tombstones(_existing_tombstone_tracker, _existing->as_mutable_clustering_row());
@@ -630,7 +627,7 @@ future<stop_iteration> view_update_builder::on_results() {
     auto tombstone = _update_tombstone_tracker.current_tombstone();
     if (tombstone && _existing) {
         // We don't care if it's a range tombstone, as we're only looking for existing entries that get deleted
-        if (!_existing->is_range_tombstone()) {
+        if (_existing->is_clustering_row()) {
             auto& existing = _existing->as_clustering_row();
             auto update = clustering_row(existing.key(), row_tombstone(std::move(tombstone)), row_marker(), ::row());
             generate_update(std::move(update), { std::move(existing) });
@@ -639,7 +636,7 @@ future<stop_iteration> view_update_builder::on_results() {
     }
 
     // If we have updates and it's a range tombstone, it removes nothing pre-exisiting, so we can ignore it
-    if (_update && !_update->is_range_tombstone()) {
+    if (_update && _update->is_clustering_row()) {
         generate_update(std::move(*_update).as_clustering_row(), { });
         return advance_updates();
     }

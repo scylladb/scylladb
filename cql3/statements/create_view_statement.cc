@@ -313,6 +313,13 @@ future<shared_ptr<transport::event::schema_change>> create_view_statement::annou
     add_columns(target_non_pk_columns, column_kind::regular_column);
     _properties.properties()->apply_to_builder(builder);
 
+    if (builder.default_time_to_live().count() > 0) {
+        throw exceptions::invalid_request_exception(
+                "Cannot set or alter default_time_to_live for a materialized view. "
+                "Data in a materialized view always expire at the same time than "
+                "the corresponding data in the parent table.");
+    }
+
     auto where_clause_text = util::relations_to_where_clause(_where_clause);
     builder.with_view_info(schema->id(), schema->cf_name(), included.empty(), std::move(where_clause_text));
 
