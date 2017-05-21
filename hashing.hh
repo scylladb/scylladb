@@ -26,6 +26,7 @@
 #include <experimental/optional>
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/sstring.hh>
+#include "seastarx.hh"
 
 //
 // This hashing differs from std::hash<> in that it decouples knowledge about

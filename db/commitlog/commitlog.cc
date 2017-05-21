@@ -62,6 +62,8 @@
 #include <seastar/core/sleep.hh>
 #include <net/byteorder.hh>
 
+#include "seastarx.hh"
+
 #include "commitlog.hh"
 #include "db/config.hh"
 #include "utils/data_input.hh"
@@ -78,7 +80,7 @@
 #include "checked-file-impl.hh"
 #include "disk-error-handler.hh"
 
-static logging::logger logger("commitlog");
+static logging::logger clogger("commitlog");
 
 using namespace std::chrono_literals;
 
@@ -226,7 +228,7 @@ public:
         ++totals.pending_flushes;
         if (totals.pending_flushes >= cfg.max_active_flushes) {
             ++totals.flush_limit_exceeded;
-            logger.trace("Flush ops overflow: {}. Will block.", totals.pending_flushes);
+            clogger.trace("Flush ops overflow: {}. Will block.", totals.pending_flushes);
         }
         return _flush_semaphore.wait();
     }
@@ -236,7 +238,7 @@ public:
     }
     segment_manager(config c);
     ~segment_manager() {
-        logger.trace("Commitlog {} disposed", cfg.commit_log_location);
+        clogger.trace("Commitlog {} disposed", cfg.commit_log_location);
     }
 
     uint64_t next_id() {
@@ -427,11 +429,11 @@ public:
                     clock_type::now()), _pending_ops(true) // want exception propagation
     {
         ++_segment_manager->totals.segments_created;
-        logger.debug("Created new {} segment {}", active ? "active" : "reserve", *this);
+        clogger.debug("Created new {} segment {}", active ? "active" : "reserve", *this);
     }
     ~segment() {
         if (is_clean()) {
-            logger.debug("Segment {} is no longer active and will be deleted now", *this);
+            clogger.debug("Segment {} is no longer active and will be deleted now", *this);
             ++_segment_manager->totals.segments_destroyed;
             _segment_manager->totals.total_size_on_disk -= size_on_disk();
             _segment_manager->totals.total_size -= (size_on_disk() + _buffer.size());
@@ -439,10 +441,10 @@ public:
                 commit_io_check([] (const char* fname) { ::unlink(fname); },
                         _file_name.c_str());
             } catch (...) {
-                logger.error("Could not delete segment {}: {}", *this, std::current_exception());
+                clogger.error("Could not delete segment {}: {}", *this, std::current_exception());
             }
         } else {
-            logger.warn("Segment {} is dirty and is left on disk.", *this);
+            clogger.warn("Segment {} is dirty and is left on disk.", *this);
         }
     }
 
@@ -464,7 +466,7 @@ public:
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now - _sync_time).count();
         if ((_segment_manager->cfg.commitlog_sync_period_in_ms * 2) < uint64_t(ms)) {
-            logger.debug("{} needs sync. {} ms elapsed", *this, ms);
+            clogger.debug("{} needs sync. {} ms elapsed", *this, ms);
             return true;
         }
         return false;
@@ -514,7 +516,7 @@ public:
             pos = _file_pos;
         }
 
-        logger.trace("Syncing {} {} -> {}", *this, _flush_pos, pos);
+        clogger.trace("Syncing {} {} -> {}", *this, _flush_pos, pos);
 
         // Only run the flush when all write ops at lower rp:s
         // have completed.
@@ -531,7 +533,7 @@ public:
         auto me = shared_from_this();
         return begin_flush().then([this, pos]() {
             if (pos <= _flush_pos) {
-                logger.trace("{} already synced! ({} < {})", *this, pos, _flush_pos);
+                clogger.trace("{} already synced! ({} < {})", *this, pos, _flush_pos);
                 return make_ready_future<>();
             }
             return _file.flush().then_wrapped([this, pos](future<> f) {
@@ -541,9 +543,9 @@ public:
                     // we fast-fail the whole commit.
                     _flush_pos = std::max(pos, _flush_pos);
                     ++_segment_manager->totals.flush_count;
-                    logger.trace("{} synced to {}", *this, _flush_pos);
+                    clogger.trace("{} synced to {}", *this, _flush_pos);
                 } catch (...) {
-                    logger.error("Failed to flush commits to disk: {}", std::current_exception());
+                    clogger.error("Failed to flush commits to disk: {}", std::current_exception());
                     throw;
                 }
             });
@@ -573,10 +575,10 @@ public:
                 _buffer = _segment_manager->acquire_buffer(k);
                 break;
             } catch (std::bad_alloc&) {
-                logger.warn("Could not allocate {} k bytes output buffer ({} k required)", k / 1024, a / 1024);
+                clogger.warn("Could not allocate {} k bytes output buffer ({} k required)", k / 1024, a / 1024);
                 if (k > a) {
                     k = std::max(a, k / 2);
-                    logger.debug("Trying reduced size: {} k", k / 1024);
+                    clogger.debug("Trying reduced size: {} k", k / 1024);
                     continue;
                 }
                 throw;
@@ -647,7 +649,7 @@ public:
 
         replay_position rp(_desc.id, position_type(off));
 
-        logger.trace("Writing {} entries, {} k in {} -> {}", num, size, off, off + size);
+        clogger.trace("Writing {} entries, {} k in {} -> {}", num, size, off, off + size);
 
         // The write will be allowed to start now, but flush (below) must wait for not only this,
         // but all previous write/flush pairs.
@@ -668,13 +670,13 @@ public:
                             }
                             // gah, partial write. should always get here with dma chunk sized
                             // "bytes", but lets make sure...
-                            logger.debug("Partial write {}: {}/{} bytes", *this, *written, size);
+                            clogger.debug("Partial write {}: {}/{} bytes", *this, *written, size);
                             *written = align_down(*written, alignment);
                             return make_ready_future<stop_iteration>(stop_iteration::no);
                             // TODO: retry/ignore/fail/stop - optional behaviour in origin.
                             // we fast-fail the whole commit.
                         } catch (...) {
-                            logger.error("Failed to persist commits to disk for {}: {}", *this, std::current_exception());
+                            clogger.error("Failed to persist commits to disk for {}: {}", *this, std::current_exception());
                             throw;
                         }
                     });
@@ -758,7 +760,7 @@ public:
                 });
             } else {
                 cycle().discard_result().handle_exception([] (auto ex) {
-                    logger.error("Failed to flush commits to disk: {}", ex);
+                    clogger.error("Failed to flush commits to disk: {}", ex);
                 });
             }
         }
@@ -811,7 +813,7 @@ public:
             // have to do it ourselves.
             if ((_buf_pos >= (db::commitlog::segment::default_size))) {
                 cycle().discard_result().handle_exception([] (auto ex) {
-                    logger.error("Failed to flush commits to disk: {}", ex);
+                    clogger.error("Failed to flush commits to disk: {}", ex);
                 });
             }
             return make_ready_future<replay_position>(rp);
@@ -934,7 +936,7 @@ db::commitlog::segment_manager::segment_manager(config c)
 {
     assert(max_size > 0);
 
-    logger.trace("Commitlog {} maximum disk size: {} MB / cpu ({} cpus)",
+    clogger.trace("Commitlog {} maximum disk size: {} MB / cpu ({} cpus)",
             cfg.commit_log_location, max_disk_size / (1024 * 1024),
             smp::count);
 
@@ -955,12 +957,12 @@ future<> db::commitlog::segment_manager::replenish_reserve() {
                 return this->allocate_segment(false).then([this](sseg_ptr s) {
                     auto ret = _reserve_segments.push(std::move(s));
                     if (!ret) {
-                        logger.error("Segment reserve is full! Ignoring and trying to continue, but shouldn't happen");
+                        clogger.error("Segment reserve is full! Ignoring and trying to continue, but shouldn't happen");
                     }
                     return make_ready_future<>();
                 });
             }).handle_exception([](std::exception_ptr ep) {
-                logger.warn("Exception in segment reservation: {}", ep);
+                clogger.warn("Exception in segment reservation: {}", ep);
                 return sleep(100ms);
             });
         });
@@ -995,7 +997,7 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) {
                     try {
                         _result.emplace_back(de.name);
                     } catch (std::domain_error& e) {
-                        logger.warn(e.what());
+                        clogger.warn(e.what());
                     }
                 }
                 return make_ready_future<>();
@@ -1038,7 +1040,7 @@ future<> db::commitlog::segment_manager::init() {
         // always run the timer now, since we need to handle segment pre-alloc etc as well.
         _timer.set_callback(std::bind(&segment_manager::on_timer, this));
         auto delay = engine().cpu_id() * std::ceil(double(cfg.commitlog_sync_period_in_ms) / smp::count);
-        logger.trace("Delaying timer loop {} ms", delay);
+        clogger.trace("Delaying timer loop {} ms", delay);
         // We need to wait until we have scanned all other segments to actually start serving new
         // segments. We are ready now
         this->_reserve_replenisher = replenish_reserve();
@@ -1129,7 +1131,7 @@ void db::commitlog::segment_manager::flush_segments(bool force) {
         }
     });
 
-    logger.debug("Flushing ({}) to {}", force, high);
+    clogger.debug("Flushing ({}) to {}", force, high);
 
     // For each CF id: for each callback c: call c(id, high)
     for (auto& f : callbacks) {
@@ -1137,7 +1139,7 @@ void db::commitlog::segment_manager::flush_segments(bool force) {
             try {
                 f(id, high);
             } catch (...) {
-                logger.error("Exception during flush request {}/{}: {}", id, high, std::current_exception());
+                clogger.error("Exception during flush request {}/{}: {}", id, high, std::current_exception());
             }
         }
     }
@@ -1165,7 +1167,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 
     if (_reserve_segments.empty() && (_reserve_segments.max_size() < cfg.max_reserve_segments)) {
         _reserve_segments.set_max_size(_reserve_segments.max_size() + 1);
-        logger.debug("Increased segment reserve count to {}", _reserve_segments.max_size());
+        clogger.debug("Increased segment reserve count to {}", _reserve_segments.max_size());
     }
     return _reserve_segments.pop_eventually().then([this] (auto s) {
         _segments.push_back(std::move(s));
@@ -1207,7 +1209,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
  */
 void db::commitlog::segment_manager::discard_completed_segments(
         const cf_id_type& id, const replay_position& pos) {
-    logger.debug("Discard completed segments for {}, table {}", pos, id);
+    clogger.debug("Discard completed segments for {}, table {}", pos, id);
     for (auto&s : _segments) {
         s->mark_clean(id, pos);
     }
@@ -1231,19 +1233,19 @@ std::ostream& operator<<(std::ostream& out, const db::replay_position& p) {
 }
 
 void db::commitlog::segment_manager::discard_unused_segments() {
-    logger.trace("Checking for unused segments ({} active)", _segments.size());
+    clogger.trace("Checking for unused segments ({} active)", _segments.size());
 
     auto i = std::remove_if(_segments.begin(), _segments.end(), [=](sseg_ptr s) {
         if (s->can_delete()) {
-            logger.debug("Segment {} is unused", *s);
+            clogger.debug("Segment {} is unused", *s);
             return true;
         }
         if (s->is_still_allocating()) {
-            logger.debug("Not safe to delete segment {}; still allocating.", s);
+            clogger.debug("Not safe to delete segment {}; still allocating.", s);
         } else if (!s->is_clean()) {
-            logger.debug("Not safe to delete segment {}; dirty is {}", s, segment::cf_mark {*s});
+            clogger.debug("Not safe to delete segment {}; dirty is {}", s, segment::cf_mark {*s});
         } else {
-            logger.debug("Not safe to delete segment {}; disk ops pending", s);
+            clogger.debug("Not safe to delete segment {}; disk ops pending", s);
         }
         return false;
     });
@@ -1262,10 +1264,10 @@ future<> db::commitlog::segment_manager::clear_reserve_segments() {
 }
 
 future<> db::commitlog::segment_manager::sync_all_segments(bool shutdown) {
-    logger.debug("Issuing sync for all segments ({})", shutdown ? "shutdown" : "active");
+    clogger.debug("Issuing sync for all segments ({})", shutdown ? "shutdown" : "active");
     return parallel_for_each(_segments, [this, shutdown](sseg_ptr s) {
         return s->sync(shutdown).then([](sseg_ptr s) {
-            logger.debug("Synced segment {}", *s);
+            clogger.debug("Synced segment {}", *s);
         });
     });
 }
@@ -1313,9 +1315,9 @@ future<> db::commitlog::segment_manager::orphan_all() {
  * Only use from tests.
  */
 future<> db::commitlog::segment_manager::clear() {
-    logger.debug("Clearing commitlog");
+    clogger.debug("Clearing commitlog");
     return shutdown().then([this] {
-        logger.debug("Clearing all segments");
+        clogger.debug("Clearing all segments");
         for (auto& s : _segments) {
             s->mark_clean();
         }
@@ -1346,7 +1348,7 @@ void db::commitlog::segment_manager::on_timer() {
             auto cur = totals.total_size_on_disk;
             if (max != 0 && cur >= max) {
                 _new_counter = 0;
-                logger.debug("Size on disk {} MB exceeds local maximum {} MB", cur / (1024 * 1024), max / (1024 * 1024));
+                clogger.debug("Size on disk {} MB exceeds local maximum {} MB", cur / (1024 * 1024), max / (1024 * 1024));
                 flush_segments();
             }
         }
@@ -1396,7 +1398,7 @@ db::commitlog::segment_manager::buffer_type db::commitlog::segment_manager::acqu
     if (a == nullptr) {
         throw std::bad_alloc();
     }
-    logger.trace("Allocated {} k buffer", s / 1024);
+    clogger.trace("Allocated {} k buffer", s / 1024);
     return buffer_type(reinterpret_cast<char *>(a), s, make_free_deleter(a));
 }
 
@@ -1409,7 +1411,7 @@ void db::commitlog::segment_manager::release_buffer(buffer_type&& b) {
     constexpr const size_t max_temp_buffers = 4;
 
     if (_temp_buffers.size() > max_temp_buffers) {
-        logger.trace("Deleting {} buffers", _temp_buffers.size() - max_temp_buffers);
+        clogger.trace("Deleting {} buffers", _temp_buffers.size() - max_temp_buffers);
         _temp_buffers.erase(_temp_buffers.begin() + max_temp_buffers, _temp_buffers.end());
     }
     totals.buffer_list_bytes = boost::accumulate(
@@ -1696,7 +1698,7 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
                 if (cs != checksum) {
                     // if a chunk header checksum is broken, we shall just assume that all
                     // remaining is as well. We cannot trust the "next" pointer, so...
-                    logger.debug("Checksum error in segment chunk at {}.", pos);
+                    clogger.debug("Checksum error in segment chunk at {}.", pos);
                     corrupt_size += (file_size - pos);
                     return stop();
                 }
@@ -1741,7 +1743,7 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
                 if (size < 3 * sizeof(uint32_t) || checksum != crc.checksum()) {
                     auto slack = next - pos;
                     if (size != 0) {
-                        logger.debug("Segment entry at {} has broken header. Skipping to next chunk ({} bytes)", rp, slack);
+                        clogger.debug("Segment entry at {} has broken header. Skipping to next chunk ({} bytes)", rp, slack);
                         corrupt_size += slack;
                     }
                     // size == 0 -> special scylla case: zero padding due to dma blocks
@@ -1763,7 +1765,7 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
                         // If we're getting a checksum error here, most likely the rest of
                         // the file will be corrupt as well. But it does not hurt to retry.
                         // Just go to the next entry (since "size" in header seemed ok).
-                        logger.debug("Segment entry at {} checksum error. Skipping {} bytes", rp, size);
+                        clogger.debug("Segment entry at {} checksum error. Skipping {} bytes", rp, size);
                         corrupt_size += size;
                         return make_ready_future<>();
                     }

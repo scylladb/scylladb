@@ -45,7 +45,7 @@
 #include "log.hh"
 #include "to_string.hh"
 
-static logging::logger logger("paging");
+static logging::logger qlogger("paging");
 
 class service::pager::query_pagers::impl : public query_pager {
 public:
@@ -85,7 +85,7 @@ private:
 
             auto reversed = _cmd->slice.options.contains<query::partition_slice::option::reversed>();
 
-            logger.trace("PKey={}, CKey={}, reversed={}", dpk, _last_ckey, reversed);
+            qlogger.trace("PKey={}, CKey={}, reversed={}", dpk, _last_ckey, reversed);
 
             // Note: we're assuming both that the ranges are checked
             // and "cql-compliant", and that storage_proxy will process
@@ -114,7 +114,7 @@ private:
                             ;
 
                     if (remove) {
-                        logger.trace("Remove range {}", *i);
+                        qlogger.trace("Remove range {}", *i);
                         i = ranges.erase(i);
                         continue;
                     }
@@ -123,12 +123,12 @@ private:
                                 ? range_type(i->start(), bound_type{ lo, inclusive })
                                 : range_type( bound_type{ lo, inclusive }, i->end(), i->is_singular())
                                 ;
-                        logger.trace("Modify range {} -> {}", *i, r);
+                        qlogger.trace("Modify range {} -> {}", *i, r);
                         *i = std::move(r);
                     }
                     ++i;
                 }
-                logger.trace("Result ranges {}", ranges);
+                qlogger.trace("Result ranges {}", ranges);
             };
 
             // Because of #1446 we don't have a comparator to use with
@@ -154,14 +154,14 @@ private:
                 while (it != ranges.end()) {
                     auto range = bound_view::from_range(*it);
                     if (cmp(end_bound(range), lo) || eq(end_bound(range).prefix, lo)) {
-                        logger.trace("Remove ck range {}", *it);
+                        qlogger.trace("Remove ck range {}", *it);
                         it = ranges.erase(it);
                         continue;
                     } else if (cmp(start_bound(range), lo)) {
                         assert(cmp(lo, end_bound(range)));
                         auto r = reversed ? range_type(it->start(), bound_type { lo, false })
                                           : range_type(bound_type { lo, false }, it->end());
-                        logger.trace("Modify ck range {} -> {}", *it, r);
+                        qlogger.trace("Modify ck range {} -> {}", *it, r);
                         *it = std::move(r);
                     }
                     ++it;
@@ -197,7 +197,7 @@ private:
         }
         _cmd->row_limit = max_rows;
 
-        logger.debug("Fetching {}, page size={}, max_rows={}",
+        qlogger.debug("Fetching {}, page size={}, max_rows={}",
                 _cmd->cf_id, page_size, max_rows
                 );
 
@@ -243,7 +243,7 @@ private:
                 throw std::logic_error("Should not reach!");
             }
             void accept_new_partition(const partition_key& key, uint32_t row_count) {
-                logger.trace("Accepting partition: {} ({})", key, row_count);
+                qlogger.trace("Accepting partition: {} ({})", key, row_count);
                 total_rows += std::max(row_count, 1u);
                 last_pkey = key;
                 last_ckey = { };
@@ -281,13 +281,13 @@ private:
         _last_pkey = v.last_pkey;
         _last_ckey = v.last_ckey;
 
-        logger.debug("Fetched {} rows, max_remain={} {}", v.total_rows, _max, _exhausted ? "(exh)" : "");
+        qlogger.debug("Fetched {} rows, max_remain={} {}", v.total_rows, _max, _exhausted ? "(exh)" : "");
 
         if (_last_pkey) {
-            logger.debug("Last partition key: {}", *_last_pkey);
+            qlogger.debug("Last partition key: {}", *_last_pkey);
         }
         if (_has_clustering_keys && _last_ckey) {
-            logger.debug("Last clustering key: {}", *_last_ckey);
+            qlogger.debug("Last clustering key: {}", *_last_ckey);
         }
     }
 
@@ -345,7 +345,7 @@ bool service::pager::query_pagers::may_need_paging(uint32_t page_size,
     auto est = est_max_rows();
     auto need_paging = est > page_size;
 
-    logger.debug("Query of {}, page_size={}, limit={} {}", cmd.cf_id, page_size,
+    qlogger.debug("Query of {}, page_size={}, limit={} {}", cmd.cf_id, page_size,
                     cmd.row_limit,
                     need_paging ? "requires paging" : "does not require paging");
 

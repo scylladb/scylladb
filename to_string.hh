@@ -28,11 +28,7 @@
 #include <set>
 #include <experimental/optional>
 
-template<typename PrintableRange>
-static inline
-sstring join(sstring delimiter, const PrintableRange& items) {
-    return join(delimiter, items.begin(), items.end());
-}
+#include "seastarx.hh"
 
 template<typename Iterator>
 static inline
@@ -46,6 +42,12 @@ sstring join(sstring delimiter, Iterator begin, Iterator end) {
         }
     }
     return oss.str();
+}
+
+template<typename PrintableRange>
+static inline
+sstring join(sstring delimiter, const PrintableRange& items) {
+    return join(delimiter, items.begin(), items.end());
 }
 
 namespace std {

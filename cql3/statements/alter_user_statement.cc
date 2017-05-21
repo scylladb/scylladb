@@ -92,7 +92,7 @@ future<> cql3::statements::alter_user_statement::check_access(const service::cli
     });
 }
 
-future<::shared_ptr<transport::messages::result_message>>
+future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::alter_user_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
     return auth::auth::is_existing_user(_username).then([this](bool exists) {
         if (!exists) {
@@ -104,7 +104,7 @@ cql3::statements::alter_user_statement::execute(distributed<service::storage_pro
                 return auth::auth::insert_user(_username, *_superuser);
             });
         }
-        return f.then([] { return  make_ready_future<::shared_ptr<transport::messages::result_message>>(); });
+        return f.then([] { return  make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(); });
     });
 }
 

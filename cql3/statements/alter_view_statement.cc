@@ -73,7 +73,7 @@ void alter_view_statement::validate(distributed<service::storage_proxy>&, const 
     // validated in announce_migration()
 }
 
-future<shared_ptr<transport::event::schema_change>> alter_view_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
 {
     auto&& db = proxy.local().get_db().local();
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
@@ -105,7 +105,7 @@ future<shared_ptr<transport::event::schema_change>> alter_view_statement::announ
     }
 
     return service::get_local_migration_manager().announce_view_update(view_ptr(builder.build()), is_local_only).then([this] {
-        using namespace transport;
+        using namespace cql_transport;
 
         return make_shared<event::schema_change>(
                 event::schema_change::change_type::UPDATED,

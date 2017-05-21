@@ -54,7 +54,7 @@
 namespace cql3 {
 
 using namespace statements;
-using namespace transport::messages;
+using namespace cql_transport::messages;
 
 logging::logger log("query_processor");
 
@@ -179,7 +179,7 @@ query_processor::process_statement(::shared_ptr<cql_statement> statement,
 
         statement->validate(_proxy, client_state);
 
-        auto fut = make_ready_future<::shared_ptr<transport::messages::result_message>>();
+        auto fut = make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
         if (client_state.is_internal()) {
             fut = statement->execute_internal(_proxy, query_state, options);
         } else  {
@@ -196,24 +196,24 @@ query_processor::process_statement(::shared_ptr<cql_statement> statement,
     });
 }
 
-future<::shared_ptr<transport::messages::result_message::prepared>>
+future<::shared_ptr<cql_transport::messages::result_message::prepared>>
 query_processor::prepare(const std::experimental::string_view& query_string, service::query_state& query_state)
 {
     auto& client_state = query_state.get_client_state();
     return prepare(query_string, client_state, client_state.is_thrift());
 }
 
-future<::shared_ptr<transport::messages::result_message::prepared>>
+future<::shared_ptr<cql_transport::messages::result_message::prepared>>
 query_processor::prepare(const std::experimental::string_view& query_string,
                          const service::client_state& client_state,
                          bool for_thrift)
 {
     auto existing = get_stored_prepared_statement(query_string, client_state.get_raw_keyspace(), for_thrift);
     if (existing) {
-        return make_ready_future<::shared_ptr<transport::messages::result_message::prepared>>(existing);
+        return make_ready_future<::shared_ptr<cql_transport::messages::result_message::prepared>>(existing);
     }
 
-    return futurize<::shared_ptr<transport::messages::result_message::prepared>>::apply([this, &query_string, &client_state, for_thrift] {
+    return futurize<::shared_ptr<cql_transport::messages::result_message::prepared>>::apply([this, &query_string, &client_state, for_thrift] {
         auto prepared = get_statement(query_string, client_state);
         auto bound_terms = prepared->statement->get_bound_terms();
         if (bound_terms > std::numeric_limits<uint16_t>::max()) {
@@ -224,7 +224,7 @@ query_processor::prepare(const std::experimental::string_view& query_string,
     });
 }
 
-::shared_ptr<transport::messages::result_message::prepared>
+::shared_ptr<cql_transport::messages::result_message::prepared>
 query_processor::get_stored_prepared_statement(const std::experimental::string_view& query_string,
                                                const sstring& keyspace,
                                                bool for_thrift)
@@ -246,7 +246,7 @@ query_processor::get_stored_prepared_statement(const std::experimental::string_v
     }
 }
 
-future<::shared_ptr<transport::messages::result_message::prepared>>
+future<::shared_ptr<cql_transport::messages::result_message::prepared>>
 query_processor::store_prepared_statement(const std::experimental::string_view& query_string,
                                           const sstring& keyspace,
                                           std::unique_ptr<statements::prepared_statement> prepared,
@@ -427,7 +427,7 @@ query_processor::process(statements::prepared_statement::checked_weak_ptr p,
     });
 }
 
-future<::shared_ptr<transport::messages::result_message>>
+future<::shared_ptr<cql_transport::messages::result_message>>
 query_processor::process_batch(::shared_ptr<statements::batch_statement> batch,
                                service::query_state& query_state,
                                query_options& options)

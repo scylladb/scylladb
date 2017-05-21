@@ -140,7 +140,7 @@ const sstring& drop_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-future<shared_ptr<transport::event::schema_change>> drop_type_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> drop_type_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
 {
     auto&& db = proxy.local().get_db().local();
 
@@ -152,11 +152,11 @@ future<shared_ptr<transport::event::schema_change>> drop_type_statement::announc
 
     // Can happen with if_exists
     if (to_drop == all_types.end()) {
-        return make_ready_future<::shared_ptr<transport::event::schema_change>>();
+        return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>();
     }
 
     return service::get_local_migration_manager().announce_type_drop(to_drop->second, is_local_only).then([this] {
-        using namespace transport;
+        using namespace cql_transport;
 
         return make_shared<event::schema_change>(
                 event::schema_change::change_type::DROPPED,

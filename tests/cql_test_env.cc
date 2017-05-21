@@ -102,14 +102,14 @@ public:
     single_node_cql_env(::shared_ptr<distributed<database>> db) : _db(db)
     { }
 
-    virtual future<::shared_ptr<transport::messages::result_message>> execute_cql(const sstring& text) override {
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(const sstring& text) override {
         auto qs = make_query_state();
         return local_qp().process(text, *qs, cql3::query_options::DEFAULT).finally([qs, this] {
             _core_local.local().client_state.merge(qs->get_client_state());
         });
     }
 
-    virtual future<::shared_ptr<transport::messages::result_message>> execute_cql(
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(
         const sstring& text,
         std::unique_ptr<cql3::query_options> qo) override
     {
@@ -129,7 +129,7 @@ public:
         });
     }
 
-    virtual future<::shared_ptr<transport::messages::result_message>> execute_prepared(
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared(
         bytes id,
         std::vector<cql3::raw_value> values) override
     {
@@ -281,7 +281,7 @@ public:
             boost::filesystem::create_directories(cfg->commitlog_directory().c_str());
 
             const gms::inet_address listen("127.0.0.1");
-            auto& ms = net::get_messaging_service();
+            auto& ms = netw::get_messaging_service();
             ms.start(listen, std::move(7000)).get();
             auto stop_ms = defer([&ms] { ms.stop().get(); });
 

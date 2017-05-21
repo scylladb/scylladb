@@ -406,7 +406,7 @@ static void drop_keyspace_if_exists(cql_test_env& env, sstring name) {
 static
 table_config read_config(cql_test_env& env, const sstring& name) {
     auto msg = env.execute_cql(sprint("select n_rows, value_size from ks.config where name = '%s'", name)).get0();
-    auto rows = dynamic_pointer_cast<transport::messages::result_message::rows>(msg);
+    auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
     if (rows->rs().size() < 1) {
         throw std::runtime_error("config not found. Did you run --populate ?");
     }

@@ -61,7 +61,7 @@ const sstring auth::auth::USERS_CF("users");
 static const sstring USER_NAME("name");
 static const sstring SUPER("super");
 
-static logging::logger logger("auth");
+static logging::logger alogger("auth");
 
 // TODO: configurable
 using namespace std::chrono_literals;
@@ -123,9 +123,9 @@ public:
     }
 
     permissions_cache(const db::config& cfg)
-                    : _cache(cfg.permissions_cache_max_entries(), std::chrono::milliseconds(cfg.permissions_validity_in_ms()), std::chrono::milliseconds(cfg.permissions_update_interval_in_ms()), logger,
+                    : _cache(cfg.permissions_cache_max_entries(), std::chrono::milliseconds(cfg.permissions_validity_in_ms()), std::chrono::milliseconds(cfg.permissions_update_interval_in_ms()), alogger,
                         [] (const key_type& k) {
-                            logger.debug("Refreshing permissions for {}", k.first.name());
+                            alogger.debug("Refreshing permissions for {}", k.first.name());
                             return authorizer::get().authorize(::make_shared<authenticated_user>(k.first), k.second);
                         }) {}
 
@@ -141,9 +141,13 @@ private:
     cache_type _cache;
 };
 
+namespace std { // for ADL, yuch
+
 std::ostream& operator<<(std::ostream& os, const std::pair<auth::authenticated_user, auth::data_resource>& p) {
     os << "{user: " << p.first.name() << ", data_resource: " << p.second << "}";
     return os;
+}
+
 }
 
 static distributed<auth::auth::permissions_cache> perm_cache;
@@ -172,7 +176,7 @@ struct waiter {
             tmr.cancel();
             done.set_exception(std::runtime_error("shutting down"));
         }
-        logger.trace("Deleting scheduled task");
+        alogger.trace("Deleting scheduled task");
     }
     void kill() {
     }
@@ -186,7 +190,7 @@ static std::vector<waiter_ptr> & thread_waiters() {
 }
 
 void auth::auth::schedule_when_up(scheduled_func f) {
-    logger.trace("Adding scheduled task");
+    alogger.trace("Adding scheduled task");
 
     auto & waiters = thread_waiters();
 
@@ -202,7 +206,7 @@ void auth::auth::schedule_when_up(scheduled_func f) {
             waiters.erase(i);
         }
     }).then([f = std::move(f)] {
-        logger.trace("Running scheduled task");
+        alogger.trace("Running scheduled task");
         return f();
     }).handle_exception([](auto ep) {
         return make_ready_future();
@@ -262,12 +266,12 @@ future<> auth::auth::setup() {
                     auto query = sprint("INSERT INTO %s.%s (%s, %s) VALUES (?, ?) USING TIMESTAMP 0",
                                     AUTH_KS, USERS_CF, USER_NAME, SUPER);
                     cql3::get_local_query_processor().process(query, db::consistency_level::ONE, {DEFAULT_SUPERUSER_NAME, true}).then([](auto) {
-                        logger.info("Created default superuser '{}'", DEFAULT_SUPERUSER_NAME);
+                        alogger.info("Created default superuser '{}'", DEFAULT_SUPERUSER_NAME);
                     }).handle_exception([](auto ep) {
                         try {
                             std::rethrow_exception(ep);
                         } catch (exceptions::request_execution_exception&) {
-                            logger.warn("Skipped default superuser setup: some nodes were not ready");
+                            alogger.warn("Skipped default superuser setup: some nodes were not ready");
                         }
                     });
                 }

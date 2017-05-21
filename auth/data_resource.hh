@@ -45,6 +45,7 @@
 #include <iosfwd>
 #include <set>
 #include <seastar/core/sstring.hh>
+#include "seastarx.hh"
 
 namespace auth {
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 ScyllaDB
+ * Copyright (C) 2017 ScyllaDB
  */
 
 /*
@@ -21,12 +21,19 @@
 
 #pragma once
 
-namespace cql_transport {
+#include <boost/asio/ip/address_v4.hpp>  // avoid conflict between ::socket and seastar::socket
 
-namespace messages {
+namespace seastar {
 
-class result_message;
+template <typename T>
+class shared_ptr;
+
+template <typename T, typename... A>
+shared_ptr<T> make_shared(A&&... a);
 
 }
 
-}
+
+using namespace seastar;
+using seastar::shared_ptr;
+using seastar::make_shared;

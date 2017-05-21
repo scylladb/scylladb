@@ -128,9 +128,9 @@ class stream_result_future;
  */
 class stream_session : public enable_shared_from_this<stream_session> {
 private:
-    using messaging_verb = net::messaging_verb;
-    using messaging_service = net::messaging_service;
-    using msg_addr = net::msg_addr;
+    using messaging_verb = netw::messaging_verb;
+    using messaging_service = netw::messaging_service;
+    using msg_addr = netw::msg_addr;
     using inet_address = gms::inet_address;
     using UUID = utils::UUID;
     using token = dht::token;
@@ -138,8 +138,8 @@ private:
     static void init_messaging_service_handler();
     static distributed<database>* _db;
 public:
-    static net::messaging_service& ms() {
-        return net::get_local_messaging_service();
+    static netw::messaging_service& ms() {
+        return netw::get_local_messaging_service();
     }
     static database& get_local_db() { return _db->local(); }
     static distributed<database>& get_db() { return *_db; };

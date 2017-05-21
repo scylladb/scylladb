@@ -25,6 +25,7 @@
 
 #include <json/json.h>
 
+namespace seastar { // FIXME: not ours
 namespace json {
 
 template<typename Map>
@@ -57,6 +58,8 @@ inline Map to_map(const sstring& raw, Map&& map) {
 
 inline std::map<sstring, sstring> to_map(const sstring& raw) {
     return to_map(raw, std::map<sstring, sstring>());
+}
+
 }
 
 }

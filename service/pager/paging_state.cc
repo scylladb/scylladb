@@ -61,7 +61,7 @@ service::pager::paging_state::paging_state(partition_key pk, std::experimental::
         return nullptr;
     }
 
-    if (data.value().size() < sizeof(uint32_t) || le_to_cpu(*unaligned_cast<int32_t*>(data.value().begin())) != net::messaging_service::current_version) {
+    if (data.value().size() < sizeof(uint32_t) || le_to_cpu(*unaligned_cast<int32_t*>(data.value().begin())) != netw::messaging_service::current_version) {
         throw exceptions::protocol_exception("Invalid value for the paging state");
     }
 
@@ -81,6 +81,6 @@ service::pager::paging_state::paging_state(partition_key pk, std::experimental::
 bytes_opt service::pager::paging_state::serialize() const {
     bytes b = ser::serialize_to_buffer<bytes>(*this, sizeof(uint32_t));
     // put serialization format id
-    *unaligned_cast<int32_t*>(b.begin()) = cpu_to_le(net::messaging_service::current_version);
+    *unaligned_cast<int32_t*>(b.begin()) = cpu_to_le(netw::messaging_service::current_version);
     return {std::move(b)};
 }

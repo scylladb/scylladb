@@ -28,8 +28,7 @@
 #include "md5_hasher.hh"
 #include <experimental/optional>
 #include <seastar/util/bool_class.hh>
-
-namespace stdx = std::experimental;
+#include "seastarx.hh"
 
 namespace query {
 

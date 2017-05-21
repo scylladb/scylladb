@@ -81,7 +81,7 @@ future<> cql3::statements::list_permissions_statement::check_access(const servic
 }
 
 
-future<::shared_ptr<transport::messages::result_message>>
+future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::list_permissions_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
     static auto make_column = [](sstring name) {
         return ::make_shared<column_specification>(auth::auth::AUTH_KS, "permissions", ::make_shared<column_identifier>(std::move(name), true), utf8_type);
@@ -125,7 +125,7 @@ cql3::statements::list_permissions_statement::execute(distributed<service::stora
             }
         }
 
-        auto rows = ::make_shared<transport::messages::result_message::rows>(std::move(rs));
-        return ::shared_ptr<transport::messages::result_message>(std::move(rows));
+        auto rows = ::make_shared<cql_transport::messages::result_message::rows>(std::move(rs));
+        return ::shared_ptr<cql_transport::messages::result_message>(std::move(rows));
     });
 }

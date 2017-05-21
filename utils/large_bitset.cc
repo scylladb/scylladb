@@ -22,6 +22,7 @@
 #include "large_bitset.hh"
 #include <algorithm>
 #include <seastar/core/align.hh>
+#include "seastarx.hh"
 
 large_bitset::large_bitset(size_t nr_bits) : _nr_bits(nr_bits) {
     auto nr_blocks = align_up(nr_bits, bits_per_block()) / bits_per_block();

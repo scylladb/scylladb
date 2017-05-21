@@ -51,7 +51,7 @@ class revoke_statement : public permission_altering_statement {
 public:
     using permission_altering_statement::permission_altering_statement;
 
-    future<::shared_ptr<transport::messages::result_message>> execute(distributed<service::storage_proxy>&
+    future<::shared_ptr<cql_transport::messages::result_message>> execute(distributed<service::storage_proxy>&
                     , service::query_state&
                     , const query_options&) override;
 };

@@ -76,7 +76,7 @@ using wrapping_partition_range = wrapping_range<dht::ring_position>;
 
 }
 
-namespace net {
+namespace netw {
 
 /* All verb handler identifiers */
 enum class messaging_verb : int32_t {
@@ -111,19 +111,19 @@ enum class messaging_verb : int32_t {
     LAST = 24,
 };
 
-} // namespace net
+} // namespace netw
 
 namespace std {
 template <>
-class hash<net::messaging_verb> {
+class hash<netw::messaging_verb> {
 public:
-    size_t operator()(const net::messaging_verb& x) const {
+    size_t operator()(const netw::messaging_verb& x) const {
         return hash<int32_t>()(int32_t(x));
     }
 };
 } // namespace std
 
-namespace net {
+namespace netw {
 
 struct serializer {};
 
@@ -145,7 +145,7 @@ public:
     struct rpc_protocol_server_wrapper;
     struct shard_info;
 
-    using msg_addr = net::msg_addr;
+    using msg_addr = netw::msg_addr;
     using inet_address = gms::inet_address;
     using UUID = utils::UUID;
     using clients_map = std::unordered_map<msg_addr, shard_info, msg_addr::hash>;
@@ -359,4 +359,4 @@ inline messaging_service& get_local_messaging_service() {
     return _the_messaging_service.local();
 }
 
-} // namespace net
+} // namespace netw

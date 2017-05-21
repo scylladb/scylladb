@@ -78,7 +78,7 @@ using inet_address = gms::inet_address;
 
 namespace service {
 
-static logging::logger logger("storage_service");
+static logging::logger slogger("storage_service");
 
 static const sstring RANGE_TOMBSTONES_FEATURE = "RANGE_TOMBSTONES";
 static const sstring LARGE_PARTITIONS_FEATURE = "LARGE_PARTITIONS";
@@ -165,7 +165,7 @@ std::experimental::optional<UUID> get_replace_node() {
         return utils::UUID(replace_node);
     } catch (...) {
         auto msg = sprint("Unable to parse %s as host-id", replace_node);
-        logger.error("{}", msg);
+        slogger.error("{}", msg);
         throw std::runtime_error(msg);
     }
 }
@@ -195,12 +195,12 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     std::map<gms::application_state, gms::versioned_value> app_states;
     if (db::system_keyspace::was_decommissioned()) {
         if (db().local().get_config().override_decommission()) {
-            logger.warn("This node was decommissioned, but overriding by operator request.");
+            slogger.warn("This node was decommissioned, but overriding by operator request.");
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
         } else {
             auto msg = sstring("This node was decommissioned and will not rejoin the ring unless override_decommission=true has been set,"
                                "or all existing data is removed and the node is bootstrapped again");
-            logger.error(msg.c_str());
+            slogger.error(msg.c_str());
             throw std::runtime_error(msg.c_str());
         }
     }
@@ -227,9 +227,9 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
         auto seeds = gms::get_local_gossiper().get_seeds();
         auto my_ep = get_broadcast_address();
         auto peer_features = db::system_keyspace::load_peer_features().get0();
-        logger.info("load_peer_features: peer_features size={}", peer_features.size());
+        slogger.info("load_peer_features: peer_features size={}", peer_features.size());
         for (auto& x : peer_features) {
-            logger.info("load_peer_features: peer={}, supported_features={}", x.first, x.second);
+            slogger.info("load_peer_features: peer={}, supported_features={}", x.first, x.second);
         }
         auto local_features = get_config_supported_features();
 
@@ -237,18 +237,18 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
             // This node is a seed node
             if (peer_features.empty()) {
                 // This is a competely new seed node, skip the check
-                logger.info("Checking remote features skipped, since this node is a new seed node which knows nothing about the cluster");
+                slogger.info("Checking remote features skipped, since this node is a new seed node which knows nothing about the cluster");
             } else {
                 // This is a existing seed node
                 if (seeds.size() == 1) {
                     // This node is the only seed node, check features with system table
-                    logger.info("Checking remote features with system table, since this node is the only seed node");
+                    slogger.info("Checking remote features with system table, since this node is the only seed node");
                     gossiper.check_knows_remote_features(local_features, peer_features);
                 } else {
                     // More than one seed node in the seed list, do shadow round with other seed nodes
                     bool ok;
                     try {
-                        logger.info("Checking remote features with gossip");
+                        slogger.info("Checking remote features with gossip");
                         gossiper.do_shadow_round().get();
                         ok = true;
                     } catch (...) {
@@ -264,7 +264,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
                         }
                     } else {
                         // Check features with system table
-                        logger.info("Checking remote features with gossip failed, fallback to check with system table");
+                        slogger.info("Checking remote features with gossip failed, fallback to check with system table");
                         gossiper.check_knows_remote_features(local_features, peer_features);
                     }
                 }
@@ -274,7 +274,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
             // Do shadow round to check if this node knows all the features
             // advertised by all other nodes, otherwise this node is too old
             // (missing features) to join the cluser.
-            logger.info("Checking remote features with gossip");
+            slogger.info("Checking remote features with gossip");
             gossiper.do_shadow_round().get();
             gossiper.check_knows_remote_features(local_features);
             gossiper.reset_endpoint_state_map();
@@ -300,7 +300,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     app_states.emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));
     app_states.emplace(gms::application_state::RELEASE_VERSION, value_factory.release_version());
     app_states.emplace(gms::application_state::SUPPORTED_FEATURES, value_factory.supported_features(features));
-    logger.info("Starting up server gossip");
+    slogger.info("Starting up server gossip");
 
     auto& gossiper = gms::get_local_gossiper();
     gossiper.register_(this->shared_from_this());
@@ -340,17 +340,17 @@ void storage_service::join_token_ring(int delay) {
     // We attempted to replace this with a schema-presence check, but you need a meaningful sleep
     // to get schema info from gossip which defeats the purpose.  See CASSANDRA-4427 for the gory details.
     std::unordered_set<inet_address> current;
-    logger.debug("Bootstrap variables: {} {} {} {}",
+    slogger.debug("Bootstrap variables: {} {} {} {}",
                  is_auto_bootstrap(),
                  db::system_keyspace::bootstrap_in_progress(),
                  db::system_keyspace::bootstrap_complete(),
                  get_seeds().count(get_broadcast_address()));
     if (is_auto_bootstrap() && !db::system_keyspace::bootstrap_complete() && get_seeds().count(get_broadcast_address())) {
-        logger.info("This node will not auto bootstrap because it is configured to be a seed node.");
+        slogger.info("This node will not auto bootstrap because it is configured to be a seed node.");
     }
     if (should_bootstrap()) {
         if (db::system_keyspace::bootstrap_in_progress()) {
-            logger.warn("Detected previous bootstrap failure; retrying");
+            slogger.warn("Detected previous bootstrap failure; retrying");
         } else {
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS).get();
         }
@@ -359,7 +359,7 @@ void storage_service::join_token_ring(int delay) {
         for (int i = 0; i < delay; i += 1000) {
             // if we see schema, we can proceed to the next check directly
             if (_db.local().get_version() != database::empty_version) {
-                logger.debug("got schema: {}", _db.local().get_version());
+                slogger.debug("got schema: {}", _db.local().get_version());
                 break;
             }
             sleep(std::chrono::seconds(1)).get();
@@ -374,7 +374,7 @@ void storage_service::join_token_ring(int delay) {
         set_mode(mode::JOINING, "waiting for pending range calculation", true);
         update_pending_ranges().get();
         set_mode(mode::JOINING, "calculation complete, ready to bootstrap", true);
-        logger.debug("... got ring + schema info");
+        slogger.debug("... got ring + schema info");
 
         auto t = gms::gossiper::clk::now();
         while (get_property_rangemovement() &&
@@ -382,7 +382,7 @@ void storage_service::join_token_ring(int delay) {
              !_token_metadata.get_leaving_endpoints().empty() ||
              !_token_metadata.get_moving_endpoints().empty())) {
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
-            logger.info("Checking bootstrapping/leaving/moving nodes: tokens {}, leaving {}, moving {}, sleep 1 second and check again ({} seconds elapsed)",
+            slogger.info("Checking bootstrapping/leaving/moving nodes: tokens {}, leaving {}, moving {}, sleep 1 second and check again ({} seconds elapsed)",
                 _token_metadata.get_bootstrap_tokens().size(),
                 _token_metadata.get_leaving_endpoints().size(),
                 _token_metadata.get_moving_endpoints().size(),
@@ -401,7 +401,7 @@ void storage_service::join_token_ring(int delay) {
             }
             update_pending_ranges().get();
         }
-        logger.info("Checking bootstrapping/leaving/moving nodes: ok");
+        slogger.info("Checking bootstrapping/leaving/moving nodes: ok");
 
         if (!db().local().is_replacing()) {
             if (_token_metadata.is_member(get_broadcast_address())) {
@@ -441,7 +441,7 @@ void storage_service::join_token_ring(int delay) {
         // bootstrap will block until finished
         if (_is_bootstrap_mode) {
             auto err = sprint("We are not supposed in bootstrap mode any more");
-            logger.warn(err.c_str());
+            slogger.warn(err.c_str());
             throw std::runtime_error(err);
         }
     } else {
@@ -452,22 +452,22 @@ void storage_service::join_token_ring(int delay) {
             if (initial_tokens.size() < 1) {
                 _bootstrap_tokens = boot_strapper::get_random_tokens(_token_metadata, num_tokens);
                 if (num_tokens == 1) {
-                    logger.warn("Generated random token {}. Random tokens will result in an unbalanced ring; see http://wiki.apache.org/cassandra/Operations", _bootstrap_tokens);
+                    slogger.warn("Generated random token {}. Random tokens will result in an unbalanced ring; see http://wiki.apache.org/cassandra/Operations", _bootstrap_tokens);
                 } else {
-                    logger.info("Generated random tokens. tokens are {}", _bootstrap_tokens);
+                    slogger.info("Generated random tokens. tokens are {}", _bootstrap_tokens);
                 }
             } else {
                 for (auto token_string : initial_tokens) {
                     auto token = dht::global_partitioner().from_sstring(token_string);
                     _bootstrap_tokens.insert(token);
                 }
-                logger.info("Saved tokens not found. Using configuration value: {}", _bootstrap_tokens);
+                slogger.info("Saved tokens not found. Using configuration value: {}", _bootstrap_tokens);
             }
         } else {
             if (_bootstrap_tokens.size() != num_tokens) {
                 throw std::runtime_error(sprint("Cannot change the number of tokens from %ld to %ld", _bootstrap_tokens.size(), num_tokens));
             } else {
-                logger.info("Using saved tokens {}", _bootstrap_tokens);
+                slogger.info("Using saved tokens {}", _bootstrap_tokens);
             }
         }
     }
@@ -500,11 +500,11 @@ void storage_service::join_token_ring(int delay) {
         }
         if (_token_metadata.sorted_tokens().empty()) {
             auto err = sprint("join_token_ring: Sorted token in token_metadata is empty");
-            logger.error(err.c_str());
+            slogger.error(err.c_str());
             throw std::runtime_error(err);
         }
     } else {
-        logger.info("Startup complete, but write survey mode is active, not becoming an active ring member. Use JMX (StorageService->joinRing()) to finalize ring joining.");
+        slogger.info("Startup complete, but write survey mode is active, not becoming an active ring member. Use JMX (StorageService->joinRing()) to finalize ring joining.");
     }
 }
 
@@ -512,17 +512,17 @@ future<> storage_service::join_ring() {
     return run_with_api_lock(sstring("join_ring"), [] (storage_service& ss) {
         return seastar::async([&ss] {
             if (!ss._joined) {
-                logger.info("Joining ring by operator request");
+                slogger.info("Joining ring by operator request");
                 ss.join_token_ring(0);
             } else if (ss._is_survey_mode) {
                 auto tokens = db::system_keyspace::get_saved_tokens().get0();
                 ss.set_tokens(std::move(tokens));
                 db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
                 ss._is_survey_mode = false;
-                logger.info("Leaving write survey mode and joining ring at operator request");
+                slogger.info("Leaving write survey mode and joining ring at operator request");
                 if (ss._token_metadata.sorted_tokens().empty()) {
                     auto err = sprint("join_ring: Sorted token in token_metadata is empty");
-                    logger.error(err.c_str());
+                    slogger.error(err.c_str());
                     throw std::runtime_error(err);
                 }
                 auth::auth::setup().get();
@@ -554,7 +554,7 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
         _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
         auto replace_addr = db().local().get_replace_address();
         if (replace_addr) {
-            logger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
+            slogger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
             db::system_keyspace::remove_endpoint(*replace_addr).get();
         }
     }
@@ -564,7 +564,7 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
     dht::boot_strapper bs(_db, get_broadcast_address(), tokens, _token_metadata);
     bs.bootstrap().get(); // handles token update
-    logger.info("Bootstrap completed! for the tokens {}", tokens);
+    slogger.info("Bootstrap completed! for the tokens {}", tokens);
 }
 
 sstring
@@ -632,11 +632,11 @@ storage_service::get_range_to_address_map(const sstring& keyspace,
 }
 
 void storage_service::handle_state_bootstrap(inet_address endpoint) {
-    logger.debug("endpoint={} handle_state_bootstrap", endpoint);
+    slogger.debug("endpoint={} handle_state_bootstrap", endpoint);
     // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
     auto tokens = get_tokens_for(endpoint);
 
-    logger.debug("Node {} state bootstrapping, token {}", endpoint, tokens);
+    slogger.debug("Node {} state bootstrapping, token {}", endpoint, tokens);
 
     // if this node is present in token metadata, either we have missed intermediate states
     // or the node had crashed. Print warning if needed, clear obsolete stuff and
@@ -648,7 +648,7 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
         // common (not enough time for gossip to spread). Therefore we report only the
         // former in the log.
         if (!_token_metadata.is_leaving(endpoint)) {
-            logger.info("Node {} state jump to bootstrap", endpoint);
+            slogger.info("Node {} state jump to bootstrap", endpoint);
         }
         _token_metadata.remove_endpoint(endpoint);
     }
@@ -663,7 +663,7 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
 }
 
 void storage_service::handle_state_normal(inet_address endpoint) {
-    logger.debug("endpoint={} handle_state_normal", endpoint);
+    slogger.debug("endpoint={} handle_state_normal", endpoint);
     auto tokens = get_tokens_for(endpoint);
     auto& gossiper = gms::get_local_gossiper();
 
@@ -672,10 +672,10 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     std::unordered_set<token> local_tokens_to_remove;
     std::unordered_set<inet_address> endpoints_to_remove;
 
-    logger.debug("Node {} state normal, token {}", endpoint, tokens);
+    slogger.debug("Node {} state normal, token {}", endpoint, tokens);
 
     if (_token_metadata.is_member(endpoint)) {
-        logger.info("Node {} state jump to normal", endpoint);
+        slogger.info("Node {} state jump to normal", endpoint);
     }
     update_peer_info(endpoint);
 
@@ -687,20 +687,20 @@ void storage_service::handle_state_normal(inet_address endpoint) {
             db().local().get_replace_address() &&
             gossiper.get_endpoint_state_for_endpoint(db().local().get_replace_address().value())  &&
             (host_id == gossiper.get_host_id(db().local().get_replace_address().value()))) {
-            logger.warn("Not updating token metadata for {} because I am replacing it", endpoint);
+            slogger.warn("Not updating token metadata for {} because I am replacing it", endpoint);
         } else {
             if (existing && *existing != endpoint) {
                 if (*existing == get_broadcast_address()) {
-                    logger.warn("Not updating host ID {} for {} because it's mine", host_id, endpoint);
+                    slogger.warn("Not updating host ID {} for {} because it's mine", host_id, endpoint);
                     _token_metadata.remove_endpoint(endpoint);
                     endpoints_to_remove.insert(endpoint);
                 } else if (gossiper.compare_endpoint_startup(endpoint, *existing) > 0) {
-                    logger.warn("Host ID collision for {} between {} and {}; {} is the new owner", host_id, *existing, endpoint, endpoint);
+                    slogger.warn("Host ID collision for {} between {} and {}; {} is the new owner", host_id, *existing, endpoint, endpoint);
                     _token_metadata.remove_endpoint(*existing);
                     endpoints_to_remove.insert(*existing);
                     _token_metadata.update_host_id(host_id, endpoint);
                 } else {
-                    logger.warn("Host ID collision for {} between {} and {}; ignored {}", host_id, *existing, endpoint, endpoint);
+                    slogger.warn("Host ID collision for {} between {} and {}; ignored {}", host_id, *existing, endpoint, endpoint);
                     _token_metadata.remove_endpoint(endpoint);
                     endpoints_to_remove.insert(endpoint);
                 }
@@ -714,16 +714,16 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         // we don't want to update if this node is responsible for the token and it has a later startup time than endpoint.
         auto current_owner = _token_metadata.get_endpoint(t);
         if (!current_owner) {
-            logger.debug("handle_state_normal: New node {} at token {}", endpoint, t);
+            slogger.debug("handle_state_normal: New node {} at token {}", endpoint, t);
             tokens_to_update_in_metadata.insert(t);
             tokens_to_update_in_system_keyspace.insert(t);
         } else if (endpoint == *current_owner) {
-            logger.debug("handle_state_normal: endpoint={} == current_owner={} token {}", endpoint, *current_owner, t);
+            slogger.debug("handle_state_normal: endpoint={} == current_owner={} token {}", endpoint, *current_owner, t);
             // set state back to normal, since the node may have tried to leave, but failed and is now back up
             tokens_to_update_in_metadata.insert(t);
             tokens_to_update_in_system_keyspace.insert(t);
         } else if (gossiper.compare_endpoint_startup(endpoint, *current_owner) > 0) {
-            logger.debug("handle_state_normal: endpoint={} > current_owner={}, token {}", endpoint, *current_owner, t);
+            slogger.debug("handle_state_normal: endpoint={} > current_owner={}, token {}", endpoint, *current_owner, t);
             tokens_to_update_in_metadata.insert(t);
             tokens_to_update_in_system_keyspace.insert(t);
             // currentOwner is no longer current, endpoint is.  Keep track of these moves, because when
@@ -732,17 +732,17 @@ void storage_service::handle_state_normal(inet_address endpoint) {
             auto rg = ep_to_token_copy.equal_range(*current_owner);
             for (auto it = rg.first; it != rg.second; it++) {
                 if (it->second == t) {
-                    logger.info("handle_state_normal: remove endpoint={} token={}", *current_owner, t);
+                    slogger.info("handle_state_normal: remove endpoint={} token={}", *current_owner, t);
                     ep_to_token_copy.erase(it);
                 }
             }
             if (ep_to_token_copy.count(*current_owner) < 1) {
-                logger.info("handle_state_normal: endpoints_to_remove endpoint={}", *current_owner);
+                slogger.info("handle_state_normal: endpoints_to_remove endpoint={}", *current_owner);
                 endpoints_to_remove.insert(*current_owner);
             }
-            logger.info("handle_state_normal: Nodes {} and {} have the same token {}. {} is the new owner", endpoint, *current_owner, t, endpoint);
+            slogger.info("handle_state_normal: Nodes {} and {} have the same token {}. {} is the new owner", endpoint, *current_owner, t, endpoint);
         } else {
-            logger.info("handle_state_normal: Nodes {} and {} have the same token {}. Ignoring {}", endpoint, *current_owner, t, endpoint);
+            slogger.info("handle_state_normal: Nodes {} and {} have the same token {}. Ignoring {}", endpoint, *current_owner, t, endpoint);
         }
     }
 
@@ -761,13 +761,13 @@ void storage_service::handle_state_normal(inet_address endpoint) {
             gossiper.replacement_quarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
         }
     }
-    logger.debug("handle_state_normal: endpoint={} tokens_to_update_in_system_keyspace = {}", endpoint, tokens_to_update_in_system_keyspace);
+    slogger.debug("handle_state_normal: endpoint={} tokens_to_update_in_system_keyspace = {}", endpoint, tokens_to_update_in_system_keyspace);
     if (!tokens_to_update_in_system_keyspace.empty()) {
         db::system_keyspace::update_tokens(endpoint, tokens_to_update_in_system_keyspace).then_wrapped([endpoint] (auto&& f) {
             try {
                 f.get();
             } catch (...) {
-                logger.error("handle_state_normal: fail to update tokens for {}: {}", endpoint, std::current_exception());
+                slogger.error("handle_state_normal: fail to update tokens for {}: {}", endpoint, std::current_exception());
             }
             return make_ready_future<>();
         }).get();
@@ -783,7 +783,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
                 try {
                     subscriber->on_move(endpoint);
                 } catch (...) {
-                    logger.warn("Move notification failed {}: {}", endpoint, std::current_exception());
+                    slogger.warn("Move notification failed {}: {}", endpoint, std::current_exception());
                 }
             }
         }).get();
@@ -793,40 +793,40 @@ void storage_service::handle_state_normal(inet_address endpoint) {
                 try {
                     subscriber->on_join_cluster(endpoint);
                 } catch (...) {
-                    logger.warn("Join cluster notification failed {}: {}", endpoint, std::current_exception());
+                    slogger.warn("Join cluster notification failed {}: {}", endpoint, std::current_exception());
                 }
             }
         }).get();
     }
 
     update_pending_ranges().get();
-    if (logger.is_enabled(logging::log_level::debug)) {
+    if (slogger.is_enabled(logging::log_level::debug)) {
         auto ver = _token_metadata.get_ring_version();
         for (auto& x : _token_metadata.get_token_to_endpoint()) {
-            logger.debug("handle_state_normal: token_metadata.ring_version={}, token={} -> endpoint={}", ver, x.first, x.second);
+            slogger.debug("handle_state_normal: token_metadata.ring_version={}, token={} -> endpoint={}", ver, x.first, x.second);
         }
     }
 }
 
 void storage_service::handle_state_leaving(inet_address endpoint) {
-    logger.debug("endpoint={} handle_state_leaving", endpoint);
+    slogger.debug("endpoint={} handle_state_leaving", endpoint);
 
     auto tokens = get_tokens_for(endpoint);
 
-    logger.debug("Node {} state leaving, tokens {}", endpoint, tokens);
+    slogger.debug("Node {} state leaving, tokens {}", endpoint, tokens);
 
     // If the node is previously unknown or tokens do not match, update tokenmetadata to
     // have this node as 'normal' (it must have been using this token before the
     // leave). This way we'll get pending ranges right.
     if (!_token_metadata.is_member(endpoint)) {
-        logger.info("Node {} state jump to leaving", endpoint);
+        slogger.info("Node {} state jump to leaving", endpoint);
         _token_metadata.update_normal_tokens(tokens, endpoint);
     } else {
         auto tokens_ = _token_metadata.get_tokens(endpoint);
         std::set<token> tmp(tokens.begin(), tokens.end());
         if (!std::includes(tokens_.begin(), tokens_.end(), tmp.begin(), tmp.end())) {
-            logger.warn("Node {} 'leaving' token mismatch. Long network partition?", endpoint);
-            logger.debug("tokens_={}, tokens={}", tokens_, tmp);
+            slogger.warn("Node {} 'leaving' token mismatch. Long network partition?", endpoint);
+            slogger.debug("tokens_={}, tokens={}", tokens_, tmp);
             _token_metadata.update_normal_tokens(tokens, endpoint);
         }
     }
@@ -838,40 +838,40 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
 }
 
 void storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
-    logger.debug("endpoint={} handle_state_left", endpoint);
+    slogger.debug("endpoint={} handle_state_left", endpoint);
     if (pieces.size() < 2) {
-        logger.warn("Fail to handle_state_left endpoint={} pieces={}", endpoint, pieces);
+        slogger.warn("Fail to handle_state_left endpoint={} pieces={}", endpoint, pieces);
         return;
     }
     auto tokens = get_tokens_for(endpoint);
-    logger.debug("Node {} state left, tokens {}", endpoint, tokens);
+    slogger.debug("Node {} state left, tokens {}", endpoint, tokens);
     excise(tokens, endpoint, extract_expire_time(pieces));
 }
 
 void storage_service::handle_state_moving(inet_address endpoint, std::vector<sstring> pieces) {
-    logger.debug("endpoint={} handle_state_moving", endpoint);
+    slogger.debug("endpoint={} handle_state_moving", endpoint);
     if (pieces.size() < 2) {
-        logger.warn("Fail to handle_state_moving endpoint={} pieces={}", endpoint, pieces);
+        slogger.warn("Fail to handle_state_moving endpoint={} pieces={}", endpoint, pieces);
         return;
     }
     auto token = dht::global_partitioner().from_sstring(pieces[1]);
-    logger.debug("Node {} state moving, new token {}", endpoint, token);
+    slogger.debug("Node {} state moving, new token {}", endpoint, token);
     _token_metadata.add_moving_endpoint(token, endpoint);
     update_pending_ranges().get();
 }
 
 void storage_service::handle_state_removing(inet_address endpoint, std::vector<sstring> pieces) {
-    logger.debug("endpoint={} handle_state_removing", endpoint);
+    slogger.debug("endpoint={} handle_state_removing", endpoint);
     if (pieces.empty()) {
-        logger.warn("Fail to handle_state_removing endpoint={} pieces={}", endpoint, pieces);
+        slogger.warn("Fail to handle_state_removing endpoint={} pieces={}", endpoint, pieces);
         return;
     }
     if (endpoint == get_broadcast_address()) {
-        logger.info("Received removenode gossip about myself. Is this node rejoining after an explicit removenode?");
+        slogger.info("Received removenode gossip about myself. Is this node rejoining after an explicit removenode?");
         try {
             drain().get();
         } catch (...) {
-            logger.error("Fail to drain: {}", std::current_exception());
+            slogger.error("Fail to drain: {}", std::current_exception());
             throw;
         }
         return;
@@ -884,7 +884,7 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
             excise(std::move(tmp), endpoint, extract_expire_time(pieces));
         } else if (sstring(gms::versioned_value::REMOVING_TOKEN) == state) {
             auto& gossiper = gms::get_local_gossiper();
-            logger.debug("Tokens {} removed manually (endpoint was {})", remove_tokens, endpoint);
+            slogger.debug("Tokens {} removed manually (endpoint was {})", remove_tokens, endpoint);
             // Note that the endpoint is being removed
             _token_metadata.add_leaving_endpoint(endpoint);
             update_pending_ranges().get();
@@ -892,20 +892,20 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
             auto state = gossiper.get_endpoint_state_for_endpoint(endpoint);
             if (!state) {
                 auto err = sprint("Can not find endpoint_state for endpoint=%s", endpoint);
-                logger.warn(err.c_str());
+                slogger.warn(err.c_str());
                 throw std::runtime_error(err);
             }
             auto value = state->get_application_state(application_state::REMOVAL_COORDINATOR);
             if (!value) {
                 auto err = sprint("Can not find application_state for endpoint=%s", endpoint);
-                logger.warn(err.c_str());
+                slogger.warn(err.c_str());
                 throw std::runtime_error(err);
             }
             std::vector<sstring> coordinator;
             boost::split(coordinator, value->value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
             if (coordinator.size() != 2) {
                 auto err = sprint("Can not split REMOVAL_COORDINATOR for endpoint=%s, value=%s", endpoint, value->value);
-                logger.warn(err.c_str());
+                slogger.warn(err.c_str());
                 throw std::runtime_error(err);
             }
             UUID host_id(coordinator[1]);
@@ -913,7 +913,7 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
             auto ep = _token_metadata.get_endpoint_for_host_id(host_id);
             if (!ep) {
                 auto err = sprint("Can not find host_id=%s", host_id);
-                logger.warn(err.c_str());
+                slogger.warn(err.c_str());
                 throw std::runtime_error(err);
             }
             restore_replica_count(endpoint, ep.value()).get();
@@ -927,19 +927,19 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
 }
 
 void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
-    logger.debug("endpoint={} on_join", endpoint);
+    slogger.debug("endpoint={} on_join", endpoint);
     for (const auto& e : ep_state.get_application_state_map()) {
         on_change(endpoint, e.first, e.second);
     }
     get_local_migration_manager().schedule_schema_pull(endpoint, ep_state).handle_exception([endpoint] (auto ep) {
-        logger.warn("Fail to pull schema from {}: {}", endpoint, ep);
+        slogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
     });
 }
 
 void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
-    logger.debug("endpoint={} on_alive", endpoint);
+    slogger.debug("endpoint={} on_alive", endpoint);
     get_local_migration_manager().schedule_schema_pull(endpoint, state).handle_exception([endpoint] (auto ep) {
-        logger.warn("Fail to pull schema from {}: {}", endpoint, ep);
+        slogger.warn("Fail to pull schema from {}: {}", endpoint, ep);
     });
     if (_token_metadata.is_member(endpoint)) {
 #if 0
@@ -950,7 +950,7 @@ void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state s
                 try {
                     subscriber->on_up(endpoint);
                 } catch (...) {
-                    logger.warn("Up notification failed {}: {}", endpoint, std::current_exception());
+                    slogger.warn("Up notification failed {}: {}", endpoint, std::current_exception());
                 }
             }
         }).get();
@@ -958,16 +958,16 @@ void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state s
 }
 
 void storage_service::before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, const gms::versioned_value& new_value) {
-    logger.debug("endpoint={} before_change: new app_state={}, new versioned_value={}", endpoint, new_state_key, new_value);
+    slogger.debug("endpoint={} before_change: new app_state={}, new versioned_value={}", endpoint, new_state_key, new_value);
 }
 
 void storage_service::on_change(inet_address endpoint, application_state state, const versioned_value& value) {
-    logger.debug("endpoint={} on_change:     app_state={}, versioned_value={}", endpoint, state, value);
+    slogger.debug("endpoint={} on_change:     app_state={}, versioned_value={}", endpoint, state, value);
     if (state == application_state::STATUS) {
         std::vector<sstring> pieces;
         boost::split(pieces, value.value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
         if (pieces.empty()) {
-            logger.warn("Fail to split status in on_change: endpoint={}, app_state={}, value={}", endpoint, state, value);
+            slogger.warn("Fail to split status in on_change: endpoint={}, app_state={}, value={}", endpoint, state, value);
         }
         sstring move_name = pieces[0];
         if (move_name == sstring(versioned_value::STATUS_BOOTSTRAPPING)) {
@@ -989,14 +989,14 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
         auto& gossiper = gms::get_local_gossiper();
         auto ep_state = gossiper.get_endpoint_state_for_endpoint(endpoint);
         if (!ep_state || gossiper.is_dead_state(*ep_state)) {
-            logger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
+            slogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
             return;
         }
         if (get_token_metadata().is_member(endpoint)) {
             do_update_system_peers_table(endpoint, state, value);
             if (state == application_state::SCHEMA) {
                 get_local_migration_manager().schedule_schema_pull(endpoint, *ep_state).handle_exception([endpoint] (auto ep) {
-                    logger.warn("Failed to pull schema from {}: {}", endpoint, ep);
+                    slogger.warn("Failed to pull schema from {}: {}", endpoint, ep);
                 });
             }
         }
@@ -1006,27 +1006,27 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
 
 
 void storage_service::on_remove(gms::inet_address endpoint) {
-    logger.debug("endpoint={} on_remove", endpoint);
+    slogger.debug("endpoint={} on_remove", endpoint);
     _token_metadata.remove_endpoint(endpoint);
     update_pending_ranges().get();
 }
 
 void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
-    logger.debug("endpoint={} on_dead", endpoint);
-    net::get_local_messaging_service().remove_rpc_client(net::msg_addr{endpoint, 0});
+    slogger.debug("endpoint={} on_dead", endpoint);
+    netw::get_local_messaging_service().remove_rpc_client(netw::msg_addr{endpoint, 0});
     get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
         for (auto&& subscriber : ss._lifecycle_subscribers) {
             try {
                 subscriber->on_down(endpoint);
             } catch (...) {
-                logger.warn("Down notification failed {}: {}", endpoint, std::current_exception());
+                slogger.warn("Down notification failed {}: {}", endpoint, std::current_exception());
             }
         }
     }).get();
 }
 
 void storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
-    logger.debug("endpoint={} on_restart", endpoint);
+    slogger.debug("endpoint={} on_restart", endpoint);
     // If we have restarted before the node was even marked down, we need to reset the connection pool
     if (state.is_alive()) {
         on_dead(endpoint, state);
@@ -1040,7 +1040,7 @@ static void update_table(gms::inet_address endpoint, sstring col, T value) {
         try {
             f.get();
         } catch (...) {
-            logger.error("fail to update {} for {}: {}", col, endpoint, std::current_exception());
+            slogger.error("fail to update {} for {}: {}", col, endpoint, std::current_exception());
         }
         return make_ready_future<>();
     }).get();
@@ -1048,7 +1048,7 @@ static void update_table(gms::inet_address endpoint, sstring col, T value) {
 
 // Runs inside seastar::async context
 void storage_service::do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value) {
-    logger.debug("Update system.peers table: endpoint={}, app_state={}, versioned_value={}", endpoint, state, value);
+    slogger.debug("Update system.peers table: endpoint={}, app_state={}, versioned_value={}", endpoint, state, value);
     if (state == application_state::RELEASE_VERSION) {
         update_table(endpoint, "release_version", value.value);
     } else if (state == application_state::DC) {
@@ -1061,7 +1061,7 @@ void storage_service::do_update_system_peers_table(gms::inet_address endpoint, c
         try {
             ep = gms::inet_address(value.value);
         } catch (...) {
-            logger.error("fail to update {} for {}: invalid rcpaddr {}", col, endpoint, value.value);
+            slogger.error("fail to update {} for {}: invalid rcpaddr {}", col, endpoint, value.value);
             return;
         }
         update_table(endpoint, col, ep.addr());
@@ -1104,7 +1104,7 @@ sstring storage_service::get_application_state_value(inet_address endpoint, appl
 
 std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address endpoint) {
     auto tokens_string = get_application_state_value(endpoint, application_state::TOKENS);
-    logger.trace("endpoint={}, tokens_string={}", endpoint, tokens_string);
+    slogger.trace("endpoint={}, tokens_string={}", endpoint, tokens_string);
     if (tokens_string.size() == 0) {
         return {}; // boost::split produces one element for emty string
     }
@@ -1113,7 +1113,7 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
     boost::split(tokens, tokens_string, boost::is_any_of(";"));
     for (auto str : tokens) {
         auto t = dht::global_partitioner().from_sstring(str);
-        logger.trace("endpoint={}, token_str={} token={}", endpoint, str, t);
+        slogger.trace("endpoint={}, token_str={} token={}", endpoint, str, t);
         ret.emplace(std::move(t));
     }
     return ret;
@@ -1121,7 +1121,7 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
 
 // Runs inside seastar::async context
 void storage_service::set_tokens(std::unordered_set<token> tokens) {
-    logger.debug("Setting tokens to {}", tokens);
+    slogger.debug("Setting tokens to {}", tokens);
     db::system_keyspace::update_tokens(tokens).get();
     _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
     auto local_tokens = get_local_tokens().get0();
@@ -1151,24 +1151,24 @@ static stdx::optional<future<>> drain_in_progress;
 future<> storage_service::stop_transport() {
     return run_with_no_api_lock([] (storage_service& ss) {
         return seastar::async([&ss] {
-            logger.info("Stop transport: starts");
+            slogger.info("Stop transport: starts");
 
             gms::stop_gossiping().get();
-            logger.info("Stop transport: stop_gossiping done");
+            slogger.info("Stop transport: stop_gossiping done");
 
             ss.shutdown_client_servers().get();
-            logger.info("Stop transport: shutdown rpc and cql server done");
+            slogger.info("Stop transport: shutdown rpc and cql server done");
 
             ss.do_stop_ms().get();
-            logger.info("Stop transport: shutdown messaging_service done");
+            slogger.info("Stop transport: shutdown messaging_service done");
 
             ss.do_stop_stream_manager().get();
-            logger.info("Stop transport: shutdown stream_manager done");
+            slogger.info("Stop transport: shutdown stream_manager done");
 
             auth::auth::shutdown().get();
-            logger.info("Stop transport: auth shutdown");
+            slogger.info("Stop transport: auth shutdown");
 
-            logger.info("Stop transport: done");
+            slogger.info("Stop transport: done");
         });
     });
 }
@@ -1179,25 +1179,25 @@ future<> storage_service::drain_on_shutdown() {
             return std::move(*drain_in_progress);
         }
         return seastar::async([&ss] {
-            logger.info("Drain on shutdown: starts");
+            slogger.info("Drain on shutdown: starts");
 
             ss.stop_transport().get();
-            logger.info("Drain on shutdown: stop_transport done");
+            slogger.info("Drain on shutdown: stop_transport done");
 
             tracing::tracing::tracing_instance().invoke_on_all([] (auto& tr) {
                 return tr.shutdown();
             }).get();
 
             tracing::tracing::tracing_instance().stop().get();
-            logger.info("Drain on shutdown: tracing is stopped");
+            slogger.info("Drain on shutdown: tracing is stopped");
 
             ss.flush_column_families();
-            logger.info("Drain on shutdown: flush column_families done");
+            slogger.info("Drain on shutdown: flush column_families done");
 
             ss.db().invoke_on_all([] (auto& db) {
                 return db.commitlog()->shutdown();
             }).get();
-            logger.info("Drain on shutdown: shutdown commitlog done");
+            slogger.info("Drain on shutdown: shutdown commitlog done");
 
             // NOTE: We currently don't destory migration_manager nor
             // storage_service in scylla, so when we reach here
@@ -1206,7 +1206,7 @@ future<> storage_service::drain_on_shutdown() {
             // process.
             service::get_local_migration_manager().unregister_listener(&ss);
 
-            logger.info("Drain on shutdown: done");
+            slogger.info("Drain on shutdown: done");
         });
     });
 #if 0
@@ -1253,7 +1253,7 @@ future<> storage_service::drain_on_shutdown() {
                 {
                     JVMStabilityInspector.inspectThrowable(t);
                     // don't let this stop us from shutting down the commitlog and other thread pools
-                    logger.warn("Caught exception while waiting for memtable flushes during shutdown hook", t);
+                    slogger.warn("Caught exception while waiting for memtable flushes during shutdown hook", t);
                 }
 
                 CommitLog.instance.shutdownBlocking();
@@ -1261,7 +1261,7 @@ future<> storage_service::drain_on_shutdown() {
                 // wait for miscellaneous tasks like sstable and commitlog segment deletion
                 ScheduledExecutors.nonPeriodicTasks.shutdown();
                 if (!ScheduledExecutors.nonPeriodicTasks.awaitTermination(1, TimeUnit.MINUTES))
-                    logger.warn("Miscellaneous task executor still busy after one minute; proceeding with shutdown");
+                    slogger.warn("Miscellaneous task executor still busy after one minute; proceeding with shutdown");
             }
         }, "StorageServiceShutdownHook");
         Runtime.getRuntime().addShutdownHook(drainOnShutdown);
@@ -1275,9 +1275,9 @@ future<> storage_service::init_server(int delay) {
         }).get();
         auto& gossiper = gms::get_local_gossiper();
 #if 0
-        logger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
-        logger.info("Thrift API version: {}", cassandraConstants.VERSION);
-        logger.info("CQL supported versions: {} (default: {})", StringUtils.join(ClientState.getCQLSupportedVersion(), ","), ClientState.DEFAULT_CQL_VERSION);
+        slogger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
+        slogger.info("Thrift API version: {}", cassandraConstants.VERSION);
+        slogger.info("CQL supported versions: {} (default: {})", StringUtils.join(ClientState.getCQLSupportedVersion(), ","), ClientState.DEFAULT_CQL_VERSION);
 #endif
         _initialized = true;
 
@@ -1300,16 +1300,16 @@ future<> storage_service::init_server(int delay) {
 
         std::vector<inet_address> loaded_endpoints;
         if (get_property_load_ring_state()) {
-            logger.info("Loading persisted ring state");
+            slogger.info("Loading persisted ring state");
             auto loaded_tokens = db::system_keyspace::load_tokens().get0();
             auto loaded_host_ids = db::system_keyspace::load_host_ids().get0();
 
             for (auto& x : loaded_tokens) {
-                logger.debug("Loaded tokens: endpoint={}, tokens={}", x.first, x.second);
+                slogger.debug("Loaded tokens: endpoint={}, tokens={}", x.first, x.second);
             }
 
             for (auto& x : loaded_host_ids) {
-                logger.debug("Loaded host_id: endpoint={}, uuid={}", x.first, x.second);
+                slogger.debug("Loaded host_id: endpoint={}, uuid={}", x.first, x.second);
             }
 
             for (auto x : loaded_tokens) {
@@ -1347,7 +1347,7 @@ future<> storage_service::init_server(int delay) {
                 gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(tokens)).get();
                 gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.hibernate(true)).get();
             }
-            logger.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
+            slogger.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
         }
 
         get_storage_service().invoke_on_all([] (auto& ss) {
@@ -1380,7 +1380,7 @@ future<> storage_service::replicate_tm_and_ep_map(shared_ptr<gms::gossiper> g0) 
     return get_storage_service().invoke_on_all([](storage_service& local_ss) {
         if (!gms::get_gossiper().local_is_initialized()) {
             auto err = sprint("replicate_to_all_cores is called before gossiper is fully initialized");
-            logger.warn(err.c_str());
+            slogger.warn(err.c_str());
             throw std::runtime_error(err);
         }
     }).then([this, g0] {
@@ -1401,13 +1401,13 @@ future<> storage_service::replicate_to_all_cores() {
     // when gossiper has already been initialized.
     if (engine().cpu_id() != 0) {
         auto err = sprint("replicate_to_all_cores is not ran on cpu zero");
-        logger.warn(err.c_str());
+        slogger.warn(err.c_str());
         throw std::runtime_error(err);
     }
 
     if (!gms::get_gossiper().local_is_initialized()) {
         auto err = sprint("replicate_to_all_cores is called before gossiper on shard0 is initialized");
-        logger.warn(err.c_str());
+        slogger.warn(err.c_str());
         throw std::runtime_error(err);
     }
 
@@ -1435,7 +1435,7 @@ future<> storage_service::replicate_to_all_cores() {
             _replicate_task.signal();
             f.get();
         } catch (...) {
-            logger.error("Fail to replicate _token_metadata");
+            slogger.error("Fail to replicate _token_metadata");
         }
         return make_ready_future<>();
     });
@@ -1458,7 +1458,7 @@ future<> storage_service::stop() {
 }
 
 future<> storage_service::check_for_endpoint_collision() {
-    logger.debug("Starting shadow gossip round to check for endpoint collision");
+    slogger.debug("Starting shadow gossip round to check for endpoint collision");
 #if 0
     if (!MessagingService.instance().isListening())
         MessagingService.instance().listen(FBUtilities.getLocalAddress());
@@ -1468,7 +1468,7 @@ future<> storage_service::check_for_endpoint_collision() {
         auto t = gms::gossiper::clk::now();
         bool found_bootstrapping_node = false;
         do {
-            logger.info("Checking remote features with gossip");
+            slogger.info("Checking remote features with gossip");
             gossiper.do_shadow_round().get();
             gossiper.check_knows_remote_features(get_config_supported_features());
             auto addr = get_broadcast_address();
@@ -1483,7 +1483,7 @@ future<> storage_service::check_for_endpoint_collision() {
                     if (state.empty()) {
                         continue;
                     }
-                    logger.debug("Checking bootstrapping/leaving/moving nodes: node={}, status={} (check_for_endpoint_collision)", x.first, state);
+                    slogger.debug("Checking bootstrapping/leaving/moving nodes: node={}, status={} (check_for_endpoint_collision)", x.first, state);
                     if (state == sstring(versioned_value::STATUS_BOOTSTRAPPING) ||
                         state == sstring(versioned_value::STATUS_LEAVING) ||
                         state == sstring(versioned_value::STATUS_MOVING)) {
@@ -1494,7 +1494,7 @@ future<> storage_service::check_for_endpoint_collision() {
                             gossiper.reset_endpoint_state_map();
                             found_bootstrapping_node = true;
                             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
-                            logger.info("Checking bootstrapping/leaving/moving nodes: node={}, status={}, sleep 1 second and check again ({} seconds elapsed) (check_for_endpoint_collision)", x.first, state, elapsed);
+                            slogger.info("Checking bootstrapping/leaving/moving nodes: node={}, status={}, sleep 1 second and check again ({} seconds elapsed) (check_for_endpoint_collision)", x.first, state, elapsed);
                             sleep(std::chrono::seconds(1)).get();
                             break;
                         }
@@ -1502,7 +1502,7 @@ future<> storage_service::check_for_endpoint_collision() {
                 }
             }
         } while (found_bootstrapping_node);
-        logger.info("Checking bootstrapping/leaving/moving nodes: ok (check_for_endpoint_collision)");
+        slogger.info("Checking bootstrapping/leaving/moving nodes: ok (check_for_endpoint_collision)");
         gossiper.reset_endpoint_state_map();
     });
 }
@@ -1515,7 +1515,7 @@ void storage_service::remove_endpoint(inet_address endpoint) {
         try {
             f.get();
         } catch (...) {
-            logger.error("fail to remove endpoint={}: {}", endpoint, std::current_exception());
+            slogger.error("fail to remove endpoint={}: {}", endpoint, std::current_exception());
         }
         return make_ready_future<>();
     }).get();
@@ -1526,7 +1526,7 @@ future<std::unordered_set<token>> storage_service::prepare_replacement_info() {
         throw std::runtime_error(sprint("replace_address is empty"));
     }
     auto replace_address = db().local().get_replace_address().value();
-    logger.info("Gathering node replacement information for {}", replace_address);
+    slogger.info("Gathering node replacement information for {}", replace_address);
 
     // if (!MessagingService.instance().isListening())
     //     MessagingService.instance().listen(FBUtilities.getLocalAddress());
@@ -1536,7 +1536,7 @@ future<std::unordered_set<token>> storage_service::prepare_replacement_info() {
     }
 
     // make magic happen
-    logger.info("Checking remote features with gossip");
+    slogger.info("Checking remote features with gossip");
     return gms::get_local_gossiper().do_shadow_round().then([this, replace_address] {
         auto& gossiper = gms::get_local_gossiper();
         gossiper.check_knows_remote_features(get_config_supported_features());
@@ -1654,9 +1654,9 @@ void storage_service::set_mode(mode m, bool log) {
 void storage_service::set_mode(mode m, sstring msg, bool log) {
     _operation_mode = m;
     if (log) {
-        logger.info("{}: {}", m, msg);
+        slogger.info("{}: {}", m, msg);
     } else {
-        logger.debug("{}: {}", m, msg);
+        slogger.debug("{}: {}", m, msg);
     }
 }
 
@@ -1665,7 +1665,7 @@ future<std::unordered_set<dht::token>> storage_service::get_local_tokens() {
         // should not be called before initServer sets this
         if (tokens.empty()) {
             auto err = sprint("get_local_tokens: tokens is empty");
-            logger.error(err.c_str());
+            slogger.error(err.c_str());
             throw std::runtime_error(err);
         }
         return tokens;
@@ -1686,7 +1686,7 @@ future<std::unordered_map<sstring, std::vector<sstring>>> storage_service::descr
     auto live_hosts = gms::get_local_gossiper().get_live_members();
     std::unordered_map<sstring, std::vector<sstring>> results;
     return map_reduce(std::move(live_hosts), [] (auto host) {
-        auto f0 = net::get_messaging_service().local().send_schema_check(net::msg_addr{ host, 0 });
+        auto f0 = netw::get_messaging_service().local().send_schema_check(netw::msg_addr{ host, 0 });
         return std::move(f0).then_wrapped([host] (auto f) {
             if (f.failed()) {
                 return std::pair<gms::inet_address, stdx::optional<utils::UUID>>(host, stdx::nullopt);
@@ -1706,7 +1706,7 @@ future<std::unordered_map<sstring, std::vector<sstring>>> storage_service::descr
         // we're done: the results map is ready to return to the client.  the rest is just debug logging:
         auto it_unreachable = results.find(UNREACHABLE);
         if (it_unreachable != results.end()) {
-            logger.debug("Hosts not in agreement. Didn't get a response from everybody: {}", ::join( ",", it_unreachable->second));
+            slogger.debug("Hosts not in agreement. Didn't get a response from everybody: {}", ::join( ",", it_unreachable->second));
         }
         auto my_version = get_local_storage_service().get_schema_version();
         for (auto&& entry : results) {
@@ -1715,11 +1715,11 @@ future<std::unordered_map<sstring, std::vector<sstring>>> storage_service::descr
                 continue;
             }
             for (auto&& host : entry.second) {
-                logger.debug("{} disagrees ({})", host, entry.first);
+                slogger.debug("{} disagrees ({})", host, entry.first);
             }
         }
         if (results.size() == 1) {
-            logger.debug("Schemas are in agreement.");
+            slogger.debug("Schemas are in agreement.");
         }
         return results;
     });
@@ -1749,7 +1749,7 @@ future<> storage_service::start_gossiping() {
     return run_with_api_lock(sstring("start_gossiping"), [] (storage_service& ss) {
         return seastar::async([&ss] {
             if (!ss._initialized) {
-                logger.warn("Starting gossip by operator request");
+                slogger.warn("Starting gossip by operator request");
                 ss.set_gossip_tokens(ss.get_local_tokens().get0());
                 gms::get_local_gossiper().force_newer_generation();
                 gms::get_local_gossiper().start_gossiping(get_generation_number()).then([&ss] {
@@ -1763,7 +1763,7 @@ future<> storage_service::start_gossiping() {
 future<> storage_service::stop_gossiping() {
     return run_with_api_lock(sstring("stop_gossiping"), [] (storage_service& ss) {
         if (ss._initialized) {
-            logger.warn("Stopping gossip by operator request");
+            slogger.warn("Stopping gossip by operator request");
             return gms::stop_gossiping().then([&ss] {
                 ss._initialized = false;
             });
@@ -1777,10 +1777,10 @@ future<> storage_service::do_stop_ms() {
         return make_ready_future<>();
     }
     _ms_stopped = true;
-    return net::get_messaging_service().invoke_on_all([] (auto& ms) {
+    return netw::get_messaging_service().invoke_on_all([] (auto& ms) {
         return ms.stop();
     }).then([] {
-        logger.info("messaging_service stopped");
+        slogger.info("messaging_service stopped");
     });
 }
 
@@ -1792,7 +1792,7 @@ future<> storage_service::do_stop_stream_manager() {
     return streaming::get_stream_manager().invoke_on_all([] (auto& sm) {
         return sm.stop();
     }).then([] {
-        logger.info("stream_manager stopped");
+        slogger.info("stream_manager stopped");
     });
 }
 
@@ -1977,7 +1977,7 @@ future<> storage_service::start_rpc_server() {
                 return tserver->invoke_on_all(&thrift_server::listen, ipv4_addr{ip, port}, keepalive);
             });
         }).then([addr, port] {
-            logger.info("Thrift server listening on {}:{} ...", addr, port);
+            slogger.info("Thrift server listening on {}:{} ...", addr, port);
         });
     });
 }
@@ -1989,7 +1989,7 @@ future<> storage_service::do_stop_rpc_server() {
         // FIXME: thrift_server::stop() doesn't kill existing connections and wait for them
         // Note: We must capture tserver so that it will not be freed before tserver->stop
         return tserver->stop().then([tserver] {
-            logger.info("Thrift server stopped");
+            slogger.info("Thrift server stopped");
         });
     }
     return make_ready_future<>();
@@ -2012,7 +2012,7 @@ future<> storage_service::start_native_transport() {
         if (ss._cql_server) {
             return make_ready_future<>();
         }
-        auto cserver = make_shared<distributed<transport::cql_server>>();
+        auto cserver = make_shared<distributed<cql_transport::cql_server>>();
         ss._cql_server = cserver;
 
         auto& cfg = ss._db.local().get_config();
@@ -2020,7 +2020,7 @@ future<> storage_service::start_native_transport() {
         auto addr = cfg.rpc_address();
         auto ceo = cfg.client_encryption_options();
         auto keepalive = cfg.rpc_keepalive();
-        transport::cql_load_balance lb = transport::parse_load_balance(cfg.load_balance());
+        cql_transport::cql_load_balance lb = cql_transport::parse_load_balance(cfg.load_balance());
         return seastar::net::dns::resolve_name(addr).then([cserver, addr, port, lb, keepalive, ceo = std::move(ceo)] (seastar::net::inet_address ip) {
             return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), lb).then([cserver, port, addr, ip, ceo, keepalive]() {
                 // #293 - do not stop anything
@@ -2050,14 +2050,14 @@ future<> storage_service::start_native_transport() {
                         f = f.then([cred, f = ceo.at("truststore")] { return cred->set_x509_trust_file(f, seastar::tls::x509_crt_format::PEM); });
                     }
 
-                    logger.info("Enabling encrypted CQL connections between client and server");
+                    slogger.info("Enabling encrypted CQL connections between client and server");
                 }
                 return f.then([cserver, addr, cred = std::move(cred), keepalive] {
-                    return cserver->invoke_on_all(&transport::cql_server::listen, addr, cred, keepalive);
+                    return cserver->invoke_on_all(&cql_transport::cql_server::listen, addr, cred, keepalive);
                 });
             });
         }).then([addr, port] {
-            logger.info("Starting listening for CQL clients on {}:{}...", addr, port);
+            slogger.info("Starting listening for CQL clients on {}:{}...", addr, port);
         });
     });
 }
@@ -2069,7 +2069,7 @@ future<> storage_service::do_stop_native_transport() {
         // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
         // Note: We must capture cserver so that it will not be freed before cserver->stop
         return cserver->stop().then([cserver] {
-            logger.info("CQL server stopped");
+            slogger.info("CQL server stopped");
         });
     }
     return make_ready_future<>();
@@ -2113,34 +2113,34 @@ future<> storage_service::decommission() {
                 }
             }
 
-            logger.info("DECOMMISSIONING: starts");
+            slogger.info("DECOMMISSIONING: starts");
             ss.start_leaving().get();
             // FIXME: long timeout = Math.max(RING_DELAY, BatchlogManager.instance.getBatchlogTimeout());
             auto timeout = ss.get_ring_delay();
             ss.set_mode(mode::LEAVING, sprint("sleeping %s ms for batch processing and pending range setup", timeout.count()), true);
             sleep(timeout).get();
 
-            logger.info("DECOMMISSIONING: unbootstrap starts");
+            slogger.info("DECOMMISSIONING: unbootstrap starts");
             ss.unbootstrap();
-            logger.info("DECOMMISSIONING: unbootstrap done");
+            slogger.info("DECOMMISSIONING: unbootstrap done");
 
             ss.shutdown_client_servers().get();
-            logger.info("DECOMMISSIONING: shutdown rpc and cql server done");
+            slogger.info("DECOMMISSIONING: shutdown rpc and cql server done");
 
             db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
                 return bm.stop();
             }).get();
-            logger.info("DECOMMISSIONING: stop batchlog_manager done");
+            slogger.info("DECOMMISSIONING: stop batchlog_manager done");
 
             gms::stop_gossiping().get();
-            logger.info("DECOMMISSIONING: stop_gossiping done");
+            slogger.info("DECOMMISSIONING: stop_gossiping done");
             ss.do_stop_ms().get();
-            logger.info("DECOMMISSIONING: stop messaging_service done");
+            slogger.info("DECOMMISSIONING: stop messaging_service done");
             // StageManager.shutdownNow();
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::DECOMMISSIONED).get();
-            logger.info("DECOMMISSIONING: set_bootstrap_state done");
+            slogger.info("DECOMMISSIONING: set_bootstrap_state done");
             ss.set_mode(mode::DECOMMISSIONED, true);
-            logger.info("DECOMMISSIONING: done");
+            slogger.info("DECOMMISSIONING: done");
             // let op be responsible for killing the process
         });
     });
@@ -2149,7 +2149,7 @@ future<> storage_service::decommission() {
 future<> storage_service::removenode(sstring host_id_string) {
     return run_with_api_lock(sstring("removenode"), [host_id_string] (storage_service& ss) mutable {
         return seastar::async([&ss, host_id_string] {
-            logger.debug("removenode: host_id = {}", host_id_string);
+            slogger.debug("removenode: host_id = {}", host_id_string);
             auto my_address = ss.get_broadcast_address();
             auto& tm = ss._token_metadata;
             auto local_host_id = tm.get_host_id(my_address);
@@ -2163,7 +2163,7 @@ future<> storage_service::removenode(sstring host_id_string) {
 
             auto tokens = tm.get_tokens(endpoint);
 
-            logger.debug("removenode: endpoint = {}", endpoint);
+            slogger.debug("removenode: endpoint = {}", endpoint);
 
             if (endpoint == my_address) {
                 throw std::runtime_error("Cannot remove self");
@@ -2175,7 +2175,7 @@ future<> storage_service::removenode(sstring host_id_string) {
 
             // A leaving endpoint that is dead is already being removed.
             if (tm.is_leaving(endpoint)) {
-                logger.warn("Node {} is already being removed, continuing removal anyway", endpoint);
+                slogger.warn("Node {} is already being removed, continuing removal anyway", endpoint);
             }
 
             if (!ss._replicating_nodes.empty()) {
@@ -2188,7 +2188,7 @@ future<> storage_service::removenode(sstring host_id_string) {
                 auto& ks = ss.db().local().find_keyspace(keyspace_name);
                 // if the replication factor is 1 the data is lost so we shouldn't wait for confirmation
                 if (ks.get_replication_strategy().get_replication_factor() == 1) {
-                    logger.warn("keyspace={} has replication factor 1, the data is probably lost", keyspace_name);
+                    slogger.warn("keyspace={} has replication factor 1, the data is probably lost", keyspace_name);
                     continue;
                 }
 
@@ -2202,11 +2202,11 @@ future<> storage_service::removenode(sstring host_id_string) {
                     if (fd.is_alive(ep)) {
                         ss._replicating_nodes.emplace(ep);
                     } else {
-                        logger.warn("Endpoint {} is down and will not receive data for re-replication of {}", ep, endpoint);
+                        slogger.warn("Endpoint {} is down and will not receive data for re-replication of {}", ep, endpoint);
                     }
                 }
             }
-            logger.info("removenode: endpoint = {}, replicating_nodes = {}", endpoint, ss._replicating_nodes);
+            slogger.info("removenode: endpoint = {}, replicating_nodes = {}", endpoint, ss._replicating_nodes);
             ss._removing_node = endpoint;
             tm.add_leaving_endpoint(endpoint);
             ss.update_pending_ranges().get();
@@ -2220,7 +2220,7 @@ future<> storage_service::removenode(sstring host_id_string) {
             // when it completes, the node will be removed from _replicating_nodes,
             // and we wait for _replicating_nodes to become empty below
             ss.restore_replica_count(endpoint, my_address).handle_exception([endpoint, my_address] (auto ep) {
-                logger.info("Failed to restore_replica_count for node {} on node {}", endpoint, my_address);
+                slogger.info("Failed to restore_replica_count for node {} on node {}", endpoint, my_address);
             });
 
             // wait for ReplicationFinishedVerbHandler to signal we're done
@@ -2284,7 +2284,7 @@ future<> storage_service::drain() {
     return run_with_api_lock(sstring("drain"), [] (storage_service& ss) {
         return seastar::async([&ss] {
             if (ss._operation_mode == mode::DRAINED) {
-                logger.warn("Cannot drain node (did it already happen?)");
+                slogger.warn("Cannot drain node (did it already happen?)");
                 return;
             }
             if (drain_in_progress) {
@@ -2362,10 +2362,10 @@ future<std::map<sstring, double>> storage_service::get_load_map() {
         if (lb) {
             for (auto& x : lb->get_load_info()) {
                 load_map.emplace(sprint("%s", x.first), x.second);
-                logger.debug("get_load_map endpoint={}, load={}", x.first, x.second);
+                slogger.debug("get_load_map endpoint={}, load={}", x.first, x.second);
             }
         } else {
-            logger.debug("load_broadcaster is not set yet!");
+            slogger.debug("load_broadcaster is not set yet!");
         }
         load_map.emplace(sprint("%s", ss.get_broadcast_address()), ss.get_load());
         return load_map;
@@ -2375,7 +2375,7 @@ future<std::map<sstring, double>> storage_service::get_load_map() {
 
 future<> storage_service::rebuild(sstring source_dc) {
     return run_with_api_lock(sstring("rebuild"), [source_dc] (storage_service& ss) {
-        logger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
+        slogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
         auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._token_metadata, ss.get_broadcast_address(), "Rebuild");
         streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector()));
         if (source_dc != "") {
@@ -2389,7 +2389,7 @@ future<> storage_service::rebuild(sstring source_dc) {
                 auto state = f.get0();
             } catch (...) {
                 // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
-                logger.error("Error while rebuilding node: {}", std::current_exception());
+                slogger.error("Error while rebuilding node: {}", std::current_exception());
                 throw std::runtime_error(sprint("Error while rebuilding node: %s", std::current_exception()));
             }
             return make_ready_future<>();
@@ -2416,7 +2416,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
     // First get all ranges the leaving endpoint is responsible for
     auto ranges = get_ranges_for_endpoint(keyspace_name, endpoint);
 
-    logger.debug("Node {} ranges [{}]", endpoint, ranges);
+    slogger.debug("Node {} ranges [{}]", endpoint, ranges);
 
     std::unordered_map<dht::token_range, std::vector<inet_address>> current_replica_endpoints;
 
@@ -2453,7 +2453,7 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
         for (auto it = rg.first; it != rg.second; it++) {
             const dht::token_range& range_ = it->first;
             std::vector<inet_address>& current_eps = it->second;
-            logger.debug("range={}, current_replica_endpoints={}, new_replica_endpoints={}", range_, current_eps, new_replica_endpoints);
+            slogger.debug("range={}, current_replica_endpoints={}, new_replica_endpoints={}", range_, current_eps, new_replica_endpoints);
             for (auto ep : it->second) {
                 auto beg = new_replica_endpoints.begin();
                 auto end = new_replica_endpoints.end();
@@ -2461,11 +2461,11 @@ std::unordered_multimap<dht::token_range, inet_address> storage_service::get_cha
             }
         }
 
-        if (logger.is_enabled(logging::log_level::debug)) {
+        if (slogger.is_enabled(logging::log_level::debug)) {
             if (new_replica_endpoints.empty()) {
-                logger.debug("Range {} already in all replicas", r);
+                slogger.debug("Range {} already in all replicas", r);
             } else {
-                logger.debug("Range {} will be responsibility of {}", r, new_replica_endpoints);
+                slogger.debug("Range {} will be responsibility of {}", r, new_replica_endpoints);
             }
         }
         for (auto& ep : new_replica_endpoints) {
@@ -2483,12 +2483,12 @@ void storage_service::unbootstrap() {
     auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
     for (const auto& keyspace_name : non_system_keyspaces) {
         auto ranges_mm = get_changed_ranges_for_leaving(keyspace_name, get_broadcast_address());
-        if (logger.is_enabled(logging::log_level::debug)) {
+        if (slogger.is_enabled(logging::log_level::debug)) {
             std::vector<range<token>> ranges;
             for (auto& x : ranges_mm) {
                 ranges.push_back(x.first);
             }
-            logger.debug("Ranges needing transfer for keyspace={} are [{}]", keyspace_name, ranges);
+            slogger.debug("Ranges needing transfer for keyspace={} are [{}]", keyspace_name, ranges);
         }
         ranges_to_stream.emplace(keyspace_name, std::move(ranges_mm));
     }
@@ -2497,7 +2497,7 @@ void storage_service::unbootstrap() {
 
     auto stream_success = stream_ranges(ranges_to_stream);
     // Wait for batch log to complete before streaming hints.
-    logger.debug("waiting for batch log processing.");
+    slogger.debug("waiting for batch log processing.");
     // Start with BatchLog replay, which may create hints but no writes since this is no longer a valid endpoint.
     db::get_local_batchlog_manager().do_batch_log_replay().get();
 
@@ -2506,15 +2506,15 @@ void storage_service::unbootstrap() {
     auto hints_success = stream_hints();
 
     // wait for the transfer runnables to signal the latch.
-    logger.debug("waiting for stream acks.");
+    slogger.debug("waiting for stream acks.");
     try {
         stream_success.get();
         hints_success.get();
     } catch (...) {
-        logger.warn("unbootstrap fails to stream : {}", std::current_exception());
+        slogger.warn("unbootstrap fails to stream : {}", std::current_exception());
         throw;
     }
-    logger.debug("stream acks all received.");
+    slogger.debug("stream acks all received.");
     leave_ring();
 }
 
@@ -2546,7 +2546,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         for (auto& m : maps) {
             auto source = m.first;
             auto ranges = m.second;
-            logger.debug("Requesting from {} ranges {}", source, ranges);
+            slogger.debug("Requesting from {} ranges {}", source, ranges);
             sp->request_ranges(source, keyspace_name, ranges);
         }
     }
@@ -2555,7 +2555,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
             auto state = f.get0();
             return this->send_replication_notification(notify_endpoint);
         } catch (...) {
-            logger.warn("Streaming to restore replica count failed: {}", std::current_exception());
+            slogger.warn("Streaming to restore replica count failed: {}", std::current_exception());
             // We still want to send the notification
             return this->send_replication_notification(notify_endpoint);
         }
@@ -2565,7 +2565,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
 
 // Runs inside seastar::async context
 void storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint) {
-    logger.info("Removing tokens {} for {}", tokens, endpoint);
+    slogger.info("Removing tokens {} for {}", tokens, endpoint);
     // FIXME: HintedHandOffManager.instance.deleteHintsForEndpoint(endpoint);
     remove_endpoint(endpoint);
     _token_metadata.remove_endpoint(endpoint);
@@ -2576,7 +2576,7 @@ void storage_service::excise(std::unordered_set<token> tokens, inet_address endp
             try {
                 subscriber->on_leave_cluster(endpoint);
             } catch (...) {
-                logger.warn("Leave cluster notification failed {}: {}", endpoint, std::current_exception());
+                slogger.warn("Leave cluster notification failed {}: {}", endpoint, std::current_exception());
             }
         }
     }).get();
@@ -2593,20 +2593,20 @@ future<> storage_service::send_replication_notification(inet_address remote) {
     // notify the remote token
     auto done = make_shared<bool>(false);
     auto local = get_broadcast_address();
-    logger.debug("Notifying {} of replication completion", remote);
+    slogger.debug("Notifying {} of replication completion", remote);
     return do_until(
         [done, remote] {
             return *done || !gms::get_local_failure_detector().is_alive(remote);
         },
         [done, remote, local] {
-            auto& ms = net::get_local_messaging_service();
-            net::msg_addr id{remote, 0};
+            auto& ms = netw::get_local_messaging_service();
+            netw::msg_addr id{remote, 0};
             return ms.send_replication_finished(id, local).then_wrapped([id, done] (auto&& f) {
                 try {
                     f.get();
                     *done = true;
                 } catch (...) {
-                    logger.warn("Fail to send REPLICATION_FINISHED to {}: {}", id, std::current_exception());
+                    slogger.warn("Fail to send REPLICATION_FINISHED to {}: {}", id, std::current_exception());
                 }
             });
         }
@@ -2616,14 +2616,14 @@ future<> storage_service::send_replication_notification(inet_address remote) {
 future<> storage_service::confirm_replication(inet_address node) {
     return run_with_no_api_lock([node] (storage_service& ss) {
         auto removing_node = bool(ss._removing_node) ? sprint("%s", *ss._removing_node) : "NONE";
-        logger.info("Got confirm_replication from {}, removing_node {}", node, removing_node);
+        slogger.info("Got confirm_replication from {}, removing_node {}", node, removing_node);
         // replicatingNodes can be empty in the case where this node used to be a removal coordinator,
         // but restarted before all 'replication finished' messages arrived. In that case, we'll
         // still go ahead and acknowledge it.
         if (!ss._replicating_nodes.empty()) {
             ss._replicating_nodes.erase(node);
         } else {
-            logger.info("Received unexpected REPLICATION_FINISHED message from {}. Was this node recently a removal coordinator?", node);
+            slogger.info("Received unexpected REPLICATION_FINISHED message from {}. Was this node recently a removal coordinator?", node);
         }
     });
 }
@@ -2638,7 +2638,7 @@ void storage_service::leave_ring() {
     auto expire_time = gossiper.compute_expire_time().time_since_epoch().count();
     gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.left(get_local_tokens().get0(), expire_time)).get();
     auto delay = std::max(get_ring_delay(), gms::gossiper::INTERVAL);
-    logger.info("Announcing that I have left the ring for {}ms", delay.count());
+    slogger.info("Announcing that I have left the ring for {}ms", delay.count());
     sleep(delay).get();
 }
 
@@ -2676,9 +2676,9 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
         }
     }
     return sp->execute().discard_result().then([sp] {
-        logger.info("stream_ranges successful");
+        slogger.info("stream_ranges successful");
     }).handle_exception([] (auto ep) {
-        logger.info("stream_ranges failed: {}", ep);
+        slogger.info("stream_ranges failed: {}", ep);
         return make_exception_future(std::runtime_error("stream_ranges failed"));
     });
 }
@@ -2701,7 +2701,7 @@ future<> storage_service::stream_hints() {
     candidates.erase(std::remove_if(beg, end, remove_fn), end);
 
     if (candidates.empty()) {
-        logger.warn("Unable to stream hints since no live endpoints seen");
+        slogger.warn("Unable to stream hints since no live endpoints seen");
         throw std::runtime_error("Unable to stream hints since no live endpoints seen");
     } else {
         // stream to the closest peer as chosen by the snitch
@@ -2712,16 +2712,16 @@ future<> storage_service::stream_hints() {
 
         // stream all hints -- range list will be a singleton of "the entire ring"
         dht::token_range_vector ranges = {dht::token_range::make_open_ended_both_sides()};
-        logger.debug("stream_hints: ranges={}", ranges);
+        slogger.debug("stream_hints: ranges={}", ranges);
 
         auto sp = make_lw_shared<streaming::stream_plan>("Hints");
         std::vector<sstring> column_families = { db::system_keyspace::HINTS };
         auto keyspace = db::system_keyspace::NAME;
         sp->transfer_ranges(hints_destination_host, keyspace, ranges, column_families);
         return sp->execute().discard_result().then([sp] {
-            logger.info("stream_hints successful");
+            slogger.info("stream_hints successful");
         }).handle_exception([] (auto ep) {
-            logger.info("stream_hints failed: {}", ep);
+            slogger.info("stream_hints failed: {}", ep);
             return make_exception_future(std::runtime_error("stream_hints failed"));
         });
     }
@@ -2765,7 +2765,7 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
         _loading_new_sstables = true;
     }
 
-    logger.info("Loading new SSTables for {}.{}...", ks_name, cf_name);
+    slogger.info("Loading new SSTables for {}.{}...", ks_name, cf_name);
 
     // First, we need to stop SSTable creation for that CF in all shards. This is a really horrible
     // thing to do, because under normal circumnstances this can make dirty memory go up to the point
@@ -2821,10 +2821,10 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
         try {
             new_tables = f.get0();
         } catch(std::exception& e) {
-            logger.error("Loading of new tables failed to {}.{} due to {}", ks_name, cf_name, e.what());
+            slogger.error("Loading of new tables failed to {}.{} due to {}", ks_name, cf_name, e.what());
             eptr = std::current_exception();
         } catch(...) {
-            logger.error("Loading of new tables failed to {}.{} due to unexpected reason", ks_name, cf_name);
+            slogger.error("Loading of new tables failed to {}.{} due to unexpected reason", ks_name, cf_name);
             eptr = std::current_exception();
         }
 
@@ -2832,11 +2832,11 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
             new_gen = new_tables.back().generation;
         }
 
-        logger.debug("Now accepting writes for sstables with generation larger or equal than {}", new_gen);
+        slogger.debug("Now accepting writes for sstables with generation larger or equal than {}", new_gen);
         return _db.invoke_on_all([ks_name, cf_name, new_gen] (database& db) {
             auto& cf = db.find_column_family(ks_name, cf_name);
             auto disabled = std::chrono::duration_cast<std::chrono::microseconds>(cf.enable_sstable_write(new_gen)).count();
-            logger.info("CF {}.{} at shard {} had SSTables writes disabled for {} usec", ks_name, cf_name, engine().cpu_id(), disabled);
+            slogger.info("CF {}.{} at shard {} had SSTables writes disabled for {} usec", ks_name, cf_name, engine().cpu_id(), disabled);
             return make_ready_future<>();
         }).then([new_tables = std::move(new_tables), eptr = std::move(eptr)] {
             if (eptr) {
@@ -2848,7 +2848,7 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
         auto f = distributed_loader::flush_upload_dir(_db, ks_name, cf_name);
         return f.then([new_tables = std::move(new_tables), ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables_from_upload) mutable {
             if (new_tables.empty() && new_tables_from_upload.empty()) {
-                logger.info("No new SSTables were found for {}.{}", ks_name, cf_name);
+                slogger.info("No new SSTables were found for {}.{}", ks_name, cf_name);
             }
             // merge new sstables found in both column family and upload directories, if any.
             new_tables.insert(new_tables.end(), new_tables_from_upload.begin(), new_tables_from_upload.end());
@@ -2856,7 +2856,7 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
         });
     }).then([this, ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables) {
         return distributed_loader::load_new_sstables(_db, ks_name, cf_name, std::move(new_tables)).then([ks_name, cf_name] {
-            logger.info("Done loading new SSTables for {}.{} for all shards", ks_name, cf_name);
+            slogger.info("Done loading new SSTables for {}.{} for all shards", ks_name, cf_name);
         });
     }).finally([this] {
         _loading_new_sstables = false;
@@ -2897,7 +2897,7 @@ storage_service::get_new_source_ranges(const sstring& keyspace_name, const dht::
 
         if (std::find(sources.begin(), sources.end(), my_address) != sources.end()) {
             auto err = sprint("get_new_source_ranges: sources=%s, my_address=%s", sources, my_address);
-            logger.warn(err.c_str());
+            slogger.warn(err.c_str());
             throw std::runtime_error(err);
         }
 
@@ -2949,11 +2949,11 @@ storage_service::calculate_stream_and_fetch_ranges(const dht::token_range_vector
         }
     }
 
-    if (logger.is_enabled(logging::log_level::debug)) {
-        logger.debug("current   = {}", current);
-        logger.debug("updated   = {}", updated);
-        logger.debug("to_stream = {}", to_stream);
-        logger.debug("to_fetch  = {}", to_fetch);
+    if (slogger.is_enabled(logging::log_level::debug)) {
+        slogger.debug("current   = {}", current);
+        slogger.debug("updated   = {}", updated);
+        slogger.debug("to_stream = {}", to_stream);
+        slogger.debug("to_fetch  = {}", to_fetch);
     }
 
     return std::pair<std::unordered_set<dht::token_range>, std::unordered_set<dht::token_range>>(to_stream, to_fetch);
@@ -2970,7 +2970,7 @@ void storage_service::range_relocator::calculate_to_from_streams(std::unordered_
     auto token_meta_clone = ss._token_metadata.clone_only_token_map();
 
     for (auto keyspace : keyspace_names) {
-        logger.debug("Calculating ranges to stream and request for keyspace {}", keyspace);
+        slogger.debug("Calculating ranges to stream and request for keyspace {}", keyspace);
         for (auto new_token : new_tokens) {
             // replication strategy of the current keyspace (aka table)
             auto& ks = ss._db.local().find_keyspace(keyspace);
@@ -3068,7 +3068,7 @@ void storage_service::range_relocator::calculate_to_from_streams(std::unordered_
                 auto end_token = to_stream.end() ? to_stream.end()->value() : dht::maximum_token();
                 std::vector<inet_address> current_endpoints = strategy.calculate_natural_endpoints(end_token, token_meta_clone);
                 std::vector<inet_address> new_endpoints = strategy.calculate_natural_endpoints(end_token, token_meta_clone_all_settled);
-                logger.debug("Range: {} Current endpoints: {} New endpoints: {}", to_stream, current_endpoints, new_endpoints);
+                slogger.debug("Range: {} Current endpoints: {} New endpoints: {}", to_stream, current_endpoints, new_endpoints);
                 std::sort(current_endpoints.begin(), current_endpoints.end());
                 std::sort(new_endpoints.begin(), new_endpoints.end());
 
@@ -3076,7 +3076,7 @@ void storage_service::range_relocator::calculate_to_from_streams(std::unordered_
                 std::set_difference(new_endpoints.begin(), new_endpoints.end(),
                         current_endpoints.begin(), current_endpoints.end(), std::back_inserter(diff));
                 for (auto address : diff) {
-                    logger.debug("Range {} has new owner {}", to_stream, address);
+                    slogger.debug("Range {} has new owner {}", to_stream, address);
                     endpoint_ranges.emplace(address, to_stream);
                 }
             }
@@ -3088,7 +3088,7 @@ void storage_service::range_relocator::calculate_to_from_streams(std::unordered_
             for (auto& x : endpoint_ranges_map) {
                 auto& address = x.first;
                 auto& ranges = x.second;
-                logger.debug("Will stream range {} of keyspace {} to endpoint {}", ranges , keyspace, address);
+                slogger.debug("Will stream range {} of keyspace {} to endpoint {}", ranges , keyspace, address);
                 _stream_plan.transfer_ranges(address, keyspace, ranges);
             }
 
@@ -3103,12 +3103,12 @@ void storage_service::range_relocator::calculate_to_from_streams(std::unordered_
             for (auto& x : work_map) {
                 auto& address = x.first;
                 auto& ranges = x.second;
-                logger.debug("Will request range {} of keyspace {} from endpoint {}", ranges, keyspace, address);
+                slogger.debug("Will request range {} of keyspace {} from endpoint {}", ranges, keyspace, address);
                 _stream_plan.request_ranges(address, keyspace, ranges);
             }
-            if (logger.is_enabled(logging::log_level::debug)) {
+            if (slogger.is_enabled(logging::log_level::debug)) {
                 for (auto& x : work) {
-                    logger.debug("Keyspace {}: work map ep = {} --> range = {}", keyspace, x.first, x.second);
+                    slogger.debug("Keyspace {}: work map ep = {} --> range = {}", keyspace, x.first, x.second);
                 }
             }
         }
@@ -3128,7 +3128,7 @@ future<> storage_service::move(token new_token) {
 
             // This doesn't make any sense in a vnodes environment.
             if (ss.get_token_metadata().get_tokens(local_address).size() > 1) {
-                logger.error("Invalid request to move(Token); This node has more than one token and cannot be moved thusly.");
+                slogger.error("Invalid request to move(Token); This node has more than one token and cannot be moved thusly.");
                 throw std::runtime_error("This node has more than one token and cannot be moved thusly.");
             }
 
@@ -3164,7 +3164,7 @@ future<> storage_service::move(token new_token) {
 
             ss.set_tokens(std::unordered_set<token>{new_token}); // setting new token as we have everything settled
 
-            logger.debug("Successfully moved to new token {}", *(ss.get_local_tokens().get0().begin()));
+            slogger.debug("Successfully moved to new token {}", *(ss.get_local_tokens().get0().begin()));
         });
     });
 }
@@ -3237,7 +3237,7 @@ std::map<token, inet_address> storage_service::get_token_to_endpoint_map() {
 
 std::chrono::milliseconds storage_service::get_ring_delay() {
     auto ring_delay = _db.local().get_config().ring_delay_ms();
-    logger.trace("Set RING_DELAY to {}ms", ring_delay);
+    slogger.trace("Set RING_DELAY to {}ms", ring_delay);
     return std::chrono::milliseconds(ring_delay);
 }
 
@@ -3252,7 +3252,7 @@ void storage_service::do_update_pending_ranges() {
         auto& strategy = ks.get_replication_strategy();
         get_local_storage_service().get_token_metadata().calculate_pending_ranges(strategy, keyspace_name);
     }
-    // logger.debug("finished calculation for {} keyspaces in {}ms", keyspaces.size(), System.currentTimeMillis() - start);
+    // slogger.debug("finished calculation for {} keyspaces in {}ms", keyspaces.size(), System.currentTimeMillis() - start);
 }
 
 future<> storage_service::update_pending_ranges() {
@@ -3269,19 +3269,19 @@ future<> storage_service::update_pending_ranges() {
 future<> storage_service::keyspace_changed(const sstring& ks_name) {
     // Update pending ranges since keyspace can be changed after we calculate pending ranges.
     return update_pending_ranges().handle_exception([ks_name] (auto ep) {
-        logger.warn("Failed to update pending ranges for ks = {}: {}", ks_name, ep);
+        slogger.warn("Failed to update pending ranges for ks = {}: {}", ks_name, ep);
     });
 }
 
 void storage_service::init_messaging_service() {
-    auto& ms = net::get_local_messaging_service();
+    auto& ms = netw::get_local_messaging_service();
     ms.register_replication_finished([] (gms::inet_address from) {
         return get_local_storage_service().confirm_replication(from);
     });
 }
 
 void storage_service::uninit_messaging_service() {
-    auto& ms = net::get_local_messaging_service();
+    auto& ms = netw::get_local_messaging_service();
     ms.unregister_replication_finished();
 }
 
@@ -3290,7 +3290,7 @@ static std::atomic<bool> isolated = { false };
 void storage_service::do_isolate_on_error(disk_error type)
 {
     if (!isolated.exchange(true)) {
-        logger.warn("Shutting down communications due to I/O errors until operator intervention");
+        slogger.warn("Shutting down communications due to I/O errors until operator intervention");
         // isolated protect us against multiple stops
         service::get_local_storage_service().stop_transport();
     }
@@ -3322,7 +3322,7 @@ future<> storage_service::force_remove_completion() {
                     ss._force_remove_completion = true;
                     while (!ss._operation_in_progress.empty()) {
                         // Wait removenode operation to complete
-                        logger.info("Operation {} is in progress, wait for it to complete", ss._operation_in_progress);
+                        slogger.info("Operation {} is in progress, wait for it to complete", ss._operation_in_progress);
                         sleep(std::chrono::seconds(1)).get();
                     }
                     ss._force_remove_completion = false;
@@ -3332,14 +3332,14 @@ future<> storage_service::force_remove_completion() {
             try {
                 if (!ss._replicating_nodes.empty() || !ss._token_metadata.get_leaving_endpoints().empty()) {
                     auto leaving = ss._token_metadata.get_leaving_endpoints();
-                    logger.warn("Removal not confirmed for {}, Leaving={}", join(",", ss._replicating_nodes), leaving);
+                    slogger.warn("Removal not confirmed for {}, Leaving={}", join(",", ss._replicating_nodes), leaving);
                     for (auto endpoint : leaving) {
                         utils::UUID host_id;
                         auto tokens = ss._token_metadata.get_tokens(endpoint);
                         try {
                             host_id = ss._token_metadata.get_host_id(endpoint);
                         } catch (...) {
-                            logger.warn("No host_id is found for endpoint {}", endpoint);
+                            slogger.warn("No host_id is found for endpoint {}", endpoint);
                             continue;
                         }
                         gms::get_local_gossiper().advertise_token_removed(endpoint, host_id).get();
@@ -3349,7 +3349,7 @@ future<> storage_service::force_remove_completion() {
                     ss._replicating_nodes.clear();
                     ss._removing_node = std::experimental::nullopt;
                 } else {
-                    logger.warn("No tokens to force removal on, call 'removenode' first");
+                    slogger.warn("No tokens to force removal on, call 'removenode' first");
                 }
                 ss._operation_in_progress = {};
             } catch (...) {

@@ -75,7 +75,7 @@ future<> cql3::statements::authentication_statement::check_access(const service:
     return make_ready_future<>();
 }
 
-future<::shared_ptr<transport::messages::result_message>> cql3::statements::authentication_statement::execute_internal(
+future<::shared_ptr<cql_transport::messages::result_message>> cql3::statements::authentication_statement::execute_internal(
                 distributed<service::storage_proxy>& proxy,
                 service::query_state& state, const query_options& options) {
     // Internal queries are exclusively on the system keyspace and makes no sense here

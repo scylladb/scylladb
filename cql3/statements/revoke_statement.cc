@@ -42,9 +42,9 @@
 #include "revoke_statement.hh"
 #include "auth/authorizer.hh"
 
-future<::shared_ptr<transport::messages::result_message>>
+future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::revoke_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
     return auth::authorizer::get().revoke(state.get_client_state().user(), _permissions, _resource, _username).then([] {
-        return make_ready_future<::shared_ptr<transport::messages::result_message>>();
+        return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
     });
 }

@@ -75,8 +75,9 @@
 #include "rpc/lz4_compressor.hh"
 #include "rpc/multi_algo_compressor_factory.hh"
 #include "partition_range_compat.hh"
+#include "stdx.hh"
 
-namespace net {
+namespace netw {
 
 // thunk from rpc serializers to generate serializers
 template <typename T, typename Output>
@@ -106,7 +107,7 @@ lw_shared_ptr<T> read(serializer s, Input& in, boost::type<lw_shared_ptr<T>>) {
     return make_lw_shared(read(s, in, boost::type<T>()));
 }
 
-static logging::logger logger("messaging_service");
+static logging::logger mlogger("messaging_service");
 static logging::logger rpc_logger("rpc");
 
 using inet_address = gms::inet_address;
@@ -278,9 +279,9 @@ void messaging_service::start_listen() {
     // Do this on just cpu 0, to avoid duplicate logs.
     if (engine().cpu_id() == 0) {
         if (_server_tls[0]) {
-            logger.info("Starting Encrypted Messaging Service on SSL port {}", _ssl_port);
+            mlogger.info("Starting Encrypted Messaging Service on SSL port {}", _ssl_port);
         }
-        logger.info("Starting Messaging Service on port {}", _port);
+        mlogger.info("Starting Messaging Service on port {}", _port);
     }
 }
 
@@ -526,7 +527,7 @@ void messaging_service::remove_rpc_client_one(clients_map& clients, msg_addr id,
         // client->stop() is over.
         //
         client->stop().finally([id, client, ms = shared_from_this()] {
-            logger.debug("dropped connection to {}", id.addr);
+            mlogger.debug("dropped connection to {}", id.addr);
         }).discard_result();
     }
 }
@@ -606,7 +607,6 @@ auto send_message_timeout(messaging_service* ms, messaging_verb verb, msg_addr i
 template <typename MsgIn, typename... MsgOut>
 auto send_message_timeout_and_retry(messaging_service* ms, messaging_verb verb, msg_addr id,
         std::chrono::seconds timeout, int nr_retry, std::chrono::seconds wait, MsgOut... msg) {
-    namespace stdx = std::experimental;
     using MsgInTuple = typename futurize_t<MsgIn>::value_type;
     return do_with(int(nr_retry), std::move(msg)..., [ms, verb, id, timeout, wait, nr_retry] (auto& retry, const auto&... messages) {
         return repeat_until_value([ms, verb, id, timeout, wait, nr_retry, &retry, &messages...] {
@@ -616,35 +616,35 @@ auto send_message_timeout_and_retry(messaging_service* ms, messaging_verb verb, 
                 try {
                     MsgInTuple ret = f.get();
                     if (retry != nr_retry) {
-                        logger.info("Retry verb={} to {}, retry={}: OK", vb, id, retry);
+                        mlogger.info("Retry verb={} to {}, retry={}: OK", vb, id, retry);
                     }
                     return make_ready_future<stdx::optional<MsgInTuple>>(std::move(ret));
                 } catch (rpc::timeout_error) {
-                    logger.info("Retry verb={} to {}, retry={}: timeout in {} seconds", vb, id, retry, timeout.count());
+                    mlogger.info("Retry verb={} to {}, retry={}: timeout in {} seconds", vb, id, retry, timeout.count());
                     throw;
                 } catch (rpc::closed_error) {
-                    logger.info("Retry verb={} to {}, retry={}: {}", vb, id, retry, std::current_exception());
+                    mlogger.info("Retry verb={} to {}, retry={}: {}", vb, id, retry, std::current_exception());
                     // Stop retrying if retry reaches 0 or message service is shutdown
                     // or the remote node is removed from gossip (on_remove())
                     retry--;
                     if (retry == 0) {
-                        logger.debug("Retry verb={} to {}, retry={}: stop retrying: retry == 0", vb, id, retry);
+                        mlogger.debug("Retry verb={} to {}, retry={}: stop retrying: retry == 0", vb, id, retry);
                         throw;
                     }
                     if (ms->is_stopping()) {
-                        logger.debug("Retry verb={} to {}, retry={}: stop retrying: messaging_service is stopped",
+                        mlogger.debug("Retry verb={} to {}, retry={}: stop retrying: messaging_service is stopped",
                                      vb, id, retry);
                         throw;
                     }
                     if (!gms::get_local_gossiper().is_known_endpoint(id.addr)) {
-                        logger.debug("Retry verb={} to {}, retry={}: stop retrying: node is removed from the cluster",
+                        mlogger.debug("Retry verb={} to {}, retry={}: stop retrying: node is removed from the cluster",
                                      vb, id, retry);
                         throw;
                     }
                     return sleep_abortable(wait).then([] {
                         return make_ready_future<stdx::optional<MsgInTuple>>(stdx::nullopt);
                     }).handle_exception([vb, id, retry] (std::exception_ptr ep) {
-                        logger.debug("Retry verb={} to {}, retry={}: stop retrying: {}", vb, id, retry, ep);
+                        mlogger.debug("Retry verb={} to {}, retry={}: stop retrying: {}", vb, id, retry, ep);
                         return make_exception_future<stdx::optional<MsgInTuple>>(ep);
                     });
                 } catch (...) {
@@ -740,7 +740,7 @@ void messaging_service::register_gossip_echo(std::function<future<> ()>&& func) 
     register_handler(this, messaging_verb::GOSSIP_ECHO, std::move(func));
 }
 void messaging_service::unregister_gossip_echo() {
-    _rpc->unregister_handler(net::messaging_verb::GOSSIP_ECHO);
+    _rpc->unregister_handler(netw::messaging_verb::GOSSIP_ECHO);
 }
 future<> messaging_service::send_gossip_echo(msg_addr id) {
     return send_message_timeout<void>(this, messaging_verb::GOSSIP_ECHO, std::move(id), 3000ms);
@@ -750,7 +750,7 @@ void messaging_service::register_gossip_shutdown(std::function<rpc::no_wait_type
     register_handler(this, messaging_verb::GOSSIP_SHUTDOWN, std::move(func));
 }
 void messaging_service::unregister_gossip_shutdown() {
-    _rpc->unregister_handler(net::messaging_verb::GOSSIP_SHUTDOWN);
+    _rpc->unregister_handler(netw::messaging_verb::GOSSIP_SHUTDOWN);
 }
 future<> messaging_service::send_gossip_shutdown(msg_addr id, inet_address from) {
     return send_message_oneway(this, messaging_verb::GOSSIP_SHUTDOWN, std::move(id), std::move(from));
@@ -761,7 +761,7 @@ void messaging_service::register_gossip_digest_syn(std::function<rpc::no_wait_ty
     register_handler(this, messaging_verb::GOSSIP_DIGEST_SYN, std::move(func));
 }
 void messaging_service::unregister_gossip_digest_syn() {
-    _rpc->unregister_handler(net::messaging_verb::GOSSIP_DIGEST_SYN);
+    _rpc->unregister_handler(netw::messaging_verb::GOSSIP_DIGEST_SYN);
 }
 future<> messaging_service::send_gossip_digest_syn(msg_addr id, gossip_digest_syn msg) {
     return send_message_oneway(this, messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), std::move(msg));
@@ -772,7 +772,7 @@ void messaging_service::register_gossip_digest_ack(std::function<rpc::no_wait_ty
     register_handler(this, messaging_verb::GOSSIP_DIGEST_ACK, std::move(func));
 }
 void messaging_service::unregister_gossip_digest_ack() {
-    _rpc->unregister_handler(net::messaging_verb::GOSSIP_DIGEST_ACK);
+    _rpc->unregister_handler(netw::messaging_verb::GOSSIP_DIGEST_ACK);
 }
 future<> messaging_service::send_gossip_digest_ack(msg_addr id, gossip_digest_ack msg) {
     return send_message_oneway(this, messaging_verb::GOSSIP_DIGEST_ACK, std::move(id), std::move(msg));
@@ -783,27 +783,27 @@ void messaging_service::register_gossip_digest_ack2(std::function<rpc::no_wait_t
     register_handler(this, messaging_verb::GOSSIP_DIGEST_ACK2, std::move(func));
 }
 void messaging_service::unregister_gossip_digest_ack2() {
-    _rpc->unregister_handler(net::messaging_verb::GOSSIP_DIGEST_ACK2);
+    _rpc->unregister_handler(netw::messaging_verb::GOSSIP_DIGEST_ACK2);
 }
 future<> messaging_service::send_gossip_digest_ack2(msg_addr id, gossip_digest_ack2 msg) {
     return send_message_oneway(this, messaging_verb::GOSSIP_DIGEST_ACK2, std::move(id), std::move(msg));
 }
 
 void messaging_service::register_definitions_update(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm)>&& func) {
-    register_handler(this, net::messaging_verb::DEFINITIONS_UPDATE, std::move(func));
+    register_handler(this, netw::messaging_verb::DEFINITIONS_UPDATE, std::move(func));
 }
 void messaging_service::unregister_definitions_update() {
-    _rpc->unregister_handler(net::messaging_verb::DEFINITIONS_UPDATE);
+    _rpc->unregister_handler(netw::messaging_verb::DEFINITIONS_UPDATE);
 }
 future<> messaging_service::send_definitions_update(msg_addr id, std::vector<frozen_mutation> fm) {
     return send_message_oneway(this, messaging_verb::DEFINITIONS_UPDATE, std::move(id), std::move(fm));
 }
 
 void messaging_service::register_migration_request(std::function<future<std::vector<frozen_mutation>> ()>&& func) {
-    register_handler(this, net::messaging_verb::MIGRATION_REQUEST, std::move(func));
+    register_handler(this, netw::messaging_verb::MIGRATION_REQUEST, std::move(func));
 }
 void messaging_service::unregister_migration_request() {
-    _rpc->unregister_handler(net::messaging_verb::MIGRATION_REQUEST);
+    _rpc->unregister_handler(netw::messaging_verb::MIGRATION_REQUEST);
 }
 future<std::vector<frozen_mutation>> messaging_service::send_migration_request(msg_addr id) {
     return send_message<std::vector<frozen_mutation>>(this, messaging_verb::MIGRATION_REQUEST, std::move(id));
@@ -811,10 +811,10 @@ future<std::vector<frozen_mutation>> messaging_service::send_migration_request(m
 
 void messaging_service::register_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, rpc::opt_time_point, frozen_mutation fm, std::vector<inet_address> forward,
     inet_address reply_to, unsigned shard, response_id_type response_id, rpc::optional<std::experimental::optional<tracing::trace_info>> trace_info)>&& func) {
-    register_handler(this, net::messaging_verb::MUTATION, std::move(func));
+    register_handler(this, netw::messaging_verb::MUTATION, std::move(func));
 }
 void messaging_service::unregister_mutation() {
-    _rpc->unregister_handler(net::messaging_verb::MUTATION);
+    _rpc->unregister_handler(netw::messaging_verb::MUTATION);
 }
 future<> messaging_service::send_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
     inet_address reply_to, unsigned shard, response_id_type response_id, std::experimental::optional<tracing::trace_info> trace_info) {
@@ -823,86 +823,86 @@ future<> messaging_service::send_mutation(msg_addr id, clock_type::time_point ti
 }
 
 void messaging_service::register_counter_mutation(std::function<future<> (const rpc::client_info&, rpc::opt_time_point, std::vector<frozen_mutation> fms, db::consistency_level cl, stdx::optional<tracing::trace_info> trace_info)>&& func) {
-    register_handler(this, net::messaging_verb::COUNTER_MUTATION, std::move(func));
+    register_handler(this, netw::messaging_verb::COUNTER_MUTATION, std::move(func));
 }
 void messaging_service::unregister_counter_mutation() {
-    _rpc->unregister_handler(net::messaging_verb::COUNTER_MUTATION);
+    _rpc->unregister_handler(netw::messaging_verb::COUNTER_MUTATION);
 }
 future<> messaging_service::send_counter_mutation(msg_addr id, clock_type::time_point timeout, std::vector<frozen_mutation> fms, db::consistency_level cl, stdx::optional<tracing::trace_info> trace_info) {
     return send_message_timeout<void>(this, messaging_verb::COUNTER_MUTATION, std::move(id), timeout, std::move(fms), cl, std::move(trace_info));
 }
 
 void messaging_service::register_mutation_done(std::function<future<rpc::no_wait_type> (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id)>&& func) {
-    register_handler(this, net::messaging_verb::MUTATION_DONE, std::move(func));
+    register_handler(this, netw::messaging_verb::MUTATION_DONE, std::move(func));
 }
 void messaging_service::unregister_mutation_done() {
-    _rpc->unregister_handler(net::messaging_verb::MUTATION_DONE);
+    _rpc->unregister_handler(netw::messaging_verb::MUTATION_DONE);
 }
 future<> messaging_service::send_mutation_done(msg_addr id, unsigned shard, response_id_type response_id) {
     return send_message_oneway(this, messaging_verb::MUTATION_DONE, std::move(id), std::move(shard), std::move(response_id));
 }
 
 void messaging_service::register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (const rpc::client_info&, query::read_command cmd, compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda)>&& func) {
-    register_handler(this, net::messaging_verb::READ_DATA, std::move(func));
+    register_handler(this, netw::messaging_verb::READ_DATA, std::move(func));
 }
 void messaging_service::unregister_read_data() {
-    _rpc->unregister_handler(net::messaging_verb::READ_DATA);
+    _rpc->unregister_handler(netw::messaging_verb::READ_DATA);
 }
 future<query::result> messaging_service::send_read_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr, query::digest_algorithm da) {
     return send_message_timeout<query::result>(this, messaging_verb::READ_DATA, std::move(id), timeout, cmd, pr, da);
 }
 
 void messaging_service::register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func) {
-    register_handler(this, net::messaging_verb::GET_SCHEMA_VERSION, std::move(func));
+    register_handler(this, netw::messaging_verb::GET_SCHEMA_VERSION, std::move(func));
 }
 void messaging_service::unregister_get_schema_version() {
-    _rpc->unregister_handler(net::messaging_verb::GET_SCHEMA_VERSION);
+    _rpc->unregister_handler(netw::messaging_verb::GET_SCHEMA_VERSION);
 }
 future<frozen_schema> messaging_service::send_get_schema_version(msg_addr dst, table_schema_version v) {
     return send_message<frozen_schema>(this, messaging_verb::GET_SCHEMA_VERSION, dst, static_cast<unsigned>(dst.cpu_id), v);
 }
 
 void messaging_service::register_schema_check(std::function<future<utils::UUID>()>&& func) {
-    register_handler(this, net::messaging_verb::SCHEMA_CHECK, std::move(func));
+    register_handler(this, netw::messaging_verb::SCHEMA_CHECK, std::move(func));
 }
 void messaging_service::unregister_schema_check() {
-    _rpc->unregister_handler(net::messaging_verb::SCHEMA_CHECK);
+    _rpc->unregister_handler(netw::messaging_verb::SCHEMA_CHECK);
 }
 future<utils::UUID> messaging_service::send_schema_check(msg_addr dst) {
-    return send_message<utils::UUID>(this, net::messaging_verb::SCHEMA_CHECK, dst);
+    return send_message<utils::UUID>(this, netw::messaging_verb::SCHEMA_CHECK, dst);
 }
 
 void messaging_service::register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (const rpc::client_info&, query::read_command cmd, compat::wrapping_partition_range pr)>&& func) {
-    register_handler(this, net::messaging_verb::READ_MUTATION_DATA, std::move(func));
+    register_handler(this, netw::messaging_verb::READ_MUTATION_DATA, std::move(func));
 }
 void messaging_service::unregister_read_mutation_data() {
-    _rpc->unregister_handler(net::messaging_verb::READ_MUTATION_DATA);
+    _rpc->unregister_handler(netw::messaging_verb::READ_MUTATION_DATA);
 }
 future<reconcilable_result> messaging_service::send_read_mutation_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr) {
     return send_message_timeout<reconcilable_result>(this, messaging_verb::READ_MUTATION_DATA, std::move(id), timeout, cmd, pr);
 }
 
 void messaging_service::register_read_digest(std::function<future<query::result_digest, api::timestamp_type> (const rpc::client_info&, query::read_command cmd, compat::wrapping_partition_range pr)>&& func) {
-    register_handler(this, net::messaging_verb::READ_DIGEST, std::move(func));
+    register_handler(this, netw::messaging_verb::READ_DIGEST, std::move(func));
 }
 void messaging_service::unregister_read_digest() {
-    _rpc->unregister_handler(net::messaging_verb::READ_DIGEST);
+    _rpc->unregister_handler(netw::messaging_verb::READ_DIGEST);
 }
 future<query::result_digest, rpc::optional<api::timestamp_type>> messaging_service::send_read_digest(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr) {
-    return send_message_timeout<future<query::result_digest, rpc::optional<api::timestamp_type>>>(this, net::messaging_verb::READ_DIGEST, std::move(id), timeout, cmd, pr);
+    return send_message_timeout<future<query::result_digest, rpc::optional<api::timestamp_type>>>(this, netw::messaging_verb::READ_DIGEST, std::move(id), timeout, cmd, pr);
 }
 
 // Wrapper for TRUNCATE
 void messaging_service::register_truncate(std::function<future<> (sstring, sstring)>&& func) {
-    register_handler(this, net::messaging_verb::TRUNCATE, std::move(func));
+    register_handler(this, netw::messaging_verb::TRUNCATE, std::move(func));
 }
 
 void messaging_service::unregister_truncate() {
-    _rpc->unregister_handler(net::messaging_verb::TRUNCATE);
+    _rpc->unregister_handler(netw::messaging_verb::TRUNCATE);
 }
 
 future<> messaging_service::send_truncate(msg_addr id, std::chrono::milliseconds timeout, sstring ks, sstring cf) {
-    return send_message_timeout<void>(this, net::messaging_verb::TRUNCATE, std::move(id), std::move(timeout), std::move(ks), std::move(cf));
+    return send_message_timeout<void>(this, netw::messaging_verb::TRUNCATE, std::move(id), std::move(timeout), std::move(ks), std::move(cf));
 }
 
 // Wrapper for REPLICATION_FINISHED

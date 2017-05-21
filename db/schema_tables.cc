@@ -80,7 +80,7 @@ using namespace std::chrono_literals;
 namespace db {
 namespace schema_tables {
 
-logging::logger logger("schema_tables");
+logging::logger slogger("schema_tables");
 
 struct push_back_and_return {
     std::vector<mutation> muts;
@@ -808,16 +808,16 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
     auto diff = difference(before, after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
 
     for (auto&& key : diff.entries_only_on_left) {
-        logger.info("Dropping keyspace {}", key);
+        slogger.info("Dropping keyspace {}", key);
         dropped.emplace(key);
     }
     for (auto&& key : diff.entries_only_on_right) {
         auto&& value = after[key];
-        logger.info("Creating keyspace {}", key);
+        slogger.info("Creating keyspace {}", key);
         created.emplace_back(schema_result_value_type{key, std::move(value)});
     }
     for (auto&& key : diff.entries_differing) {
-        logger.info("Altering keyspace {}", key);
+        slogger.info("Altering keyspace {}", key);
         altered.emplace_back(key);
     }
     return do_with(std::move(created), [&proxy, altered = std::move(altered)] (auto& created) mutable {
@@ -867,17 +867,17 @@ static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy
     auto diff = difference(before, after);
     for (auto&& key : diff.entries_only_on_left) {
         auto&& s = proxy.local().get_db().local().find_schema(key.keyspace_name, key.table_name);
-        logger.info("Dropping {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
+        slogger.info("Dropping {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
         d.dropped.emplace_back(schema_diff::dropped_schema{s});
     }
     for (auto&& key : diff.entries_only_on_right) {
         auto s = create_schema(std::move(after.at(key)));
-        logger.info("Creating {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
+        slogger.info("Creating {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
         d.created.emplace_back(s);
     }
     for (auto&& key : diff.entries_differing) {
         auto s = create_schema(std::move(after.at(key)));
-        logger.info("Altering {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
+        slogger.info("Altering {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
         d.altered.emplace_back(s);
     }
     return d;
@@ -1760,7 +1760,7 @@ static void prepare_builder_from_table_row(schema_builder& builder, const query:
                 map.erase(i);
             } catch (const exceptions::configuration_exception& e) {
                 // If compaction strategy class isn't supported, fallback to size tiered.
-                logger.warn("Falling back to size-tiered compaction strategy after the problem: {}", e.what());
+                slogger.warn("Falling back to size-tiered compaction strategy after the problem: {}", e.what());
                 builder.set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
             }
         }
@@ -2343,7 +2343,7 @@ future<std::vector<mutation>> make_drop_view_mutations(lw_shared_ptr<keyspace_me
         }
         catch (InvalidRequestException e)
         {
-            logger.error(String.format("Cannot load function '%s' from schema: this function won't be available (on this node)", name), e);
+            slogger.error(String.format("Cannot load function '%s' from schema: this function won't be available (on this node)", name), e);
             return UDFunction.createBrokenFunction(name, argNames, argTypes, returnType, language, body, e);
         }
     }

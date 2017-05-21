@@ -49,7 +49,7 @@
 #include <experimental/optional>
 #include <stdexcept>
 
-namespace transport {
+namespace cql_transport {
 
 class event {
 public:

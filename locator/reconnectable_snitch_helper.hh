@@ -61,7 +61,7 @@ private:
     }
 
     void reconnect(gms::inet_address public_address, gms::inet_address local_address) {
-        auto& ms = net::get_local_messaging_service();
+        auto& ms = netw::get_local_messaging_service();
         auto& sn_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
         if (sn_ptr->get_datacenter(public_address) == _local_dc &&
@@ -75,10 +75,10 @@ private:
             // ...then update messaging_service cache and reset the currently
             // open connections to this endpoint on all shards...
             //
-            net::get_messaging_service().invoke_on_all([public_address, local_address] (auto& local_ms) {
+            netw::get_messaging_service().invoke_on_all([public_address, local_address] (auto& local_ms) {
                 local_ms.cache_preferred_ip(public_address, local_address);
 
-                net::msg_addr id = {
+                netw::msg_addr id = {
                     .addr = public_address
                 };
                 local_ms.remove_rpc_client(id);

@@ -41,7 +41,7 @@
 
 #include "transport/event.hh"
 
-namespace transport {
+namespace cql_transport {
 
 event::event(const event_type& type_)
     : type{type_}

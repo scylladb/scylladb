@@ -77,14 +77,14 @@ void drop_index_statement::validate(distributed<service::storage_proxy>&, const 
     // validated in lookup_indexed_table()
 }
 
-future<shared_ptr<transport::event::schema_change>> drop_index_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
 {
     if (!service::get_local_storage_service().cluster_supports_indexes()) {
         throw exceptions::invalid_request_exception("Index support is not enabled");
     }
     auto cfm = lookup_indexed_table();
     if (!cfm) {
-        return make_ready_future<::shared_ptr<transport::event::schema_change>>(nullptr);
+        return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>(nullptr);
     }
     auto builder = schema_builder(cfm);
     builder.without_index(_index_name);
@@ -92,7 +92,7 @@ future<shared_ptr<transport::event::schema_change>> drop_index_statement::announ
         // Dropping an index is akin to updating the CF
         // Note that we shouldn't call columnFamily() at this point because the index has been dropped and the call to lookupIndexedTable()
         // in that method would now throw.
-        using namespace transport;
+        using namespace cql_transport;
         return make_shared<event::schema_change>(event::schema_change::change_type::UPDATED,
                                                  event::schema_change::target_type::TABLE,
                                                  cfm->ks_name(),

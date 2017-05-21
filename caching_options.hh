@@ -24,6 +24,7 @@
 #include <boost/lexical_cast.hpp>
 #include "exceptions/exceptions.hh"
 #include "json.hh"
+#include "seastarx.hh"
 
 class schema;
 

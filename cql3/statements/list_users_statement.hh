@@ -52,7 +52,7 @@ class list_users_statement : public authentication_statement {
 public:
     void validate(distributed<service::storage_proxy>&, const service::client_state&) override;
     future<> check_access(const service::client_state&) override;
-    future<::shared_ptr<transport::messages::result_message>> execute(distributed<service::storage_proxy>&
+    future<::shared_ptr<cql_transport::messages::result_message>> execute(distributed<service::storage_proxy>&
                     , service::query_state&
                     , const query_options&) override;
 };

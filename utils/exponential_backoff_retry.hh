@@ -23,6 +23,7 @@
 #pragma once
 
 #include "core/sleep.hh"
+#include "seastarx.hh"
 #include <chrono>
 
 // Implements retry policy that exponentially increases sleep time between retries.

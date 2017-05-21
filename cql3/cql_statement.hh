@@ -46,7 +46,7 @@
 #include "service/storage_proxy.hh"
 #include "cql3/query_options.hh"
 
-namespace transport {
+namespace cql_transport {
 
 namespace messages {
 
@@ -89,7 +89,7 @@ public:
      * @param state the current query state
      * @param options options for this query (consistency, variables, pageSize, ...)
      */
-    virtual future<::shared_ptr<transport::messages::result_message>>
+    virtual future<::shared_ptr<cql_transport::messages::result_message>>
         execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) = 0;
 
     /**
@@ -97,7 +97,7 @@ public:
      *
      * @param state the current query state
      */
-    virtual future<::shared_ptr<transport::messages::result_message>>
+    virtual future<::shared_ptr<cql_transport::messages::result_message>>
         execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) = 0;
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;

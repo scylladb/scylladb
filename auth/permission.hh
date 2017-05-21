@@ -44,6 +44,7 @@
 #include <unordered_set>
 #include <seastar/core/sstring.hh>
 
+#include "seastarx.hh"
 #include "enum_set.hh"
 
 namespace auth {

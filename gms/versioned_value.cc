@@ -54,7 +54,7 @@ constexpr const char* versioned_value::SHUTDOWN;
 constexpr const char* versioned_value::REMOVAL_COORDINATOR;
 
 versioned_value versioned_value::factory::network_version() {
-    return versioned_value(sprint("%s",net::messaging_service::current_version));
+    return versioned_value(sprint("%s",netw::messaging_service::current_version));
 }
 
 }

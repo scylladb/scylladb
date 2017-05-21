@@ -64,7 +64,7 @@ SEASTAR_TEST_CASE(test_execute_batch) {
 
             using namespace std::chrono_literals;
 
-            auto version = net::messaging_service::current_version;
+            auto version = netw::messaging_service::current_version;
             auto bm = bp.get_batch_log_mutation_for({ m }, s->id(), version, db_clock::now() - db_clock::duration(3h));
 
             return qp.proxy().local().mutate_locally(bm).then([&bp] () mutable {

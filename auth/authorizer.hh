@@ -51,6 +51,8 @@
 #include "permission.hh"
 #include "data_resource.hh"
 
+#include "seastarx.hh"
+
 namespace auth {
 
 class authenticated_user;

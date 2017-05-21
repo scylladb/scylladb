@@ -26,6 +26,8 @@
 #include <cmath>
 #include "core/timer.hh"
 #include <iosfwd>
+#include "seastarx.hh"
+
 namespace utils {
 /**
  * An exponentially-weighted moving average.

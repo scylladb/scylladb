@@ -57,7 +57,7 @@ logging::logger date_tiered_manifest::logger = logging::logger("DateTieredCompac
 
 namespace sstables {
 
-extern logging::logger logger;
+extern logging::logger clogger;
 
 class incremental_selector_impl {
 public:
@@ -341,7 +341,7 @@ compaction_strategy_impl::get_resharding_jobs(column_family& cf, std::vector<sst
     std::vector<resharding_descriptor> jobs;
     shard_id reshard_at_current = 0;
 
-    logger.debug("Trying to get resharding jobs for {}.{}...", cf.schema()->ks_name(), cf.schema()->cf_name());
+    clogger.debug("Trying to get resharding jobs for {}.{}...", cf.schema()->ks_name(), cf.schema()->cf_name());
     for (auto& candidate : candidates) {
         auto level = candidate->get_sstable_level();
         jobs.push_back(resharding_descriptor{{std::move(candidate)}, std::numeric_limits<uint64_t>::max(), reshard_at_current++ % smp::count, level});
@@ -711,10 +711,10 @@ public:
         auto tmp_value = size_tiered_compaction_strategy_options::get_value(options, SSTABLE_SIZE_OPTION);
         _max_sstable_size_in_mb = property_definitions::to_int(SSTABLE_SIZE_OPTION, tmp_value, DEFAULT_MAX_SSTABLE_SIZE_IN_MB);
         if (_max_sstable_size_in_mb >= 1000) {
-            logger.warn("Max sstable size of {}MB is configured; having a unit of compaction this large is probably a bad idea",
+            clogger.warn("Max sstable size of {}MB is configured; having a unit of compaction this large is probably a bad idea",
                 _max_sstable_size_in_mb);
         } else if (_max_sstable_size_in_mb < 50) {
-            logger.warn("Max sstable size of {}MB is configured. Testing done for CASSANDRA-5727 indicates that performance improves up to 160MB",
+            clogger.warn("Max sstable size of {}MB is configured. Testing done for CASSANDRA-5727 indicates that performance improves up to 160MB",
                 _max_sstable_size_in_mb);
         }
         _compaction_counter.resize(leveled_manifest::MAX_LEVELS);
@@ -760,7 +760,7 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(c
         return sstables::compaction_descriptor();
     }
 
-    logger.debug("leveled: Compacting {} out of {} sstables", candidate.sstables.size(), cfs.get_sstables()->size());
+    clogger.debug("leveled: Compacting {} out of {} sstables", candidate.sstables.size(), cfs.get_sstables()->size());
 
     return std::move(candidate);
 }
@@ -859,7 +859,7 @@ public:
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override {
         auto gc_before = gc_clock::now() - cfs.schema()->gc_grace_seconds();
         auto sstables = _manifest.get_next_sstables(cfs, candidates, gc_before);
-        logger.debug("datetiered: Compacting {} out of {} sstables", sstables.size(), candidates.size());
+        clogger.debug("datetiered: Compacting {} out of {} sstables", sstables.size(), candidates.size());
         if (sstables.empty()) {
             return sstables::compaction_descriptor();
         }

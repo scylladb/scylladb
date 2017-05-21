@@ -70,14 +70,14 @@ struct send_info {
     utils::UUID plan_id;
     utils::UUID cf_id;
     dht::partition_range_vector prs;
-    net::messaging_service::msg_addr id;
+    netw::messaging_service::msg_addr id;
     uint32_t dst_cpu_id;
     size_t mutations_nr{0};
     semaphore mutations_done{0};
     bool error_logged = false;
     mutation_reader reader;
     send_info(database& db_, utils::UUID plan_id_, utils::UUID cf_id_,
-              dht::partition_range_vector prs_, net::messaging_service::msg_addr id_,
+              dht::partition_range_vector prs_, netw::messaging_service::msg_addr id_,
               uint32_t dst_cpu_id_)
         : db(db_)
         , plan_id(plan_id_)
@@ -94,7 +94,7 @@ future<> do_send_mutations(lw_shared_ptr<send_info> si, frozen_mutation fm, bool
     return get_local_stream_manager().mutation_send_limiter().wait().then([si, fragmented, fm = std::move(fm)] () mutable {
         sslog.debug("[Stream #{}] SEND STREAM_MUTATION to {}, cf_id={}", si->plan_id, si->id, si->cf_id);
         auto fm_size = fm.representation().size();
-        net::get_local_messaging_service().send_stream_mutation(si->id, si->plan_id, std::move(fm), si->dst_cpu_id, fragmented).then([si, fm_size] {
+        netw::get_local_messaging_service().send_stream_mutation(si->id, si->plan_id, std::move(fm), si->dst_cpu_id, fragmented).then([si, fm_size] {
             sslog.debug("[Stream #{}] GOT STREAM_MUTATION Reply from {}", si->plan_id, si->id.addr);
             get_local_stream_manager().update_progress(si->plan_id, si->id.addr, progress_info::direction::OUT, fm_size);
             si->mutations_done.signal();
@@ -139,7 +139,7 @@ void stream_transfer_task::start() {
     auto cf_id = this->cf_id;
     auto dst_cpu_id = session->dst_cpu_id;
     auto& schema = session->get_local_db().find_column_family(cf_id).schema();
-    auto id = net::messaging_service::msg_addr{session->peer, session->dst_cpu_id};
+    auto id = netw::messaging_service::msg_addr{session->peer, session->dst_cpu_id};
     sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}", plan_id, cf_id);
     sort_and_merge_ranges();
     _shard_ranges = dht::split_ranges_to_shards(_ranges, *schema);

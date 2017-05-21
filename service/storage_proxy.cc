@@ -79,7 +79,7 @@
 
 namespace service {
 
-static logging::logger logger("storage_proxy");
+static logging::logger slogger("storage_proxy");
 static logging::logger qlogger("query_result");
 static logging::logger mlogger("mutation_data");
 
@@ -254,7 +254,7 @@ public:
     }
     void on_timeout() {
         if (_cl_achieved) {
-            logger.trace("Write is not acknowledged by {} replicas after achieving CL", get_targets());
+            slogger.trace("Write is not acknowledged by {} replicas after achieving CL", get_targets());
         }
         _timedout = true;
     }
@@ -375,7 +375,7 @@ storage_proxy::response_id_type storage_proxy::register_response_handler(shared_
             auto hints = hint_to_dead_endpoints(e.handler->_mutation_holder, e.handler->get_targets());
             e.handler->signal(hints);
             if (e.handler->_cl == db::consistency_level::ANY && hints) {
-                logger.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
+                slogger.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
             }
         }
 
@@ -1036,7 +1036,7 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
     std::vector<gms::inet_address> pending_endpoints =
         get_local_storage_service().get_token_metadata().pending_endpoints_for(m.token(), keyspace_name);
 
-    logger.trace("creating write handler for token: {} natural: {} pending: {}", m.token(), natural_endpoints, pending_endpoints);
+    slogger.trace("creating write handler for token: {} natural: {} pending: {}", m.token(), natural_endpoints, pending_endpoints);
     tracing::trace(tr_state, "Creating write handler for token: {} natural: {} pending: {}", m.token(), natural_endpoints ,pending_endpoints);
 
     // filter out naturale_endpoints from pending_endpoint if later is not yet updated during node join
@@ -1064,7 +1064,7 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
     std::partition_copy(all.begin(), all.end(), std::inserter(live_endpoints, live_endpoints.begin()), std::back_inserter(dead_endpoints),
             std::bind1st(std::mem_fn(&gms::failure_detector::is_alive), &gms::get_local_failure_detector()));
 
-    logger.trace("creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
+    slogger.trace("creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
     tracing::trace(tr_state, "Creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
 
     db::assure_sufficient_live_nodes(cl, ks, live_endpoints, pending_endpoints);
@@ -1078,7 +1078,7 @@ storage_proxy::create_write_response_handler(const std::unordered_map<gms::inet_
     boost::copy(m | boost::adaptors::map_keys, std::inserter(endpoints, endpoints.begin()));
     auto mh = std::make_unique<per_destination_mutation>(m);
 
-    logger.trace("creating write handler for read repair token: {} endpoint: {}", mh->token(), endpoints);
+    slogger.trace("creating write handler for read repair token: {} endpoint: {}", mh->token(), endpoints);
     tracing::trace(tr_state, "Creating write handler for read repair token: {} endpoint: {}", mh->token(), endpoints);
 
     auto keyspace_name = mh->schema()->ks_name();
@@ -1151,23 +1151,23 @@ future<> storage_proxy::mutate_end(future<> mutate_result, utils::latency_counte
         return make_ready_future<>();
     } catch (no_such_keyspace& ex) {
         tracing::trace(trace_state, "Mutation failed: write to non existing keyspace: {}", ex.what());
-        logger.trace("Write to non existing keyspace: {}", ex.what());
+        slogger.trace("Write to non existing keyspace: {}", ex.what());
         return make_exception_future<>(std::current_exception());
     } catch(mutation_write_timeout_exception& ex) {
         // timeout
         tracing::trace(trace_state, "Mutation failed: write timeout; received {:d} of {:d} required replies", ex.received, ex.block_for);
-        logger.debug("Write timeout; received {} of {} required replies", ex.received, ex.block_for);
+        slogger.debug("Write timeout; received {} of {} required replies", ex.received, ex.block_for);
         _stats.write_timeouts.mark();
         return make_exception_future<>(std::current_exception());
     } catch (exceptions::unavailable_exception& ex) {
         tracing::trace(trace_state, "Mutation failed: unavailable");
         _stats.write_unavailables.mark();
-        logger.trace("Unavailable");
+        slogger.trace("Unavailable");
         return make_exception_future<>(std::current_exception());
     }  catch(overloaded_exception& ex) {
         tracing::trace(trace_state, "Mutation failed: overloaded");
         _stats.write_unavailables.mark();
-        logger.trace("Overloaded");
+        slogger.trace("Overloaded");
         return make_exception_future<>(std::current_exception());
     } catch (...) {
         tracing::trace(trace_state, "Mutation failed: unknown reason");
@@ -1206,7 +1206,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
         return make_ready_future<>();
     }
 
-    logger.trace("mutate_counters cl={}", cl);
+    slogger.trace("mutate_counters cl={}", cl);
     mlogger.trace("counter mutations={}", mutations);
 
 
@@ -1248,8 +1248,8 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
                 return std::move(m.fm);
             }));
 
-            auto& ms = net::get_local_messaging_service();
-            auto msg_addr = net::messaging_service::msg_addr{ endpoint_and_mutations.first, 0 };
+            auto& ms = netw::get_local_messaging_service();
+            auto msg_addr = netw::messaging_service::msg_addr{ endpoint_and_mutations.first, 0 };
             tracing::trace(tr_state, "Enqueuing counter update to {}", msg_addr);
             f = ms.send_counter_mutation(msg_addr, timeout, std::move(fms), cl, tracing::make_trace_info(tr_state));
         }
@@ -1305,7 +1305,7 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool c
         return make_ready_future<>();
     }
 
-    logger.trace("mutate cl={}", cl);
+    slogger.trace("mutate cl={}", cl);
     mlogger.trace("mutations={}", mutations);
 
     // If counters is set it means that we are replicating counter shards. There
@@ -1404,7 +1404,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             });
         }
         future<> sync_write_to_batchlog() {
-            auto m = db::get_batchlog_manager().local().get_batch_log_mutation_for(_mutations, _batch_uuid, net::messaging_service::current_version);
+            auto m = db::get_batchlog_manager().local().get_batch_log_mutation_for(_mutations, _batch_uuid, netw::messaging_service::current_version);
             tracing::trace(_trace_state, "Sending a batchlog write mutation");
             return send_batchlog_mutation(std::move(m));
         };
@@ -1418,7 +1418,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
 
             tracing::trace(_trace_state, "Sending a batchlog remove mutation");
             return send_batchlog_mutation(std::move(m), db::consistency_level::ANY).handle_exception([] (std::exception_ptr eptr) {
-                logger.error("Failed to remove mutations from batchlog: {}", eptr);
+                slogger.error("Failed to remove mutations from batchlog: {}", eptr);
             });
         };
 
@@ -1518,14 +1518,14 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
 
     // lambda for applying mutation remotely
     auto rmutate = [this, handler_ptr, timeout, response_id, my_address] (gms::inet_address coordinator, std::vector<gms::inet_address>&& forward, const frozen_mutation& m) {
-        auto& ms = net::get_local_messaging_service();
+        auto& ms = netw::get_local_messaging_service();
         auto msize = m.representation().size();
         _stats.queued_write_bytes += msize;
 
         auto& tr_state = handler_ptr->get_trace_state();
         tracing::trace(tr_state, "Sending a mutation to /{}", coordinator);
 
-        return ms.send_mutation(net::messaging_service::msg_addr{coordinator, 0}, timeout, m,
+        return ms.send_mutation(netw::messaging_service::msg_addr{coordinator, 0}, timeout, m,
                 std::move(forward), my_address, engine().cpu_id(), response_id, tracing::make_trace_info(tr_state)).finally([this, p = shared_from_this(), h = std::move(handler_ptr), msize] {
             _stats.queued_write_bytes -= msize;
             unthrottle();
@@ -1572,7 +1572,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
                 // from lmutate(). Ignore so that logs are not flooded
                 // database total_writes_timedout counter was incremented.
             } catch(...) {
-                logger.error("exception during mutation write to {}: {}", coordinator, std::current_exception());
+                slogger.error("exception during mutation write to {}: {}", coordinator, std::current_exception());
             }
         });
     }
@@ -1610,14 +1610,14 @@ bool storage_proxy::submit_hint(std::unique_ptr<mutation_holder>& mh, gms::inet_
             int ttl = HintedHandOffManager.calculateHintTTL(mutation);
             if (ttl > 0)
             {
-                logger.debug("Adding hint for {}", target);
+                slogger.debug("Adding hint for {}", target);
                 writeHintForMutation(mutation, System.currentTimeMillis(), ttl, target);
                 // Notify the handler only for CL == ANY
                 if (responseHandler != null && responseHandler.consistencyLevel == ConsistencyLevel.ANY)
                     responseHandler.response(null);
             } else
             {
-                logger.debug("Skipped writing hint for {} (ttl {})", target, ttl);
+                slogger.debug("Skipped writing hint for {} (ttl {})", target, ttl);
             }
         }
     };
@@ -1829,7 +1829,7 @@ public:
         }
 
         // do nothing other than log for now, request will timeout eventually
-        logger.error("Exception when communicating with {}: {}", ep, why);
+        slogger.error("Exception when communicating with {}: {}", ep, why);
     }
 };
 
@@ -2427,9 +2427,9 @@ protected:
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
             return _proxy->query_mutations_locally(_schema, cmd, _partition_range, _trace_state);
         } else {
-            auto& ms = net::get_local_messaging_service();
+            auto& ms = netw::get_local_messaging_service();
             tracing::trace(_trace_state, "read_mutation_data: sending a message to /{}", ep);
-            return ms.send_read_mutation_data(net::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this, ep](reconcilable_result&& result) {
+            return ms.send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this, ep](reconcilable_result&& result) {
                     tracing::trace(_trace_state, "read_mutation_data: got response from /{}", ep);
                     return make_foreign(::make_lw_shared<reconcilable_result>(std::move(result)));
             });
@@ -2442,10 +2442,10 @@ protected:
             auto qrr = want_digest ? query::result_request::result_and_digest : query::result_request::only_result;
             return _proxy->query_singular_local(_schema, _cmd, _partition_range, qrr, _trace_state);
         } else {
-            auto& ms = net::get_local_messaging_service();
+            auto& ms = netw::get_local_messaging_service();
             tracing::trace(_trace_state, "read_data: sending a message to /{}", ep);
             auto da = want_digest ? query::digest_algorithm::MD5 : query::digest_algorithm::none;
-            return ms.send_read_data(net::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, da).then([this, ep](query::result&& result) {
+            return ms.send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, da).then([this, ep](query::result&& result) {
                 tracing::trace(_trace_state, "read_data: got response from /{}", ep);
                 return make_foreign(::make_lw_shared<query::result>(std::move(result)));
             });
@@ -2457,9 +2457,9 @@ protected:
             tracing::trace(_trace_state, "read_digest: querying locally");
             return _proxy->query_singular_local_digest(_schema, _cmd, _partition_range, _trace_state);
         } else {
-            auto& ms = net::get_local_messaging_service();
+            auto& ms = netw::get_local_messaging_service();
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
-            return ms.send_read_digest(net::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range).then([this, ep] (query::result_digest d, rpc::optional<api::timestamp_type> t) {
+            return ms.send_read_digest(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range).then([this, ep] (query::result_digest d, rpc::optional<api::timestamp_type> t) {
                 tracing::trace(_trace_state, "read_digest: got response from /{}", ep);
                 return make_ready_future<query::result_digest, api::timestamp_type>(d, t ? t.value() : api::missing_timestamp);
             });
@@ -2588,7 +2588,7 @@ protected:
                         _retry_cmd->slice.options.remove<query::partition_slice::option::allow_short_read>();
                     }
 
-                    logger.trace("Retrying query with command {} (previous is {})", *_retry_cmd, *cmd);
+                    slogger.trace("Retrying query with command {} (previous is {})", *_retry_cmd, *cmd);
                     reconcile(cl, timeout, _retry_cmd);
                 }
             } catch (...) {
@@ -2759,14 +2759,14 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     db::read_repair_decision repair_decision = new_read_repair_decision(*schema);
     std::vector<gms::inet_address> target_replicas = db::filter_for_query(cl, ks, all_replicas, repair_decision);
 
-    logger.trace("creating read executor for token {} with all: {} targets: {} rp decision: {}", token, all_replicas, target_replicas, repair_decision);
+    slogger.trace("creating read executor for token {} with all: {} targets: {} rp decision: {}", token, all_replicas, target_replicas, repair_decision);
     tracing::trace(trace_state, "Creating read executor for token {} with all: {} targets: {} repair decision: {}", token, all_replicas, target_replicas, repair_decision);
 
     // Throw UAE early if we don't have enough replicas.
     try {
         db::assure_sufficient_live_nodes(cl, ks, target_replicas);
     } catch (exceptions::unavailable_exception& ex) {
-        logger.debug("Read unavailable: cl={} required {} alive {}", ex.consistency, ex.required, ex.alive);
+        slogger.debug("Read unavailable: cl={} required {} alive {}", ex.consistency, ex.required, ex.alive);
         _stats.read_unavailables.mark();
         throw;
     }
@@ -2810,13 +2810,13 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
         if (!good_replica(extra_replica)) {
             auto it = boost::range::find_if(all_replicas, std::move(good_replica));
             if (it == all_replicas.end()) {
-                logger.trace("read executor no extra target to speculate");
+                slogger.trace("read executor no extra target to speculate");
                 return ::make_shared<never_speculating_read_executor>(schema, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
             }
             extra_replica = *it;
         }
         target_replicas.push_back(extra_replica);
-        logger.trace("creating read executor with extra target {}", extra_replica);
+        slogger.trace("creating read executor with extra target {}", extra_replica);
     }
 
     if (retry_type == speculative_retry::type::ALWAYS) {
@@ -2847,14 +2847,14 @@ void storage_proxy::handle_read_error(std::exception_ptr eptr, bool range) {
     try {
         std::rethrow_exception(eptr);
     } catch (read_timeout_exception& ex) {
-        logger.debug("Read timeout: received {} of {} required replies, data {}present", ex.received, ex.block_for, ex.data_present ? "" : "not ");
+        slogger.debug("Read timeout: received {} of {} required replies, data {}present", ex.received, ex.block_for, ex.data_present ? "" : "not ");
         if (range) {
             _stats.range_slice_timeouts.mark();
         } else {
             _stats.read_timeouts.mark();
         }
     } catch (...) {
-        logger.debug("Error during read query {}", eptr);
+        slogger.debug("Error during read query {}", eptr);
     }
 }
 
@@ -2942,11 +2942,11 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             filtered_endpoints = std::move(filtered_merged);
             ++i;
         }
-        logger.trace("creating range read executor with targets {}", filtered_endpoints);
+        slogger.trace("creating range read executor with targets {}", filtered_endpoints);
         try {
             db::assure_sufficient_live_nodes(cl, ks, filtered_endpoints);
         } catch(exceptions::unavailable_exception& ex) {
-            logger.debug("Read unavailable: cl={} required {} alive {}", ex.consistency, ex.required, ex.alive);
+            slogger.debug("Read unavailable: cl={} required {} alive {}", ex.consistency, ex.required, ex.alive);
             _stats.range_slice_unavailables.mark();
             throw;
         }
@@ -2965,7 +2965,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                    cl, cmd, concurrency_factor, timeout, remaining_row_count, remaining_partition_count, trace_state = std::move(trace_state)]
                    (foreign_ptr<lw_shared_ptr<query::result>>&& result) mutable {
         if (!result->row_count() || !result->partition_count()) {
-            logger.error("no row count in query result, should not happen here");
+            slogger.error("no row count in query result, should not happen here");
             result->calculate_counts(cmd->slice);
         }
         remaining_row_count -= result->row_count().value();
@@ -3019,7 +3019,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
 
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results;
     results.reserve(ranges.size()/concurrency_factor + 1);
-    logger.debug("Estimated result rows per range: {}; requested rows: {}, ranges.size(): {}; concurrent range requests: {}",
+    slogger.debug("Estimated result rows per range: {}; requested rows: {}, ranges.size(): {}; concurrent range requests: {}",
             result_rows_per_range, cmd->row_limit, ranges.size(), concurrency_factor);
 
     return query_partition_key_range_concurrent(timeout, std::move(results), cmd, cl, ranges.begin(), std::move(ranges), concurrency_factor,
@@ -3042,17 +3042,17 @@ storage_proxy::query(schema_ptr s,
     dht::partition_range_vector&& partition_ranges,
     db::consistency_level cl, tracing::trace_state_ptr trace_state)
 {
-    if (logger.is_enabled(logging::log_level::trace) || qlogger.is_enabled(logging::log_level::trace)) {
+    if (slogger.is_enabled(logging::log_level::trace) || qlogger.is_enabled(logging::log_level::trace)) {
         static thread_local int next_id = 0;
         auto query_id = next_id++;
 
-        logger.trace("query {}.{} cmd={}, ranges={}, id={}", s->ks_name(), s->cf_name(), *cmd, partition_ranges, query_id);
+        slogger.trace("query {}.{} cmd={}, ranges={}, id={}", s->ks_name(), s->cf_name(), *cmd, partition_ranges, query_id);
         return do_query(s, cmd, std::move(partition_ranges), cl, std::move(trace_state)).then([query_id, cmd, s] (foreign_ptr<lw_shared_ptr<query::result>>&& res) {
             if (res->buf().is_linearized()) {
                 res->calculate_counts(cmd->slice);
-                logger.trace("query_result id={}, size={}, rows={}, partitions={}", query_id, res->buf().size(), *res->row_count(), *res->partition_count());
+                slogger.trace("query_result id={}, size={}, rows={}, partitions={}", query_id, res->buf().size(), *res->row_count(), *res->partition_count());
             } else {
-                logger.trace("query_result id={}, size={}", query_id, res->buf().size());
+                slogger.trace("query_result id={}, size={}", query_id, res->buf().size());
             }
             qlogger.trace("id={}, {}", query_id, res->pretty_printer(s, cmd->slice));
             return std::move(res);
@@ -3369,12 +3369,12 @@ bool storage_proxy::should_hint(gms::inet_address ep) noexcept {
 }
 
 future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
-    logger.debug("Starting a blocking truncate operation on keyspace {}, CF {}", keyspace, cfname);
+    slogger.debug("Starting a blocking truncate operation on keyspace {}, CF {}", keyspace, cfname);
 
     auto& gossiper = gms::get_local_gossiper();
 
     if (!gossiper.get_unreachable_token_owners().empty()) {
-        logger.info("Cannot perform truncate, some hosts are down");
+        slogger.info("Cannot perform truncate, some hosts are down");
         // Since the truncate operation is so aggressive and is typically only
         // invoked by an admin, for simplicity we require that all nodes are up
         // to perform the operation.
@@ -3386,18 +3386,18 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
     }
 
     auto all_endpoints = gossiper.get_live_token_owners();
-    auto& ms = net::get_local_messaging_service();
+    auto& ms = netw::get_local_messaging_service();
     auto timeout = std::chrono::milliseconds(_db.local().get_config().truncate_request_timeout_in_ms());
 
-    logger.trace("Enqueuing truncate messages to hosts {}", all_endpoints);
+    slogger.trace("Enqueuing truncate messages to hosts {}", all_endpoints);
 
     return parallel_for_each(all_endpoints, [keyspace, cfname, &ms, timeout](auto ep) {
-        return ms.send_truncate(net::messaging_service::msg_addr{ep, 0}, timeout, keyspace, cfname);
+        return ms.send_truncate(netw::messaging_service::msg_addr{ep, 0}, timeout, keyspace, cfname);
     }).handle_exception([cfname](auto ep) {
        try {
            std::rethrow_exception(ep);
        } catch (rpc::timeout_error& e) {
-           logger.trace("Truncation of {} timed out: {}", cfname, e.what());
+           slogger.trace("Truncation of {} timed out: {}", cfname, e.what());
        } catch (...) {
            throw;
        }
@@ -3540,7 +3540,7 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
     public void verifyNoHintsInProgress()
     {
         if (getHintsInProgress() > 0)
-            logger.warn("Some hints were not written before shutdown.  This is not supposed to happen.  You should (a) run repair, and (b) file a bug report");
+            slogger.warn("Some hints were not written before shutdown.  This is not supposed to happen.  You should (a) run repair, and (b) file a bug report");
     }
 
     public Long getRpcTimeout() { return DatabaseDescriptor.getRpcTimeout(); }
@@ -3580,9 +3580,9 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
 #endif
 
 void storage_proxy::init_messaging_service() {
-    auto& ms = net::get_local_messaging_service();
+    auto& ms = netw::get_local_messaging_service();
     ms.register_counter_mutation([] (const rpc::client_info& cinfo, rpc::opt_time_point t, std::vector<frozen_mutation> fms, db::consistency_level cl, stdx::optional<tracing::trace_info> trace_info) {
-        auto src_addr = net::messaging_service::get_source(cinfo);
+        auto src_addr = netw::messaging_service::get_source(cinfo);
 
         tracing::trace_state_ptr trace_state_ptr;
         if (trace_info) {
@@ -3607,7 +3607,7 @@ void storage_proxy::init_messaging_service() {
     });
     ms.register_mutation([] (const rpc::client_info& cinfo, rpc::opt_time_point t, frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id, rpc::optional<std::experimental::optional<tracing::trace_info>> trace_info) {
         tracing::trace_state_ptr trace_state_ptr;
-        auto src_addr = net::messaging_service::get_source(cinfo);
+        auto src_addr = netw::messaging_service::get_source(cinfo);
 
         if (trace_info && *trace_info) {
             tracing::trace_info& tr_info = **trace_info;
@@ -3635,14 +3635,14 @@ void storage_proxy::init_messaging_service() {
                         return p->mutate_locally(std::move(s), m, timeout);
                     });
                 }).then([reply_to, shard, response_id, trace_state_ptr] () {
-                    auto& ms = net::get_local_messaging_service();
+                    auto& ms = netw::get_local_messaging_service();
                     // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
                     // lots of unsent responses, which can OOM our shard.
                     //
                     // Usually we will return immediately, since this work only involves appending data to the connection
                     // send buffer.
                     tracing::trace(trace_state_ptr, "Sending mutation_done to /{}", reply_to);
-                    return ms.send_mutation_done(net::messaging_service::msg_addr{reply_to, shard}, shard, response_id).then_wrapped([] (future<> f) {
+                    return ms.send_mutation_done(netw::messaging_service::msg_addr{reply_to, shard}, shard, response_id).then_wrapped([] (future<> f) {
                         f.ignore_ready_future();
                     });
                 }).handle_exception([reply_to, shard, &p] (std::exception_ptr eptr) {
@@ -3656,12 +3656,12 @@ void storage_proxy::init_messaging_service() {
                     } catch (...) {
                         // ignore
                     }
-                    logger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
+                    slogger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
                 }),
                 parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p, trace_state_ptr, timeout] (gms::inet_address forward) {
-                    auto& ms = net::get_local_messaging_service();
+                    auto& ms = netw::get_local_messaging_service();
                     tracing::trace(trace_state_ptr, "Forwarding a mutation to /{}", forward);
-                    return ms.send_mutation(net::messaging_service::msg_addr{forward, 0}, timeout, m, {}, reply_to, shard, response_id, tracing::make_trace_info(trace_state_ptr)).then_wrapped([&p] (future<> f) {
+                    return ms.send_mutation(netw::messaging_service::msg_addr{forward, 0}, timeout, m, {}, reply_to, shard, response_id, tracing::make_trace_info(trace_state_ptr)).then_wrapped([&p] (future<> f) {
                         if (f.failed()) {
                             ++p->_stats.forwarding_errors;
                         };
@@ -3671,7 +3671,7 @@ void storage_proxy::init_messaging_service() {
             ).then_wrapped([trace_state_ptr] (future<std::tuple<future<>, future<>>>&& f) {
                 // ignore ressult, since we'll be returning them via MUTATION_DONE verbs
                 tracing::trace(trace_state_ptr, "Mutation handling is done");
-                return net::messaging_service::no_wait();
+                return netw::messaging_service::no_wait();
             });
         });
     });
@@ -3679,12 +3679,12 @@ void storage_proxy::init_messaging_service() {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return get_storage_proxy().invoke_on(shard, [from, response_id] (storage_proxy& sp) {
             sp.got_response(response_id, from);
-            return net::messaging_service::no_wait();
+            return netw::messaging_service::no_wait();
         });
     });
     ms.register_read_data([] (const rpc::client_info& cinfo, query::read_command cmd, compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda) {
         tracing::trace_state_ptr trace_state_ptr;
-        auto src_addr = net::messaging_service::get_source(cinfo);
+        auto src_addr = netw::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
             trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd.trace_info);
             tracing::begin(trace_state_ptr);
@@ -3718,7 +3718,7 @@ void storage_proxy::init_messaging_service() {
     });
     ms.register_read_mutation_data([] (const rpc::client_info& cinfo, query::read_command cmd, compat::wrapping_partition_range pr) {
         tracing::trace_state_ptr trace_state_ptr;
-        auto src_addr = net::messaging_service::get_source(cinfo);
+        auto src_addr = netw::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
             trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd.trace_info);
             tracing::begin(trace_state_ptr);
@@ -3746,7 +3746,7 @@ void storage_proxy::init_messaging_service() {
     });
     ms.register_read_digest([] (const rpc::client_info& cinfo, query::read_command cmd, compat::wrapping_partition_range pr) {
         tracing::trace_state_ptr trace_state_ptr;
-        auto src_addr = net::messaging_service::get_source(cinfo);
+        auto src_addr = netw::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
             trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd.trace_info);
             tracing::begin(trace_state_ptr);
@@ -3779,14 +3779,14 @@ void storage_proxy::init_messaging_service() {
 
     ms.register_get_schema_version([] (unsigned shard, table_schema_version v) {
         return get_storage_proxy().invoke_on(shard, [v] (auto&& sp) {
-            logger.debug("Schema version request for {}", v);
+            slogger.debug("Schema version request for {}", v);
             return local_schema_registry().get_frozen(v);
         });
     });
 }
 
 void storage_proxy::uninit_messaging_service() {
-    auto& ms = net::get_local_messaging_service();
+    auto& ms = netw::get_local_messaging_service();
     ms.unregister_mutation();
     ms.unregister_mutation_done();
     ms.unregister_read_data();

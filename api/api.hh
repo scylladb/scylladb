@@ -29,6 +29,7 @@
 #include "utils/histogram.hh"
 #include "http/exception.hh"
 #include "api_init.hh"
+#include "seastarx.hh"
 
 namespace api {
 

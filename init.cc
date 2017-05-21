@@ -57,8 +57,8 @@ void init_ms_fd_gossiper(sstring listen_address_in
 {
     const auto listen = gms::inet_address::lookup(listen_address_in).get0();
 
-    using encrypt_what = net::messaging_service::encrypt_what;
-    using compress_what = net::messaging_service::compress_what;
+    using encrypt_what = netw::messaging_service::encrypt_what;
+    using compress_what = netw::messaging_service::compress_what;
     using namespace seastar::tls;
 
     encrypt_what ew = encrypt_what::none;
@@ -102,10 +102,10 @@ void init_ms_fd_gossiper(sstring listen_address_in
     // Init messaging_service
     // Delay listening messaging_service until gossip message handlers are registered
     bool listen_now = false;
-    net::get_messaging_service().start(listen, storage_port, ew, cw, ssl_storage_port, creds, sltba, listen_now).get();
+    netw::get_messaging_service().start(listen, storage_port, ew, cw, ssl_storage_port, creds, sltba, listen_now).get();
 
     // #293 - do not stop anything
-    //engine().at_exit([] { return net::get_messaging_service().stop(); });
+    //engine().at_exit([] { return netw::get_messaging_service().stop(); });
     // Init failure_detector
     gms::get_failure_detector().start(std::move(phi)).get();
     // #293 - do not stop anything

@@ -27,8 +27,9 @@
 #include <unordered_map>
 #include "core/sstring.hh"
 #include "core/future.hh"
+#include "seastarx.hh"
 
-class file;
+namespace seastar { class file; }
 
 namespace db {
 

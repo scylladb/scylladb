@@ -24,6 +24,7 @@
 #include "core/timer.hh"
 #include "core/semaphore.hh"
 #include "core/reactor.hh"
+#include "seastarx.hh"
 
 namespace utils {
 

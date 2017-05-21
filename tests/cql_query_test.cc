@@ -422,7 +422,7 @@ SEASTAR_TEST_CASE(test_limit_is_respected_across_partitions) {
             // Determine partition order
             return e.execute_cql("select k from cf;");
         }).then([&e](auto msg) {
-            auto rows = dynamic_pointer_cast<transport::messages::result_message::rows>(msg);
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
             BOOST_REQUIRE(rows);
             std::vector<bytes> keys;
             for (auto&& row : rows->rs().rows()) {
@@ -481,7 +481,7 @@ SEASTAR_TEST_CASE(test_partitions_have_consistent_ordering_in_range_query) {
             // Determine partition order
             return e.execute_cql("select k from cf;");
         }).then([&e](auto msg) {
-            auto rows = dynamic_pointer_cast<transport::messages::result_message::rows>(msg);
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
             BOOST_REQUIRE(rows);
             std::vector<bytes> keys;
             for (auto&& row : rows->rs().rows()) {
@@ -562,7 +562,7 @@ SEASTAR_TEST_CASE(test_partition_range_queries_with_bounds) {
             // Determine partition order
             return e.execute_cql("select k, token(k) from cf;");
         }).then([&e](auto msg) {
-            auto rows = dynamic_pointer_cast<transport::messages::result_message::rows>(msg);
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
             BOOST_REQUIRE(rows);
             std::vector<bytes> keys;
             std::vector<int64_t> tokens;
@@ -972,8 +972,8 @@ SEASTAR_TEST_CASE(test_functions) {
             return e.execute_cql("insert into cf (p1, c1, tu) values ('key1', 3, now());").discard_result();
         }).then([&e] {
             return e.execute_cql("select tu from cf where p1 in ('key1');");
-        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
-            using namespace transport::messages;
+        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
+            using namespace cql_transport::messages;
             struct validator : result_message::visitor {
                 std::vector<bytes_opt> res;
                 virtual void visit(const result_message::void_message&) override { throw "bad"; }
@@ -996,7 +996,7 @@ SEASTAR_TEST_CASE(test_functions) {
             BOOST_REQUIRE_EQUAL(boost::distance(v.res | boost::adaptors::uniqued), 3);
         }).then([&] {
             return e.execute_cql("select sum(c1), count(c1) from cf where p1 = 'key1';");
-        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({
@@ -1005,7 +1005,7 @@ SEASTAR_TEST_CASE(test_functions) {
                  });
         }).then([&] {
             return e.execute_cql("select count(*) from cf where p1 = 'key1';");
-        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({
@@ -1013,7 +1013,7 @@ SEASTAR_TEST_CASE(test_functions) {
                  });
         }).then([&] {
             return e.execute_cql("select count(1) from cf where p1 = 'key1';");
-        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({
@@ -1024,7 +1024,7 @@ SEASTAR_TEST_CASE(test_functions) {
             return e.execute_cql("insert into cf (p1, c1) values ((text)'key2', 7);").discard_result();
         }).then([&e] {
             return e.execute_cql("select c1 from cf where p1 = 'key2';");
-        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({
@@ -1042,7 +1042,7 @@ SEASTAR_TEST_CASE(test_writetime_and_ttl) {
             return e.execute_cql(q).discard_result();
         }).then([&e] {
             return e.execute_cql("select writetime(i) from cf where p1 in ('key1');");
-        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows()
                 .with_rows({{
                      {long_type->decompose(int64_t(the_timestamp))},
@@ -1082,7 +1082,7 @@ SEASTAR_TEST_CASE(test_tuples) {
             return e.execute_cql("insert into cf (id, t) values (1, (1001, 2001, 'abc1'));").discard_result();
         }).then([&e] {
             return e.execute_cql("select t from cf where id = 1;");
-        }).then([&e, tt] (shared_ptr<transport::messages::result_message> msg) {
+        }).then([&e, tt] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows()
                 .with_rows({{
                      {tt->decompose(make_tuple_value(tt, tuple_type_impl::native_type({int32_t(1001), int64_t(2001), sstring("abc1")})))},
@@ -1108,7 +1108,7 @@ SEASTAR_TEST_CASE(test_user_type) {
             return e.execute_cql("insert into cf (id, t) values (1, (1001, 2001, 'abc1'));").discard_result();
         }).then([&e] {
             return e.execute_cql("select t.my_int, t.my_bigint, t.my_text from cf where id = 1;");
-        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows()
                 .with_rows({
                      {int32_type->decompose(int32_t(1001)), long_type->decompose(int64_t(2001)), utf8_type->decompose(sstring("abc1"))},
@@ -1117,7 +1117,7 @@ SEASTAR_TEST_CASE(test_user_type) {
             return e.execute_cql("update cf set t = { my_int: 1002, my_bigint: 2002, my_text: 'abc2' } where id = 1;").discard_result();
         }).then([&e] {
             return e.execute_cql("select t.my_int, t.my_bigint, t.my_text from cf where id = 1;");
-        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows()
                 .with_rows({
                      {int32_type->decompose(int32_t(1002)), long_type->decompose(int64_t(2002)), utf8_type->decompose(sstring("abc2"))},
@@ -1126,7 +1126,7 @@ SEASTAR_TEST_CASE(test_user_type) {
             return e.execute_cql("insert into cf (id, t) values (2, (frozen<ut1>)(2001, 3001, 'abc4'));").discard_result();
         }).then([&e] {
             return e.execute_cql("select t from cf where id = 2;");
-        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
             auto ut = user_type_impl::get_instance("ks", to_bytes("ut1"),
                         {to_bytes("my_int"), to_bytes("my_bigint"), to_bytes("my_text")},
                         {int32_type, long_type, utf8_type});
@@ -1153,7 +1153,7 @@ SEASTAR_TEST_CASE(test_select_multiple_ranges) {
             ).discard_result();
         }).then([&e] {
             return e.execute_cql("select r1 from cf where p1 in ('key1', 'key2');");
-        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows().with_size(2).with_row({
                 {int32_type->decompose(100)}
             }).with_row({

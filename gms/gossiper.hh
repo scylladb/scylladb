@@ -84,11 +84,11 @@ class gossiper : public i_failure_detection_event_listener, public seastar::asyn
 public:
     using clk = std::chrono::system_clock;
 private:
-    using messaging_verb = net::messaging_verb;
-    using messaging_service = net::messaging_service;
-    using msg_addr = net::msg_addr;
-    net::messaging_service& ms() {
-        return net::get_local_messaging_service();
+    using messaging_verb = netw::messaging_verb;
+    using messaging_service = netw::messaging_service;
+    using msg_addr = netw::msg_addr;
+    netw::messaging_service& ms() {
+        return netw::get_local_messaging_service();
     }
     void init_messaging_service_handler();
     void uninit_messaging_service_handler();

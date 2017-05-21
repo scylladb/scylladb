@@ -97,14 +97,14 @@ void use_statement::validate(distributed<service::storage_proxy>&, const service
 {
 }
 
-future<::shared_ptr<transport::messages::result_message>>
+future<::shared_ptr<cql_transport::messages::result_message>>
 use_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
     state.get_client_state().set_keyspace(proxy.local().get_db(), _keyspace);
-    auto result =::make_shared<transport::messages::result_message::set_keyspace>(_keyspace);
-    return make_ready_future<::shared_ptr<transport::messages::result_message>>(result);
+    auto result =::make_shared<cql_transport::messages::result_message::set_keyspace>(_keyspace);
+    return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(result);
 }
 
-future<::shared_ptr<transport::messages::result_message>>
+future<::shared_ptr<cql_transport::messages::result_message>>
 use_statement::execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
     // Internal queries are exclusively on the system keyspace and 'use' is thus useless
     throw std::runtime_error("unsupported operation");

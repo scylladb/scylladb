@@ -73,7 +73,7 @@ namespace logalloc {
 
 struct segment;
 
-static logging::logger logger("lsa");
+static logging::logger llogger("lsa");
 static logging::logger timing_logger("lsa-timing");
 static thread_local tracker tracker_instance;
 
@@ -320,7 +320,7 @@ public:
         if (_segments.size()) {
             free(_base);
         }
-        logger.debug("Removed zone @{}", this);
+        llogger.debug("Removed zone @{}", this);
     }
     segment_zone(const segment_zone&) = delete;
     segment_zone& operator=(const segment_zone&) = delete;
@@ -387,7 +387,7 @@ std::unique_ptr<segment_zone> segment_zone::try_creating_zone()
         }
         try {
             zone = std::make_unique<segment_zone>(static_cast<segment*>(ptr), size);
-            logger.debug("Creating new zone @{}, size: {}", zone.get(), size);
+            llogger.debug("Creating new zone @{}, size: {}", zone.get(), size);
             next_attempt_size = std::min(std::max(size << 1, minimum_size), maximum_size);
             while (size--) {
                 auto seg = zone->segment_from_position(size);
@@ -398,7 +398,7 @@ std::unique_ptr<segment_zone> segment_zone::try_creating_zone()
             free(ptr);
         }
     }
-    logger.trace("Failed to create zone");
+    llogger.trace("Failed to create zone");
     next_attempt_size = minimum_size;
     return zone;
 }
@@ -438,7 +438,7 @@ size_t segment_zone::shrink_by(size_t delta)
 
     delta = std::min(delta, free_segment_count());
     auto new_size = segment_count() - delta;
-    logger.debug("Shrinking zone @{} by {} segments (total: {})", this, delta, new_size);
+    llogger.debug("Shrinking zone @{} by {} segments (total: {})", this, delta, new_size);
     _segments.resize(new_size);
     // Seastar allocator guarantees that realloc shrinks buffer in place.
     auto ptr = realloc(_base, new_size << segment::size_shift);
@@ -544,7 +544,7 @@ size_t segment_pool::reclaim_segments(size_t target) {
         return 0;
     }
 
-    logger.debug("Trying to reclaim {} segments form {} zones ({} full)", target,
+    llogger.debug("Trying to reclaim {} segments form {} zones ({} full)", target,
         _all_zones.size(), _all_zones.size() - _not_full_zones.size());
 
     // Reclamation. Migrate segments to lower addresses and shrink zones.
@@ -589,7 +589,7 @@ size_t segment_pool::reclaim_segments(size_t target) {
     });
     // FIXME: merge adjacent zones to reduce memory footprint of zone metadata
 
-    logger.debug("Reclaimed {} segments (requested {}), {} zones left",
+    llogger.debug("Reclaimed {} segments (requested {}), {} zones left",
         reclaimed_segments, target, _all_zones.size());
     return reclaimed_segments;
 }
@@ -649,7 +649,7 @@ segment* segment_pool::allocate_segment()
         }
     } while (shard_tracker().get_impl().compact_and_evict(shard_tracker().reclamation_step() * segment::size));
     if (shard_tracker().should_abort_on_bad_alloc()) {
-        logger.error("Aborting due to segment allocation failure");
+        llogger.error("Aborting due to segment allocation failure");
         abort();
     }
     return nullptr;
@@ -751,7 +751,7 @@ void segment_pool::free_segment(segment* seg) noexcept {
 }
 
 void segment_pool::free_segment(segment* seg, segment_descriptor& desc) noexcept {
-    logger.trace("Releasing segment {}", seg);
+    llogger.trace("Releasing segment {}", seg);
     desc._lsa_managed = false;
     desc._region = nullptr;
     free_or_restore_to_reserve(seg);
@@ -1149,7 +1149,7 @@ private:
             auto pos =_active->at<char>(_active_offset);
             desc.encode(pos);
         }
-        logger.trace("Closing segment {}, used={}, waste={} [B]", _active, _active->occupancy(), segment::size - _active_offset);
+        llogger.trace("Closing segment {}, used={}, waste={} [B]", _active, _active->occupancy(), segment::size - _active_offset);
         _closed_occupancy += _active->occupancy();
 
         _segment_descs.push(shard_segment_pool.descriptor(_active));
@@ -1421,7 +1421,7 @@ public:
         _segment_descs.pop_one_of_largest();
         _closed_occupancy -= desc.occupancy();
         segment* seg = shard_segment_pool.segment_from(desc);
-        logger.debug("Compacting segment {} from region {}, {}", seg, id(), seg->occupancy());
+        llogger.debug("Compacting segment {} from region {}, {}", seg, id(), seg->occupancy());
         compact(seg, desc);
         shard_segment_pool.on_segment_compaction();
     }
@@ -1467,7 +1467,7 @@ public:
     // Invalidates references to allocated objects.
     void full_compaction() {
         compaction_lock _(*this);
-        logger.debug("Full compaction, {}", occupancy());
+        llogger.debug("Full compaction, {}", occupancy());
         close_and_open();
         segment_descriptor_hist all;
         std::swap(all, _segment_descs);
@@ -1477,7 +1477,7 @@ public:
             all.pop_one_of_largest();
             compact(shard_segment_pool.segment_from(desc), desc);
         }
-        logger.debug("Done, {}", occupancy());
+        llogger.debug("Done, {}", occupancy());
     }
 
     allocation_strategy& allocator() {
@@ -1681,16 +1681,16 @@ occupancy_stats tracker::impl::occupancy() {
 
 void tracker::impl::reclaim_all_free_segments()
 {
-    logger.debug("Reclaiming all free segments");
+    llogger.debug("Reclaiming all free segments");
     shard_segment_pool.trim_emergency_reserve_to_max();
     shard_segment_pool.reclaim_all_free_segments();
-    logger.debug("Reclamation done");
+    llogger.debug("Reclamation done");
 }
 
 void tracker::impl::full_compaction() {
     reclaiming_lock _(*this);
 
-    logger.debug("Full compaction on all regions, {}", region_occupancy());
+    llogger.debug("Full compaction on all regions, {}", region_occupancy());
 
     for (region_impl* r : _regions) {
         if (r->reclaiming_enabled()) {
@@ -1698,7 +1698,7 @@ void tracker::impl::full_compaction() {
         }
     }
 
-    logger.debug("Compaction done, {}", region_occupancy());
+    llogger.debug("Compaction done, {}", region_occupancy());
 }
 
 static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use) {
@@ -1710,21 +1710,21 @@ static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use) {
             break;
         }
         auto used_target = used - std::min(used, deficit - std::min(deficit, occupancy.free_space()));
-        logger.debug("Evicting {} bytes from region {}, occupancy={}", used - used_target, r.id(), r.occupancy());
+        llogger.debug("Evicting {} bytes from region {}, occupancy={}", used - used_target, r.id(), r.occupancy());
         while (r.occupancy().used_space() > used_target || !r.is_compactible()) {
             if (r.evict_some() == memory::reclaiming_result::reclaimed_nothing) {
-                logger.debug("Unable to evict more, evicted {} bytes", used - r.occupancy().used_space());
+                llogger.debug("Unable to evict more, evicted {} bytes", used - r.occupancy().used_space());
                 return;
             }
             if (shard_segment_pool.total_memory_in_use() <= target_mem_in_use) {
-                logger.debug("Target met after evicting {} bytes", used - r.occupancy().used_space());
+                llogger.debug("Target met after evicting {} bytes", used - r.occupancy().used_space());
                 return;
             }
             if (r.empty()) {
                 return;
             }
         }
-        logger.debug("Compacting after evicting {} bytes", used - r.occupancy().used_space());
+        llogger.debug("Compacting after evicting {} bytes", used - r.occupancy().used_space());
         r.compact();
     }
 }
@@ -1858,7 +1858,7 @@ size_t tracker::impl::compact_and_evict_locked(size_t memory_to_release) {
     size_t mem_in_use = shard_segment_pool.total_memory_in_use();
     auto target_mem = mem_in_use - std::min(mem_in_use, memory_to_release - mem_released);
 
-    logger.debug("Compacting, requested {} bytes, {} bytes in use, target is {}",
+    llogger.debug("Compacting, requested {} bytes, {} bytes in use, target is {}",
         memory_to_release, mem_in_use, target_mem);
 
     // Allow dipping into reserves while compacting
@@ -1873,10 +1873,10 @@ size_t tracker::impl::compact_and_evict_locked(size_t memory_to_release) {
 
     boost::range::make_heap(_regions, cmp);
 
-    if (logger.is_enabled(logging::log_level::debug)) {
-        logger.debug("Occupancy of regions:");
+    if (llogger.is_enabled(logging::log_level::debug)) {
+        llogger.debug("Occupancy of regions:");
         for (region::impl* r : _regions) {
-            logger.debug(" - {}: min={}, avg={}", r->id(), r->min_occupancy(), r->compactible_occupancy());
+            llogger.debug(" - {}: min={}, avg={}", r->id(), r->min_occupancy(), r->compactible_occupancy());
         }
     }
 
@@ -1885,7 +1885,7 @@ size_t tracker::impl::compact_and_evict_locked(size_t memory_to_release) {
         region::impl* r = _regions.back();
 
         if (!r->is_compactible()) {
-            logger.trace("Unable to release segments, no compactible pools.");
+            llogger.trace("Unable to release segments, no compactible pools.");
             break;
         }
 
@@ -1897,7 +1897,7 @@ size_t tracker::impl::compact_and_evict_locked(size_t memory_to_release) {
     auto released_during_compaction = mem_in_use - shard_segment_pool.total_memory_in_use();
 
     if (shard_segment_pool.total_memory_in_use() > target_mem) {
-        logger.debug("Considering evictable regions.");
+        llogger.debug("Considering evictable regions.");
         // FIXME: Fair eviction
         for (region::impl* r : _regions) {
             if (r->is_evictable()) {
@@ -1911,7 +1911,7 @@ size_t tracker::impl::compact_and_evict_locked(size_t memory_to_release) {
 
     mem_released += mem_in_use - shard_segment_pool.total_memory_in_use();
 
-    logger.debug("Released {} bytes (wanted {}), {} during compaction, {} from reserve",
+    llogger.debug("Released {} bytes (wanted {}), {} during compaction, {} from reserve",
         mem_released, memory_to_release, released_during_compaction, released_from_reserve);
 
     return mem_released;
@@ -1925,14 +1925,14 @@ bool segment_pool::migrate_segment(segment* src, segment_zone& src_zone,
     auto& src_desc = descriptor(src);
     auto& dst_desc = descriptor(dst);
 
-    logger.debug("Migrating segment {} (zone @{}) to {} (zone @{}) (region @{})",
+    llogger.debug("Migrating segment {} (zone @{}) to {} (zone @{}) (region @{})",
         src, &src_zone, dst, &dst_zone, src_desc._region);
 
     dst_desc._zone = &dst_zone;
     assert(src_desc._zone == &src_zone);
     if (src_desc._region) {
         if (!src_desc._region->reclaiming_enabled()) {
-            logger.trace("Cannot move segment {}", src);
+            llogger.trace("Cannot move segment {}", src);
             return false;
         }
         dst_desc._lsa_managed = true;
@@ -1983,12 +1983,12 @@ bool segment_zone::migrate_segments(segment_zone& dst_zone, size_t to_migrate)
 void tracker::impl::register_region(region::impl* r) {
     reclaiming_lock _(*this);
     _regions.push_back(r);
-    logger.debug("Registered region @{} with id={}", r, r->id());
+    llogger.debug("Registered region @{} with id={}", r, r->id());
 }
 
 void tracker::impl::unregister_region(region::impl* r) {
     reclaiming_lock _(*this);
-    logger.debug("Unregistering region, id={}", r->id());
+    llogger.debug("Unregistering region, id={}", r->id());
     _regions.erase(std::remove(_regions.begin(), _regions.end(), r));
 }
 
@@ -2037,7 +2037,7 @@ tracker::impl::impl() {
 tracker::impl::~impl() {
     if (!_regions.empty()) {
         for (auto&& r : _regions) {
-            logger.error("Region with id={} not unregistered!", r->id());
+            llogger.error("Region with id={} not unregistered!", r->id());
         }
         abort();
     }
@@ -2194,10 +2194,10 @@ void allocating_section::guard::enter(allocating_section& self) {
 void allocating_section::on_alloc_failure() {
     if (shard_segment_pool.allocation_failure_flag()) {
         _lsa_reserve *= 2; // FIXME: decay?
-        logger.debug("LSA allocation failure, increasing reserve in section {} to {} segments", this, _lsa_reserve);
+        llogger.debug("LSA allocation failure, increasing reserve in section {} to {} segments", this, _lsa_reserve);
     } else {
         _std_reserve *= 2; // FIXME: decay?
-        logger.debug("Standard allocator failure, increasing head-room in section {} to {} [B]", this, _std_reserve);
+        llogger.debug("Standard allocator failure, increasing head-room in section {} to {} [B]", this, _std_reserve);
     }
 }
 

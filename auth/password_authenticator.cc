@@ -61,7 +61,7 @@ static const sstring DEFAULT_USER_NAME = auth::auth::DEFAULT_SUPERUSER_NAME;
 static const sstring DEFAULT_USER_PASSWORD = auth::auth::DEFAULT_SUPERUSER_NAME;
 static const sstring CREDENTIALS_CF = "credentials";
 
-static logging::logger logger("password_authenticator");
+static logging::logger plogger("password_authenticator");
 
 auth::password_authenticator::~password_authenticator()
 {}
@@ -169,7 +169,7 @@ future<> auth::password_authenticator::init() {
                                                     USER_NAME, SALTED_HASH
                                     ),
                                     db::consistency_level::ONE, {DEFAULT_USER_NAME, hashpw(DEFAULT_USER_PASSWORD)}).then([](auto) {
-                                        logger.info("Created default user '{}'", DEFAULT_USER_NAME);
+                                        plogger.info("Created default user '{}'", DEFAULT_USER_NAME);
                                     });
                 }
             });
@@ -302,7 +302,7 @@ const auth::resource_ids& auth::password_authenticator::protected_resources() co
          * @throws javax.security.sasl.SaslException
          */
         bytes evaluate_response(bytes_view client_response) override {
-            logger.debug("Decoding credentials from client token");
+            plogger.debug("Decoding credentials from client token");
 
             sstring username, password;
 

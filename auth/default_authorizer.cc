@@ -62,7 +62,7 @@ static const sstring RESOURCE_NAME = "resource";
 static const sstring PERMISSIONS_NAME = "permissions";
 static const sstring PERMISSIONS_CF = "permissions";
 
-static logging::logger logger("default_authorizer");
+static logging::logger alogger("default_authorizer");
 
 auth::default_authorizer::default_authorizer() {
 }
@@ -107,7 +107,7 @@ future<auth::permission_set> auth::default_authorizer::authorize(
                 }
                 return make_ready_future<permission_set>(permissions::from_strings(res->one().get_set<sstring>(PERMISSIONS_NAME)));
             } catch (exceptions::request_execution_exception& e) {
-                logger.warn("CassandraAuthorizer failed to authorize {} for {}", user->name(), resource);
+                alogger.warn("CassandraAuthorizer failed to authorize {} for {}", user->name(), resource);
                 return make_ready_future<permission_set>(permissions::NONE);
             }
         });
@@ -196,7 +196,7 @@ future<> auth::default_authorizer::revoke_all(sstring dropped_user) {
                         try {
                             std::rethrow_exception(ep);
                         } catch (exceptions::request_execution_exception& e) {
-                            logger.warn("CassandraAuthorizer failed to revoke all permissions of {}: {}", dropped_user, e);
+                            alogger.warn("CassandraAuthorizer failed to revoke all permissions of {}: {}", dropped_user, e);
                         }
                     });
 }
@@ -217,13 +217,13 @@ future<> auth::default_authorizer::revoke_all(data_resource resource) {
                     try {
                         std::rethrow_exception(ep);
                     } catch (exceptions::request_execution_exception& e) {
-                        logger.warn("CassandraAuthorizer failed to revoke all permissions on {}: {}", resource, e);
+                        alogger.warn("CassandraAuthorizer failed to revoke all permissions on {}: {}", resource, e);
                     }
 
                 });
             });
         } catch (exceptions::request_execution_exception& e) {
-            logger.warn("CassandraAuthorizer failed to revoke all permissions on {}: {}", resource, e);
+            alogger.warn("CassandraAuthorizer failed to revoke all permissions on {}: {}", resource, e);
             return make_ready_future();
         }
     });

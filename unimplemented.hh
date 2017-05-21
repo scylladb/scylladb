@@ -67,6 +67,6 @@ void warn(cause what);
 namespace std {
 
 template <>
-struct hash<unimplemented::cause> : enum_hash<unimplemented::cause> {};
+struct hash<unimplemented::cause> : seastar::enum_hash<unimplemented::cause> {};
 
 }

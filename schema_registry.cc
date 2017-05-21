@@ -25,7 +25,7 @@
 #include "log.hh"
 
 
-static logging::logger logger("schema_registry");
+static logging::logger slogger("schema_registry");
 
 static thread_local schema_registry registry;
 
@@ -58,7 +58,7 @@ schema_ptr schema_registry::learn(const schema_ptr& s) {
     if (i != _entries.end()) {
         return i->second->get_schema();
     }
-    logger.debug("Learning about version {} of {}.{}", s->version(), s->ks_name(), s->cf_name());
+    slogger.debug("Learning about version {} of {}.{}", s->version(), s->ks_name(), s->cf_name());
     auto e_ptr = make_lw_shared<schema_registry_entry>(s->version(), *this);
     auto loaded_s = e_ptr->load(frozen_schema(s));
     _entries.emplace(s->version(), e_ptr);
@@ -135,7 +135,7 @@ schema_ptr schema_registry_entry::load(frozen_schema fs) {
         _schema_promise = {};
     }
     _state = state::LOADED;
-    logger.trace("Loaded {} = {}", _version, *s);
+    slogger.trace("Loaded {} = {}", _version, *s);
     return s;
 }
 
@@ -144,11 +144,11 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
     auto f = _loader(_version);
     auto sf = _schema_promise.get_shared_future();
     _state = state::LOADING;
-    logger.trace("Loading {}", _version);
+    slogger.trace("Loading {}", _version);
     f.then_wrapped([self = shared_from_this(), this] (future<frozen_schema>&& f) {
         _loader = {};
         if (_state != state::LOADING) {
-            logger.trace("Loading of {} aborted", _version);
+            slogger.trace("Loading of {} aborted", _version);
             return;
         }
         try {
@@ -158,7 +158,7 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
                 std::throw_with_nested(schema_version_loading_failed(_version));
             }
         } catch (...) {
-            logger.debug("Loading of {} failed: {}", _version, std::current_exception());
+            slogger.debug("Loading of {} failed: {}", _version, std::current_exception());
             _schema_promise.set_exception(std::current_exception());
             _registry._entries.erase(_version);
         }
@@ -168,7 +168,7 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
 
 schema_ptr schema_registry_entry::get_schema() {
     if (!_schema) {
-        logger.trace("Activating {}", _version);
+        slogger.trace("Activating {}", _version);
         auto s = _frozen_schema->unfreeze();
         if (s->version() != _version) {
             throw std::runtime_error(sprint("Unfrozen schema version doesn't match entry version (%s): %s", _version, *s));
@@ -182,13 +182,13 @@ schema_ptr schema_registry_entry::get_schema() {
 }
 
 void schema_registry_entry::detach_schema() noexcept {
-    logger.trace("Deactivating {}", _version);
+    slogger.trace("Deactivating {}", _version);
     _schema = nullptr;
     // TODO: keep the entry for a while (timer)
     try {
         _registry._entries.erase(_version);
     } catch (...) {
-        logger.error("Failed to erase schema version {}: {}", _version, std::current_exception());
+        slogger.error("Failed to erase schema version {}: {}", _version, std::current_exception());
     }
 }
 
@@ -204,7 +204,7 @@ future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
         case schema_registry_entry::sync_state::SYNCING:
             return _synced_promise.get_shared_future();
         case schema_registry_entry::sync_state::NOT_SYNCED: {
-            logger.debug("Syncing {}", _version);
+            slogger.debug("Syncing {}", _version);
             _synced_promise = {};
             auto f = do_with(std::move(syncer), [] (auto& syncer) {
                 return syncer();
@@ -216,11 +216,11 @@ future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
                     return;
                 }
                 if (f.failed()) {
-                    logger.debug("Syncing of {} failed", _version);
+                    slogger.debug("Syncing of {} failed", _version);
                     _sync_state = schema_registry_entry::sync_state::NOT_SYNCED;
                     _synced_promise.set_exception(f.get_exception());
                 } else {
-                    logger.debug("Synced {}", _version);
+                    slogger.debug("Synced {}", _version);
                     _sync_state = schema_registry_entry::sync_state::SYNCED;
                     _synced_promise.set_value();
                 }
@@ -241,7 +241,7 @@ void schema_registry_entry::mark_synced() {
         _synced_promise.set_value();
     }
     _sync_state = sync_state::SYNCED;
-    logger.debug("Marked {} as synced", _version);
+    slogger.debug("Marked {} as synced", _version);
 }
 
 schema_registry& local_schema_registry() {

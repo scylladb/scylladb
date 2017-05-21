@@ -34,7 +34,7 @@
 #include "log.hh"
 #include <boost/any.hpp>
 
-static logging::logger logger("config");
+static logging::logger clogger("config");
 
 db::config::config()
 :
@@ -364,32 +364,32 @@ void db::config::read_from_yaml(const char* yaml) {
         auto label = node.first.as<sstring>();
         auto i = values.find(label);
         if (i == values.end()) {
-            logger.warn("Unknown option {} ignored.", label);
+            clogger.warn("Unknown option {} ignored.", label);
             continue;
         }
         if (i->second->source() > config_source::SettingsFile) {
-            logger.debug("Option {} already set by commandline. ignored.", label);
+            clogger.debug("Option {} already set by commandline. ignored.", label);
             continue;
         }
         switch (i->second->status()) {
         case value_status::Invalid:
-            logger.warn("Option {} is not applicable. Ignoring.", label);
+            clogger.warn("Option {} is not applicable. Ignoring.", label);
             continue;
         case value_status::Unused:
-            logger.warn("Option {} is not (yet) used.", label);
+            clogger.warn("Option {} is not (yet) used.", label);
             break;
         default:
             break;
         }
         if (node.second.IsNull()) {
-            logger.debug("Option {}, empty value. Skipping.", label);
+            clogger.debug("Option {}, empty value. Skipping.", label);
             continue;
         }
         // Still, a syntax error is an error warning, not a fail
         try {
             (*i->second)(node.second);
         } catch (...) {
-            logger.error("Option {}, exception while converting value.", label);
+            clogger.error("Option {}, exception while converting value.", label);
         }
     }
 
@@ -400,7 +400,7 @@ void db::config::read_from_yaml(const char* yaml) {
         if (p.second->source() > config_source::None) {
             continue;
         }
-        logger.debug("Option {} not set", p.first);
+        clogger.debug("Option {} not set", p.first);
     }
 }
 

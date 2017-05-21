@@ -60,7 +60,7 @@
 #include "disk-error-handler.hh"
 #include "gms/feature.hh"
 
-namespace transport {
+namespace cql_transport {
     class cql_server;
 }
 class thrift_server;
@@ -121,7 +121,7 @@ private:
     // ever arise.
     bool _loading_new_sstables = false;
     shared_ptr<load_broadcaster> _lb;
-    shared_ptr<distributed<transport::cql_server>> _cql_server;
+    shared_ptr<distributed<cql_transport::cql_server>> _cql_server;
     shared_ptr<distributed<thrift_server>> _thrift_server;
     sstring _operation_in_progress;
     bool _force_remove_completion = false;

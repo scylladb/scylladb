@@ -44,7 +44,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
         service::get_storage_service().start(std::ref(db)).get();
         db.start().get();
-        net::get_messaging_service().start(gms::inet_address("127.0.0.1")).get();
+        netw::get_messaging_service().start(gms::inet_address("127.0.0.1")).get();
         gms::get_failure_detector().start().get();
 
         gms::get_gossiper().start().get();
@@ -52,7 +52,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         gms::get_failure_detector().stop().get();
         db.stop().get();
         service::get_storage_service().stop().get();
-        net::get_messaging_service().stop().get();
+        netw::get_messaging_service().stop().get();
         locator::i_endpoint_snitch::stop_snitch().get();
     });
 }

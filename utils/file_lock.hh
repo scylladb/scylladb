@@ -26,6 +26,8 @@
 #include <core/sstring.hh>
 #include <core/future.hh>
 
+#include "seastarx.hh"
+
 namespace utils {
     class file_lock {
     public:

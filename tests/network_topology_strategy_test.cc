@@ -36,7 +36,7 @@
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
 
-static logging::logger logger("NetworkTopologyStrategyLogger");
+static logging::logger nlogger("NetworkTopologyStrategyLogger");
 
 using namespace locator;
 
@@ -46,7 +46,7 @@ struct ring_point {
 };
 
 void print_natural_endpoints(double point, const std::vector<inet_address> v) {
-    logger.debug("Natural endpoints for a token {}:", point);
+    nlogger.debug("Natural endpoints for a token {}:", point);
     std::string str;
     std::ostringstream strm(str);
 
@@ -54,7 +54,7 @@ void print_natural_endpoints(double point, const std::vector<inet_address> v) {
         strm<<addr<<" ";
     }
 
-    logger.debug("{}", strm.str());
+    nlogger.debug("{}", strm.str());
 }
 
 void strategy_sanity_check(
@@ -276,7 +276,7 @@ future<> heavy_origin_test() {
                     tokens[address].emplace(token{dht::token::kind::key,
                             {(int8_t*)d2t(token_point / total_eps).data(), 8}});
 
-                    logger.debug("adding node {} at {}", address, token_point);
+                    nlogger.debug("adding node {} at {}", address, token_point);
 
                     token_point++;
                 }

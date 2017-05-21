@@ -32,6 +32,7 @@
 #include <seastar/core/expiring_fifo.hh>
 #include "allocation_strategy.hh"
 #include <boost/heap/binomial_heap.hpp>
+#include "seastarx.hh"
 
 namespace logalloc {
 

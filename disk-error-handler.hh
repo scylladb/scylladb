@@ -27,6 +27,8 @@
 #include "utils/exceptions.hh"
 #include <core/future.hh>
 
+#include "seastarx.hh"
+
 namespace bs2 = boost::signals2;
 
 using disk_error_signal_type = bs2::signal_type<void (), bs2::keywords::mutex_type<bs2::dummy_mutex>>::type;

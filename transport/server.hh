@@ -43,7 +43,7 @@ class registrations;
 
 class database;
 
-namespace transport {
+namespace cql_transport {
 
 enum class cql_compression {
     none,
@@ -185,10 +185,10 @@ private:
         shared_ptr<cql_server::response> make_error(int16_t stream, exceptions::exception_code err, sstring msg, const tracing::trace_state_ptr& tr_state);
         shared_ptr<cql_server::response> make_ready(int16_t stream, const tracing::trace_state_ptr& tr_state);
         shared_ptr<cql_server::response> make_supported(int16_t stream, const tracing::trace_state_ptr& tr_state);
-        shared_ptr<cql_server::response> make_result(int16_t stream, shared_ptr<transport::messages::result_message> msg, const tracing::trace_state_ptr& tr_state, bool skip_metadata = false);
-        shared_ptr<cql_server::response> make_topology_change_event(const transport::event::topology_change& event);
-        shared_ptr<cql_server::response> make_status_change_event(const transport::event::status_change& event);
-        shared_ptr<cql_server::response> make_schema_change_event(const transport::event::schema_change& event);
+        shared_ptr<cql_server::response> make_result(int16_t stream, shared_ptr<cql_transport::messages::result_message> msg, const tracing::trace_state_ptr& tr_state, bool skip_metadata = false);
+        shared_ptr<cql_server::response> make_topology_change_event(const cql_transport::event::topology_change& event);
+        shared_ptr<cql_server::response> make_status_change_event(const cql_transport::event::status_change& event);
+        shared_ptr<cql_server::response> make_schema_change_event(const cql_transport::event::schema_change& event);
         shared_ptr<cql_server::response> make_autheticate(int16_t, const sstring&, const tracing::trace_state_ptr& tr_state);
         shared_ptr<cql_server::response> make_auth_success(int16_t, bytes, const tracing::trace_state_ptr& tr_state);
         shared_ptr<cql_server::response> make_auth_challenge(int16_t, bytes, const tracing::trace_state_ptr& tr_state);
@@ -248,7 +248,7 @@ class cql_server::event_notifier : public service::migration_listener,
     std::unordered_map<gms::inet_address, event::status_change::status_type> _last_status_change;
 public:
     event_notifier(uint16_t port);
-    void register_event(transport::event::event_type et, cql_server::connection* conn);
+    void register_event(cql_transport::event::event_type et, cql_server::connection* conn);
     void unregister_connection(cql_server::connection* conn);
 
     virtual void on_create_keyspace(const sstring& ks_name) override;

@@ -67,7 +67,7 @@
 
 namespace sstables {
 
-logging::logger logger("compaction");
+logging::logger clogger("compaction");
 
 class sstable_reader final : public ::mutation_reader::impl {
     shared_sstable _sst;
@@ -79,7 +79,7 @@ public:
             {}
     virtual future<streamed_mutation_opt> operator()() override {
         return _reader.read().handle_exception([sst = _sst] (auto ep) {
-            logger.error("Compaction found an exception when reading sstable {} : {}",
+            clogger.error("Compaction found an exception when reading sstable {} : {}",
                     sst->get_filename(), ep);
             return make_exception_future<streamed_mutation_opt>(ep);
         });
@@ -124,7 +124,7 @@ static void delete_sstables_for_interrupted_compaction(std::vector<shared_sstabl
     // was either stopped abruptly (e.g. out of disk space) or deliberately
     // (e.g. nodetool stop COMPACTION).
     for (auto& sst : new_sstables) {
-        logger.debug("Deleting sstable {} of interrupted compaction for {}.{}", sst->get_filename(), ks, cf);
+        clogger.debug("Deleting sstable {} of interrupted compaction for {}.{}", sst->get_filename(), ks, cf);
         sst->mark_for_deletion();
     }
 }
@@ -348,11 +348,11 @@ public:
     }
 
     void report_start(const sstring& formatted_msg) const override {
-        logger.info("Compacting {}", formatted_msg);
+        clogger.info("Compacting {}", formatted_msg);
     }
 
     void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const override {
-        logger.info("Compacted {}", formatted_msg);
+        clogger.info("Compacted {}", formatted_msg);
 
         // skip update if running without a query context, for example, when running a test case.
         if (!db::qctx) {
@@ -414,11 +414,11 @@ public:
     }
 
     void report_start(const sstring& formatted_msg) const override {
-        logger.info("Cleaning {}", formatted_msg);
+        clogger.info("Cleaning {}", formatted_msg);
     }
 
     void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const override {
-        logger.info("Cleaned {}", formatted_msg);
+        clogger.info("Cleaned {}", formatted_msg);
     }
 
     std::function<bool(const streamed_mutation& sm)> filter_func() const override {
@@ -452,11 +452,11 @@ public:
     }
 
     void report_start(const sstring& formatted_msg) const override {
-        logger.info("Resharding {}", formatted_msg);
+        clogger.info("Resharding {}", formatted_msg);
     }
 
     void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const override {
-        logger.info("Resharded {}", formatted_msg);
+        clogger.info("Resharded {}", formatted_msg);
     }
 
     sstable_writer* select_sstable_writer(const dht::decorated_key& dk) override {
@@ -546,7 +546,7 @@ reshard_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
 
 std::vector<sstables::shared_sstable>
 get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstable>& compacting, int32_t gc_before) {
-    logger.debug("Checking droppable sstables in {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name());
+    clogger.debug("Checking droppable sstables in {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name());
 
     if (compacting.empty()) {
         return {};
@@ -574,13 +574,13 @@ get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstab
 
     // SStables that do not contain live data is added to list of possibly expired sstables.
     for (auto& candidate : compacting) {
-        logger.debug("Checking if candidate of generation {} and max_deletion_time {} is expired, gc_before is {}",
+        clogger.debug("Checking if candidate of generation {} and max_deletion_time {} is expired, gc_before is {}",
                     candidate->generation(), candidate->get_stats_metadata().max_local_deletion_time, gc_before);
         // A fully expired sstable which has an ancestor undeleted shouldn't be compacted because
         // expired data won't be purged because undeleted sstables are taken into account when
         // calculating max purgeable timestamp, and not doing it could lead to a compaction loop.
         if (candidate->get_stats_metadata().max_local_deletion_time < gc_before && !has_undeleted_ancestor(candidate)) {
-            logger.debug("Adding candidate of generation {} to list of possibly expired sstables", candidate->generation());
+            clogger.debug("Adding candidate of generation {} to list of possibly expired sstables", candidate->generation());
             candidates.push_back(candidate);
         } else {
             min_timestamp = std::min(min_timestamp, candidate->get_stats_metadata().min_timestamp);
@@ -594,7 +594,7 @@ get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstab
         if (candidate->get_stats_metadata().max_timestamp >= min_timestamp) {
             it = candidates.erase(it);
         } else {
-            logger.debug("Dropping expired SSTable {} (maxLocalDeletionTime={}, gcBefore={})",
+            clogger.debug("Dropping expired SSTable {} (maxLocalDeletionTime={}, gcBefore={})",
                     candidate->get_filename(), candidate->get_stats_metadata().max_local_deletion_time, gc_before);
             it++;
         }

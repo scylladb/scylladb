@@ -27,7 +27,7 @@
 #include <sstream>
 
 using namespace httpd::messaging_service_json;
-using namespace net;
+using namespace netw;
 
 namespace api {
 
@@ -120,13 +120,13 @@ void set_messaging_service(http_context& ctx, routes& r) {
     }));
 
     get_version.set(r, [](const_req req) {
-        return net::get_local_messaging_service().get_raw_version(req.get_query_param("addr"));
+        return netw::get_local_messaging_service().get_raw_version(req.get_query_param("addr"));
     });
 
     get_dropped_messages_by_ver.set(r, [](std::unique_ptr<request> req) {
         shared_ptr<std::vector<uint64_t>> map = make_shared<std::vector<uint64_t>>(num_verb);
 
-        return net::get_messaging_service().map_reduce([map](const uint64_t* local_map) mutable {
+        return netw::get_messaging_service().map_reduce([map](const uint64_t* local_map) mutable {
             for (auto i = 0; i < num_verb; i++) {
                 (*map)[i]+= local_map[i];
             }

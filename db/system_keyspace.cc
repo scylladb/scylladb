@@ -80,7 +80,7 @@ std::unique_ptr<query_context> qctx = {};
 
 namespace system_keyspace {
 
-static logging::logger logger("system_keyspace");
+static logging::logger slogger("system_keyspace");
 static const api::timestamp_type creation_timestamp = api::new_timestamp();
 
 api::timestamp_type schema_creation_timestamp() {
@@ -947,7 +947,7 @@ static future<> setup_version() {
                              sstring(dht::global_partitioner().name()),
                              a.addr(),
                              utils::fb_utilities::get_broadcast_address().addr(),
-                             net::get_local_messaging_service().listen_address().addr(),
+                             netw::get_local_messaging_service().listen_address().addr(),
                              service::storage_service::get_config_supported_features()
         ).discard_result();
     });
@@ -1045,7 +1045,7 @@ future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp
     }).then([] {
         return db::schema_tables::save_system_keyspace_schema();
     }).then([] {
-        return net::get_messaging_service().invoke_on_all([] (auto& ms){
+        return netw::get_messaging_service().invoke_on_all([] (auto& ms){
             return ms.init_local_preferred_ip_cache();
         });
     });
@@ -1129,7 +1129,7 @@ static future<truncation_record> get_truncation_record(utils::UUID cf_id) {
                         if (buf.size() & 1) {
                             // new record.
                             if (buf[0] != current_version) {
-                                logger.warn("Found truncation record of unknown version {}. Ignoring.", int(buf[0]));
+                                slogger.warn("Found truncation record of unknown version {}. Ignoring.", int(buf[0]));
                                 continue;
                             }
                             e = ser::deserialize_from_buffer(buf, boost::type<truncation_record>(), 1);
@@ -1143,7 +1143,7 @@ static future<truncation_record> get_truncation_record(utils::UUID cf_id) {
                             // struct (and official serial size) is 64+32.
                             data_input in(buf);
 
-                            logger.debug("Reading old type record");
+                            slogger.debug("Reading old type record");
                             while (in.avail() > sizeof(db_clock::rep)) {
                                 auto id = in.read<uint64_t>();
                                 auto pos = in.read<uint64_t>();
@@ -1161,7 +1161,7 @@ static future<truncation_record> get_truncation_record(utils::UUID cf_id) {
                     // This is useless to us, because the only usage for this
                     // data is commit log and batch replay, and we cannot replay
                     // either from origin anyway.
-                    logger.warn("Error reading truncation record for {}. "
+                    slogger.warn("Error reading truncation record for {}. "
                                     "Most likely this is data from a cassandra instance."
                                     "Make sure you have cleared commit and batch logs before upgrading.",
                                     uuid
@@ -1427,7 +1427,7 @@ future<> force_blocking_flush(sstring cfname) {
  * 3. files are present but you can't read them: bad
  */
 future<> check_health() {
-    using namespace transport::messages;
+    using namespace cql_transport::messages;
     sstring req = sprint("SELECT cluster_name FROM system.%s WHERE key=?", LOCAL);
     return execute_cql(req, sstring(LOCAL)).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
         if (msg->empty() || !msg->one().has("cluster_name")) {
@@ -1589,7 +1589,7 @@ void make(database& db, bool durable, bool volatile_testing_only) {
 }
 
 future<utils::UUID> get_local_host_id() {
-    using namespace transport::messages;
+    using namespace cql_transport::messages;
     sstring req = sprint("SELECT host_id FROM system.%s WHERE key=?", LOCAL);
     return execute_cql(req, sstring(LOCAL)).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
         auto new_id = [] {
@@ -1738,7 +1738,7 @@ future<int> increment_and_get_generation() {
             int stored_generation = rs->one().template get_as<int>("gossip_generation") + 1;
             int now = service::get_generation_number();
             if (stored_generation >= now) {
-                logger.warn("Using stored Gossip Generation {} as it is greater than current system time {}."
+                slogger.warn("Using stored Gossip Generation {} as it is greater than current system time {}."
                             "See CASSANDRA-3654 if you experience problems", stored_generation, now);
                 generation = stored_generation;
             } else {

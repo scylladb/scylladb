@@ -52,7 +52,7 @@ future<> cql3::statements::list_users_statement::check_access(const service::cli
     return make_ready_future();
 }
 
-future<::shared_ptr<transport::messages::result_message>>
+future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::list_users_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
     auto is = std::make_unique<service::query_state>(service::client_state::for_internal_calls());
     auto io = std::make_unique<query_options>(db::consistency_level::QUORUM, std::vector<cql3::raw_value>{});

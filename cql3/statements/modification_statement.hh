@@ -205,23 +205,23 @@ protected:
                 db::consistency_level cl,
                 tracing::trace_state_ptr trace_state);
 private:
-    future<::shared_ptr<transport::messages::result_message>>
+    future<::shared_ptr<cql_transport::messages::result_message>>
     do_execute(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options);
     friend class modification_statement_executor;
 public:
     bool has_conditions();
 
-    virtual future<::shared_ptr<transport::messages::result_message>>
+    virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) override;
 
-    virtual future<::shared_ptr<transport::messages::result_message>>
+    virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) override;
 
 private:
     future<>
     execute_without_condition(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options);
 
-    future<::shared_ptr<transport::messages::result_message>>
+    future<::shared_ptr<cql_transport::messages::result_message>>
     execute_with_condition(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options);
 
 #if 0

@@ -120,11 +120,11 @@ public:
      */
     static void verify_batch_size(const std::vector<mutation>& mutations);
 
-    virtual future<shared_ptr<transport::messages::result_message>> execute(
+    virtual future<shared_ptr<cql_transport::messages::result_message>> execute(
             distributed<service::storage_proxy>& storage, service::query_state& state, const query_options& options) override;
 private:
     friend class batch_statement_executor;
-    future<shared_ptr<transport::messages::result_message>> do_execute(
+    future<shared_ptr<cql_transport::messages::result_message>> do_execute(
             distributed<service::storage_proxy>& storage,
             service::query_state& query_state, const query_options& options,
             bool local, api::timestamp_type now);
@@ -135,12 +135,12 @@ private:
             db::consistency_level cl,
             tracing::trace_state_ptr tr_state);
 
-    future<shared_ptr<transport::messages::result_message>> execute_with_conditions(
+    future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditions(
             distributed<service::storage_proxy>& storage,
             const query_options& options,
             service::query_state& state);
 public:
-    virtual future<shared_ptr<transport::messages::result_message>> execute_internal(
+    virtual future<shared_ptr<cql_transport::messages::result_message>> execute_internal(
             distributed<service::storage_proxy>& proxy,
             service::query_state& query_state, const query_options& options) override;
 

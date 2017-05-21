@@ -63,7 +63,7 @@ void cql3::statements::drop_user_statement::validate(distributed<service::storag
     }
 }
 
-future<::shared_ptr<transport::messages::result_message>>
+future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::drop_user_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
     return state.get_client_state().user()->is_super().then([this](bool is_super) {
         if (!is_super) {
@@ -75,7 +75,7 @@ cql3::statements::drop_user_statement::execute(distributed<service::storage_prox
                 throw exceptions::invalid_request_exception(sprint("User %s doesn't exist", _username));
             }
             if (_if_exists && !exists) {
-                return  make_ready_future<::shared_ptr<transport::messages::result_message>>();
+                return  make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
             }
 
             // clean up permissions after the dropped user.
@@ -84,7 +84,7 @@ cql3::statements::drop_user_statement::execute(distributed<service::storage_prox
                     return auth::authenticator::get().drop(_username);
                 });
             }).then([] {
-                return make_ready_future<::shared_ptr<transport::messages::result_message>>();
+                return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
             });
         });
     });

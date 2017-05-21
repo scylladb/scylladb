@@ -129,7 +129,7 @@ inline user_type create_type_statement::create_type(database& db)
         std::move(field_names), std::move(field_types));
 }
 
-future<shared_ptr<transport::event::schema_change>> create_type_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> create_type_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
 {
     auto&& db = proxy.local().get_db().local();
 
@@ -138,13 +138,13 @@ future<shared_ptr<transport::event::schema_change>> create_type_statement::annou
 
     // Can happen with if_not_exists
     if (type_exists_in(ks)) {
-        return make_ready_future<::shared_ptr<transport::event::schema_change>>();
+        return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>();
     }
 
     auto type = create_type(db);
     check_for_duplicate_names(type);
     return service::get_local_migration_manager().announce_new_type(type, is_local_only).then([this] {
-        using namespace transport;
+        using namespace cql_transport;
 
         return make_shared<event::schema_change>(
                 event::schema_change::change_type::CREATED,

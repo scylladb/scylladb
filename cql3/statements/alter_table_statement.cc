@@ -166,7 +166,7 @@ static void validate_column_rename(const schema& schema, const column_identifier
     }
 }
 
-future<shared_ptr<transport::event::schema_change>> alter_table_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
 {
     auto& db = proxy.local().get_db().local();
     auto schema = validation::validate_column_family(db, keyspace(), column_family());
@@ -370,7 +370,7 @@ future<shared_ptr<transport::event::schema_change>> alter_table_statement::annou
     }
 
     return service::get_local_migration_manager().announce_column_family_update(cfm.build(), false, std::move(view_updates), is_local_only).then([this] {
-        using namespace transport;
+        using namespace cql_transport;
         return make_shared<event::schema_change>(
                 event::schema_change::change_type::UPDATED,
                 event::schema_change::target_type::TABLE,

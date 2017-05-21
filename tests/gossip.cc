@@ -75,9 +75,9 @@ int main(int ac, char ** av) {
         locator::i_endpoint_snitch::create_snitch("SimpleSnitch").then([&db] {
             return service::init_storage_service(db);
         }).then([vv, listen, config] {
-            return net::get_messaging_service().start(listen);
+            return netw::get_messaging_service().start(listen);
         }).then([config] {
-            auto& server = net::get_local_messaging_service();
+            auto& server = netw::get_local_messaging_service();
             auto port = server.port();
             auto listen = server.listen_address();
             print("Messaging server listening on ip %s port %d ...\n", listen, port);

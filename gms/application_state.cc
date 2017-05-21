@@ -42,6 +42,7 @@
 #include <seastar/core/sstring.hh>
 #include <ostream>
 #include <map>
+#include "seastarx.hh"
 
 namespace gms {
 

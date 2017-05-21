@@ -26,8 +26,7 @@
 #include "mutation_reader.hh"
 #include "core/future-util.hh"
 #include "utils/move.hh"
-
-namespace stdx = std::experimental;
+#include "stdx.hh"
 
 template<typename T>
 T move_and_clear(T& obj) {

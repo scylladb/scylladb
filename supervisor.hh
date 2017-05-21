@@ -22,6 +22,7 @@
 #pragma once
 
 #include <seastar/core/sstring.hh>
+#include "seastarx.hh"
 
 class supervisor {
 public:

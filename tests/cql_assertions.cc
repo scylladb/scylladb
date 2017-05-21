@@ -31,7 +31,7 @@ static inline void fail(sstring msg) {
     throw std::runtime_error(msg);
 }
 
-rows_assertions::rows_assertions(shared_ptr<transport::messages::result_message::rows> rows)
+rows_assertions::rows_assertions(shared_ptr<cql_transport::messages::result_message::rows> rows)
     : _rows(rows)
 { }
 
@@ -113,16 +113,16 @@ rows_assertions::with_rows_ignore_order(std::initializer_list<std::initializer_l
     return {*this};
 }
 
-result_msg_assertions::result_msg_assertions(shared_ptr<transport::messages::result_message> msg)
+result_msg_assertions::result_msg_assertions(shared_ptr<cql_transport::messages::result_message> msg)
     : _msg(msg)
 { }
 
 rows_assertions result_msg_assertions::is_rows() {
-    auto rows = dynamic_pointer_cast<transport::messages::result_message::rows>(_msg);
+    auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(_msg);
     BOOST_REQUIRE(rows);
     return rows_assertions(rows);
 }
 
-result_msg_assertions assert_that(shared_ptr<transport::messages::result_message> msg) {
+result_msg_assertions assert_that(shared_ptr<cql_transport::messages::result_message> msg) {
     return result_msg_assertions(msg);
 }

@@ -21,7 +21,7 @@
 
 #pragma once
 
-namespace net {
+namespace netw {
 
 struct msg_addr;
 enum class messaging_verb;

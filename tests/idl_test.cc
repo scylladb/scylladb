@@ -35,10 +35,11 @@
 
 #include "disk-error-handler.hh"
 
+#include "stdx.hh"
+
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
 
-namespace stdx = std::experimental;
 
 struct simple_compound {
     // TODO: change this to test for #905

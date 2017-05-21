@@ -55,7 +55,7 @@
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
-using namespace ::apache::thrift::transport;
+namespace thrift_transport = ::apache::thrift::transport;
 using namespace ::apache::thrift::async;
 
 using namespace  ::cassandra;
@@ -909,28 +909,28 @@ public:
         throw make_exception<InvalidRequestException>("CQL2 is not supported");
     }
 
-    class cql3_result_visitor final : public ::transport::messages::result_message::visitor {
+    class cql3_result_visitor final : public cql_transport::messages::result_message::visitor {
         CqlResult _result;
     public:
         const CqlResult& result() const {
             return _result;
         }
-        virtual void visit(const ::transport::messages::result_message::void_message&) override {
+        virtual void visit(const cql_transport::messages::result_message::void_message&) override {
             _result.__set_type(CqlResultType::VOID);
         }
-        virtual void visit(const ::transport::messages::result_message::set_keyspace& m) override {
+        virtual void visit(const cql_transport::messages::result_message::set_keyspace& m) override {
             _result.__set_type(CqlResultType::VOID);
         }
-        virtual void visit(const ::transport::messages::result_message::prepared::cql& m) override {
+        virtual void visit(const cql_transport::messages::result_message::prepared::cql& m) override {
             throw make_exception<InvalidRequestException>("Cannot convert prepared query result to CqlResult");
         }
-        virtual void visit(const ::transport::messages::result_message::prepared::thrift& m) override {
+        virtual void visit(const cql_transport::messages::result_message::prepared::thrift& m) override {
             throw make_exception<InvalidRequestException>("Cannot convert prepared query result to CqlResult");
         }
-        virtual void visit(const ::transport::messages::result_message::schema_change& m) override {
+        virtual void visit(const cql_transport::messages::result_message::schema_change& m) override {
             _result.__set_type(CqlResultType::VOID);
         }
-        virtual void visit(const ::transport::messages::result_message::rows& m) override {
+        virtual void visit(const cql_transport::messages::result_message::rows& m) override {
             _result = to_thrift_result(m.rs());
         }
     };
@@ -955,16 +955,16 @@ public:
         throw make_exception<InvalidRequestException>("CQL2 is not supported");
     }
 
-    class prepared_result_visitor final : public ::transport::messages::result_message::visitor_base {
+    class prepared_result_visitor final : public cql_transport::messages::result_message::visitor_base {
         CqlPreparedResult _result;
     public:
         const CqlPreparedResult& result() const {
             return _result;
         }
-        virtual void visit(const ::transport::messages::result_message::prepared::cql& m) override {
+        virtual void visit(const cql_transport::messages::result_message::prepared::cql& m) override {
             throw std::runtime_error("Unexpected result message type.");
         }
-        virtual void visit(const ::transport::messages::result_message::prepared::thrift& m) override {
+        virtual void visit(const cql_transport::messages::result_message::prepared::thrift& m) override {
             _result.__set_itemId(m.get_id());
             auto& names = m.metadata()->names();
             _result.__set_count(names.size());

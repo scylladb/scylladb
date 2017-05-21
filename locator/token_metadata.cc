@@ -34,7 +34,7 @@
 
 namespace locator {
 
-static logging::logger logger("token_metadata");
+static logging::logger tlogger("token_metadata");
 
 template <typename C, typename V>
 static void remove_by_value(C& container, V value) {
@@ -129,7 +129,7 @@ void token_metadata::update_normal_tokens(std::unordered_map<inet_address, std::
             auto prev = _token_to_endpoint_map.insert(std::pair<token, inet_address>(t, endpoint));
             should_sort_tokens |= prev.second; // new token inserted -> sort
             if (prev.first->second != endpoint) {
-                logger.warn("Token {} changing ownership from {} to {}", t, prev.first->second, endpoint);
+                tlogger.warn("Token {} changing ownership from {} to {}", t, prev.first->second, endpoint);
                 prev.first->second = endpoint;
             }
         }
@@ -199,7 +199,7 @@ void token_metadata::update_host_id(const UUID& host_id, inet_address endpoint) 
 
     UUID storedId = _endpoint_to_host_id_map.get(endpoint);
     // if ((storedId != null) && (!storedId.equals(host_id)))
-        logger.warn("Changing {}'s host ID from {} to {}", endpoint, storedId, host_id);
+        tlogger.warn("Changing {}'s host ID from {} to {}", endpoint, storedId, host_id);
 #endif
     _endpoint_to_host_id_map[endpoint] = host_id;
 }
@@ -447,7 +447,7 @@ void token_metadata::calculate_pending_ranges(abstract_replication_strategy& str
     std::unordered_multimap<range<token>, inet_address> new_pending_ranges;
 
     if (_bootstrap_tokens.empty() && _leaving_endpoints.empty() && _moving_endpoints.empty()) {
-        logger.debug("No bootstrapping, leaving or moving nodes -> empty pending ranges for {}", keyspace_name);
+        tlogger.debug("No bootstrapping, leaving or moving nodes -> empty pending ranges for {}", keyspace_name);
         set_pending_ranges(keyspace_name, std::move(new_pending_ranges));
         return;
     }
@@ -535,8 +535,8 @@ void token_metadata::calculate_pending_ranges(abstract_replication_strategy& str
 
     set_pending_ranges(keyspace_name, std::move(new_pending_ranges));
 
-    if (logger.is_enabled(logging::log_level::debug)) {
-        logger.debug("Pending ranges: {}", (_pending_ranges.empty() ? "<empty>" : print_pending_ranges()));
+    if (tlogger.is_enabled(logging::log_level::debug)) {
+        tlogger.debug("Pending ranges: {}", (_pending_ranges.empty() ? "<empty>" : print_pending_ranges()));
     }
 }
 sstring token_metadata::print_pending_ranges() {

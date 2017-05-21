@@ -79,7 +79,7 @@ public:
 
     future<> check_access(const service::client_state& state) override;
     void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
-    future<::shared_ptr<transport::event::schema_change>> announce_migration(distributed<service::storage_proxy>&, bool is_local_only) override;
+    future<::shared_ptr<cql_transport::event::schema_change>> announce_migration(distributed<service::storage_proxy>&, bool is_local_only) override;
 
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 private:

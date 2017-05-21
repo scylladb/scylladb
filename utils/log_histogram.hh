@@ -27,6 +27,7 @@
 #include <limits>
 #include <seastar/core/bitops.hh>
 #include <seastar/util/gcc6-concepts.hh>
+#include "seastarx.hh"
 
 namespace bi = boost::intrusive;
 

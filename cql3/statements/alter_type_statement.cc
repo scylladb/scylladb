@@ -135,14 +135,14 @@ void alter_type_statement::do_announce_migration(database& db, ::keyspace& ks, b
     }
 }
 
-future<shared_ptr<transport::event::schema_change>> alter_type_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> alter_type_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
 {
     return seastar::async([this, &proxy, is_local_only] {
         auto&& db = proxy.local().get_db().local();
         try {
             auto&& ks = db.find_keyspace(keyspace());
             do_announce_migration(db, ks, is_local_only);
-            using namespace transport;
+            using namespace cql_transport;
             return make_shared<event::schema_change>(
                     event::schema_change::change_type::UPDATED,
                     event::schema_change::target_type::TYPE,

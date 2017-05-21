@@ -63,7 +63,7 @@ public:
 
     virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
 
-    virtual future<shared_ptr<transport::event::schema_change>> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) override;
+    virtual future<shared_ptr<cql_transport::event::schema_change>> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) override;
 
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 };

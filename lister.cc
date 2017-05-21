@@ -4,7 +4,7 @@
 #include "disk-error-handler.hh"
 #include "checked-file-impl.hh"
 
-static seastar::logger logger("lister");
+static seastar::logger llogger("lister");
 
 lister::lister(file f, dir_entry_types type, walker_type walker, filter_type filter, lister::path dir, lister::show_hidden do_show_hidden)
         : _f(std::move(f))

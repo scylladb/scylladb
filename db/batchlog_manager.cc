@@ -69,7 +69,7 @@
 #include "idl/frozen_schema.dist.impl.hh"
 #include "message/messaging_service.hh"
 
-static logging::logger logger("batchlog_manager");
+static logging::logger blogger("batchlog_manager");
 
 const uint32_t db::batchlog_manager::replay_interval;
 const uint32_t db::batchlog_manager::page_size;
@@ -94,11 +94,11 @@ future<> db::batchlog_manager::do_batch_log_replay() {
             return bm._cpu++ % smp::count;
         });
     }).then([] (auto dest) {
-        logger.debug("Batchlog replay on shard {}: starts", dest);
+        blogger.debug("Batchlog replay on shard {}: starts", dest);
         return get_batchlog_manager().invoke_on(dest, [] (auto& bm) {
             return bm.replay_all_failed_batches();
         }).then([dest] {
-            logger.debug("Batchlog replay on shard {}: done", dest);
+            blogger.debug("Batchlog replay on shard {}: done", dest);
         });
     }).finally([] {
         return get_batchlog_manager().invoke_on(0, [] (auto& bm) {
@@ -117,7 +117,7 @@ future<> db::batchlog_manager::start() {
     if (engine().cpu_id() == 0) {
         _timer.set_callback([this] {
             return do_batch_log_replay().handle_exception([] (auto ep) {
-                logger.error("Exception in batch replay: {}", ep);
+                blogger.error("Exception in batch replay: {}", ep);
             }).finally([this] {
                 _timer.arm(lowres_clock::now() + std::chrono::milliseconds(replay_interval));
             });
@@ -188,25 +188,25 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
         // enough time for the actual write + batchlog entry mutation delivery (two separate requests).
         auto timeout = get_batch_log_timeout();
         if (db_clock::now() < written_at + timeout) {
-            logger.debug("Skipping replay of {}, too fresh", id);
+            blogger.debug("Skipping replay of {}, too fresh", id);
             return make_ready_future<>();
         }
 
         // check version of serialization format
         if (!row.has("version")) {
-            logger.warn("Skipping logged batch because of unknown version");
+            blogger.warn("Skipping logged batch because of unknown version");
             return make_ready_future<>();
         }
 
         auto version = row.get_as<int32_t>("version");
-        if (version != net::messaging_service::current_version) {
-            logger.warn("Skipping logged batch because of incorrect version");
+        if (version != netw::messaging_service::current_version) {
+            blogger.warn("Skipping logged batch because of incorrect version");
             return make_ready_future<>();
         }
 
         auto data = row.get_blob("data");
 
-        logger.debug("Replaying batch {}", id);
+        blogger.debug("Replaying batch {}", id);
 
         auto fms = make_lw_shared<std::deque<canonical_mutation>>();
         auto in = ser::as_input_stream(data);
@@ -292,7 +292,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
     };
 
     return seastar::with_gate(_gate, [this, batch = std::move(batch)] {
-        logger.debug("Started replayAllFailedBatches (cpu {})", engine().cpu_id());
+        blogger.debug("Started replayAllFailedBatches (cpu {})", engine().cpu_id());
 
         typedef ::shared_ptr<cql3::untyped_result_set> page_ptr;
         sstring query = sprint("SELECT id, data, written_at, version FROM %s.%s LIMIT %d", system_keyspace::NAME, system_keyspace::BATCHLOG, page_size);
@@ -332,7 +332,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
 #endif
 
         }).then([this] {
-            logger.debug("Finished replayAllFailedBatches");
+            blogger.debug("Finished replayAllFailedBatches");
         });
     });
 }

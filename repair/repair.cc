@@ -38,7 +38,7 @@
 #include <cryptopp/sha.h>
 #include <seastar/core/gate.hh>
 
-static logging::logger logger("repair");
+static logging::logger rlogger("repair");
 
 struct failed_range {
     sstring cf;
@@ -84,19 +84,19 @@ public:
         return sp_in.execute().discard_result().then([this] {
                 return sp_out.execute().discard_result();
         }).handle_exception([] (auto ep) {
-            logger.warn("repair's stream failed: {}", ep);
+            rlogger.warn("repair's stream failed: {}", ep);
             return make_exception_future(ep);
         });
     }
     bool check_failed_ranges() {
         if (failed_ranges.empty()) {
-            logger.info("repair {} completed successfully", id);
+            rlogger.info("repair {} completed successfully", id);
             return true;
         } else {
             for (auto& frange: failed_ranges) {
-                logger.debug("repair cf {} range {} failed", frange.cf, frange.range);
+                rlogger.debug("repair cf {} range {} failed", frange.cf, frange.range);
             }
-            logger.info("repair {} failed - {} ranges failed", id, failed_ranges.size());
+            rlogger.info("repair {} failed - {} ranges failed", id, failed_ranges.size());
             return false;
         }
     }
@@ -567,7 +567,7 @@ static future<> repair_cf_range(repair_info& ri,
             break;
         }
     }
-    logger.debug("target_partitions={}, estimated_partitions={}, ranges.size={}, range={} -> ranges={}",
+    rlogger.debug("target_partitions={}, estimated_partitions={}, ranges.size={}, range={} -> ranges={}",
                   ri.target_partitions, estimated_partitions, ranges.size(), range, ranges);
 
     return do_with(seastar::gate(), true, std::move(cf), std::move(ranges),
@@ -586,8 +586,8 @@ static future<> repair_cf_range(repair_info& ri,
                 checksums.push_back(checksum_range(ri.db, ri.keyspace, cf, range, checksum_type));
                 for (auto&& neighbor : neighbors) {
                     checksums.push_back(
-                            net::get_local_messaging_service().send_repair_checksum_range(
-                                    net::msg_addr{neighbor}, ri.keyspace, cf, range, checksum_type));
+                            netw::get_local_messaging_service().send_repair_checksum_range(
+                                    netw::msg_addr{neighbor}, ri.keyspace, cf, range, checksum_type));
                 }
 
                 completion.enter();
@@ -601,7 +601,7 @@ static future<> repair_cf_range(repair_info& ri,
                     std::vector<partition_checksum> live_neighbors_checksum;
                     for (unsigned i = 0; i < checksums.size(); i++) {
                         if (checksums[i].failed()) {
-                            logger.warn(
+                            rlogger.warn(
                                 "Checksum of range {} on {} failed: {}",
                                 range,
                                 (i ? neighbors[i-1] :
@@ -711,7 +711,7 @@ static future<> repair_cf_range(repair_info& ri,
                         }
                     }
                     if (!(live_neighbors_in.empty() && live_neighbors_out.empty())) {
-                        logger.info("Found differing range {} on nodes {}, in = {}, out = {}", range,
+                        rlogger.info("Found differing range {} on nodes {}, in = {}, out = {}", range,
                                 live_neighbors, live_neighbors_in, live_neighbors_out);
                         ri.request_transfer_ranges(cf, range, live_neighbors_in, live_neighbors_out);
                         return make_ready_future<>();
@@ -725,7 +725,7 @@ static future<> repair_cf_range(repair_info& ri,
                     // tell the caller.
                     success = false;
                     ri.failed_ranges.push_back(failed_range{cf, range});
-                    logger.warn("Failed sync of range {}: {}", range, eptr);
+                    rlogger.warn("Failed sync of range {}: {}", range, eptr);
                 }).finally([&completion] {
                     parallelism_semaphore.signal(1);
                     completion.leave(); // notify do_for_each that we're done
@@ -734,7 +734,7 @@ static future<> repair_cf_range(repair_info& ri,
         }).finally([&success, &completion] {
             return completion.close().then([&success] {
                 if (!success) {
-                    logger.warn("Checksum or sync of partial range failed");
+                    rlogger.warn("Checksum or sync of partial range failed");
                 }
                 // We probably want the repair contiunes even if some
                 // ranges fail to do the checksum. We need to set the
@@ -752,7 +752,7 @@ static future<> repair_cf_range(repair_info& ri,
 static future<> repair_range(repair_info& ri, const dht::token_range& range) {
     auto id = utils::UUID_gen::get_time_UUID();
     return do_with(get_neighbors(ri.db.local(), ri.keyspace, range, ri.data_centers, ri.hosts), [&ri, range, id] (const auto& neighbors) {
-        logger.debug("[repair #{}] new session: will sync {} on range {} for {}.{}", id, neighbors, range, ri.keyspace, ri.cfs);
+        rlogger.debug("[repair #{}] new session: will sync {} on range {} for {}.{}", id, neighbors, range, ri.keyspace, ri.cfs);
         return do_for_each(ri.cfs.begin(), ri.cfs.end(), [&ri, &neighbors, range] (auto&& cf) {
             return repair_cf_range(ri, cf, range, neighbors);
         });
@@ -977,7 +977,7 @@ static future<> repair_ranges(repair_info ri) {
         }).then([&ri] {
             repair_tracker.done(ri.id, ri.check_failed_ranges());
         }).handle_exception([&ri] (std::exception_ptr eptr) {
-            logger.info("repair {} failed - {}", ri.id, eptr);
+            rlogger.info("repair {} failed - {}", ri.id, eptr);
             repair_tracker.done(ri.id, false);
         });
     });
@@ -999,7 +999,7 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     // that "Nothing to repair for keyspace '...'". We don't have such a case
     // yet. Real ids returned by next_repair_command() will be >= 1.
     int id = repair_tracker.next_repair_command();
-    logger.info("starting user-requested repair for keyspace {}, repair id {}, options {}", keyspace, id, options_map);
+    rlogger.info("starting user-requested repair for keyspace {}, repair id {}, options {}", keyspace, id, options_map);
 
     repair_tracker.start(id);
 
@@ -1011,7 +1011,7 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     if (options.ranges.size()) {
         ranges = options.ranges;
     } else if (options.primary_range) {
-        logger.info("primary-range repair");
+        rlogger.info("primary-range repair");
         // when "primary_range" option is on, neither data_centers nor hosts
         // may be set, except data_centers may contain only local DC (-local)
 #if 0
@@ -1095,10 +1095,10 @@ future<repair_status> repair_get_status(seastar::sharded<database>& db, int id) 
 }
 
 future<> repair_shutdown(seastar::sharded<database>& db) {
-    logger.info("Starting shutdown of repair");
+    rlogger.info("Starting shutdown of repair");
     return db.invoke_on(0, [] (database& localdb) {
         return repair_tracker.shutdown().then([] {
-            logger.info("Completed shutdown of repair");
+            rlogger.info("Completed shutdown of repair");
         });
     });
 }

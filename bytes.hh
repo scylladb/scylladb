@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "seastarx.hh"
 #include "core/sstring.hh"
 #include "hashing.hh"
 #include <experimental/optional>

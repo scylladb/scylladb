@@ -28,9 +28,9 @@
 #include "keys.hh"
 #include "tombstone.hh"
 #include "clustering_bounds_comparator.hh"
+#include "stdx.hh"
 
 namespace bi = boost::intrusive;
-namespace stdx = std::experimental;
 
 class position_in_partition_view;
 

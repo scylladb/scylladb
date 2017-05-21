@@ -273,14 +273,14 @@ struct batch_statement_executor {
 };
 static thread_local auto batch_stage = seastar::make_execution_stage("cql3_batch", batch_statement_executor::get());
 
-future<shared_ptr<transport::messages::result_message>> batch_statement::execute(
+future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute(
         distributed<service::storage_proxy>& storage, service::query_state& state, const query_options& options) {
     ++_stats.batches;
     return batch_stage(this, seastar::ref(storage), seastar::ref(state),
                        seastar::cref(options), false, options.get_timestamp(state));
 }
 
-future<shared_ptr<transport::messages::result_message>> batch_statement::do_execute(
+future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_execute(
         distributed<service::storage_proxy>& storage,
         service::query_state& query_state, const query_options& options,
         bool local, api::timestamp_type now)
@@ -299,8 +299,8 @@ future<shared_ptr<transport::messages::result_message>> batch_statement::do_exec
     return get_mutations(storage, options, local, now, query_state.get_trace_state()).then([this, &storage, &options, tr_state = query_state.get_trace_state()] (std::vector<mutation> ms) mutable {
         return execute_without_conditions(storage, std::move(ms), options.get_consistency(), std::move(tr_state));
     }).then([] {
-        return make_ready_future<shared_ptr<transport::messages::result_message>>(
-                make_shared<transport::messages::result_message::void_message>());
+        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
+                make_shared<cql_transport::messages::result_message::void_message>());
     });
 }
 
@@ -338,7 +338,7 @@ future<> batch_statement::execute_without_conditions(
     return storage.local().mutate_with_triggers(std::move(mutations), cl, mutate_atomic, std::move(tr_state));
 }
 
-future<shared_ptr<transport::messages::result_message>> batch_statement::execute_with_conditions(
+future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_with_conditions(
         distributed<service::storage_proxy>& storage,
         const query_options& options,
         service::query_state& state)
@@ -391,7 +391,7 @@ future<shared_ptr<transport::messages::result_message>> batch_statement::execute
 #endif
 }
 
-future<shared_ptr<transport::messages::result_message>> batch_statement::execute_internal(
+future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_internal(
         distributed<service::storage_proxy>& proxy,
         service::query_state& query_state, const query_options& options)
 {

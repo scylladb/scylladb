@@ -22,6 +22,8 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/core/reactor.hh>
 
+#include "seastarx.hh"
+
 namespace service {
 class priority_manager {
     ::io_priority_class _commitlog_priority;

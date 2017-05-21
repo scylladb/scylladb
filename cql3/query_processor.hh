@@ -275,7 +275,7 @@ public:
     }
 #endif
 public:
-    future<::shared_ptr<transport::messages::result_message>> process_statement(::shared_ptr<cql_statement> statement,
+    future<::shared_ptr<cql_transport::messages::result_message>> process_statement(::shared_ptr<cql_statement> statement,
             service::query_state& query_state, const query_options& options);
 
 #if 0
@@ -286,7 +286,7 @@ public:
     }
 #endif
 
-    future<::shared_ptr<transport::messages::result_message>> process(const std::experimental::string_view& query_string,
+    future<::shared_ptr<cql_transport::messages::result_message>> process(const std::experimental::string_view& query_string,
             service::query_state& query_state, query_options& options);
 
 #if 0
@@ -434,20 +434,20 @@ public:
     }
 #endif
 
-    future<::shared_ptr<transport::messages::result_message::prepared>>
+    future<::shared_ptr<cql_transport::messages::result_message::prepared>>
     prepare(const std::experimental::string_view& query_string, service::query_state& query_state);
 
-    future<::shared_ptr<transport::messages::result_message::prepared>>
+    future<::shared_ptr<cql_transport::messages::result_message::prepared>>
     prepare(const std::experimental::string_view& query_string, const service::client_state& client_state, bool for_thrift);
 
     static bytes compute_id(const std::experimental::string_view& query_string, const sstring& keyspace);
     static int32_t compute_thrift_id(const std::experimental::string_view& query_string, const sstring& keyspace);
 
 private:
-    ::shared_ptr<transport::messages::result_message::prepared>
+    ::shared_ptr<cql_transport::messages::result_message::prepared>
     get_stored_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, bool for_thrift);
 
-    future<::shared_ptr<transport::messages::result_message::prepared>>
+    future<::shared_ptr<cql_transport::messages::result_message::prepared>>
     store_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, std::unique_ptr<statements::prepared_statement> prepared, bool for_thrift);
 
     // Erases the statements for which filter returns true.
@@ -497,7 +497,7 @@ private:
 #endif
 
 public:
-    future<::shared_ptr<transport::messages::result_message>> process_batch(::shared_ptr<statements::batch_statement>,
+    future<::shared_ptr<cql_transport::messages::result_message>> process_batch(::shared_ptr<statements::batch_statement>,
             service::query_state& query_state, query_options& options);
 
     std::unique_ptr<statements::prepared_statement> get_statement(const std::experimental::string_view& query,

@@ -55,7 +55,7 @@
 #include "service/storage_service.hh"
 #include "view_info.hh"
 
-static logging::logger logger("view");
+static logging::logger vlogger("view");
 
 view_info::view_info(const schema& schema, const raw_view_info& raw_view_info)
         : _schema(schema)
@@ -831,7 +831,7 @@ void mutate_MV(const dht::token& base_token,
                     // Note also that mutate_locally(mut) copies mut (in
                     // frozen from) so don't need to increase its lifetime.
                     service::get_local_storage_proxy().mutate_locally(mut).handle_exception([] (auto ep) {
-                        logger.error("Error applying local view update: {}", ep);
+                        vlogger.error("Error applying local view update: {}", ep);
                     });
             } else {
 #if 0
@@ -849,7 +849,7 @@ void mutate_MV(const dht::token& base_token,
                 // Note we don't wait for the asynchronous operation to complete
                 // FIXME: need to extend mut's lifetime???
                 service::get_local_storage_proxy().send_to_endpoint(mut, *paired_endpoint, db::write_type::VIEW).handle_exception([paired_endpoint] (auto ep) {
-                    logger.error("Error applying view update to {}: {}", *paired_endpoint, ep);
+                    vlogger.error("Error applying view update to {}: {}", *paired_endpoint, ep);
                 });;
             }
         } else {
@@ -857,7 +857,7 @@ void mutate_MV(const dht::token& base_token,
                     //if there are no paired endpoints there are probably range movements going on,
                     //so we write to the local batchlog to replay later
                     if (pendingEndpoints.isEmpty())
-                        logger.warn("Received base materialized view mutation for key {} that does not belong " +
+                        vlogger.warn("Received base materialized view mutation for key {} that does not belong " +
                                     "to this node. There is probably a range movement happening (move or decommission)," +
                                     "but this node hasn't updated its ring metadata yet. Adding mutation to " +
                                     "local batchlog to be replayed later.",

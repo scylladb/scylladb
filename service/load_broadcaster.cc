@@ -44,7 +44,7 @@ namespace service {
 
 constexpr std::chrono::milliseconds load_broadcaster::BROADCAST_INTERVAL;
 
-logging::logger logger("load_broadcaster");
+logging::logger llogger("load_broadcaster");
 
 void load_broadcaster::start_broadcasting() {
     _done = make_ready_future<>();
@@ -53,7 +53,7 @@ void load_broadcaster::start_broadcasting() {
     // after that send every BROADCAST_INTERVAL.
 
     _timer.set_callback([this] {
-        logger.debug("Disseminating load info ...");
+        llogger.debug("Disseminating load info ...");
         _done = _db.map_reduce0([](database& db) {
             int64_t res = 0;
             for (auto i : db.get_column_families()) {

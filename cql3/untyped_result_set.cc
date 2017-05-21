@@ -67,7 +67,7 @@ bool cql3::untyped_result_set::row::has(const sstring& name) const {
     return i != _data.end() && i->second;
 }
 
-using transport::messages::result_message;
+using cql_transport::messages::result_message;
 
 cql3::untyped_result_set::untyped_result_set(::shared_ptr<result_message> msg)
     : _rows([msg]{

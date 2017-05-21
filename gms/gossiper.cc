@@ -72,7 +72,7 @@ constexpr int64_t gossiper::MAX_GENERATION_DIFFERENCE;
 
 distributed<gossiper> _the_gossiper;
 
-net::msg_addr gossiper::get_msg_addr(inet_address to) {
+netw::msg_addr gossiper::get_msg_addr(inet_address to) {
     return msg_addr{to, _default_cpuid};
 }
 
@@ -293,7 +293,7 @@ void gossiper::init_messaging_service_handler() {
     }
     _ms_registered = true;
     ms().register_gossip_digest_syn([] (const rpc::client_info& cinfo, gossip_digest_syn syn_msg) {
-        auto from = net::messaging_service::get_source(cinfo);
+        auto from = netw::messaging_service::get_source(cinfo);
         smp::submit_to(0, [from, syn_msg = std::move(syn_msg)] () mutable {
             auto& gossiper = gms::get_local_gossiper();
             return gossiper.handle_syn_msg(from, std::move(syn_msg));
@@ -303,7 +303,7 @@ void gossiper::init_messaging_service_handler() {
         return messaging_service::no_wait();
     });
     ms().register_gossip_digest_ack([] (const rpc::client_info& cinfo, gossip_digest_ack msg) {
-        auto from = net::messaging_service::get_source(cinfo);
+        auto from = netw::messaging_service::get_source(cinfo);
         smp::submit_to(0, [from, msg = std::move(msg)] () mutable {
             auto& gossiper = gms::get_local_gossiper();
             return gossiper.handle_ack_msg(from, std::move(msg));
@@ -339,7 +339,7 @@ void gossiper::init_messaging_service_handler() {
 }
 
 void gossiper::uninit_messaging_service_handler() {
-    auto& ms = net::get_local_messaging_service();
+    auto& ms = netw::get_local_messaging_service();
     ms.unregister_gossip_echo();
     ms.unregister_gossip_shutdown();
     ms.unregister_gossip_digest_syn();
@@ -1057,7 +1057,7 @@ std::unordered_map<inet_address, endpoint_state>& gms::gossiper::get_endpoint_st
 }
 
 bool gossiper::uses_host_id(inet_address endpoint) {
-    if (net::get_local_messaging_service().knows_version(endpoint)) {
+    if (netw::get_local_messaging_service().knows_version(endpoint)) {
         return true;
     } else if (get_endpoint_state_for_endpoint(endpoint)->get_application_state(application_state::NET_VERSION)) {
         return true;

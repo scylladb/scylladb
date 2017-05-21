@@ -55,7 +55,7 @@ namespace cql3 {
 
 namespace statements {
 
-namespace messages = transport::messages;
+namespace messages = cql_transport::messages;
 
 /**
  * Abstract class for statements that alter the schema.
@@ -81,7 +81,7 @@ protected:
 
     virtual void prepare_keyspace(const service::client_state& state) override;
 
-    virtual future<::shared_ptr<transport::event::schema_change>> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) = 0;
+    virtual future<::shared_ptr<cql_transport::event::schema_change>> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) = 0;
 
     virtual future<::shared_ptr<messages::result_message>>
     execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;

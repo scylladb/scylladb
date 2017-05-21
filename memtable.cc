@@ -23,8 +23,7 @@
 #include "database.hh"
 #include "frozen_mutation.hh"
 #include "sstable_mutation_readers.hh"
-
-namespace stdx = std::experimental;
+#include "stdx.hh"
 
 memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, memtable_list* memtable_list)
         : logalloc::region(dmm.region_group())

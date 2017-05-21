@@ -50,7 +50,9 @@
 #include "replay_position.hh"
 #include "commitlog_entry.hh"
 
-class file;
+namespace seastar { class file; }
+
+#include "seastarx.hh"
 
 namespace db {
 

@@ -28,6 +28,7 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/core/thread.hh>
 
+#include "seastarx.hh"
 #include "tests/test-utils.hh"
 #include "utils/flush_queue.hh"
 #include "log.hh"

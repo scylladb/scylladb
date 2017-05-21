@@ -56,9 +56,9 @@
 #include <snappy-c.h>
 #include <lz4.h>
 
-namespace transport {
+namespace cql_transport {
 
-static logging::logger logger("cql_server");
+static logging::logger clogger("cql_server");
 
 struct cql_frame_error : std::exception {
     const char* what() const throw () override {
@@ -296,17 +296,17 @@ future<> cql_server::stop() {
     _stopping = true;
     size_t nr = 0;
     size_t nr_total = _listeners.size();
-    logger.debug("cql_server: abort accept nr_total={}", nr_total);
+    clogger.debug("cql_server: abort accept nr_total={}", nr_total);
     for (auto&& l : _listeners) {
         l.abort_accept();
-        logger.debug("cql_server: abort accept {} out of {} done", ++nr, nr_total);
+        clogger.debug("cql_server: abort accept {} out of {} done", ++nr, nr_total);
     }
     auto nr_conn = make_lw_shared<size_t>(0);
     auto nr_conn_total = _connections_list.size();
-    logger.debug("cql_server: shutdown connection nr_total={}", nr_conn_total);
+    clogger.debug("cql_server: shutdown connection nr_total={}", nr_conn_total);
     return parallel_for_each(_connections_list.begin(), _connections_list.end(), [nr_conn, nr_conn_total] (auto&& c) {
         return c.shutdown().then([nr_conn, nr_conn_total] {
-            logger.debug("cql_server: shutdown connection {} out of {} done", ++(*nr_conn), nr_conn_total);
+            clogger.debug("cql_server: shutdown connection {} out of {} done", ++(*nr_conn), nr_conn_total);
         });
     }).then([this] {
         service::get_local_storage_service().unregister_subscriber(_notifier.get());
@@ -359,7 +359,7 @@ cql_server::do_accepts(int which, bool keepalive) {
             try {
                 f.get();
             } catch (...) {
-                logger.debug("connection error: {}", std::current_exception());
+                clogger.debug("connection error: {}", std::current_exception());
             }
         });
         do_accepts(which, keepalive);
@@ -367,7 +367,7 @@ cql_server::do_accepts(int which, bool keepalive) {
         try {
             f.get();
         } catch (...) {
-            logger.warn("acccept failed: {}", std::current_exception());
+            clogger.warn("acccept failed: {}", std::current_exception());
             do_accepts(which, keepalive);
         }
     });
@@ -664,7 +664,7 @@ future<> cql_server::connection::process_request() {
                     // Keep buf alive.
                 });
             }).handle_exception([] (std::exception_ptr ex) {
-                logger.error("request processing failed: {}", ex);
+                clogger.error("request processing failed: {}", ex);
             });
 
             return make_ready_future<>();

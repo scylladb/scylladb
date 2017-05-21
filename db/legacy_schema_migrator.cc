@@ -54,7 +54,7 @@
 #include "cql3/query_processor.hh"
 #include "utils/joinpoint.hh"
 
-static seastar::logger logger("legacy_schema_migrator");
+static seastar::logger mlogger("legacy_schema_migrator");
 
 namespace db {
 namespace legacy_schema_migrator {
@@ -377,7 +377,7 @@ public:
                     builder.set_compaction_strategy(sstables::compaction_strategy::type(strategy));
                 } catch (const exceptions::configuration_exception& e) {
                     // If compaction strategy class isn't supported, fallback to size tiered.
-                    logger.warn("Falling back to size-tiered compaction strategy after the problem: {}", e.what());
+                    mlogger.warn("Falling back to size-tiered compaction strategy after the problem: {}", e.what());
                     builder.set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
                 }
             }
@@ -526,7 +526,7 @@ public:
     }
 
     future<> truncate_legacy_tables() {
-        logger.info("Truncating legacy schema tables");
+        mlogger.info("Truncating legacy schema tables");
         return do_with(utils::make_joinpoint([] { return db_clock::now();}),[this](auto& tsf) {
             return _qp.db().invoke_on_all([&tsf](database& db) {
                 return parallel_for_each(legacy_schema_tables, [&db, &tsf](const sstring& cfname) {
@@ -537,7 +537,7 @@ public:
     }
 
     future<> store_keyspaces_in_new_schema_tables() {
-        logger.info("Moving {} keyspaces from legacy schema tables to the new schema keyspace ({})",
+        mlogger.info("Moving {} keyspaces from legacy schema tables to the new schema keyspace ({})",
                         _keyspaces.size(), db::schema_tables::v3::NAME);
 
         std::vector<mutation> mutations;
@@ -597,7 +597,7 @@ public:
                                                 .then(std::bind(&migrator::flush_schemas, this))
                                                 .then(std::bind(&migrator::truncate_legacy_tables, this))
                                                 .then(std::bind(&migrator::unload_legacy_tables, this))
-                                                .then([] { logger.info("Completed migration of legacy schema tables"); });
+                                                .then([] { mlogger.info("Completed migration of legacy schema tables"); });
         });
     }
 

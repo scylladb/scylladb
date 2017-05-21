@@ -26,7 +26,7 @@
 
 #include <experimental/optional>
 
-namespace stdx = std::experimental;
+#include "stdx.hh"
 
 // mutation_fragments are the objects that streamed_mutation are going to
 // stream. They can represent:

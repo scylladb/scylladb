@@ -22,7 +22,7 @@
 
 #pragma once
 
-namespace transport {
+namespace cql_transport {
 namespace messages {
 
 class result_message {

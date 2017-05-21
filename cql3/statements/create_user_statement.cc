@@ -64,7 +64,7 @@ void cql3::statements::create_user_statement::validate(distributed<service::stor
     // we need to query -> continuation, and this is not a continuation method
 }
 
-future<::shared_ptr<transport::messages::result_message>>
+future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::create_user_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
     return state.get_client_state().user()->is_super().then([this](bool is_super) {
         if (!is_super) {
@@ -75,11 +75,11 @@ cql3::statements::create_user_statement::execute(distributed<service::storage_pr
                 throw exceptions::invalid_request_exception(sprint("User %s already exists", _username));
             }
             if (exists && _if_not_exists) {
-                make_ready_future<::shared_ptr<transport::messages::result_message>>();
+                make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
             }
             return auth::authenticator::get().create(_username, _opts->options()).then([this] {
                 return auth::auth::insert_user(_username, _superuser).then([] {
-                    return  make_ready_future<::shared_ptr<transport::messages::result_message>>();
+                    return  make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
                 });
             });
         });

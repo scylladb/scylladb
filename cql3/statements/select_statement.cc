@@ -233,7 +233,7 @@ struct select_statement_executor {
 };
 static thread_local auto select_stage = seastar::make_execution_stage("cql3_select", select_statement_executor::get());
 
-future<shared_ptr<transport::messages::result_message>>
+future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::execute(distributed<service::storage_proxy>& proxy,
                              service::query_state& state,
                              const query_options& options)
@@ -241,7 +241,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
     return select_stage(this, seastar::ref(proxy), seastar::ref(state), seastar::cref(options));
 }
 
-future<shared_ptr<transport::messages::result_message>>
+future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::do_execute(distributed<service::storage_proxy>& proxy,
                           service::query_state& state,
                           const query_options& options)
@@ -293,8 +293,8 @@ select_statement::do_execute(distributed<service::storage_proxy>& proxy,
                             }
                     ).then([&builder] {
                                 auto rs = builder.build();
-                                auto msg = ::make_shared<transport::messages::result_message::rows>(std::move(rs));
-                                return make_ready_future<shared_ptr<transport::messages::result_message>>(std::move(msg));
+                                auto msg = ::make_shared<cql_transport::messages::result_message::rows>(std::move(rs));
+                                return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(msg));
                             });
                 });
     }
@@ -312,12 +312,12 @@ select_statement::do_execute(distributed<service::storage_proxy>& proxy,
                     rs->get_metadata().set_has_more_pages(p->state());
                 }
 
-                auto msg = ::make_shared<transport::messages::result_message::rows>(std::move(rs));
-                return make_ready_future<shared_ptr<transport::messages::result_message>>(std::move(msg));
+                auto msg = ::make_shared<cql_transport::messages::result_message::rows>(std::move(rs));
+                return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(msg));
             });
 }
 
-future<shared_ptr<transport::messages::result_message>>
+future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::execute(distributed<service::storage_proxy>& proxy,
                           lw_shared_ptr<query::read_command> cmd,
                           dht::partition_range_vector&& partition_ranges,
@@ -349,7 +349,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
     }
 }
 
-future<::shared_ptr<transport::messages::result_message>>
+future<::shared_ptr<cql_transport::messages::result_message>>
 select_statement::execute_internal(distributed<service::storage_proxy>& proxy,
                                    service::query_state& state,
                                    const query_options& options)
@@ -383,7 +383,7 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy,
     }
 }
 
-shared_ptr<transport::messages::result_message>
+shared_ptr<cql_transport::messages::result_message>
 select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
                                   lw_shared_ptr<query::read_command> cmd,
                                   const query_options& options,
@@ -403,7 +403,7 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
         }
         rs->trim(cmd->row_limit);
     }
-    return ::make_shared<transport::messages::result_message::rows>(std::move(rs));
+    return ::make_shared<cql_transport::messages::result_message::rows>(std::move(rs));
 }
 
 ::shared_ptr<restrictions::statement_restrictions> select_statement::get_restrictions() const {

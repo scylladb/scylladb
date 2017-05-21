@@ -28,9 +28,9 @@
 #include "core/future.hh"
 
 class rows_assertions {
-    shared_ptr<transport::messages::result_message::rows> _rows;
+    shared_ptr<cql_transport::messages::result_message::rows> _rows;
 public:
-    rows_assertions(shared_ptr<transport::messages::result_message::rows> rows);
+    rows_assertions(shared_ptr<cql_transport::messages::result_message::rows> rows);
     rows_assertions with_size(size_t size);
     rows_assertions is_empty();
     rows_assertions with_row(std::initializer_list<bytes_opt> values);
@@ -42,13 +42,13 @@ public:
 };
 
 class result_msg_assertions {
-    shared_ptr<transport::messages::result_message> _msg;
+    shared_ptr<cql_transport::messages::result_message> _msg;
 public:
-    result_msg_assertions(shared_ptr<transport::messages::result_message> msg);
+    result_msg_assertions(shared_ptr<cql_transport::messages::result_message> msg);
     rows_assertions is_rows();
 };
 
-result_msg_assertions assert_that(shared_ptr<transport::messages::result_message> msg);
+result_msg_assertions assert_that(shared_ptr<cql_transport::messages::result_message> msg);
 
 template<typename... T>
 void assert_that_failed(future<T...>& f)

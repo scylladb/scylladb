@@ -42,7 +42,7 @@
 #include <vector>
 #include <boost/make_shared.hpp>
 
-static logging::logger logger("thrift");
+static logging::logger tlogger("thrift");
 
 using namespace apache::thrift;
 using namespace apache::thrift::transport;
@@ -189,7 +189,7 @@ thrift_server::do_accepts(int which, bool keepalive) {
             try {
                 f.get();
             } catch (std::exception& ex) {
-                logger.debug("request error {}", ex.what());
+                tlogger.debug("request error {}", ex.what());
             }
         });
         do_accepts(which, keepalive);

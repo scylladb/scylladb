@@ -37,7 +37,7 @@ thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
 
 using namespace std::chrono_literals;
-using namespace net;
+using namespace netw;
 
 class tester {
 private:
@@ -48,7 +48,7 @@ public:
     tester()
        : ms(get_local_messaging_service()) {
     }
-    using msg_addr = net::messaging_service::msg_addr;
+    using msg_addr = netw::messaging_service::msg_addr;
     using inet_address = gms::inet_address;
     using endpoint_state = gms::endpoint_state;
     msg_addr get_msg_addr() {
@@ -69,7 +69,7 @@ public:
         ms.register_gossip_digest_syn([this] (const rpc::client_info& cinfo, gms::gossip_digest_syn msg) {
             print("Server got syn msg = %s\n", msg);
 
-            auto from = net::messaging_service::get_source(cinfo);
+            auto from = netw::messaging_service::get_source(cinfo);
             auto ep1 = inet_address("1.1.1.1");
             auto ep2 = inet_address("2.2.2.2");
             int32_t gen = 800;
@@ -91,7 +91,7 @@ public:
 
         ms.register_gossip_digest_ack([this] (const rpc::client_info& cinfo, gms::gossip_digest_ack msg) {
             print("Server got ack msg = %s\n", msg);
-            auto from = net::messaging_service::get_source(cinfo);
+            auto from = netw::messaging_service::get_source(cinfo);
             // Prepare gossip_digest_ack2 message
             auto ep1 = inet_address("3.3.3.3");
             std::map<inet_address, endpoint_state> eps{
@@ -188,10 +188,10 @@ int main(int ac, char ** av) {
         }
         const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
         utils::fb_utilities::set_broadcast_address(listen);
-        net::get_messaging_service().start(listen).then([config, api_port, stay_alive] () {
+        netw::get_messaging_service().start(listen).then([config, api_port, stay_alive] () {
             auto testers = new distributed<tester>;
             testers->start().then([testers]{
-                auto& server = net::get_local_messaging_service();
+                auto& server = netw::get_local_messaging_service();
                 auto port = server.port();
                 std::cout << "Messaging server listening on port " << port << " ...\n";
                 return testers->invoke_on_all(&tester::init_handler);
@@ -217,7 +217,7 @@ int main(int ac, char ** av) {
                     print("=============TEST DONE===========\n");
                     testers->stop().then([testers] {
                         delete testers;
-                        net::get_messaging_service().stop().then([]{
+                        netw::get_messaging_service().stop().then([]{
                             engine().exit(0);
                         });
                     });

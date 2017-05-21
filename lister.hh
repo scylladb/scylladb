@@ -27,6 +27,8 @@
 #include <seastar/core/enum.hh>
 #include <boost/filesystem.hpp>
 
+#include "seastarx.hh"
+
 class lister final {
 public:
     using path = boost::filesystem::path;

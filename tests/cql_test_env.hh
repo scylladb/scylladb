@@ -54,14 +54,14 @@ class cql_test_env {
 public:
     virtual ~cql_test_env() {};
 
-    virtual future<::shared_ptr<transport::messages::result_message>> execute_cql(const sstring& text) = 0;
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(const sstring& text) = 0;
 
-    virtual future<::shared_ptr<transport::messages::result_message>> execute_cql(
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(
         const sstring& text, std::unique_ptr<cql3::query_options> qo) = 0;
 
     virtual future<bytes> prepare(sstring query) = 0;
 
-    virtual future<::shared_ptr<transport::messages::result_message>> execute_prepared(
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared(
         bytes id, std::vector<cql3::raw_value> values) = 0;
 
     virtual future<> create_table(std::function<schema(const sstring&)> schema_maker) = 0;

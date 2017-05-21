@@ -42,6 +42,7 @@
 #pragma once
 
 #include "core/sstring.hh"
+#include "seastarx.hh"
 
 namespace db {
 namespace index {

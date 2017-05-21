@@ -57,7 +57,7 @@ static constexpr size_t serialize_int16_size = 2;
 static constexpr size_t serialize_int32_size = 4;
 static constexpr size_t serialize_int64_size = 8;
 
-namespace internal {
+namespace internal_impl {
 
 template <typename ExplicitIntegerType, typename CharOutputIterator, typename IntegerType>
 GCC6_CONCEPT(requires std::is_integral<ExplicitIntegerType>::value && std::is_integral<IntegerType>::value && requires (CharOutputIterator it) {
@@ -74,25 +74,25 @@ void serialize_int(CharOutputIterator& out, IntegerType val) {
 template <typename CharOutputIterator>
 inline
 void serialize_int8(CharOutputIterator& out, uint8_t val) {
-    internal::serialize_int<uint8_t>(out, val);
+    internal_impl::serialize_int<uint8_t>(out, val);
 }
 
 template <typename CharOutputIterator>
 inline
 void serialize_int16(CharOutputIterator& out, uint16_t val) {
-    internal::serialize_int<uint16_t>(out, val);
+    internal_impl::serialize_int<uint16_t>(out, val);
 }
 
 template <typename CharOutputIterator>
 inline
 void serialize_int32(CharOutputIterator& out, uint32_t val) {
-    internal::serialize_int<uint32_t>(out, val);
+    internal_impl::serialize_int<uint32_t>(out, val);
 }
 
 template <typename CharOutputIterator>
 inline
 void serialize_int64(CharOutputIterator& out, uint64_t val) {
-    internal::serialize_int<uint64_t>(out, val);
+    internal_impl::serialize_int<uint64_t>(out, val);
 }
 
 template <typename CharOutputIterator>

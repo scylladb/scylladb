@@ -353,12 +353,12 @@ struct modification_statement_executor {
 };
 static thread_local auto modify_stage = seastar::make_execution_stage("cql3_modification", modification_statement_executor::get());
 
-future<::shared_ptr<transport::messages::result_message>>
+future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) {
     return modify_stage(this, seastar::ref(proxy), seastar::ref(qs), seastar::cref(options));
 }
 
-future<::shared_ptr<transport::messages::result_message>>
+future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::do_execute(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) {
     if (has_conditions() && options.get_protocol_version() == 1) {
         throw exceptions::invalid_request_exception("Conditional updates are not supported by the protocol version in use. You need to upgrade to a driver using the native protocol v2.");
@@ -373,8 +373,8 @@ modification_statement::do_execute(distributed<service::storage_proxy>& proxy, s
     inc_cql_stats();
 
     return execute_without_condition(proxy, qs, options).then([] {
-        return make_ready_future<::shared_ptr<transport::messages::result_message>>(
-                ::shared_ptr<transport::messages::result_message>{});
+        return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
+                ::shared_ptr<cql_transport::messages::result_message>{});
     });
 }
 
@@ -396,7 +396,7 @@ modification_statement::execute_without_condition(distributed<service::storage_p
     });
 }
 
-future<::shared_ptr<transport::messages::result_message>>
+future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::execute_with_condition(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) {
     fail(unimplemented::cause::LWT);
 #if 0
@@ -424,7 +424,7 @@ modification_statement::execute_with_condition(distributed<service::storage_prox
 #endif
 }
 
-future<::shared_ptr<transport::messages::result_message>>
+future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) {
     if (has_conditions()) {
         throw exceptions::unsupported_operation_exception();
@@ -439,8 +439,8 @@ modification_statement::execute_internal(distributed<service::storage_proxy>& pr
                 return proxy.local().mutate_locally(std::move(mutations));
             }).then(
             [] {
-                return make_ready_future<::shared_ptr<transport::messages::result_message>>(
-                        ::shared_ptr<transport::messages::result_message> {});
+                return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
+                        ::shared_ptr<cql_transport::messages::result_message> {});
             });
 }
 

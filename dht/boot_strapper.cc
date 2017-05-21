@@ -42,12 +42,12 @@
 #include "gms/failure_detector.hh"
 #include "log.hh"
 
-static logging::logger logger("boot_strapper");
+static logging::logger blogger("boot_strapper");
 
 namespace dht {
 
 future<> boot_strapper::bootstrap() {
-    logger.debug("Beginning bootstrap process: sorted_tokens={}", _token_metadata.sorted_tokens());
+    blogger.debug("Beginning bootstrap process: sorted_tokens={}", _token_metadata.sorted_tokens());
 
     auto streamer = make_lw_shared<range_streamer>(_db, _token_metadata, _tokens, _address, "Bootstrap");
     streamer->add_source_filter(std::make_unique<range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector()));
@@ -55,7 +55,7 @@ future<> boot_strapper::bootstrap() {
         auto& ks = _db.local().find_keyspace(keyspace_name);
         auto& strategy = ks.get_replication_strategy();
         dht::token_range_vector ranges = strategy.get_pending_address_ranges(_token_metadata, _tokens, _address);
-        logger.debug("Will stream keyspace={}, ranges={}", keyspace_name, ranges);
+        blogger.debug("Will stream keyspace={}, ranges={}", keyspace_name, ranges);
         streamer->add_ranges(keyspace_name, ranges);
     }
 
@@ -74,7 +74,7 @@ std::unordered_set<token> boot_strapper::get_bootstrap_tokens(token_metadata met
     auto initial_tokens = db.get_initial_tokens();
     // if user specified tokens, use those
     if (initial_tokens.size() > 0) {
-        logger.debug("tokens manually specified as {}", initial_tokens);
+        blogger.debug("tokens manually specified as {}", initial_tokens);
         std::unordered_set<token> tokens;
         for (auto& token_string : initial_tokens) {
             auto token = dht::global_partitioner().from_sstring(token_string);
@@ -83,7 +83,7 @@ std::unordered_set<token> boot_strapper::get_bootstrap_tokens(token_metadata met
             }
             tokens.insert(token);
         }
-        logger.debug("Get manually specified bootstrap_tokens={}", tokens);
+        blogger.debug("Get manually specified bootstrap_tokens={}", tokens);
         return tokens;
     }
 
@@ -93,11 +93,11 @@ std::unordered_set<token> boot_strapper::get_bootstrap_tokens(token_metadata met
     }
 
     if (num_tokens == 1) {
-        logger.warn("Picking random token for a single vnode.  You should probably add more vnodes; failing that, you should probably specify the token manually");
+        blogger.warn("Picking random token for a single vnode.  You should probably add more vnodes; failing that, you should probably specify the token manually");
     }
 
     auto tokens = get_random_tokens(metadata, num_tokens);
-    logger.debug("Get random bootstrap_tokens={}", tokens);
+    blogger.debug("Get random bootstrap_tokens={}", tokens);
     return tokens;
 }
 

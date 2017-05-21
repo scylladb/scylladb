@@ -24,6 +24,7 @@
 #include "core/print.hh"
 #include "core/future-util.hh"
 #include "core/distributed.hh"
+#include "seastarx.hh"
 
 #include <chrono>
 #include <iosfwd>

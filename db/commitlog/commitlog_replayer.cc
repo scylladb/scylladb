@@ -59,7 +59,7 @@
 #include "schema_registry.hh"
 #include "commitlog_entry.hh"
 
-static logging::logger logger("commitlog_replayer");
+static logging::logger rlogger("commitlog_replayer");
 
 class db::commitlog_replayer::impl {
     struct column_mappings {
@@ -161,11 +161,11 @@ future<> db::commitlog_replayer::impl::init() {
                 for (auto& sst : *cfp.second->get_sstables()) {
                     try {
                         auto p = sst->get_stats_metadata().position;
-                        logger.trace("sstable {} -> rp {}", sst->get_filename(), p);
+                        rlogger.trace("sstable {} -> rp {}", sst->get_filename(), p);
                         auto& pp = map[p.shard_id()][uuid];
                         pp = std::max(pp, p);
                     } catch (...) {
-                        logger.warn("Could not read sstable metadata {}", std::current_exception());
+                        rlogger.warn("Could not read sstable metadata {}", std::current_exception());
                     }
                 }
                 // We do this on each cpu, for each CF, which technically is a little wasteful, but the values are
@@ -175,7 +175,7 @@ future<> db::commitlog_replayer::impl::init() {
                 // mark the CF as "needed".
                 return db::system_keyspace::get_truncated_position(uuid).then([&map, &uuid](std::vector<db::replay_position> tpps) {
                     for (auto& p : tpps) {
-                        logger.trace("CF {} truncated at {}", uuid, p);
+                        rlogger.trace("CF {} truncated at {}", uuid, p);
                         auto& pp = map[p.shard_id()][uuid];
                         pp = std::max(pp, p);
                     }
@@ -204,11 +204,11 @@ future<> db::commitlog_replayer::impl::init() {
             }
         }
         for (auto&p : _min_pos) {
-            logger.debug("minimum position for shard {}: {}", p.first, p.second);
+            rlogger.debug("minimum position for shard {}: {}", p.first, p.second);
         }
         for (auto&p1 : _rpm) {
             for (auto& p2 : p1.second) {
-                logger.debug("replay position for shard/uuid {}/{}: {}", p1.first, p2.first, p2.second);
+                rlogger.debug("replay position for shard/uuid {}/{}: {}", p1.first, p2.first, p2.second);
             }
         }
     });
@@ -222,7 +222,7 @@ db::commitlog_replayer::impl::recover(sstring file) const {
     auto gp = min_pos(rp.shard_id());
 
     if (rp.id < gp.id) {
-        logger.debug("skipping replay of fully-flushed {}", file);
+        rlogger.debug("skipping replay of fully-flushed {}", file);
         return make_ready_future<stats>();
     }
     position_type p = 0;
@@ -261,14 +261,14 @@ future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> 
             if (!cer.get_column_mapping()) {
                 throw std::runtime_error(sprint("unknown schema version {}", fm.schema_version()));
             }
-            logger.debug("new schema version {} in entry {}", fm.schema_version(), rp);
+            rlogger.debug("new schema version {} in entry {}", fm.schema_version(), rp);
             cm_it = local_cm.emplace(fm.schema_version(), *cer.get_column_mapping()).first;
         }
         const column_mapping& src_cm = cm_it->second;
 
         auto shard_id = rp.shard_id();
         if (rp < min_pos(shard_id)) {
-            logger.trace("entry {} is less than global min position. skipping", rp);
+            rlogger.trace("entry {} is less than global min position. skipping", rp);
             s->skipped_mutations++;
             return make_ready_future<>();
         }
@@ -276,7 +276,7 @@ future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> 
         auto uuid = fm.column_family_id();
         auto cf_rp = cf_min_pos(uuid, shard_id);
         if (rp <= cf_rp) {
-            logger.trace("entry {} at {} is younger than recorded replay position {}. skipping", fm.column_family_id(), rp, cf_rp);
+            rlogger.trace("entry {} at {} is younger than recorded replay position {}. skipping", fm.column_family_id(), rp, cf_rp);
             s->skipped_mutations++;
             return make_ready_future<>();
         }
@@ -289,8 +289,8 @@ future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> 
             // will not do this.
             auto& cf = db.find_column_family(fm.column_family_id());
 
-            if (logger.is_enabled(logging::log_level::debug)) {
-                logger.debug("replaying at {} v={} {}:{} at {}", fm.column_family_id(), fm.schema_version(),
+            if (rlogger.is_enabled(logging::log_level::debug)) {
+                rlogger.debug("replaying at {} v={} {}:{} at {}", fm.column_family_id(), fm.schema_version(),
                         cf.schema()->ks_name(), cf.schema()->cf_name(), rp);
             }
             // Removed forwarding "new" RP. Instead give none/empty.
@@ -317,14 +317,14 @@ future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> 
         }).handle_exception([s](auto ep) {
             s->invalid_mutations++;
             // TODO: write mutation to file like origin.
-            logger.warn("error replaying: {}", ep);
+            rlogger.warn("error replaying: {}", ep);
         });
     } catch (no_such_column_family&) {
         // No such CF now? Origin just ignores this.
     } catch (...) {
         s->invalid_mutations++;
         // TODO: write mutation to file like origin.
-        logger.warn("error replaying: {}", std::current_exception());
+        rlogger.warn("error replaying: {}", std::current_exception());
     }
 
     return make_ready_future<>();
@@ -353,7 +353,7 @@ future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(seastar::
 future<> db::commitlog_replayer::recover(std::vector<sstring> files) {
     typedef std::unordered_multimap<unsigned, sstring> shard_file_map;
 
-    logger.info("Replaying {}", join(", ", files));
+    rlogger.info("Replaying {}", join(", ", files));
 
     // pre-compute work per shard already.
     auto map = ::make_lw_shared<shard_file_map>();
@@ -373,12 +373,12 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files) {
                 auto range = map->equal_range(id);
                 return do_for_each(range.first, range.second, [this, total](const std::pair<unsigned, sstring>& p) {
                     auto&f = p.second;
-                    logger.debug("Replaying {}", f);
+                    rlogger.debug("Replaying {}", f);
                     return _impl->recover(f).then([f, total](impl::stats stats) {
                         if (stats.corrupt_bytes != 0) {
-                            logger.warn("Corrupted file: {}. {} bytes skipped.", f, stats.corrupt_bytes);
+                            rlogger.warn("Corrupted file: {}. {} bytes skipped.", f, stats.corrupt_bytes);
                         }
-                        logger.debug("Log replay of {} complete, {} replayed mutations ({} invalid, {} skipped)"
+                        rlogger.debug("Log replay of {} complete, {} replayed mutations ({} invalid, {} skipped)"
                                         , f
                                         , stats.applied_mutations
                                         , stats.invalid_mutations
@@ -391,7 +391,7 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files) {
                 });
             });
         }, impl::stats(), std::plus<impl::stats>()).then([](impl::stats totals) {
-            logger.info("Log replay complete, {} replayed mutations ({} invalid, {} skipped)"
+            rlogger.info("Log replay complete, {} replayed mutations ({} invalid, {} skipped)"
                             , totals.applied_mutations
                             , totals.invalid_mutations
                             , totals.skipped_mutations

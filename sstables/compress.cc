@@ -33,8 +33,7 @@
 #include <snappy-c.h>
 
 #include "unimplemented.hh"
-
-namespace stdx = std::experimental;
+#include "stdx.hh"
 
 namespace sstables {
 

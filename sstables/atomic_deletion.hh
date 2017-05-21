@@ -48,6 +48,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "seastarx.hh"
+
 namespace sstables {
 
 struct sstable_to_delete {

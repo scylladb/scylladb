@@ -115,7 +115,7 @@ void stream_session::init_messaging_service_handler() {
         });
     });
     ms().register_stream_mutation([] (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id, rpc::optional<bool> fragmented_opt) {
-        auto from = net::messaging_service::get_source(cinfo);
+        auto from = netw::messaging_service::get_source(cinfo);
         auto fragmented = fragmented_opt && *fragmented_opt;
         return do_with(std::move(fm), [plan_id, from, fragmented] (const auto& fm) {
             auto fm_size = fm.representation().size();
@@ -478,7 +478,7 @@ void stream_session::start() {
         close_session(stream_session_state::COMPLETE);
         return;
     }
-    auto connecting = net::get_local_messaging_service().get_preferred_ip(peer);
+    auto connecting = netw::get_local_messaging_service().get_preferred_ip(peer);
     if (peer == connecting) {
         sslog.info("[Stream #{}] Starting streaming to {}", plan_id(), peer);
     } else {

@@ -72,14 +72,14 @@ void drop_view_statement::validate(distributed<service::storage_proxy>&, const s
     // validated in migration_manager::announce_view_drop()
 }
 
-future<shared_ptr<transport::event::schema_change>> drop_view_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> drop_view_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
 {
     return make_ready_future<>().then([this, is_local_only] {
         return service::get_local_migration_manager().announce_view_drop(keyspace(), column_family(), is_local_only);
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();
-            using namespace transport;
+            using namespace cql_transport;
 
             return make_shared<event::schema_change>(event::schema_change::change_type::DROPPED,
                                                      event::schema_change::target_type::TABLE,
@@ -87,7 +87,7 @@ future<shared_ptr<transport::event::schema_change>> drop_view_statement::announc
                                                      this->column_family());
         } catch (const exceptions::configuration_exception& e) {
             if (_if_exists) {
-                return ::shared_ptr<transport::event::schema_change>();
+                return ::shared_ptr<cql_transport::event::schema_change>();
             }
             throw e;
         }

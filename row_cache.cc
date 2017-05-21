@@ -30,12 +30,12 @@
 #include "utils/move.hh"
 #include <boost/version.hpp>
 #include <sys/sdt.h>
+#include "stdx.hh"
 
 using namespace std::chrono_literals;
 
-namespace stdx = std::experimental;
 
-static logging::logger logger("cache");
+static logging::logger clogger("cache");
 
 thread_local seastar::thread_scheduling_group row_cache::_update_thread_scheduling_group(1ms, 0.2);
 

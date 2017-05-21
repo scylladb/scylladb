@@ -26,8 +26,7 @@
 #include "frozen_mutation.hh"
 #include "schema.hh"
 #include "utils/data_output.hh"
-
-namespace stdx = std::experimental;
+#include "stdx.hh"
 
 class commitlog_entry {
     stdx::optional<column_mapping> _mapping;

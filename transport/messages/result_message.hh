@@ -31,7 +31,7 @@
 #include "core/shared_ptr.hh"
 #include "core/sstring.hh"
 
-namespace transport {
+namespace cql_transport {
 
 namespace messages {
 
@@ -124,7 +124,7 @@ public:
         return _id;
     }
 
-    static const bytes& get_id(::shared_ptr<transport::messages::result_message::prepared> prepared) {
+    static const bytes& get_id(::shared_ptr<cql_transport::messages::result_message::prepared> prepared) {
         auto msg_cql = dynamic_pointer_cast<const messages::result_message::prepared::cql>(prepared);
         if (msg_cql == nullptr) {
             throw std::bad_cast();
