@@ -51,9 +51,10 @@ static clustering_key_prefix key(std::vector<int32_t> components) {
     return clustering_key_prefix::from_clustering_prefix(*s, exploded_clustering_prefix(std::move(exploded)));
 }
 
-template<typename FirstType, typename SecondType>
-static void assert_rt(FirstType&& expected, SecondType&& actual) {
-    BOOST_REQUIRE(expected.equal(*s, actual));
+static void assert_rt(const range_tombstone& expected, const range_tombstone& actual) {
+    if (!expected.equal(*s, actual)) {
+        BOOST_FAIL(sprint("Expected %s but got %s", expected, actual));
+    }
 }
 
 static range_tombstone rt(int32_t start, int32_t end, api::timestamp_type timestamp) {
