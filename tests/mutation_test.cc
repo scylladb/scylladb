@@ -1493,17 +1493,10 @@ SEASTAR_TEST_CASE(test_apply_is_commutative) {
 
 SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
     return seastar::async([] {
-        auto partitions_match = [] (const mutation_partition& mp1, const mutation_partition& mp2, const schema& s) {
-            // FIXME: Due to #2158, we compare only the rows and the partition tombstone.
-            return mp1.partition_tombstone() == mp2.partition_tombstone()
-                && std::equal(
-                    mp1.clustered_rows().begin(), mp1.clustered_rows().end(),
-                    mp2.clustered_rows().begin(), mp2.clustered_rows().end(),
-                    [&] (const rows_entry& e1, const rows_entry& e2) {
-                        return e1.equal(s, e2);
-                    });
+        auto check_partitions_match = [] (const mutation_partition& mp1, const mutation_partition& mp2, const schema& s) {
+            BOOST_REQUIRE(mp1.equal(s, mp2));
         };
-        for_each_mutation_pair([&partitions_match] (auto&& m1, auto&& m2, are_equal eq) {
+        for_each_mutation_pair([&] (auto&& m1, auto&& m2, are_equal eq) {
             auto s = m1.schema();
             if (s != m2.schema()) {
                 return;
@@ -1512,10 +1505,10 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
             m12.apply(m2);
             auto m12_with_diff = m1;
             m12_with_diff.partition().apply(*s, m2.partition().difference(s, m1.partition()));
-            BOOST_REQUIRE(partitions_match(m12.partition(), m12_with_diff.partition(), *s));
-            BOOST_REQUIRE(partitions_match(mutation_partition{s}, m1.partition().difference(s, m1.partition()), *s));
-            BOOST_REQUIRE(partitions_match(m1.partition(), m1.partition().difference(s, mutation_partition{s}), *s));
-            BOOST_REQUIRE(partitions_match(mutation_partition{s}, mutation_partition{s}.difference(s, m1.partition()), *s));
+            check_partitions_match(m12.partition(), m12_with_diff.partition(), *s);
+            check_partitions_match(mutation_partition{s}, m1.partition().difference(s, m1.partition()), *s);
+            check_partitions_match(m1.partition(), m1.partition().difference(s, mutation_partition{s}), *s);
+            check_partitions_match(mutation_partition{s}, mutation_partition{s}.difference(s, m1.partition()), *s);
         });
     });
 }
