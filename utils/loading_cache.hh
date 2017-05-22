@@ -38,38 +38,38 @@ namespace utils {
 typedef lowres_clock loading_cache_clock_type;
 typedef bi::list_base_hook<bi::link_mode<bi::auto_unlink>> auto_unlink_list_hook;
 
-template<typename _Tp, typename _Key, typename _Hash, typename _EqualPred>
+template<typename Tp, typename Key, typename Hash, typename EqualPred>
 class timestamped_val : public auto_unlink_list_hook, public bi::unordered_set_base_hook<bi::store_hash<true>> {
 public:
     typedef bi::list<timestamped_val, bi::constant_time_size<false>> lru_list_type;
-    typedef _Key key_type;
-    typedef _Tp value_type;
+    typedef Key key_type;
+    typedef Tp value_type;
 
 private:
-    std::experimental::optional<_Tp> _opt_value;
+    std::experimental::optional<Tp> _opt_value;
     loading_cache_clock_type::time_point _loaded;
     loading_cache_clock_type::time_point _last_read;
     lru_list_type& _lru_list; /// MRU item is at the front, LRU - at the back
-    _Key _key;
+    Key _key;
 
 public:
     struct key_eq {
-       bool operator()(const _Key& k, const timestamped_val& c) const {
-           return _EqualPred()(k, c.key());
+       bool operator()(const Key& k, const timestamped_val& c) const {
+           return EqualPred()(k, c.key());
        }
 
-       bool operator()(const timestamped_val& c, const _Key& k) const {
-           return _EqualPred()(c.key(), k);
+       bool operator()(const timestamped_val& c, const Key& k) const {
+           return EqualPred()(c.key(), k);
        }
     };
 
-    timestamped_val(lru_list_type& lru_list, const _Key& key)
+    timestamped_val(lru_list_type& lru_list, const Key& key)
         : _loaded(loading_cache_clock_type::now())
         , _last_read(_loaded)
         , _lru_list(lru_list)
         , _key(key) {}
 
-    timestamped_val(lru_list_type& lru_list, _Key&& key)
+    timestamped_val(lru_list_type& lru_list, Key&& key)
         : _loaded(loading_cache_clock_type::now())
         , _last_read(_loaded)
         , _lru_list(lru_list)
@@ -90,7 +90,7 @@ public:
         return *this;
     }
 
-    const _Tp& value() {
+    const Tp& value() {
         _last_read = loading_cache_clock_type::now();
         touch();
         return _opt_value.value();
@@ -108,16 +108,16 @@ public:
         return _loaded;
     }
 
-    const _Key& key() const {
+    const Key& key() const {
         return _key;
     }
 
     friend bool operator==(const timestamped_val& a, const timestamped_val& b){
-        return _EqualPred()(a.key(), b.key());
+        return EqualPred()(a.key(), b.key());
     }
 
     friend std::size_t hash_value(const timestamped_val& v) {
-        return _Hash()(v.key());
+        return Hash()(v.key());
     }
 
 private:
@@ -142,18 +142,17 @@ public:
     }
 };
 
-template<typename _Key,
-         typename _Tp,
-         typename _Hash = std::hash<_Key>,
-         typename _Pred = std::equal_to<_Key>,
-         typename _Alloc = std::allocator<timestamped_val<_Tp, _Key, _Hash, _Pred>>,
-         typename SharedMutexMapAlloc = std::allocator<std::pair<const _Key, shared_mutex>>>
+template<typename Key,
+         typename Tp,
+         typename Hash = std::hash<Key>,
+         typename EqualPred = std::equal_to<Key>,
+         typename Alloc = std::allocator<timestamped_val<Tp, Key, Hash, EqualPred>>,
+         typename SharedMutexMapAlloc = std::allocator<std::pair<const Key, shared_mutex>>>
 class loading_cache {
 private:
-    typedef timestamped_val<_Tp, _Key, _Hash, _Pred> ts_value_type;
+    typedef timestamped_val<Tp, Key, Hash, EqualPred> ts_value_type;
     typedef bi::unordered_set<ts_value_type, bi::power_2_buckets<true>, bi::compare_hash<true>> set_type;
-    typedef std::unordered_map<_Key, shared_mutex, _Hash, _Pred, SharedMutexMapAlloc> write_mutex_map_type;
-    typedef loading_cache<_Key, _Tp, _Hash, _Pred, _Alloc> _MyType;
+    typedef std::unordered_map<Key, shared_mutex, Hash, EqualPred, SharedMutexMapAlloc> write_mutex_map_type;
     typedef typename ts_value_type::lru_list_type lru_list_type;
     typedef typename set_type::bucket_traits bi_set_bucket_traits;
 
@@ -161,8 +160,8 @@ private:
     static constexpr int max_num_buckets = 1024 * 1024;
 
 public:
-    typedef _Tp value_type;
-    typedef _Key key_type;
+    typedef Tp value_type;
+    typedef Key key_type;
     typedef typename set_type::iterator iterator;
 
     template<typename Func>
@@ -193,7 +192,7 @@ public:
         _set.clear_and_dispose([] (ts_value_type* ptr) { loading_cache::destroy_ts_value(ptr); });
     }
 
-    future<_Tp> get(const _Key& k) {
+    future<Tp> get(const Key& k) {
         // If caching is disabled - always load in the foreground
         if (!caching_enabled()) {
             return _load(k);
@@ -205,7 +204,7 @@ public:
         // the mutex and try to load the value (the slow path).
         iterator ts_value_it = find_or_create(k);
         if (*ts_value_it) {
-            return make_ready_future<_Tp>(ts_value_it->value());
+            return make_ready_future<Tp>(ts_value_it->value());
         } else {
             return slow_load(k);
         }
@@ -223,9 +222,9 @@ private:
     /// \return An iterator to the value with the given key (always dirrerent from _set.end())
     template <typename KeyType>
     iterator find_or_create(KeyType&& k) {
-        iterator i = _set.find(k, _Hash(), typename ts_value_type::key_eq());
+        iterator i = _set.find(k, Hash(), typename ts_value_type::key_eq());
         if (i == _set.end()) {
-            ts_value_type* new_ts_val = _Alloc().allocate(1);
+            ts_value_type* new_ts_val = Alloc().allocate(1);
             new(new_ts_val) ts_value_type(_lru_list, std::forward<KeyType>(k));
             auto p = _set.insert(*new_ts_val);
             i = p.first;
@@ -236,10 +235,10 @@ private:
 
     static void destroy_ts_value(ts_value_type* val) {
         val->~ts_value_type();
-        _Alloc().deallocate(val, 1);
+        Alloc().deallocate(val, 1);
     }
 
-    future<_Tp> slow_load(const _Key& k) {
+    future<Tp> slow_load(const Key& k) {
         // If the key is not in the cache yet, then _write_mutex_map[k] is going
         // to create a new value with the initialized mutex. The mutex is going
         // to serialize the producers and only the first one is going to
@@ -250,14 +249,14 @@ private:
         return with_semaphore(sm.get(), 1, [this, k] {
             iterator ts_value_it = find_or_create(k);
             if (*ts_value_it) {
-                return make_ready_future<_Tp>(ts_value_it->value());
+                return make_ready_future<Tp>(ts_value_it->value());
             }
             _logger.trace("{}: storing the value for the first time", k);
-            return _load(k).then([this, k] (_Tp t) {
+            return _load(k).then([this, k] (Tp t) {
                 // we have to "re-read" the _set here because the value may have been evicted by now
                 iterator ts_value_it = find_or_create(std::move(k));
                 *ts_value_it = std::move(t);
-                return make_ready_future<_Tp>(ts_value_it->value());
+                return make_ready_future<Tp>(ts_value_it->value());
             });
         }).finally([sm] {});
     }
@@ -380,7 +379,7 @@ private:
     std::chrono::milliseconds _expiry;
     std::chrono::milliseconds _refresh;
     logging::logger& _logger;
-    std::function<future<_Tp>(const _Key&)> _load;
+    std::function<future<Tp>(const Key&)> _load;
     timer<lowres_clock> _timer;
 };
 
