@@ -1076,6 +1076,7 @@ private:
     ::cf_stats _cf_stats;
     static constexpr size_t max_concurrent_reads() { return 100; }
     static constexpr size_t max_system_concurrent_reads() { return 10; }
+    static constexpr size_t max_concurrent_sstable_loads() { return 3; }
     struct db_stats {
         uint64_t total_writes = 0;
         uint64_t total_writes_failed = 0;
@@ -1100,6 +1101,8 @@ private:
     restricted_mutation_reader_config _read_concurrency_config;
     semaphore _system_read_concurrency_sem{max_system_concurrent_reads()};
     restricted_mutation_reader_config _system_read_concurrency_config;
+
+    semaphore _sstable_load_concurrency_sem{max_concurrent_sstable_loads()};
 
     std::unordered_map<sstring, keyspace> _keyspaces;
     std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
@@ -1256,6 +1259,9 @@ public:
     bool is_replacing();
     semaphore& system_keyspace_read_concurrency_sem() {
         return _system_read_concurrency_sem;
+    }
+    semaphore& sstable_load_concurrency_sem() {
+        return _sstable_load_concurrency_sem;
     }
 
     friend class distributed_loader;
