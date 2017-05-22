@@ -111,19 +111,6 @@ bool select_statement::uses_function(const sstring& ks_name, const sstring& func
         || (_limit && _limit->uses_function(ks_name, function_name));
 }
 
-::shared_ptr<select_statement>
-select_statement::for_selection(schema_ptr schema, ::shared_ptr<selection::selection> selection, cql_stats& stats) {
-    return ::make_shared<select_statement>(schema,
-        0,
-        _default_parameters,
-        selection,
-        ::make_shared<restrictions::statement_restrictions>(schema),
-        false,
-        ordering_comparator_type{},
-        ::shared_ptr<term>{},
-        stats);
-}
-
 ::shared_ptr<const cql3::metadata> select_statement::get_result_metadata() const {
     // FIXME: COUNT needs special result metadata handling.
     return _selection->get_result_metadata();

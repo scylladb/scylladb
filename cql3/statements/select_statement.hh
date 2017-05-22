@@ -107,12 +107,6 @@ public:
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
 
-    // Creates a simple select based on the given selection
-    // Note that the results select statement should not be used for actual queries, but only for processing already
-    // queried data through processColumnFamily.
-    static ::shared_ptr<select_statement> for_selection(
-        schema_ptr schema, ::shared_ptr<selection::selection> selection, cql_stats& stats);
-
     virtual ::shared_ptr<const cql3::metadata> get_result_metadata() const override;
     virtual uint32_t get_bound_terms() override;
     virtual future<> check_access(const service::client_state& state) override;
