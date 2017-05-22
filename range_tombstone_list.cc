@@ -88,7 +88,26 @@ void range_tombstone_list::insert_from(const schema& s,
             return;
         }
 
-        if (tomb > it->tomb) {
+        if (less(end_bound, it->start_bound())) {
+            // not overlapping, not adjacent
+            auto rt = current_allocator().construct<range_tombstone>(std::move(start), start_kind, std::move(end), end_kind, tomb);
+            rev.insert(it, *rt);
+            return;
+        }
+
+        auto c = tomb.compare(it->tomb);
+        if (c == 0) {
+            // same timestamp, overlapping or adjacent, so merge.
+            if (less(it->start_bound(), start_bound)) {
+                start = it->start;
+                start_kind = it->start_kind;
+            }
+            if (less(end_bound, it->end_bound())) {
+                end = it->end;
+                end_kind = it->end_kind;
+            }
+            it = rev.erase(it);
+        } else if (c > 0) {
             // We overwrite the current tombstone.
 
             if (less(it->start_bound(), start_bound)) {
@@ -100,16 +119,6 @@ void range_tombstone_list::insert_from(const schema& s,
                     ++it;
                     rev.update(it, {start_bound, it->end_bound(), it->tomb});
                 }
-            }
-
-            // Here start <= it->start.
-
-            if (less(end_bound, it->start_bound())) {
-                // Here end < it->start, so the new tombstone is before the current one.
-                auto rt = current_allocator().construct<range_tombstone>(
-                        std::move(start), start_kind, std::move(end), end_kind, std::move(tomb));
-                rev.insert(it, *rt);
-                return;
             }
 
             if (less(end_bound, it->end_bound())) {
@@ -124,21 +133,7 @@ void range_tombstone_list::insert_from(const schema& s,
             }
 
             // Here start <= it->start and end >= it->end.
-
-            // If we're on the last tombstone, or if we end before the next start, we set the
-            // new tombstone and are done.
-            auto next = std::next(it);
-            if (next == _tombstones.end() || !less(next->start_bound(), end_bound)) {
-                rev.update(it, {std::move(start), start_kind, std::move(end), end_kind, std::move(tomb)});
-                return;
-            }
-
-            // We overlap with the next tombstone.
-
-            rev.update(it, {std::move(start), start_kind, next->start, invert_kind(next->start_kind), tomb});
-            start = next->start;
-            start_kind = next->start_kind;
-            ++it;
+            it = rev.erase(it);
         } else {
             // We don't overwrite the current tombstone.
 
