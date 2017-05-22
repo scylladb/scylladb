@@ -114,21 +114,19 @@ void range_tombstone_list::insert_from(const schema& s,
                 auto new_end = bound_view(start, invert_kind(start_kind));
                 if (!less(new_end, it->start_bound())) {
                     // Here it->start < start
-                    auto rt = current_allocator().construct<range_tombstone>(it->start_bound(), new_end, it->tomb);
-                    it = rev.insert(it, *rt);
-                    ++it;
+                    auto rt = alloc_strategy_unique_ptr<range_tombstone>(
+                        current_allocator().construct<range_tombstone>(it->start_bound(), new_end, it->tomb));
                     rev.update(it, {start_bound, it->end_bound(), it->tomb});
+                    rev.insert(it, *rt.release());
                 }
             }
 
             if (less(end_bound, it->end_bound())) {
                 // Here start <= it->start and end < it->end.
-                auto rt = current_allocator().construct<range_tombstone>(
-                        std::move(start), start_kind, end, end_kind, std::move(tomb));
-                it = rev.insert(it, *rt);
-                ++it;
-                auto new_start_kind = invert_kind(end_kind);
-                rev.update(it, {std::move(end), new_start_kind, it->end, it->end_kind, it->tomb});
+                auto rt = alloc_strategy_unique_ptr<range_tombstone>(
+                    current_allocator().construct<range_tombstone>(std::move(start), start_kind, end, end_kind, std::move(tomb)));
+                rev.update(it, {std::move(end), invert_kind(end_kind), it->end, it->end_kind, it->tomb});
+                rev.insert(it, *rt.release());
                 return;
             }
 
