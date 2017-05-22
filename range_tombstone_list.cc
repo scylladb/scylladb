@@ -19,8 +19,10 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <boost/range/adaptor/reversed.hpp>
 #include "range_tombstone_list.hh"
 #include "utils/allocation_strategy.hh"
+#include "utils/to_boost_visitor.hh"
 
 range_tombstone_list::range_tombstone_list(const range_tombstone_list& x)
         : _tombstones(x._tombstones.value_comp()) {
@@ -303,14 +305,23 @@ range_tombstone_list::erase(const_iterator a, const_iterator b) {
 
 range_tombstone_list::range_tombstones_type::iterator
 range_tombstone_list::reverter::insert(range_tombstones_type::iterator it, range_tombstone& new_rt) {
-    _insert_undo_ops.emplace_back(new_rt);
+    _ops.emplace_back(insert_undo_op(new_rt));
     return _dst._tombstones.insert_before(it, new_rt);
 }
 
 void range_tombstone_list::reverter::update(range_tombstones_type::iterator it, range_tombstone&& new_rt) {
-    _update_undo_ops.reserve(_update_undo_ops.size() + 1);
+    _ops.reserve(_ops.size() + 1);
     swap(*it, new_rt);
-    _update_undo_ops.emplace_back(std::move(new_rt), *it);
+    _ops.emplace_back(update_undo_op(std::move(new_rt), *it));
+}
+
+void range_tombstone_list::reverter::revert() noexcept {
+    for (auto&& rt : _ops | boost::adaptors::reversed) {
+        boost::apply_visitor(to_boost_visitor([this] (auto& op) {
+            op.undo(_s, _dst);
+        }), rt);
+    }
+    cancel();
 }
 
 range_tombstone_list::range_tombstones_type::iterator

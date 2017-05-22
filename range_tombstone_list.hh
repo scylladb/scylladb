@@ -43,8 +43,8 @@ class range_tombstone_list final {
     };
     class reverter {
     private:
-        std::vector<insert_undo_op> _insert_undo_ops;
-        std::vector<update_undo_op> _update_undo_ops;
+        using op = boost::variant<insert_undo_op, update_undo_op>;
+        std::vector<op> _ops;
         const schema& _s;
     protected:
         range_tombstone_list& _dst;
@@ -61,20 +61,9 @@ class range_tombstone_list final {
         reverter& operator=(reverter&) = delete;
         virtual range_tombstones_type::iterator insert(range_tombstones_type::iterator it, range_tombstone& new_rt);
         virtual void update(range_tombstones_type::iterator it, range_tombstone&& new_rt);
-        void revert() noexcept {
-            for (auto&& op : _insert_undo_ops) {
-                op.undo(_s, _dst);
-            }
-            auto rit = _update_undo_ops.rbegin();
-            while (rit != _update_undo_ops.rend()) {
-                rit->undo(_s, _dst);
-                ++rit;
-            }
-            cancel();
-        }
+        void revert() noexcept;
         void cancel() noexcept {
-            _insert_undo_ops.clear();
-            _update_undo_ops.clear();
+            _ops.clear();
         }
     };
     class nop_reverter : public reverter {
