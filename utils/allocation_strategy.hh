@@ -203,6 +203,19 @@ auto current_deleter() {
     };
 }
 
+template<typename T>
+struct alloc_strategy_deleter {
+    void operator()(T* ptr) const noexcept {
+        current_allocator().destroy(ptr);
+    }
+};
+
+// std::unique_ptr which can be used for owning an object allocated using allocation_strategy.
+// Must be destroyed before the pointer is invalidated. For compacting allocators, that
+// means it must not escape outside allocating_section or reclaim lock.
+// Must be destroyed in the same allocating context in which T was allocated.
+template<typename T>
+using alloc_strategy_unique_ptr = std::unique_ptr<T, alloc_strategy_deleter<T>>;
 
 //
 // Passing allocators to objects.
