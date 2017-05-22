@@ -1479,6 +1479,18 @@ SEASTAR_TEST_CASE(test_collection_cell_diff) {
     });
 }
 
+SEASTAR_TEST_CASE(test_apply_is_commutative) {
+    return seastar::async([] {
+        for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq) {
+            auto s = m1.schema();
+            if (s != m2.schema()) {
+                return; // mutations with different schemas not commutative
+            }
+            assert_that(m1 + m2).is_equal_to(m2 + m1);
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
     return seastar::async([] {
         auto partitions_match = [] (const mutation_partition& mp1, const mutation_partition& mp2, const schema& s) {
