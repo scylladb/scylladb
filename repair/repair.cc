@@ -517,6 +517,24 @@ static void split_and_add(std::vector<::nonwrapping_range<dht::token>>& ranges,
 constexpr int parallelism = 100;
 static thread_local semaphore parallelism_semaphore(parallelism);
 
+static future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,
+        const sstring& cf, const ::nonwrapping_range<dht::token>& range) {
+    return db.map_reduce0(
+        [keyspace, cf, range] (auto& db) {
+            // FIXME: column_family should have a method to estimate the number of
+            // partitions (and of course it should use cardinality estimation bitmaps,
+            // not trivial sum). We shouldn't have this ugly code here...
+            // FIXME: If sstables are shared, they will be accounted more than
+            // once. However, shared sstables should exist for a short-time only.
+            auto sstables = db.find_column_family(keyspace, cf).get_sstables();
+            return boost::accumulate(*sstables, uint64_t(0),
+                [&range] (uint64_t x, auto&& sst) { return x + sst->estimated_keys_for_range(range); });
+        },
+        uint64_t(0),
+        std::plus<uint64_t>()
+    );
+}
+
 // Repair a single cf in a single local range.
 // Comparable to RepairJob in Origin.
 static future<> repair_cf_range(repair_info& ri,
@@ -527,19 +545,11 @@ static future<> repair_cf_range(repair_info& ri,
         return make_ready_future<>();
     }
 
-    std::vector<::nonwrapping_range<dht::token>> ranges;
-    ranges.push_back(range);
-
+    return estimate_partitions(ri.db, ri.keyspace, cf, range).then([&ri, cf, range, &neighbors] (uint64_t estimated_partitions) {
     // Additionally, we want to break up large ranges so they will have
     // (approximately) a desired number of rows each.
-    // FIXME: column_family should have a method to estimate the number of
-    // partitions (and of course it should use cardinality estimation bitmaps,
-    // not trivial sum). We shouldn't have this ugly code here...
-    auto sstables = ri.db.local().find_column_family(ri.keyspace, cf).get_sstables();
-    uint64_t estimated_partitions = 0;
-    for (auto sst : *sstables) {
-        estimated_partitions += sst->estimated_keys_for_range(range);
-    }
+    std::vector<::nonwrapping_range<dht::token>> ranges;
+    ranges.push_back(range);
 
     // FIXME: we should have an on-the-fly iterator generator here, not
     // fill a vector in advance.
@@ -668,6 +678,7 @@ static future<> repair_cf_range(repair_info& ri,
                 return make_ready_future<>();
             });
         });
+    });
     });
 }
 
