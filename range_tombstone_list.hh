@@ -33,6 +33,13 @@ class range_tombstone_list final {
                 : _new_rt(new_rt) { }
         void undo(const schema& s, range_tombstone_list& rt_list) noexcept;
     };
+    class erase_undo_op {
+        alloc_strategy_unique_ptr<range_tombstone> _rt;
+    public:
+        erase_undo_op(range_tombstone& rt)
+                : _rt(&rt) { }
+        void undo(const schema& s, range_tombstone_list& rt_list) noexcept;
+    };
     class update_undo_op {
         range_tombstone _old_rt;
         const range_tombstone& _new_rt;
@@ -43,7 +50,7 @@ class range_tombstone_list final {
     };
     class reverter {
     private:
-        using op = boost::variant<insert_undo_op, update_undo_op>;
+        using op = boost::variant<erase_undo_op, insert_undo_op, update_undo_op>;
         std::vector<op> _ops;
         const schema& _s;
     protected:
@@ -60,6 +67,7 @@ class range_tombstone_list final {
         reverter(const reverter&) = delete;
         reverter& operator=(reverter&) = delete;
         virtual range_tombstones_type::iterator insert(range_tombstones_type::iterator it, range_tombstone& new_rt);
+        virtual range_tombstones_type::iterator erase(range_tombstones_type::iterator it);
         virtual void update(range_tombstones_type::iterator it, range_tombstone&& new_rt);
         void revert() noexcept;
         void cancel() noexcept {
@@ -71,6 +79,7 @@ class range_tombstone_list final {
         nop_reverter(const schema& s, range_tombstone_list& rt_list)
                 : reverter(s, rt_list) { }
         virtual range_tombstones_type::iterator insert(range_tombstones_type::iterator it, range_tombstone& new_rt) override;
+        virtual range_tombstones_type::iterator erase(range_tombstones_type::iterator it) override;
         virtual void update(range_tombstones_type::iterator it, range_tombstone&& new_rt) override;
     };
 private:

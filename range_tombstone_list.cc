@@ -309,6 +309,12 @@ range_tombstone_list::reverter::insert(range_tombstones_type::iterator it, range
     return _dst._tombstones.insert_before(it, new_rt);
 }
 
+range_tombstone_list::range_tombstones_type::iterator
+range_tombstone_list::reverter::erase(range_tombstones_type::iterator it) {
+    _ops.emplace_back(erase_undo_op(*it));
+    return _dst._tombstones.erase(it);
+}
+
 void range_tombstone_list::reverter::update(range_tombstones_type::iterator it, range_tombstone&& new_rt) {
     _ops.reserve(_ops.size() + 1);
     swap(*it, new_rt);
@@ -329,6 +335,11 @@ range_tombstone_list::nop_reverter::insert(range_tombstones_type::iterator it, r
     return _dst._tombstones.insert_before(it, new_rt);
 }
 
+range_tombstone_list::range_tombstones_type::iterator
+range_tombstone_list::nop_reverter::erase(range_tombstones_type::iterator it) {
+    return _dst._tombstones.erase_and_dispose(it, alloc_strategy_deleter<range_tombstone>());
+}
+
 void range_tombstone_list::nop_reverter::update(range_tombstones_type::iterator it, range_tombstone&& new_rt) {
     *it = std::move(new_rt);
 }
@@ -337,6 +348,10 @@ void range_tombstone_list::insert_undo_op::undo(const schema& s, range_tombstone
     auto it = rt_list.find(s, _new_rt);
     assert (it != rt_list.end());
     rt_list._tombstones.erase_and_dispose(it, current_deleter<range_tombstone>());
+}
+
+void range_tombstone_list::erase_undo_op::undo(const schema& s, range_tombstone_list& rt_list) noexcept {
+    rt_list._tombstones.insert(*_rt.release());
 }
 
 void range_tombstone_list::update_undo_op::undo(const schema& s, range_tombstone_list& rt_list) noexcept {
