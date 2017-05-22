@@ -1512,16 +1512,19 @@ future<> distributed_loader::open_sstable(distributed<database>& db, sstables::e
 
     return db.invoke_on(column_family::calculate_shard_from_sstable_generation(comps.generation),
             [&db, comps = std::move(comps), func = std::move(func)] (database& local) {
-        auto& cf = local.find_column_family(comps.ks, comps.cf);
 
-        auto f = sstables::sstable::load_shared_components(cf.schema(), cf._config.datadir, comps.generation, comps.version, comps.format);
-        return f.then([&db, comps = std::move(comps), func = std::move(func)] (sstables::sstable_open_info info) {
-            // shared components loaded, now opening sstable in all shards with shared components
-            return do_with(std::move(info), [&db, comps = std::move(comps), func = std::move(func)] (auto& info) {
-                return invoke_all_with_ptr(db, std::move(info.components),
-                        [owners = info.owners, data = info.data.dup(), index = info.index.dup(), comps, func] (database& db, auto components) {
-                    auto& cf = db.find_column_family(comps.ks, comps.cf);
-                    return func(cf, sstables::foreign_sstable_open_info{std::move(components), owners, data, index});
+        return with_semaphore(local.sstable_load_concurrency_sem(), 1, [&db, &local, comps = std::move(comps), func = std::move(func)] {
+            auto& cf = local.find_column_family(comps.ks, comps.cf);
+
+            auto f = sstables::sstable::load_shared_components(cf.schema(), cf._config.datadir, comps.generation, comps.version, comps.format);
+            return f.then([&db, comps = std::move(comps), func = std::move(func)] (sstables::sstable_open_info info) {
+                // shared components loaded, now opening sstable in all shards with shared components
+                return do_with(std::move(info), [&db, comps = std::move(comps), func = std::move(func)] (auto& info) {
+                    return invoke_all_with_ptr(db, std::move(info.components),
+                            [owners = info.owners, data = info.data.dup(), index = info.index.dup(), comps, func] (database& db, auto components) {
+                        auto& cf = db.find_column_family(comps.ks, comps.cf);
+                        return func(cf, sstables::foreign_sstable_open_info{std::move(components), owners, data, index});
+                    });
                 });
             });
         });
