@@ -23,6 +23,7 @@
 
 #include <chrono>
 #include <unordered_map>
+#include <boost/intrusive/list.hpp>
 #include <boost/intrusive/unordered_set.hpp>
 
 #include <seastar/core/timer.hh>
@@ -35,10 +36,12 @@ namespace utils {
 // Simple variant of the "LoadingCache" used for permissions in origin.
 
 typedef lowres_clock loading_cache_clock_type;
+typedef bi::list_base_hook<bi::link_mode<bi::auto_unlink>> auto_unlink_list_hook;
 
 template<typename _Tp, typename _Key, typename _Hash, typename _EqualPred>
-class timestamped_val : public bi::unordered_set_base_hook<bi::store_hash<true>> {
+class timestamped_val : public auto_unlink_list_hook, public bi::unordered_set_base_hook<bi::store_hash<true>> {
 public:
+    typedef bi::list<timestamped_val, bi::constant_time_size<false>> lru_list_type;
     typedef _Key key_type;
     typedef _Tp value_type;
 
@@ -46,6 +49,7 @@ private:
     std::experimental::optional<_Tp> _opt_value;
     loading_cache_clock_type::time_point _loaded;
     loading_cache_clock_type::time_point _last_read;
+    lru_list_type& _lru_list; /// MRU item is at the front, LRU - at the back
     _Key _key;
 
 public:
@@ -59,14 +63,16 @@ public:
        }
     };
 
-    timestamped_val(const _Key& key)
+    timestamped_val(lru_list_type& lru_list, const _Key& key)
         : _loaded(loading_cache_clock_type::now())
         , _last_read(_loaded)
+        , _lru_list(lru_list)
         , _key(key) {}
 
-    timestamped_val(_Key&& key)
+    timestamped_val(lru_list_type& lru_list, _Key&& key)
         : _loaded(loading_cache_clock_type::now())
         , _last_read(_loaded)
+        , _lru_list(lru_list)
         , _key(std::move(key)) {}
 
     timestamped_val(const timestamped_val&) = default;
@@ -86,6 +92,7 @@ public:
 
     const _Tp& value() {
         _last_read = loading_cache_clock_type::now();
+        touch();
         return _opt_value.value();
     }
 
@@ -112,6 +119,16 @@ public:
     friend std::size_t hash_value(const timestamped_val& v) {
         return _Hash()(v.key());
     }
+
+private:
+    /// Set the given item as the most recently used item.
+    /// The MRU item is going to be at the front of the _lru_list, the LRU item - at the back.
+    ///
+    /// \param item item to set as MRU item
+    void touch() noexcept {
+        auto_unlink_list_hook::unlink();
+        _lru_list.push_front(*this);
+    }
 };
 
 class shared_mutex {
@@ -137,6 +154,7 @@ private:
     typedef bi::unordered_set<ts_value_type, bi::power_2_buckets<true>, bi::compare_hash<true>> set_type;
     typedef std::unordered_map<_Key, shared_mutex, _Hash, _Pred, SharedMutexMapAlloc> write_mutex_map_type;
     typedef loading_cache<_Key, _Tp, _Hash, _Pred, _Alloc> _MyType;
+    typedef typename ts_value_type::lru_list_type lru_list_type;
     typedef typename set_type::bucket_traits bi_set_bucket_traits;
 
     static constexpr int initial_num_buckets = 256;
@@ -208,7 +226,7 @@ private:
         iterator i = _set.find(k, _Hash(), typename ts_value_type::key_eq());
         if (i == _set.end()) {
             ts_value_type* new_ts_val = _Alloc().allocate(1);
-            new(new_ts_val) ts_value_type(std::forward<KeyType>(k));
+            new(new_ts_val) ts_value_type(_lru_list, std::forward<KeyType>(k));
             auto p = _set.insert(*new_ts_val);
             i = p.first;
         }
@@ -264,49 +282,36 @@ private:
 
     void erase(iterator it) {
         _set.erase_and_dispose(it, [] (ts_value_type* ptr) { loading_cache::destroy_ts_value(ptr); });
+        // no need to delete the item from _lru_list - it's auto-deleted
     }
 
-    // We really miss the std::erase_if()... :(
     void drop_expired() {
         auto now = loading_cache_clock_type::now();
-        auto i = _set.begin();
-        auto e = _set.end();
-
-        while (i != e) {
+        _lru_list.remove_and_dispose_if([now, this] (const ts_value_type& v) {
+            using namespace std::chrono;
             // An entry should be discarded if it hasn't been reloaded for too long or nobody cares about it anymore
-            auto since_last_read = now - i->last_read();
-            auto since_loaded = now - i->loaded();
+            auto since_last_read = now - v.last_read();
+            auto since_loaded = now - v.loaded();
             if (_expiry < since_last_read || _expiry < since_loaded) {
-                using namespace std::chrono;
-                _logger.trace("drop_expired(): {}: dropping the entry: _expiry {},  ms passed since: loaded {} last_read {}", i->key(), _expiry.count(), duration_cast<milliseconds>(since_loaded).count(), duration_cast<milliseconds>(since_last_read).count());
-                erase(i++);
-                continue;
+                _logger.trace("drop_expired(): {}: dropping the entry: _expiry {},  ms passed since: loaded {} last_read {}", v.key(), _expiry.count(), duration_cast<milliseconds>(since_loaded).count(), duration_cast<milliseconds>(since_last_read).count());
+                return true;
             }
-            ++i;
-        }
+            return false;
+        }, [this] (ts_value_type* p) {
+            erase(_set.iterator_to(*p));
+        });
     }
 
     // Shrink the cache to the _max_size discarding the least recently used items
     void shrink() {
-        if (_max_size != 0 && _set.size() > _max_size) {
-            std::vector<iterator> tmp;
-            tmp.reserve(_set.size());
-
-            iterator i = _set.begin();
-            while (i != _set.end()) {
-                tmp.emplace_back(i++);
-            }
-
-            std::sort(tmp.begin(), tmp.end(), [] (iterator i1, iterator i2) {
-               return i1->last_read() < i2->last_read();
-            });
-
-            tmp.resize(_set.size() - _max_size);
-            std::for_each(tmp.begin(), tmp.end(), [this] (auto& k) {
+        if (_set.size() > _max_size) {
+            auto num_items_to_erase = _set.size() - _max_size;
+            for (size_t i = 0; i < num_items_to_erase; ++i) {
                 using namespace std::chrono;
-                _logger.trace("shrink(): {}: dropping the entry: ms since last_read {}", k->key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - k->last_read()).count());
-                this->erase(k);
-            });
+                ts_value_type& ts_val = *_lru_list.rbegin();
+                _logger.trace("shrink(): {}: dropping the entry: ms since last_read {}", ts_val.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - ts_val.last_read()).count());
+                erase(_set.iterator_to(ts_val));
+            }
         }
     }
 
@@ -370,6 +375,7 @@ private:
     size_t _current_buckets_count = initial_num_buckets;
     set_type _set;
     write_mutex_map_type _write_mutex_map;
+    lru_list_type _lru_list;
     size_t _max_size;
     std::chrono::milliseconds _expiry;
     std::chrono::milliseconds _refresh;
