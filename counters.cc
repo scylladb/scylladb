@@ -178,10 +178,11 @@ stdx::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, at
     assert(!a.is_counter_update());
     assert(!b.is_counter_update());
 
-    if (!b.is_live()) {
+    if (!b.is_live() || !a.is_live()) {
+        if (b.is_live() || (!a.is_live() && compare_atomic_cell_for_merge(b, a) < 0)) {
+            return atomic_cell(a);
+        }
         return { };
-    } else if (!a.is_live()) {
-        return atomic_cell(a);
     }
 
     auto a_shards = counter_cell_view(a).shards();
