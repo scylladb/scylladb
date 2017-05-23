@@ -56,7 +56,7 @@ private:
     bool _in_ck_range = false;
 
     rows_entry::compare _cmp;
-    clustering_key_prefix::equality _eq;
+    position_in_partition::equal_compare _eq;
     heap_compare _heap_cmp;
 
     lw_shared_ptr<partition_snapshot> _snapshot;
@@ -148,7 +148,7 @@ private:
             }
 
             clustering_row result = pop_clustering_row();
-            while (has_more_rows() && _eq(peek_row().key(), result.key())) {
+            while (has_more_rows() && _eq(peek_row().position(), result.position())) {
                 result.apply(*_schema, pop_clustering_row());
             }
             _last_entry = position_in_partition(result.position());
