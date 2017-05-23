@@ -26,6 +26,7 @@
 #include <initializer_list>
 
 #include "utils/serialization.hh"
+#include "types.hh"
 
 #define BOOST_TEST_MODULE test-serialization
 #include <boost/test/unit_test.hpp>
@@ -51,31 +52,43 @@ int8_t back_and_forth_8(int8_t a) {
     std::stringstream buf;
     auto it = std::ostream_iterator<char>(buf);
     serialize_int8(it, a);
-    return deserialize_int8(buf);
+    auto str = buf.str();
+    auto bview = bytes_view(reinterpret_cast<const int8_t*>(str.data()), 1);
+    return read_simple<uint8_t>(bview);
 }
 int16_t back_and_forth_16(int16_t a) {
     std::stringstream buf;
     auto it = std::ostream_iterator<char>(buf);
     serialize_int16(it, a);
-    return deserialize_int16(buf);
+    auto str = buf.str();
+    auto bview = bytes_view(reinterpret_cast<const int8_t*>(str.data()), 2);
+    return read_simple<uint16_t>(bview);
 }
 int32_t back_and_forth_32(int32_t a) {
     std::stringstream buf;
     auto it = std::ostream_iterator<char>(buf);
     serialize_int32(it, a);
-    return deserialize_int32(buf);
+    auto str = buf.str();
+    auto bview = bytes_view(reinterpret_cast<const int8_t*>(str.data()), 4);
+    return read_simple<uint32_t>(bview);
 }
 int64_t back_and_forth_64(int64_t a) {
     std::stringstream buf;
     auto it = std::ostream_iterator<char>(buf);
     serialize_int64(it, a);
-    return deserialize_int64(buf);
+    auto str = buf.str();
+    auto bview = bytes_view(reinterpret_cast<const int8_t*>(str.data()), 8);
+    return read_simple<uint64_t>(bview);
 }
 sstring back_and_forth_sstring(sstring a) {
     std::stringstream buf;
     auto it = std::ostream_iterator<char>(buf);
     serialize_string(it, a);
-    return deserialize_string(buf);
+    auto str = buf.str();
+    auto bview = bytes_view(reinterpret_cast<const int8_t*>(str.data()), str.size());
+    auto res = read_simple_short_string(bview);
+    sstring str_res = sstring(reinterpret_cast<const char*>(res.data()), res.size());
+    return str_res;
 }
 BOOST_AUTO_TEST_CASE(round_trip) {
     BOOST_CHECK_EQUAL(back_and_forth_8('a'), 'a');

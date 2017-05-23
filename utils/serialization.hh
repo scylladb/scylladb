@@ -101,66 +101,6 @@ void serialize_bool(CharOutputIterator& out, bool val) {
     serialize_int8(out, val ? 1 : 0);
 }
 
-inline
-int8_t deserialize_int8(std::istream& in) {
-    char ret;
-    if (in.get(ret)) {
-        return ret;
-    } else {
-        throw EOFException();
-    }
-}
-
-inline
-bool deserialize_bool(std::istream& in) {
-    return deserialize_int8(in);
-}
-
-inline
-int16_t deserialize_int16(std::istream& in) {
-    char a1, a2;
-    in.get(a1);
-    in.get(a2);
-    if (!in) {
-        throw EOFException();
-    }
-    return  ((int16_t)(uint8_t)a1 << 8) | ((int16_t)(uint8_t)a2 << 0);
-}
-
-inline
-int32_t deserialize_int32(std::istream& in) {
-    char a1, a2, a3, a4;
-    in.get(a1);
-    in.get(a2);
-    in.get(a3);
-    in.get(a4);
-    return  ((int32_t)(uint8_t)a1 << 24) |
-            ((int32_t)(uint8_t)a2 << 16) |
-            ((int32_t)(uint8_t)a3 << 8) |
-            ((int32_t)(uint8_t)a4 << 0);
-}
-
-inline
-int64_t deserialize_int64(std::istream& in) {
-    char a1, a2, a3, a4, a5, a6, a7, a8;
-    in.get(a1);
-    in.get(a2);
-    in.get(a3);
-    in.get(a4);
-    in.get(a5);
-    in.get(a6);
-    in.get(a7);
-    in.get(a8);
-    return  ((int64_t)(uint8_t)a1 << 56) |
-            ((int64_t)(uint8_t)a2 << 48) |
-            ((int64_t)(uint8_t)a3 << 40) |
-            ((int64_t)(uint8_t)a4 << 32) |
-            ((int64_t)(uint8_t)a5 << 24) |
-            ((int64_t)(uint8_t)a6 << 16) |
-            ((int64_t)(uint8_t)a7 <<  8) |
-            ((int64_t)(uint8_t)a8 <<  0);
-}
-
 // The following serializer is compatible with Java's writeUTF().
 // In our C++ implementation, we assume the string is already UTF-8
 // encoded. Unfortunately, Java's implementation is a bit different from
@@ -212,19 +152,6 @@ inline
 size_t serialize_string_size(const sstring& s) {;
     // As above, this code is missing the case of modified utf-8
     return serialize_int16_size + s.size();
-}
-
-inline
-sstring deserialize_string(std::istream& in) {
-    int len = deserialize_int16(in);
-    sstring ret(sstring::initialized_later(), len);
-    for (int i = 0; i < len; i++) {
-        in.get(ret[i]);
-    }
-    if (!in) {
-        throw EOFException();
-    }
-    return ret;
 }
 
 template<typename T>
