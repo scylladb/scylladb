@@ -121,10 +121,8 @@ public:
     }
 
 private:
-    /// Set the given item as the most recently used item.
+    /// Set this item as the most recently used item.
     /// The MRU item is going to be at the front of the _lru_list, the LRU item - at the back.
-    ///
-    /// \param item item to set as MRU item
     void touch() noexcept {
         auto_unlink_list_hook::unlink();
         _lru_list.push_front(*this);
