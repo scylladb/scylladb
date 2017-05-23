@@ -37,7 +37,7 @@ namespace utils {
 typedef lowres_clock loading_cache_clock_type;
 
 template<typename _Tp, typename _Key, typename _Hash, typename _EqualPred>
-class timestamped_val : public bi::unordered_set_base_hook<> {
+class timestamped_val : public bi::unordered_set_base_hook<bi::store_hash<true>> {
 public:
     typedef _Key key_type;
     typedef _Tp value_type;
@@ -134,12 +134,13 @@ template<typename _Key,
 class loading_cache {
 private:
     typedef timestamped_val<_Tp, _Key, _Hash, _Pred> ts_value_type;
-    typedef bi::unordered_set<ts_value_type> set_type;
+    typedef bi::unordered_set<ts_value_type, bi::power_2_buckets<true>, bi::compare_hash<true>> set_type;
     typedef std::unordered_map<_Key, shared_mutex, _Hash, _Pred, SharedMutexMapAlloc> write_mutex_map_type;
     typedef loading_cache<_Key, _Tp, _Hash, _Pred, _Alloc> _MyType;
     typedef typename set_type::bucket_traits bi_set_bucket_traits;
 
-    static constexpr int num_buckets = 1021; // A prime number close to 1024
+    static constexpr int initial_num_buckets = 256;
+    static constexpr int max_num_buckets = 1024 * 1024;
 
 public:
     typedef _Tp value_type;
@@ -148,7 +149,7 @@ public:
 
     template<typename Func>
     loading_cache(size_t max_size, std::chrono::milliseconds expiry, std::chrono::milliseconds refresh, logging::logger& logger, Func&& load)
-                : _buckets(num_buckets)
+                : _buckets(initial_num_buckets)
                 , _set(bi_set_bucket_traits(_buckets.data(), _buckets.size()))
                 , _max_size(max_size)
                 , _expiry(expiry)
@@ -309,6 +310,31 @@ private:
         }
     }
 
+    void rehash() {
+        size_t new_buckets_count = 0;
+
+        // Don't grow or shrink too fast even if there is a steep drop/growth in the number of elements in the set.
+        // Exponential growth/backoff should be good enough.
+        //
+        // Try to keep the load factor between 0.25 and 1.0.
+        if (_set.size() < _current_buckets_count / 4) {
+            new_buckets_count = _current_buckets_count / 4;
+        } else if (_set.size() > _current_buckets_count) {
+            new_buckets_count = _current_buckets_count * 2;
+        }
+
+        if (new_buckets_count < initial_num_buckets || new_buckets_count > max_num_buckets) {
+            return;
+        }
+
+        std::vector<typename set_type::bucket_type> new_buckets(new_buckets_count);
+        _set.rehash(bi_set_bucket_traits(new_buckets.data(), new_buckets.size()));
+        _logger.trace("rehash(): buckets count changed: {} -> {}", _current_buckets_count, new_buckets_count);
+
+        _buckets.swap(new_buckets);
+        _current_buckets_count = new_buckets_count;
+    }
+
     void on_timer() {
         _logger.trace("on_timer(): start");
 
@@ -322,6 +348,9 @@ private:
 
         // Remove the least recently used items if map is too big.
         shrink();
+
+        // check if rehashing is needed and do it if it is.
+        rehash();
 
         // Reload all those which vlaue needs to be reloaded.
         parallel_for_each(_set.begin(), _set.end(), [this, curr_time = timer_start_tp] (auto& ts_val) {
@@ -338,6 +367,7 @@ private:
     }
 
     std::vector<typename set_type::bucket_type> _buckets;
+    size_t _current_buckets_count = initial_num_buckets;
     set_type _set;
     write_mutex_map_type _write_mutex_map;
     size_t _max_size;
