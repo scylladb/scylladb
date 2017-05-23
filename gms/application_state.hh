@@ -58,8 +58,8 @@ enum class application_state {
     HOST_ID,
     TOKENS,
     SUPPORTED_FEATURES,
+    CACHE_HITRATES,
     // pad to allow adding new states to existing cluster
-    X2,
     X3,
     X4,
     X5,

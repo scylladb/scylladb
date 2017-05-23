@@ -41,6 +41,8 @@
 #include "load_broadcaster.hh"
 #include "cache_hitrate_calculator.hh"
 #include "db/system_keyspace.hh"
+#include "gms/application_state.hh"
+#include "service/storage_service.hh"
 
 namespace service {
 
@@ -140,6 +142,7 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
         _diff = 0;
         // set calculated rates on all shards
         return _db.invoke_on_all([this, rates = std::move(rates), cpuid = engine().cpu_id()] (database& db) {
+            sstring gstate;
             for (auto& cf : db.get_column_families() | boost::adaptors::filtered(non_system_filter)) {
                 stat s = rates.at(cf.first);
                 float rate = 0;
@@ -149,9 +152,16 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
                 if (engine().cpu_id() == cpuid) {
                     // calculate max difference between old rate and new one for all cfs
                     _diff = std::max(_diff, std::abs(float(cf.second->get_global_cache_hit_rate()) - rate));
+                    gstate += sprint("%s.%s:%f;", cf.second->schema()->ks_name(), cf.second->schema()->cf_name(), rate);
                 }
                 cf.second->set_global_cache_hit_rate(cache_temperature(rate));
             }
+            if (gstate.size()) {
+                auto& g = gms::get_local_gossiper();
+                auto& ss = get_local_storage_service();
+                return g.add_local_application_state(gms::application_state::CACHE_HITRATES, ss.value_factory.cache_hitrates(std::move(gstate)));
+            }
+            return make_ready_future<>();
         });
     }).then([this] {
         // if max difference during this round is big schedule next recalculate earlier
