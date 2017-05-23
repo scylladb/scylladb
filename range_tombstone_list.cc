@@ -47,13 +47,16 @@ void range_tombstone_list::apply_reversibly(const schema& s,
         bound_view::compare less(s);
         bound_view start_bound(start, start_kind);
         auto last = --_tombstones.end();
+        range_tombstones_type::iterator it;
         if (less(start_bound, last->end_bound())) {
-            auto it = _tombstones.upper_bound(start_bound, [less](auto&& sb, auto&& rt) {
+            it = _tombstones.upper_bound(start_bound, [less](auto&& sb, auto&& rt) {
                 return less(sb, rt.end_bound());
             });
-            insert_from(s, std::move(it), std::move(start), start_kind, std::move(end), end_kind, std::move(tomb), rev);
-            return;
+        } else {
+            it = _tombstones.end();
         }
+        insert_from(s, std::move(it), std::move(start), start_kind, std::move(end), end_kind, std::move(tomb), rev);
+        return;
     }
     auto rt = current_allocator().construct<range_tombstone>(
             std::move(start), start_kind, std::move(end), end_kind, std::move(tomb));
@@ -82,6 +85,14 @@ void range_tombstone_list::insert_from(const schema& s,
 {
     bound_view::compare less(s);
     bound_view end_bound(end, end_kind);
+    if (it != _tombstones.begin()) {
+        auto prev = std::prev(it);
+        if (prev->tomb == tomb && prev->end_bound().adjacent(s, bound_view(start, start_kind))) {
+            start = prev->start;
+            start_kind = prev->start_kind;
+            rev.erase(prev);
+        }
+    }
     while (it != _tombstones.end()) {
         bound_view start_bound(start, start_kind);
         if (less(end_bound, start_bound)) {
@@ -89,9 +100,14 @@ void range_tombstone_list::insert_from(const schema& s,
         }
 
         if (less(end_bound, it->start_bound())) {
-            // not overlapping, not adjacent
-            auto rt = current_allocator().construct<range_tombstone>(std::move(start), start_kind, std::move(end), end_kind, tomb);
-            rev.insert(it, *rt);
+            // not overlapping
+            if (it->tomb == tomb && end_bound.adjacent(s, it->start_bound())) {
+                rev.update(it, {std::move(start), start_kind, it->end, it->end_kind, tomb});
+            } else {
+                auto rt = current_allocator().construct<range_tombstone>(std::move(start), start_kind, std::move(end),
+                    end_kind, tomb);
+                rev.insert(it, *rt);
+            }
             return;
         }
 

@@ -246,22 +246,22 @@ BOOST_AUTO_TEST_CASE(test_search_prefix) {
 BOOST_AUTO_TEST_CASE(test_add_prefixes) {
     range_tombstone_list l(*s);
 
-    l.apply(*s, range_tombstone(key({1}), bound_kind::excl_start, key({1, 2}), bound_kind::incl_end, {8, gc_now}));
-    l.apply(*s, range_tombstone(key({1}), bound_kind::incl_start, key({1}), bound_kind::incl_end, {8, gc_now}));
+    auto tomb = tombstone{8, gc_now};
+
+    l.apply(*s, range_tombstone(key({1}), bound_kind::excl_start, key({2, 2}), bound_kind::incl_end, tomb));
+    l.apply(*s, range_tombstone(key({1}), bound_kind::incl_start, key({1}), bound_kind::incl_end, tomb));
 
     auto it = l.begin();
-    assert_rt(range_tombstone(key({1}), bound_kind::incl_start, key({1}), bound_kind::incl_end, {8, gc_now}), *it++);
-    assert_rt(range_tombstone(key({1}), bound_kind::excl_start, key({1, 2}), bound_kind::incl_end, {8, gc_now}), *it++);
+    assert_rt(range_tombstone(key({1}), bound_kind::incl_start, key({2, 2}), bound_kind::incl_end, tomb), *it++);
     BOOST_REQUIRE(it == l.end());
 
     range_tombstone_list l2(*s);
 
-    l2.apply(*s, range_tombstone(key({1}), bound_kind::incl_start, key({1}), bound_kind::incl_end, {8, gc_now}));
-    l2.apply(*s, range_tombstone(key({1}), bound_kind::excl_start, key({1, 2}), bound_kind::incl_end, {8, gc_now}));
+    l2.apply(*s, range_tombstone(key({1}), bound_kind::incl_start, key({1}), bound_kind::incl_end, tomb));
+    l2.apply(*s, range_tombstone(key({1}), bound_kind::excl_start, key({2, 2}), bound_kind::incl_end, tomb));
 
     it = l2.begin();
-    assert_rt(range_tombstone(key({1}), bound_kind::incl_start, key({1}), bound_kind::incl_end, {8, gc_now}), *it++);
-    assert_rt(range_tombstone(key({1}), bound_kind::excl_start, key({1, 2}), bound_kind::incl_end, {8, gc_now}), *it++);
+    assert_rt(range_tombstone(key({1}), bound_kind::incl_start, key({2, 2}), bound_kind::incl_end, tomb), *it++);
     BOOST_REQUIRE(it == l2.end());
 }
 
@@ -619,13 +619,9 @@ BOOST_AUTO_TEST_CASE(test_difference_with_bigger_tombstone) {
     auto diff = l1.difference(*s, l2);
     auto it = diff.begin();
     assert_rt(rt(1, 2, 3), *it++);
-    assert_rt(rtie(5, 6, 3), *it++);
-    assert_rt(rt(6, 7, 3), *it++);
-    assert_rt(rt(8, 9, 3), *it++);
-    assert_rt(rtee(9, 10, 3), *it++);
-    assert_rt(rt(10, 11, 3), *it++);
-    assert_rt(rt(12, 13, 3), *it++);
-    assert_rt(rtei(13, 14, 3), *it++);
+    assert_rt(rt(5, 7, 3), *it++);
+    assert_rt(rt(8, 11, 3), *it++);
+    assert_rt(rt(12, 14, 3), *it++);
     BOOST_REQUIRE(it == diff.end());
 }
 
