@@ -844,7 +844,7 @@ class seastar_thread_context(object):
         self.new_regs = None
 
     def __enter__(self):
-        gdb.write('Switched to thread %d, (seastar::thread_context*) 0x%x\n' % (self.gdb_thread.num, self.thread_ctx.address))
+        gdb.write('Switched to thread %d, (seastar::thread_context*) 0x%x\n' % (self.gdb_thread.num, int(self.thread_ctx.address)))
         self.gdb_thread.switch()
         if not self.is_switched_in():
             self.new_regs = self.regs_from_jmpbuf(self.thread_ctx['_context']['jmpbuf'])
