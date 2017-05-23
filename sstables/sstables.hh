@@ -343,7 +343,11 @@ public:
         _shared = false;
     }
 
+    // Returns uncompressed size of data component.
     uint64_t data_size() const;
+    // Returns on-disk size of data component.
+    uint64_t ondisk_data_size() const;
+
     uint64_t index_size() const {
         return _index_file_size;
     }

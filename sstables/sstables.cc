@@ -2153,6 +2153,10 @@ uint64_t sstable::data_size() const {
     return _data_file_size;
 }
 
+uint64_t sstable::ondisk_data_size() const {
+    return _data_file_size;
+}
+
 uint64_t sstable::bytes_on_disk() {
     assert(_bytes_on_disk > 0);
     return _bytes_on_disk;
