@@ -125,6 +125,71 @@ BOOST_AUTO_TEST_CASE(test_non_sorted_addition) {
     BOOST_REQUIRE(it == l.end());
 }
 
+BOOST_AUTO_TEST_CASE(test_adjacent_ranges_are_merged) {
+    range_tombstone_list l(*s);
+
+    l.apply(*s, rtie(1, 5, 1));
+    l.apply(*s, rt(5, 7, 1));
+    l.apply(*s, rtei(7, 8, 1));
+
+    l.apply(*s, rt(18, 20, 1));
+    l.apply(*s, rtee(15, 18, 1));
+    l.apply(*s, rt(12, 15, 1));
+
+    auto it = l.begin();
+    BOOST_REQUIRE(it != l.end());
+    assert_rt(rt(1, 8, 1), *it++);
+    BOOST_REQUIRE(it != l.end());
+    assert_rt(rt(12, 20, 1), *it++);
+    BOOST_REQUIRE(it == l.end());
+}
+
+BOOST_AUTO_TEST_CASE(test_adjacent_ranges_with_differing_timestamps_are_not_merged) {
+    range_tombstone_list l(*s);
+
+    auto rt1 = rtie(1, 5, 1);
+    auto rt2 = rt(5, 7, 2);
+    auto rt3 = rtei(7, 8, 1);
+
+    l.apply(*s, rt1);
+    l.apply(*s, rt2);
+    l.apply(*s, rt3);
+
+    auto it = l.begin();
+    BOOST_REQUIRE(it != l.end());
+    assert_rt(rt1, *it++);
+    BOOST_REQUIRE(it != l.end());
+    assert_rt(rt2, *it++);
+    BOOST_REQUIRE(it != l.end());
+    assert_rt(rt3, *it++);
+    BOOST_REQUIRE(it == l.end());
+}
+
+static bool no_overlap(const range_tombstone_list& l) {
+    bound_view::tri_compare cmp(*s);
+    stdx::optional<range_tombstone> prev;
+    for (const range_tombstone& r : l) {
+        if (prev) {
+            if (cmp(prev->end_bound(), r.start_bound()) >= 0) {
+                return false;
+            }
+        }
+        prev = r;
+    }
+    return true;
+}
+
+BOOST_AUTO_TEST_CASE(test_overlap_around_same_key) {
+    range_tombstone_list l(*s);
+
+    auto rt1 = rt(1, 5, 1);
+    auto rt2 = rt(5, 7, 2);
+
+    l.apply(*s, rt1);
+    l.apply(*s, rt2);
+    BOOST_REQUIRE(no_overlap(l));
+}
+
 BOOST_AUTO_TEST_CASE(test_overlapping_addition) {
     range_tombstone_list l(*s);
 
