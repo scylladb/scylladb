@@ -772,7 +772,7 @@ public:
     static uint64_t get_total_bytes(const T& sstables) {
         uint64_t sum = 0;
         for (auto& sstable : sstables) {
-            sum += sstable->data_size();
+            sum += sstable->ondisk_data_size();
         }
         return sum;
     }
