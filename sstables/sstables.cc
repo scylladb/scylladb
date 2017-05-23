@@ -1173,9 +1173,8 @@ future<> sstable::update_info_for_opened_data() {
     return _data_file.stat().then([this] (struct stat st) {
         if (this->has_component(sstable::component_type::CompressionInfo)) {
             _components->compression.update(st.st_size);
-        } else {
-            _data_file_size = st.st_size;
         }
+        _data_file_size = st.st_size;
         _data_file_write_time = db_clock::from_time_t(st.st_mtime);
     }).then([this] {
         return _index_file.size().then([this] (auto size) {
