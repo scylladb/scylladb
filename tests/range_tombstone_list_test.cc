@@ -51,9 +51,10 @@ static clustering_key_prefix key(std::vector<int32_t> components) {
     return clustering_key_prefix::from_clustering_prefix(*s, exploded_clustering_prefix(std::move(exploded)));
 }
 
-template<typename FirstType, typename SecondType>
-static void assert_rt(FirstType&& expected, SecondType&& actual) {
-    BOOST_REQUIRE(expected.equal(*s, actual));
+static void assert_rt(const range_tombstone& expected, const range_tombstone& actual) {
+    if (!expected.equal(*s, actual)) {
+        BOOST_FAIL(sprint("Expected %s but got %s", expected, actual));
+    }
 }
 
 static range_tombstone rt(int32_t start, int32_t end, api::timestamp_type timestamp) {
@@ -123,6 +124,71 @@ BOOST_AUTO_TEST_CASE(test_non_sorted_addition) {
     assert_rt(rt2, *it++);
     assert_rt(rtei(10, 13, 1), *it++);
     BOOST_REQUIRE(it == l.end());
+}
+
+BOOST_AUTO_TEST_CASE(test_adjacent_ranges_are_merged) {
+    range_tombstone_list l(*s);
+
+    l.apply(*s, rtie(1, 5, 1));
+    l.apply(*s, rt(5, 7, 1));
+    l.apply(*s, rtei(7, 8, 1));
+
+    l.apply(*s, rt(18, 20, 1));
+    l.apply(*s, rtee(15, 18, 1));
+    l.apply(*s, rt(12, 15, 1));
+
+    auto it = l.begin();
+    BOOST_REQUIRE(it != l.end());
+    assert_rt(rt(1, 8, 1), *it++);
+    BOOST_REQUIRE(it != l.end());
+    assert_rt(rt(12, 20, 1), *it++);
+    BOOST_REQUIRE(it == l.end());
+}
+
+BOOST_AUTO_TEST_CASE(test_adjacent_ranges_with_differing_timestamps_are_not_merged) {
+    range_tombstone_list l(*s);
+
+    auto rt1 = rtie(1, 5, 1);
+    auto rt2 = rt(5, 7, 2);
+    auto rt3 = rtei(7, 8, 1);
+
+    l.apply(*s, rt1);
+    l.apply(*s, rt2);
+    l.apply(*s, rt3);
+
+    auto it = l.begin();
+    BOOST_REQUIRE(it != l.end());
+    assert_rt(rt1, *it++);
+    BOOST_REQUIRE(it != l.end());
+    assert_rt(rt2, *it++);
+    BOOST_REQUIRE(it != l.end());
+    assert_rt(rt3, *it++);
+    BOOST_REQUIRE(it == l.end());
+}
+
+static bool no_overlap(const range_tombstone_list& l) {
+    bound_view::tri_compare cmp(*s);
+    stdx::optional<range_tombstone> prev;
+    for (const range_tombstone& r : l) {
+        if (prev) {
+            if (cmp(prev->end_bound(), r.start_bound()) >= 0) {
+                return false;
+            }
+        }
+        prev = r;
+    }
+    return true;
+}
+
+BOOST_AUTO_TEST_CASE(test_overlap_around_same_key) {
+    range_tombstone_list l(*s);
+
+    auto rt1 = rt(1, 5, 1);
+    auto rt2 = rt(5, 7, 2);
+
+    l.apply(*s, rt1);
+    l.apply(*s, rt2);
+    BOOST_REQUIRE(no_overlap(l));
 }
 
 BOOST_AUTO_TEST_CASE(test_overlapping_addition) {
@@ -246,22 +312,22 @@ BOOST_AUTO_TEST_CASE(test_search_prefix) {
 BOOST_AUTO_TEST_CASE(test_add_prefixes) {
     range_tombstone_list l(*s);
 
-    l.apply(*s, range_tombstone(key({1}), bound_kind::excl_start, key({1, 2}), bound_kind::incl_end, {8, gc_now}));
-    l.apply(*s, range_tombstone(key({1}), bound_kind::incl_start, key({1}), bound_kind::incl_end, {8, gc_now}));
+    auto tomb = tombstone{8, gc_now};
+
+    l.apply(*s, range_tombstone(key({1}), bound_kind::excl_start, key({2, 2}), bound_kind::incl_end, tomb));
+    l.apply(*s, range_tombstone(key({1}), bound_kind::incl_start, key({1}), bound_kind::incl_end, tomb));
 
     auto it = l.begin();
-    assert_rt(range_tombstone(key({1}), bound_kind::incl_start, key({1}), bound_kind::incl_end, {8, gc_now}), *it++);
-    assert_rt(range_tombstone(key({1}), bound_kind::excl_start, key({1, 2}), bound_kind::incl_end, {8, gc_now}), *it++);
+    assert_rt(range_tombstone(key({1}), bound_kind::incl_start, key({2, 2}), bound_kind::incl_end, tomb), *it++);
     BOOST_REQUIRE(it == l.end());
 
     range_tombstone_list l2(*s);
 
-    l2.apply(*s, range_tombstone(key({1}), bound_kind::incl_start, key({1}), bound_kind::incl_end, {8, gc_now}));
-    l2.apply(*s, range_tombstone(key({1}), bound_kind::excl_start, key({1, 2}), bound_kind::incl_end, {8, gc_now}));
+    l2.apply(*s, range_tombstone(key({1}), bound_kind::incl_start, key({1}), bound_kind::incl_end, tomb));
+    l2.apply(*s, range_tombstone(key({1}), bound_kind::excl_start, key({2, 2}), bound_kind::incl_end, tomb));
 
     it = l2.begin();
-    assert_rt(range_tombstone(key({1}), bound_kind::incl_start, key({1}), bound_kind::incl_end, {8, gc_now}), *it++);
-    assert_rt(range_tombstone(key({1}), bound_kind::excl_start, key({1, 2}), bound_kind::incl_end, {8, gc_now}), *it++);
+    assert_rt(range_tombstone(key({1}), bound_kind::incl_start, key({2, 2}), bound_kind::incl_end, tomb), *it++);
     BOOST_REQUIRE(it == l2.end());
 }
 
@@ -619,13 +685,9 @@ BOOST_AUTO_TEST_CASE(test_difference_with_bigger_tombstone) {
     auto diff = l1.difference(*s, l2);
     auto it = diff.begin();
     assert_rt(rt(1, 2, 3), *it++);
-    assert_rt(rtie(5, 6, 3), *it++);
-    assert_rt(rt(6, 7, 3), *it++);
-    assert_rt(rt(8, 9, 3), *it++);
-    assert_rt(rtee(9, 10, 3), *it++);
-    assert_rt(rt(10, 11, 3), *it++);
-    assert_rt(rt(12, 13, 3), *it++);
-    assert_rt(rtei(13, 14, 3), *it++);
+    assert_rt(rt(5, 7, 3), *it++);
+    assert_rt(rt(8, 11, 3), *it++);
+    assert_rt(rt(12, 14, 3), *it++);
     BOOST_REQUIRE(it == diff.end());
 }
 

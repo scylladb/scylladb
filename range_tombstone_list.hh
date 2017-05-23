@@ -33,6 +33,13 @@ class range_tombstone_list final {
                 : _new_rt(new_rt) { }
         void undo(const schema& s, range_tombstone_list& rt_list) noexcept;
     };
+    class erase_undo_op {
+        alloc_strategy_unique_ptr<range_tombstone> _rt;
+    public:
+        erase_undo_op(range_tombstone& rt)
+                : _rt(&rt) { }
+        void undo(const schema& s, range_tombstone_list& rt_list) noexcept;
+    };
     class update_undo_op {
         range_tombstone _old_rt;
         const range_tombstone& _new_rt;
@@ -43,8 +50,8 @@ class range_tombstone_list final {
     };
     class reverter {
     private:
-        std::vector<insert_undo_op> _insert_undo_ops;
-        std::vector<update_undo_op> _update_undo_ops;
+        using op = boost::variant<erase_undo_op, insert_undo_op, update_undo_op>;
+        std::vector<op> _ops;
         const schema& _s;
     protected:
         range_tombstone_list& _dst;
@@ -60,21 +67,11 @@ class range_tombstone_list final {
         reverter(const reverter&) = delete;
         reverter& operator=(reverter&) = delete;
         virtual range_tombstones_type::iterator insert(range_tombstones_type::iterator it, range_tombstone& new_rt);
+        virtual range_tombstones_type::iterator erase(range_tombstones_type::iterator it);
         virtual void update(range_tombstones_type::iterator it, range_tombstone&& new_rt);
-        void revert() noexcept {
-            for (auto&& op : _insert_undo_ops) {
-                op.undo(_s, _dst);
-            }
-            auto rit = _update_undo_ops.rbegin();
-            while (rit != _update_undo_ops.rend()) {
-                rit->undo(_s, _dst);
-                ++rit;
-            }
-            cancel();
-        }
+        void revert() noexcept;
         void cancel() noexcept {
-            _insert_undo_ops.clear();
-            _update_undo_ops.clear();
+            _ops.clear();
         }
     };
     class nop_reverter : public reverter {
@@ -82,6 +79,7 @@ class range_tombstone_list final {
         nop_reverter(const schema& s, range_tombstone_list& rt_list)
                 : reverter(s, rt_list) { }
         virtual range_tombstones_type::iterator insert(range_tombstones_type::iterator it, range_tombstone& new_rt) override;
+        virtual range_tombstones_type::iterator erase(range_tombstones_type::iterator it) override;
         virtual void update(range_tombstones_type::iterator it, range_tombstone&& new_rt) override;
     };
 private:

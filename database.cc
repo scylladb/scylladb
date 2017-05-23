@@ -2685,10 +2685,11 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
         if (c != 0) {
             return c;
         }
-        if (left.is_live_and_has_ttl()
-            && right.is_live_and_has_ttl()
-            && left.expiry() != right.expiry())
-        {
+        if (left.is_live_and_has_ttl() != right.is_live_and_has_ttl()) {
+            // prefer expiring cells.
+            return left.is_live_and_has_ttl() ? 1 : -1;
+        }
+        if (left.is_live_and_has_ttl() && left.expiry() != right.expiry()) {
             return left.expiry() < right.expiry() ? -1 : 1;
         }
     } else {

@@ -483,18 +483,17 @@ SEASTAR_TEST_CASE(test_cell_ordering) {
         atomic_cell::make_live(0, bytes("value")),
         atomic_cell::make_live(0, bytes("value")));
 
-    assert_equal(
-        atomic_cell::make_live(1, bytes("value"), expiry_1, ttl_1),
-        atomic_cell::make_live(1, bytes("value")));
+    assert_order(
+        atomic_cell::make_live(1, bytes("value")),
+        atomic_cell::make_live(1, bytes("value"), expiry_1, ttl_1));
 
     assert_equal(
         atomic_cell::make_dead(1, expiry_1),
         atomic_cell::make_dead(1, expiry_1));
 
-    // If one cell doesn't have an expiry, Origin considers them equal.
-    assert_equal(
-        atomic_cell::make_live(1, bytes(), expiry_2, ttl_2),
-        atomic_cell::make_live(1, bytes()));
+    assert_order(
+        atomic_cell::make_live(1, bytes()),
+        atomic_cell::make_live(1, bytes(), expiry_2, ttl_2));
 
     // Origin doesn't compare ttl (is it wise?)
     assert_equal(
@@ -1479,19 +1478,26 @@ SEASTAR_TEST_CASE(test_collection_cell_diff) {
     });
 }
 
+SEASTAR_TEST_CASE(test_apply_is_commutative) {
+    return seastar::async([] {
+        for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq) {
+            auto s = m1.schema();
+            if (s != m2.schema()) {
+                return; // mutations with different schemas not commutative
+            }
+            assert_that(m1 + m2).is_equal_to(m2 + m1);
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
     return seastar::async([] {
-        auto partitions_match = [] (const mutation_partition& mp1, const mutation_partition& mp2, const schema& s) {
-            // FIXME: Due to #2158, we compare only the rows and the partition tombstone.
-            return mp1.partition_tombstone() == mp2.partition_tombstone()
-                && std::equal(
-                    mp1.clustered_rows().begin(), mp1.clustered_rows().end(),
-                    mp2.clustered_rows().begin(), mp2.clustered_rows().end(),
-                    [&] (const rows_entry& e1, const rows_entry& e2) {
-                        return e1.equal(s, e2);
-                    });
+        auto check_partitions_match = [] (const mutation_partition& mp1, const mutation_partition& mp2, const schema& s) {
+            if (!mp1.equal(s, mp2)) {
+                BOOST_FAIL(sprint("Partitions don't match, got: %s\n...and: %s", mp1, mp2));
+            }
         };
-        for_each_mutation_pair([&partitions_match] (auto&& m1, auto&& m2, are_equal eq) {
+        for_each_mutation_pair([&] (auto&& m1, auto&& m2, are_equal eq) {
             auto s = m1.schema();
             if (s != m2.schema()) {
                 return;
@@ -1500,10 +1506,10 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
             m12.apply(m2);
             auto m12_with_diff = m1;
             m12_with_diff.partition().apply(*s, m2.partition().difference(s, m1.partition()));
-            BOOST_REQUIRE(partitions_match(m12.partition(), m12_with_diff.partition(), *s));
-            BOOST_REQUIRE(partitions_match(mutation_partition{s}, m1.partition().difference(s, m1.partition()), *s));
-            BOOST_REQUIRE(partitions_match(m1.partition(), m1.partition().difference(s, mutation_partition{s}), *s));
-            BOOST_REQUIRE(partitions_match(mutation_partition{s}, mutation_partition{s}.difference(s, m1.partition()), *s));
+            check_partitions_match(m12.partition(), m12_with_diff.partition(), *s);
+            check_partitions_match(mutation_partition{s}, m1.partition().difference(s, m1.partition()), *s);
+            check_partitions_match(m1.partition(), m1.partition().difference(s, mutation_partition{s}), *s);
+            check_partitions_match(mutation_partition{s}, mutation_partition{s}.difference(s, m1.partition()), *s);
         });
     });
 }

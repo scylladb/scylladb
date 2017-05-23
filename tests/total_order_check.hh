@@ -23,20 +23,7 @@
 
 #include <vector>
 #include <boost/test/unit_test.hpp>
-
-template <typename ResultType, typename Visitor>
-struct boost_visitor_adapter : Visitor {
-    using result_type = ResultType;
-    boost_visitor_adapter(Visitor&& v) : Visitor(std::move(v)) {}
-};
-
-// Boost 1.55 requires that visitors expose a `result_type` member. This
-// function adds it.
-template <typename ResultType = void, typename Visitor>
-auto
-to_boost_visitor(Visitor&& v) {
-    return boost_visitor_adapter<ResultType, Visitor>(std::move(v));
-}
+#include "utils/to_boost_visitor.hh"
 
 template<typename Comparator, typename... T>
 class total_order_check {

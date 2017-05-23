@@ -19,8 +19,10 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <boost/range/adaptor/reversed.hpp>
 #include "range_tombstone_list.hh"
 #include "utils/allocation_strategy.hh"
+#include "utils/to_boost_visitor.hh"
 
 range_tombstone_list::range_tombstone_list(const range_tombstone_list& x)
         : _tombstones(x._tombstones.value_comp()) {
@@ -45,13 +47,16 @@ void range_tombstone_list::apply_reversibly(const schema& s,
         bound_view::compare less(s);
         bound_view start_bound(start, start_kind);
         auto last = --_tombstones.end();
+        range_tombstones_type::iterator it;
         if (less(start_bound, last->end_bound())) {
-            auto it = _tombstones.upper_bound(start_bound, [less](auto&& sb, auto&& rt) {
+            it = _tombstones.upper_bound(start_bound, [less](auto&& sb, auto&& rt) {
                 return less(sb, rt.end_bound());
             });
-            insert_from(s, std::move(it), std::move(start), start_kind, std::move(end), end_kind, std::move(tomb), rev);
-            return;
+        } else {
+            it = _tombstones.end();
         }
+        insert_from(s, std::move(it), std::move(start), start_kind, std::move(end), end_kind, std::move(tomb), rev);
+        return;
     }
     auto rt = current_allocator().construct<range_tombstone>(
             std::move(start), start_kind, std::move(end), end_kind, std::move(tomb));
@@ -80,63 +85,69 @@ void range_tombstone_list::insert_from(const schema& s,
 {
     bound_view::compare less(s);
     bound_view end_bound(end, end_kind);
+    if (it != _tombstones.begin()) {
+        auto prev = std::prev(it);
+        if (prev->tomb == tomb && prev->end_bound().adjacent(s, bound_view(start, start_kind))) {
+            start = prev->start;
+            start_kind = prev->start_kind;
+            rev.erase(prev);
+        }
+    }
     while (it != _tombstones.end()) {
         bound_view start_bound(start, start_kind);
         if (less(end_bound, start_bound)) {
             return;
         }
 
-        if (tomb > it->tomb) {
+        if (less(end_bound, it->start_bound())) {
+            // not overlapping
+            if (it->tomb == tomb && end_bound.adjacent(s, it->start_bound())) {
+                rev.update(it, {std::move(start), start_kind, it->end, it->end_kind, tomb});
+            } else {
+                auto rt = current_allocator().construct<range_tombstone>(std::move(start), start_kind, std::move(end),
+                    end_kind, tomb);
+                rev.insert(it, *rt);
+            }
+            return;
+        }
+
+        auto c = tomb.compare(it->tomb);
+        if (c == 0) {
+            // same timestamp, overlapping or adjacent, so merge.
+            if (less(it->start_bound(), start_bound)) {
+                start = it->start;
+                start_kind = it->start_kind;
+            }
+            if (less(end_bound, it->end_bound())) {
+                end = it->end;
+                end_kind = it->end_kind;
+            }
+            it = rev.erase(it);
+        } else if (c > 0) {
             // We overwrite the current tombstone.
 
             if (less(it->start_bound(), start_bound)) {
                 auto new_end = bound_view(start, invert_kind(start_kind));
                 if (!less(new_end, it->start_bound())) {
                     // Here it->start < start
-                    auto rt = current_allocator().construct<range_tombstone>(it->start_bound(), new_end, it->tomb);
-                    it = rev.insert(it, *rt);
-                    ++it;
+                    auto rt = alloc_strategy_unique_ptr<range_tombstone>(
+                        current_allocator().construct<range_tombstone>(it->start_bound(), new_end, it->tomb));
                     rev.update(it, {start_bound, it->end_bound(), it->tomb});
+                    rev.insert(it, *rt.release());
                 }
-            }
-
-            // Here start <= it->start.
-
-            if (less(end_bound, it->start_bound())) {
-                // Here end < it->start, so the new tombstone is before the current one.
-                auto rt = current_allocator().construct<range_tombstone>(
-                        std::move(start), start_kind, std::move(end), end_kind, std::move(tomb));
-                rev.insert(it, *rt);
-                return;
             }
 
             if (less(end_bound, it->end_bound())) {
                 // Here start <= it->start and end < it->end.
-                auto rt = current_allocator().construct<range_tombstone>(
-                        std::move(start), start_kind, end, end_kind, std::move(tomb));
-                it = rev.insert(it, *rt);
-                ++it;
-                auto new_start_kind = invert_kind(end_kind);
-                rev.update(it, {std::move(end), new_start_kind, it->end, it->end_kind, it->tomb});
+                auto rt = alloc_strategy_unique_ptr<range_tombstone>(
+                    current_allocator().construct<range_tombstone>(std::move(start), start_kind, end, end_kind, std::move(tomb)));
+                rev.update(it, {std::move(end), invert_kind(end_kind), it->end, it->end_kind, it->tomb});
+                rev.insert(it, *rt.release());
                 return;
             }
 
             // Here start <= it->start and end >= it->end.
-
-            // If we're on the last tombstone, or if we end before the next start, we set the
-            // new tombstone and are done.
-            auto next = std::next(it);
-            if (next == _tombstones.end() || !less(next->start_bound(), end_bound)) {
-                rev.update(it, {std::move(start), start_kind, std::move(end), end_kind, std::move(tomb)});
-                return;
-            }
-
-            // We overlap with the next tombstone.
-
-            rev.update(it, {std::move(start), start_kind, next->start, invert_kind(next->start_kind), tomb});
-            start = next->start;
-            start_kind = next->start_kind;
-            ++it;
+            it = rev.erase(it);
         } else {
             // We don't overwrite the current tombstone.
 
@@ -303,19 +314,39 @@ range_tombstone_list::erase(const_iterator a, const_iterator b) {
 
 range_tombstone_list::range_tombstones_type::iterator
 range_tombstone_list::reverter::insert(range_tombstones_type::iterator it, range_tombstone& new_rt) {
-    _insert_undo_ops.emplace_back(new_rt);
+    _ops.emplace_back(insert_undo_op(new_rt));
     return _dst._tombstones.insert_before(it, new_rt);
 }
 
+range_tombstone_list::range_tombstones_type::iterator
+range_tombstone_list::reverter::erase(range_tombstones_type::iterator it) {
+    _ops.emplace_back(erase_undo_op(*it));
+    return _dst._tombstones.erase(it);
+}
+
 void range_tombstone_list::reverter::update(range_tombstones_type::iterator it, range_tombstone&& new_rt) {
-    _update_undo_ops.reserve(_update_undo_ops.size() + 1);
+    _ops.reserve(_ops.size() + 1);
     swap(*it, new_rt);
-    _update_undo_ops.emplace_back(std::move(new_rt), *it);
+    _ops.emplace_back(update_undo_op(std::move(new_rt), *it));
+}
+
+void range_tombstone_list::reverter::revert() noexcept {
+    for (auto&& rt : _ops | boost::adaptors::reversed) {
+        boost::apply_visitor(to_boost_visitor([this] (auto& op) {
+            op.undo(_s, _dst);
+        }), rt);
+    }
+    cancel();
 }
 
 range_tombstone_list::range_tombstones_type::iterator
 range_tombstone_list::nop_reverter::insert(range_tombstones_type::iterator it, range_tombstone& new_rt) {
     return _dst._tombstones.insert_before(it, new_rt);
+}
+
+range_tombstone_list::range_tombstones_type::iterator
+range_tombstone_list::nop_reverter::erase(range_tombstones_type::iterator it) {
+    return _dst._tombstones.erase_and_dispose(it, alloc_strategy_deleter<range_tombstone>());
 }
 
 void range_tombstone_list::nop_reverter::update(range_tombstones_type::iterator it, range_tombstone&& new_rt) {
@@ -326,6 +357,10 @@ void range_tombstone_list::insert_undo_op::undo(const schema& s, range_tombstone
     auto it = rt_list.find(s, _new_rt);
     assert (it != rt_list.end());
     rt_list._tombstones.erase_and_dispose(it, current_deleter<range_tombstone>());
+}
+
+void range_tombstone_list::erase_undo_op::undo(const schema& s, range_tombstone_list& rt_list) noexcept {
+    rt_list._tombstones.insert(*_rt.release());
 }
 
 void range_tombstone_list::update_undo_op::undo(const schema& s, range_tombstone_list& rt_list) noexcept {
