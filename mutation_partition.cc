@@ -864,10 +864,11 @@ int compare_row_marker_for_merge(const row_marker& left, const row_marker& right
         return left.is_live() ? -1 : 1;
     }
     if (left.is_live()) {
-        if (left.is_expiring()
-            && right.is_expiring()
-            && left.expiry() != right.expiry())
-        {
+        if (left.is_expiring() != right.is_expiring()) {
+            // prefer expiring cells.
+            return left.is_expiring() ? 1 : -1;
+        }
+        if (left.is_expiring() && left.expiry() != right.expiry()) {
             return left.expiry() < right.expiry() ? -1 : 1;
         }
     } else {

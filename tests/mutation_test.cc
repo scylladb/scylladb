@@ -483,18 +483,17 @@ SEASTAR_TEST_CASE(test_cell_ordering) {
         atomic_cell::make_live(0, bytes("value")),
         atomic_cell::make_live(0, bytes("value")));
 
-    assert_equal(
-        atomic_cell::make_live(1, bytes("value"), expiry_1, ttl_1),
-        atomic_cell::make_live(1, bytes("value")));
+    assert_order(
+        atomic_cell::make_live(1, bytes("value")),
+        atomic_cell::make_live(1, bytes("value"), expiry_1, ttl_1));
 
     assert_equal(
         atomic_cell::make_dead(1, expiry_1),
         atomic_cell::make_dead(1, expiry_1));
 
-    // If one cell doesn't have an expiry, Origin considers them equal.
-    assert_equal(
-        atomic_cell::make_live(1, bytes(), expiry_2, ttl_2),
-        atomic_cell::make_live(1, bytes()));
+    assert_order(
+        atomic_cell::make_live(1, bytes()),
+        atomic_cell::make_live(1, bytes(), expiry_2, ttl_2));
 
     // Origin doesn't compare ttl (is it wise?)
     assert_equal(
