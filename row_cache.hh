@@ -183,6 +183,7 @@ public:
         uint64_t removals;
         uint64_t partitions;
         uint64_t modification_count;
+        uint64_t mispopulations;
     };
 private:
     stats _stats{};
@@ -203,6 +204,7 @@ public:
     void on_hit();
     void on_miss();
     void on_miss_already_populated();
+    void on_mispopulate();
     allocation_strategy& allocator();
     logalloc::region& region();
     const logalloc::region& region() const;
@@ -218,15 +220,15 @@ cache_tracker& global_cache_tracker();
 // A data source which wraps another data source such that data obtained from the underlying data source
 // is cached in-memory in order to serve queries faster.
 //
-// To query the underlying data source through cache, use make_reader().
-//
 // Cache populates itself automatically during misses.
 //
-// Cache needs to be maintained externally so that it remains consistent with the underlying data source.
-// Any incremental change to the underlying data source should result in update() being called on cache.
+// Cache represents a snapshot of the underlying mutation source. When the
+// underlying mutation source changes, cache needs to be explicitly synchronized
+// to the latest snapshot. This is done by calling update() or invalidate().
 //
 class row_cache final {
 public:
+    using phase_type = utils::phased_barrier::phase_type;
     using partitions_type = bi::set<cache_entry,
         bi::member_hook<cache_entry, cache_entry::cache_link_type, &cache_entry::_cache_link>,
         bi::constant_time_size<false>, // we need this to have bi::auto_unlink on hooks
@@ -246,25 +248,48 @@ private:
     schema_ptr _schema;
     partitions_type _partitions; // Cached partitions are complete.
 
-    // Represents all mutations behind the cache.
-    // The set of mutations doesn't change within a single populate phase (it's a snapshot).
+    // The snapshots used by cache are versioned. The version number of a snapshot is
+    // called the "population phase", or simply "phase". Between updates, cache
+    // represents the same snapshot.
+    //
+    // Update doesn't happen atomically. Before it completes, some entries reflect
+    // the old snapshot, while others reflect the new snapshot. After update
+    // completes, all entries must reflect the new snapshot. There is a race between the
+    // update process and populating reads. Since after the update all entries must
+    // reflect the new snapshot, reads using the old snapshot cannot be allowed to
+    // insert data which will no longer be reached by the update process. The whole
+    // range can be therefore divided into two sub-ranges, one which was already
+    // processed by the update and one which hasn't. Each key can be assigned a
+    // population phase which determines to which range it belongs, as well as which
+    // snapshot it reflects. The methods snapshot_of() and phase_of() can
+    // be used to determine this.
+    //
+    // In general, reads are allowed to populate given range only if the phase
+    // of the snapshot they use matches the phase of all keys in that range
+    // when the population is committed. This guarantees that the range will
+    // be reached by the update process or already has been in its entirety.
+    // In case of phase conflict, current solution is to give up on
+    // population. Since the update process is a scan, it's sufficient to
+    // check when committing the population if the start and end of the range
+    // have the same phases and that it's the same phase as that of the start
+    // of the range at the time when reading began.
+
     mutation_source _underlying;
+    phase_type _underlying_phase = 0;
+    mutation_source_opt _prev_snapshot;
+
+    // Positions >= than this are using _prev_snapshot, the rest is using _underlying.
+    stdx::optional<dht::ring_position> _prev_snapshot_pos;
+
     snapshot_source _snapshot_source;
 
-    // Synchronizes populating reads with updates of underlying data source to ensure that cache
-    // remains consistent across flushes with the underlying data source.
-    // Readers obtained from the underlying data source in earlier than
-    // current phases must not be used to populate the cache, unless they hold
-    // phaser::operation created in the reader's phase of origin. Readers
-    // should hold to a phase only briefly because this inhibits progress of
-    // updates. Phase changes occur in update()/clear(), which can be assumed to
-    // be asynchronous wrt invoking of the underlying data source.
-    utils::phased_barrier _populate_phaser;
+    // There can be at most one update in progress.
+    seastar::semaphore _update_sem = {1};
 
     logalloc::allocating_section _update_section;
     logalloc::allocating_section _populate_section;
     logalloc::allocating_section _read_section;
-    mutation_reader create_underlying_reader(cache::read_context&, const dht::partition_range&);
+    mutation_reader create_underlying_reader(cache::read_context&, mutation_source&, const dht::partition_range&);
     mutation_reader make_scanning_reader(const dht::partition_range&, lw_shared_ptr<cache::read_context>);
     void on_hit();
     void on_miss();
@@ -275,13 +300,10 @@ private:
     static thread_local seastar::thread_scheduling_group _update_thread_scheduling_group;
 
     struct previous_entry_pointer {
-        utils::phased_barrier::phase_type _populate_phase;
         stdx::optional<dht::decorated_key> _key;
 
-        void reset(stdx::optional<dht::decorated_key> key, utils::phased_barrier::phase_type populate_phase) {
-            _populate_phase = populate_phase;
-            _key = std::move(key);
-        }
+        previous_entry_pointer() = default; // Represents dht::ring_position_view::min()
+        previous_entry_pointer(dht::decorated_key key) : _key(std::move(key)) {};
 
         // TODO: Currently inserting an entry to the cache increases
         // modification counter. That doesn't seem to be necessary and if we
@@ -300,6 +322,27 @@ private:
     partitions_type::iterator partitions_end() {
         return std::prev(_partitions.end());
     }
+
+    // Only active phases are accepted.
+    // Reference valid only until next deferring point.
+    mutation_source& snapshot_for_phase(phase_type);
+
+    // Returns population phase for given position in the ring.
+    // snapshot_for_phase() can be called to obtain mutation_source for given phase, but
+    // only until the next deferring point.
+    // Should be only called outside update().
+    phase_type phase_of(dht::ring_position_view);
+
+    struct snapshot_and_phase {
+        mutation_source& snapshot;
+        phase_type phase;
+    };
+
+    // Optimized version of:
+    //
+    //  { snapshot_for_phase(phase_of(pos)), phase_of(pos) };
+    //
+    snapshot_and_phase snapshot_of(dht::ring_position_view pos);
 public:
     ~row_cache();
     row_cache(schema_ptr, snapshot_source, cache_tracker&);
@@ -338,6 +381,11 @@ public:
     // by invalidating ranges which were modified. This will force
     // them to be re-read from the underlying mutation source
     // during next read overlapping with the invalidated ranges.
+    //
+    // The ranges passed to invalidate() must include all
+    // data which changed since last synchronization. Failure
+    // to do so may result in reads seeing partial writes,
+    // which would violate write atomicity.
     //
     // Guarantees that readers created after invalidate()
     // completes will see all writes from the underlying

@@ -191,7 +191,8 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_full_range)
 
 void test_cache_delegates_to_underlying_only_once_with_single_partition(schema_ptr s,
                                                                         const mutation& m,
-                                                                        const dht::partition_range& range) {
+                                                                        const dht::partition_range& range,
+                                                                        int calls_to_secondary) {
     int secondary_calls_count = 0;
     cache_tracker tracker;
     row_cache cache(s, snapshot_source_from_snapshot(mutation_source([m, &secondary_calls_count] (schema_ptr s, const dht::partition_range& range, const query::partition_slice&, const io_priority_class&, tracing::trace_state_ptr, streamed_mutation::forwarding fwd) {
@@ -206,11 +207,11 @@ void test_cache_delegates_to_underlying_only_once_with_single_partition(schema_p
     assert_that(cache.make_reader(s, range))
         .produces(m)
         .produces_end_of_stream();
-    BOOST_REQUIRE_EQUAL(secondary_calls_count, 2);
+    BOOST_REQUIRE_EQUAL(secondary_calls_count, calls_to_secondary);
     assert_that(cache.make_reader(s, range))
         .produces(m)
         .produces_end_of_stream();
-    BOOST_REQUIRE_EQUAL(secondary_calls_count, 2);
+    BOOST_REQUIRE_EQUAL(secondary_calls_count, calls_to_secondary);
 }
 
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_single_key_range) {
@@ -218,7 +219,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_single_key_range)
         auto s = make_schema();
         auto m = make_new_mutation(s);
         test_cache_delegates_to_underlying_only_once_with_single_partition(s, m,
-            dht::partition_range::make_singular(query::ring_position(m.decorated_key())));
+            dht::partition_range::make_singular(query::ring_position(m.decorated_key())), 1);
     });
 }
 
@@ -226,7 +227,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_full_range) {
     return seastar::async([] {
         auto s = make_schema();
         auto m = make_new_mutation(s);
-        test_cache_delegates_to_underlying_only_once_with_single_partition(s, m, query::full_partition_range);
+        test_cache_delegates_to_underlying_only_once_with_single_partition(s, m, query::full_partition_range, 2);
     });
 }
 
@@ -236,7 +237,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_range_open) {
         auto m = make_new_mutation(s);
         dht::partition_range::bound end = {dht::ring_position(m.decorated_key()), true};
         dht::partition_range range = dht::partition_range::make_ending_with(end);
-        test_cache_delegates_to_underlying_only_once_with_single_partition(s, m, range);
+        test_cache_delegates_to_underlying_only_once_with_single_partition(s, m, range, 2);
     });
 }
 

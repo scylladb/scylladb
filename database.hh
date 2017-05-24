@@ -574,7 +574,9 @@ private:
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, std::vector<unsigned>&& shards_for_the_sstable);
     // Adds new sstable to the set of sstables
-    // Doesn't update the cache.
+    // Doesn't update the cache. The cache must be synchronized in order for reads to see
+    // the writes contained in this sstable.
+    // Cache must be synchronized atomically with this, otherwise write atomicity may not be respected.
     // Doesn't trigger compaction.
     void add_sstable(lw_shared_ptr<sstables::sstable> sstable, std::vector<unsigned>&& shards_for_the_sstable);
     // returns an empty pointer if sstable doesn't belong to current shard.
