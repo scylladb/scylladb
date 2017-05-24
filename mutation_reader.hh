@@ -351,6 +351,9 @@ public:
     }
 };
 
+mutation_source make_empty_mutation_source();
+snapshot_source make_empty_snapshot_source();
+
 template<>
 struct move_constructor_disengages<mutation_source> {
     enum { value = true };
