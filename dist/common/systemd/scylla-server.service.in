@@ -22,6 +22,9 @@ KillMode=process
 Restart=on-abnormal
 User=scylla
 OOMScoreAdjust=-950
+StandardOutput=syslog
+StandardError=syslog
+SyslogLevelPrefix=false
 
 [Install]
 WantedBy=multi-user.target
