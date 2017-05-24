@@ -312,14 +312,16 @@ fi
 if is_debian_variant || is_gentoo_variant; then
     echo "scylla_selinux_setup only supports Red Hat variants"
 else
-    if [ $INTERACTIVE -eq 1 ]; then
-        interactive_ask_service "Do you want to disable SELinux?" "Answer yes to disable SELinux and improve performance; answer no to keep it activated." "yes" &&:
-        SELINUX_SETUP=$?
-    fi
-    if [ $SELINUX_SETUP -eq 1 ]; then
-        run_setup_script "SELinux" /usr/lib/scylla/scylla_selinux_setup &&:
-        if [ $? -eq 0 ]; then
-            SELINUX_REBOOT_REQUIRED=1
+    if ! is_selinux_enabled; then
+        if [ $INTERACTIVE -eq 1 ]; then
+            interactive_ask_service "Do you want to disable SELinux?" "Answer yes to disable SELinux and improve performance; answer no to keep it activated." "yes" &&:
+            SELINUX_SETUP=$?
+        fi
+        if [ $SELINUX_SETUP -eq 1 ]; then
+            run_setup_script "SELinux" /usr/lib/scylla/scylla_selinux_setup &&:
+            if [ $? -eq 0 ]; then
+                SELINUX_REBOOT_REQUIRED=1
+            fi
         fi
     fi
 fi

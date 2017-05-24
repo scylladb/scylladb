@@ -21,6 +21,15 @@ is_ec2() {
     [ -f /sys/hypervisor/uuid ] && [ "$(head -c 3 /sys/hypervisor/uuid)" = "ec2" ]
 }
 
+is_selinux_enabled() {
+    STATUS=`getenforce`
+    if [ "$STATUS" = "Disabled" ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 ec2_is_supported_instance_type() {
     TYPE=`curl -s http://169.254.169.254/latest/meta-data/instance-type|cut -d . -f 1`
     case $TYPE in
