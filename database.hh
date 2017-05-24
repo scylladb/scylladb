@@ -618,11 +618,12 @@ private:
     void remove_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancestors);
 private:
     mutation_source_opt _virtual_reader;
-    // Creates a mutation reader which covers sstables.
+    // Creates a mutation reader which covers given sstables.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
     // The 'range' parameter must be live as long as the reader is used.
     // Mutations returned by the reader will all have given schema.
     mutation_reader make_sstable_reader(schema_ptr schema,
+                                        lw_shared_ptr<sstables::sstable_set> sstables,
                                         const dht::partition_range& range,
                                         const query::partition_slice& slice,
                                         const io_priority_class& pc,
@@ -631,6 +632,7 @@ private:
                                         mutation_reader::forwarding fwd_mr) const;
 
     mutation_source sstables_as_mutation_source();
+    snapshot_source sstables_as_snapshot_source();
     partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set>);
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
     void do_trigger_compaction();
