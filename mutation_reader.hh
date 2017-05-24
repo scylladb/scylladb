@@ -334,6 +334,23 @@ public:
     }
 };
 
+// Represent mutation_source which can be snapshotted.
+class snapshot_source {
+private:
+    std::function<mutation_source()> _func;
+public:
+    snapshot_source(std::function<mutation_source()> func)
+        : _func(std::move(func))
+    { }
+
+    // Creates a new snapshot.
+    // The returned mutation_source represents all earlier writes and only those.
+    // Note though that the mutations in the snapshot may get compacted over time.
+    mutation_source operator()() {
+        return _func();
+    }
+};
+
 template<>
 struct move_constructor_disengages<mutation_source> {
     enum { value = true };
