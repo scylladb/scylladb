@@ -1105,7 +1105,15 @@ public:
     }
 
     future<> fast_forward_to(const dht::partition_range& pr) {
-        return _ds->fast_forward_to(pr);
+        if (_ds) {
+            return _ds->fast_forward_to(pr);
+        }
+        return (_get_data_source)().then([this, &pr] (lw_shared_ptr<sstable_data_source> ds) {
+            // We must get the sstable_data_source and backup it in case we enable read
+            // again in the future.
+            _ds = std::move(ds);
+            return _ds->fast_forward_to(pr);
+        });
     }
 };
 
