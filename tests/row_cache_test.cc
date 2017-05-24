@@ -912,7 +912,7 @@ SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
           .produces(ring[2]);
 
         // Invalidate whole cache.
-        cache.clear().get();
+        cache.invalidate().get();
 
         rd.produces(ring[3])
           .produces_end_of_stream();
@@ -1087,7 +1087,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
         memtables.push_back(mt2);
 
         // This update should miss on all partitions
-        auto cache_cleared = cache.clear();
+        auto cache_cleared = cache.invalidate();
 
         auto rd2 = cache.make_reader(s);
 
@@ -1185,7 +1185,7 @@ SEASTAR_TEST_CASE(test_mvcc) {
             auto m_1 = mutation_from_streamed_mutation(std::move(sm1)).get0();
             assert_that(*m_1).is_equal_to(m1);
 
-            cache.clear().get0();
+            cache.invalidate().get0();
 
             auto m_2 = mutation_from_streamed_mutation(std::move(sm2)).get0();
             assert_that(*m_2).is_equal_to(m1);
@@ -1259,7 +1259,7 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
         row_cache cache(s, mt->as_data_source(), tracker);
 
         auto run_tests = [&] (auto& ps, std::deque<int> expected) {
-            cache.clear().get0();
+            cache.invalidate().get0();
 
             auto reader = cache.make_reader(s, query::full_partition_range, ps);
             test_sliced_read_row_presence(std::move(reader), s, expected);
@@ -1273,7 +1273,7 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
             reader = cache.make_reader(s, singular_range, ps);
             test_sliced_read_row_presence(std::move(reader), s, expected);
 
-            cache.clear().get0();
+            cache.invalidate().get0();
 
             reader = cache.make_reader(s, singular_range, ps);
             test_sliced_read_row_presence(std::move(reader), s, expected);

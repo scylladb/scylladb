@@ -321,11 +321,6 @@ public:
     // information there is for its partition in the underlying data sources.
     void populate(const mutation& m, const previous_entry_pointer* previous = nullptr);
 
-    // Clears the cache.
-    // Guarantees that cache will not be populated using readers created
-    // before this method was invoked.
-    future<> clear();
-
     // Synchronizes cache with the underlying data source from a memtable which
     // has just been flushed to the underlying data source.
     // The memtable can be queried during the process, but must not be written.
@@ -335,22 +330,17 @@ public:
     // Moves given partition to the front of LRU if present in cache.
     void touch(const dht::decorated_key&);
 
-    // Removes given partition from cache.
+    // Synchronizes cache with the underlying mutation source
+    // by invalidating ranges which were modified. This will force
+    // them to be re-read from the underlying mutation source
+    // during next read overlapping with the invalidated ranges.
     //
-    // Guarantees that cache will not be populated with given key
-    // using readers created before this method was invoked.
-    //
-    // The key must be kept alive until method resolves.
-    future<> invalidate(const dht::decorated_key& key);
-
-    // Removes given range of partitions from cache.
-    // The range can be a wrap around.
-    //
-    // Guarantees that cache will not be populated with partitions from that range
-    // using readers created before this method was invoked.
-    //
-    // The range must be kept alive until method resolves.
-    future<> invalidate(const dht::partition_range&);
+    // Guarantees that readers created after invalidate()
+    // completes will see all writes from the underlying
+    // mutation source made prior to the call to invalidate().
+    future<> invalidate(const dht::decorated_key&);
+    future<> invalidate(const dht::partition_range& = query::full_partition_range);
+    future<> invalidate(dht::partition_range_vector&&);
 
     auto num_entries() const {
         return _partitions.size();

@@ -1808,7 +1808,7 @@ future<> distributed_loader::load_new_sstables(distributed<database>& db, sstrin
             cf.trigger_compaction();
             // Drop entire cache for this column family because it may be populated
             // with stale data.
-            return cf.get_row_cache().clear();
+            return cf.get_row_cache().invalidate();
         });
     }).then([&db, ks, cf] () mutable {
         return smp::submit_to(0, [&db, ks = std::move(ks), cf = std::move(cf)] () mutable {
@@ -3818,15 +3818,11 @@ future<> column_family::flush_streaming_mutations(utils::UUID plan_id, dht::part
             return _streaming_memtables->seal_active_memtable(memtable_list::flush_behavior::delayed);
         }).finally([this] {
             return _streaming_flush_phaser.advance_and_await();
-        }).finally([this, ranges = std::move(ranges)] {
+        }).finally([this, ranges = std::move(ranges)] () mutable {
             if (!_config.enable_cache) {
                 return make_ready_future<>();
             }
-            return do_with(std::move(ranges), [this] (auto& ranges) {
-                return parallel_for_each(ranges, [this](auto&& range) {
-                    return _cache.invalidate(range);
-                });
-            });
+            return _cache.invalidate(std::move(ranges));
         });
     });
 }
@@ -3878,7 +3874,7 @@ future<> column_family::clear() {
     _streaming_memtables->clear();
     _streaming_memtables->add_memtable();
     _streaming_memtables_big.clear();
-    return _cache.clear();
+    return _cache.invalidate();
 }
 
 // NOTE: does not need to be futurized, but might eventually, depending on
@@ -3904,7 +3900,7 @@ future<db::replay_position> column_family::discard_sstables(db_clock::time_point
 
         _sstables = std::move(pruned);
         dblog.debug("cleaning out row cache");
-        return _cache.clear().then([rp, remove = std::move(remove)] () mutable {
+        return _cache.invalidate().then([rp, remove = std::move(remove)] () mutable {
             return parallel_for_each(remove, [](sstables::shared_sstable s) {
                 return sstables::delete_atomically({s});
             }).then([rp] {

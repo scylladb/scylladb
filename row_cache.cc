@@ -661,10 +661,6 @@ void row_cache::populate(const mutation& m, const previous_entry_pointer* previo
     });
 }
 
-future<> row_cache::clear() {
-    return invalidate(query::full_partition_range);
-}
-
 future<> row_cache::update(memtable& m, partition_presence_checker presence_checker) {
     m.on_detach_from_region_group();
     _tracker.region().merge(m); // Now all data in memtable belongs to cache
@@ -782,21 +778,19 @@ void row_cache::invalidate_locked(const dht::decorated_key& dk) {
 }
 
 future<> row_cache::invalidate(const dht::decorated_key& dk) {
-return _populate_phaser.advance_and_await().then([this, &dk] {
-  _read_section(_tracker.region(), [&] {
-    with_allocator(_tracker.allocator(), [this, &dk] {
-      with_linearized_managed_bytes([&] {
-        invalidate_locked(dk);
-      });
-    });
-  });
-});
+    return invalidate(dht::partition_range::make_singular(dk));
 }
 
 future<> row_cache::invalidate(const dht::partition_range& range) {
-    return _populate_phaser.advance_and_await().then([this, &range] {
+    return invalidate(dht::partition_range_vector({range}));
+}
+
+future<> row_cache::invalidate(dht::partition_range_vector&& ranges) {
+    return _populate_phaser.advance_and_await().then([this, ranges = std::move(ranges)] () mutable {
         with_linearized_managed_bytes([&] {
-            invalidate_unwrapped(range);
+            for (auto&& range : ranges) {
+                this->invalidate_unwrapped(range);
+            }
         });
     });
 }
