@@ -24,6 +24,7 @@
 #include "frozen_mutation.hh"
 #include "sstable_mutation_readers.hh"
 #include "stdx.hh"
+#include "partition_snapshot_reader.hh"
 
 memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, memtable_list* memtable_list)
         : logalloc::region(dmm.region_group())
