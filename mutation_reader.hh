@@ -334,6 +334,12 @@ public:
     }
 };
 
+// Returns a mutation_source which is the sum of given mutation_sources.
+//
+// Adding two mutation sources gives a mutation source which contains
+// the sum of writes contained in the addends.
+mutation_source make_combined_mutation_source(std::vector<mutation_source>);
+
 // Represent mutation_source which can be snapshotted.
 class snapshot_source {
 private:

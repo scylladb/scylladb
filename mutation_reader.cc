@@ -332,12 +332,28 @@ snapshot_source make_empty_snapshot_source() {
 }
 
 mutation_source make_empty_mutation_source() {
-    return mutation_source([] (schema_ptr s,
+    return mutation_source([](schema_ptr s,
             const dht::partition_range& pr,
             const query::partition_slice& slice,
             const io_priority_class& pc,
             tracing::trace_state_ptr tr,
             streamed_mutation::forwarding fwd) {
         return make_empty_reader();
+    });
+}
+
+mutation_source make_combined_mutation_source(std::vector<mutation_source> addends) {
+    return mutation_source([addends = std::move(addends)] (schema_ptr s,
+            const dht::partition_range& pr,
+            const query::partition_slice& slice,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr tr,
+            streamed_mutation::forwarding fwd) {
+        std::vector<mutation_reader> rd;
+        rd.reserve(addends.size());
+        for (auto&& ms : addends) {
+            rd.emplace_back(ms(s, pr, slice, pc, tr, fwd));
+        }
+        return make_combined_reader(std::move(rd));
     });
 }
