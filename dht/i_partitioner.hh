@@ -374,6 +374,14 @@ private:
     token_bound _token_bound; // valid when !_key
     std::experimental::optional<partition_key> _key;
 public:
+    static ring_position min() {
+        return { minimum_token(), token_bound::start };
+    }
+
+    static ring_position max() {
+        return { maximum_token(), token_bound::end };
+    }
+
     static ring_position starting_at(dht::token token) {
         return { std::move(token), token_bound::start };
     }
