@@ -70,10 +70,8 @@ int main(int argc, char** argv) {
                 .with_column("v", bytes_type, column_kind::regular_column)
                 .build();
 
-            auto mt0 = make_lw_shared<memtable>(s);
-
             cache_tracker tracker;
-            row_cache cache(s, mt0->as_data_source(), tracker);
+            row_cache cache(s, make_empty_snapshot_source(), tracker);
 
             auto mt = make_lw_shared<memtable>(s);
             std::vector<dht::decorated_key> keys;

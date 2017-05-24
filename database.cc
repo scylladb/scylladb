@@ -143,7 +143,7 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog* cl
     , _streaming_memtables(_config.enable_disk_writes ? make_streaming_memtable_list() : make_memory_only_memtable_list())
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
     , _sstables(make_lw_shared(_compaction_strategy.make_sstable_set(_schema)))
-    , _cache(_schema, sstables_as_mutation_source(), global_cache_tracker())
+    , _cache(_schema, sstables_as_snapshot_source(), global_cache_tracker())
     , _commitlog(cl)
     , _compaction_manager(compaction_manager)
     , _flush_queue(std::make_unique<memtable_flush_queue>())

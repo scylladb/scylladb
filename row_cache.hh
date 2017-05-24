@@ -245,7 +245,11 @@ private:
     stats _stats{};
     schema_ptr _schema;
     partitions_type _partitions; // Cached partitions are complete.
+
+    // Represents all mutations behind the cache.
+    // The set of mutations doesn't change within a single populate phase (it's a snapshot).
     mutation_source _underlying;
+    snapshot_source _snapshot_source;
 
     // Synchronizes populating reads with updates of underlying data source to ensure that cache
     // remains consistent across flushes with the underlying data source.
@@ -298,7 +302,7 @@ private:
     }
 public:
     ~row_cache();
-    row_cache(schema_ptr, mutation_source underlying, cache_tracker&);
+    row_cache(schema_ptr, snapshot_source, cache_tracker&);
     row_cache(row_cache&&) = default;
     row_cache(const row_cache&) = delete;
     row_cache& operator=(row_cache&&) = default;
