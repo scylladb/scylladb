@@ -74,7 +74,7 @@ public:
         return dht::global_partitioner().decorate_key(*_s, key);
     }
 
-    void add_row(mutation& m, const clustering_key& key, sstring v, api::timestamp_type t = api::missing_timestamp) {
+    void add_row(mutation& m, const clustering_key& key, const sstring& v, api::timestamp_type t = api::missing_timestamp) {
         if (t == api::missing_timestamp) {
             t = new_timestamp();
         }
