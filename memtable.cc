@@ -248,8 +248,7 @@ protected:
                                     const query::partition_slice& slice,
                                     const io_priority_class& pc,
                                     streamed_mutation::forwarding fwd) {
-        auto ret = make_mutation_reader<sstable_range_wrapping_reader>(
-            _memtable->_sstable, _schema, delegate, slice, pc, fwd);
+        auto ret = (*_memtable->_underlying)(_schema, delegate, slice, pc, nullptr, fwd);
         _memtable = {};
         _last = {};
         return ret;

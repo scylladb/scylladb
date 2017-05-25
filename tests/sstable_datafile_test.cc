@@ -997,13 +997,12 @@ static future<std::vector<sstables::shared_sstable>> open_sstables(schema_ptr s,
 
 // mutation_reader for sstable keeping all the required objects alive.
 static ::mutation_reader sstable_reader(shared_sstable sst, schema_ptr s) {
-    // TODO: s is probably not necessary, as the read_rows() object keeps a copy of it.
-    return as_mutation_reader(sst, sst->read_rows(s));
+    return sst->as_mutation_source()(s);
 
 }
 
 static ::mutation_reader sstable_reader(shared_sstable sst, schema_ptr s, const dht::partition_range& pr) {
-    return as_mutation_reader(sst, sst->read_range_rows(s, pr));
+    return sst->as_mutation_source()(s, pr);
 }
 
 SEASTAR_TEST_CASE(compaction_manager_test) {
@@ -2550,8 +2549,7 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
 void test_sliced_read_row_presence(shared_sstable sst, schema_ptr s, const query::partition_slice& ps,
     std::vector<std::pair<partition_key, std::vector<clustering_key>>> expected)
 {
-    auto reader = make_mutation_reader<test_mutation_reader>(sst,
-                    sst->read_range_rows(s, query::full_partition_range, ps));
+    auto reader = sst->as_mutation_source()(s, query::full_partition_range, ps);
 
     partition_key::equality pk_eq(*s);
     clustering_key::equality ck_eq(*s);

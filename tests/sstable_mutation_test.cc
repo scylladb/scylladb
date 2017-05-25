@@ -498,7 +498,7 @@ SEASTAR_TEST_CASE(compact_storage_dense_read) {
 SEASTAR_TEST_CASE(broken_ranges_collection) {
     return reusable_sst(peers_schema(), "tests/sstables/broken_ranges", 2).then([] (auto sstp) {
         auto s = peers_schema();
-        auto reader = make_lw_shared<::mutation_reader>(as_mutation_reader(sstp, sstp->read_rows(s)));
+        auto reader = make_lw_shared<::mutation_reader>(sstp->as_mutation_source()(s));
         return repeat([s, reader] {
             return (*reader)().then([] (auto sm) {
                 return mutation_from_streamed_mutation(std::move(sm));

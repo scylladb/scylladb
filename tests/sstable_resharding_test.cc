@@ -118,7 +118,7 @@ void run_sstable_resharding_test() {
         auto shard = shards.front();
         BOOST_REQUIRE(column_family_test::calculate_shard_from_sstable_generation(new_sst->generation()) == shard);
 
-        assert_that(as_mutation_reader(new_sst, new_sst->read_rows(s)))
+        assert_that(sst->as_mutation_source()(s))
             .produces(muts.at(shard))
             .produces_end_of_stream();
     }

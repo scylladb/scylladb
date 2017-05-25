@@ -608,63 +608,7 @@ public:
 };
 }
 
-
-struct test_mutation_reader final : public ::mutation_reader::impl {
-    sstables::shared_sstable _sst;
-    sstables::mutation_reader _rd;
-public:
-    test_mutation_reader(sstables::shared_sstable sst, sstables::mutation_reader rd)
-            : _sst(std::move(sst)), _rd(std::move(rd)) {}
-    virtual future<streamed_mutation_opt> operator()() override {
-        return _rd.read();
-    }
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
-        return _rd.fast_forward_to(pr);
-    }
-};
-
-struct test_single_row_reader final : public ::mutation_reader::impl {
-    sstables::shared_sstable _sst;
-    schema_ptr _s;
-    dht::ring_position_view _key;
-    const query::partition_slice& _slice;
-    const io_priority_class& _pc;
-    streamed_mutation::forwarding _fwd;
-public:
-    test_single_row_reader(sstables::shared_sstable sst, schema_ptr s, dht::ring_position_view key,
-        const query::partition_slice& slice, const io_priority_class& pc, streamed_mutation::forwarding fwd)
-            : _sst(sst), _s(s), _key(key), _slice(slice), _pc(pc), _fwd(fwd)
-    { }
-    virtual future<streamed_mutation_opt> operator()() override {
-        if (!_sst) {
-            return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
-        }
-        auto sst = std::move(_sst);
-        return sst->read_row(_s, _key, _slice, _pc, _fwd);
-    }
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
-        throw std::bad_function_call();
-    }
-};
-
-inline
-::mutation_reader as_mutation_reader(sstables::shared_sstable sst, sstables::mutation_reader rd) {
-    return make_mutation_reader<test_mutation_reader>(std::move(sst), std::move(rd));
-}
-
 inline
 ::mutation_source as_mutation_source(lw_shared_ptr<sstables::sstable> sst) {
-    return mutation_source([sst] (schema_ptr s,
-            const dht::partition_range& range,
-            const query::partition_slice& slice,
-            const io_priority_class& pc,
-            tracing::trace_state_ptr trace_ptr,
-            streamed_mutation::forwarding fwd) mutable {
-        if (range.is_singular() && range.start()->value().has_key()) {
-            const dht::ring_position& pos = range.start()->value();
-            return make_mutation_reader<test_single_row_reader>(sst, s, pos, slice, pc, fwd);
-        } else {
-            return as_mutation_reader(sst, sst->read_range_rows(s, range, slice, pc, fwd));
-        }
-    });
+    return sst->as_mutation_source();
 }

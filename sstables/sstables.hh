@@ -288,6 +288,10 @@ public:
         const io_priority_class& pc = default_priority_class(),
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
+    // Returns mutation_source containing all writes contained in this sstable.
+    // The mutation_source shares ownership of this sstable.
+    mutation_source as_mutation_source();
+
     // Write sstable components from a memtable.
     future<> write_components(memtable& mt, bool backup = false,
                               const io_priority_class& pc = default_priority_class(), bool leave_unsealed = false);
