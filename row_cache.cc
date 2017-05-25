@@ -862,6 +862,10 @@ future<> row_cache::invalidate(dht::partition_range_vector&& ranges) {
   });
 }
 
+void row_cache::evict(const dht::partition_range& range) {
+    invalidate_unwrapped(range);
+}
+
 void row_cache::invalidate_unwrapped(const dht::partition_range& range) {
     logalloc::reclaim_lock _(_tracker.region());
 
