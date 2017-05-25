@@ -202,7 +202,7 @@ protected:
         writer->consume_end_of_stream();
         writer = stdx::nullopt;
         sst->open_data().get0();
-        _info->end_size += sst->data_size();
+        _info->end_size += sst->bytes_on_disk();
     }
 public:
     compaction& operator=(const compaction&) = delete;
@@ -228,7 +228,7 @@ private:
             // Compacted sstable keeps track of its ancestors.
             _ancestors.push_back(sst->generation());
             formatted_msg += sprint("%s:level=%d, ", sst->get_filename(), sst->get_sstable_level());
-            _info->start_size += sst->data_size();
+            _info->start_size += sst->bytes_on_disk();
             // TODO:
             // Note that this is not fully correct. Since we might be merging sstables that originated on
             // another shard (#cpu changed), we might be comparing RP:s with differing shard ids,
