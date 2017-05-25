@@ -528,12 +528,12 @@ memtable_entry::memtable_entry(memtable_entry&& o) noexcept
     container_type::node_algorithms::init(o._link.this_ptr());
 }
 
-void memtable::mark_flushed(lw_shared_ptr<sstables::sstable> sst) {
-    _sstable = std::move(sst);
+void memtable::mark_flushed(mutation_source underlying) {
+    _underlying = std::move(underlying);
 }
 
 bool memtable::is_flushed() const {
-    return bool(_sstable);
+    return bool(_underlying);
 }
 
 streamed_mutation

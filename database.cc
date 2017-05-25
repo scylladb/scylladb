@@ -996,7 +996,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
                 // memtable's data after moving to cache can be evicted at any time.
                 auto old_sstables = _sstables;
                 add_sstable(newtab, {engine().cpu_id()});
-                old->mark_flushed(newtab);
+                old->mark_flushed(newtab->as_mutation_source());
 
                 trigger_compaction();
                 return update_cache(*old, std::move(old_sstables));

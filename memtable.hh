@@ -29,7 +29,6 @@
 #include "mutation_reader.hh"
 #include "db/commitlog/replay_position.hh"
 #include "utils/logalloc.hh"
-#include "sstables/sstables.hh"
 #include "partition_version.hh"
 
 class frozen_mutation;
@@ -110,7 +109,13 @@ private:
     logalloc::allocating_section _allocating_section;
     partitions_type partitions;
     db::replay_position _replay_position;
-    lw_shared_ptr<sstables::sstable> _sstable;
+    // mutation source to which reads fall-back after mark_flushed()
+    // so that memtable contents can be moved away while there are
+    // still active readers. This is needed for this mutation_source
+    // to be monotonic (not loose writes). Monotonicity of each
+    // mutation_source is necessary for the combined mutation source to be
+    // monotonic. That combined source in this case is cache + memtable.
+    mutation_source_opt _underlying;
     uint64_t _flushed_memory = 0;
     void update(const db::replay_position&);
     friend class row_cache;
@@ -183,7 +188,7 @@ public:
     mutation_source as_data_source();
 
     bool empty() const { return partitions.empty(); }
-    void mark_flushed(lw_shared_ptr<sstables::sstable> sst);
+    void mark_flushed(mutation_source);
     bool is_flushed() const;
     void on_detach_from_region_group() noexcept;
     void revert_flushed_memory() noexcept;
