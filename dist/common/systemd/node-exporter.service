@@ -5,7 +5,7 @@ Description=Node Exporter
 Type=simple
 User=scylla
 Group=scylla
-ExecStart=/usr/bin/node_exporter
+ExecStart=/usr/bin/node_exporter -collectors.enabled interrupts,conntrack,diskstats,entropy,filefd,filesystem,loadavg,mdadm,meminfo,netdev,netstat,sockstat,stat,textfile,time,uname,vmstat
 
 [Install]
 WantedBy=multi-user.target
