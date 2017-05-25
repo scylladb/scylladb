@@ -200,8 +200,8 @@ class scylla_memory(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla memory', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
     def invoke(self, arg, from_tty):
-        cpu_mem = gdb.parse_and_eval('\'memory::cpu_mem\'')
-        page_size = int(gdb.parse_and_eval('\'memory::page_size\''))
+        cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
+        page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
         free_mem = int(cpu_mem['nr_free_pages']) * page_size
         total_mem = int(cpu_mem['nr_pages']) * page_size
         gdb.write('Used memory: {used_mem:>13}\nFree memory: {free_mem:>13}\nTotal memory: {total_mem:>12}\n\n'
@@ -363,7 +363,7 @@ class scylla_heapprof(gdb.Command):
             return
 
         root = ProfNode(None)
-        cpu_mem = gdb.parse_and_eval('\'memory::cpu_mem\'')
+        cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
         site = cpu_mem['alloc_site_list_head']
 
         while site:
@@ -427,8 +427,8 @@ class scylla_heapprof(gdb.Command):
                 printer=gdb.write)
 
 def get_seastar_memory_start_and_size():
-    cpu_mem = gdb.parse_and_eval('\'memory::cpu_mem\'')
-    page_size = int(gdb.parse_and_eval('\'memory::page_size\''))
+    cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
+    page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
     total_mem = int(cpu_mem['nr_pages']) * page_size
     start = int(cpu_mem['memory'])
     return start, total_mem
@@ -466,8 +466,8 @@ class scylla_ptr(gdb.Command):
 
         owning_thread.switch()
 
-        cpu_mem = gdb.parse_and_eval('\'memory::cpu_mem\'')
-        page_size = int(gdb.parse_and_eval('\'memory::page_size\''))
+        cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
+        page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
         offset = ptr - int(cpu_mem['memory'])
 
         page = cpu_mem['pages'][offset / page_size];
@@ -695,17 +695,17 @@ class scylla_timers(gdb.Command):
         gdb.Command.__init__(self, 'scylla timers', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
     def invoke(self, arg, from_tty):
         gdb.write('Timers:\n')
-        timer_set = gdb.parse_and_eval('local_engine->_timers')
+        timer_set = gdb.parse_and_eval('\'seastar\'::local_engine->_timers')
         for timer_list in std_array(timer_set['_buckets']):
             for t in intrusive_list(timer_list):
                 gdb.write('(%s*) %s = %s\n' % (t.type, t.address, t))
-        timer_set = gdb.parse_and_eval('local_engine->_lowres_timers')
+        timer_set = gdb.parse_and_eval('\'seastar\'::local_engine->_lowres_timers')
         for timer_list in std_array(timer_set['_buckets']):
             for t in intrusive_list(timer_list):
                 gdb.write('(%s*) %s = %s\n' % (t.type, t.address, t))
 
 def has_reactor():
-    if gdb.parse_and_eval('local_engine'):
+    if gdb.parse_and_eval('\'seastar\'::local_engine'):
         return True
     return False
 
@@ -721,7 +721,7 @@ def reactors():
     orig = gdb.selected_thread()
     for t in gdb.selected_inferior().threads():
         t.switch()
-        reactor = gdb.parse_and_eval('local_engine')
+        reactor = gdb.parse_and_eval('\'seastar\'::local_engine')
         if reactor:
             yield reactor.dereference()
     orig.switch()
@@ -742,7 +742,7 @@ class scylla_shard(gdb.Command):
         orig = gdb.selected_thread()
         for t in gdb.selected_inferior().threads():
             t.switch()
-            reactor = gdb.parse_and_eval('local_engine')
+            reactor = gdb.parse_and_eval('\'seastar\'::local_engine')
             if reactor and reactor['_id'] == id:
                 gdb.write('Switched to thread %d\n' % t.num)
                 return
@@ -959,7 +959,7 @@ class scylla_task_stats(gdb.Command):
     def invoke(self, arg, for_tty):
         vptr_count = defaultdict(int)
         vptr_type = gdb.lookup_type('uintptr_t').pointer()
-        for t in circular_buffer(gdb.parse_and_eval('local_engine._pending_tasks')):
+        for t in circular_buffer(gdb.parse_and_eval('\'seastar\'::local_engine._pending_tasks')):
             vptr = int(t['_M_t']['_M_head_impl'].reinterpret_cast(vptr_type).dereference())
             vptr_count[vptr] += 1
         for vptr, count in sorted(vptr_count.items(), key=lambda e: -e[1]):
@@ -990,7 +990,7 @@ class scylla_tasks(gdb.Command):
         gdb.Command.__init__(self, 'scylla tasks', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
     def invoke(self, arg, for_tty):
         vptr_type = gdb.lookup_type('uintptr_t').pointer()
-        for t in circular_buffer(gdb.parse_and_eval('local_engine._pending_tasks')):
+        for t in circular_buffer(gdb.parse_and_eval('\'seastar\'::local_engine._pending_tasks')):
             ptr = t['_M_t']['_M_head_impl']
             vptr = int(ptr.reinterpret_cast(vptr_type).dereference())
             gdb.write('(task*) 0x%x  %s\n' % (ptr, resolve(vptr)))
