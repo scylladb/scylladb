@@ -1109,6 +1109,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             });
         } catch (...) {
+            newtab->mark_for_deletion();
             dblog.error("failed to write sstable {}: {}", newtab->get_filename(), std::current_exception());
             // If we failed this write we will try the write again and that will create a new flush reader
             // that will decrease dirty memory again. So we need to reset the accounting.
