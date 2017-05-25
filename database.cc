@@ -1262,7 +1262,7 @@ void column_family::rebuild_statistics() {
                     // making the two ranges compatible when compiling with boost 1.55.
                     // Noone is actually moving anything...
                                          std::move(*_sstables->all()))) {
-        update_stats_for_new_sstable(tab->data_size());
+        update_stats_for_new_sstable(tab->bytes_on_disk());
     }
 }
 
