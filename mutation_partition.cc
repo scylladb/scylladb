@@ -2074,10 +2074,12 @@ future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& so
                                          const query::partition_slice& slice,
                                          tracing::trace_state_ptr trace_ptr)
 {
+  return do_with(dht::partition_range::make_singular(dk), [&] (auto& prange) {
     auto cwqrb = counter_write_query_result_builder(*s);
     auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::yes, counter_write_query_result_builder>>(
             *s, gc_clock::now(), slice, query::max_rows, query::max_rows, std::move(cwqrb));
-    auto reader = source(s, dht::partition_range::make_singular(dk), slice,
+    auto reader = source(s, prange, slice,
                          service::get_local_sstable_query_read_priority(), std::move(trace_ptr));
     return consume_flattened(std::move(reader), std::move(cfq), false);
+  });
 }
