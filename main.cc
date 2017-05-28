@@ -338,6 +338,10 @@ int main(int ac, char** av) {
                     cfg->log_to_stdout(), cfg->log_to_syslog());
             verify_rlimit(cfg->developer_mode());
             verify_adequate_memory_per_shard(cfg->developer_mode());
+            if (cfg->partitioner() != "org.apache.cassandra.dht.Murmur3Partitioner") {
+                startlog.warn("The partitioner {} is deprecated and will be removed in a future version."
+                        "  Contact scylladb-users@googlegroups.com if you are using it in production", cfg->partitioner());
+            }
             dht::set_global_partitioner(cfg->partitioner(), cfg->murmur3_partitioner_ignore_msb_bits());
             auto start_thrift = cfg->start_rpc();
             uint16_t api_port = cfg->api_port();
