@@ -154,7 +154,7 @@ public:
         _state_props.set_if<trace_state_props::full_tracing>(!full_tracing() && !log_slow_query());
 
         // inherit the slow query threshold and ttl from the coordinator
-        init_session_records(info.type, std::chrono::seconds(info.slow_query_ttl_sec), info.session_id);
+        init_session_records(info.type, std::chrono::seconds(info.slow_query_ttl_sec), info.session_id, info.parent_id);
         _slow_query_threshold = std::chrono::microseconds(info.slow_query_threshold_us);
 
         trace_state_logger.trace("{}: props {}, slow query threshold {}us, slow query ttl {}s", session_id(), _state_props.mask(), info.slow_query_threshold_us, info.slow_query_ttl_sec);
@@ -220,13 +220,19 @@ public:
         return _records->session_rec.slow_query_record_ttl.count();
     }
 
+    /**
+     * @return a span ID
+     */
+    span_id my_span_id() const {
+        return _records->my_span_id;
+    }
+
 private:
     bool should_log_slow_query(elapsed_clock::duration e) const {
         return log_slow_query() && e > _slow_query_threshold;
     }
 
-    void init_session_records(trace_type type, std::chrono::seconds slow_query_ttl, const std::experimental::optional<utils::UUID>& session_id = std::experimental::nullopt)
-    {
+    void init_session_records(trace_type type, std::chrono::seconds slow_query_ttl, std::experimental::optional<utils::UUID> session_id = std::experimental::nullopt, span_id parent_id = span_id::illegal_id) {
         _records = make_lw_shared<one_session_records>();
         _records->session_id = session_id ? *session_id : utils::UUID_gen::get_time_UUID();
 
@@ -242,6 +248,8 @@ private:
 
         _records->session_rec.command = type;
         _records->session_rec.slow_query_record_ttl = slow_query_ttl;
+        _records->my_span_id = span_id::make_span_id();
+        _records->parent_id = parent_id;
     }
 
     bool should_write_records() const {
@@ -596,7 +604,7 @@ inline std::experimental::optional<trace_info> make_trace_info(const trace_state
     // happens on a remote replica after a Client has received a response for
     // his/her query.
     if (state && (state->full_tracing() || (state->log_slow_query() && !state->is_in_state(trace_state::state::background)))) {
-        return trace_info{state->session_id(), state->type(), state->write_on_close(), state->raw_props(), state->slow_query_threshold_us(), state->slow_query_ttl_sec()};
+        return trace_info{state->session_id(), state->type(), state->write_on_close(), state->raw_props(), state->slow_query_threshold_us(), state->slow_query_ttl_sec(), state->my_span_id()};
     }
 
     return std::experimental::nullopt;
