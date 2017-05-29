@@ -167,6 +167,7 @@ public:
     reverter apply_reversibly(const schema& s, range_tombstone_list& rt_list);
 
     friend std::ostream& operator<<(std::ostream& out, const range_tombstone_list&);
+    bool equal(const schema&, const range_tombstone_list&) const;
 private:
     void apply_reversibly(const schema& s, clustering_key_prefix start, bound_kind start_kind,
                           clustering_key_prefix end, bound_kind end_kind, tombstone tomb, reverter& rev);

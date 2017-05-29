@@ -388,3 +388,9 @@ void range_tombstone_list::update_undo_op::undo(const schema& s, range_tombstone
 std::ostream& operator<<(std::ostream& out, const range_tombstone_list& list) {
     return out << "{" << ::join(", ", list) << "}";
 }
+
+bool range_tombstone_list::equal(const schema& s, const range_tombstone_list& other) const {
+    return boost::equal(_tombstones, other._tombstones, [&s] (auto&& rt1, auto&& rt2) {
+        return rt1.equal(s, rt2);
+    });
+}
