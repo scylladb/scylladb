@@ -29,6 +29,11 @@
 class reader_assertions {
     mutation_reader _reader;
     dht::partition_range _pr;
+private:
+    mutation_opt read_next() {
+        auto smo = _reader().get0();
+        return mutation_from_streamed_mutation(std::move(smo)).get0();
+    }
 public:
     reader_assertions(mutation_reader reader)
         : _reader(std::move(reader))
@@ -36,35 +41,28 @@ public:
 
     reader_assertions& produces(const dht::decorated_key& dk) {
         BOOST_TEST_MESSAGE(sprint("Expecting key %s", dk));
-        _reader().then([&] (auto sm) {
-            if (!sm) {
-                BOOST_FAIL(sprint("Expected: %s, got end of stream", dk));
-            }
-            if (!sm->decorated_key().equal(*sm->schema(), dk)) {
-                BOOST_FAIL(sprint("Expected: %s, got: %s", dk, sm->decorated_key()));
-            }
-        }).get0();
+        auto mo = read_next();
+        if (!mo) {
+            BOOST_FAIL(sprint("Expected: %s, got end of stream", dk));
+        }
+        if (!mo->decorated_key().equal(*mo->schema(), dk)) {
+            BOOST_FAIL(sprint("Expected: %s, got: %s", dk, mo->decorated_key()));
+        }
         return *this;
     }
 
     reader_assertions& produces(mutation m) {
         BOOST_TEST_MESSAGE(sprint("Expecting %s", m));
-        _reader().then([] (auto sm) {
-            return mutation_from_streamed_mutation(std::move(sm));
-        }).then([this, m = std::move(m)] (mutation_opt&& mo) mutable {
-            BOOST_REQUIRE(bool(mo));
-            assert_that(*mo).is_equal_to(m);
-        }).get0();
+        auto mo = read_next();
+        BOOST_REQUIRE(bool(mo));
+        assert_that(*mo).is_equal_to(m);
         return *this;
     }
 
     mutation_assertion next_mutation() {
-        return _reader().then([] (auto sm) {
-            return mutation_from_streamed_mutation(std::move(sm));
-        }).then([] (mutation_opt&& mo) mutable {
-            BOOST_REQUIRE(bool(mo));
-            return mutation_assertion(std::move(*mo));
-        }).get0();
+        auto mo = read_next();
+        BOOST_REQUIRE(bool(mo));
+        return mutation_assertion(std::move(*mo));
     }
 
     template<typename RangeOfMutations>
@@ -77,20 +75,16 @@ public:
 
     reader_assertions& produces_end_of_stream() {
         BOOST_TEST_MESSAGE("Expecting end of stream");
-        _reader().then([] (auto sm) {
-            return mutation_from_streamed_mutation(std::move(sm));
-        }).then([this] (mutation_opt&& mo) mutable {
-            if (bool(mo)) {
-                BOOST_FAIL(sprint("Expected end of stream, got %s", *mo));
-            }
-        }).get0();
+        auto mo = read_next();
+        if (bool(mo)) {
+            BOOST_FAIL(sprint("Expected end of stream, got %s", *mo));
+        }
         return *this;
     }
 
     reader_assertions& produces_eos_or_empty_mutation() {
         BOOST_TEST_MESSAGE("Expecting eos or empty mutation");
-        auto sm = _reader().get0();
-        mutation_opt mo = mutation_from_streamed_mutation(std::move(sm)).get0();
+        auto mo = read_next();
         if (mo) {
             if (!mo->partition().empty()) {
                 BOOST_FAIL(sprint("Mutation is not empty: %s", *mo));
