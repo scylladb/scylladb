@@ -107,6 +107,10 @@ public:
         return {clustering_row_tag_t(), ck};
     }
 
+    static position_in_partition_view after_key(const clustering_key& ck) {
+        return {1, &ck};
+    }
+
     bool is_static_row() const { return !_ck; }
 
     // Returns true if all fragments that can be seen for given schema have
