@@ -30,7 +30,12 @@ public:
         : _m(std::move(m))
     { }
 
-    mutation_assertion& is_equal_to(const mutation& other) {
+    // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
+    mutation_assertion& is_equal_to(const mutation& other, const query::clustering_row_ranges& ck_ranges = {}) {
+        if (!ck_ranges.empty()) {
+            mutation_assertion(_m.sliced(ck_ranges)).is_equal_to(other.sliced(ck_ranges));
+            return *this;
+        }
         if (_m != other) {
             BOOST_FAIL(sprint("Mutations differ, expected %s\n ...but got: %s", other, _m));
         }
@@ -171,7 +176,8 @@ public:
         return *this;
     }
 
-    streamed_mutation_assertions& produces_range_tombstone(const range_tombstone& rt) {
+    // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
+    streamed_mutation_assertions& produces_range_tombstone(const range_tombstone& rt, const query::clustering_row_ranges& ck_ranges = {}) {
         BOOST_TEST_MESSAGE(sprint("Expect %s", rt));
         auto mfo = _sm().get0();
         if (!mfo) {
@@ -181,7 +187,18 @@ public:
             BOOST_FAIL(sprint("Expected range tombstone %s, but got %s", rt, *mfo));
         }
         auto& actual = mfo->as_range_tombstone();
-        if (!actual.equal(*_sm.schema(), rt)) {
+        const schema& s = *_sm.schema();
+        if (!ck_ranges.empty()) {
+            range_tombstone_list actual_list(s);
+            range_tombstone_list expected_list(s);
+            actual_list.apply(s, actual);
+            expected_list.apply(s, rt);
+            actual_list.trim(s, ck_ranges);
+            expected_list.trim(s, ck_ranges);
+            if (!actual_list.equal(s, expected_list)) {
+                BOOST_FAIL(sprint("Expected %s, but got %s", expected_list, actual_list));
+            }
+        } else if (!actual.equal(s, rt)) {
             BOOST_FAIL(sprint("Expected range tombstone %s, but got %s", rt, actual));
         }
         return *this;
