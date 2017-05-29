@@ -551,6 +551,13 @@ public:
     val(native_transport_port, uint16_t, 9042, Used,                \
             "Port on which the CQL native transport listens for clients."  \
     )   \
+    val(native_transport_port_ssl, uint16_t, 9142, Used,                \
+            "Port on which the CQL TLS native transport listens for clients."  \
+            "Enabling client encryption and keeping native_transport_port_ssl disabled will use encryption" \
+            "for native_transport_port. Setting native_transport_port_ssl to a different value" \
+            "from native_transport_port will use encryption for native_transport_port_ssl while"    \
+            "keeping native_transport_port unencrypted" \
+    )   \
     val(native_transport_max_threads, uint32_t, 128, Invalid,                \
             "The maximum number of thread handling requests. The meaning is the same as rpc_max_threads.\n"  \
             "Default is different (128 versus unlimited).\n"  \

@@ -2016,25 +2016,30 @@ future<> storage_service::start_native_transport() {
         ss._cql_server = cserver;
 
         auto& cfg = ss._db.local().get_config();
-        auto port = cfg.native_transport_port();
         auto addr = cfg.rpc_address();
         auto ceo = cfg.client_encryption_options();
         auto keepalive = cfg.rpc_keepalive();
         cql_transport::cql_load_balance lb = cql_transport::parse_load_balance(cfg.load_balance());
-        return seastar::net::dns::resolve_name(addr).then([cserver, addr, port, lb, keepalive, ceo = std::move(ceo)] (seastar::net::inet_address ip) {
-            return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), lb).then([cserver, port, addr, ip, ceo, keepalive]() {
+        return seastar::net::dns::resolve_name(addr).then([cserver, addr, &cfg, lb, keepalive, ceo = std::move(ceo)] (seastar::net::inet_address ip) {
+            return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), lb).then([cserver, &cfg, addr, ip, ceo, keepalive]() {
                 // #293 - do not stop anything
                 //engine().at_exit([cserver] {
                 //    return cserver->stop();
                 //});
 
-                std::shared_ptr<seastar::tls::credentials_builder> cred;
-                auto addr = ipv4_addr{ip, port};
                 auto f = make_ready_future();
+
+                struct listen_cfg {
+                    ipv4_addr addr;
+                    std::shared_ptr<seastar::tls::credentials_builder> cred;
+                };
+
+                std::vector<listen_cfg> configs({ { ipv4_addr{ip, cfg.native_transport_port()} }});
 
                 // main should have made sure values are clean and neatish
                 if (ceo.at("enabled") == "true") {
-                    cred = std::make_shared<seastar::tls::credentials_builder>();
+                    auto cred = std::make_shared<seastar::tls::credentials_builder>();
+
                     cred->set_dh_level(seastar::tls::dh_params::level::MEDIUM);
 
                     if (ceo.count("priority_string")) {
@@ -2051,13 +2056,25 @@ future<> storage_service::start_native_transport() {
                     }
 
                     slogger.info("Enabling encrypted CQL connections between client and server");
+
+                    if (cfg.native_transport_port_ssl.is_set() && cfg.native_transport_port_ssl() != cfg.native_transport_port()) {
+                        configs.emplace_back(listen_cfg{ipv4_addr{ip, cfg.native_transport_port_ssl()}, std::move(cred)});
+                    } else {
+                        configs.back().cred = std::move(cred);
+                    }
                 }
-                return f.then([cserver, addr, cred = std::move(cred), keepalive] {
-                    return cserver->invoke_on_all(&cql_transport::cql_server::listen, addr, cred, keepalive);
+
+                return f.then([cserver, configs = std::move(configs), keepalive] {
+                    return parallel_for_each(configs, [cserver, keepalive](const listen_cfg & cfg) {
+                        return cserver->invoke_on_all(&cql_transport::cql_server::listen, cfg.addr, cfg.cred, keepalive).then([cfg] {
+                            slogger.info("Starting listening for CQL clients on {} ({})"
+                                            , cfg.addr, cfg.cred ? "encrypted" : "unencrypted"
+                                            );
+                        });
+                    });
+
                 });
             });
-        }).then([addr, port] {
-            slogger.info("Starting listening for CQL clients on {}:{}...", addr, port);
         });
     });
 }

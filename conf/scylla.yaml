@@ -89,6 +89,15 @@ listen_address: localhost
 # For security reasons, you should not expose this port to the internet.  Firewall it if needed.
 native_transport_port: 9042
 
+# Enabling native transport encryption in client_encryption_options allows you to either use
+# encryption for the standard port or to use a dedicated, additional port along with the unencrypted
+# standard native_transport_port.
+# Enabling client encryption and keeping native_transport_port_ssl disabled will use encryption
+# for native_transport_port. Setting native_transport_port_ssl to a different value
+# from native_transport_port will use encryption for native_transport_port_ssl while
+# keeping native_transport_port unencrypted.
+#native_transport_port_ssl: 9142
+
 # Throttles all outbound streaming file transfers on this node to the
 # given total throughput in Mbps. This is necessary because Scylla does
 # mostly sequential IO when streaming data during bootstrap or repair, which
