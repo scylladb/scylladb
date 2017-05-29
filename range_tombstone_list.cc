@@ -384,3 +384,7 @@ void range_tombstone_list::update_undo_op::undo(const schema& s, range_tombstone
     assert (it != rt_list.end());
     *it = std::move(_old_rt);
 }
+
+std::ostream& operator<<(std::ostream& out, const range_tombstone_list& list) {
+    return out << "{" << ::join(", ", list) << "}";
+}
