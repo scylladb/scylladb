@@ -268,6 +268,7 @@ cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<c
     , _query_processor(qp)
     , _max_request_size(memory::stats().total_memory() / 10)
     , _memory_available(_max_request_size)
+    , _notifier(std::make_unique<event_notifier>())
     , _lb(lb)
 {
     namespace sm = seastar::metrics;
@@ -309,18 +310,12 @@ future<> cql_server::stop() {
             clogger.debug("cql_server: shutdown connection {} out of {} done", ++(*nr_conn), nr_conn_total);
         });
     }).then([this] {
-        service::get_local_storage_service().unregister_subscriber(_notifier.get());
-        service::get_local_migration_manager().unregister_listener(_notifier.get());
         return std::move(_stopped);
     });
 }
 
 future<>
 cql_server::listen(ipv4_addr addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool keepalive) {
-    _notifier = std::make_unique<event_notifier>(addr.port);
-    service::get_local_migration_manager().register_listener(_notifier.get());
-    service::get_local_storage_service().register_subscriber(_notifier.get());
-
     listen_options lo;
     lo.reuse_address = true;
     server_socket ss;
@@ -332,14 +327,14 @@ cql_server::listen(ipv4_addr addr, std::shared_ptr<seastar::tls::credentials_bui
         throw std::runtime_error(sprint("CQLServer error while listening on %s -> %s", make_ipv4_address(addr), std::current_exception()));
     }
     _listeners.emplace_back(std::move(ss));
-    _stopped = when_all(std::move(_stopped), do_accepts(_listeners.size() - 1, keepalive)).discard_result();
+    _stopped = when_all(std::move(_stopped), do_accepts(_listeners.size() - 1, keepalive, addr)).discard_result();
     return make_ready_future<>();
 }
 
 future<>
-cql_server::do_accepts(int which, bool keepalive) {
+cql_server::do_accepts(int which, bool keepalive, ipv4_addr server_addr) {
     ++_connections_being_accepted;
-    return _listeners[which].accept().then_wrapped([this, which, keepalive] (future<connected_socket, socket_address> f_cs_sa) mutable {
+    return _listeners[which].accept().then_wrapped([this, which, keepalive, server_addr] (future<connected_socket, socket_address> f_cs_sa) mutable {
         --_connections_being_accepted;
         if (_stopping) {
             f_cs_sa.ignore_ready_future();
@@ -351,7 +346,7 @@ cql_server::do_accepts(int which, bool keepalive) {
         auto addr = std::get<1>(std::move(cs_sa));
         fd.set_nodelay(true);
         fd.set_keepalive(keepalive);
-        auto conn = make_shared<connection>(*this, std::move(fd), std::move(addr));
+        auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
         ++_connects;
         ++_connections;
         conn->process().then_wrapped([this, conn] (future<> f) {
@@ -362,13 +357,13 @@ cql_server::do_accepts(int which, bool keepalive) {
                 clogger.debug("connection error: {}", std::current_exception());
             }
         });
-        do_accepts(which, keepalive);
-    }).then_wrapped([this, which, keepalive] (future<> f) {
+        do_accepts(which, keepalive, server_addr);
+    }).then_wrapped([this, which, keepalive, server_addr] (future<> f) {
         try {
             f.get();
         } catch (...) {
             clogger.warn("acccept failed: {}", std::current_exception());
-            do_accepts(which, keepalive);
+            do_accepts(which, keepalive, server_addr);
         }
     });
 }
@@ -555,12 +550,14 @@ future<response_type>
     });
 }
 
-cql_server::connection::connection(cql_server& server, connected_socket&& fd, socket_address addr)
+cql_server::connection::connection(cql_server& server, ipv4_addr server_addr, connected_socket&& fd, socket_address addr)
     : _server(server)
+    , _server_addr(server_addr)
     , _fd(std::move(fd))
     , _read_buf(_fd.input())
     , _write_buf(_fd.output())
-    , _client_state(service::client_state::external_tag{}, addr) {
+    , _client_state(service::client_state::external_tag{}, addr)
+{
     ++_server._total_connections;
     ++_server._current_connections;
     _server._connections_list.push_back(*this);

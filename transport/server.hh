@@ -120,7 +120,7 @@ private:
 public:
     cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb);
     future<> listen(ipv4_addr addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool keepalive = false);
-    future<> do_accepts(int which, bool keepalive);
+    future<> do_accepts(int which, bool keepalive, ipv4_addr server_addr);
     future<> stop();
 public:
     class response;
@@ -130,6 +130,7 @@ private:
     friend class process_request_executor;
     class connection : public boost::intrusive::list_base_hook<> {
         cql_server& _server;
+        ipv4_addr _server_addr;
         connected_socket _fd;
         input_stream<char> _read_buf;
         output_stream<char> _write_buf;
@@ -155,7 +156,7 @@ private:
         state _state = state::UNINITIALIZED;
         ::shared_ptr<auth::authenticator::sasl_challenge> _sasl_challenge;
     public:
-        connection(cql_server& server, connected_socket&& fd, socket_address addr);
+        connection(cql_server& server, ipv4_addr server_addr, connected_socket&& fd, socket_address addr);
         ~connection();
         future<> process();
         future<> process_request();
@@ -241,13 +242,13 @@ private:
 class cql_server::event_notifier : public service::migration_listener,
                                    public service::endpoint_lifecycle_subscriber
 {
-    uint16_t _port;
     std::set<cql_server::connection*> _topology_change_listeners;
     std::set<cql_server::connection*> _status_change_listeners;
     std::set<cql_server::connection*> _schema_change_listeners;
     std::unordered_map<gms::inet_address, event::status_change::status_type> _last_status_change;
 public:
-    event_notifier(uint16_t port);
+    event_notifier();
+    ~event_notifier();
     void register_event(cql_transport::event::event_type et, cql_server::connection* conn);
     void unregister_connection(cql_server::connection* conn);
 

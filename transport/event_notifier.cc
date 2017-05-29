@@ -21,14 +21,23 @@
 
 #include "transport/server.hh"
 #include "core/gate.hh"
+#include "service/migration_manager.hh"
+#include "service/storage_service.hh"
 
 namespace cql_transport {
 
 static logging::logger elogger("event_notifier");
 
-cql_server::event_notifier::event_notifier(uint16_t port)
-    : _port{port}
+cql_server::event_notifier::event_notifier()
 {
+    service::get_local_migration_manager().register_listener(this);
+    service::get_local_storage_service().register_subscriber(this);
+}
+
+cql_server::event_notifier::~event_notifier()
+{
+    service::get_local_storage_service().unregister_subscriber(this);
+    service::get_local_migration_manager().unregister_listener(this);
 }
 
 void cql_server::event_notifier::register_event(event::event_type et, cql_server::connection* conn)
@@ -232,7 +241,7 @@ void cql_server::event_notifier::on_join_cluster(const gms::inet_address& endpoi
     for (auto&& conn : _topology_change_listeners) {
         using namespace cql_transport;
         with_gate(conn->_pending_requests_gate, [&] {
-            return conn->write_response(conn->make_topology_change_event(event::topology_change::new_node(endpoint, _port)));
+            return conn->write_response(conn->make_topology_change_event(event::topology_change::new_node(endpoint, conn->_server_addr.port)));
         });
     }
 }
@@ -242,7 +251,7 @@ void cql_server::event_notifier::on_leave_cluster(const gms::inet_address& endpo
     for (auto&& conn : _topology_change_listeners) {
         using namespace cql_transport;
         with_gate(conn->_pending_requests_gate, [&] {
-            return conn->write_response(conn->make_topology_change_event(event::topology_change::removed_node(endpoint, _port)));
+            return conn->write_response(conn->make_topology_change_event(event::topology_change::removed_node(endpoint, conn->_server_addr.port)));
         });
     }
 }
@@ -252,7 +261,7 @@ void cql_server::event_notifier::on_move(const gms::inet_address& endpoint)
     for (auto&& conn : _topology_change_listeners) {
         using namespace cql_transport;
         with_gate(conn->_pending_requests_gate, [&] {
-            return conn->write_response(conn->make_topology_change_event(event::topology_change::moved_node(endpoint, _port)));
+            return conn->write_response(conn->make_topology_change_event(event::topology_change::moved_node(endpoint, conn->_server_addr.port)));
         });
     }
 }
@@ -265,7 +274,7 @@ void cql_server::event_notifier::on_up(const gms::inet_address& endpoint)
         for (auto&& conn : _status_change_listeners) {
             using namespace cql_transport;
             with_gate(conn->_pending_requests_gate, [&] {
-                return conn->write_response(conn->make_status_change_event(event::status_change::node_up(endpoint, _port)));
+                return conn->write_response(conn->make_status_change_event(event::status_change::node_up(endpoint, conn->_server_addr.port)));
             });
         }
     }
@@ -279,7 +288,7 @@ void cql_server::event_notifier::on_down(const gms::inet_address& endpoint)
         for (auto&& conn : _status_change_listeners) {
             using namespace cql_transport;
             with_gate(conn->_pending_requests_gate, [&] {
-                return conn->write_response(conn->make_status_change_event(event::status_change::node_down(endpoint, _port)));
+                return conn->write_response(conn->make_status_change_event(event::status_change::node_down(endpoint, conn->_server_addr.port)));
             });
         }
     }
