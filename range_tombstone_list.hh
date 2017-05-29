@@ -140,6 +140,9 @@ public:
     // Returns range of tombstones which overlap with given range
     boost::iterator_range<const_iterator> slice(const schema& s, const query::clustering_range&) const;
     iterator erase(const_iterator, const_iterator);
+    // Ensures that every range tombstone is strictly contained within given clustering ranges.
+    // Preserves all information which may be relevant for rows from that ranges.
+    void trim(const schema& s, const query::clustering_row_ranges&);
     range_tombstone_list difference(const schema& s, const range_tombstone_list& rt_list) const;
     // Erases the range tombstones for which filter returns true.
     template <typename Pred>

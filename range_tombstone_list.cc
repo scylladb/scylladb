@@ -312,6 +312,22 @@ range_tombstone_list::erase(const_iterator a, const_iterator b) {
     return _tombstones.erase_and_dispose(a, b, current_deleter<range_tombstone>());
 }
 
+void range_tombstone_list::trim(const schema& s, const query::clustering_row_ranges& ranges) {
+    range_tombstone_list list(s);
+    bound_view::compare less(s);
+    for (auto&& range : ranges) {
+        auto start = bound_view::from_range_start(range);
+        auto end = bound_view::from_range_end(range);
+        for (const range_tombstone& rt : slice(s, range)) {
+            list.apply(s, range_tombstone(
+                std::max(rt.start_bound(), start, less),
+                std::min(rt.end_bound(), end, less),
+                rt.tomb));
+        }
+    }
+    *this = std::move(list);
+}
+
 range_tombstone_list::range_tombstones_type::iterator
 range_tombstone_list::reverter::insert(range_tombstones_type::iterator it, range_tombstone& new_rt) {
     _ops.emplace_back(insert_undo_op(new_rt));
