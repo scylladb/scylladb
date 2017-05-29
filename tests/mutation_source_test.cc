@@ -90,7 +90,7 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populat
         }
 
         mutation sliced_m = mutation_from_streamed_mutation(sliced_sm).get0();
-        assert_that(sliced_m).is_equal_to(fwd_m);
+        assert_that(sliced_m).is_equal_to(fwd_m, slice_with_ranges.row_ranges(*m.schema(), m.key()));
     }
 }
 
@@ -295,9 +295,9 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
         auto sm = assert_that_stream(std::move(*smo));
 
         sm.produces_row_with_key(keys[2]);
-        sm.produces_range_tombstone(rt3);
+        sm.produces_range_tombstone(rt3, slice.row_ranges(*s, m.key()));
         sm.produces_row_with_key(keys[8]);
-        sm.produces_range_tombstone(rt4);
+        sm.produces_range_tombstone(rt4, slice.row_ranges(*s, m.key()));
         sm.produces_end_of_stream();
     }
 
@@ -314,9 +314,9 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
         streamed_mutation_opt smo = rd().get0();
         BOOST_REQUIRE(bool(smo));
         assert_that_stream(std::move(*smo))
-            .produces_range_tombstone(rt3)
+            .produces_range_tombstone(rt3, slice.row_ranges(*s, m.key()))
             .produces_row_with_key(keys[8])
-            .produces_range_tombstone(rt4)
+            .produces_range_tombstone(rt4, slice.row_ranges(*s, m.key()))
             .produces_end_of_stream();
     }
 }
@@ -676,7 +676,7 @@ static void test_clustering_slices(populate_fn populate) {
             .with_range(query::clustering_range::make_singular(make_ck(2)))
             .build();
         assert_that(ds(s, pr, slice))
-            .produces(row6 + row7 + del_1 + del_2)
+            .produces(row6 + row7 + del_1 + del_2, slice.row_ranges(*s, pk.key()))
             .produces_end_of_stream();
     }
 
