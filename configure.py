@@ -743,7 +743,7 @@ scylla_release = file.read().strip()
 
 extra_cxxflags["release.cc"] = "-DSCYLLA_VERSION=\"\\\"" + scylla_version + "\\\"\" -DSCYLLA_RELEASE=\"\\\"" + scylla_release + "\\\"\""
 
-seastar_flags = ['--disable-xen']
+seastar_flags = []
 if args.dpdk:
     # fake dependencies on dpdk, so that it is built before anything else
     seastar_flags += ['--enable-dpdk']
