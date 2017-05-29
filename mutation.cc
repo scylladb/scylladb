@@ -206,6 +206,12 @@ mutation& mutation::operator+=(mutation&& other) {
     return *this;
 }
 
+mutation mutation::sliced(const query::clustering_row_ranges& ranges) const {
+    auto m = mutation(schema(), decorated_key(), mutation_partition(partition(), *schema(), ranges));
+    m.partition().row_tombstones().trim(*schema(), ranges);
+    return m;
+}
+
 class mutation_rebuilder {
     mutation _m;
     streamed_mutation& _sm;
