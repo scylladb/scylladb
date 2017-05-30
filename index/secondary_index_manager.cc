@@ -43,8 +43,6 @@
 
 namespace secondary_index {
 
-seastar::sharded<secondary_index_manager> _the_secondary_index_manager;
-
 std::set<index_metadata> secondary_index_manager::get_dependent_indices(const column_definition& cdef) const {
     // FIXME
     return {};

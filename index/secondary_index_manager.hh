@@ -43,19 +43,14 @@
 
 #include "schema.hh"
 
-#include <seastar/core/sharded.hh>
+#include <vector>
+#include <set>
 
 namespace secondary_index {
 
-class secondary_index_manager : public seastar::async_sharded_service<secondary_index_manager> {
+class secondary_index_manager {
 public:
-  std::set<index_metadata> get_dependent_indices(const column_definition& cdef) const;
+    std::set<index_metadata> get_dependent_indices(const column_definition& cdef) const;
 };
-
-extern seastar::sharded<secondary_index_manager> _the_secondary_index_manager;
-
-inline seastar::sharded<secondary_index_manager>& get_secondary_index_manager() {
-    return _the_secondary_index_manager;
-}
 
 }
