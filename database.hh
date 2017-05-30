@@ -1224,9 +1224,6 @@ public:
     friend class distributed_loader;
 };
 
-// FIXME: stub
-class secondary_index_manager {};
-
 future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy);
 
 class distributed_loader {
