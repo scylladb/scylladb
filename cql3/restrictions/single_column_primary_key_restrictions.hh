@@ -312,11 +312,11 @@ public:
         fail(unimplemented::cause::LEGACY_COMPOSITE_KEYS); // not 100% correct...
     }
 
-#if 0
-    virtual bool hasSupportingIndex(SecondaryIndexManager indexManager) override {
-        return restrictions.hasSupportingIndex(indexManager);
+    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager) const override {
+        return _restrictions->has_supporting_index(index_manager);
     }
 
+#if 0
     virtual void addIndexExpressionTo(List<IndexExpression> expressions, QueryOptions options) override {
         restrictions.addIndexExpressionTo(expressions, options);
     }

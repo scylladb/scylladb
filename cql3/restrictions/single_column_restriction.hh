@@ -82,14 +82,18 @@ public:
         ByteBuffer value = validateIndexedValue(columnDef, values.get(0));
         expressions.add(new IndexExpression(columnDef.name.bytes, Operator.EQ, value));
     }
+#endif
 
-    @Override
-    public boolean hasSupportingIndex(SecondaryIndexManager indexManager)
-    {
-        SecondaryIndex index = indexManager.getIndexForColumn(columnDef.name.bytes);
-        return index != null && isSupportedBy(index);
+    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager) const override {
+        for (const auto& index : index_manager.list_indexes()) {
+            if (is_supported_by(index))
+                return true;
+        }
+        return false;
     }
 
+    virtual bool is_supported_by(const secondary_index::index& index) const = 0;
+#if 0
     /**
      * Check if this type of restriction is supported by the specified index.
      *
@@ -127,6 +131,10 @@ public:
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
         return abstract_restriction::term_uses_function(_value, ks_name, function_name);
+    }
+
+    virtual bool is_supported_by(const secondary_index::index& index) const override {
+        return index.supports_expression(_column_def, cql3::operator_type::EQ);
     }
 
     virtual bool is_EQ() const override {
@@ -176,6 +184,10 @@ public:
 
     virtual bool is_IN() const override {
         return true;
+    }
+
+    virtual bool is_supported_by(const secondary_index::index& index) const override {
+        return index.supports_expression(_column_def, cql3::operator_type::IN);
     }
 
     virtual void merge_with(::shared_ptr<restriction> r) override {
@@ -262,6 +274,10 @@ public:
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
         return (_slice.has_bound(statements::bound::START) && abstract_restriction::term_uses_function(_slice.bound(statements::bound::START), ks_name, function_name))
                 || (_slice.has_bound(statements::bound::END) && abstract_restriction::term_uses_function(_slice.bound(statements::bound::END), ks_name, function_name));
+    }
+
+    virtual bool is_supported_by(const secondary_index::index& index) const override {
+        return _slice.is_supported_by(_column_def, index);
     }
 
     virtual bool is_slice() const override {
@@ -403,22 +419,21 @@ public:
                 target.add(new IndexExpression(columnDef.name.bytes, op, value));
             }
         }
+#endif
 
-        virtual bool is_supported_by(SecondaryIndex index) override {
+        virtual bool is_supported_by(const secondary_index::index& index) const override {
             bool supported = false;
-
-            if (numberOfValues() > 0)
-                supported |= index.supportsOperator(Operator.CONTAINS);
-
-            if (numberOfKeys() > 0)
-                supported |= index.supportsOperator(Operator.CONTAINS_KEY);
-
-            if (numberOfEntries() > 0)
-                supported |= index.supportsOperator(Operator.EQ);
-
+            if (number_of_values() > 0) {
+                supported |= index.supports_expression(_column_def, cql3::operator_type::CONTAINS);
+            }
+            if (number_of_keys() > 0) {
+                supported |= index.supports_expression(_column_def, cql3::operator_type::CONTAINS_KEY);
+            }
+            if (number_of_entries() > 0) {
+                supported |= index.supports_expression(_column_def, cql3::operator_type::EQ);
+            }
             return supported;
         }
-#endif
 
     uint32_t number_of_values() const {
         return _values.size();

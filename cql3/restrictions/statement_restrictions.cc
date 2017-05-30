@@ -87,6 +87,9 @@ public:
     uint32_t size() const override {
         return 0;
     }
+    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager) const override {
+        return false;
+    }
     sstring to_string() const override {
         return "Initial restrictions";
     }
@@ -198,16 +201,12 @@ statement_restrictions::statement_restrictions(database& db,
             }
         }
     }
-
-    warn(unimplemented::cause::INDEXES);
-#if 0
-    ColumnFamilyStore cfs = Keyspace.open(cfm.ks_name).getColumnFamilyStore(cfm.cfName);
-    secondary_index_manager secondaryIndexManager = cfs.index_manager;
-#endif
-    bool has_queriable_clustering_column_index = false; /*_clustering_columns_restrictions->has_supporting_index(secondaryIndexManager);*/
-    bool has_queriable_index = false; /*has_queriable_clustering_column_index
-            || _partition_key_restrictions->has_supporting_index(secondaryIndexManager)
-            || nonprimary_key_restrictions->has_supporting_index(secondaryIndexManager);*/
+    auto& cf = db.find_column_family(schema);
+    auto& sim = cf.get_index_manager();
+    bool has_queriable_clustering_column_index = _clustering_columns_restrictions->has_supporting_index(sim);
+    bool has_queriable_index = has_queriable_clustering_column_index
+            || _partition_key_restrictions->has_supporting_index(sim)
+            || _nonprimary_key_restrictions->has_supporting_index(sim);
 
     // At this point, the select statement if fully constructed, but we still have a few things to validate
     process_partition_key_restrictions(has_queriable_index, for_view);

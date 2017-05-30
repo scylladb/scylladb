@@ -73,11 +73,11 @@ public:
         return _column_definitions;
     }
 
-#if 0
-    bool has_supporting_index(::shared_ptr<secondary_index_manager> index_manager) const override {
+    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager) const override {
         return false;
     }
 
+#if 0
     void add_index_expression_to(std::vector<::shared_ptr<index_expression>>& expressions,
                                          const query_options& options) override {
         throw exceptions::unsupported_operation_exception();

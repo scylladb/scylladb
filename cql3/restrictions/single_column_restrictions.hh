@@ -150,8 +150,7 @@ public:
         }
     }
 
-#if 0
-    virtual bool has_supporting_index(::shared_ptr<secondary_index_manager> index_manager) const override {
+    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager) const override {
         for (auto&& e : _restrictions) {
             if (e.second->has_supporting_index(index_manager)) {
                 return true;
@@ -159,7 +158,6 @@ public:
         }
         return false;
     }
-#endif
 
     /**
      * Returns the column after the specified one.
