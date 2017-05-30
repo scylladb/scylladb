@@ -54,6 +54,13 @@ public:
         return *this;
     }
 
+    mutation_assertion& has_same_continuity(const mutation& other) {
+        if (!_m.partition().equal_continuity(*_m.schema(), other.partition())) {
+            BOOST_FAIL(sprint("Continuity doesn't match: %s\n ...and: %s", other, _m));
+        }
+        return *this;
+    }
+
     // Verifies that mutation data remains unchanged when upgraded to the new schema
     void is_upgrade_equivalent(schema_ptr new_schema) {
         mutation m2 = _m;

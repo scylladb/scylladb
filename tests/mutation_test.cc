@@ -48,6 +48,7 @@
 #include "cell_locking.hh"
 
 #include "disk-error-handler.hh"
+#include "simple_schema.hh"
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
@@ -830,7 +831,8 @@ SEASTAR_TEST_CASE(test_apply_is_atomic_in_case_of_allocation_failures) {
                         break; // we exhausted all allocation points
                     } catch (const std::bad_alloc&) {
                         BOOST_TEST_MESSAGE("Checking that apply was reverted");
-                        assert_that(m).is_equal_to(target);
+                        assert_that(m).is_equal_to(target)
+                            .has_same_continuity(target);
                     }
                 }
             }
@@ -851,7 +853,8 @@ SEASTAR_TEST_CASE(test_apply_is_atomic_in_case_of_allocation_failures) {
                         assert_that(m).is_equal_to(target);
                         // they should still commute
                         m.apply(copy_of_second);
-                        assert_that(m).is_equal_to(expected_apply_result);
+                        assert_that(m).is_equal_to(expected_apply_result)
+                            .has_same_continuity(expected_apply_result);
                     }
                 }
             }
@@ -1512,4 +1515,69 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
             check_partitions_match(mutation_partition{s}, mutation_partition{s}.difference(s, m1.partition()), *s);
         });
     });
+}
+
+SEASTAR_TEST_CASE(test_continuity_merging) {
+    return seastar::async([] {
+        simple_schema table;
+        auto&& s = *table.schema();
+
+        auto new_mutation = [&] {
+            return mutation(table.make_pkey(0), table.schema());
+        };
+
+        {
+            auto left = new_mutation();
+            auto right = new_mutation();
+            auto result = new_mutation();
+
+            left.partition().clustered_row(s, table.make_ckey(0), is_dummy::no, is_continuous::yes);
+            right.partition().clustered_row(s, table.make_ckey(0), is_dummy::no, is_continuous::no);
+            result.partition().clustered_row(s, table.make_ckey(0), is_dummy::no, is_continuous::yes);
+
+            left.partition().clustered_row(s, table.make_ckey(1), is_dummy::yes, is_continuous::yes);
+            right.partition().clustered_row(s, table.make_ckey(2), is_dummy::yes, is_continuous::no);
+            result.partition().clustered_row(s, table.make_ckey(1), is_dummy::yes, is_continuous::yes);
+            result.partition().clustered_row(s, table.make_ckey(2), is_dummy::yes, is_continuous::no);
+
+            left.partition().clustered_row(s, table.make_ckey(3), is_dummy::yes, is_continuous::yes);
+            right.partition().clustered_row(s, table.make_ckey(3), is_dummy::no, is_continuous::no);
+            result.partition().clustered_row(s, table.make_ckey(3), is_dummy::yes, is_continuous::yes);
+
+            left.partition().clustered_row(s, table.make_ckey(4), is_dummy::no, is_continuous::no);
+            right.partition().clustered_row(s, table.make_ckey(4), is_dummy::no, is_continuous::yes);
+            result.partition().clustered_row(s, table.make_ckey(4), is_dummy::no, is_continuous::no);
+
+            left.partition().clustered_row(s, table.make_ckey(5), is_dummy::no, is_continuous::no);
+            right.partition().clustered_row(s, table.make_ckey(5), is_dummy::yes, is_continuous::yes);
+            result.partition().clustered_row(s, table.make_ckey(5), is_dummy::no, is_continuous::no);
+
+            left.partition().clustered_row(s, table.make_ckey(6), is_dummy::no, is_continuous::yes);
+            right.partition().clustered_row(s, table.make_ckey(6), is_dummy::yes, is_continuous::no);
+            result.partition().clustered_row(s, table.make_ckey(6), is_dummy::no, is_continuous::yes);
+
+            left.partition().clustered_row(s, table.make_ckey(7), is_dummy::yes, is_continuous::yes);
+            right.partition().clustered_row(s, table.make_ckey(7), is_dummy::yes, is_continuous::no);
+            result.partition().clustered_row(s, table.make_ckey(7), is_dummy::yes, is_continuous::yes);
+
+            left.partition().clustered_row(s, table.make_ckey(8), is_dummy::yes, is_continuous::no);
+            right.partition().clustered_row(s, table.make_ckey(8), is_dummy::yes, is_continuous::yes);
+            result.partition().clustered_row(s, table.make_ckey(8), is_dummy::yes, is_continuous::no);
+
+            assert_that(left + right).has_same_continuity(result);
+        }
+
+        // static row continuity
+        {
+            auto complete = mutation(table.make_pkey(0), table.schema());
+            auto incomplete = mutation(table.make_pkey(0), table.schema());
+            incomplete.partition().set_static_row_continuous(false);
+
+            assert_that(complete + complete).has_same_continuity(complete);
+            assert_that(complete + incomplete).has_same_continuity(complete);
+            assert_that(incomplete + complete).has_same_continuity(incomplete);
+            assert_that(incomplete + incomplete).has_same_continuity(incomplete);
+        }
+    });
+
 }
