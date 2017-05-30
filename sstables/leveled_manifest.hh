@@ -523,6 +523,11 @@ public:
         }
     };
 #endif
+
+    bool worth_promoting_L0_candidates(uint64_t candidates_total_size) const {
+        return candidates_total_size >= _max_sstable_size_in_bytes;
+    }
+
     /**
      * @return highest-priority sstables to compact for the given level.
      * If no compactions are possible (because of concurrent compactions or because some sstables are blacklisted
@@ -607,7 +612,7 @@ public:
             }
 
             // leave everything in L0 if we didn't end up with a full sstable's worth of data
-            if (get_total_bytes(candidates) > _max_sstable_size_in_bytes) {
+            if (worth_promoting_L0_candidates(get_total_bytes(candidates))) {
                 // add sstables from L1 that overlap candidates
                 // if the overlapping ones are already busy in a compaction, leave it out.
                 // TODO try to find a set of L0 sstables that only overlaps with non-busy L1 sstables
@@ -759,7 +764,7 @@ public:
         }
 
         int new_level;
-        if (minimum_level == 0 && minimum_level == maximum_level && total_bytes < _max_sstable_size_in_bytes) {
+        if (minimum_level == 0 && minimum_level == maximum_level && !worth_promoting_L0_candidates(total_bytes)) {
             new_level = 0;
         } else {
             new_level = (minimum_level == maximum_level && can_promote) ? maximum_level + 1 : maximum_level;
