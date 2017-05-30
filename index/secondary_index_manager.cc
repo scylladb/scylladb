@@ -43,6 +43,8 @@
 
 #include "database.hh"
 
+#include <boost/range/adaptor/map.hpp>
+
 namespace secondary_index {
 
 index::index(const sstring& target_column, const index_metadata& im)
@@ -69,6 +71,10 @@ secondary_index_manager::secondary_index_manager(column_family& cf)
 std::set<index_metadata> secondary_index_manager::get_dependent_indices(const column_definition& cdef) const {
     // FIXME
     return {};
+}
+
+std::vector<index> secondary_index_manager::list_indexes() const {
+    return boost::copy_range<std::vector<index>>(_indices | boost::adaptors::map_values);
 }
 
 }

@@ -62,9 +62,12 @@ public:
 
 class secondary_index_manager {
     column_family& _cf;
+    /// The key of the map is the name of the index as stored in system tables.
+    std::unordered_map<sstring, index> _indices;
 public:
     secondary_index_manager(column_family& cf);
     std::set<index_metadata> get_dependent_indices(const column_definition& cdef) const;
+    std::vector<index> list_indexes() const;
 };
 
 }
