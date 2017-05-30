@@ -43,10 +43,22 @@
 
 #include "schema.hh"
 
+#include "cql3/operator.hh"
+
 #include <vector>
 #include <set>
 
 namespace secondary_index {
+
+class index {
+    sstring _target_column;
+    index_metadata _im;
+public:
+    index(const sstring& target_column, const index_metadata& im);
+    bool depends_on(const column_definition& cdef) const;
+    bool supports_expression(const column_definition& cdef, const cql3::operator_type op) const;
+    const index_metadata& metadata() const;
+};
 
 class secondary_index_manager {
     column_family& _cf;
