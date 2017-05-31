@@ -599,6 +599,9 @@ class deletable_row final {
 public:
     deletable_row() {}
     explicit deletable_row(clustering_row&&);
+    deletable_row(row_tombstone tomb, const row_marker& marker, const row& cells)
+        : _deleted_at(tomb), _marker(marker), _cells(cells)
+    {}
 
     void apply(tombstone deleted_at) {
         _deleted_at.apply(deleted_at);
@@ -681,6 +684,9 @@ public:
     { }
     rows_entry(const clustering_key& key, const deletable_row& row)
         : _key(key), _row(row)
+    { }
+    rows_entry(const clustering_key& key, row_tombstone tomb, const row_marker& marker, const row& row)
+        : _key(key), _row(tomb, marker, row)
     { }
     rows_entry(rows_entry&& o) noexcept;
     rows_entry(const rows_entry& e)
