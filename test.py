@@ -77,7 +77,6 @@ boost_tests = [
     'input_stream_test',
     'nonwrapping_range_test',
     'virtual_reader_test',
-    'view_schema_test',
     'counter_test',
     'cell_locker_test',
 ]
@@ -150,8 +149,10 @@ if __name__ == "__main__":
         test_to_run.append(('build/release/tests/row_cache_alloc_stress', 'other',
                             '-c1 -m1G'.split()))
         test_to_run.append(('build/release/tests/sstable_test', 'boost', ['-c1']))
+        test_to_run.append(('build/release/tests/view_schema_test', 'boost', ['-c1']))
     if 'debug' in modes_to_run:
         test_to_run.append(('build/debug/tests/sstable_test', 'boost', ['-c1']))
+        test_to_run.append(('build/debug/tests/view_schema_test', 'boost', ['-c1']))
 
     if args.name:
         test_to_run = [t for t in test_to_run if args.name in t[0]]
