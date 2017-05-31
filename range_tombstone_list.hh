@@ -23,6 +23,7 @@
 
 #include "range_tombstone.hh"
 #include "query-request.hh"
+#include "position_in_partition.hh"
 #include <iosfwd>
 
 class range_tombstone_list final {
@@ -140,6 +141,8 @@ public:
     tombstone search_tombstone_covering(const schema& s, const clustering_key_prefix& key) const;
     // Returns range of tombstones which overlap with given range
     boost::iterator_range<const_iterator> slice(const schema& s, const query::clustering_range&) const;
+    // Returns range tombstones which overlap with [start, end)
+    boost::iterator_range<const_iterator> slice(const schema& s, position_in_partition_view start, position_in_partition_view end) const;
     iterator erase(const_iterator, const_iterator);
     // Ensures that every range tombstone is strictly contained within given clustering ranges.
     // Preserves all information which may be relevant for rows from that ranges.

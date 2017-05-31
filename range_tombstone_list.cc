@@ -307,6 +307,25 @@ range_tombstone_list::slice(const schema& s, const query::clustering_range& r) c
         _tombstones.upper_bound(bv_range.second, order_by_start{s}));
 }
 
+boost::iterator_range<range_tombstone_list::const_iterator>
+range_tombstone_list::slice(const schema& s, position_in_partition_view start, position_in_partition_view end) const {
+    struct order_by_end {
+        position_in_partition::less_compare less;
+        order_by_end(const schema& s) : less(s) {}
+        bool operator()(position_in_partition_view v, const range_tombstone& rt) const { return less(v, rt.end_position()); }
+        bool operator()(const range_tombstone& rt, position_in_partition_view v) const { return less(rt.end_position(), v); }
+    };
+    struct order_by_start {
+        position_in_partition::less_compare less;
+        order_by_start(const schema& s) : less(s) {}
+        bool operator()(position_in_partition_view v, const range_tombstone& rt) const { return less(v, rt.position()); }
+        bool operator()(const range_tombstone& rt, position_in_partition_view v) const { return less(rt.position(), v); }
+    };
+    return boost::make_iterator_range(
+        _tombstones.upper_bound(start, order_by_end{s}), // end_position() is exclusive, hence upper_bound()
+        _tombstones.lower_bound(end, order_by_start{s}));
+}
+
 range_tombstone_list::iterator
 range_tombstone_list::erase(const_iterator a, const_iterator b) {
     return _tombstones.erase_and_dispose(a, b, current_deleter<range_tombstone>());
