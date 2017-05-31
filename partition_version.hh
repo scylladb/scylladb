@@ -221,6 +221,8 @@ public:
     }
 
     unsigned version_count();
+    tombstone partition_tombstone() const;
+    row static_row() const;
 };
 
 class partition_entry {

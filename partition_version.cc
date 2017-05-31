@@ -62,6 +62,60 @@ partition_version::~partition_version()
     }
 }
 
+namespace {
+
+GCC6_CONCEPT(
+
+// A functor which transforms objects from Domain into objects from CoDomain
+template<typename U, typename Domain, typename CoDomain>
+concept bool Mapper() {
+    return requires(U obj, const Domain& src) {
+        { obj(src) } -> const CoDomain&
+    };
+}
+
+// A functor which merges two objects from Domain into one. The result is stored in the first argument.
+template<typename U, typename Domain>
+concept bool Reducer() {
+    return requires(U obj, Domain& dst, const Domain& src) {
+        { obj(dst, src) } -> void;
+    };
+}
+
+)
+
+// Calculates the value of particular part of mutation_partition represented by
+// the version chain starting from v.
+// |map| extracts the part from each version.
+// |reduce| Combines parts from the two versions.
+template <typename Result, typename Map, typename Reduce>
+GCC6_CONCEPT(
+requires Mapper<Map, mutation_partition, Result>() && Reducer<Reduce, Result>()
+)
+inline Result squashed(const partition_version_ref& v, Map&& map, Reduce&& reduce) {
+    Result r = map(v->partition());
+    auto it = v->next();
+    while (it) {
+        reduce(r, map(it->partition()));
+        it = it->next();
+    }
+    return r;
+}
+
+}
+
+row partition_snapshot::static_row() const {
+    return ::squashed<row>(version(),
+                         [] (const mutation_partition& mp) -> const row& { return mp.static_row(); },
+                         [this] (row& a, const row& b) { a.apply(*_schema, column_kind::static_column, b); });
+}
+
+tombstone partition_snapshot::partition_tombstone() const {
+    return ::squashed<tombstone>(version(),
+                               [] (const mutation_partition& mp) { return mp.partition_tombstone(); },
+                               [] (tombstone& a, tombstone b) { a.apply(b); });
+}
+
 partition_snapshot::~partition_snapshot() {
     if (_version && _version.is_unique_owner()) {
         auto v = &*_version;
