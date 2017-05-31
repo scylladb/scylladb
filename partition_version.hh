@@ -162,7 +162,7 @@ public:
         return *this;
     }
 
-    explicit operator bool() { return _version; }
+    explicit operator bool() const { return _version; }
 
     partition_version& operator*() {
         assert(_version);
