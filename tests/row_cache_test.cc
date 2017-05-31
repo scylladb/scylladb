@@ -1188,17 +1188,21 @@ SEASTAR_TEST_CASE(test_mvcc) {
             assert_that(*m_5).is_equal_to(m12);
         };
 
-        for_each_mutation_pair([&] (const mutation& m1, const mutation& m2_, are_equal) {
-            if (m1.schema() != m2_.schema()) {
+        for_each_mutation_pair([&] (const mutation& m1_, const mutation& m2_, are_equal) {
+            if (m1_.schema() != m2_.schema()) {
                 return;
             }
-            if (m1.partition().empty() || m2_.partition().empty()) {
+            if (m1_.partition().empty() || m2_.partition().empty()) {
                 return;
             }
-            auto s = m1.schema();
+            auto s = m1_.schema();
+
+            auto m1 = m1_;
+            m1.partition().make_fully_continuous();
 
             auto m2 = mutation(m1.decorated_key(), m1.schema());
             m2.partition().apply(*s, m2_.partition(), *s);
+            m2.partition().make_fully_continuous();
 
             test(m1, m2, false);
             test(m1, m2, true);

@@ -2133,6 +2133,19 @@ bool mutation_partition::is_fully_continuous() const {
     return true;
 }
 
+void mutation_partition::make_fully_continuous() {
+    _static_row_continuous = true;
+    auto i = _rows.begin();
+    while (i != _rows.end()) {
+        if (i->dummy()) {
+            i = _rows.erase_and_dispose(i, alloc_strategy_deleter<rows_entry>());
+        } else {
+            i->set_continuous(true);
+            ++i;
+        }
+    }
+}
+
 future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& source,
                                          const dht::decorated_key& dk,
                                          const query::partition_slice& slice,

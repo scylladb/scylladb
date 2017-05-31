@@ -896,6 +896,7 @@ public:
     bool static_row_continuous() const { return _static_row_continuous; }
     void set_static_row_continuous(bool value) { _static_row_continuous = value; }
     bool is_fully_continuous() const;
+    void make_fully_continuous();
     void apply(tombstone t) { _tombstone.apply(t); }
     void apply_delete(const schema& schema, const clustering_key_prefix& prefix, tombstone t);
     void apply_delete(const schema& schema, range_tombstone rt);
