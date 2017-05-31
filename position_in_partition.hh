@@ -131,6 +131,12 @@ public:
         return *_ck;
     }
 
+    // Can be called only when !is_static_row && !is_clustering_row().
+    bound_view as_start_bound_view() const {
+        assert(_bound_weight != 0);
+        return bound_view(*_ck, _bound_weight < 0 ? bound_kind::incl_start : bound_kind::excl_start);
+    }
+
     friend std::ostream& operator<<(std::ostream&, position_in_partition_view);
 };
 
