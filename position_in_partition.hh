@@ -90,8 +90,13 @@ public:
     position_in_partition_view(range_tag_t, bound_view bv)
         : _bound_weight(weight(bv.kind)), _ck(&bv.prefix) { }
 
-    static position_in_partition_view for_range_start(const query::clustering_range&);
-    static position_in_partition_view for_range_end(const query::clustering_range&);
+    static position_in_partition_view for_range_start(const query::clustering_range& r) {
+        return {position_in_partition_view::range_tag_t(), bound_view::from_range_start(r)};
+    }
+
+    static position_in_partition_view for_range_end(const query::clustering_range& r) {
+        return {position_in_partition_view::range_tag_t(), bound_view::from_range_end(r)};
+    }
 
     static position_in_partition_view before_all_clustered_rows() {
         return {range_tag_t(), bound_view::bottom()};
@@ -141,16 +146,6 @@ public:
     friend bool no_clustering_row_between(const schema&, position_in_partition_view, position_in_partition_view);
 };
 
-inline
-position_in_partition_view position_in_partition_view::for_range_start(const query::clustering_range& r) {
-    return {position_in_partition_view::range_tag_t(), bound_view::from_range_start(r)};
-}
-
-inline
-position_in_partition_view position_in_partition_view::for_range_end(const query::clustering_range& r) {
-    return {position_in_partition_view::range_tag_t(), bound_view::from_range_end(r)};
-}
-
 class position_in_partition {
     int _bound_weight = 0;
     stdx::optional<clustering_key_prefix> _ck;
@@ -195,6 +190,9 @@ public:
     static position_in_partition for_key(clustering_key ck) {
         return {clustering_row_tag_t(), std::move(ck)};
     }
+
+    static position_in_partition for_range_start(const query::clustering_range&);
+    static position_in_partition for_range_end(const query::clustering_range&);
 
     bool is_static_row() const { return !_ck; }
     bool is_clustering_row() const { return _ck && !_bound_weight; }
@@ -373,6 +371,16 @@ public:
     };
     friend std::ostream& operator<<(std::ostream&, const position_in_partition&);
 };
+
+inline
+position_in_partition position_in_partition::for_range_start(const query::clustering_range& r) {
+    return {position_in_partition::range_tag_t(), bound_view::from_range_start(r)};
+}
+
+inline
+position_in_partition position_in_partition::for_range_end(const query::clustering_range& r) {
+    return {position_in_partition::range_tag_t(), bound_view::from_range_end(r)};
+}
 
 // Returns true if and only if there can't be any clustering_row with position > a and < b.
 // It is assumed that a <= b.
