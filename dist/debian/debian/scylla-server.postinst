@@ -20,4 +20,8 @@ echo "api_ui_dir: /usr/lib/scylla/swagger-ui/dist/" >> /tmp/scylla.yaml
 echo "api_doc_dir: /usr/lib/scylla/api/api-doc/" >> /tmp/scylla.yaml
 mv /tmp/scylla.yaml /etc/scylla/scylla.yaml
 
+if [ -d /etc/collectd/ ] && [ ! -e /etc/collectd/collectd.conf ]; then
+    zcat /usr/share/doc/scylla-server/collectd.conf.example.gz > /etc/collectd/collectd.conf
+fi
+
 #DEBHELPER#
