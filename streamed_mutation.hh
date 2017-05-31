@@ -572,6 +572,7 @@ public:
     }
     void apply(const range_tombstone_list&, const query::clustering_range&);
     void reset();
+    friend std::ostream& operator<<(std::ostream& out, const range_tombstone_stream&);
 };
 
 // mutation_hasher is an equivalent of hashing_partition_visitor for

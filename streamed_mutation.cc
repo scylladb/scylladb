@@ -637,3 +637,7 @@ bool mutation_fragment::relevant_for_range_assuming_after(const schema& s, posit
     // Range tombstones overlapping with the new range are let in
     return is_range_tombstone() && cmp(pos, as_range_tombstone().end_position());
 }
+
+std::ostream& operator<<(std::ostream& out, const range_tombstone_stream& rtl) {
+    return out << rtl._list;
+}
