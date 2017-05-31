@@ -172,6 +172,10 @@ public:
         assert(_version);
         return _version;
     }
+    const partition_version* operator->() const {
+        assert(_version);
+        return _version;
+    }
 
     bool is_unique_owner() const { return _unique_owner; }
     void mark_as_unique_owner() { _unique_owner = true; }
