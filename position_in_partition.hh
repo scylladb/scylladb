@@ -138,6 +138,7 @@ public:
     }
 
     friend std::ostream& operator<<(std::ostream&, position_in_partition_view);
+    friend bool no_clustering_row_between(const schema&, position_in_partition_view, position_in_partition_view);
 };
 
 inline
@@ -372,6 +373,18 @@ public:
     };
     friend std::ostream& operator<<(std::ostream&, const position_in_partition&);
 };
+
+// Returns true if and only if there can't be any clustering_row with position > a and < b.
+// It is assumed that a <= b.
+inline
+bool no_clustering_row_between(const schema& s, position_in_partition_view a, position_in_partition_view b) {
+    clustering_key_prefix::equality eq(s);
+    if (a._ck && b._ck) {
+        return eq(*a._ck, *b._ck) && (a._bound_weight >= 0 || b._bound_weight <= 0);
+    } else {
+        return !a._ck && !b._ck;
+    }
+}
 
 // Includes all position_in_partition objects "p" for which: start <= p < end
 // And only those.
