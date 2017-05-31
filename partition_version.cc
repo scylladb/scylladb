@@ -358,3 +358,15 @@ lw_shared_ptr<partition_snapshot> partition_entry::read(schema_ptr entry_schema,
         return snp;
     }
 }
+
+std::vector<range_tombstone>
+partition_snapshot::range_tombstones(const schema& s, position_in_partition_view start, position_in_partition_view end)
+{
+    range_tombstone_list list(s);
+    for (auto&& v : versions()) {
+        for (auto&& rt : v.partition().row_tombstones().slice(s, start, end)) {
+            list.apply(s, rt);
+        }
+    }
+    return boost::copy_range<std::vector<range_tombstone>>(list);
+}
