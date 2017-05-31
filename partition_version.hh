@@ -216,6 +216,8 @@ public:
 
     partition_version_ref& version();
 
+    const partition_version_ref& version() const;
+
     auto versions() {
         return version()->elements_from_this();
     }
@@ -308,6 +310,15 @@ public:
 };
 
 inline partition_version_ref& partition_snapshot::version()
+{
+    if (_version) {
+        return _version;
+    } else {
+        return _entry->_version;
+    }
+}
+
+inline const partition_version_ref& partition_snapshot::version() const
 {
     if (_version) {
         return _version;
