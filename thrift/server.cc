@@ -115,7 +115,10 @@ public:
     }
     future<> process() {
         return do_until([this] { return _read_buf.eof(); },
-                [this] { return process_one_request(); });
+                [this] { return process_one_request(); })
+            .finally([this] {
+                return _write_buf.close();
+            });
     }
     future<> process_one_request() {
         _input->resetBuffer();
