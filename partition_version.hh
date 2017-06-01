@@ -267,6 +267,10 @@ public:
         return _version;
     }
 
+    partition_version_range versions() {
+        return _version->elements_from_this();
+    }
+
     // Strong exception guarantees.
     // Assumes this instance and mp are fully continuous.
     void apply(const schema& s, const mutation_partition& mp, const schema& mp_schema);
