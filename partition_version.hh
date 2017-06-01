@@ -128,7 +128,7 @@ public:
     mutation_partition& partition() { return _partition; }
     const mutation_partition& partition() const { return _partition; }
 
-    bool is_referenced() { return _backref; }
+    bool is_referenced() const { return _backref; }
     partition_version_ref& back_reference() { return *_backref; }
 };
 
