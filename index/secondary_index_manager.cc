@@ -41,7 +41,13 @@
 
 #include "index/secondary_index_manager.hh"
 
+#include "database.hh"
+
 namespace secondary_index {
+
+secondary_index_manager::secondary_index_manager(column_family& cf)
+    : _cf{cf}
+{}
 
 std::set<index_metadata> secondary_index_manager::get_dependent_indices(const column_definition& cdef) const {
     // FIXME

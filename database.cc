@@ -138,6 +138,7 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog* cl
     , _cache(_schema, sstables_as_snapshot_source(), global_cache_tracker())
     , _commitlog(cl)
     , _compaction_manager(compaction_manager)
+    , _index_manager(*this)
     , _counter_cell_locks(std::make_unique<cell_locker>(_schema, cl_stats))
 {
     if (!_config.enable_disk_writes) {

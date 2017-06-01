@@ -49,7 +49,9 @@
 namespace secondary_index {
 
 class secondary_index_manager {
+    column_family& _cf;
 public:
+    secondary_index_manager(column_family& cf);
     std::set<index_metadata> get_dependent_indices(const column_definition& cdef) const;
 };
 
