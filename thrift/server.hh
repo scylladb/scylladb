@@ -43,17 +43,49 @@ class CassandraCobSvIfFactory;
 namespace apache { namespace thrift { namespace protocol {
 
 class TProtocolFactory;
+class TProtocol;
 
 }}}
 
 namespace apache { namespace thrift { namespace async {
 
+class TAsyncProcessor;
 class TAsyncProcessorFactory;
 
 }}}
 
+namespace apache { namespace thrift { namespace transport {
+
+class TMemoryBuffer;
+
+}}}
 
 class thrift_server {
+    class connection {
+        struct fake_transport;
+        thrift_server& _server;
+        connected_socket _fd;
+        input_stream<char> _read_buf;
+        output_stream<char> _write_buf;
+        temporary_buffer<char> _in_tmp;
+        boost::shared_ptr<fake_transport> _transport;
+        boost::shared_ptr<apache::thrift::transport::TMemoryBuffer> _input;
+        boost::shared_ptr<apache::thrift::transport::TMemoryBuffer> _output;
+        boost::shared_ptr<apache::thrift::protocol::TProtocol> _in_proto;
+        boost::shared_ptr<apache::thrift::protocol::TProtocol> _out_proto;
+        boost::shared_ptr<apache::thrift::async::TAsyncProcessor> _processor;
+        promise<> _processor_promise;
+    public:
+        connection(thrift_server& server, connected_socket&& fd, socket_address addr);
+        ~connection();
+        future<> process();
+        future<> read();
+        future<> write();
+        void shutdown();
+    private:
+        future<> process_one_request();
+    };
+private:
     std::vector<server_socket> _listeners;
     std::unique_ptr<thrift_stats> _stats;
     boost::shared_ptr<::cassandra::CassandraCobSvIfFactory> _handler_factory;
@@ -68,7 +100,6 @@ public:
     future<> listen(ipv4_addr addr, bool keepalive);
     future<> stop();
     void do_accepts(int which, bool keepalive);
-    class connection;
     uint64_t total_connections() const;
     uint64_t current_connections() const;
     uint64_t requests_served() const;
