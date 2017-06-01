@@ -13,4 +13,5 @@ def parse():
     parser.add_argument('--listen-address', default=None, dest='listenAddress')
     parser.add_argument('--broadcast-address', default=None, dest='broadcastAddress')
     parser.add_argument('--broadcast-rpc-address', default=None, dest='broadcastRpcAddress')
+    parser.add_argument('--api-address', default=None, dest='apiAddress')
     return parser.parse_args()

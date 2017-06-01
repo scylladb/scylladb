@@ -11,6 +11,7 @@ class ScyllaSetup:
         self._listenAddress = arguments.listenAddress
         self._broadcastAddress = arguments.broadcastAddress
         self._broadcastRpcAddress = arguments.broadcastRpcAddress
+        self._apiAddress = arguments.apiAddress
         self._smp = arguments.smp
         self._memory = arguments.memory
         self._overprovisioned = arguments.overprovisioned
@@ -62,6 +63,9 @@ class ScyllaSetup:
             args += ["--broadcast-address %s" %self._broadcastAddress ]
         if self._broadcastRpcAddress is not None:
             args += [ "--broadcast-rpc-address %s" %self._broadcastRpcAddress ]
+
+        if self._apiAddress is not None:
+            args += ["--api-address %s" %self._apiAddress ]
 
         if self._experimental == "1":
             args += [ "--experimental=on" ]
