@@ -133,10 +133,14 @@ if [ "$DISTRIBUTION" = "Debian" ] || [ "$VERSION_ID" = "14.04" ]; then
     cp dist/debian/scylla-server.cron.d debian/
 fi
 
-if [ "$VERSION_ID" = "14.04" ] && [ $REBUILD -eq 0 ]; then
-    if [ ! -f /etc/apt/sources.list.d/scylla-3rdparty-trusty.list ]; then
+if [ $REBUILD -eq 0 ]; then
+    if [ "$DISTRIBUTION" != "Ubuntu" ]; then
+        echo "Prebuilt 3rdparty is not supported in this distribution."
+        exit 1
+    fi
+    if [ ! -f /etc/apt/sources.list.d/scylla-3rdparty.list ]; then
         cd /etc/apt/sources.list.d
-        sudo wget -nv https://s3.amazonaws.com/downloads.scylladb.com/deb/3rdparty/ubuntu/scylla-3rdparty-trusty.list
+        sudo wget -nv https://s3.amazonaws.com/downloads.scylladb.com/deb/3rdparty/$CODENAME/scylla-3rdparty.list
         cd -
     fi
     sudo apt-get -y update
