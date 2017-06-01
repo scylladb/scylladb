@@ -121,6 +121,21 @@ class read_context final : public enable_lw_shared_from_this<read_context> {
     mutation_reader::forwarding _fwd_mr;
     bool _range_query;
     autoupdating_underlying_reader _underlying;
+
+    // When reader enters a partition, it must be set up for reading that
+    // partition from the underlying mutation source (_sm) in one of two ways:
+    //
+    //  1) either _underlying is already in that partition, then _sm is set to the
+    //     stream obtained from it.
+    //
+    //  2) _underlying is before the partition, then _underlying_snapshot and _key
+    //     are set so that _sm can be created on demand.
+    //
+    streamed_mutation_opt _sm;
+    mutation_source_opt _underlying_snapshot;
+    dht::partition_range _sm_range;
+    stdx::optional<dht::decorated_key> _key;
+    row_cache::phase_type _phase;
 public:
     read_context(row_cache& cache,
             schema_ptr schema,
@@ -152,6 +167,46 @@ public:
     mutation_reader::forwarding fwd_mr() const { return _fwd_mr; }
     bool is_range_query() const { return _range_query; }
     autoupdating_underlying_reader& underlying() { return _underlying; }
+    row_cache::phase_type phase() const { return _phase; }
+    const dht::decorated_key& key() const { return _sm->decorated_key(); }
+private:
+    future<> create_sm();
+    future<> ensure_sm_created() {
+        if (_sm) {
+            return make_ready_future<>();
+        }
+        return create_sm();
+    }
+public:
+    // Prepares the underlying streamed_mutation to represent dk in given snapshot.
+    // Partitions must be entered with strictly monotonic keys.
+    // The key must be after the current range of the underlying() reader.
+    // The phase argument must match the snapshot's phase.
+    void enter_partition(const dht::decorated_key& dk, mutation_source& snapshot, row_cache::phase_type phase) {
+        _phase = phase;
+        _sm = {};
+        _underlying_snapshot = snapshot;
+        _key = dk;
+    }
+    // Prepares the underlying streamed_mutation to be sm.
+    // The phase argument must match the phase of the snapshot used to obtain sm.
+    void enter_partition(streamed_mutation&& sm, row_cache::phase_type phase) {
+        _phase = phase;
+        _sm = std::move(sm);
+        _underlying_snapshot = {};
+    }
+    // Fast forwards the underlying streamed_mutation to given range.
+    future<> fast_forward_to(position_range range) {
+        return ensure_sm_created().then([this, range = std::move(range)] () mutable {
+            return _sm->fast_forward_to(std::move(range));
+        });
+    }
+    // Gets the next fragment from the underlying streamed_mutation
+    future<mutation_fragment_opt> get_next_fragment() {
+        return ensure_sm_created().then([this] {
+            return (*_sm)();
+        });
+    }
 };
 
 }

@@ -276,6 +276,25 @@ public:
     }
 };
 
+future<> read_context::create_sm() {
+    if (_range_query) {
+        // FIXME: Singular-range mutation readers don't support fast_forward_to(), so need to use a wide range
+        // here in case the same reader will need to be fast forwarded later.
+        _sm_range = dht::partition_range({dht::ring_position(*_key)}, {dht::ring_position(*_key)});
+    } else {
+        _sm_range = dht::partition_range::make_singular({dht::ring_position(*_key)});
+    }
+    return _underlying.fast_forward_to(std::move(_sm_range), *_underlying_snapshot, _phase).then([this] {
+        return _underlying.read_next_same_phase().then([this] (auto&& smo) {
+            if (!smo) {
+                _sm = make_empty_streamed_mutation(_cache.schema(), *_key, streamed_mutation::forwarding::yes);
+            } else {
+                _sm = std::move(*smo);
+            }
+        });
+    });
+}
+
 // Reader which populates the cache using data from the delegate.
 class single_partition_populating_reader final : public mutation_reader::impl {
     row_cache& _cache;
