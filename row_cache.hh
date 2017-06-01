@@ -177,6 +177,8 @@ public:
             return _c(k1._key, k2);
         }
     };
+
+    friend std::ostream& operator<<(std::ostream&, cache_entry&);
 };
 
 // Tracks accesses and performs eviction of cache entries.
@@ -432,6 +434,8 @@ public:
 
     void set_schema(schema_ptr) noexcept;
     const schema_ptr& schema() const;
+
+    friend std::ostream& operator<<(std::ostream&, row_cache&);
 
     friend class just_cache_scanning_reader;
     friend class scanning_and_populating_reader;

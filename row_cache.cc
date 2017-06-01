@@ -977,3 +977,18 @@ void row_cache::upgrade_entry(cache_entry& e) {
         });
     }
 }
+
+std::ostream& operator<<(std::ostream& out, row_cache& rc) {
+    rc._read_section(rc._tracker.region(), [&] {
+        out << "{row_cache: " << ::join(", ", rc._partitions.begin(), rc._partitions.end()) << "}";
+    });
+    return out;
+}
+
+std::ostream& operator<<(std::ostream& out, cache_entry& e) {
+    return out << "{cache_entry: " << e.key()
+               << ", cont=" << e.continuous()
+               << ", dummy=" << e.is_dummy_entry()
+               << ", " << e.partition()
+               << "}";
+}

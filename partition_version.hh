@@ -313,6 +313,8 @@ public:
     // Snapshots with different values of phase will point to different partition_version objects.
     lw_shared_ptr<partition_snapshot> read(schema_ptr entry_schema,
         partition_snapshot::phase_type phase = partition_snapshot::default_phase);
+
+    friend std::ostream& operator<<(std::ostream& out, partition_entry& e);
 };
 
 inline partition_version_ref& partition_snapshot::version()

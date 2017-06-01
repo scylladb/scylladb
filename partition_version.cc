@@ -370,3 +370,22 @@ partition_snapshot::range_tombstones(const schema& s, position_in_partition_view
     }
     return boost::copy_range<std::vector<range_tombstone>>(list);
 }
+
+std::ostream& operator<<(std::ostream& out, partition_entry& e) {
+    out << "{";
+    bool first = true;
+    if (e._version) {
+        for (const partition_version& v : e.versions()) {
+            if (!first) {
+                out << ", ";
+            }
+            if (v.is_referenced()) {
+                out << "(*) ";
+            }
+            out << v.partition();
+            first = false;
+        }
+    }
+    out << "}";
+    return out;
+}
