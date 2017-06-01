@@ -642,12 +642,11 @@ template<typename CreateEntry, typename VisitEntry>
 //        { create(it) } -> row_cache::partitions_type::iterator;
 //        { visit(it) } -> void;
 //    }
-void row_cache::do_find_or_create_entry(const dht::decorated_key& key,
+cache_entry& row_cache::do_find_or_create_entry(const dht::decorated_key& key,
     const previous_entry_pointer* previous, CreateEntry&& create_entry, VisitEntry&& visit_entry)
 {
-    with_allocator(_tracker.allocator(), [&] {
-        _populate_section(_tracker.region(), [&] {
-            with_linearized_managed_bytes([&] {
+    return with_allocator(_tracker.allocator(), [&] () -> cache_entry& {
+            return with_linearized_managed_bytes([&] () -> cache_entry& {
                 auto i = _partitions.lower_bound(key, cache_entry::compare(_schema));
                 if (i == _partitions.end() || !i->key().equal(*_schema, key)) {
                     i = create_entry(i);
@@ -656,7 +655,7 @@ void row_cache::do_find_or_create_entry(const dht::decorated_key& key,
                 }
 
                 if (!previous) {
-                    return;
+                    return *i;
                 }
 
                 if ((!previous->_key && i == _partitions.begin())
@@ -664,12 +663,14 @@ void row_cache::do_find_or_create_entry(const dht::decorated_key& key,
                         && std::prev(i)->key().equal(*_schema, *previous->_key))) {
                     i->set_continuous(true);
                 }
+
+                return *i;
             });
-        });
     });
 }
 
 void row_cache::populate(const mutation& m, const previous_entry_pointer* previous) {
+  _populate_section(_tracker.region(), [&] {
     do_find_or_create_entry(m.decorated_key(), previous, [&] (auto i) {
         cache_entry* entry = current_allocator().construct<cache_entry>(
                 m.schema(), m.decorated_key(), m.partition());
@@ -682,6 +683,7 @@ void row_cache::populate(const mutation& m, const previous_entry_pointer* previo
         // it must be complete, so do nothing.
         _tracker.on_miss_already_populated();  // #1534
     });
+  });
 }
 
 mutation_source& row_cache::snapshot_for_phase(phase_type phase) {

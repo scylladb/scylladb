@@ -334,7 +334,9 @@ private:
     //        { create(it) } -> partitions_type::iterator;
     //        { visit(it) } -> void;
     //    }
-    void do_find_or_create_entry(const dht::decorated_key& key, const previous_entry_pointer* previous,
+    //
+    // Must be run under reclaim lock
+    cache_entry& do_find_or_create_entry(const dht::decorated_key& key, const previous_entry_pointer* previous,
                                  CreateEntry&& create_entry, VisitEntry&& visit_entry);
 
     partitions_type::iterator partitions_end() {
