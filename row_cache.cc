@@ -32,7 +32,9 @@
 #include <boost/version.hpp>
 #include <sys/sdt.h>
 #include "stdx.hh"
+#include "cache_streamed_mutation.hh"
 #include "read_context.hh"
+#include "schema_upgrader.hh"
 
 using namespace std::chrono_literals;
 using namespace cache;
@@ -44,7 +46,7 @@ thread_local seastar::thread_scheduling_group row_cache::_update_thread_scheduli
 
 mutation_reader
 row_cache::create_underlying_reader(read_context& ctx, mutation_source& src, const dht::partition_range& pr) {
-    return src(_schema, pr, query::full_slice, ctx.pc(), ctx.trace_state(), streamed_mutation::forwarding::no);
+    return src(_schema, pr, ctx.slice(), ctx.pc(), ctx.trace_state(), streamed_mutation::forwarding::yes);
 }
 
 cache_tracker& global_cache_tracker() {
@@ -295,12 +297,21 @@ future<> read_context::create_sm() {
     });
 }
 
+static streamed_mutation read_directly_from_underlying(streamed_mutation&& sm, read_context& reader) {
+    if (reader.schema()->version() != sm.schema()->version()) {
+        sm = transform(std::move(sm), schema_upgrader(reader.schema()));
+    }
+    if (reader.fwd() == streamed_mutation::forwarding::no) {
+        sm = streamed_mutation_from_forwarding_streamed_mutation(std::move(sm));
+    }
+    return std::move(sm);
+}
+
 // Reader which populates the cache using data from the delegate.
 class single_partition_populating_reader final : public mutation_reader::impl {
     row_cache& _cache;
     mutation_reader _delegate;
     lw_shared_ptr<read_context> _read_context;
-    bool done = false;
 public:
     single_partition_populating_reader(row_cache& cache,
             lw_shared_ptr<read_context> context)
@@ -309,32 +320,26 @@ public:
     { }
 
     virtual future<streamed_mutation_opt> operator()() override {
-        if (done) {
+        if (!_read_context) {
             return make_ready_future<streamed_mutation_opt>(streamed_mutation_opt());
         }
-        done = true;
         auto src_and_phase = _cache.snapshot_of(_read_context->range().start()->value());
         auto phase = src_and_phase.phase;
         _delegate = _cache.create_underlying_reader(*_read_context, src_and_phase.snapshot, _read_context->range());
-        return _delegate().then([this, phase] (auto sm) mutable {
+        return _delegate().then([this, phase] (auto sm) mutable -> streamed_mutation_opt {
+            auto ctx = std::move(_read_context);
             if (!sm) {
-                return make_ready_future<streamed_mutation_opt>(streamed_mutation_opt());
+                return std::move(sm);
             }
-            return mutation_from_streamed_mutation(std::move(sm)).then([this, phase] (mutation_opt&& mo) {
-                    if (mo) {
-                        if (phase == _cache.phase_of(_read_context->range().start()->value())) {
-                            _cache.populate(*mo);
-                        } else {
-                            _cache._tracker.on_mispopulate();
-                        }
-                        mo->upgrade(_read_context->schema());
-                        auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*_read_context->schema(), _read_context->slice(), mo->key());
-                        auto filtered_partition = mutation_partition(std::move(mo->partition()), *(mo->schema()), std::move(ck_ranges));
-                        mo->partition() = std::move(filtered_partition);
-                        return make_ready_future<streamed_mutation_opt>(streamed_mutation_from_mutation(std::move(*mo), _read_context->fwd()));
-                    }
-                    return make_ready_future<streamed_mutation_opt>(streamed_mutation_opt());
+            if (phase == _cache.phase_of(ctx->range().start()->value())) {
+                return _cache._read_section(_cache._tracker.region(), [&] {
+                    cache_entry& e = _cache.find_or_create(sm->decorated_key(), sm->partition_tombstone(), phase);
+                    return e.read(_cache, *ctx, std::move(*sm), phase);
                 });
+            } else {
+                _cache._tracker.on_mispopulate();
+                return read_directly_from_underlying(std::move(*sm), *ctx);
+            }
         });
     }
 };
@@ -392,28 +397,26 @@ public:
     {}
 
     future<streamed_mutation_opt> operator()() {
-        return _reader().then([this] (streamed_mutation_opt smopt) mutable {
-            return mutation_from_streamed_mutation(std::move(smopt)).then(
-            [this] (mutation_opt&& mo) mutable {
-                if (!mo) {
+        return _reader().then([this] (streamed_mutation_opt smopt) mutable -> streamed_mutation_opt {
+            {
+                if (!smopt) {
                     handle_end_of_stream();
-                    return make_ready_future<streamed_mutation_opt>();
+                    return std::move(smopt);
                 }
-
                 _cache.on_miss();
-                if (_reader.creation_phase() == _cache.phase_of(mo->decorated_key())) {
-                    _cache.populate(*mo, can_set_continuity() ? &*_last_key : nullptr);
+                if (_reader.creation_phase() == _cache.phase_of(smopt->decorated_key())) {
+                    return _cache._read_section(_cache._tracker.region(), [&] {
+                        cache_entry& e = _cache.find_or_create(smopt->decorated_key(), smopt->partition_tombstone(), _reader.creation_phase(),
+                            can_set_continuity() ? &*_last_key : nullptr);
+                        _last_key = smopt->decorated_key();
+                        return e.read(_cache, _read_context, std::move(*smopt), _reader.creation_phase());
+                    });
                 } else {
                     _cache._tracker.on_mispopulate();
+                    _last_key = smopt->decorated_key();
+                    return read_directly_from_underlying(std::move(*smopt), _read_context);
                 }
-                _last_key = mo->decorated_key();
-
-                mo->upgrade(_read_context.schema());
-                auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*_read_context.schema(), _read_context.slice(), mo->key());
-                auto filtered_partition = mutation_partition(std::move(mo->partition()), *mo->schema(), std::move(ck_ranges));
-                mo->partition() = std::move(filtered_partition);
-                return make_ready_future<streamed_mutation_opt>(streamed_mutation_from_mutation(std::move(*mo), _read_context.fwd()));
-            });
+            }
         });
     }
 
@@ -567,10 +570,8 @@ row_cache::make_reader(schema_ptr s,
                 cache_entry& e = *i;
                 _tracker.touch(e);
                 upgrade_entry(e);
-                mutation_reader reader;
-                reader = make_reader_returning(e.read(*this, *ctx));
                 on_hit();
-                return reader;
+                return make_reader_returning(e.read(*this, *ctx));
             } else {
                 on_miss();
                 return make_mutation_reader<single_partition_populating_reader>(*this, std::move(ctx));
@@ -657,10 +658,7 @@ void row_cache::populate(const mutation& m, const previous_entry_pointer* previo
         _tracker.insert(*entry);
         return _partitions.insert(i, *entry);
     }, [&] (auto i) {
-        _tracker.touch(*i);
-        // We cache whole partitions right now, so if cache already has this partition,
-        // it must be complete, so do nothing.
-        _tracker.on_miss_already_populated();  // #1534
+        throw std::runtime_error(sprint("cache already contains entry for {}", m.key()));
     });
   });
 }
@@ -789,7 +787,7 @@ future<> row_cache::update(memtable& m, partition_presence_checker is_present) {
         if (cache_i != partitions_end() && cache_i->key().equal(*_schema, mem_e.key())) {
             cache_entry& entry = *cache_i;
             upgrade_entry(entry);
-            entry.partition().apply(*_schema, std::move(mem_e.partition()), *mem_e.schema());
+            entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema());
             _tracker.touch(entry);
             _tracker.on_merge();
         } else if (is_present(mem_e.key()) == partition_presence_checker_result::definitely_doesnt_exist) {
@@ -918,19 +916,30 @@ void row_cache::set_schema(schema_ptr new_schema) noexcept {
     _schema = std::move(new_schema);
 }
 
-streamed_mutation cache_entry::read(row_cache& rc, read_context& ctx) {
-    auto s = ctx.schema();
-    auto& slice = ctx.slice();
-    auto fwd = ctx.fwd();
-    if (_schema->version() != s->version()) {
-        auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*s, slice, _key.key());
-        auto mp = mutation_partition(_pe.squashed(_schema, s), *s, std::move(ck_ranges));
-        auto m = mutation(s, _key, std::move(mp));
-        return streamed_mutation_from_mutation(std::move(m), fwd);
+streamed_mutation cache_entry::read(row_cache& rc, read_context& reader) {
+    auto source_and_phase = rc.snapshot_of(_key);
+    reader.enter_partition(_key, source_and_phase.snapshot, source_and_phase.phase);
+    return do_read(rc, reader);
+}
+
+streamed_mutation cache_entry::read(row_cache& rc, read_context& reader,
+        streamed_mutation&& sm, row_cache::phase_type phase) {
+    reader.enter_partition(std::move(sm), phase);
+    return do_read(rc, reader);
+}
+
+// Assumes reader is in the corresponding partition
+streamed_mutation cache_entry::do_read(row_cache& rc, read_context& reader) {
+    auto snp = _pe.read(_schema, reader.phase());
+    auto ckr = query::clustering_key_filter_ranges::get_ranges(*_schema, reader.slice(), _key.key());
+    auto sm = make_cache_streamed_mutation(_schema, _key, std::move(ckr), rc, reader.shared_from_this(), std::move(snp));
+    if (reader.schema()->version() != _schema->version()) {
+        sm = transform(std::move(sm), schema_upgrader(reader.schema()));
     }
-    auto ckr = query::clustering_key_filter_ranges::get_ranges(*s, slice, _key.key());
-    auto snp = _pe.read(_schema);
-    return make_partition_snapshot_reader(_schema, _key, std::move(ckr), snp, rc._tracker.region(), rc._read_section, { }, fwd);
+    if (reader.fwd() == streamed_mutation::forwarding::yes) {
+        sm = make_forwardable(std::move(sm));
+    }
+    return std::move(sm);
 }
 
 const schema_ptr& row_cache::schema() const {

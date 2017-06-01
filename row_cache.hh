@@ -76,6 +76,7 @@ class cache_entry {
     cache_link_type _cache_link;
     friend class size_calculator;
 
+    streamed_mutation do_read(row_cache&, cache::read_context& reader);
 public:
     friend class row_cache;
     friend class cache_tracker;
@@ -137,6 +138,7 @@ public:
     const schema_ptr& schema() const { return _schema; }
     schema_ptr& schema() { return _schema; }
     streamed_mutation read(row_cache&, cache::read_context& reader);
+    streamed_mutation read(row_cache&, cache::read_context& reader, streamed_mutation&& underlying, utils::phased_barrier::phase_type);
     bool continuous() const { return _flags._continuous; }
     void set_continuous(bool value) { _flags._continuous = value; }
 
@@ -402,8 +404,9 @@ public:
 
     const stats& stats() const { return _stats; }
 public:
-    // Populate cache from given mutation. The mutation must contain all
-    // information there is for its partition in the underlying data sources.
+    // Populate cache from given mutation, which must be fully continuous.
+    // Intended to be used only in tests.
+    // Can only be called prior to any reads.
     void populate(const mutation& m, const previous_entry_pointer* previous = nullptr);
 
     // Synchronizes cache with the underlying data source from a memtable which
