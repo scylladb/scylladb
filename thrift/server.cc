@@ -67,9 +67,8 @@ thrift_server::thrift_server(distributed<database>& db,
 thrift_server::~thrift_server() {
 }
 
-// FIXME: this is here because we must have a stop function. But we should actually
-// do something useful - or be sure it is not needed
 future<> thrift_server::stop() {
+    std::for_each(_connections_list.begin(), _connections_list.end(), std::mem_fn(&connection::shutdown));
     return make_ready_future<>();
 }
 
@@ -98,10 +97,12 @@ thrift_server::connection::connection(thrift_server& server, connected_socket&& 
         , _processor(_server._processor_factory->getProcessor({ _in_proto, _out_proto, _transport })) {
     ++_server._total_connections;
     ++_server._current_connections;
+    _server._connections_list.push_back(*this);
 }
 
 thrift_server::connection::~connection() {
     --_server._current_connections;
+    _server._connections_list.erase(_server._connections_list.iterator_to(*this));
 }
 
 future<>

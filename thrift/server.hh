@@ -27,6 +27,7 @@
 #include "cql3/query_processor.hh"
 #include <memory>
 #include <cstdint>
+#include <boost/intrusive/list.hpp>
 
 class thrift_server;
 class thrift_stats;
@@ -61,7 +62,7 @@ class TMemoryBuffer;
 }}}
 
 class thrift_server {
-    class connection {
+    class connection : public boost::intrusive::list_base_hook<> {
         struct fake_transport;
         thrift_server& _server;
         connected_socket _fd;
@@ -94,6 +95,7 @@ private:
     uint64_t _total_connections = 0;
     uint64_t _current_connections = 0;
     uint64_t _requests_served = 0;
+    boost::intrusive::list<connection> _connections_list;
 public:
     thrift_server(distributed<database>& db, distributed<cql3::query_processor>& qp);
     ~thrift_server();
