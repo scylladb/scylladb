@@ -669,6 +669,19 @@ cache_entry& row_cache::do_find_or_create_entry(const dht::decorated_key& key,
     });
 }
 
+cache_entry& row_cache::find_or_create(const dht::decorated_key& key, tombstone t, row_cache::phase_type phase, const previous_entry_pointer* previous) {
+    return do_find_or_create_entry(key, previous, [&] (auto i) { // create
+        auto entry = current_allocator().construct<cache_entry>(cache_entry::incomplete_tag{}, _schema, key, t);
+        _tracker.insert(*entry);
+        return _partitions.insert(i, *entry);
+    }, [&] (auto i) { // visit
+        cache_entry& e = *i;
+        e.partition().open_version(*e.schema(), phase).partition().apply(t);
+        _tracker.touch(e);
+        upgrade_entry(e);
+    });
+}
+
 void row_cache::populate(const mutation& m, const previous_entry_pointer* previous) {
   _populate_section(_tracker.region(), [&] {
     do_find_or_create_entry(m.decorated_key(), previous, [&] (auto i) {

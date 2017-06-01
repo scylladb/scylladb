@@ -339,6 +339,15 @@ private:
     cache_entry& do_find_or_create_entry(const dht::decorated_key& key, const previous_entry_pointer* previous,
                                  CreateEntry&& create_entry, VisitEntry&& visit_entry);
 
+    // Ensures that partition entry for given key exists in cache and returns a reference to it.
+    // Prepares the entry for reading. "phase" must match the current phase of the entry.
+    //
+    // Since currently every entry has to have a complete tombstone, it has to be provided here.
+    // The entry which is returned will have the tombstone applied to it.
+    //
+    // Must be run under reclaim lock
+    cache_entry& find_or_create(const dht::decorated_key& key, tombstone t, row_cache::phase_type phase, const previous_entry_pointer* previous = nullptr);
+
     partitions_type::iterator partitions_end() {
         return std::prev(_partitions.end());
     }
