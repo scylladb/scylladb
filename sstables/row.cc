@@ -180,33 +180,26 @@ public:
             }
             // fallthrough
         case state::ATOM_MASK_2: {
-            auto mask = _u8;
-            enum mask_type {
-                DELETION_MASK = 0x01,
-                EXPIRATION_MASK = 0x02,
-                COUNTER_MASK = 0x04,
-                COUNTER_UPDATE_MASK = 0x08,
-                RANGE_TOMBSTONE_MASK = 0x10,
-                SHADOWABLE_MASK = 0x40,
-            };
-            if (mask & (RANGE_TOMBSTONE_MASK | SHADOWABLE_MASK)) {
+            auto const mask = column_mask(_u8);
+
+            if ((mask & (column_mask::range_tombstone | column_mask::shadowable)) != column_mask::none) {
                 _state = state::RANGE_TOMBSTONE;
-                _shadowable = (mask & SHADOWABLE_MASK) != 0;
-            } else if (mask & COUNTER_MASK) {
+                _shadowable = (mask & column_mask::shadowable) != column_mask::none;
+            } else if ((mask & column_mask::counter) != column_mask::none) {
                 _deleted = false;
                 _counter = true;
                 _state = state::COUNTER_CELL;
-            } else if (mask & EXPIRATION_MASK) {
+            } else if ((mask & column_mask::expiration) != column_mask::none) {
                 _deleted = false;
                 _counter = false;
                 _state = state::EXPIRING_CELL;
             } else {
                 // FIXME: see ColumnSerializer.java:deserializeColumnBody
-                if (mask & COUNTER_UPDATE_MASK) {
+                if ((mask & column_mask::counter_update) != column_mask::none) {
                     throw malformed_sstable_exception("FIXME COUNTER_UPDATE_MASK");
                 }
                 _ttl = _expiration = 0;
-                _deleted = mask & DELETION_MASK;
+                _deleted = (mask & column_mask::deletion) != column_mask::none;
                 _counter = false;
                 _state = state::CELL;
             }
