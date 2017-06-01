@@ -170,6 +170,13 @@ public:
             return _write_buf.flush();
         });
     }
+    void shutdown() {
+        try {
+            _fd.shutdown_input();
+            _fd.shutdown_output();
+        } catch (...) {
+        }
+    }
 };
 
 future<>
@@ -188,6 +195,7 @@ thrift_server::do_accepts(int which, bool keepalive) {
         fd.set_keepalive(keepalive);
         auto conn = new connection(*this, std::move(fd), addr);
         conn->process().then_wrapped([this, conn] (future<> f) {
+            conn->shutdown();
             delete conn;
             try {
                 f.get();
