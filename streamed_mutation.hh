@@ -531,6 +531,8 @@ streamed_mutation streamed_mutation_returning(schema_ptr, dht::decorated_key, st
 streamed_mutation merge_mutations(std::vector<streamed_mutation>);
 streamed_mutation reverse_streamed_mutation(streamed_mutation);
 
+streamed_mutation make_empty_streamed_mutation(schema_ptr, dht::decorated_key, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+
 // range_tombstone_stream is a helper object that simplifies producing a stream
 // of range tombstones and merging it with a stream of clustering rows.
 // Tombstones are added using apply() and retrieved using get_next().

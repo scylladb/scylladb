@@ -154,6 +154,10 @@ std::ostream& operator<<(std::ostream& os, const mutation_fragment& mf) {
     return os;
 }
 
+streamed_mutation make_empty_streamed_mutation(schema_ptr s, dht::decorated_key key, streamed_mutation::forwarding fwd) {
+    return streamed_mutation_from_mutation(mutation(std::move(key), std::move(s)), fwd);
+}
+
 streamed_mutation streamed_mutation_from_mutation(mutation m, streamed_mutation::forwarding fwd)
 {
     class reader final : public streamed_mutation::impl {
