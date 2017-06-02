@@ -67,9 +67,8 @@ thrift_server::thrift_server(distributed<database>& db,
 thrift_server::~thrift_server() {
 }
 
-// FIXME: this is here because we must have a stop function. But we should actually
-// do something useful - or be sure it is not needed
 future<> thrift_server::stop() {
+    std::for_each(_connections_list.begin(), _connections_list.end(), std::mem_fn(&connection::shutdown));
     return make_ready_future<>();
 }
 
@@ -80,94 +79,105 @@ struct handler_deleter {
     }
 };
 
-class thrift_server::connection {
-    // thrift uses a shared_ptr to refer to the transport (= connection),
-    // while we do not, so we can't have connection inherit from TTransport.
-    struct fake_transport : TTransport {
-        fake_transport(connection* c) : conn(c) {}
-        connection* conn;
-    };
-    thrift_server& _server;
-    connected_socket _fd;
-    input_stream<char> _read_buf;
-    output_stream<char> _write_buf;
-    temporary_buffer<char> _in_tmp;
-    boost::shared_ptr<fake_transport> _transport = boost::make_shared<fake_transport>(this);
-    boost::shared_ptr<TMemoryBuffer> _input = boost::make_shared<TMemoryBuffer>();
-    boost::shared_ptr<TMemoryBuffer> _output = boost::make_shared<TMemoryBuffer>();
-    boost::shared_ptr<TProtocol> _in_proto = _server._protocol_factory->getProtocol(_input);
-    boost::shared_ptr<TProtocol> _out_proto = _server._protocol_factory->getProtocol(_output);
-    boost::shared_ptr<TAsyncProcessor> _processor;
-    promise<> _processor_promise;
-public:
-    connection(thrift_server& server, connected_socket&& fd, socket_address addr)
+// thrift uses a shared_ptr to refer to the transport (= connection),
+// while we do not, so we can't have connection inherit from TTransport.
+struct thrift_server::connection::fake_transport : TTransport {
+    fake_transport(thrift_server::connection* c) : conn(c) {}
+    thrift_server::connection* conn;
+};
+
+thrift_server::connection::connection(thrift_server& server, connected_socket&& fd, socket_address addr)
         : _server(server), _fd(std::move(fd)), _read_buf(_fd.input())
         , _write_buf(_fd.output())
-        , _processor(_server._processor_factory->getProcessor(get_conn_info())) {
-        ++_server._total_connections;
-        ++_server._current_connections;
-    }
-    ~connection() {
-        --_server._current_connections;
-    }
-    TConnectionInfo get_conn_info() {
-        return { _in_proto, _out_proto, _transport };
-    }
-    future<> process() {
-        return do_until([this] { return _read_buf.eof(); },
-                [this] { return process_one_request(); });
-    }
-    future<> process_one_request() {
-        _input->resetBuffer();
-        _output->resetBuffer();
-        return read().then([this] {
-            ++_server._requests_served;
-            auto ret = _processor_promise.get_future();
-            // adapt from "continuation object style" to future/promise
-            auto complete = [this] (bool success) mutable {
-                // FIXME: look at success?
-                write().forward_to(std::move(_processor_promise));
-                _processor_promise = promise<>();
-            };
-            _processor->process(complete, _in_proto, _out_proto);
-            return ret;
+        , _transport(boost::make_shared<thrift_server::connection::fake_transport>(this))
+        , _input(boost::make_shared<TMemoryBuffer>())
+        , _output(boost::make_shared<TMemoryBuffer>())
+        , _in_proto(_server._protocol_factory->getProtocol(_input))
+        , _out_proto(_server._protocol_factory->getProtocol(_output))
+        , _processor(_server._processor_factory->getProcessor({ _in_proto, _out_proto, _transport })) {
+    ++_server._total_connections;
+    ++_server._current_connections;
+    _server._connections_list.push_back(*this);
+}
+
+thrift_server::connection::~connection() {
+    --_server._current_connections;
+    _server._connections_list.erase(_server._connections_list.iterator_to(*this));
+}
+
+future<>
+thrift_server::connection::process() {
+    return do_until([this] { return _read_buf.eof(); },
+            [this] { return process_one_request(); })
+        .finally([this] {
+            return _write_buf.close();
         });
-    }
-    future<> read() {
-        return _read_buf.read_exactly(4).then([this] (temporary_buffer<char> size_buf) {
-            if (size_buf.size() != 4) {
-                return make_ready_future<>();
+}
+
+future<>
+thrift_server::connection::process_one_request() {
+    _input->resetBuffer();
+    _output->resetBuffer();
+    return read().then([this] {
+        ++_server._requests_served;
+        auto ret = _processor_promise.get_future();
+        // adapt from "continuation object style" to future/promise
+        auto complete = [this] (bool success) mutable {
+            // FIXME: look at success?
+            write().forward_to(std::move(_processor_promise));
+            _processor_promise = promise<>();
+        };
+        _processor->process(complete, _in_proto, _out_proto);
+        return ret;
+    });
+}
+
+future<>
+thrift_server::connection::read() {
+    return _read_buf.read_exactly(4).then([this] (temporary_buffer<char> size_buf) {
+        if (size_buf.size() != 4) {
+            return make_ready_future<>();
+        }
+        union {
+            uint32_t n;
+            char b[4];
+        } data;
+        std::copy_n(size_buf.get(), 4, data.b);
+        auto n = ntohl(data.n);
+        return _read_buf.read_exactly(n).then([this, n] (temporary_buffer<char> buf) {
+            if (buf.size() != n) {
+                // FIXME: exception perhaps?
+                return;
             }
-            union {
-                uint32_t n;
-                char b[4];
-            } data;
-            std::copy_n(size_buf.get(), 4, data.b);
-            auto n = ntohl(data.n);
-            return _read_buf.read_exactly(n).then([this, n] (temporary_buffer<char> buf) {
-                if (buf.size() != n) {
-                    // FIXME: exception perhaps?
-                    return;
-                }
-                _in_tmp = std::move(buf); // keep ownership of the data
-                auto b = reinterpret_cast<uint8_t*>(_in_tmp.get_write());
-                _input->resetBuffer(b, _in_tmp.size());
-            });
+            _in_tmp = std::move(buf); // keep ownership of the data
+            auto b = reinterpret_cast<uint8_t*>(_in_tmp.get_write());
+            _input->resetBuffer(b, _in_tmp.size());
         });
+    });
+}
+
+future<>
+thrift_server::connection::write() {
+    uint8_t* data;
+    uint32_t len;
+    _output->getBuffer(&data, &len);
+    net::packed<uint32_t> plen = { net::hton(len) };
+    return _write_buf.write(reinterpret_cast<char*>(&plen), 4).then([this, data, len] {
+        // FIXME: zero-copy
+        return _write_buf.write(reinterpret_cast<char*>(data), len);
+    }).then([this] {
+        return _write_buf.flush();
+    });
+}
+
+void
+thrift_server::connection::shutdown() {
+    try {
+        _fd.shutdown_input();
+        _fd.shutdown_output();
+    } catch (...) {
     }
-    future<> write() {
-        uint8_t* data;
-        uint32_t len;
-        _output->getBuffer(&data, &len);
-        net::packed<uint32_t> plen = { net::hton(len) };
-        return _write_buf.write(reinterpret_cast<char*>(&plen), 4).then([this, data, len] {
-            // FIXME: zero-copy
-            return _write_buf.write(reinterpret_cast<char*>(data), len);
-        }).then([this] {
-            return _write_buf.flush();
-        });
-    }
-};
+}
 
 future<>
 thrift_server::listen(ipv4_addr addr, bool keepalive) {
@@ -185,6 +195,7 @@ thrift_server::do_accepts(int which, bool keepalive) {
         fd.set_keepalive(keepalive);
         auto conn = new connection(*this, std::move(fd), addr);
         conn->process().then_wrapped([this, conn] (future<> f) {
+            conn->shutdown();
             delete conn;
             try {
                 f.get();
