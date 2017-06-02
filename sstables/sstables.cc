@@ -2497,7 +2497,9 @@ fsync_directory(const io_error_handler& error_handler, sstring fname) {
     return ::sstable_io_check(error_handler, [&] {
         return open_checked_directory(error_handler, dirname(fname)).then([] (file f) {
             return do_with(std::move(f), [] (file& f) {
-                return f.flush();
+                return f.flush().then([&f] {
+                    return f.close();
+                });
             });
         });
     });
