@@ -67,7 +67,7 @@ class secondary_index_manager {
 public:
     secondary_index_manager(column_family& cf);
     void reload();
-    std::set<index_metadata> get_dependent_indices(const column_definition& cdef) const;
+    std::vector<index_metadata> get_dependent_indices(const column_definition& cdef) const;
     std::vector<index> list_indexes() const;
 private:
     void add_index(const index_metadata& im);

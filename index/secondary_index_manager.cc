@@ -90,13 +90,14 @@ void secondary_index_manager::add_index(const index_metadata& im) {
     _indices.emplace(im.name(), index{index_target_name, im});
 }
 
-std::set<index_metadata> secondary_index_manager::get_dependent_indices(const column_definition& cdef) const {
-    // FIXME
-    return {};
+std::vector<index_metadata> secondary_index_manager::get_dependent_indices(const column_definition& cdef) const {
+    return boost::copy_range<std::vector<index_metadata>>(_indices
+           | boost::adaptors::map_values
+           | boost::adaptors::filtered([&] (auto& index) { return index.depends_on(cdef); })
+           | boost::adaptors::transformed([&] (auto& index) { return index.metadata(); }));
 }
 
 std::vector<index> secondary_index_manager::list_indexes() const {
     return boost::copy_range<std::vector<index>>(_indices | boost::adaptors::map_values);
 }
-
 }
