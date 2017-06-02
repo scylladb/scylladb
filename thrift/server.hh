@@ -27,6 +27,7 @@
 #include "cql3/query_processor.hh"
 #include <memory>
 #include <cstdint>
+#include <boost/intrusive/list.hpp>
 
 class thrift_server;
 class thrift_stats;
@@ -43,17 +44,49 @@ class CassandraCobSvIfFactory;
 namespace apache { namespace thrift { namespace protocol {
 
 class TProtocolFactory;
+class TProtocol;
 
 }}}
 
 namespace apache { namespace thrift { namespace async {
 
+class TAsyncProcessor;
 class TAsyncProcessorFactory;
 
 }}}
 
+namespace apache { namespace thrift { namespace transport {
+
+class TMemoryBuffer;
+
+}}}
 
 class thrift_server {
+    class connection : public boost::intrusive::list_base_hook<> {
+        struct fake_transport;
+        thrift_server& _server;
+        connected_socket _fd;
+        input_stream<char> _read_buf;
+        output_stream<char> _write_buf;
+        temporary_buffer<char> _in_tmp;
+        boost::shared_ptr<fake_transport> _transport;
+        boost::shared_ptr<apache::thrift::transport::TMemoryBuffer> _input;
+        boost::shared_ptr<apache::thrift::transport::TMemoryBuffer> _output;
+        boost::shared_ptr<apache::thrift::protocol::TProtocol> _in_proto;
+        boost::shared_ptr<apache::thrift::protocol::TProtocol> _out_proto;
+        boost::shared_ptr<apache::thrift::async::TAsyncProcessor> _processor;
+        promise<> _processor_promise;
+    public:
+        connection(thrift_server& server, connected_socket&& fd, socket_address addr);
+        ~connection();
+        future<> process();
+        future<> read();
+        future<> write();
+        void shutdown();
+    private:
+        future<> process_one_request();
+    };
+private:
     std::vector<server_socket> _listeners;
     std::unique_ptr<thrift_stats> _stats;
     boost::shared_ptr<org::apache::cassandra::CassandraCobSvIfFactory> _handler_factory;
@@ -62,13 +95,13 @@ class thrift_server {
     uint64_t _total_connections = 0;
     uint64_t _current_connections = 0;
     uint64_t _requests_served = 0;
+    boost::intrusive::list<connection> _connections_list;
 public:
     thrift_server(distributed<database>& db, distributed<cql3::query_processor>& qp);
     ~thrift_server();
     future<> listen(ipv4_addr addr, bool keepalive);
     future<> stop();
     void do_accepts(int which, bool keepalive);
-    class connection;
     uint64_t total_connections() const;
     uint64_t current_connections() const;
     uint64_t requests_served() const;
