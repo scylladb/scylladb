@@ -96,9 +96,6 @@ class entry_descriptor;
 }
 
 namespace db {
-template<typename T>
-class serializer;
-
 class commitlog;
 class config;
 

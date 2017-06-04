@@ -388,11 +388,6 @@ collection_mutation::operator collection_mutation_view() const {
     return { data };
 }
 
-namespace db {
-template<typename T>
-class serializer;
-}
-
 class column_definition;
 
 int compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right);

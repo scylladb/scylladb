@@ -728,11 +728,6 @@ public:
     bool equal(const schema& s, const rows_entry& other, const schema& other_schema) const;
 };
 
-namespace db {
-template<typename T>
-class serializer;
-}
-
 class mutation_partition final {
 public:
     using rows_type = intrusive_set_external_comparator<rows_entry, &rows_entry::_link>;
@@ -746,8 +741,6 @@ private:
     // in both _row_tombstones and _rows.
     range_tombstone_list _row_tombstones;
 
-    template<typename T>
-    friend class db::serializer;
     friend class mutation_partition_applier;
     friend class converting_mutation_partition_applier;
 public:
