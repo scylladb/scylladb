@@ -70,6 +70,7 @@ public:
     size_t sp_index = 0;
     size_t current_sub_ranges_nr_in = 0;
     size_t current_sub_ranges_nr_out = 0;
+    int ranges_index = 0;
 public:
     repair_info(seastar::sharded<database>& db_,
             const sstring& keyspace_,
@@ -133,10 +134,10 @@ public:
             rlogger.info("repair {} completed successfully", id);
             return true;
         } else {
-            for (auto& frange: failed_ranges) {
-                rlogger.debug("repair cf {} range {} failed", frange.cf, frange.range);
-            }
             rlogger.info("repair {} failed - {} ranges failed", id, failed_ranges.size());
+            for (auto& frange: failed_ranges) {
+                rlogger.info("repair cf {} range {} failed", frange.cf, frange.range);
+            }
             return false;
         }
     }
@@ -563,6 +564,7 @@ static future<uint64_t> estimate_partitions(seastar::sharded<database>& db, cons
 static future<> repair_cf_range(repair_info& ri,
         sstring cf, ::dht::token_range range,
         const std::vector<gms::inet_address>& neighbors) {
+    ri.ranges_index++;
     if (neighbors.empty()) {
         // Nothing to do in this case...
         return make_ready_future<>();
@@ -570,6 +572,8 @@ static future<> repair_cf_range(repair_info& ri,
 
     return estimate_partitions(ri.db, ri.keyspace, cf, range).then([&ri, cf, range, &neighbors] (uint64_t estimated_partitions) {
     range_splitter ranges(range, estimated_partitions, ri.target_partitions);
+    rlogger.info("Repair {} out of {} ranges, id={}, keyspace={}, cf={}, range={}, target_partitions={}, estimated_partitions={}",
+            ri.ranges_index, ri.ranges.size(), ri.id, ri.keyspace, cf, range, ri.target_partitions, estimated_partitions);
     return do_with(seastar::gate(), true, std::move(cf), std::move(ranges),
         [&ri, &neighbors] (auto& completion, auto& success, const auto& cf, auto& ranges) {
         return do_until([&ranges] () { return !ranges.has_next(); },
@@ -713,7 +717,7 @@ static future<> repair_cf_range(repair_info& ri,
                         }
                     }
                     if (!(live_neighbors_in.empty() && live_neighbors_out.empty())) {
-                        rlogger.info("Found differing range {} on nodes {}, in = {}, out = {}", range,
+                        rlogger.debug("Found differing range {} on nodes {}, in = {}, out = {}", range,
                                 live_neighbors, live_neighbors_in, live_neighbors_out);
                         return ri.request_transfer_ranges(cf, range, live_neighbors_in, live_neighbors_out);
                     }
