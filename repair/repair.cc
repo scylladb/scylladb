@@ -968,7 +968,7 @@ private:
 // same nodes as replicas.
 static future<> repair_ranges(repair_info ri) {
     return do_with(std::move(ri), [] (auto& ri) {
-    #if 1
+    #if 0
         // repair all the ranges in parallel
         return parallel_for_each(ri.ranges, [&ri] (auto&& range) {
     #else
