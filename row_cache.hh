@@ -133,10 +133,10 @@ public:
     bool is_dummy_entry() const { return _flags._dummy_entry; }
 
     struct compare {
-        dht::decorated_key::less_comparator _c;
+        dht::ring_position_less_comparator _c;
 
         compare(schema_ptr s)
-            : _c(std::move(s))
+            : _c(*s)
         {}
 
         bool operator()(const dht::decorated_key& k1, const cache_entry& k2) const {
@@ -146,7 +146,7 @@ public:
             return _c(k1, k2._key);
         }
 
-        bool operator()(const dht::ring_position& k1, const cache_entry& k2) const {
+        bool operator()(dht::ring_position_view k1, const cache_entry& k2) const {
             if (k2.is_dummy_entry()) {
                 return true;
             }
@@ -170,11 +170,15 @@ public:
             return _c(k1._key, k2);
         }
 
-        bool operator()(const cache_entry& k1, const dht::ring_position& k2) const {
+        bool operator()(const cache_entry& k1, dht::ring_position_view k2) const {
             if (k1.is_dummy_entry()) {
                 return false;
             }
             return _c(k1._key, k2);
+        }
+
+        bool operator()(dht::ring_position_view k1, dht::ring_position_view k2) const {
+            return _c(k1, k2);
         }
     };
 
