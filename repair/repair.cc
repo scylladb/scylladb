@@ -20,6 +20,7 @@
  */
 
 #include "repair.hh"
+#include "range_split.hh"
 
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
@@ -478,31 +479,6 @@ future<partition_checksum> checksum_range(seastar::sharded<database> &db,
     });
 }
 
-static void split_and_add(std::vector<::dht::token_range>& ranges,
-        const dht::token_range& range,
-        uint64_t estimated_partitions, uint64_t target_partitions) {
-    if (estimated_partitions < target_partitions) {
-        // We're done, the range is small enough to not be split further
-        ranges.push_back(range);
-        return;
-    }
-    // The use of minimum_token() here twice is not a typo - because wrap-
-    // around token ranges are supported by midpoint(), the beyond-maximum
-    // token can also be represented by minimum_token().
-    auto midpoint = dht::global_partitioner().midpoint(
-            range.start() ? range.start()->value() : dht::minimum_token(),
-            range.end() ? range.end()->value() : dht::minimum_token());
-    // This shouldn't happen, but if the range included just one token, we
-    // can't split further (split() may actually fail with assertion failure)
-    if ((range.start() && midpoint == range.start()->value()) ||
-        (range.end() && midpoint == range.end()->value())) {
-        ranges.push_back(range);
-        return;
-    }
-    auto halves = range.split(midpoint, dht::token_comparator());
-    ranges.push_back(halves.first);
-    ranges.push_back(halves.second);
-}
 // We don't need to wait for one checksum to finish before we start the
 // next, but doing too many of these operations in parallel also doesn't
 // make sense, so we limit the number of concurrent ongoing checksum
@@ -548,33 +524,14 @@ static future<> repair_cf_range(repair_info& ri,
     }
 
     return estimate_partitions(ri.db, ri.keyspace, cf, range).then([&ri, cf, range, &neighbors] (uint64_t estimated_partitions) {
-    // Additionally, we want to break up large ranges so they will have
-    // (approximately) a desired number of rows each.
-    std::vector<::dht::token_range> ranges;
-    ranges.push_back(range);
-
-    // FIXME: we should have an on-the-fly iterator generator here, not
-    // fill a vector in advance.
-    std::vector<::dht::token_range> tosplit;
-    while (estimated_partitions > ri.target_partitions) {
-        tosplit.clear();
-        ranges.swap(tosplit);
-        for (const auto& range : tosplit) {
-            split_and_add(ranges, range, estimated_partitions, ri.target_partitions);
-        }
-        estimated_partitions /= 2;
-        if (ranges.size() >= ri.sub_ranges_max) {
-            break;
-        }
-    }
-    rlogger.debug("target_partitions={}, estimated_partitions={}, ranges.size={}, range={} -> ranges={}",
-                  ri.target_partitions, estimated_partitions, ranges.size(), range, ranges);
-
+    range_splitter ranges(range, estimated_partitions, ri.target_partitions);
     return do_with(seastar::gate(), true, std::move(cf), std::move(ranges),
         [&ri, &neighbors] (auto& completion, auto& success, const auto& cf, auto& ranges) {
-        return do_for_each(ranges, [&ri, &completion, &success, &neighbors, &cf] (const auto& range) {
+        return do_until([&ranges] () { return !ranges.has_next(); },
+            [&ranges, &ri, &completion, &success, &neighbors, &cf] () {
+            auto range = ranges.next();
             check_in_shutdown();
-            return parallelism_semaphore.wait(1).then([&ri, &completion, &success, &neighbors, &cf, &range] {
+            return parallelism_semaphore.wait(1).then([&ri, &completion, &success, &neighbors, &cf, range] {
                 auto checksum_type = service::get_local_storage_service().cluster_supports_large_partitions()
                                      ? repair_checksum::streamed : repair_checksum::legacy;
 
@@ -592,7 +549,7 @@ static future<> repair_cf_range(repair_info& ri,
 
                 completion.enter();
                 when_all(checksums.begin(), checksums.end()).then(
-                        [&ri, &cf, &range, &neighbors, &success]
+                        [&ri, &cf, range, &neighbors, &success]
                         (std::vector<future<partition_checksum>> checksums) {
                     // If only some of the replicas of this range are alive,
                     // we set success=false so repair will fail, but we can
