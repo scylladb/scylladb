@@ -122,6 +122,12 @@ public:
 
     bool is_evictable() { return _lru_link.is_linked(); }
     const dht::decorated_key& key() const { return _key; }
+    dht::ring_position_view position() const {
+        if (is_dummy_entry()) {
+            return dht::ring_position_view::max();
+        }
+        return _key;
+    }
     const partition_entry& partition() const { return _pe; }
     partition_entry& partition() { return _pe; }
     const schema_ptr& schema() const { return _schema; }
@@ -140,41 +146,23 @@ public:
         {}
 
         bool operator()(const dht::decorated_key& k1, const cache_entry& k2) const {
-            if (k2.is_dummy_entry()) {
-                return true;
-            }
-            return _c(k1, k2._key);
+            return _c(k1, k2.position());
         }
 
         bool operator()(dht::ring_position_view k1, const cache_entry& k2) const {
-            if (k2.is_dummy_entry()) {
-                return true;
-            }
-            return _c(k1, k2._key);
+            return _c(k1, k2.position());
         }
 
         bool operator()(const cache_entry& k1, const cache_entry& k2) const {
-            if (k1.is_dummy_entry()) {
-                return false;
-            }
-            if (k2.is_dummy_entry()) {
-                return true;
-            }
-            return _c(k1._key, k2._key);
+            return _c(k1.position(), k2.position());
         }
 
         bool operator()(const cache_entry& k1, const dht::decorated_key& k2) const {
-            if (k1.is_dummy_entry()) {
-                return false;
-            }
-            return _c(k1._key, k2);
+            return _c(k1.position(), k2);
         }
 
         bool operator()(const cache_entry& k1, dht::ring_position_view k2) const {
-            if (k1.is_dummy_entry()) {
-                return false;
-            }
-            return _c(k1._key, k2);
+            return _c(k1.position(), k2);
         }
 
         bool operator()(dht::ring_position_view k1, dht::ring_position_view k2) const {
