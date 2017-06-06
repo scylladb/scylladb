@@ -2,6 +2,16 @@
 
 . /etc/os-release
 DISTRIBUTION=`lsb_release -i|awk '{print $3}'`
+CODENAME=`lsb_release -c|awk '{print $2}'`
+
+# workaround fix for #2444
+if [ "$CODENAME" = "jessie" ]; then
+    if [ ! -e /etc/apt/sources.list.d/jessie-backports.list ]; then
+        sudo sh -c 'echo deb "http://httpredir.debian.org/debian jessie-backports main" > /etc/apt/sources.list.d/jessie-backports.list'
+    fi
+    sudo apt-get -y update
+    sudo apt-get install -t jessie-backports -y texlive
+fi
 
 sudo apt-get install -y gdebi-core
 if [ "$VERSION_ID" = "14.04" ] || [ "$DISTRIBUTION" = "Debian" ]; then
