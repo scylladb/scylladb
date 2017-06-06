@@ -7,6 +7,14 @@ print_usage() {
     echo "  --rebuild-dep  rebuild dependency packages"
     exit 1
 }
+install_deps() {
+    echo Y | sudo mk-build-deps
+    DEB_FILE=`ls *-build-deps*.deb`
+    sudo gdebi -n $DEB_FILE
+    sudo rm -f $DEB_FILE
+    sudo dpkg -P ${DEB_FILE%%_*.deb}
+}
+
 REBUILD=0
 DIST=0
 while [ $# -gt 0 ]; do
@@ -144,5 +152,5 @@ else
     sudo apt-get install g++
 fi
 
-echo Y | sudo mk-build-deps -i -r
+install_deps
 debuild -r fakeroot -us -uc
