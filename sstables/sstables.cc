@@ -1180,6 +1180,15 @@ future<> sstable::update_info_for_opened_data() {
             _index_file_size = size;
         });
     }).then([this] {
+        if (this->has_component(sstable::component_type::Filter)) {
+            return io_check([&] {
+                return engine().file_size(this->filename(sstable::component_type::Filter));
+            }).then([this] (auto size) {
+                _filter_file_size = size;
+            });
+        }
+        return make_ready_future<>();
+    }).then([this] {
         this->set_clustering_components_ranges();
         this->set_first_and_last_keys();
 
