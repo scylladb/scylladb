@@ -249,6 +249,7 @@ public:
     friend class single_partition_populating_reader;
     friend class cache_entry;
     friend class cache::read_context;
+    friend class partition_range_cursor;
 public:
     struct stats {
         utils::timed_rate_moving_average hits;

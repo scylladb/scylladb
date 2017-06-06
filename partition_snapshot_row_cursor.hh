@@ -63,12 +63,12 @@ class partition_snapshot_row_cursor final {
     // Removes the next row from _heap and puts it into _current_row
     void recreate_current_row() {
         position_in_version::less_compare heap_less(_schema);
-        rows_entry::tri_compare _cmp(_schema);
+        position_in_partition::equal_compare eq(_schema);
         do {
             boost::range::pop_heap(_heap, heap_less);
             _current_row.push_back(_heap.back());
             _heap.pop_back();
-        } while (!_heap.empty() && _cmp(*_current_row[0].it, *_heap[0].it) == 0);
+        } while (!_heap.empty() && eq(_current_row[0].it->position(), _heap[0].it->position()));
         _position = position_in_partition(_current_row[0].it->position());
     }
 public:

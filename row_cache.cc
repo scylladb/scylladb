@@ -183,6 +183,99 @@ const logalloc::region& cache_tracker::region() const {
     return _region;
 }
 
+// Stable cursor over partition entries from given range.
+//
+// Must be accessed with reclaim lock held on the cache region.
+// The position of the cursor is always valid, but cache entry reference
+// is not always valid. It remains valid as long as the iterators
+// into _cache._partitions remain valid. Cache entry reference can be
+// brought back to validity by calling refresh().
+//
+class partition_range_cursor final {
+    std::reference_wrapper<row_cache> _cache;
+    row_cache::partitions_type::iterator _it;
+    row_cache::partitions_type::iterator _end;
+    dht::ring_position_view _start_pos;
+    dht::ring_position_view _end_pos;
+    stdx::optional<dht::decorated_key> _last;
+    uint64_t _last_reclaim_count;
+    size_t _last_modification_count;
+private:
+    void set_position(cache_entry& e) {
+        // FIXME: make ring_position_view convertible to ring_position, so we can use e.position()
+        if (e.is_dummy_entry()) {
+            _last = {};
+            _start_pos = dht::ring_position_view::max();
+        } else {
+            _last = e.key();
+            _start_pos = dht::ring_position_view(*_last);
+        }
+    }
+public:
+    // Creates a cursor positioned at the lower bound of the range.
+    // The cache entry reference is not valid.
+    // The range reference must remain live as long as this instance is used.
+    partition_range_cursor(row_cache& cache, const dht::partition_range& range)
+        : _cache(cache)
+        , _start_pos(dht::ring_position_view::for_range_start(range))
+        , _end_pos(dht::ring_position_view::for_range_end(range))
+        , _last_reclaim_count(std::numeric_limits<uint64_t>::max())
+        , _last_modification_count(std::numeric_limits<size_t>::max())
+    { }
+
+    // Ensures that cache entry reference is valid.
+    // The cursor will point at the first entry with position >= the current position.
+    // Returns true if and only if the position of the cursor changed.
+    // Strong exception guarantees.
+    bool refresh() {
+        auto reclaim_count = _cache.get().get_cache_tracker().region().reclaim_counter();
+        auto modification_count = _cache.get().get_cache_tracker().modification_count();
+
+        if (reclaim_count == _last_reclaim_count && modification_count == _last_modification_count) {
+            return true;
+        }
+
+        auto cmp = cache_entry::compare(_cache.get()._schema);
+        if (cmp(_end_pos, _start_pos)) { // next() may have moved _start_pos past the _end_pos.
+            _end_pos = _start_pos;
+        }
+        _end = _cache.get()._partitions.lower_bound(_end_pos, cmp);
+        _it = _cache.get()._partitions.lower_bound(_start_pos, cmp);
+        auto same = !cmp(_start_pos, _it->position());
+        set_position(*_it);
+        _last_reclaim_count = reclaim_count;
+        _last_modification_count = modification_count;
+        return same;
+    }
+
+    // Positions the cursor at the next entry.
+    // May advance past the requested range. Use in_range() after the call to determine that.
+    // Call only when in_range() and cache entry reference is valid.
+    // Strong exception guarantees.
+    void next() {
+        auto next = std::next(_it);
+        set_position(*next);
+        _it = std::move(next);
+    }
+
+    // Valid only after refresh() and before _cache._partitions iterators are invalidated.
+    // Points inside the requested range if in_range().
+    cache_entry& entry() {
+        return *_it;
+    }
+
+    // Call only when cache entry reference is valid.
+    bool in_range() {
+        return _it != _end;
+    }
+
+    // Returns current position of the cursor.
+    // Result valid as long as this instance is valid and not advanced.
+    dht::ring_position_view position() const {
+        return _start_pos;
+    }
+};
+
 /*
  * Represent a reader to the underlying source.
  * This reader automatically makes sure that it's up to date with all cache updates
