@@ -972,7 +972,7 @@ std::ostream& operator<<(std::ostream& out, row_cache& rc) {
 }
 
 std::ostream& operator<<(std::ostream& out, cache_entry& e) {
-    return out << "{cache_entry: " << e.key()
+    return out << "{cache_entry: " << e.position()
                << ", cont=" << e.continuous()
                << ", dummy=" << e.is_dummy_entry()
                << ", " << e.partition()
