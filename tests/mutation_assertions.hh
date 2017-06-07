@@ -160,6 +160,25 @@ public:
         return *this;
     }
 
+    streamed_mutation_assertions& produces(mutation_fragment mf) {
+        auto mfopt = _sm().get0();
+        if (!mfopt) {
+            BOOST_FAIL(sprint("Expected mutation fragment %s, got end of stream", mf));
+        }
+        if (!mfopt->equal(*_sm.schema(), mf)) {
+            BOOST_FAIL(sprint("Expected %s, but got %s", mf, *mfopt));
+        }
+        return *this;
+    }
+
+    streamed_mutation_assertions& produces_only(const std::deque<mutation_fragment>& fragments) {
+        for (auto&& f : fragments) {
+            produces(f);
+        }
+        produces_end_of_stream();
+        return *this;
+    }
+
     streamed_mutation_assertions& produces_row_with_key(const clustering_key& ck) {
         BOOST_TEST_MESSAGE(sprint("Expect %s", ck));
         auto mfo = _sm().get0();
