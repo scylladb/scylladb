@@ -882,22 +882,8 @@ void row_cache::invalidate_unwrapped(const dht::partition_range& range) {
     logalloc::reclaim_lock _(_tracker.region());
 
     auto cmp = cache_entry::compare(_schema);
-    auto begin = _partitions.begin();
-    if (range.start()) {
-        if (range.start()->is_inclusive()) {
-            begin = _partitions.lower_bound(range.start()->value(), cmp);
-        } else {
-            begin = _partitions.upper_bound(range.start()->value(), cmp);
-        }
-    }
-    auto end = partitions_end();
-    if (range.end()) {
-        if (range.end()->is_inclusive()) {
-            end = _partitions.upper_bound(range.end()->value(), cmp);
-        } else {
-            end = _partitions.lower_bound(range.end()->value(), cmp);
-        }
-    }
+    auto begin = _partitions.lower_bound(dht::ring_position_view::for_range_start(range), cmp);
+    auto end = _partitions.lower_bound(dht::ring_position_view::for_range_end(range), cmp);
     with_allocator(_tracker.allocator(), [this, begin, end] {
         auto it = _partitions.erase_and_dispose(begin, end, [this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
             _tracker.on_erase();
