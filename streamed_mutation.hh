@@ -110,6 +110,13 @@ public:
         return sizeof(clustering_row) + external_memory_usage();
     }
 
+    bool equal(const schema& s, const clustering_row& other) const {
+        return _ck.equal(s, other._ck)
+               && _t == other._t
+               && _marker == other._marker
+               && _cells.equal(column_kind::static_column, s, other._cells, s);
+    }
+
     friend std::ostream& operator<<(std::ostream& os, const clustering_row& row);
 };
 
@@ -145,6 +152,10 @@ public:
 
     size_t memory_usage() const {
         return sizeof(static_row) + external_memory_usage();
+    }
+
+    bool equal(const schema& s, const static_row& other) const {
+        return _cells.equal(column_kind::static_column, s, other._cells, s);
     }
 
     friend std::ostream& operator<<(std::ostream& is, const static_row& row);
@@ -314,6 +325,21 @@ public:
             _data->_size_in_bytes = sizeof(data) + visit([] (auto& mf) { return mf.external_memory_usage(); });
         }
         return *_data->_size_in_bytes;
+    }
+
+    bool equal(const schema& s, const mutation_fragment& other) const {
+        if (other._kind != _kind) {
+            return false;
+        }
+        switch(_kind) {
+        case kind::static_row:
+            return as_static_row().equal(s, other.as_static_row());
+        case kind::clustering_row:
+            return as_clustering_row().equal(s, other.as_clustering_row());
+        case kind::range_tombstone:
+            return as_range_tombstone().equal(s, other.as_range_tombstone());
+        }
+        abort();
     }
 
     friend std::ostream& operator<<(std::ostream&, const mutation_fragment& mf);
