@@ -62,6 +62,9 @@ fi
 if [ ! -f /usr/bin/lsb_release ]; then
     sudo apt-get -y install lsb-release
 fi
+if [ ! -f /usr/bin/gdebi ]; then
+    sudo apt-get -y install gdebi-core
+fi
 
 DISTRIBUTION=`lsb_release -i|awk '{print $3}'`
 CODENAME=`lsb_release -c|awk '{print $2}'`
