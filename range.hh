@@ -548,6 +548,12 @@ public:
             return nonwrapping_range(range_bound<T>(split_point, false), end());
         }
     }
+    // Creates a new sub-range which is the intersection of this range and a range starting with "start".
+    // If there is no overlap, returns stdx::nullopt.
+    template<typename Comparator>
+    stdx::optional<nonwrapping_range> trim_front(stdx::optional<bound>&& start, Comparator&& cmp) const {
+        return intersection(nonwrapping_range(std::move(start), {}), cmp);
+    }
     // Transforms this range into a new range of a different value type
     // Supplied transformer should transform value of type T (the old type) into value of type U (the new type).
     template<typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
