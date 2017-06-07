@@ -616,7 +616,7 @@ class lsa_object_descriptor(object):
         start_pos = pos
         b = next()
         if not (b & 0x40):
-            raise Exception('object descriptor does not start with 0x40')
+            raise Exception('object descriptor at 0x%x does not start with 0x40: 0x%x' % (int(start_pos), int(b)))
         value = b & 0x3f
         shift = 0
         while not (b & 0x80):
