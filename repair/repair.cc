@@ -61,8 +61,6 @@ public:
     std::unordered_map<gms::inet_address, std::unordered_map<sstring, dht::token_range_vector>> ranges_need_repair_out;
     // FIXME: this "100" needs to be a parameter.
     uint64_t target_partitions = 100;
-    // FIXME: this "10 * 1024 * 1024" needs to be a parameter.
-    size_t sub_ranges_max = 10 * 1024 * 1024;
     // This affects how many ranges we put in a stream plan. The more the more
     // memory we use to store the ranges in memory. However, it can reduce the
     // total number of stream_plan we use for the repair.
