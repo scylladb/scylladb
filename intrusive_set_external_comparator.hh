@@ -208,6 +208,10 @@ public:
     }
     template<class ElemCompare>
     iterator insert(const_iterator hint, Elem& value, ElemCompare cmp) {
+        return insert_check(hint, value, std::move(cmp)).first;
+    }
+    template<class ElemCompare>
+    std::pair<iterator, bool> insert_check(const_iterator hint, Elem& value, ElemCompare cmp) {
         algo::insert_commit_data commit_data;
         std::pair<node_ptr, bool> ret =
             algo::insert_unique_check(_header.this_ptr(),
@@ -215,8 +219,8 @@ public:
                                       key_of_value()(value),
                                       key_node_comp(cmp),
                                       commit_data);
-        return ret.second ? insert_unique_commit(value, commit_data)
-                          : iterator(ret.first, priv_value_traits_ptr());
+        return ret.second ? std::make_pair(insert_unique_commit(value, commit_data), true)
+                          : std::make_pair(iterator(ret.first, priv_value_traits_ptr()), false);
     }
 };
 
