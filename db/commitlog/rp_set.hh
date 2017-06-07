@@ -43,13 +43,20 @@
 #include <unordered_map>
 
 #include "replay_position.hh"
+#include "commitlog.hh"
 
 namespace db {
 
 class rp_set {
 public:
+    typedef std::unordered_map<segment_id_type, uint64_t> usage_map;
+
     rp_set()
     {}
+    rp_set(const replay_position & rp)
+    {
+        put(rp);
+    }
     rp_set(rp_set&&) = default;
 
     rp_set& operator=(rp_set&&) = default;
@@ -57,11 +64,25 @@ public:
     void put(const replay_position& rp) {
         _usage[rp.id]++;
     }
-    const std::unordered_map<segment_id_type, uint64_t> usage() const {
+    void put(rp_handle && h) {
+        if (h) {
+            put(h.rp());
+        }
+        h.release();
+    }
+
+    size_t size() const {
+        return _usage.size();
+    }
+    bool empty() const {
+        return _usage.empty();
+    }
+
+    const usage_map& usage() const {
         return _usage;
     }
 private:
-    std::unordered_map<segment_id_type, uint64_t> _usage;
+    usage_map _usage;
 };
 
 }

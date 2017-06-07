@@ -950,7 +950,7 @@ column_family::seal_active_memtable(memtable_list::flush_behavior ignored) {
       });
     }, [old, this] {
         if (_commitlog) {
-            _commitlog->discard_completed_segments(_schema->id(), old->replay_position());
+            _commitlog->discard_completed_segments(_schema->id(), old->rp_set());
         }
     });
     // FIXME: release commit log
@@ -2290,7 +2290,7 @@ database::init_commitlog() {
         _commitlog->add_flush_handler([this](db::cf_id_type id, db::replay_position pos) {
             if (_column_families.count(id) == 0) {
                 // the CF has been removed.
-                _commitlog->discard_completed_segments(id, pos);
+                _commitlog->discard_completed_segments(id);
                 return;
             }
             _column_families[id]->flush(pos);
@@ -2883,12 +2883,14 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
 }
 
 template<typename... Args>
-void column_family::do_apply(const db::replay_position& rp, Args&&... args) {
+void column_family::do_apply(db::rp_handle&& h, Args&&... args) {
     utils::latency_counter lc;
     _stats.writes.set_latency(lc);
+    db::replay_position rp = h;
     check_valid_rp(rp);
     try {
-        _memtables->active_memtable().apply(std::forward<Args>(args)..., rp);
+        _memtables->active_memtable().apply(std::forward<Args>(args)..., std::move(h));
+        _highest_rp = std::max(_highest_rp, rp);
     } catch (...) {
         _failed_counter_applies_to_memtable++;
         throw;
@@ -2900,13 +2902,13 @@ void column_family::do_apply(const db::replay_position& rp, Args&&... args) {
 }
 
 void
-column_family::apply(const mutation& m, const db::replay_position& rp) {
-    do_apply(rp, m);
+column_family::apply(const mutation& m, db::rp_handle&& h) {
+    do_apply(std::move(h), m);
 }
 
 void
-column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& rp) {
-    do_apply(rp, m, m_schema);
+column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h) {
+    do_apply(std::move(h), m, m_schema);
 }
 
 future<mutation> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema,
@@ -2986,10 +2988,16 @@ void column_family::apply_streaming_big_mutation(schema_ptr m_schema, utils::UUI
 
 void
 column_family::check_valid_rp(const db::replay_position& rp) const {
-    if (rp != db::replay_position() && rp < _highest_flushed_rp) {
+    if (rp != db::replay_position() && rp < _lowest_allowed_rp) {
         throw replay_position_reordered_exception();
     }
 }
+
+db::replay_position column_family::set_low_replay_position_mark() {
+    _lowest_allowed_rp = _highest_rp;
+    return _lowest_allowed_rp;
+}
+
 
 future<> dirty_memory_manager::shutdown() {
     _db_shutdown_requested = true;
@@ -3100,20 +3108,20 @@ void dirty_memory_manager::start_reclaiming() noexcept {
     _should_flush.signal();
 }
 
-future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position rp, timeout_clock::time_point timeout) {
-    return _dirty_memory_manager.region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), rp = std::move(rp)] {
+future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, timeout_clock::time_point timeout) {
+    return _dirty_memory_manager.region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h)]() mutable {
         try {
             auto& cf = find_column_family(m.column_family_id());
-            cf.apply(m, m_schema, rp);
+            cf.apply(m, m_schema, std::move(h));
         } catch (no_such_column_family&) {
             dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
         }
     }, timeout);
 }
 
-future<> database::apply_in_memory(const mutation& m, column_family& cf, db::replay_position rp, timeout_clock::time_point timeout) {
-    return _dirty_memory_manager.region_group().run_when_memory_available([this, &m, &cf, rp = std::move(rp)] {
-        cf.apply(m, rp);
+future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&& h, timeout_clock::time_point timeout) {
+    return _dirty_memory_manager.region_group().run_when_memory_available([this, &m, &cf, h = std::move(h)]() mutable {
+        cf.apply(m, std::move(h));
     }, timeout);
 }
 
@@ -3136,8 +3144,8 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, ti
         return do_with(freeze(m), [this, &m, &cf, timeout] (frozen_mutation& fm) {
             commitlog_entry_writer cew(m.schema(), fm);
             return cf.commitlog()->add_entry(m.schema()->id(), cew, timeout);
-        }).then([this, &m, &cf, timeout] (db::replay_position rp) {
-            return apply_in_memory(m, cf, rp, timeout).handle_exception([this, &cf, &m, timeout] (auto ep) {
+        }).then([this, &m, &cf, timeout] (db::rp_handle h) {
+            return apply_in_memory(m, cf, std::move(h), timeout).handle_exception([this, &cf, &m, timeout] (auto ep) {
                 try {
                     std::rethrow_exception(ep);
                 } catch (replay_position_reordered_exception&) {
@@ -3152,14 +3160,15 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, ti
             });
         });
     }
-    return apply_in_memory(m, cf, db::replay_position(), timeout);
+    return apply_in_memory(m, cf, {}, timeout);
 }
 
 future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::UUID uuid, const frozen_mutation& m, timeout_clock::time_point timeout) {
-    if (cf.commitlog() != nullptr) {
+    auto cl = cf.commitlog();
+    if (cl != nullptr) {
         commitlog_entry_writer cew(s, m);
-        return cf.commitlog()->add_entry(std::move(uuid), cew, timeout).then([&m, this, s, timeout](auto rp) {
-            return this->apply_in_memory(m, s, rp, timeout).handle_exception([this, s, &m, timeout] (auto ep) {
+        return cf.commitlog()->add_entry(uuid, cew, timeout).then([&m, this, s, timeout, cl](db::rp_handle h) {
+            return this->apply_in_memory(m, s, std::move(h), timeout).handle_exception([this, s, &m, timeout] (auto ep) {
                 try {
                     std::rethrow_exception(ep);
                 } catch (replay_position_reordered_exception&) {
@@ -3174,7 +3183,7 @@ future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::
             });
         });
     }
-    return apply_in_memory(m, std::move(s), db::replay_position(), timeout);
+    return apply_in_memory(m, std::move(s), {}, timeout);
 }
 
 future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
@@ -3394,6 +3403,13 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
     const auto durable = ks.metadata()->durable_writes();
     const auto auto_snapshot = get_config().auto_snapshot();
 
+    // Force mutations coming in to re-acquire higher rp:s
+    // This creates a "soft" ordering, in that we will guarantee that
+    // any sstable written _after_ we issue the flush below will
+    // only have higher rp:s than we will get from the discard_sstable
+    // call.
+    auto low_mark = cf.set_low_replay_position_mark();
+
     future<> f = make_ready_future<>();
     if (durable || auto_snapshot) {
         // TODO:
@@ -3404,20 +3420,21 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
         f = cf.clear();
     }
 
-    return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, tsf = std::move(tsf)]() mutable {
-        return f.then([&cf, auto_snapshot, tsf = std::move(tsf)] {
+    return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
+        return f.then([&cf, auto_snapshot, tsf = std::move(tsf), low_mark] {
             dblog.debug("Discarding sstable data for truncated CF + indexes");
             // TODO: notify truncation
 
-            return tsf().then([&cf, auto_snapshot](db_clock::time_point truncated_at) {
+            return tsf().then([&cf, auto_snapshot, low_mark](db_clock::time_point truncated_at) {
                 future<> f = make_ready_future<>();
                 if (auto_snapshot) {
                     auto name = sprint("%d-%s", truncated_at.time_since_epoch().count(), cf.schema()->cf_name());
                     f = cf.snapshot(name);
                 }
-                return f.then([&cf, truncated_at] {
-                    return cf.discard_sstables(truncated_at).then([&cf, truncated_at](db::replay_position rp) {
+                return f.then([&cf, truncated_at, low_mark] {
+                    return cf.discard_sstables(truncated_at).then([&cf, truncated_at, low_mark](db::replay_position rp) {
                         // TODO: indexes.
+                        assert(low_mark <= rp);
                         return db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
                     });
                 });
@@ -3809,6 +3826,9 @@ future<> column_family::fail_streaming_mutations(utils::UUID plan_id) {
 }
 
 future<> column_family::clear() {
+    if (_commitlog) {
+        _commitlog->discard_completed_segments(_schema->id());
+    }
     _memtables->clear();
     _memtables->add_memtable();
     _streaming_memtables->clear();

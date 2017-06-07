@@ -158,16 +158,6 @@ future<> db::commitlog_replayer::impl::init() {
         return do_with(shard_rpm_map{}, [this, &qp](shard_rpm_map& map) {
             return parallel_for_each(qp.db().local().get_column_families(), [&map, &qp](auto& cfp) {
                 auto uuid = cfp.first;
-                for (auto& sst : *cfp.second->get_sstables()) {
-                    try {
-                        auto p = sst->get_stats_metadata().position;
-                        rlogger.trace("sstable {} -> rp {}", sst->get_filename(), p);
-                        auto& pp = map[p.shard_id()][uuid];
-                        pp = std::max(pp, p);
-                    } catch (...) {
-                        rlogger.warn("Could not read sstable metadata {}", std::current_exception());
-                    }
-                }
                 // We do this on each cpu, for each CF, which technically is a little wasteful, but the values are
                 // cached, this is only startup, and it makes the code easier.
                 // Get all truncation records for the CF and initialize max rps if
@@ -188,7 +178,7 @@ future<> db::commitlog_replayer::impl::init() {
         // bugfix: the above map-reduce will not_ detect if sstables
         // are _missing_ from a CF. And because of re-sharding, we can't
         // just insert initial zeros into the maps, because we don't know
-        // how many shards there we're last time.
+        // how many shards there was last time.
         // However, this only affects global min pos, since
         // for each CF, the worst that happens is that we have a missing
         // entry -> empty replay_pos == min value. But calculating

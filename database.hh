@@ -98,6 +98,7 @@ class entry_descriptor;
 namespace db {
 class commitlog;
 class config;
+class rp_handle;
 
 namespace system_keyspace {
 void make(database& db, bool durable, bool volatile_testing_only);
@@ -439,7 +440,7 @@ private:
     uint64_t _failed_counter_applies_to_memtable = 0;
 
     template<typename... Args>
-    void do_apply(const db::replay_position&, Args&&... args);
+    void do_apply(db::rp_handle&&, Args&&... args);
 
     lw_shared_ptr<memtable_list> _memtables;
 
@@ -512,6 +513,9 @@ private:
     std::experimental::optional<int64_t> _sstable_generation = {};
 
     db::replay_position _highest_flushed_rp;
+    db::replay_position _highest_rp;
+    db::replay_position _lowest_allowed_rp;
+
     // Provided by the database that owns this commitlog
     db::commitlog* _commitlog;
     compaction_manager& _compaction_manager;
@@ -693,8 +697,8 @@ public:
     future<const_row_ptr> find_row(schema_ptr, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
     // Applies given mutation to this column family
     // The mutation is always upgraded to current schema.
-    void apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& = db::replay_position());
-    void apply(const mutation& m, const db::replay_position& = db::replay_position());
+    void apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& = {});
+    void apply(const mutation& m, db::rp_handle&& = {});
     void apply_streaming_mutation(schema_ptr, utils::UUID plan_id, const frozen_mutation&, bool fragmented);
 
     // Returns at most "cmd.limit" rows
@@ -774,6 +778,8 @@ public:
     future<> cleanup_sstables(sstables::compaction_descriptor descriptor);
 
     future<bool> snapshot_exists(sstring name);
+
+    db::replay_position set_low_replay_position_mark();
 
     future<> snapshot(sstring name);
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
@@ -1136,8 +1142,8 @@ private:
     bool _enable_incremental_backups = false;
 
     future<> init_commitlog();
-    future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position, timeout_clock::time_point timeout);
-    future<> apply_in_memory(const mutation& m, column_family& cf, db::replay_position rp, timeout_clock::time_point timeout);
+    future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, timeout_clock::time_point timeout);
+    future<> apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&&, timeout_clock::time_point timeout);
 private:
     // Unless you are an earlier boostraper or the database itself, you should
     // not be using this directly.  Go for the public create_keyspace instead.

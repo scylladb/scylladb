@@ -46,7 +46,6 @@
 #include "core/future.hh"
 #include "core/shared_ptr.hh"
 #include "core/stream.hh"
-#include "utils/UUID.hh"
 #include "replay_position.hh"
 #include "commitlog_entry.hh"
 
@@ -57,8 +56,8 @@ namespace seastar { class file; }
 namespace db {
 
 class config;
-
-using cf_id_type = utils::UUID;
+class rp_set;
+class rp_handle;
 
 /*
  * Commit Log tracks every write operation into the system. The aim of
@@ -101,6 +100,7 @@ public:
     class segment_manager;
     class segment;
 
+    friend class rp_handle;
 private:
     ::shared_ptr<segment_manager> _segment_manager;
 public:
@@ -158,6 +158,7 @@ public:
      */
     static future<commitlog> create_commitlog(config);
 
+
     /**
      * Note: To be able to keep impl out of header file,
      * actual data writing is done via a std::function.
@@ -179,7 +180,7 @@ public:
      *
      * @param mutation_func a function that writes 'size' bytes to the log, representing the mutation.
      */
-    future<replay_position> add(const cf_id_type& id, size_t size, timeout_clock::time_point timeout, serializer_func mutation_func);
+    future<rp_handle> add(const cf_id_type& id, size_t size, timeout_clock::time_point timeout, serializer_func mutation_func);
 
     /**
      * Template version of add.
@@ -187,7 +188,7 @@ public:
      * @param mu an invokable op that generates the serialized data. (Of size bytes)
      */
     template<typename _MutationOp>
-    future<replay_position> add_mutation(const cf_id_type& id, size_t size, timeout_clock::time_point timeout, _MutationOp&& mu) {
+    future<rp_handle> add_mutation(const cf_id_type& id, size_t size, timeout_clock::time_point timeout, _MutationOp&& mu) {
         return add(id, size, timeout, [mu = std::forward<_MutationOp>(mu)](output& out) {
             mu(out);
         });
@@ -198,7 +199,7 @@ public:
      * @param mu an invokable op that generates the serialized data. (Of size bytes)
      */
     template<typename _MutationOp>
-    future<replay_position> add_mutation(const cf_id_type& id, size_t size, _MutationOp&& mu) {
+    future<rp_handle> add_mutation(const cf_id_type& id, size_t size, _MutationOp&& mu) {
         return add_mutation(id, size, timeout_clock::time_point::max(), std::forward<_MutationOp>(mu));
     }
 
@@ -207,16 +208,18 @@ public:
      * Resolves with timed_out_error when timeout is reached.
      * @param entry_writer a writer responsible for writing the entry
      */
-    future<replay_position> add_entry(const cf_id_type& id, const commitlog_entry_writer& entry_writer, timeout_clock::time_point timeout);
+    future<rp_handle> add_entry(const cf_id_type& id, const commitlog_entry_writer& entry_writer, timeout_clock::time_point timeout);
 
     /**
      * Modifies the per-CF dirty cursors of any commit log segments for the column family according to the position
      * given. Discards any commit log segments that are no longer used.
      *
      * @param cfId    the column family ID that was flushed
-     * @param context the replay position of the flush
+     * @param rp_set  the replay positions of the flush
      */
-    void discard_completed_segments(const cf_id_type&, const replay_position&);
+    void discard_completed_segments(const cf_id_type&, const rp_set&);
+
+    void discard_completed_segments(const cf_id_type&);
 
     /**
      * A 'flush_handler' is invoked when the CL determines that size on disk has

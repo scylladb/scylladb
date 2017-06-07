@@ -456,10 +456,12 @@ memtable::make_flush_reader(schema_ptr s, const io_priority_class& pc) {
 }
 
 void
-memtable::update(const db::replay_position& rp) {
+memtable::update(db::rp_handle&& h) {
+    db::replay_position rp = h;
     if (_replay_position < rp) {
         _replay_position = rp;
     }
+    _rp_set.put(std::move(h));
 }
 
 future<>
@@ -473,7 +475,7 @@ memtable::apply(memtable& mt) {
 }
 
 void
-memtable::apply(const mutation& m, const db::replay_position& rp) {
+memtable::apply(const mutation& m, db::rp_handle&& h) {
     with_allocator(allocator(), [this, &m] {
         _allocating_section(*this, [&, this] {
           with_linearized_managed_bytes([&] {
@@ -482,11 +484,11 @@ memtable::apply(const mutation& m, const db::replay_position& rp) {
           });
         });
     });
-    update(rp);
+    update(std::move(h));
 }
 
 void
-memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& rp) {
+memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_handle&& h) {
     with_allocator(allocator(), [this, &m, &m_schema] {
         _allocating_section(*this, [&, this] {
           with_linearized_managed_bytes([&] {
@@ -495,7 +497,7 @@ memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::
           });
         });
     });
-    update(rp);
+    update(std::move(h));
 }
 
 logalloc::occupancy_stats memtable::occupancy() const {
