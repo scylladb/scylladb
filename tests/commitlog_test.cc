@@ -149,6 +149,10 @@ typedef std::vector<sstring> segment_names;
 static segment_names segment_diff(commitlog& log, segment_names prev = {}) {
     segment_names now = log.get_active_segment_names();
     segment_names diff;
+    // safety fix. We should always get segment names in alphabetical order, but
+    // we're not explicitly guaranteed it. Lets sort the sets just to be sure.
+    std::sort(now.begin(), now.end());
+    std::sort(prev.begin(), prev.end());
     std::set_difference(prev.begin(), prev.end(), now.begin(), now.end(), std::back_inserter(diff));
     return diff;
 }
@@ -254,7 +258,7 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
 
             auto set = make_lw_shared<std::set<segment_id_type>>();
             auto uuid = utils::UUID_gen::get_time_UUID();
-            return do_until([set]() {return set->size() > 2;},
+            return do_until([set, sem]() {return set->size() > 2 && sem->try_wait();},
                     [&log, set, uuid]() {
                         sstring tmp = "hej bubba cow";
                         return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
@@ -263,14 +267,13 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
                                     BOOST_CHECK_NE(rp, db::replay_position());
                                     set->insert(rp.id);
                                 });
-                    }).then([&log, sem, segments]() {
-                        auto names = log.get_active_segment_names();
+                    }).then([&log, segments]() {
                         auto diff = segment_diff(log, *segments);
                         auto nn = diff.size();
                         auto dn = log.get_num_segments_destroyed();
 
                         BOOST_REQUIRE(nn > 0);
-                        BOOST_REQUIRE(nn <= names.size());
+                        BOOST_REQUIRE(nn <= segments->size());
                         BOOST_REQUIRE(dn <= nn);
                     }).finally([r = std::move(r)] {
                     });
