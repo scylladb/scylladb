@@ -921,6 +921,12 @@ void deletable_row::revert(const schema& s, deletable_row& src) {
     _marker.revert(src._marker);
 }
 
+void deletable_row::apply(const schema& s, deletable_row&& src) {
+    _cells.apply(s, column_kind::regular_column, std::move(src._cells));
+    _marker.apply(src._marker);
+    _deleted_at.apply(src._deleted_at, _marker);
+}
+
 bool
 rows_entry::equal(const schema& s, const rows_entry& other) const {
     return equal(s, other, s);

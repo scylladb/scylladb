@@ -628,6 +628,10 @@ public:
     void apply_reversibly(const schema& s, deletable_row& src);
     // See reversibly_mergeable.hh
     void revert(const schema& s, deletable_row& src);
+
+    // Weak exception guarantees. After exception, both src and this will commute to the same value as
+    // they would should the exception not happen.
+    void apply(const schema& s, deletable_row&& src);
 public:
     row_tombstone deleted_at() const { return _deleted_at; }
     api::timestamp_type created_at() const { return _marker.timestamp(); }
