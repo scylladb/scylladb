@@ -79,8 +79,14 @@ private:
     void refresh_iterators() {
         _clustering_rows.clear();
 
-        if (!_in_ck_range && _current_ck_range == _ck_range_end) {
-            return;
+        if (!_in_ck_range) {
+            if (_current_ck_range == _ck_range_end) {
+                _end_of_stream = true;
+                return;
+            }
+            for (auto&& v : _snapshot->versions()) {
+                _range_tombstones.apply(v.partition().row_tombstones(), *_current_ck_range);
+            }
         }
 
         for (auto&& v : _snapshot->versions()) {
@@ -177,18 +183,13 @@ private:
         }
 
         while (!is_end_of_stream() && !is_buffer_full()) {
-            if (_in_ck_range && _clustering_rows.empty()) {
-                _in_ck_range = false;
-                _current_ck_range = std::next(_current_ck_range);
-                refresh_iterators();
-                continue;
-            }
-
             auto mfopt = read_next();
             if (mfopt) {
                 emplace_mutation_fragment(std::move(*mfopt));
             } else {
-                _end_of_stream = true;
+                _in_ck_range = false;
+                _current_ck_range = std::next(_current_ck_range);
+                refresh_iterators();
             }
         }
     }
@@ -219,12 +220,6 @@ public:
     , _range_tombstones(*s)
     , _lsa_region(region)
     , _read_section(read_section) {
-        for (auto&& v : _snapshot->versions()) {
-            auto&& rt_list = v.partition().row_tombstones();
-            for (auto&& range : _ck_ranges.ranges()) {
-                _range_tombstones.apply(rt_list, range);
-            }
-        }
         do_fill_buffer();
     }
 
