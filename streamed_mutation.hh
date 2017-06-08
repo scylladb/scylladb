@@ -690,3 +690,50 @@ public:
         consume_range_tombstones_until_end();
     }
 };
+
+
+GCC6_CONCEPT(
+    // F gets a stream element as an argument and returns the new value which replaces that element
+    // in the transformed stream.
+    template<typename F>
+    concept bool StreamedMutationTranformer() {
+        return requires(F f, mutation_fragment mf, schema_ptr s) {
+            { f(std::move(mf)) } -> mutation_fragment
+            { f(s) } -> schema_ptr
+        };
+    }
+)
+
+// Creates a stream which is like sm but with transformation applied to the elements.
+template<typename T>
+GCC6_CONCEPT(
+    requires StreamedMutationTranformer<T>()
+)
+streamed_mutation transform(streamed_mutation sm, T t) {
+    class reader : public streamed_mutation::impl {
+        streamed_mutation _sm;
+        T _t;
+    public:
+        explicit reader(streamed_mutation sm, T&& t)
+            : impl(t(sm.schema()), sm.decorated_key(), sm.partition_tombstone())
+            , _sm(std::move(sm))
+            , _t(std::move(t))
+        { }
+
+        virtual future<> fill_buffer() override {
+            return _sm.fill_buffer().then([this] {
+                while (!_sm.is_buffer_empty()) {
+                    push_mutation_fragment(_t(_sm.pop_mutation_fragment()));
+                }
+                _end_of_stream = _sm.is_end_of_stream();
+            });
+        }
+
+        virtual future<> fast_forward_to(position_range pr) override {
+            _end_of_stream = false;
+            forward_buffer_to(pr.start());
+            return _sm.fast_forward_to(std::move(pr));
+        }
+    };
+    return make_streamed_mutation<reader>(std::move(sm), std::move(t));
+}
