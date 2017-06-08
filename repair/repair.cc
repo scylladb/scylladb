@@ -64,11 +64,13 @@ public:
     // This affects how many ranges we put in a stream plan. The more the more
     // memory we use to store the ranges in memory. However, it can reduce the
     // total number of stream_plan we use for the repair.
-    size_t sub_ranges_to_stream = 1 * 1024;
+    size_t sub_ranges_to_stream = 10 * 1024;
     size_t sp_index = 0;
     size_t current_sub_ranges_nr_in = 0;
     size_t current_sub_ranges_nr_out = 0;
     int ranges_index = 0;
+    // Only allow one stream_plan in flight
+    semaphore sp_parallelism_semaphore{1};
 public:
     repair_info(seastar::sharded<database>& db_,
             const sstring& keyspace_,
@@ -143,18 +145,23 @@ public:
         const ::dht::token_range& range,
         const std::vector<gms::inet_address>& neighbors_in,
         const std::vector<gms::inet_address>& neighbors_out) {
-        for (const auto& peer : neighbors_in) {
-            ranges_need_repair_in[peer][cf].emplace_back(range);
-            current_sub_ranges_nr_in++;
-        }
-        for (const auto& peer : neighbors_out) {
-            ranges_need_repair_out[peer][cf].emplace_back(range);
-            current_sub_ranges_nr_out++;
-        }
-        if (current_sub_ranges_nr_in >= sub_ranges_to_stream || current_sub_ranges_nr_out >= sub_ranges_to_stream) {
-            return do_streaming();
-        }
-        return make_ready_future<>();
+        rlogger.debug("Add cf {}, range {}, current_sub_ranges_nr_in {}, current_sub_ranges_nr_out {}", cf, range, current_sub_ranges_nr_in, current_sub_ranges_nr_out);
+        return sp_parallelism_semaphore.wait(1).then([this, cf, range, neighbors_in, neighbors_out] {
+            for (const auto& peer : neighbors_in) {
+                ranges_need_repair_in[peer][cf].emplace_back(range);
+                current_sub_ranges_nr_in++;
+            }
+            for (const auto& peer : neighbors_out) {
+                ranges_need_repair_out[peer][cf].emplace_back(range);
+                current_sub_ranges_nr_out++;
+            }
+            if (current_sub_ranges_nr_in >= sub_ranges_to_stream || current_sub_ranges_nr_out >= sub_ranges_to_stream) {
+                return do_streaming();
+            }
+            return make_ready_future<>();
+        }).finally([this] {
+            sp_parallelism_semaphore.signal(1);
+        });
     }
 };
 
