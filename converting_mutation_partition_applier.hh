@@ -38,12 +38,12 @@ private:
     static bool is_compatible(const column_definition& new_def, const data_type& old_type, column_kind kind) {
         return ::is_compatible(new_def.kind, kind) && new_def.type->is_value_compatible_with(*old_type);
     }
-    void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, atomic_cell_view cell) {
+    static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, atomic_cell_view cell) {
         if (is_compatible(new_def, old_type, kind) && cell.timestamp() > new_def.dropped_at()) {
             dst.apply(new_def, atomic_cell_or_collection(cell));
         }
     }
-    void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, collection_mutation_view cell) {
+    static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, collection_mutation_view cell) {
         if (!is_compatible(new_def, old_type, kind)) {
             return;
         }
@@ -115,6 +115,16 @@ public:
         const column_definition* def = _p_schema.get_column_definition(col.name());
         if (def) {
             accept_cell(_current_row->cells(), column_kind::regular_column, *def, col.type(), collection);
+        }
+    }
+
+    // Appends the cell to dst upgrading it to the new schema.
+    // Cells must have monotonic names.
+    static void append_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, const atomic_cell_or_collection& cell) {
+        if (new_def.is_atomic()) {
+            accept_cell(dst, kind, new_def, old_type, cell.as_atomic_cell());
+        } else {
+            accept_cell(dst, kind, new_def, old_type, cell.as_collection_mutation());
         }
     }
 };
