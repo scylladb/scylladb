@@ -20,6 +20,7 @@
  */
 
 #include <boost/range/algorithm/heap_algorithm.hpp>
+#include <seastar/util/defer.hh>
 
 #include "partition_version.hh"
 
@@ -314,6 +315,31 @@ void partition_entry::apply(const schema& s, partition_entry&& pe, const schema&
     if (current) {
         current->back_reference().mark_as_unique_owner();
     }
+}
+
+
+template<typename Func>
+void partition_entry::with_detached_versions(Func&& func) {
+    partition_version* current = &*_version;
+    auto snapshot = _snapshot;
+    if (snapshot) {
+        snapshot->_version = std::move(_version);
+        snapshot->_entry = nullptr;
+        _snapshot = nullptr;
+    }
+    _version = { };
+
+    auto revert = defer([&] {
+        if (snapshot) {
+            _snapshot = snapshot;
+            snapshot->_entry = this;
+            _version = std::move(snapshot->_version);
+        } else {
+            _version = partition_version_ref(*current);
+        }
+    });
+
+    func(current);
 }
 
 mutation_partition partition_entry::squashed(schema_ptr from, schema_ptr to)

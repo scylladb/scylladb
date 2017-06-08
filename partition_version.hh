@@ -245,6 +245,11 @@ class partition_entry {
     friend class partition_snapshot;
     friend class cache_entry;
 private:
+    // Detaches all versions temporarily around execution of the function.
+    // The function receives partition_version* pointing to the latest version.
+    template<typename Func>
+    void with_detached_versions(Func&&);
+
     void set_version(partition_version*);
 
     void apply(const schema& s, partition_version* pv, const schema& pv_schema);
