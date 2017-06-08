@@ -117,6 +117,21 @@ public:
         }
     }
 
+    bool is_supported_by(const column_definition& cdef, const secondary_index::index& index) const {
+        bool supported = false;
+        if (has_bound(statements::bound::START)) {
+            supported |= is_inclusive(statements::bound::START)
+                         ? index.supports_expression(cdef, cql3::operator_type::GTE)
+                         : index.supports_expression(cdef, cql3::operator_type::GT);
+        }
+        if (has_bound(statements::bound::END)) {
+            supported |= is_inclusive(statements::bound::END)
+                         ? index.supports_expression(cdef, cql3::operator_type::LTE)
+                         : index.supports_expression(cdef, cql3::operator_type::LT);
+        }
+        return supported;
+    }
+
     sstring to_string() const {
         static auto print_term = [] (::shared_ptr<term> t) -> sstring {
             return t ? t->to_string() : "null";
