@@ -20,6 +20,7 @@
  */
 
 #include "repair.hh"
+#include "range_split.hh"
 
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
@@ -55,12 +56,19 @@ public:
     std::vector<sstring> data_centers;
     std::vector<sstring> hosts;
     std::vector<failed_range> failed_ranges;
-    streaming::stream_plan sp_in;
-    streaming::stream_plan sp_out;
+    // Map of peer -> <cf, ranges>
+    std::unordered_map<gms::inet_address, std::unordered_map<sstring, dht::token_range_vector>> ranges_need_repair_in;
+    std::unordered_map<gms::inet_address, std::unordered_map<sstring, dht::token_range_vector>> ranges_need_repair_out;
     // FIXME: this "100" needs to be a parameter.
     uint64_t target_partitions = 100;
-    // FIXME: this "10 * 1024 * 1024" needs to be a parameter.
-    size_t sub_ranges_max = 10 * 1024 * 1024;
+    // This affects how many ranges we put in a stream plan. The more the more
+    // memory we use to store the ranges in memory. However, it can reduce the
+    // total number of stream_plan we use for the repair.
+    size_t sub_ranges_to_stream = 1 * 1024;
+    size_t sp_index = 0;
+    size_t current_sub_ranges_nr_in = 0;
+    size_t current_sub_ranges_nr_out = 0;
+    int ranges_index = 0;
 public:
     repair_info(seastar::sharded<database>& db_,
             const sstring& keyspace_,
@@ -75,14 +83,45 @@ public:
         , cfs(cfs_)
         , id(id_)
         , data_centers(data_centers_)
-        , hosts(hosts_)
-        , sp_in(streaming::stream_plan(sprint("repair-in-%d", id)))
-        , sp_out(streaming::stream_plan(sprint("repair-out-%d", id))) {
-
+        , hosts(hosts_) {
     }
     future<> do_streaming() {
-        return sp_in.execute().discard_result().then([this] {
-                return sp_out.execute().discard_result();
+        size_t ranges_in = 0;
+        size_t ranges_out = 0;
+        auto sp_in = make_lw_shared<streaming::stream_plan>(sprint("repair-in-%d-index-%d", id, sp_index));
+        auto sp_out = make_lw_shared<streaming::stream_plan>(sprint("repair-out-%d-index-%d", id, sp_index));
+
+        for (auto& x : ranges_need_repair_in) {
+            auto& peer = x.first;
+            for (auto& y : x.second) {
+                auto& cf = y.first;
+                auto& stream_ranges = y.second;
+                ranges_in += stream_ranges.size();
+                sp_in->request_ranges(peer, keyspace, std::move(stream_ranges), {cf});
+            }
+        }
+        ranges_need_repair_in.clear();
+        current_sub_ranges_nr_in = 0;
+
+        for (auto& x : ranges_need_repair_out) {
+            auto& peer = x.first;
+            for (auto& y : x.second) {
+                auto& cf = y.first;
+                auto& stream_ranges = y.second;
+                ranges_out += stream_ranges.size();
+                sp_out->transfer_ranges(peer, keyspace, std::move(stream_ranges), {cf});
+            }
+        }
+        ranges_need_repair_out.clear();
+        current_sub_ranges_nr_out = 0;
+
+        if (ranges_in || ranges_out) {
+            logger.info("Start streaming for repair {} index {}, ranges_in={}, ranges_out={}", id, sp_index, ranges_in, ranges_out);
+        }
+        sp_index++;
+
+        return sp_in->execute().discard_result().then([sp_in, sp_out] {
+                return sp_out->execute().discard_result();
         }).handle_exception([] (auto ep) {
             logger.warn("repair's stream failed: {}", ep);
             return make_exception_future(ep);
@@ -93,23 +132,29 @@ public:
             logger.info("repair {} completed successfully", id);
             return true;
         } else {
-            for (auto& frange: failed_ranges) {
-                logger.debug("repair cf {} range {} failed", frange.cf, frange.range);
-            }
             logger.info("repair {} failed - {} ranges failed", id, failed_ranges.size());
+            for (auto& frange: failed_ranges) {
+                logger.info("repair cf {} range {} failed", frange.cf, frange.range);
+            }
             return false;
         }
     }
-    void request_transfer_ranges(const sstring& cf,
+    future<> request_transfer_ranges(const sstring& cf,
         const ::dht::token_range& range,
         const std::vector<gms::inet_address>& neighbors_in,
         const std::vector<gms::inet_address>& neighbors_out) {
         for (const auto& peer : neighbors_in) {
-            sp_in.request_ranges(peer, keyspace, {range}, {cf});
+            ranges_need_repair_in[peer][cf].emplace_back(range);
+            current_sub_ranges_nr_in++;
         }
         for (const auto& peer : neighbors_out) {
-            sp_out.transfer_ranges(peer, keyspace, {range}, {cf});
+            ranges_need_repair_out[peer][cf].emplace_back(range);
+            current_sub_ranges_nr_out++;
         }
+        if (current_sub_ranges_nr_in >= sub_ranges_to_stream || current_sub_ranges_nr_out >= sub_ranges_to_stream) {
+            return do_streaming();
+        }
+        return make_ready_future<>();
     }
 };
 
@@ -478,31 +523,6 @@ future<partition_checksum> checksum_range(seastar::sharded<database> &db,
     });
 }
 
-static void split_and_add(std::vector<::dht::token_range>& ranges,
-        const dht::token_range& range,
-        uint64_t estimated_partitions, uint64_t target_partitions) {
-    if (estimated_partitions < target_partitions) {
-        // We're done, the range is small enough to not be split further
-        ranges.push_back(range);
-        return;
-    }
-    // The use of minimum_token() here twice is not a typo - because wrap-
-    // around token ranges are supported by midpoint(), the beyond-maximum
-    // token can also be represented by minimum_token().
-    auto midpoint = dht::global_partitioner().midpoint(
-            range.start() ? range.start()->value() : dht::minimum_token(),
-            range.end() ? range.end()->value() : dht::minimum_token());
-    // This shouldn't happen, but if the range included just one token, we
-    // can't split further (split() may actually fail with assertion failure)
-    if ((range.start() && midpoint == range.start()->value()) ||
-        (range.end() && midpoint == range.end()->value())) {
-        ranges.push_back(range);
-        return;
-    }
-    auto halves = range.split(midpoint, dht::token_comparator());
-    ranges.push_back(halves.first);
-    ranges.push_back(halves.second);
-}
 // We don't need to wait for one checksum to finish before we start the
 // next, but doing too many of these operations in parallel also doesn't
 // make sense, so we limit the number of concurrent ongoing checksum
@@ -542,39 +562,23 @@ static future<uint64_t> estimate_partitions(seastar::sharded<database>& db, cons
 static future<> repair_cf_range(repair_info& ri,
         sstring cf, ::dht::token_range range,
         const std::vector<gms::inet_address>& neighbors) {
+    ri.ranges_index++;
     if (neighbors.empty()) {
         // Nothing to do in this case...
         return make_ready_future<>();
     }
 
     return estimate_partitions(ri.db, ri.keyspace, cf, range).then([&ri, cf, range, &neighbors] (uint64_t estimated_partitions) {
-    // Additionally, we want to break up large ranges so they will have
-    // (approximately) a desired number of rows each.
-    std::vector<::dht::token_range> ranges;
-    ranges.push_back(range);
-
-    // FIXME: we should have an on-the-fly iterator generator here, not
-    // fill a vector in advance.
-    std::vector<::dht::token_range> tosplit;
-    while (estimated_partitions > ri.target_partitions) {
-        tosplit.clear();
-        ranges.swap(tosplit);
-        for (const auto& range : tosplit) {
-            split_and_add(ranges, range, estimated_partitions, ri.target_partitions);
-        }
-        estimated_partitions /= 2;
-        if (ranges.size() >= ri.sub_ranges_max) {
-            break;
-        }
-    }
-    logger.debug("target_partitions={}, estimated_partitions={}, ranges.size={}, range={} -> ranges={}",
-                  ri.target_partitions, estimated_partitions, ranges.size(), range, ranges);
-
+    range_splitter ranges(range, estimated_partitions, ri.target_partitions);
+    logger.info("Repair {} out of {} ranges, id={}, keyspace={}, cf={}, range={}, target_partitions={}, estimated_partitions={}",
+            ri.ranges_index, ri.ranges.size(), ri.id, ri.keyspace, cf, range, ri.target_partitions, estimated_partitions);
     return do_with(seastar::gate(), true, std::move(cf), std::move(ranges),
         [&ri, &neighbors] (auto& completion, auto& success, const auto& cf, auto& ranges) {
-        return do_for_each(ranges, [&ri, &completion, &success, &neighbors, &cf] (const auto& range) {
+        return do_until([&ranges] () { return !ranges.has_next(); },
+            [&ranges, &ri, &completion, &success, &neighbors, &cf] () {
+            auto range = ranges.next();
             check_in_shutdown();
-            return parallelism_semaphore.wait(1).then([&ri, &completion, &success, &neighbors, &cf, &range] {
+            return parallelism_semaphore.wait(1).then([&ri, &completion, &success, &neighbors, &cf, range] {
                 auto checksum_type = service::get_local_storage_service().cluster_supports_large_partitions()
                                      ? repair_checksum::streamed : repair_checksum::legacy;
 
@@ -592,7 +596,7 @@ static future<> repair_cf_range(repair_info& ri,
 
                 completion.enter();
                 when_all(checksums.begin(), checksums.end()).then(
-                        [&ri, &cf, &range, &neighbors, &success]
+                        [&ri, &cf, range, &neighbors, &success]
                         (std::vector<future<partition_checksum>> checksums) {
                     // If only some of the replicas of this range are alive,
                     // we set success=false so repair will fail, but we can
@@ -711,10 +715,9 @@ static future<> repair_cf_range(repair_info& ri,
                         }
                     }
                     if (!(live_neighbors_in.empty() && live_neighbors_out.empty())) {
-                        logger.info("Found differing range {} on nodes {}, in = {}, out = {}", range,
+                        logger.debug("Found differing range {} on nodes {}, in = {}, out = {}", range,
                                 live_neighbors, live_neighbors_in, live_neighbors_out);
-                        ri.request_transfer_ranges(cf, range, live_neighbors_in, live_neighbors_out);
-                        return make_ready_future<>();
+                        return ri.request_transfer_ranges(cf, range, live_neighbors_in, live_neighbors_out);
                     }
                     return make_ready_future<>();
                 }).handle_exception([&ri, &success, &cf, &range] (std::exception_ptr eptr) {
@@ -963,7 +966,7 @@ private:
 // same nodes as replicas.
 static future<> repair_ranges(repair_info ri) {
     return do_with(std::move(ri), [] (auto& ri) {
-    #if 1
+    #if 0
         // repair all the ranges in parallel
         return parallel_for_each(ri.ranges, [&ri] (auto&& range) {
     #else
@@ -973,6 +976,8 @@ static future<> repair_ranges(repair_info ri) {
             check_in_shutdown();
             return repair_range(ri, range);
         }).then([&ri] {
+            // Do streaming for the remaining ranges we do not stream in
+            // repair_cf_range
             return ri.do_streaming();
         }).then([&ri] {
             repair_tracker.done(ri.id, ri.check_failed_ranges());
