@@ -50,7 +50,9 @@
 #include "sstable_set.hh"
 #include "compatible_ring_position.hh"
 #include <boost/range/algorithm/find.hpp>
+#include <boost/range/adaptors.hpp>
 #include <boost/icl/interval_map.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
 #include "date_tiered_compaction_strategy.hh"
 
 logging::logger date_tiered_manifest::logger = logging::logger("DateTieredCompactionStrategy");
@@ -317,8 +319,38 @@ std::unique_ptr<incremental_selector_impl> partitioned_sstable_set::make_increme
 }
 
 class compaction_strategy_impl {
+    static constexpr float DEFAULT_TOMBSTONE_THRESHOLD = 0.2f;
+    // minimum interval needed to perform tombstone removal compaction in seconds, default 86400 or 1 day.
+    static constexpr long DEFAULT_TOMBSTONE_COMPACTION_INTERVAL = 86400;
+
+    const sstring TOMBSTONE_THRESHOLD_OPTION = "tombstone_threshold";
+    const sstring TOMBSTONE_COMPACTION_INTERVAL_OPTION = "tombstone_compaction_interval";
 protected:
     bool _use_clustering_key_filter = false;
+    float _tombstone_threshold = DEFAULT_TOMBSTONE_THRESHOLD;
+    db_clock::duration _tombstone_compaction_interval = std::chrono::seconds(DEFAULT_TOMBSTONE_COMPACTION_INTERVAL);
+public:
+    static stdx::optional<sstring> get_value(const std::map<sstring, sstring>& options, const sstring& name) {
+        auto it = options.find(name);
+        if (it == options.end()) {
+            return stdx::nullopt;
+        }
+        return it->second;
+    }
+protected:
+    compaction_strategy_impl() = default;
+    explicit compaction_strategy_impl(const std::map<sstring, sstring>& options) {
+        using namespace cql3::statements;
+
+        auto tmp_value = get_value(options, TOMBSTONE_THRESHOLD_OPTION);
+        _tombstone_threshold = property_definitions::to_double(TOMBSTONE_THRESHOLD_OPTION, tmp_value, DEFAULT_TOMBSTONE_THRESHOLD);
+
+        tmp_value = get_value(options, TOMBSTONE_COMPACTION_INTERVAL_OPTION);
+        auto interval = property_definitions::to_long(TOMBSTONE_COMPACTION_INTERVAL_OPTION, tmp_value, DEFAULT_TOMBSTONE_COMPACTION_INTERVAL);
+        _tombstone_compaction_interval = db_clock::duration(std::chrono::seconds(interval));
+
+        // FIXME: validate options.
+    }
 public:
     virtual ~compaction_strategy_impl() {}
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) = 0;
@@ -334,6 +366,19 @@ public:
     }
     bool use_clustering_key_filter() const {
         return _use_clustering_key_filter;
+    }
+
+    // Check if a given sstable is entitled for tombstone compaction based on its
+    // droppable tombstone histogram and gc_before.
+    bool worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point gc_before) {
+        // ignore sstables that were created just recently because there's a chance
+        // that expired tombstones still cover old data and thus cannot be removed.
+        // We want to avoid a compaction loop here on the same data by considering
+        // only old enough sstables.
+        if (db_clock::now()-_tombstone_compaction_interval < sst->data_file_write_time()) {
+            return false;
+        }
+        return sst->estimate_droppable_tombstone_ratio(gc_before) >= _tombstone_threshold;
     }
 };
 
@@ -407,27 +452,19 @@ class size_tiered_compaction_strategy_options {
     double bucket_high = DEFAULT_BUCKET_HIGH;
     double cold_reads_to_omit =  DEFAULT_COLD_READS_TO_OMIT;
 public:
-    static std::experimental::optional<sstring> get_value(const std::map<sstring, sstring>& options, const sstring& name) {
-        auto it = options.find(name);
-        if (it == options.end()) {
-            return std::experimental::nullopt;
-        }
-        return it->second;
-    }
-
     size_tiered_compaction_strategy_options(const std::map<sstring, sstring>& options) {
         using namespace cql3::statements;
 
-        auto tmp_value = get_value(options, MIN_SSTABLE_SIZE_KEY);
+        auto tmp_value = compaction_strategy_impl::get_value(options, MIN_SSTABLE_SIZE_KEY);
         min_sstable_size = property_definitions::to_long(MIN_SSTABLE_SIZE_KEY, tmp_value, DEFAULT_MIN_SSTABLE_SIZE);
 
-        tmp_value = get_value(options, BUCKET_LOW_KEY);
+        tmp_value = compaction_strategy_impl::get_value(options, BUCKET_LOW_KEY);
         bucket_low = property_definitions::to_double(BUCKET_LOW_KEY, tmp_value, DEFAULT_BUCKET_LOW);
 
-        tmp_value = get_value(options, BUCKET_HIGH_KEY);
+        tmp_value = compaction_strategy_impl::get_value(options, BUCKET_HIGH_KEY);
         bucket_high = property_definitions::to_double(BUCKET_HIGH_KEY, tmp_value, DEFAULT_BUCKET_HIGH);
 
-        tmp_value = get_value(options, COLD_READS_TO_OMIT_KEY);
+        tmp_value = compaction_strategy_impl::get_value(options, COLD_READS_TO_OMIT_KEY);
         cold_reads_to_omit = property_definitions::to_double(COLD_READS_TO_OMIT_KEY, tmp_value, DEFAULT_COLD_READS_TO_OMIT);
     }
 
@@ -507,10 +544,20 @@ class size_tiered_compaction_strategy : public compaction_strategy_impl {
 
         return n / sstables.size();
     }
+
+    bool is_bucket_interesting(const std::vector<sstables::shared_sstable>& bucket, int min_threshold) const {
+        return bucket.size() >= size_t(min_threshold);
+    }
+
+    bool is_any_bucket_interesting(const std::vector<std::vector<sstables::shared_sstable>>& buckets, int min_threshold) const {
+        return boost::algorithm::any_of(buckets, [&] (const auto& bucket) {
+            return this->is_bucket_interesting(bucket, min_threshold);
+        });
+    }
 public:
     size_tiered_compaction_strategy() = default;
     size_tiered_compaction_strategy(const std::map<sstring, sstring>& options) :
-        _options(options) {}
+        compaction_strategy_impl(options), _options(options) {}
 
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override;
 
@@ -609,7 +656,7 @@ size_tiered_compaction_strategy::most_interesting_bucket(std::vector<std::vector
         // by converting SizeTieredCompactionStrategy::trimToThresholdWithHotness.
         // By the time being, we will only compact buckets that meet the threshold.
         bucket.resize(std::min(bucket.size(), size_t(max_threshold)));
-        if (bucket.size() >= min_threshold) {
+        if (is_bucket_interesting(bucket, min_threshold)) {
             auto avg = avg_size(bucket);
             pruned_buckets_and_hotness.push_back({ std::move(bucket), avg });
         }
@@ -634,18 +681,37 @@ compaction_descriptor size_tiered_compaction_strategy::get_sstables_for_compacti
     // make local copies so they can't be changed out from under us mid-method
     int min_threshold = cfs.schema()->min_compaction_threshold();
     int max_threshold = cfs.schema()->max_compaction_threshold();
+    auto gc_before = gc_clock::now() - cfs.schema()->gc_grace_seconds();
 
     // TODO: Add support to filter cold sstables (for reference: SizeTieredCompactionStrategy::filterColdSSTables).
 
     auto buckets = get_buckets(candidates);
 
-    std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
-    if (most_interesting.empty()) {
-        // nothing to do
-        return sstables::compaction_descriptor();
+    if (is_any_bucket_interesting(buckets, min_threshold)) {
+        std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
+        return sstables::compaction_descriptor(std::move(most_interesting));
     }
 
-    return sstables::compaction_descriptor(std::move(most_interesting));
+    // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
+    // ratio is greater than threshold.
+    // prefer oldest sstables from biggest size tiers because they will be easier to satisfy conditions for
+    // tombstone purge, i.e. less likely to shadow even older data.
+    for (auto&& sstables : buckets | boost::adaptors::reversed) {
+        // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
+        auto e = boost::range::remove_if(sstables, [this, &gc_before] (const sstables::shared_sstable& sst) -> bool {
+            return !worth_dropping_tombstones(sst, gc_before);
+        });
+        sstables.erase(e, sstables.end());
+        if (sstables.empty()) {
+            continue;
+        }
+        // find oldest sstable from current tier
+        auto it = std::min_element(sstables.begin(), sstables.end(), [] (auto& i, auto& j) {
+            return i->get_stats_metadata().min_timestamp < j->get_stats_metadata().min_timestamp;
+        });
+        return sstables::compaction_descriptor({ *it });
+    }
+    return sstables::compaction_descriptor();
 }
 
 int64_t size_tiered_compaction_strategy::estimated_pending_compactions(column_family& cf) const {
@@ -709,7 +775,7 @@ public:
     leveled_compaction_strategy(const std::map<sstring, sstring>& options) {
         using namespace cql3::statements;
 
-        auto tmp_value = size_tiered_compaction_strategy_options::get_value(options, SSTABLE_SIZE_OPTION);
+        auto tmp_value = compaction_strategy_impl::get_value(options, SSTABLE_SIZE_OPTION);
         _max_sstable_size_in_mb = property_definitions::to_int(SSTABLE_SIZE_OPTION, tmp_value, DEFAULT_MAX_SSTABLE_SIZE_IN_MB);
         if (_max_sstable_size_in_mb >= 1000) {
             clogger.warn("Max sstable size of {}MB is configured; having a unit of compaction this large is probably a bad idea",
