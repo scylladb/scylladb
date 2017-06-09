@@ -691,6 +691,10 @@ public:
 
     const std::vector<nonwrapping_range<bytes_view>>& clustering_components_ranges() const;
 
+    // Gets ratio of droppable tombstone. A tombstone is considered droppable here
+    // for cells expired before gc_before and regular tombstones older than gc_before.
+    double estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const;
+
     // get sstable open info from a loaded sstable, which can be used to quickly open a sstable
     // at another shard.
     future<foreign_sstable_open_info> get_open_info() &;

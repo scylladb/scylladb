@@ -1168,6 +1168,16 @@ const std::vector<nonwrapping_range<bytes_view>>& sstable::clustering_components
     return _clustering_components_ranges;
 }
 
+double sstable::estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const {
+    auto& st = get_stats_metadata();
+    auto estimated_count = st.estimated_column_count.mean() * st.estimated_column_count.count();
+    if (estimated_count > 0) {
+        double droppable = st.estimated_tombstone_drop_time.sum(gc_before.time_since_epoch().count());
+        return droppable / estimated_count;
+    }
+    return 0.0f;
+}
+
 future<> sstable::read_statistics(const io_priority_class& pc) {
     return read_simple<component_type::Statistics>(_components->statistics, pc);
 }
