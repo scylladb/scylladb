@@ -236,6 +236,7 @@ scylla_tests = [
     'tests/view_schema_test',
     'tests/counter_test',
     'tests/cell_locker_test',
+    'tests/streaming_histogram_test',
 ]
 
 apps = [
@@ -614,6 +615,7 @@ pure_boost_tests = set([
     'tests/dynamic_bitset_test',
     'tests/idl_test',
     'tests/cartesian_product_test',
+    'tests/streaming_histogram_test',
 ])
 
 tests_not_using_seastar_test_framework = set([
