@@ -772,7 +772,9 @@ class leveled_compaction_strategy : public compaction_strategy_impl {
     stdx::optional<std::vector<stdx::optional<dht::decorated_key>>> _last_compacted_keys;
     std::vector<int> _compaction_counter;
 public:
-    leveled_compaction_strategy(const std::map<sstring, sstring>& options) {
+    leveled_compaction_strategy(const std::map<sstring, sstring>& options)
+        : compaction_strategy_impl(options)
+    {
         using namespace cql3::statements;
 
         auto tmp_value = compaction_strategy_impl::get_value(options, SSTABLE_SIZE_OPTION);
@@ -823,13 +825,31 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(c
     }
     auto candidate = manifest.get_compaction_candidates(*_last_compacted_keys, _compaction_counter);
 
-    if (candidate.sstables.empty()) {
-        return sstables::compaction_descriptor();
+    if (!candidate.sstables.empty()) {
+        clogger.debug("leveled: Compacting {} out of {} sstables", candidate.sstables.size(), cfs.get_sstables()->size());
+        return std::move(candidate);
     }
 
-    clogger.debug("leveled: Compacting {} out of {} sstables", candidate.sstables.size(), cfs.get_sstables()->size());
-
-    return std::move(candidate);
+    // if there is no sstable to compact in standard way, try compacting based on droppable tombstone ratio
+    // unlike stcs, lcs can look for sstable with highest droppable tombstone ratio, so as not to choose
+    // a sstable which droppable data shadow data in older sstable, by starting from highest levels which
+    // theoretically contain oldest non-overlapping data.
+    auto gc_before = gc_clock::now() - cfs.schema()->gc_grace_seconds();
+    for (auto level = manifest.get_level_count(); level >= 0; level--) {
+        auto& sstables = manifest.get_level(level);
+        // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
+        auto e = boost::range::remove_if(sstables, [this, &gc_before] (const sstables::shared_sstable& sst) -> bool {
+            return !worth_dropping_tombstones(sst, gc_before);
+        });
+        sstables.erase(e, sstables.end());
+        if (sstables.empty()) {
+            continue;
+        }
+        auto& sst = *std::min_element(sstables.begin(), sstables.end(), [&] (auto& i, auto& j) {
+            return i->estimate_droppable_tombstone_ratio(gc_before) < j->estimate_droppable_tombstone_ratio(gc_before);
+        });
+        return sstables::compaction_descriptor({ sst }, sst->get_sstable_level());
+    }
 }
 
 std::vector<resharding_descriptor> leveled_compaction_strategy::get_resharding_jobs(column_family& cf, std::vector<shared_sstable> candidates) {
