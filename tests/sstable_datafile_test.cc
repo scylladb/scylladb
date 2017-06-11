@@ -3878,5 +3878,23 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         descriptor = cs.get_sstables_for_compaction(*cf, { sst });
         BOOST_REQUIRE(descriptor.sstables.size() == 1);
         BOOST_REQUIRE(descriptor.sstables.front() == sst);
+
+        // sstable with droppable ratio of 0.3 won't be included due to threshold
+        {
+            std::map<sstring, sstring> options;
+            options.emplace("tombstone_threshold", "0.5f");
+            auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
+            auto descriptor = cs.get_sstables_for_compaction(*cf, { sst });
+            BOOST_REQUIRE(descriptor.sstables.size() == 0);
+        }
+        // sstable which was recently created won't be included due to min interval
+        {
+            std::map<sstring, sstring> options;
+            options.emplace("tombstone_compaction_interval", "3600");
+            auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
+            sstables::test(sst).set_data_file_write_time(db_clock::now());
+            auto descriptor = cs.get_sstables_for_compaction(*cf, { sst });
+            BOOST_REQUIRE(descriptor.sstables.size() == 0);
+        }
     });
 }
