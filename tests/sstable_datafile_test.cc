@@ -3861,5 +3861,13 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         auto descriptor = cs.get_sstables_for_compaction(*cf, { sst });
         BOOST_REQUIRE(descriptor.sstables.size() == 1);
         BOOST_REQUIRE(descriptor.sstables.front() == sst);
+
+        cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, options);
+        sst->set_sstable_level(1);
+        descriptor = cs.get_sstables_for_compaction(*cf, { sst });
+        BOOST_REQUIRE(descriptor.sstables.size() == 1);
+        BOOST_REQUIRE(descriptor.sstables.front() == sst);
+        // make sure sstable picked for tombstone compaction removal won't be promoted or demoted.
+        BOOST_REQUIRE(descriptor.sstables.front()->get_sstable_level() == 1U);
     });
 }
