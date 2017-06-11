@@ -3869,5 +3869,14 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         BOOST_REQUIRE(descriptor.sstables.front() == sst);
         // make sure sstable picked for tombstone compaction removal won't be promoted or demoted.
         BOOST_REQUIRE(descriptor.sstables.front()->get_sstable_level() == 1U);
+
+        // check tombstone compaction is disabled by default for DTCS
+        cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::date_tiered, {});
+        descriptor = cs.get_sstables_for_compaction(*cf, { sst });
+        BOOST_REQUIRE(descriptor.sstables.size() == 0);
+        cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::date_tiered, options);
+        descriptor = cs.get_sstables_for_compaction(*cf, { sst });
+        BOOST_REQUIRE(descriptor.sstables.size() == 1);
+        BOOST_REQUIRE(descriptor.sstables.front() == sst);
     });
 }
