@@ -180,7 +180,7 @@ class scylla_keyspaces(gdb.Command):
             db = find_db(shard)
             keyspaces = db['_keyspaces']
             for (key, value) in list_unordered_map(keyspaces):
-                gdb.write('{:5} {:20} (keyspace*){}\n'.format(shard, key, value))
+                gdb.write('{:5} {:20} (keyspace*){}\n'.format(shard, str(key), value))
 
 class scylla_column_families(gdb.Command):
     def __init__(self):
