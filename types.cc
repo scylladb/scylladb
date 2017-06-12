@@ -2699,9 +2699,9 @@ tuple_type_impl::tuple_type_impl(std::vector<data_type> types)
     }
 }
 
-shared_ptr<tuple_type_impl>
+shared_ptr<const tuple_type_impl>
 tuple_type_impl::get_instance(std::vector<data_type> types) {
-    return ::make_shared<tuple_type_impl>(std::move(types));
+    return intern::get_instance(std::move(types));
 }
 
 int32_t

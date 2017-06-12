@@ -831,6 +831,20 @@ struct simple_tuple_hash<> {
     size_t operator()() const { return 0; }
 };
 
+template <typename Arg0, typename... Args >
+struct simple_tuple_hash<std::vector<Arg0>, Args...> {
+    size_t operator()(const std::vector<Arg0>& vec, const Args&... args) const {
+        size_t h0 = 0;
+        size_t h1;
+        for (auto&& i : vec) {
+            h1 = std::hash<Arg0>()(i);
+            h0 = h0 ^ ((h1 << 7) | (h1 >> (std::numeric_limits<size_t>::digits - 7)));
+        }
+        h1 = simple_tuple_hash<Args...>()(args...);
+        return h0 ^ ((h1 << 7) | (h1 >> (std::numeric_limits<size_t>::digits - 7)));
+    }
+};
+
 template <typename Arg0, typename... Args>
 struct simple_tuple_hash<Arg0, Args...> {
     size_t operator()(const Arg0& arg0, const Args&... args) const {
@@ -856,7 +870,7 @@ public:
         auto key = std::make_tuple(keys...);
         auto i = _instances.find(key);
         if (i == _instances.end()) {
-            auto v = make_shared<InternedType>(keys...);
+            auto v = ::make_shared<InternedType>(std::move(keys)...);
             i = _instances.insert(std::make_pair(std::move(key), std::move(v))).first;
         }
         return i->second;
@@ -1499,6 +1513,7 @@ private:
 };
 
 class tuple_type_impl : public concrete_type<std::vector<data_value>> {
+    using intern = type_interning_helper<tuple_type_impl, std::vector<data_type>>;
 protected:
     std::vector<data_type> _types;
     static boost::iterator_range<tuple_deserializing_iterator> make_range(bytes_view v) {
@@ -1507,7 +1522,7 @@ protected:
     tuple_type_impl(sstring name, std::vector<data_type> types);
 public:
     tuple_type_impl(std::vector<data_type> types);
-    static shared_ptr<tuple_type_impl> get_instance(std::vector<data_type> types);
+    static shared_ptr<const tuple_type_impl> get_instance(std::vector<data_type> types);
     data_type type(size_t i) const {
         return _types[i];
     }
@@ -1558,6 +1573,7 @@ private:
 data_value make_tuple_value(data_type tuple_type, tuple_type_impl::native_type value);
 
 class user_type_impl : public tuple_type_impl {
+    using intern = type_interning_helper<user_type_impl, sstring, bytes, std::vector<bytes>, std::vector<data_type>>;
 public:
     const sstring _keyspace;
     const bytes _name;
@@ -1575,8 +1591,8 @@ public:
             _string_field_names.emplace_back(utf8_type->to_string(field_name));
         }
     }
-    static shared_ptr<user_type_impl> get_instance(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types) {
-        return ::make_shared<user_type_impl>(std::move(keyspace), std::move(name), std::move(field_names), std::move(field_types));
+    static shared_ptr<const user_type_impl> get_instance(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types) {
+        return intern::get_instance(std::move(keyspace), std::move(name), std::move(field_names), std::move(field_types));
     }
     data_type field_type(size_t i) const { return type(i); }
     const std::vector<data_type>& field_types() const { return _types; }
