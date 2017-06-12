@@ -656,7 +656,7 @@ public:
             return wrapping_range<T>::less_than(a.start_bound(), b.start_bound(), cmp);
         });
         if (wrapping_range<T>::greater_than_or_equal(p.first.end_bound(), p.second.start_bound(), cmp)) {
-            auto& end = std::min(p.first.end_bound(), p.second.end_bound(), [&cmp] (auto&& a, auto&& b) {
+            auto end = std::min(p.first.end_bound(), p.second.end_bound(), [&cmp] (auto&& a, auto&& b) {
                 return !wrapping_range<T>::greater_than_or_equal(a, b, cmp);
             });
             return nonwrapping_range(p.second.start(), end.b);
