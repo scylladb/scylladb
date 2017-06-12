@@ -132,14 +132,14 @@ class uuid_printer(gdb.printing.PrettyPrinter):
 
 def build_pretty_printer():
     pp = gdb.printing.RegexpCollectionPrettyPrinter('scylla')
-    pp.add_printer('sstring', r'^basic_sstring<char,.*>$', sstring_printer)
+    pp.add_printer('sstring', r'^seastar::basic_sstring<char,.*>$', sstring_printer)
     pp.add_printer('uuid', r'^utils::UUID$', uuid_printer)
     return pp
 
 gdb.printing.register_pretty_printer(gdb.current_objfile(), build_pretty_printer(), replace=True)
 
 def cpus():
-    return int(gdb.parse_and_eval('::smp::count'))
+    return int(gdb.parse_and_eval('::seastar::smp::count'))
 
 def find_db(shard):
     return gdb.parse_and_eval('::debug::db')['_instances']['_M_impl']['_M_start'][shard]['service']['_p']
