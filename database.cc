@@ -1841,6 +1841,7 @@ future<sstables::entry_descriptor> distributed_loader::probe_file(distributed<da
         return cf.open_sstable(std::move(info), sstdir, comps.generation, comps.version, comps.format).then([&cf] (sstables::shared_sstable sst) mutable {
             if (sst) {
                 cf.load_sstable(sst);
+                return cf.get_row_cache().invalidate();
             }
             return make_ready_future<>();
         });
