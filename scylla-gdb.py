@@ -150,7 +150,7 @@ def find_dbs():
 def list_unordered_map(map):
     kt = map.type.template_argument(0)
     vt = map.type.template_argument(1)
-    value_type = gdb.lookup_type('::std::pair<{} const, {}>'.format(kt.name, vt.name))
+    value_type = gdb.lookup_type('::std::pair<{} const, {} >'.format(kt.name, vt.name))
     hashnode_ptr_type = gdb.lookup_type('::std::__detail::_Hash_node<' + value_type.name + ', true>').pointer()
     h = map['_M_h']
     p = h['_M_before_begin']['_M_nxt']
