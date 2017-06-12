@@ -29,6 +29,7 @@
 #include "tests/mutation_source_test.hh"
 
 #include "schema_builder.hh"
+#include "simple_schema.hh"
 #include "row_cache.hh"
 #include "core/thread.hh"
 #include "memtable.hh"
@@ -1442,6 +1443,73 @@ SEASTAR_TEST_CASE(test_update_invalidating) {
             .produces(m1 + m3)
             .produces(m4)
             .produces(m2)
+            .produces_end_of_stream();
+    });
+}
+
+SEASTAR_TEST_CASE(test_scan_with_partial_partitions) {
+    return seastar::async([] {
+        simple_schema s;
+        auto cache_mt = make_lw_shared<memtable>(s.schema());
+
+        auto pkeys = s.make_pkeys(3);
+
+        mutation m1(pkeys[0], s.schema());
+        s.add_row(m1, s.make_ckey(0), "v1");
+        s.add_row(m1, s.make_ckey(1), "v2");
+        s.add_row(m1, s.make_ckey(2), "v3");
+        s.add_row(m1, s.make_ckey(3), "v4");
+        cache_mt->apply(m1);
+
+        mutation m2(pkeys[1], s.schema());
+        s.add_row(m2, s.make_ckey(0), "v5");
+        s.add_row(m2, s.make_ckey(1), "v6");
+        s.add_row(m2, s.make_ckey(2), "v7");
+        cache_mt->apply(m2);
+
+        mutation m3(pkeys[2], s.schema());
+        s.add_row(m3, s.make_ckey(0), "v8");
+        s.add_row(m3, s.make_ckey(1), "v9");
+        s.add_row(m3, s.make_ckey(2), "v10");
+        cache_mt->apply(m3);
+
+        cache_tracker tracker;
+        row_cache cache(s.schema(), snapshot_source_from_snapshot(cache_mt->as_data_source()), tracker);
+
+        // partially populate all up to middle of m1
+        {
+            auto slice = partition_slice_builder(*s.schema())
+                .with_range(query::clustering_range::make_ending_with(s.make_ckey(1)))
+                .build();
+            auto prange = dht::partition_range::make_ending_with(dht::ring_position(m1.decorated_key()));
+            assert_that(cache.make_reader(s.schema(), prange, slice))
+                .produces(m1, slice.row_ranges(*s.schema(), m1.key()))
+                .produces_end_of_stream();
+        }
+
+        // partially populate m3
+        {
+            auto slice = partition_slice_builder(*s.schema())
+                .with_range(query::clustering_range::make_ending_with(s.make_ckey(1)))
+                .build();
+            auto prange = dht::partition_range::make_singular(m3.decorated_key());
+            assert_that(cache.make_reader(s.schema(), prange, slice))
+                .produces(m3, slice.row_ranges(*s.schema(), m3.key()))
+                .produces_end_of_stream();
+        }
+
+        // full scan
+        assert_that(cache.make_reader(s.schema()))
+            .produces(m1)
+            .produces(m2)
+            .produces(m3)
+            .produces_end_of_stream();
+
+        // full scan after full scan
+        assert_that(cache.make_reader(s.schema()))
+            .produces(m1)
+            .produces(m2)
+            .produces(m3)
             .produces_end_of_stream();
     });
 }
