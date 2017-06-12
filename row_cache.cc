@@ -540,17 +540,10 @@ row_cache::make_reader(schema_ptr s,
 {
     auto ctx = make_lw_shared<read_context>(*this, std::move(s), range, slice, pc, trace_state, fwd, fwd_mr);
 
-    if (range.is_singular()) {
-        const query::ring_position& pos = range.start()->value();
-
-        if (!pos.has_key()) {
-            return make_scanning_reader(range, std::move(ctx));
-        }
-
+    if (!ctx->is_range_query()) {
         return _read_section(_tracker.region(), [&] {
           return with_linearized_managed_bytes([&] {
-            const dht::decorated_key& dk = pos.as_decorated_key();
-            auto i = _partitions.find(dk, cache_entry::compare(_schema));
+            auto i = _partitions.find(ctx->range().start()->value(), cache_entry::compare(_schema));
             if (i != _partitions.end()) {
                 cache_entry& e = *i;
                 _tracker.touch(e);

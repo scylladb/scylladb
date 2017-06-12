@@ -106,6 +106,7 @@ class read_context final : public enable_lw_shared_from_this<read_context> {
     tracing::trace_state_ptr _trace_state;
     streamed_mutation::forwarding _fwd;
     mutation_reader::forwarding _fwd_mr;
+    bool _range_query;
 public:
     read_context(row_cache& cache,
             schema_ptr schema,
@@ -123,6 +124,7 @@ public:
         , _trace_state(std::move(trace_state))
         , _fwd(fwd)
         , _fwd_mr(fwd_mr)
+        , _range_query(!range.is_singular() || !range.start()->value().has_key())
     { }
     read_context(const read_context&) = delete;
     row_cache& cache() { return _cache; }
@@ -133,6 +135,7 @@ public:
     tracing::trace_state_ptr trace_state() const { return _trace_state; }
     streamed_mutation::forwarding fwd() const { return _fwd; }
     mutation_reader::forwarding fwd_mr() const { return _fwd_mr; }
+    bool is_range_query() const { return _range_query; }
 };
 
 }
