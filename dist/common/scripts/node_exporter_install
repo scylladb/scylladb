@@ -38,7 +38,7 @@ if is_gentoo_variant; then
         service prometheus-node_exporter start
     fi
 else
-    version=0.12.0
+    version=0.14.0
     dir=/usr/lib/scylla/Prometheus/node_exporter
     mkdir -p $dir
     cd $dir
