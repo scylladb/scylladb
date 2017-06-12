@@ -720,7 +720,7 @@ static future<> repair_cf_range(repair_info& ri,
                         return ri.request_transfer_ranges(cf, range, live_neighbors_in, live_neighbors_out);
                     }
                     return make_ready_future<>();
-                }).handle_exception([&ri, &success, &cf, &range] (std::exception_ptr eptr) {
+                }).handle_exception([&ri, &success, &cf, range] (std::exception_ptr eptr) {
                     // Something above (e.g., request_transfer_ranges) failed. We could
                     // stop the repair immediately, or let it continue with
                     // other ranges (at the moment, we do the latter). But in
