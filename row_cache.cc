@@ -336,7 +336,7 @@ void row_cache::on_miss() {
 
 class range_populating_reader {
     row_cache& _cache;
-    autoupdating_underlying_reader _reader;
+    autoupdating_underlying_reader& _reader;
     stdx::optional<row_cache::previous_entry_pointer> _last_key;
     read_context& _read_context;
 private:
@@ -368,7 +368,7 @@ private:
 public:
     range_populating_reader(row_cache& cache, read_context& ctx)
         : _cache(cache)
-        , _reader(cache, ctx)
+        , _reader(ctx.underlying())
         , _read_context(ctx)
     {}
 
