@@ -3433,6 +3433,10 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
                 }
                 return f.then([&cf, truncated_at, low_mark] {
                     return cf.discard_sstables(truncated_at).then([&cf, truncated_at, low_mark](db::replay_position rp) {
+                        // TODO: verify that rp == db::replay_position is because we have no sstables (and no data flushed)
+                        if (rp == db::replay_position()) {
+                            return make_ready_future();
+                        }
                         // TODO: indexes.
                         assert(low_mark <= rp);
                         return db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
