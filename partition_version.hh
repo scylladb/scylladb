@@ -232,6 +232,12 @@ public:
     std::vector<range_tombstone> range_tombstones(const schema& s, position_in_partition_view start, position_in_partition_view end);
 };
 
+// Represents mutation_partition with snapshotting support a la MVCC.
+//
+// Internally the state is represented by an ordered list of mutation_partition
+// objects called versions. The logical mutation_partition state represented
+// by that chain is equal to reducing the chain using mutation_partition::apply()
+// from left (latest version) to right.
 class partition_entry {
     partition_snapshot* _snapshot = nullptr;
     partition_version_ref _version;
