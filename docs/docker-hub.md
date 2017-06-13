@@ -5,7 +5,7 @@ ScyllaDB is released under the GNU Affero General Public License version 3 and t
 
 > [ScyllaDB](http://www.scylladb.com/)
 
-![logo](http://www.scylladb.com/img/mascot_1.png)
+![logo](http://www.scylladb.com/wp-content/uploads/mascot_medium.png)
 
 # How to use this image
 
