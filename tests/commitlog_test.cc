@@ -21,6 +21,7 @@
 
 
 #include <boost/test/unit_test.hpp>
+#include <boost/range/adaptor/map.hpp>
 
 #include <stdlib.h>
 #include <iostream>
@@ -303,7 +304,7 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
     return cl_test(cfg, [](commitlog& log) {
-            auto set = make_lw_shared<std::set<segment_id_type>>();
+            auto set = make_lw_shared<rp_set>();
             auto count = make_lw_shared<size_t>(0);
             auto count2 = make_lw_shared<size_t>(0);
             auto uuid = utils::UUID_gen::get_time_UUID();
@@ -312,9 +313,9 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
                         sstring tmp = "hej bubba cow";
                         return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
                                     dst.write(tmp.begin(), tmp.end());
-                                }).then([&log, set, count](replay_position rp) {
-                                    BOOST_CHECK_NE(rp, db::replay_position());
-                                    set->insert(rp.id);
+                                }).then([&log, set, count](auto h) {
+                                    BOOST_CHECK_NE(db::replay_position(), h.rp());
+                                    set->put(std::move(h));
                                     if (set->size() == 1) {
                                         ++(*count);
                                     }
@@ -324,7 +325,9 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
                         auto segments = log.get_active_segment_names();
                         BOOST_REQUIRE(segments.size() > 1);
 
-                        auto id = *set->begin();
+                        auto ids = boost::copy_range<std::vector<segment_id_type>>(set->usage() | boost::adaptors::map_keys);
+                        std::sort(ids.begin(), ids.end());
+                        auto id = ids.front();
                         auto i = std::find_if(segments.begin(), segments.end(), [id](sstring filename) {
                             commitlog::descriptor desc(filename);
                             return desc.id == id;
