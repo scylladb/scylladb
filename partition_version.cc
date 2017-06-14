@@ -116,6 +116,12 @@ tombstone partition_snapshot::partition_tombstone() const {
                                [] (tombstone& a, tombstone b) { a.apply(b); });
 }
 
+mutation_partition partition_snapshot::squashed() const {
+    return ::squashed<mutation_partition>(version(),
+                               [] (const mutation_partition& mp) -> const mutation_partition& { return mp; },
+                               [this] (mutation_partition& a, const mutation_partition& b) { a.apply(*_schema, b, *_schema); });
+}
+
 partition_snapshot::~partition_snapshot() {
     if (_version && _version.is_unique_owner()) {
         auto v = &*_version;

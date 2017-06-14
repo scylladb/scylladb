@@ -223,6 +223,7 @@ public:
     unsigned version_count();
     tombstone partition_tombstone() const;
     row static_row() const;
+    mutation_partition squashed() const;
 };
 
 class partition_entry {
