@@ -132,6 +132,8 @@ public:
     partition_version_ref& back_reference() { return *_backref; }
 };
 
+using partition_version_range = anchorless_list_base_hook<partition_version>::range;
+
 class partition_version_ref {
     partition_version* _version = nullptr;
     bool _unique_owner = false;
@@ -218,7 +220,7 @@ public:
 
     const partition_version_ref& version() const;
 
-    auto versions() {
+    partition_version_range versions() {
         return version()->elements_from_this();
     }
 
