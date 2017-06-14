@@ -269,6 +269,50 @@ void compaction_manager::submit_sstable_rewrite(column_family* cf, sstables::sha
     });
 }
 
+future<> compaction_manager::submit_major_compaction(column_family* cf) {
+    if (_stopped) {
+        return make_ready_future<>();
+    }
+    auto task = make_lw_shared<compaction_manager::task>();
+    task->compacting_cf = cf;
+    _tasks.push_back(task);
+
+    // first take major compaction semaphore, then exclusely take compaction lock for column family.
+    // it cannot be the other way around, or minor compaction for this column family would be
+    // prevented while an ongoing major compaction doesn't release the semaphore.
+    task->compaction_done = with_semaphore(_major_compaction_sem, 1, [this, cf, task] {
+        return with_lock(_compaction_locks[cf].for_write(), [this, cf, task] {
+            _stats.active_tasks++;
+            if (!can_proceed(task)) {
+                return make_ready_future<>();
+            }
+
+            // candidates are sstables that aren't being operated on by other compaction types.
+            // those are eligible for major compaction.
+            // FIXME: we need to make major compaction compaction strategy aware. For example,
+            // leveled strategy may want to promote the merged sstables of a level N.
+            auto sstables = get_candidates(*cf);
+            auto compacting = compacting_sstable_registration(this, sstables);
+
+            return cf->compact_sstables(sstables::compaction_descriptor(std::move(sstables))).then([compacting = std::move(compacting)] {});
+        });
+    }).then_wrapped([this, task] (future<> f) {
+        _stats.active_tasks--;
+        _tasks.remove(task);
+        try {
+            f.get();
+            _stats.completed_tasks++;
+        } catch (sstables::compaction_stop_exception& e) {
+            cmlog.info("major compaction stopped, reason: {}", e.what());
+            _stats.errors++;
+        } catch (...) {
+            cmlog.error("major compaction failed, reason: {}", std::current_exception());
+            _stats.errors++;
+        }
+    });
+    return task->compaction_done.get_future().then([task] {});
+}
+
 future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> task) {
     task->stopping = true;
     auto f = task->compaction_done.get_future();
@@ -358,49 +402,51 @@ void compaction_manager::submit(column_family* cf) {
     _tasks.push_back(task);
     _stats.pending_tasks++;
 
-    task->compaction_done = repeat([this, task] () mutable {
+    task->compaction_done = repeat([this, task, cf] () mutable {
         if (!can_proceed(task)) {
             _stats.pending_tasks--;
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         }
-        column_family& cf = *task->compacting_cf;
-        sstables::compaction_strategy cs = cf.get_compaction_strategy();
-        sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(cf, get_candidates(cf));
-        int weight = trim_to_compact(&cf, descriptor);
+        return with_lock(_compaction_locks[cf].for_read(), [this, task] () mutable {
+            column_family& cf = *task->compacting_cf;
+            sstables::compaction_strategy cs = cf.get_compaction_strategy();
+            sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(cf, get_candidates(cf));
+            int weight = trim_to_compact(&cf, descriptor);
 
-        // Stop compaction task immediately if strategy is satisfied or job cannot run in parallel.
-        if (descriptor.sstables.empty() || !can_register_weight(&cf, weight, cs.parallel_compaction())) {
-            _stats.pending_tasks--;
-            cmlog.debug("Refused compaction job ({} sstable(s)) of weight {} for {}.{}",
-                descriptor.sstables.size(), weight, cf.schema()->ks_name(), cf.schema()->cf_name());
-            return make_ready_future<stop_iteration>(stop_iteration::yes);
-        }
-        auto compacting = compacting_sstable_registration(this, descriptor.sstables);
-        auto c_weight = compaction_weight_registration(this, &cf, weight);
-        cmlog.debug("Accepted compaction job ({} sstable(s)) of weight {} for {}.{}",
-            descriptor.sstables.size(), weight, cf.schema()->ks_name(), cf.schema()->cf_name());
-
-        _stats.pending_tasks--;
-        _stats.active_tasks++;
-        return cf.run_compaction(std::move(descriptor))
-                .then_wrapped([this, task, compacting = std::move(compacting), c_weight = std::move(c_weight)] (future<> f) mutable {
-            _stats.active_tasks--;
-
-            if (!can_proceed(task)) {
-                check_for_error(std::move(f));
+            // Stop compaction task immediately if strategy is satisfied or job cannot run in parallel.
+            if (descriptor.sstables.empty() || !can_register_weight(&cf, weight, cs.parallel_compaction())) {
+                _stats.pending_tasks--;
+                cmlog.debug("Refused compaction job ({} sstable(s)) of weight {} for {}.{}",
+                    descriptor.sstables.size(), weight, cf.schema()->ks_name(), cf.schema()->cf_name());
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
-            if (check_for_error(std::move(f))) {
-                _stats.errors++;
+            auto compacting = compacting_sstable_registration(this, descriptor.sstables);
+            auto c_weight = compaction_weight_registration(this, &cf, weight);
+            cmlog.debug("Accepted compaction job ({} sstable(s)) of weight {} for {}.{}",
+                descriptor.sstables.size(), weight, cf.schema()->ks_name(), cf.schema()->cf_name());
+
+            _stats.pending_tasks--;
+            _stats.active_tasks++;
+            return cf.run_compaction(std::move(descriptor))
+                    .then_wrapped([this, task, compacting = std::move(compacting), c_weight = std::move(c_weight)] (future<> f) mutable {
+                _stats.active_tasks--;
+
+                if (!can_proceed(task)) {
+                    check_for_error(std::move(f));
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }
+                if (check_for_error(std::move(f))) {
+                    _stats.errors++;
+                    _stats.pending_tasks++;
+                    return put_task_to_sleep(task).then([] {
+                        return make_ready_future<stop_iteration>(stop_iteration::no);
+                    });
+                }
                 _stats.pending_tasks++;
-                return put_task_to_sleep(task).then([] {
-                    return make_ready_future<stop_iteration>(stop_iteration::no);
-                });
-            }
-            _stats.pending_tasks++;
-            _stats.completed_tasks++;
-            task->compaction_retry.reset();
-            return make_ready_future<stop_iteration>(stop_iteration::no);
+                _stats.completed_tasks++;
+                task->compaction_retry.reset();
+                return make_ready_future<stop_iteration>(stop_iteration::no);
+            });
         });
     }).finally([this, task] {
         _tasks.remove(task);
@@ -477,6 +523,7 @@ future<> compaction_manager::remove(column_family* cf) {
         return this->task_stop(task);
     }).then([this, cf, tasks_to_stop] {
         _weight_tracker.erase(cf);
+        _compaction_locks.erase(cf);
     });
 }
 

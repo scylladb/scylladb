@@ -1436,14 +1436,7 @@ column_family::load_new_sstables(std::vector<sstables::entry_descriptor> new_tab
 // Note: We assume that the column_family does not get destroyed during compaction.
 future<>
 column_family::compact_all_sstables() {
-    std::vector<sstables::shared_sstable> sstables;
-    sstables.reserve(_sstables->all()->size());
-    for (auto&& sst : *_sstables->all()) {
-        sstables.push_back(sst);
-    }
-    // FIXME: check if the lower bound min_compaction_threshold() from schema
-    // should be taken into account before proceeding with compaction.
-    return compact_sstables(sstables::compaction_descriptor(std::move(sstables)));
+    return _compaction_manager.submit_major_compaction(this);
 }
 
 void column_family::start_compaction() {

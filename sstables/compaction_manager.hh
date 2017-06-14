@@ -26,6 +26,7 @@
 #include "core/shared_ptr.hh"
 #include "core/gate.hh"
 #include "core/shared_future.hh"
+#include "core/rwlock.hh"
 #include "log.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include <vector>
@@ -74,6 +75,12 @@ private:
     // Keep track of weight of ongoing compaction for each column family.
     // That's used to allow parallel compaction on the same column family.
     std::unordered_map<column_family*, std::unordered_set<int>> _weight_tracker;
+
+    // Purpose is to serialize major compaction across all column families, so as to
+    // reduce disk space requirement.
+    semaphore _major_compaction_sem{1};
+    // Prevents column family from running major and minor compaction at same time.
+    std::unordered_map<column_family*, rwlock> _compaction_locks;
 private:
     future<> task_stop(lw_shared_ptr<task> task);
 
@@ -128,6 +135,9 @@ public:
     // separate sstable for each shard.
     void submit_sstable_rewrite(column_family* cf,
             sstables::shared_sstable s);
+
+    // Submit a column family for major compaction.
+    future<> submit_major_compaction(column_family* cf);
 
     // Remove a column family from the compaction manager.
     // Cancel requests on cf and wait for a possible ongoing compaction on cf.
