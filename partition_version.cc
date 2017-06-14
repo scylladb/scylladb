@@ -325,6 +325,11 @@ mutation_partition partition_entry::squashed(schema_ptr from, schema_ptr to)
     return mp;
 }
 
+mutation_partition partition_entry::squashed(const schema& s)
+{
+    return squashed(s.shared_from_this(), s.shared_from_this());
+}
+
 void partition_entry::upgrade(schema_ptr from, schema_ptr to)
 {
     auto new_version = current_allocator().construct<partition_version>(mutation_partition(to));
