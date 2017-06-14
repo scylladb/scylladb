@@ -42,7 +42,7 @@ class commitlog_entry_writer {
     schema_ptr _schema;
     const frozen_mutation& _mutation;
     bool _with_schema = true;
-    size_t _size;
+    size_t _size = std::numeric_limits<size_t>::max();
 private:
     template<typename Output>
     void serialize(Output&) const;
@@ -50,9 +50,7 @@ private:
 public:
     commitlog_entry_writer(schema_ptr s, const frozen_mutation& fm)
         : _schema(std::move(s)), _mutation(fm)
-    {
-        compute_size();
-    }
+    {}
 
     void set_with_schema(bool value) {
         _with_schema = value;
@@ -66,6 +64,7 @@ public:
     }
 
     size_t size() const {
+        assert(_size != std::numeric_limits<size_t>::max());
         return _size;
     }
 
