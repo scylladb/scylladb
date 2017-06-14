@@ -34,7 +34,6 @@
 #include "idl/uuid.dist.impl.hh"
 #include "idl/keys.dist.impl.hh"
 #include "idl/mutation.dist.impl.hh"
-#include "range_tombstone_to_prefix_tombstone_converter.hh"
 #include "service/storage_service.hh"
 
 using namespace db;
@@ -170,21 +169,9 @@ auto write_row_marker(Writer&& writer, const row_marker& marker)
 template <typename RowTombstones>
 static void write_tombstones(const schema& s, RowTombstones& row_tombstones, const range_tombstone_list& rt_list)
 {
-    if (service::get_local_storage_service().cluster_supports_range_tombstones()) {
-        for (auto&& rt : rt_list) {
-            row_tombstones.add().write_start(rt.start).write_tomb(rt.tomb).write_start_kind(rt.start_kind)
-                .write_end(rt.end).write_end_kind(rt.end_kind).end_range_tombstone();
-        }
-    } else {
-        range_tombstone_to_prefix_tombstone_converter m;
-        for (auto&& rt : rt_list) {
-            auto prefix = m.convert(s, rt);
-            if (prefix) {
-                row_tombstones.add().write_start(*prefix).write_tomb(rt.tomb).write_start_kind(bound_kind::incl_start)
-                    .write_end(*prefix).write_end_kind(bound_kind::incl_end).end_range_tombstone();
-            }
-        }
-        m.verify_no_open_tombstones();
+    for (auto&& rt : rt_list) {
+        row_tombstones.add().write_start(rt.start).write_tomb(rt.tomb).write_start_kind(rt.start_kind)
+            .write_end(rt.end).write_end_kind(rt.end_kind).end_range_tombstone();
     }
 }
 
