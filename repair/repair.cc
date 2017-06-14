@@ -53,6 +53,7 @@ public:
     dht::token_range_vector ranges;
     std::vector<sstring> cfs;
     int id;
+    shard_id shard;
     std::vector<sstring> data_centers;
     std::vector<sstring> hosts;
     std::vector<failed_range> failed_ranges;
@@ -84,14 +85,15 @@ public:
         , ranges(ranges_)
         , cfs(cfs_)
         , id(id_)
+        , shard(engine().cpu_id())
         , data_centers(data_centers_)
         , hosts(hosts_) {
     }
     future<> do_streaming() {
         size_t ranges_in = 0;
         size_t ranges_out = 0;
-        auto sp_in = make_lw_shared<streaming::stream_plan>(sprint("repair-in-%d-index-%d", id, sp_index));
-        auto sp_out = make_lw_shared<streaming::stream_plan>(sprint("repair-out-%d-index-%d", id, sp_index));
+        auto sp_in = make_lw_shared<streaming::stream_plan>(sprint("repair-in-id-%d-shard-%d-index-%d", id, shard, sp_index));
+        auto sp_out = make_lw_shared<streaming::stream_plan>(sprint("repair-out-id-%d-shard-%d-index-%d", id, shard, sp_index));
 
         for (auto& x : ranges_need_repair_in) {
             auto& peer = x.first;
@@ -118,7 +120,7 @@ public:
         current_sub_ranges_nr_out = 0;
 
         if (ranges_in || ranges_out) {
-            logger.info("Start streaming for repair {} index {}, ranges_in={}, ranges_out={}", id, sp_index, ranges_in, ranges_out);
+            logger.info("Start streaming for repair id={}, shard={}, index={}, ranges_in={}, ranges_out={}", id, shard, sp_index, ranges_in, ranges_out);
         }
         sp_index++;
 
@@ -129,23 +131,22 @@ public:
             return make_exception_future(ep);
         });
     }
-    bool check_failed_ranges() {
+    void check_failed_ranges() {
         if (failed_ranges.empty()) {
-            logger.info("repair {} completed successfully", id);
-            return true;
+            logger.info("repair {} on shard {} completed successfully", id, shard);
         } else {
-            logger.info("repair {} failed - {} ranges failed", id, failed_ranges.size());
+            logger.info("repair {} on shard {} failed - {} ranges failed", id, shard, failed_ranges.size());
             for (auto& frange: failed_ranges) {
                 logger.info("repair cf {} range {} failed", frange.cf, frange.range);
             }
-            return false;
+            throw std::runtime_error(sprint("repair %d on shard %d failed to do checksum for %d sub ranges", id, shard, failed_ranges.size()));
         }
     }
     future<> request_transfer_ranges(const sstring& cf,
         const ::dht::token_range& range,
         const std::vector<gms::inet_address>& neighbors_in,
         const std::vector<gms::inet_address>& neighbors_out) {
-        rlogger.debug("Add cf {}, range {}, current_sub_ranges_nr_in {}, current_sub_ranges_nr_out {}", cf, range, current_sub_ranges_nr_in, current_sub_ranges_nr_out);
+        logger.debug("Add cf {}, range {}, current_sub_ranges_nr_in {}, current_sub_ranges_nr_out {}", cf, range, current_sub_ranges_nr_in, current_sub_ranges_nr_out);
         return sp_parallelism_semaphore.wait(1).then([this, cf, range, neighbors_in, neighbors_out] {
             for (const auto& peer : neighbors_in) {
                 ranges_need_repair_in[peer][cf].emplace_back(range);
@@ -320,7 +321,7 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
 // be queried about more than once (FIXME: reconsider this. But note that
 // failed repairs should be rare anwyay).
 // This object is not thread safe, and must be used by only one cpu.
-static class {
+class tracker {
 private:
     // Each repair_start() call returns a unique int which the user can later
     // use to follow the status of this repair with repair_status().
@@ -333,7 +334,11 @@ private:
     std::unordered_map<int, repair_status> _status;
     // Used to allow shutting down repairs in progress, and waiting for them.
     seastar::gate _gate;
+    // Set when the repair service is being shutdown
+    std::atomic_bool _shutdown alignas(64);
 public:
+    tracker() : _shutdown(false) {
+    }
     void start(int id) {
         _gate.enter();
         _status[id] = repair_status::RUNNING;
@@ -361,17 +366,19 @@ public:
         return _next_repair_command++;
     }
     future<> shutdown() {
+        _shutdown.store(true, std::memory_order_relaxed);
         return _gate.close();
     }
     void check_in_shutdown() {
-        _gate.check();
+        if (_shutdown.load(std::memory_order_relaxed)) {
+            throw std::runtime_error(sprint("Repair service is being shutdown"));
+        }
     }
-} repair_tracker;
+};
+
+static tracker repair_tracker;
 
 static void check_in_shutdown() {
-    // Only call this from the single CPU managing the repair - the only CPU
-    // which is allowed to use repair_tracker.
-    assert(engine().cpu_id() == 0);
     repair_tracker.check_in_shutdown();
 }
 
@@ -577,8 +584,8 @@ static future<> repair_cf_range(repair_info& ri,
 
     return estimate_partitions(ri.db, ri.keyspace, cf, range).then([&ri, cf, range, &neighbors] (uint64_t estimated_partitions) {
     range_splitter ranges(range, estimated_partitions, ri.target_partitions);
-    logger.info("Repair {} out of {} ranges, id={}, keyspace={}, cf={}, range={}, target_partitions={}, estimated_partitions={}",
-            ri.ranges_index, ri.ranges.size(), ri.id, ri.keyspace, cf, range, ri.target_partitions, estimated_partitions);
+    logger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, cf={}, range={}, target_partitions={}, estimated_partitions={}",
+            ri.ranges_index, ri.ranges.size(), ri.id, ri.shard, ri.keyspace, cf, range, ri.target_partitions, estimated_partitions);
     return do_with(seastar::gate(), true, std::move(cf), std::move(ranges),
         [&ri, &neighbors] (auto& completion, auto& success, const auto& cf, auto& ranges) {
         return do_until([&ranges] () { return !ranges.has_next(); },
@@ -987,13 +994,35 @@ static future<> repair_ranges(repair_info ri) {
             // repair_cf_range
             return ri.do_streaming();
         }).then([&ri] {
-            repair_tracker.done(ri.id, ri.check_failed_ranges());
+            ri.check_failed_ranges();
+            return make_ready_future<>();
         }).handle_exception([&ri] (std::exception_ptr eptr) {
             logger.info("repair {} failed - {}", ri.id, eptr);
-            repair_tracker.done(ri.id, false);
+            return make_exception_future<>(std::move(eptr));
         });
     });
 }
+
+static void split_and_add(std::vector<::dht::token_range>& ranges,
+        const dht::token_range& range) {
+    // The use of minimum_token() here twice is not a typo - because wrap-
+    // around token ranges are supported by midpoint(), the beyond-maximum
+    // token can also be represented by minimum_token().
+    auto midpoint = dht::global_partitioner().midpoint(
+            range.start() ? range.start()->value() : dht::minimum_token(),
+            range.end() ? range.end()->value() : dht::minimum_token());
+    // This shouldn't happen, but if the range included just one token, we
+    // can't split further (split() may actually fail with assertion failure)
+    if ((range.start() && midpoint == range.start()->value()) ||
+        (range.end() && midpoint == range.end()->value())) {
+        ranges.push_back(range);
+        return;
+    }
+    auto halves = range.split(midpoint, dht::token_comparator());
+    ranges.push_back(halves.first);
+    ranges.push_back(halves.second);
+}
+
 
 // repair_start() can run on any cpu; It runs on cpu0 the function
 // do_repair_start(). The benefit of always running that function on the same
@@ -1012,7 +1041,6 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     // yet. Real ids returned by next_repair_command() will be >= 1.
     int id = repair_tracker.next_repair_command();
     logger.info("starting user-requested repair for keyspace {}, repair id {}, options {}", keyspace, id, options_map);
-
     repair_tracker.start(id);
 
     // If the "ranges" option is not explicitly specified, we repair all the
@@ -1087,8 +1115,56 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         cfs = list_column_families(db.local(), keyspace);
     }
 
-    repair_ranges(repair_info(db, std::move(keyspace), std::move(ranges),
-            std::move(cfs), id, options.data_centers, options.hosts));
+    // Split the ranges so that we have more number of ranges than smp::count
+    // Note, the split is not a guaratnee when the range can not be split anmore.
+    dht::token_range_vector tosplit;
+    while (ranges.size() < smp::count) {
+        size_t sz = ranges.size();
+        tosplit.clear();
+        ranges.swap(tosplit);
+        for (const auto& range : tosplit) {
+            split_and_add(ranges, range);
+        }
+        if (sz == ranges.size()) {
+            // We can not split the ranges anymore
+            break;
+        }
+    }
+
+    std::map<shard_id, dht::token_range_vector> shard_ranges_map;
+    unsigned idx = 0;
+    for (auto& range : ranges) {
+        shard_ranges_map[idx++ % smp::count].push_back(std::move(range));
+    }
+
+    std::vector<future<>> repair_results;
+    repair_results.reserve(shard_ranges_map.size());
+
+    for (auto& x : shard_ranges_map) {
+        shard_id shard = x.first;
+        auto& ranges = x.second;
+        auto f = db.invoke_on(shard, [keyspace, cfs, id, ranges = std::move(ranges),
+                data_centers = options.data_centers, hosts = options.hosts] (database& localdb) mutable {
+            return repair_ranges(repair_info(service::get_local_storage_service().db(),
+                    std::move(keyspace), std::move(ranges), std::move(cfs),
+                    id, std::move(data_centers), std::move(hosts)));
+        });
+        repair_results.push_back(std::move(f));
+    }
+
+    when_all(repair_results.begin(), repair_results.end()).then([id] (std::vector<future<>> results) {
+        if (std::any_of(results.begin(), results.end(), [] (auto&& f) { return f.failed(); })) {
+            repair_tracker.done(id, false);
+            logger.info("repair {} failed", id);
+        } else {
+            repair_tracker.done(id, true);
+            logger.info("repair {} completed successfully", id);
+        }
+        return make_ready_future<>();
+    }).handle_exception([id] (std::exception_ptr eptr) {
+         repair_tracker.done(id, false);
+         logger.info("repair {} failed: {}", id, eptr);
+    });
 
     return id;
 }
