@@ -1581,3 +1581,72 @@ SEASTAR_TEST_CASE(test_continuity_merging) {
     });
 
 }
+
+SEASTAR_TEST_CASE(test_apply_to_incomplete) {
+    return seastar::async([] {
+        simple_schema table;
+        auto&& s = *table.schema();
+
+        auto new_mutation = [&] {
+            return mutation(table.make_pkey(0), table.schema());
+        };
+
+        auto mutation_with_row = [&] (clustering_key ck) {
+            auto m = new_mutation();
+            table.add_row(m, ck, "v");
+            return m;
+        };
+
+        // FIXME: There is no assert_that() for mutation_partition
+        auto assert_equal = [&] (mutation_partition mp1, mutation_partition mp2) {
+            auto key = table.make_pkey(0);
+            assert_that(mutation(table.schema(), key, std::move(mp1)))
+                .is_equal_to(mutation(table.schema(), key, std::move(mp2)));
+        };
+
+        auto apply = [&] (partition_entry& e, const mutation& m) {
+            e.apply_to_incomplete(s, partition_entry(m.partition()), s);
+        };
+
+        auto ck1 = table.make_ckey(1);
+        auto ck2 = table.make_ckey(2);
+
+        BOOST_TEST_MESSAGE("Check that insert falling into discontinuous range is dropped");
+        {
+            auto e = partition_entry(mutation_partition::make_incomplete(s));
+            auto m = new_mutation();
+            table.add_row(m, ck1, "v");
+            apply(e, m);
+            assert_equal(e.squashed(s), mutation_partition::make_incomplete(s));
+        }
+
+        BOOST_TEST_MESSAGE("Check that continuity from latest version wins");
+        {
+            auto m1 = mutation_with_row(ck2);
+            auto e = partition_entry(m1.partition());
+
+            auto snap1 = e.read(table.schema());
+
+            auto m2 = mutation_with_row(ck2);
+            apply(e, m2);
+
+            partition_version* latest = &*e.version();
+            partition_version* prev = latest->next();
+
+            for (rows_entry& row : prev->partition().clustered_rows()) {
+                row.set_continuous(is_continuous::no);
+            }
+
+            auto m3 = mutation_with_row(ck1);
+            apply(e, m3);
+            assert_equal(e.squashed(s), (m2 + m3).partition());
+
+            // Check that snapshot data is not stolen when its entry is applied
+            auto e2 = partition_entry(mutation_partition(table.schema()));
+            e2.apply_to_incomplete(s, std::move(e), s);
+            assert_equal(snap1->squashed(), m1.partition());
+            assert_equal(e2.squashed(s), (m2 + m3).partition());
+        }
+    });
+
+}
