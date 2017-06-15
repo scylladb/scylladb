@@ -60,7 +60,7 @@ static auto execute_counter_update_for_key(cql_test_env& env, const bytes& key) 
 };
 
 struct test_config {
-    enum class run_mode { read, write };
+    enum class run_mode { read, write, del };
 
     run_mode mode;
     unsigned partitions;
@@ -75,6 +75,7 @@ std::ostream& operator<<(std::ostream& os, const test_config::run_mode& m) {
     switch (m) {
         case test_config::run_mode::write: return os << "write";
         case test_config::run_mode::read: return os << "read";
+        case test_config::run_mode::del: return os << "delete";
     }
     assert(0);
 }
@@ -88,7 +89,7 @@ std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
            << "}";
 }
 
-future<> test_read(cql_test_env& env, test_config& cfg) {
+future<> create_partitions(cql_test_env& env, test_config& cfg) {
     std::cout << "Creating " << cfg.partitions << " partitions..." << std::endl;
     auto partitions = boost::irange(0, (int)cfg.partitions);
     return do_for_each(partitions.begin(), partitions.end(), [&] (int sequence) {
@@ -96,7 +97,11 @@ future<> test_read(cql_test_env& env, test_config& cfg) {
             return execute_counter_update_for_key(env, make_key(sequence));
         }
         return execute_update_for_key(env, make_key(sequence));
-    }).then([&env] {
+    });
+}
+
+future<> test_read(cql_test_env& env, test_config& cfg) {
+    return create_partitions(env, cfg).then([&env] {
         return env.prepare("select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" from cf where \"KEY\" = ?");
     }).then([&env, &cfg](auto id) {
         return time_parallel([&env, &cfg, id] {
@@ -120,6 +125,17 @@ future<> test_write(cql_test_env& env, test_config& cfg) {
                 return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
             }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
         });
+}
+
+future<> test_delete(cql_test_env& env, test_config& cfg) {
+    return create_partitions(env, cfg).then([&env] {
+        return env.prepare("DELETE \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" FROM cf WHERE \"KEY\" = ?");
+    }).then([&env, &cfg](auto id) {
+        return time_parallel([&env, &cfg, id] {
+            bytes key = make_key(cfg.query_single_key ? 0 : std::rand() % cfg.partitions);
+            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(key))}}).discard_result();
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard);
+    });
 }
 
 future<> test_counter_update(cql_test_env& env, test_config& cfg) {
@@ -171,6 +187,8 @@ future<> do_test(cql_test_env& env, test_config& cfg) {
                 } else {
                     return test_write(env, cfg);
                 }
+            case test_config::run_mode::del:
+                return test_delete(env, cfg);
         };
         assert(0);
     });
@@ -182,8 +200,9 @@ int main(int argc, char** argv) {
     app.add_options()
         ("partitions", bpo::value<unsigned>()->default_value(10000), "number of partitions")
         ("write", "test write path instead of read path")
+        ("delete", "test delete path instead of read path")
         ("duration", bpo::value<unsigned>()->default_value(5), "test duration in seconds")
-        ("query-single-key", "test write path instead of read path")
+        ("query-single-key", "test reading with a single key instead of random keys")
         ("concurrency", bpo::value<unsigned>()->default_value(100), "workers per core")
         ("operations-per-shard", bpo::value<unsigned>(), "run this many operations per shard (overrides duration)")
         ("counters", "test counters");
@@ -194,9 +213,15 @@ int main(int argc, char** argv) {
             cfg->partitions = app.configuration()["partitions"].as<unsigned>();
             cfg->duration_in_seconds = app.configuration()["duration"].as<unsigned>();
             cfg->concurrency = app.configuration()["concurrency"].as<unsigned>();
-            cfg->mode = app.configuration().count("write") ? test_config::run_mode::write : test_config::run_mode::read;
             cfg->query_single_key = app.configuration().count("query-single-key");
             cfg->counters = app.configuration().count("counters");
+            if (app.configuration().count("write")) {
+                cfg->mode = test_config::run_mode::write;
+            } else if (app.configuration().count("delete")) {
+                cfg->mode = test_config::run_mode::del;
+            } else {
+                cfg->mode = test_config::run_mode::read;
+            };
             if (app.configuration().count("operations-per-shard")) {
                 cfg->operations_per_shard = app.configuration()["operations-per-shard"].as<unsigned>();
             }
