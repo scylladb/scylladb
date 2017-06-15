@@ -567,6 +567,50 @@ SEASTAR_TEST_CASE(test_row_cache_conforms_to_mutation_source) {
     });
 }
 
+static
+mutation make_fully_continuous(const mutation& m) {
+    mutation res = m;
+    res.partition().make_fully_continuous();
+    return res;
+}
+
+SEASTAR_TEST_CASE(test_reading_from_random_partial_partition) {
+    return seastar::async([] {
+        cache_tracker tracker;
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+
+        // The test primes the cache with m1, which has random continuity,
+        // and then applies m2 on top of it. This should result in some of m2's
+        // write information to be dropped. The test then verifies that we still get the
+        // proper m1 + m2.
+
+        auto m1 = gen();
+        auto m2 = make_fully_continuous(gen());
+
+        memtable_snapshot_source underlying(gen.schema());
+        underlying.apply(make_fully_continuous(m1));
+
+        row_cache cache(gen.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+        cache.populate(m1); // m1 is supposed to have random continuity and populate() should preserve it
+
+        auto rd1 = cache.make_reader(gen.schema());
+        auto sm1 = rd1().get0();
+
+        // Merge m2 into cache
+        auto mt = make_lw_shared<memtable>(gen.schema());
+        mt->apply(m2);
+        underlying.apply(m2);
+        cache.update(*mt, make_default_partition_presence_checker()).get();
+
+        auto rd2 = cache.make_reader(gen.schema());
+        auto sm2 = rd2().get0();
+
+        assert_that(std::move(sm1)).has_mutation().is_equal_to(m1);
+        assert_that(std::move(sm2)).has_mutation().is_equal_to(m1 + m2);
+    });
+}
+
 SEASTAR_TEST_CASE(test_eviction) {
     return seastar::async([] {
         auto s = make_schema();
