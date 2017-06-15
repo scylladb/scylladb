@@ -50,6 +50,20 @@
 // not be the optimal object to use here.
 class mutation_reader final {
 public:
+    // mutation_reader::forwarding determines whether fast_forward_to() may
+    // be used on the mutation reader to change the partition range being
+    // read. Enabling forwarding also changes read policy: forwarding::no
+    // means we will stop reading from disk at the end of the given range,
+    // but with forwarding::yes we may read ahead, anticipating the user to
+    // make a small skip with fast_forward_to() and continuing to read.
+    //
+    // Note that mutation_reader::forwarding is similarly name but different
+    // from streamed_mutation::forwarding - the former is about skipping to
+    // a different partition range, while the latter is about skipping
+    // inside a large partition.
+    class forwading_tag;
+    using forwarding = bool_class<forwarding_tag>;
+
     class impl {
     public:
         virtual ~impl() {}
@@ -259,7 +273,8 @@ class mutation_source {
         const query::partition_slice&,
         io_priority,
         tracing::trace_state_ptr,
-        streamed_mutation::forwarding
+        streamed_mutation::forwarding,
+        mutation_reader::forwarding
     )>;
     // We could have our own version of std::function<> that is nothrow
     // move constructible and save some indirection and allocation.
@@ -272,15 +287,15 @@ private:
 public:
     mutation_source(func_type fn) : _fn(std::make_unique<func_type>(std::move(fn))) {}
     mutation_source(std::function<mutation_reader(schema_ptr, partition_range, const query::partition_slice&, io_priority)> fn)
-        : _fn(std::make_unique<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr, streamed_mutation::forwarding) {
+        : _fn(std::make_unique<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr, streamed_mutation::forwarding, mutation_reader::forwarding) {
             return fn(s, range, slice, pc);
         })) {}
     mutation_source(std::function<mutation_reader(schema_ptr, partition_range, const query::partition_slice&)> fn)
-        : _fn(std::make_unique<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding) {
+        : _fn(std::make_unique<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding, mutation_reader::forwarding) {
             return fn(s, range, slice);
         })) {}
     mutation_source(std::function<mutation_reader(schema_ptr, partition_range range)> fn)
-        : _fn(std::make_unique<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice&, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding) {
+        : _fn(std::make_unique<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice&, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding, mutation_reader::forwarding) {
             return fn(s, range);
         })) {}
 
@@ -304,9 +319,10 @@ public:
         const query::partition_slice& slice = query::full_slice,
         io_priority pc = default_priority_class(),
         tracing::trace_state_ptr trace_state = nullptr,
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no) const
+        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const
     {
-        return (*_fn)(std::move(s), range, slice, pc, std::move(trace_state), fwd);
+        return (*_fn)(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
     }
 };
 
@@ -463,4 +479,5 @@ stable_flattened_mutations_consumer<FlattenedConsumer> make_stable_flattened_mut
 mutation_reader
 make_multi_range_reader(schema_ptr s, mutation_source source, const dht::partition_range_vector& ranges,
                         const query::partition_slice& slice, const io_priority_class& pc = default_priority_class(),
-                        tracing::trace_state_ptr trace_state = nullptr, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+                        tracing::trace_state_ptr trace_state = nullptr, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+                        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);

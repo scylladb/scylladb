@@ -281,10 +281,11 @@ private:
 public:
     multi_range_mutation_reader(schema_ptr s, mutation_source source, const ranges_vector& ranges,
                                 const query::partition_slice& slice, const io_priority_class& pc,
-                                tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd)
+                                tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd,
+                                mutation_reader::forwarding fwd_mr)
         : _ranges(ranges)
         , _current_range(_ranges.begin())
-        , _reader(source(s, *_current_range, slice, pc, trace_state, fwd))
+        , _reader(source(s, *_current_range, slice, pc, trace_state, fwd, fwd_mr))
     {
     }
 
@@ -316,8 +317,9 @@ public:
 mutation_reader
 make_multi_range_reader(schema_ptr s, mutation_source source, const dht::partition_range_vector& ranges,
                         const query::partition_slice& slice, const io_priority_class& pc,
-                        tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd)
+                        tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd,
+                        mutation_reader::forwarding fwd_mr)
 {
     return make_mutation_reader<multi_range_mutation_reader>(std::move(s), std::move(source), ranges,
-                                                             slice, pc, std::move(trace_state), fwd);
+                                                             slice, pc, std::move(trace_state), fwd, fwd_mr);
 }

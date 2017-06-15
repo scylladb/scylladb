@@ -3505,7 +3505,8 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
             query::full_slice,
             default_priority_class(),
             nullptr,
-            streamed_mutation::forwarding::yes);
+            streamed_mutation::forwarding::yes,
+            ::mutation_reader::forwarding::yes);
 
         // Consume first partition completely so that index is stale
         {

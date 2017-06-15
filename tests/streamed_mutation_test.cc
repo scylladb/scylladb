@@ -184,11 +184,12 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
                     const query::partition_slice& slice,
                     const io_priority_class& pc,
                     tracing::trace_state_ptr trace_state,
-                    streamed_mutation::forwarding fwd)
+                    streamed_mutation::forwarding fwd,
+                    mutation_reader::forwarding fwd_mr)
             {
                 std::vector<mutation_reader> readers;
                 for (int i = 0; i < n; ++i) {
-                    readers.push_back(memtables[i]->make_reader(s, range, slice, pc, trace_state, fwd));
+                    readers.push_back(memtables[i]->make_reader(s, range, slice, pc, trace_state, fwd, fwd_mr));
                 }
                 return make_combined_reader(std::move(readers));
             });

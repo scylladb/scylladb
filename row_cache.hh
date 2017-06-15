@@ -286,7 +286,8 @@ private:
                                          const io_priority_class& pc,
                                          const query::partition_slice& slice,
                                          tracing::trace_state_ptr trace_state,
-                                         streamed_mutation::forwarding);
+                                         streamed_mutation::forwarding,
+                                         mutation_reader::forwarding);
     void on_hit();
     void on_miss();
     void on_uncached_wide_partition();
@@ -338,7 +339,8 @@ public:
                                 const query::partition_slice& slice = query::full_slice,
                                 const io_priority_class& = default_priority_class(),
                                 tracing::trace_state_ptr trace_state = nullptr,
-                                streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+                                streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+                                mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
 
     const stats& stats() const { return _stats; }
 public:

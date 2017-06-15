@@ -628,7 +628,8 @@ private:
                                         const query::partition_slice& slice,
                                         const io_priority_class& pc,
                                         tracing::trace_state_ptr trace_state,
-                                        streamed_mutation::forwarding fwd) const;
+                                        streamed_mutation::forwarding fwd,
+                                        mutation_reader::forwarding fwd_mr) const;
 
     mutation_source sstables_as_mutation_source();
     partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set>);
@@ -679,7 +680,8 @@ public:
             const query::partition_slice& slice = query::full_slice,
             const io_priority_class& pc = default_priority_class(),
             tracing::trace_state_ptr trace_state = nullptr,
-            streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no) const;
+            streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+            mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const;
 
     // The streaming mutation reader differs from the regular mutation reader in that:
     //  - Reflects all writes accepted by replica prior to creation of the
