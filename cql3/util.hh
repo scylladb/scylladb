@@ -79,6 +79,8 @@ shared_ptr<cql3::statements::raw::select_statement> build_select_statement(
         const sstring_view& where_clause,
         std::vector<sstring_view> included_columns);
 
+sstring maybe_quote(sstring s);
+
 } // namespace util
 
 } // namespace cql3
