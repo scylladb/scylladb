@@ -13,7 +13,7 @@ if [ "$SCYLLA_PRODUCTION" == "true" ]; then
 		DATA_DIR=`/usr/lib/scylla/scylla_config_get.py --config $SCYLLA_CONF/scylla.yaml --get data_file_directories|head -n1`
 		iotune --evaluation-directory $DATA_DIR --format envfile --options-file /var/lib/scylla/io.conf $CPUSET --timeout 600
 		if [ $? -ne 0 ]; then
-			echo "/var/lib/scylla did not pass validation tests, it may not be on XFS and/or has limited disk space."
+			echo "$DATA_DIR did not pass validation tests, it may not be on XFS and/or has limited disk space."
 			echo "This is a non-supported setup, please bind mount an XFS volume."
 			exit 1
 		fi
