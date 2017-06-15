@@ -372,7 +372,7 @@ operator<<(std::ostream& os, const cql3_type::raw& r) {
 
 namespace util {
 
-sstring maybe_quote(sstring s) {
+sstring maybe_quote(const sstring& s) {
     static const std::regex unquoted("\\w*");
     static const std::regex double_quote("\"");
 
