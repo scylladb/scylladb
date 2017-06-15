@@ -31,7 +31,7 @@ namespace cql3 {
 
 sstring cql3_type::to_string() const {
     if (_type->is_user_type() || _type->is_tuple()) {
-        return "frozen<" + _name + ">";
+        return "frozen<" + util::maybe_quote(_name) + ">";
     }
     return _name;
 }
