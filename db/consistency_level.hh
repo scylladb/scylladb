@@ -76,17 +76,12 @@ inline size_t count_local_endpoints(Range& live_endpoints) {
 }
 
 std::vector<gms::inet_address>
-filter_for_query_dc_local(consistency_level cl,
-                          keyspace& ks,
-                          const std::vector<gms::inet_address>& live_endpoints);
-
-std::vector<gms::inet_address>
 filter_for_query(consistency_level cl,
                  keyspace& ks,
                  std::vector<gms::inet_address> live_endpoints,
-                 read_repair_decision read_repair);
+                 read_repair_decision read_repair, gms::inet_address* extra, column_family* cf);
 
-std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& ks, std::vector<gms::inet_address>& live_endpoints);
+std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& ks, std::vector<gms::inet_address>& live_endpoints, column_family* cf);
 
 struct dc_node_count {
     size_t live = 0;

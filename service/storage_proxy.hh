@@ -247,11 +247,11 @@ private:
     std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token);
     db::read_repair_decision new_read_repair_decision(const schema& s);
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, tracing::trace_state_ptr trace_state);
-    future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
+    future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> query_singular_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
                                                                            query::result_request request,
                                                                            tracing::trace_state_ptr trace_state,
                                                                            uint64_t max_size = query::result_memory_limiter::maximum_result_size);
-    future<query::result_digest, api::timestamp_type> query_singular_local_digest(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state,
+    future<query::result_digest, api::timestamp_type, cache_temperature> query_singular_local_digest(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state,
                                                                                   uint64_t max_size  = query::result_memory_limiter::maximum_result_size);
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_partition_key_range(lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state);
     dht::partition_range_vector get_restricted_ranges(keyspace& ks, const schema& s, dht::partition_range range);
@@ -278,7 +278,7 @@ private:
     void handle_read_error(std::exception_ptr eptr, bool range);
     template<typename Range>
     future<> mutate_internal(Range mutations, db::consistency_level cl, bool counter_write, tracing::trace_state_ptr tr_state, stdx::optional<clock_type::time_point> timeout_opt = { });
-    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_nonsingular_mutations_locally(
+    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> query_nonsingular_mutations_locally(
             schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector& pr, tracing::trace_state_ptr trace_state, uint64_t max_size);
 
     struct frozen_mutation_and_schema {
@@ -377,18 +377,18 @@ public:
         db::consistency_level cl,
         tracing::trace_state_ptr trace_state);
 
-    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations_locally(
+    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> query_mutations_locally(
         schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range&,
         tracing::trace_state_ptr trace_state = nullptr,
         uint64_t max_size = query::result_memory_limiter::maximum_result_size);
 
 
-    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations_locally(
+    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> query_mutations_locally(
         schema_ptr, lw_shared_ptr<query::read_command> cmd, const compat::one_or_two_partition_ranges&,
         tracing::trace_state_ptr trace_state = nullptr,
         uint64_t max_size = query::result_memory_limiter::maximum_result_size);
 
-    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations_locally(
+    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> query_mutations_locally(
             schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector& pr,
             tracing::trace_state_ptr trace_state = nullptr,
             uint64_t max_size = query::result_memory_limiter::maximum_result_size);

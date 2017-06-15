@@ -242,6 +242,11 @@ public:
         versioned_value supported_features(const sstring& features) {
             return versioned_value(features);
         }
+
+        versioned_value cache_hitrates(const sstring& hitrates) {
+            return versioned_value(hitrates);
+        }
+
     };
 }; // class versioned_value
 

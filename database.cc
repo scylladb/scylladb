@@ -59,6 +59,7 @@
 #include "core/do_with.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
+#include "message/messaging_service.hh"
 #include "mutation_query.hh"
 #include "sstable_mutation_readers.hh"
 #include <core/fstream.hh>
@@ -1187,6 +1188,11 @@ void column_family::set_metrics() {
             ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks),
             ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks)
     });
+    if (_schema->ks_name() != db::system_keyspace::NAME) {
+        _metrics.add_group("column_family", {
+                ms::make_gauge("cache_hit_rate", ms::description("Cache hit rate"), [this] {return float(_global_cache_hit_rate);})(cf)(ks)
+        });
+    }
 }
 
 void column_family::rebuild_statistics() {
@@ -2783,40 +2789,40 @@ column_family::as_mutation_source() const {
 
 static thread_local auto data_query_stage = seastar::make_execution_stage("data_query", &column_family::query);
 
-future<lw_shared_ptr<query::result>>
+future<lw_shared_ptr<query::result>, cache_temperature>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state,
                 uint64_t max_result_size) {
     column_family& cf = find_column_family(cmd.cf_id);
     return data_query_stage(&cf, std::move(s), seastar::cref(cmd), request, seastar::cref(ranges),
                             std::move(trace_state), seastar::ref(get_result_memory_limiter()),
-                            max_result_size).then_wrapped([this, s = _stats] (auto f) {
+                            max_result_size).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
+            return make_exception_future<lw_shared_ptr<query::result>, cache_temperature>(f.get_exception());
         } else {
             ++s->total_reads;
             auto result = f.get0();
             s->short_data_queries += bool(result->is_short_read());
-            return make_ready_future<lw_shared_ptr<query::result>>(std::move(result));
+            return make_ready_future<lw_shared_ptr<query::result>, cache_temperature>(std::move(result), hit_rate);
         }
-        return f;
     });
 }
 
-future<reconcilable_result>
+future<reconcilable_result, cache_temperature>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const dht::partition_range& range,
                           query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state) {
     column_family& cf = find_column_family(cmd.cf_id);
     return mutation_query(std::move(s), cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.partition_limit,
-            cmd.timestamp, std::move(accounter), std::move(trace_state)).then_wrapped([this, s = _stats] (auto f) {
+            cmd.timestamp, std::move(accounter), std::move(trace_state)).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
+            return make_exception_future<reconcilable_result, cache_temperature>(f.get_exception());
         } else {
             ++s->total_reads;
             auto result = f.get0();
             s->short_mutation_queries += bool(result.is_short_read());
-            return make_ready_future<reconcilable_result>(std::move(result));
+            return make_ready_future<reconcilable_result, cache_temperature>(std::move(result), hit_rate);
         }
-        return f;
     });
 }
 
@@ -2855,6 +2861,15 @@ bool database::is_replacing() {
         return false;
     }
     return bool(get_replace_address());
+}
+
+void database::register_connection_drop_notifier(netw::messaging_service& ms) {
+    ms.register_connection_drop_notifier([this] (gms::inet_address ep) {
+        dblog.debug("Drop hit rate info for {} because of disconnect", ep);
+        for (auto&& cf : get_non_system_column_families()) {
+            cf->drop_hit_rate(ep);
+        }
+    });
 }
 
 std::ostream& operator<<(std::ostream& out, const atomic_cell_or_collection& c) {
@@ -4036,4 +4051,44 @@ future<> column_family::push_view_replica_updates(const schema_ptr& s, const fro
                 return this->generate_and_propagate_view_updates(base, std::move(views), std::move(m), std::move(existing));
             });
     });
+}
+
+void column_family::set_hit_rate(gms::inet_address addr, cache_temperature rate) {
+    auto& e = _cluster_cache_hit_rates[addr];
+    e.rate = rate;
+    e.last_updated = lowres_clock::now();
+}
+
+column_family::cache_hit_rate column_family::get_hit_rate(gms::inet_address addr) {
+    auto it = _cluster_cache_hit_rates.find(addr);
+    if (utils::fb_utilities::get_broadcast_address() == addr) {
+        return cache_hit_rate { _global_cache_hit_rate, lowres_clock::now()};
+    }
+    if (it == _cluster_cache_hit_rates.end()) {
+        // no data yet, get it from the gossiper
+        auto& gossiper = gms::get_local_gossiper();
+        auto eps = gossiper.get_endpoint_state_for_endpoint(addr);
+        if (eps) {
+            auto state = eps->get_application_state(gms::application_state::CACHE_HITRATES);
+            float f = -1.0f; // missing state means old node
+            if (state) {
+                sstring me = sprint("%s.%s", _schema->ks_name(), _schema->cf_name());
+                auto i = state->value.find(me);
+                if (i != sstring::npos) {
+                    f = strtof(&state->value[i + me.size() + 1], nullptr);
+                } else {
+                    f = 0.0f; // empty state means that node has rebooted
+                }
+                set_hit_rate(addr, cache_temperature(f));
+                return cache_hit_rate{cache_temperature(f), lowres_clock::now()};
+            }
+        }
+        return cache_hit_rate {cache_temperature(0.0f), lowres_clock::now()};
+    } else {
+        return it->second;
+    }
+}
+
+void column_family::drop_hit_rate(gms::inet_address addr) {
+    _cluster_cache_hit_rates.erase(addr);
 }

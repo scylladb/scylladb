@@ -69,6 +69,8 @@
 #include <boost/range/numeric.hpp>
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/empty.hpp>
+#include <boost/range/algorithm/min_element.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 #include "utils/latency.hh"
 #include "schema.hh"
 #include "schema_registry.hh"
@@ -304,7 +306,7 @@ public:
             std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets,
             std::vector<gms::inet_address> pending_endpoints, std::vector<gms::inet_address> dead_endpoints, tracing::trace_state_ptr tr_state) :
                 abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh),
-                        std::move(targets), std::move(tr_state), boost::range::count_if(pending_endpoints, db::is_local), std::move(dead_endpoints)) {}
+                        std::move(targets), std::move(tr_state), db::count_local_endpoints(pending_endpoints), std::move(dead_endpoints)) {}
 };
 
 class write_response_handler : public abstract_write_response_handler {
@@ -2409,11 +2411,13 @@ protected:
     std::vector<gms::inet_address> _targets;
     promise<foreign_ptr<lw_shared_ptr<query::result>>> _result_promise;
     tracing::trace_state_ptr _trace_state;
+    lw_shared_ptr<column_family> _cf;
 
 public:
-    abstract_read_executor(schema_ptr s, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
+    abstract_read_executor(schema_ptr s, lw_shared_ptr<column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
             std::vector<gms::inet_address> targets, tracing::trace_state_ptr trace_state) :
-                           _schema(std::move(s)), _proxy(std::move(proxy)), _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)) {
+                           _schema(std::move(s)), _proxy(std::move(proxy)), _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)),
+                           _cf(std::move(cf)) {
         _proxy->_stats.reads++;
     }
     virtual ~abstract_read_executor() {
@@ -2421,7 +2425,7 @@ public:
     };
 
 protected:
-    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep, clock_type::time_point timeout) {
+    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->_stats.mutation_data_read_attempts.get_ep_stat(ep);
         if (is_me(ep)) {
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
@@ -2429,13 +2433,13 @@ protected:
         } else {
             auto& ms = netw::get_local_messaging_service();
             tracing::trace(_trace_state, "read_mutation_data: sending a message to /{}", ep);
-            return ms.send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this, ep](reconcilable_result&& result) {
-                    tracing::trace(_trace_state, "read_mutation_data: got response from /{}", ep);
-                    return make_foreign(::make_lw_shared<reconcilable_result>(std::move(result)));
+            return ms.send_read_mutation_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this, ep](reconcilable_result&& result, rpc::optional<cache_temperature> hit_rate) {
+                tracing::trace(_trace_state, "read_mutation_data: got response from /{}", ep);
+                return make_ready_future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>(make_foreign(::make_lw_shared<reconcilable_result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid()));
             });
         }
     }
-    future<foreign_ptr<lw_shared_ptr<query::result>>> make_data_request(gms::inet_address ep, clock_type::time_point timeout, bool want_digest) {
+    future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> make_data_request(gms::inet_address ep, clock_type::time_point timeout, bool want_digest) {
         ++_proxy->_stats.data_read_attempts.get_ep_stat(ep);
         if (is_me(ep)) {
             tracing::trace(_trace_state, "read_data: querying locally");
@@ -2445,13 +2449,13 @@ protected:
             auto& ms = netw::get_local_messaging_service();
             tracing::trace(_trace_state, "read_data: sending a message to /{}", ep);
             auto da = want_digest ? query::digest_algorithm::MD5 : query::digest_algorithm::none;
-            return ms.send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, da).then([this, ep](query::result&& result) {
+            return ms.send_read_data(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range, da).then([this, ep](query::result&& result, rpc::optional<cache_temperature> hit_rate) {
                 tracing::trace(_trace_state, "read_data: got response from /{}", ep);
-                return make_foreign(::make_lw_shared<query::result>(std::move(result)));
+                return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>(make_foreign(::make_lw_shared<query::result>(std::move(result))), hit_rate.value_or(cache_temperature::invalid()));
             });
         }
     }
-    future<query::result_digest, api::timestamp_type> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
+    future<query::result_digest, api::timestamp_type, cache_temperature> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->_stats.digest_read_attempts.get_ep_stat(ep);
         if (is_me(ep)) {
             tracing::trace(_trace_state, "read_digest: querying locally");
@@ -2459,17 +2463,20 @@ protected:
         } else {
             auto& ms = netw::get_local_messaging_service();
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
-            return ms.send_read_digest(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range).then([this, ep] (query::result_digest d, rpc::optional<api::timestamp_type> t) {
+            return ms.send_read_digest(netw::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range).then([this, ep] (query::result_digest d, rpc::optional<api::timestamp_type> t,
+                    rpc::optional<cache_temperature> hit_rate) {
                 tracing::trace(_trace_state, "read_digest: got response from /{}", ep);
-                return make_ready_future<query::result_digest, api::timestamp_type>(d, t ? t.value() : api::missing_timestamp);
+                return make_ready_future<query::result_digest, api::timestamp_type, cache_temperature>(d, t ? t.value() : api::missing_timestamp, hit_rate.value_or(cache_temperature::invalid()));
             });
         }
     }
     future<> make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         return parallel_for_each(begin, end, [this, &cmd, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
-            return make_mutation_data_request(cmd, ep, timeout).then_wrapped([this, resolver, ep] (future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> f) {
+            return make_mutation_data_request(cmd, ep, timeout).then_wrapped([this, resolver, ep] (future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> f) {
                 try {
-                    resolver->add_mutate_data(ep, f.get0());
+                    auto v = f.get();
+                    _cf->set_hit_rate(ep, std::get<1>(v));
+                    resolver->add_mutate_data(ep, std::get<0>(std::move(v)));
                     ++_proxy->_stats.mutation_data_read_completed.get_ep_stat(ep);
                 } catch(...) {
                     ++_proxy->_stats.mutation_data_read_errors.get_ep_stat(ep);
@@ -2480,9 +2487,11 @@ protected:
     }
     future<> make_data_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout, bool want_digest) {
         return parallel_for_each(begin, end, [this, resolver = std::move(resolver), timeout, want_digest] (gms::inet_address ep) {
-            return make_data_request(ep, timeout, want_digest).then_wrapped([this, resolver, ep] (future<foreign_ptr<lw_shared_ptr<query::result>>> f) {
+            return make_data_request(ep, timeout, want_digest).then_wrapped([this, resolver, ep] (future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> f) {
                 try {
-                    resolver->add_data(ep, f.get0());
+                    auto v = f.get();
+                    _cf->set_hit_rate(ep, std::get<1>(v));
+                    resolver->add_data(ep, std::get<0>(std::move(v)));
                     ++_proxy->_stats.data_read_completed.get_ep_stat(ep);
                 } catch(...) {
                     ++_proxy->_stats.data_read_errors.get_ep_stat(ep);
@@ -2493,9 +2502,10 @@ protected:
     }
     future<> make_digest_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         return parallel_for_each(begin, end, [this, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
-            return make_digest_request(ep, timeout).then_wrapped([this, resolver, ep] (future<query::result_digest, api::timestamp_type> f) {
+            return make_digest_request(ep, timeout).then_wrapped([this, resolver, ep] (future<query::result_digest, api::timestamp_type, cache_temperature> f) {
                 try {
                     auto v = f.get();
+                    _cf->set_hit_rate(ep, std::get<2>(v));
                     resolver->add_digest(ep, std::get<0>(v), std::get<1>(v));
                     ++_proxy->_stats.digest_read_completed.get_ep_stat(ep);
                 } catch(...) {
@@ -2729,8 +2739,8 @@ public:
 
 class range_slice_read_executor : public abstract_read_executor {
 public:
-    range_slice_read_executor(schema_ptr s, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, std::vector<gms::inet_address> targets, tracing::trace_state_ptr trace_state) :
-                                    abstract_read_executor(std::move(s), std::move(proxy), std::move(cmd), std::move(pr), cl, targets.size(), std::move(targets), std::move(trace_state)) {}
+    range_slice_read_executor(schema_ptr s, lw_shared_ptr<column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, std::vector<gms::inet_address> targets, tracing::trace_state_ptr trace_state) :
+                                    abstract_read_executor(std::move(s), std::move(cf), std::move(proxy), std::move(cmd), std::move(pr), cl, targets.size(), std::move(targets), std::move(trace_state)) {}
     virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(storage_proxy::clock_type::time_point timeout) override {
         reconcile(_cl, timeout);
         return _result_promise.get_future();
@@ -2754,10 +2764,15 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     const dht::token& token = pr.start()->value().token();
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
+    speculative_retry::type retry_type = schema->speculative_retry().get_type();
+    gms::inet_address extra_replica;
 
     std::vector<gms::inet_address> all_replicas = get_live_sorted_endpoints(ks, token);
     db::read_repair_decision repair_decision = new_read_repair_decision(*schema);
-    std::vector<gms::inet_address> target_replicas = db::filter_for_query(cl, ks, all_replicas, repair_decision);
+    auto cf = _db.local().find_column_family(schema).shared_from_this();
+    std::vector<gms::inet_address> target_replicas = db::filter_for_query(cl, ks, all_replicas, repair_decision,
+            retry_type == speculative_retry::type::NONE ? nullptr : &extra_replica,
+            _db.local().get_config().cache_hit_rate_read_balancing() ? &*cf : nullptr);
 
     slogger.trace("creating read executor for token {} with all: {} targets: {} rp decision: {}", token, all_replicas, target_replicas, repair_decision);
     tracing::trace(trace_state, "Creating read executor for token {} with all: {} targets: {} repair decision: {}", token, all_replicas, target_replicas, repair_decision);
@@ -2778,67 +2793,53 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
 #if 0
     ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(command.cfName);
 #endif
-    speculative_retry::type retry_type = schema->speculative_retry().get_type();
 
     size_t block_for = db::block_for(ks, cl);
     auto p = shared_from_this();
     // Speculative retry is disabled *OR* there are simply no extra replicas to speculate.
     if (retry_type == speculative_retry::type::NONE || block_for == all_replicas.size()
             || (repair_decision == db::read_repair_decision::DC_LOCAL && is_datacenter_local(cl) && block_for == target_replicas.size())) {
-        return ::make_shared<never_speculating_read_executor>(schema, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
+        return ::make_shared<never_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
     }
 
     if (target_replicas.size() == all_replicas.size()) {
         // CL.ALL, RRD.GLOBAL or RRD.DC_LOCAL and a single-DC.
         // We are going to contact every node anyway, so ask for 2 full data requests instead of 1, for redundancy
         // (same amount of requests in total, but we turn 1 digest request into a full blown data request).
-        return ::make_shared<always_speculating_read_executor>(schema, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
+        return ::make_shared<always_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
     }
 
     // RRD.NONE or RRD.DC_LOCAL w/ multiple DCs.
     if (target_replicas.size() == block_for) { // If RRD.DC_LOCAL extra replica may already be present
-        auto good_replica = [&target_replicas, local_only = is_datacenter_local(cl)] (gms::inet_address ep) {
-            if (local_only && !db::is_local(ep)) {
-                return false;
-            } else {
-                return boost::range::find(target_replicas, ep) == target_replicas.end();
-            }
-        };
-        gms::inet_address extra_replica = all_replicas[target_replicas.size()];
-        // With repair decision DC_LOCAL all replicas/target replicas may be in different order, so
-        // we might have to find a replacement that's not already in targetReplicas.
-        if (!good_replica(extra_replica)) {
-            auto it = boost::range::find_if(all_replicas, std::move(good_replica));
-            if (it == all_replicas.end()) {
-                slogger.trace("read executor no extra target to speculate");
-                return ::make_shared<never_speculating_read_executor>(schema, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
-            }
-            extra_replica = *it;
+        if (is_datacenter_local(cl) && !db::is_local(extra_replica)) {
+            slogger.trace("read executor no extra target to speculate");
+            return ::make_shared<never_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
+        } else {
+            target_replicas.push_back(extra_replica);
+            slogger.trace("creating read executor with extra target {}", extra_replica);
         }
-        target_replicas.push_back(extra_replica);
-        slogger.trace("creating read executor with extra target {}", extra_replica);
     }
 
     if (retry_type == speculative_retry::type::ALWAYS) {
-        return ::make_shared<always_speculating_read_executor>(schema, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
+        return ::make_shared<always_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
     } else {// PERCENTILE or CUSTOM.
-        return ::make_shared<speculating_read_executor>(schema, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
+        return ::make_shared<speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
     }
 }
 
-future<query::result_digest, api::timestamp_type>
+future<query::result_digest, api::timestamp_type, cache_temperature>
 storage_proxy::query_singular_local_digest(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state, uint64_t max_size) {
-    return query_singular_local(std::move(s), std::move(cmd), pr, query::result_request::only_digest, std::move(trace_state), max_size).then([] (foreign_ptr<lw_shared_ptr<query::result>> result) {
-        return make_ready_future<query::result_digest, api::timestamp_type>(*result->digest(), result->last_modified());
+    return query_singular_local(std::move(s), std::move(cmd), pr, query::result_request::only_digest, std::move(trace_state), max_size).then([] (foreign_ptr<lw_shared_ptr<query::result>> result, cache_temperature hit_rate) {
+        return make_ready_future<query::result_digest, api::timestamp_type, cache_temperature>(*result->digest(), result->last_modified(), hit_rate);
     });
 }
 
-future<foreign_ptr<lw_shared_ptr<query::result>>>
+future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>
 storage_proxy::query_singular_local(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, query::result_request request, tracing::trace_state_ptr trace_state, uint64_t max_size) {
     unsigned shard = _db.local().shard_of(pr.start()->value().token());
     return _db.invoke_on(shard, [max_size, gs = global_schema_ptr(s), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, request, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
-        return db.query(gs, *cmd, request, prv, gt, max_size).then([](auto&& f) {
-            return make_foreign(std::move(f));
+        return db.query(gs, *cmd, request, prv, gt, max_size).then([](auto&& f, cache_temperature ht) {
+            return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>(make_foreign(std::move(f)), ht);
         });
     });
 }
@@ -2895,11 +2896,14 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     std::vector<::shared_ptr<abstract_read_executor>> exec;
     auto concurrent_fetch_starting_index = i;
     auto p = shared_from_this();
+    auto& cf= _db.local().find_column_family(schema);
+    auto pcf = _db.local().get_config().cache_hit_rate_read_balancing() ? &cf : nullptr;
+
 
     while (i != ranges.end() && std::distance(concurrent_fetch_starting_index, i) < concurrency_factor) {
         dht::partition_range& range = *i;
         std::vector<gms::inet_address> live_endpoints = get_live_sorted_endpoints(ks, end_token(range));
-        std::vector<gms::inet_address> filtered_endpoints = filter_for_query(cl, ks, live_endpoints);
+        std::vector<gms::inet_address> filtered_endpoints = filter_for_query(cl, ks, live_endpoints, pcf);
         ++i;
 
         // getRestrictedRange has broken the queried range into per-[vnode] token ranges, but this doesn't take
@@ -2909,7 +2913,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         {
             dht::partition_range& next_range = *i;
             std::vector<gms::inet_address> next_endpoints = get_live_sorted_endpoints(ks, end_token(next_range));
-            std::vector<gms::inet_address> next_filtered_endpoints = filter_for_query(cl, ks, next_endpoints);
+            std::vector<gms::inet_address> next_filtered_endpoints = filter_for_query(cl, ks, next_endpoints, pcf);
 
             // Origin has this to say here:
             // *  If the current range right is the min token, we should stop merging because CFS.getRangeSlice
@@ -2929,11 +2933,25 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 break;
             }
 
-            std::vector<gms::inet_address> filtered_merged = filter_for_query(cl, ks, merged);
+            std::vector<gms::inet_address> filtered_merged = filter_for_query(cl, ks, merged, pcf);
 
             // Estimate whether merging will be a win or not
             if (!locator::i_endpoint_snitch::get_local_snitch_ptr()->is_worth_merging_for_range_query(filtered_merged, filtered_endpoints, next_filtered_endpoints)) {
                 break;
+            } else if (pcf) {
+                // check that merged set hit rate is not to low
+                auto find_min = [pcf] (const std::vector<gms::inet_address>& range) {
+                    auto ep_to_hr = [pcf] (gms::inet_address ep) -> float { return float(pcf->get_hit_rate(ep).rate); };
+                    return *boost::range::min_element(range | boost::adaptors::transformed(std::ref(ep_to_hr)));
+                };
+                auto merged = find_min(filtered_merged) * 1.2; // give merged set 20% boost
+                if (merged < find_min(filtered_endpoints) && merged < find_min(next_filtered_endpoints)) {
+                    // if lowest cache hits rate of a merged set is smaller than lowest cache hit
+                    // rate of un-merged sets then do not merge. The idea is that we better issue
+                    // two different range reads with highest chance of hitting a cache then one read that
+                    // will cause more IO on contacted nodes
+                    break;
+                }
             }
 
             // If we get there, merge this range and the next one
@@ -2951,7 +2969,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             throw;
         }
 
-        exec.push_back(::make_shared<range_slice_read_executor>(schema, p, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state));
+        exec.push_back(::make_shared<range_slice_read_executor>(schema, cf.shared_from_this(), p, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state));
     }
 
     query::result_merger merger(cmd->row_limit, cmd->partition_limit);
@@ -3967,15 +3985,15 @@ public:
     }
 };
 
-future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>
 storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
                                        tracing::trace_state_ptr trace_state, uint64_t max_size) {
     if (pr.is_singular()) {
         unsigned shard = _db.local().shard_of(pr.start()->value().token());
         return _db.invoke_on(shard, [max_size, cmd, &pr, gs=global_schema_ptr(s), gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
           return db.get_result_memory_limiter().new_mutation_read(max_size).then([&] (query::result_memory_accounter ma) {
-            return db.query_mutations(gs, *cmd, pr, std::move(ma), gt).then([] (reconcilable_result&& result) {
-                return make_foreign(make_lw_shared(std::move(result)));
+            return db.query_mutations(gs, *cmd, pr, std::move(ma), gt).then([] (reconcilable_result&& result, cache_temperature ht) {
+                return make_ready_future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>(make_foreign(make_lw_shared(std::move(result))), ht);
             });
           });
         });
@@ -3984,7 +4002,7 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
     }
 }
 
-future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>
 storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const compat::one_or_two_partition_ranges& pr,
                                        tracing::trace_state_ptr trace_state, uint64_t max_size) {
     if (!pr.second) {
@@ -4027,7 +4045,7 @@ struct partition_range_and_sort_key {
     unsigned sort_key_shard_order;   // for the same source partition range, we sort in shard order
 };
 
-future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>
 storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector& prs,
                                                    tracing::trace_state_ptr trace_state, uint64_t max_size) {
     // no one permitted us to modify *cmd, so make a copy
@@ -4042,6 +4060,7 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
             dht::ring_position_exponential_vector_sharder{prs},
             global_schema_ptr(s),
             tracing::global_trace_state_ptr(std::move(trace_state)),
+            cache_temperature(0.0f),
             [this, s, max_size] (lw_shared_ptr<query::read_command>& cmd,
                     lw_shared_ptr<query::read_command>& shard_cmd,
                     unsigned& mutation_result_merger_key,
@@ -4051,10 +4070,11 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
                     mutation_result_merger& mrm,
                     dht::ring_position_exponential_vector_sharder& rpevs,
                     global_schema_ptr& gs,
-                    tracing::global_trace_state_ptr& gt) {
+                    tracing::global_trace_state_ptr& gt,
+                    cache_temperature& hit_rate) {
       return _db.local().get_result_memory_limiter().new_mutation_read(max_size).then([&, s] (query::result_memory_accounter ma) {
         mrm.memory() = std::move(ma);
-        return repeat_until_value([&, s] () -> future<stdx::optional<reconcilable_result>> {
+        return repeat_until_value([&, s] () -> future<stdx::optional<std::pair<reconcilable_result, cache_temperature>>> {
             // We don't want to query a sparsely populated table sequentially, because the latency
             // will go through the roof.  We don't want to query a densely populated table in parallel,
             // because we'll throw away most of the results.  So we'll exponentially increase
@@ -4097,7 +4117,8 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
                 auto sort_key_shard_order = elem_shard_range.second.sort_key_shard_order;
                 return _db.invoke_on(shard, [&, range, gt, fstate = mrm.memory().state_for_another_shard()] (database& db) {
                     query::result_memory_accounter accounter(db.get_result_memory_limiter(), std::move(fstate));
-                    return db.query_mutations(gs, *shard_cmd, range, std::move(accounter), std::move(gt)).then([] (reconcilable_result&& rr) {
+                    return db.query_mutations(gs, *shard_cmd, range, std::move(accounter), std::move(gt)).then([&hit_rate] (reconcilable_result&& rr, cache_temperature ht) {
+                        hit_rate = ht;
                         return make_foreign(make_lw_shared(std::move(rr)));
                     });
                 }).then([&, key_base, retain_shard_order, elem, sort_key_shard_order] (foreign_ptr<lw_shared_ptr<reconcilable_result>> partial_result) {
@@ -4112,16 +4133,16 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
                     }
                     mrm.add_result(key, std::move(partial_result));
                 });
-            }).then([&] () -> stdx::optional<reconcilable_result> {
+            }).then([&] () -> stdx::optional<std::pair<reconcilable_result, cache_temperature>> {
                 if (mrm.short_read() || mrm.partition_count() >= cmd->partition_limit || mrm.row_count() >= cmd->row_limit || no_more_ranges) {
-                    return stdx::make_optional(std::move(mrm).get());
+                    return stdx::make_optional(std::make_pair(std::move(mrm).get(), hit_rate));
                 }
                 return stdx::nullopt;
             });
         });
       });
-    }).then([] (reconcilable_result&& result) {
-        return make_foreign(make_lw_shared(std::move(result)));
+    }).then([] (std::pair<reconcilable_result, cache_temperature>&& result) {
+        return make_ready_future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>(make_foreign(make_lw_shared(std::move(result.first))), result.second);
     });
 }
 

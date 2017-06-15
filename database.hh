@@ -89,10 +89,19 @@ namespace service {
 class storage_proxy;
 }
 
+namespace netw {
+class messaging_service;
+}
+
 namespace sstables {
 
 class sstable;
 class entry_descriptor;
+}
+
+namespace ser {
+template<typename T>
+class serializer;
 }
 
 namespace db {
@@ -390,7 +399,21 @@ struct cf_stats {
     int64_t surviving_sstables_after_clustering_filter = 0;
 };
 
-class column_family {
+class cache_temperature {
+    float hit_rate;
+    explicit cache_temperature(uint8_t hr) : hit_rate(hr/255.0f) {}
+public:
+    uint8_t get_serialized_temperature() const {
+        return hit_rate * 255;
+    }
+    cache_temperature() : hit_rate(0) {}
+    explicit cache_temperature(float hr) : hit_rate(hr) {}
+    explicit operator float() const { return hit_rate; }
+    static cache_temperature invalid() { return cache_temperature(-1.0f); }
+    friend struct ser::serializer<cache_temperature>;
+};
+
+class column_family : public enable_lw_shared_from_this<column_family> {
 public:
     using timeout_clock = lowres_clock;
 
@@ -431,6 +454,10 @@ public:
     struct snapshot_details {
         int64_t total;
         int64_t live;
+    };
+    struct cache_hit_rate {
+        cache_temperature rate;
+        lowres_clock::time_point last_updated;
     };
 private:
     schema_ptr _schema;
@@ -536,6 +563,15 @@ private:
     std::unique_ptr<cell_locker> _counter_cell_locks;
     void set_metrics();
     seastar::metrics::metric_groups _metrics;
+
+    // holds average cache hit rate of all shards
+    // recalculated periodically
+    cache_temperature _global_cache_hit_rate = cache_temperature(0.0f);
+
+    // holds cache hit rates per each node in a cluster
+    // may not have information for some node, since it fills
+    // in dynamically
+    std::unordered_map<gms::inet_address, cache_hit_rate> _cluster_cache_hit_rates;
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, std::vector<unsigned>&& shards_for_the_sstable);
     // Adds new sstable to the set of sstables
@@ -826,6 +862,18 @@ public:
     compaction_manager& get_compaction_manager() const {
         return _compaction_manager;
     }
+
+    cache_temperature get_global_cache_hit_rate() const {
+        return _global_cache_hit_rate;
+    }
+
+    void set_global_cache_hit_rate(cache_temperature rate) {
+        _global_cache_hit_rate = rate;
+    }
+
+    void set_hit_rate(gms::inet_address addr, cache_temperature rate);
+    cache_hit_rate get_hit_rate(gms::inet_address addr);
+    void drop_hit_rate(gms::inet_address addr);
 
     template<typename Func, typename Result = futurize_t<std::result_of_t<Func()>>>
     Result run_with_compaction_disabled(Func && func) {
@@ -1230,9 +1278,9 @@ public:
     unsigned shard_of(const dht::token& t);
     unsigned shard_of(const mutation& m);
     unsigned shard_of(const frozen_mutation& m);
-    future<lw_shared_ptr<query::result>> query(schema_ptr, const query::read_command& cmd, query::result_request request, const dht::partition_range_vector& ranges,
+    future<lw_shared_ptr<query::result>, cache_temperature> query(schema_ptr, const query::read_command& cmd, query::result_request request, const dht::partition_range_vector& ranges,
                                                tracing::trace_state_ptr trace_state, uint64_t max_result_size);
-    future<reconcilable_result> query_mutations(schema_ptr, const query::read_command& cmd, const dht::partition_range& range,
+    future<reconcilable_result, cache_temperature> query_mutations(schema_ptr, const query::read_command& cmd, const dht::partition_range& range,
                                                 query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state);
     // Apply the mutation atomically.
     // Throws timed_out_error when timeout is reached.
@@ -1298,6 +1346,7 @@ public:
     semaphore& sstable_load_concurrency_sem() {
         return _sstable_load_concurrency_sem;
     }
+    void register_connection_drop_notifier(netw::messaging_service& ms);
 
     friend class distributed_loader;
 };
