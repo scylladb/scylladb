@@ -99,7 +99,9 @@ else
         yum install -y $LOCAL_PKG/scylla*.*.rpm
     fi
 
-    rm /etc/yum.repos.d/scylla_install.repo
+    if [ "$REPO_FOR_INSTALL" != "" ]; then
+        rm /etc/yum.repos.d/scylla_install.repo
+    fi
     if [ "$REPO_FOR_UPDATE" != "" ]; then
         curl -o /etc/yum.repos.d/scylla.repo $REPO_FOR_UPDATE
     fi
