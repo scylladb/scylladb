@@ -19,14 +19,19 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <iostream>
+#include <iterator>
+#include <regex>
+
 #include "cql3_type.hh"
+#include "cql3/util.hh"
 #include "ut_name.hh"
 
 namespace cql3 {
 
 sstring cql3_type::to_string() const {
     if (_type->is_user_type() || _type->is_tuple()) {
-        return "frozen<" + _name + ">";
+        return "frozen<" + util::maybe_quote(_name) + ">";
     }
     return _name;
 }
@@ -363,6 +368,24 @@ make_cql3_tuple_type(tuple_type t) {
 std::ostream&
 operator<<(std::ostream& os, const cql3_type::raw& r) {
     return os << r.to_string();
+}
+
+namespace util {
+
+sstring maybe_quote(const sstring& s) {
+    static const std::regex unquoted("\\w*");
+    static const std::regex double_quote("\"");
+
+    if (std::regex_match(s.begin(), s.end(), unquoted)) {
+        return s;
+    }
+    std::ostringstream ss;
+    ss << "\"";
+    std::regex_replace(std::ostreambuf_iterator<char>(ss), s.begin(), s.end(), double_quote, "\"\"");
+    ss << "\"";
+    return ss.str();
+}
+
 }
 
 }

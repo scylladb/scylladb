@@ -52,6 +52,7 @@
 #include "schema_builder.hh"
 #include "json.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/util.hh"
 #include "utils/joinpoint.hh"
 
 static seastar::logger mlogger("legacy_schema_migrator");
@@ -328,7 +329,7 @@ public:
                             type = "VALUES";
                         }
                     }
-                    auto column = maybe_quote(utf8_type->to_string(name));
+                    auto column = cql3::util::maybe_quote(utf8_type->to_string(name));
                     options["target"] = validator->is_collection()
                                     ? type + "(" + column + ")"
                                     : column;
