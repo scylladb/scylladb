@@ -2185,6 +2185,11 @@ future<std::vector<mutation>> make_create_view_mutations(lw_shared_ptr<keyspace_
     return read_keyspace_mutation(service::get_storage_proxy(), keyspace->name()).then(push_back_and_return{std::move(mutations)});
 }
 
+/**
+ * Note: new_view can be generated due to an ALTER on its base table; in that
+ * case, the new base schema isn't yet loaded, thus can't be accessed from this
+ * function.
+ */
 future<std::vector<mutation>> make_update_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace,
                                                  view_ptr old_view,
                                                  view_ptr new_view,
