@@ -2188,12 +2188,15 @@ future<std::vector<mutation>> make_create_view_mutations(lw_shared_ptr<keyspace_
 future<std::vector<mutation>> make_update_view_mutations(lw_shared_ptr<keyspace_metadata> keyspace,
                                                  view_ptr old_view,
                                                  view_ptr new_view,
-                                                 api::timestamp_type timestamp)
+                                                 api::timestamp_type timestamp,
+                                                 bool include_base)
 {
     std::vector<mutation> mutations;
-    // And also the serialized base table.
-    auto base = keyspace->cf_meta_data().at(new_view->view_info()->base_name());
-    add_table_or_view_to_schema_mutation(base, timestamp, true, mutations);
+    if (include_base) {
+        // Include the serialized base table mutations in case the target node is missing them.
+        auto base = keyspace->cf_meta_data().at(new_view->view_info()->base_name());
+        add_table_or_view_to_schema_mutation(base, timestamp, true, mutations);
+    }
     add_table_or_view_to_schema_mutation(new_view, timestamp, false, mutations);
     make_update_columns_mutations(old_view, new_view, timestamp, false, mutations);
 

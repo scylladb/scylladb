@@ -510,7 +510,7 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
                     [keyspace = std::move(keyspace), ts] (auto&& view) {
                         auto& old_view = keyspace->cf_meta_data().at(view->cf_name());
                         mlogger.info("Update view '{}.{}' From {} To {}", view->ks_name(), view->cf_name(), *old_view, *view);
-                        return db::schema_tables::make_update_view_mutations(keyspace, view_ptr(old_view), std::move(view), ts);
+                        return db::schema_tables::make_update_view_mutations(keyspace, view_ptr(old_view), std::move(view), ts, false);
                     }, std::move(mutations),
                     [] (auto&& result, auto&& view_mutations) {
                         std::move(view_mutations.begin(), view_mutations.end(), std::back_inserter(result));
@@ -685,7 +685,7 @@ future<> migration_manager::announce_view_update(view_ptr view, bool announce_lo
         oldCfm.validateCompatility(cfm);
 #endif
         mlogger.info("Update view '{}.{}' From {} To {}", view->ks_name(), view->cf_name(), *old_view, *view);
-        return db::schema_tables::make_update_view_mutations(std::move(keyspace), view_ptr(old_view), std::move(view), api::new_timestamp())
+        return db::schema_tables::make_update_view_mutations(std::move(keyspace), view_ptr(old_view), std::move(view), api::new_timestamp(), true)
             .then([announce_locally] (auto&& mutations) {
                 return announce(std::move(mutations), announce_locally);
             });
