@@ -551,7 +551,6 @@ class scanning_and_populating_reader final : public mutation_reader::impl {
     just_cache_scanning_reader _primary_reader;
     range_populating_reader _secondary_reader;
     streamed_mutation::forwarding _fwd;
-    mutation_reader::forwarding _fwd_mr;
     streamed_mutation_opt _next_primary;
     bool _secondary_in_progress = false;
     bool _first_element = true;
@@ -629,14 +628,12 @@ public:
                                     const query::partition_slice& slice,
                                     const io_priority_class& pc,
                                     tracing::trace_state_ptr trace_state,
-                                    streamed_mutation::forwarding fwd,
-                                    mutation_reader::forwarding fwd_mr)
+                                    streamed_mutation::forwarding fwd)
         : _pr(&range)
         , _schema(s)
         , _primary_reader(s, cache, range, slice, pc, fwd)
         , _secondary_reader(cache, s, slice, pc, trace_state, fwd)
         , _fwd(fwd)
-        , _fwd_mr(fwd_mr)
     { }
 
     future<streamed_mutation_opt> operator()() {
@@ -661,9 +658,8 @@ row_cache::make_scanning_reader(schema_ptr s,
                                 const io_priority_class& pc,
                                 const query::partition_slice& slice,
                                 tracing::trace_state_ptr trace_state,
-                                streamed_mutation::forwarding fwd,
-                                mutation_reader::forwarding fwd_mr) {
-    return make_mutation_reader<scanning_and_populating_reader>(std::move(s), *this, range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+                                streamed_mutation::forwarding fwd) {
+    return make_mutation_reader<scanning_and_populating_reader>(std::move(s), *this, range, slice, pc, std::move(trace_state), fwd);
 }
 
 mutation_reader
@@ -672,13 +668,12 @@ row_cache::make_reader(schema_ptr s,
                        const query::partition_slice& slice,
                        const io_priority_class& pc,
                        tracing::trace_state_ptr trace_state,
-                       streamed_mutation::forwarding fwd,
-                       mutation_reader::forwarding fwd_mr) {
+                       streamed_mutation::forwarding fwd) {
     if (range.is_singular()) {
         const query::ring_position& pos = range.start()->value();
 
         if (!pos.has_key()) {
-            return make_scanning_reader(std::move(s), range, pc, slice, std::move(trace_state), fwd, fwd_mr);
+            return make_scanning_reader(std::move(s), range, pc, slice, std::move(trace_state), fwd);
         }
 
         return _read_section(_tracker.region(), [&] {
@@ -691,7 +686,7 @@ row_cache::make_reader(schema_ptr s,
                 upgrade_entry(e);
                 mutation_reader reader;
                 if (e.wide_partition()) {
-                    reader = _underlying(s, range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+                    reader = _underlying(s, range, slice, pc, std::move(trace_state), fwd);
                     _tracker.on_uncached_wide_partition();
                     on_miss();
                 } else {
@@ -709,7 +704,7 @@ row_cache::make_reader(schema_ptr s,
         });
     }
 
-    return make_scanning_reader(std::move(s), range, pc, slice, std::move(trace_state), fwd, fwd_mr);
+    return make_scanning_reader(std::move(s), range, pc, slice, std::move(trace_state), fwd);
 }
 
 row_cache::~row_cache() {

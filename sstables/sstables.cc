@@ -2824,13 +2824,12 @@ mutation_source sstable::as_mutation_source() {
             const query::partition_slice& slice,
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_ptr,
-            streamed_mutation::forwarding fwd,
-            ::mutation_reader::forwarding fwd_mr) mutable {
+            streamed_mutation::forwarding fwd) mutable {
         if (range.is_singular() && range.start()->value().has_key()) {
             const dht::ring_position& pos = range.start()->value();
             return make_mutation_reader<single_partition_reader_adaptor>(sst, s, pos, slice, pc, fwd);
         } else {
-            return make_mutation_reader<range_reader_adaptor>(sst, sst->read_range_rows(s, range, slice, pc, fwd, fwd_mr));
+            return make_mutation_reader<range_reader_adaptor>(sst, sst->read_range_rows(s, range, slice, pc, fwd));
         }
     });
 }

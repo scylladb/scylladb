@@ -590,9 +590,8 @@ SEASTAR_TEST_CASE(test_row_cache_conforms_to_mutation_source) {
                     const query::partition_slice& slice,
                     const io_priority_class& pc,
                     tracing::trace_state_ptr trace_state,
-                    streamed_mutation::forwarding fwd,
-                    mutation_reader::forwarding fwd_mr) {
-                return cache->make_reader(s, range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+                    streamed_mutation::forwarding fwd) {
+                return cache->make_reader(s, range, slice, pc, std::move(trace_state), fwd);
             });
         });
     });

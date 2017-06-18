@@ -188,7 +188,6 @@ public:
         // TODO: this should become a vector of ranges
         uint64_t start;
         uint64_t end;
-
         disk_read_range() : start(0), end(0) {}
         disk_read_range(uint64_t start, uint64_t end) :
             start(start), end(end) { }
@@ -213,22 +212,7 @@ public:
     // The caller must ensure (e.g., using do_with()) that the context object,
     // as well as the sstable, remains alive as long as a read() is in
     // progress (i.e., returned a future which hasn't completed yet).
-    //
-    // The "toread" range specifies the range we want to read initially.
-    // However, the object returned by the read, a data_consume_context, also
-    // provides a fast_forward_to(start,end) method which allows resetting
-    // the reader to a new range. To allow that, we also have a "last_end"
-    // byte which should be the last end to which fast_forward_to is
-    // eventually allowed. If last_end==end, fast_forward_to is not allowed
-    // at all, if last_end==file_size fast_forward_to is allowed until the
-    // end of the file, and it can be something in between if we know that we
-    // are planning to skip parts, but eventually read until last_end.
-    // When last_end==end, we guarantee that the read will only read the
-    // desired byte range from disk. However, when last_end > end, we may
-    // read beyond end in anticipation of a small skip via fast_foward_to.
-    // The amount of this excessive read is controlled by read ahead
-    // hueristics which learn from the usefulness of previous read aheads.
-    data_consume_context data_consume_rows(row_consumer& consumer, disk_read_range toread, uint64_t last_end);
+    data_consume_context data_consume_rows(row_consumer& consumer, disk_read_range toread);
 
     data_consume_context data_consume_single_partition(row_consumer& consumer, disk_read_range toread);
 
@@ -287,8 +271,7 @@ public:
         const dht::partition_range& range,
         const query::partition_slice& slice = query::full_slice,
         const io_priority_class& pc = default_priority_class(),
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-        ::mutation_reader::forwarding fwd_mr = ::mutation_reader::forwarding::yes);
+        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
     // read_rows() returns each of the rows in the sstable, in sequence,
     // converted to a "mutation" data structure.
