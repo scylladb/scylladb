@@ -2941,8 +2941,13 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             } else if (pcf) {
                 // check that merged set hit rate is not to low
                 auto find_min = [pcf] (const std::vector<gms::inet_address>& range) {
-                    auto ep_to_hr = [pcf] (gms::inet_address ep) -> float { return float(pcf->get_hit_rate(ep).rate); };
-                    return *boost::range::min_element(range | boost::adaptors::transformed(std::ref(ep_to_hr)));
+                    struct {
+                        column_family* cf = nullptr;
+                        float operator()(const gms::inet_address& ep) const {
+                            return float(cf->get_hit_rate(ep).rate);
+                        }
+                    } ep_to_hr{pcf};
+                    return *boost::range::min_element(range | boost::adaptors::transformed(ep_to_hr));
                 };
                 auto merged = find_min(filtered_merged) * 1.2; // give merged set 20% boost
                 if (merged < find_min(filtered_endpoints) && merged < find_min(next_filtered_endpoints)) {
