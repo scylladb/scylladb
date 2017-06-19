@@ -21,7 +21,16 @@ if [ "$CODENAME" = "jessie" ]; then
     sudo apt-get install -t jessie-backports -y texlive
 fi
 
-sudo apt-get install -y gdebi-core
+if [ ! -f /usr/bin/gdebi ]; then
+    sudo apt-get install -y gdebi-core
+fi
+if [ ! -f /usr/bin/mk-build-deps ]; then
+    sudo apt-get install -y devscripts
+fi
+if [ ! -f /usr/bin/equivs ]; then
+    sudo apt-get install -y equivs
+fi
+
 if [ "$VERSION_ID" = "14.04" ] || [ "$DISTRIBUTION" = "Debian" ]; then
     if [ ! -f build/antlr3_*.deb ]; then
         rm -rf build/antlr3-3.5.2
@@ -110,32 +119,6 @@ if [ "$DISTRIBUTION" = "Debian" ] && [ "$VERSION_ID" = "8" ]; then
     fi
 fi
 
-if [ "$VERSION_ID" = "14.04" ]; then
-    sudo gdebi -n build/antlr3_*.deb
-    sudo gdebi -n build/thrift-compiler_*.deb
-elif [ "$DISTRIBUTION" = "Debian" ]; then
-    sudo gdebi -n build/antlr3_*.deb
-fi
-sudo gdebi -n build/antlr3-c++-dev_*.deb
-sudo gdebi -n build/libthrift0_*.deb
-sudo gdebi -n build/libthrift-dev_*.deb
-if [ "$DISTRIBUTION" = "Debian" ] && [ "$VERSION_ID" = "8" ]; then
-    sudo gdebi -n build/gcc-5-base_*.deb
-    sudo gdebi -n build/libatomic1_*.deb
-    sudo gdebi -n build/libcilkrts5_*.deb
-    sudo gdebi -n build/libgcc1_*.deb
-    sudo gdebi -n build/libgomp1_*.deb
-    sudo gdebi -n build/libitm1_*.deb
-    sudo gdebi -n build/liblsan0_*.deb
-    sudo gdebi -n build/libstdc++6_*.deb
-    sudo gdebi -n build/libtsan0_*.deb
-    sudo gdebi -n build/libubsan0_*.deb
-    sudo gdebi -n build/libasan2_*.deb
-    sudo gdebi -n build/libcc1-0_*.deb
-    sudo gdebi -n build/libmpx0_*.deb
-    sudo gdebi -n build/libgcc-5-dev_*.deb
-    sudo gdebi -n build/libstdc++-5-dev_*.deb
-    sudo gdebi -n build/cpp-5_*.deb
-    sudo gdebi -n build/gcc-5_*.deb
-    sudo gdebi -n build/g++-5_*.deb
-fi
+rm -rf /var/tmp/pbuilder
+mkdir /var/tmp/pbuilder
+cp -v build/*.deb /var/tmp/pbuilder/
