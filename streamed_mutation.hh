@@ -736,8 +736,8 @@ public:
     //
     // When streamed_mutation is not in forwarding mode, fast_forward_to()
     // cannot be used.
-    //
-    using forwarding = bool_class<class forwarding_tag>;
+    class forwarding_tag;
+    using forwarding = bool_class<forwarding_tag>;
 
     // streamed_mutation uses batching. The mutation implementations are
     // supposed to fill a buffer with mutation fragments until is_buffer_full()
