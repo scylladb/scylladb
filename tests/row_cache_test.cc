@@ -1620,3 +1620,50 @@ SEASTAR_TEST_CASE(test_scan_with_partial_partitions) {
             .produces_end_of_stream();
     });
 }
+
+SEASTAR_TEST_CASE(test_cache_populates_partition_tombstone) {
+    return seastar::async([] {
+        simple_schema s;
+        auto cache_mt = make_lw_shared<memtable>(s.schema());
+
+        auto pkeys = s.make_pkeys(2);
+
+        mutation m1(pkeys[0], s.schema());
+        s.add_static_row(m1, "val");
+        m1.partition().apply(tombstone(s.new_timestamp(), gc_clock::now()));
+        cache_mt->apply(m1);
+
+        mutation m2(pkeys[1], s.schema());
+        s.add_static_row(m2, "val");
+        m2.partition().apply(tombstone(s.new_timestamp(), gc_clock::now()));
+        cache_mt->apply(m2);
+
+        cache_tracker tracker;
+        row_cache cache(s.schema(), snapshot_source_from_snapshot(cache_mt->as_data_source()), tracker);
+
+        // singular range case
+        {
+            auto prange = dht::partition_range::make_singular(dht::ring_position(m1.decorated_key()));
+            assert_that(cache.make_reader(s.schema(), prange))
+                .produces(m1)
+                .produces_end_of_stream();
+
+            assert_that(cache.make_reader(s.schema(), prange)) // over populated
+                .produces(m1)
+                .produces_end_of_stream();
+        }
+
+        // range scan case
+        {
+            assert_that(cache.make_reader(s.schema()))
+                .produces(m1)
+                .produces(m2)
+                .produces_end_of_stream();
+
+            assert_that(cache.make_reader(s.schema())) // over populated
+                .produces(m1)
+                .produces(m2)
+                .produces_end_of_stream();
+        }
+    });
+}
