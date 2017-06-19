@@ -49,13 +49,6 @@
 class leveled_manifest {
     logging::logger logger;
 
-    /**
-     * limit the number of L0 sstables we do at once, because compaction bloom filter creation
-     * uses a pessimistic estimate of how many keys overlap (none), so we risk wasting memory
-     * or even OOMing when compacting highly overlapping sstables
-     */
-    static constexpr int MAX_COMPACTING_L0 = 32;
-
     schema_ptr _schema;
     std::vector<std::list<sstables::shared_sstable>> _generations;
     uint64_t _max_sstable_size_in_bytes;
@@ -68,6 +61,12 @@ class leveled_manifest {
         bool can_promote = true;
     };
 public:
+    /**
+     * limit the number of L0 sstables we do at once, because compaction bloom filter creation
+     * uses a pessimistic estimate of how many keys overlap (none), so we risk wasting memory
+     * or even OOMing when compacting highly overlapping sstables
+     */
+    static constexpr int MAX_COMPACTING_L0 = 32;
     /**
      * If we go this many rounds without compacting
      * in the highest level, we start bringing in sstables from
@@ -603,10 +602,8 @@ public:
 
                 if (candidates.size() > MAX_COMPACTING_L0) {
                     // limit to only the MAX_COMPACTING_L0 oldest candidates
-                    auto age_sorted_candidates = age_sorted_sstables(candidates);
-                    // create a sub list of age_sorted_candidates by resizing it.
-                    age_sorted_candidates.resize(MAX_COMPACTING_L0);
-                    candidates = std::move(age_sorted_candidates);
+                    sort_sstables_by_age(candidates);
+                    candidates.resize(MAX_COMPACTING_L0);
                     break;
                 }
             }
@@ -686,20 +683,16 @@ public:
         auto age_sorted_candidates = candidates;
 
         age_sorted_candidates.sort([] (auto& i, auto& j) {
-            return i->compare_by_max_timestamp(*j) > 0;
+            return i->compare_by_max_timestamp(*j) < 0;
         });
 
         return age_sorted_candidates;
     }
 
-    std::vector<sstables::shared_sstable> age_sorted_sstables(std::vector<sstables::shared_sstable>& candidates) {
-        auto age_sorted_candidates = candidates;
-
-        std::sort(age_sorted_candidates.begin(), age_sorted_candidates.end(), [] (auto& i, auto& j) {
-            return i->compare_by_max_timestamp(*j) > 0;
+    void sort_sstables_by_age(std::vector<sstables::shared_sstable>& candidates) {
+        std::sort(candidates.begin(), candidates.end(), [] (auto& i, auto& j) {
+            return i->compare_by_max_timestamp(*j) < 0;
         });
-
-        return age_sorted_candidates;
     }
 #if 0
     @Override

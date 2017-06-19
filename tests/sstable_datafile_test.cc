@@ -2083,6 +2083,34 @@ SEASTAR_TEST_CASE(leveled_06) {
     return make_ready_future<>();
 }
 
+SEASTAR_TEST_CASE(leveled_07) {
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
+
+    column_family::config cfg;
+    cell_locker_stats cl_stats;
+    compaction_manager cm;
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
+    cf->mark_ready_for_writes();
+
+    for (auto i = 0; i < leveled_manifest::MAX_COMPACTING_L0*2; i++) {
+        add_sstable_for_leveled_test(cf, i, 0, /*level*/0, "a", "a", i /* max timestamp */);
+    }
+    auto candidates = get_candidates_for_leveled_strategy(*cf);
+    leveled_manifest manifest = leveled_manifest::create(*cf, candidates, 1);
+    std::vector<stdx::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
+    std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
+    auto desc = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
+    BOOST_REQUIRE(desc.level == 0);
+    BOOST_REQUIRE(desc.sstables.size() == leveled_manifest::MAX_COMPACTING_L0);
+    // check that strategy returns the oldest sstables
+    for (auto& sst : desc.sstables) {
+        BOOST_REQUIRE(sst->get_stats_metadata().max_timestamp < leveled_manifest::MAX_COMPACTING_L0);
+    }
+
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(leveled_invariant_fix) {
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
