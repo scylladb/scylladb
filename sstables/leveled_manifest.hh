@@ -617,13 +617,7 @@ public:
                 // if the overlapping ones are already busy in a compaction, leave it out.
                 // TODO try to find a set of L0 sstables that only overlaps with non-busy L1 sstables
                 auto l1overlapping = overlapping(*_schema, candidates, get_level(1));
-                for (auto candidate : l1overlapping) {
-                    auto it = std::find(candidates.begin(), candidates.end(), candidate);
-                    if (it != candidates.end()) {
-                        continue;
-                    }
-                    candidates.push_back(candidate);
-                }
+                candidates.insert(candidates.end(), l1overlapping.begin(), l1overlapping.end());
             }
             if (candidates.size() < 2) {
                 return {};
