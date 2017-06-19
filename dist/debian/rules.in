@@ -1,7 +1,9 @@
 #!/usr/bin/make -f
 
-override_dh_auto_build:
+override_dh_auto_configure:
 	./configure.py --enable-dpdk --mode=release --static-stdc++ --static-thrift --compiler=@@COMPILER@@
+
+override_dh_auto_build:
 	ninja
 
 override_dh_auto_clean:
