@@ -54,6 +54,7 @@
 #include "date_tiered_compaction_strategy.hh"
 
 logging::logger date_tiered_manifest::logger = logging::logger("DateTieredCompactionStrategy");
+logging::logger leveled_manifest::logger("LeveledManifest");
 
 namespace sstables {
 

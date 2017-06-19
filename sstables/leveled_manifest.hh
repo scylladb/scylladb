@@ -47,7 +47,7 @@
 #include "log.hh"
 
 class leveled_manifest {
-    logging::logger logger;
+    static logging::logger logger;
 
     schema_ptr _schema;
     std::vector<std::list<sstables::shared_sstable>> _generations;
@@ -77,8 +77,7 @@ public:
     static constexpr int MAX_LEVELS = 9; // log10(1000^3);
 
     leveled_manifest(column_family& cfs, int max_sstable_size_in_MB)
-        : logger("LeveledManifest")
-        , _schema(cfs.schema())
+        : _schema(cfs.schema())
         , _max_sstable_size_in_bytes(max_sstable_size_in_MB * 1024 * 1024)
     {
         // allocate enough generations for a PB of data, with a 1-MB sstable size.  (Note that if maxSSTableSize is
