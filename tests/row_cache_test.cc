@@ -611,6 +611,33 @@ SEASTAR_TEST_CASE(test_reading_from_random_partial_partition) {
     });
 }
 
+SEASTAR_TEST_CASE(test_random_partition_population) {
+    return seastar::async([] {
+        cache_tracker tracker;
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+
+        auto m1 = make_fully_continuous(gen());
+        auto m2 = make_fully_continuous(gen());
+
+        memtable_snapshot_source underlying(gen.schema());
+        underlying.apply(m1);
+
+        row_cache cache(gen.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+        assert_that(cache.make_reader(gen.schema()))
+            .produces(m1)
+            .produces_end_of_stream();
+
+        underlying.apply(m2);
+        cache.invalidate().get();
+
+        auto pr = dht::partition_range::make_singular(m2.decorated_key());
+        assert_that(cache.make_reader(gen.schema(), pr))
+            .produces(m1 + m2)
+            .produces_end_of_stream();
+    });
+}
+
 SEASTAR_TEST_CASE(test_eviction) {
     return seastar::async([] {
         auto s = make_schema();
