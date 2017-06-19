@@ -145,10 +145,6 @@ if [ "$DISTRIBUTION" = "Debian" ] || [ "$VERSION_ID" = "14.04" ]; then
 fi
 
 if [ $REBUILD -eq 0 ]; then
-    if [ "$DISTRIBUTION" != "Ubuntu" ]; then
-        echo "Prebuilt 3rdparty is not supported in this distribution."
-        exit 1
-    fi
     if [ ! -f /etc/apt/sources.list.d/scylla-3rdparty.list ]; then
         cd /etc/apt/sources.list.d
         sudo wget -nv https://s3.amazonaws.com/downloads.scylladb.com/deb/3rdparty/$CODENAME/scylla-3rdparty.list
