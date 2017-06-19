@@ -764,12 +764,12 @@ struct sstable_data_source : public enable_lw_shared_from_this<sstable_data_sour
         , _schema(std::move(s))
     { }
 
-    sstable_data_source(schema_ptr s, shared_sstable sst, mp_row_consumer&& consumer, sstable::disk_read_range toread,
+    sstable_data_source(schema_ptr s, shared_sstable sst, mp_row_consumer&& consumer, sstable::disk_read_range toread, uint64_t last_end,
             std::unique_ptr<index_reader> lh_index = {}, std::unique_ptr<index_reader> rh_index = {})
         : _sst(std::move(sst))
         , _consumer(std::move(consumer))
         , _read_enabled(bool(toread))
-        , _context(_sst->data_consume_rows(_consumer, std::move(toread)))
+        , _context(_sst->data_consume_rows(_consumer, std::move(toread), last_end))
         , _lh_index(std::move(lh_index))
         , _rh_index(std::move(rh_index))
         , _schema(std::move(s))
@@ -1051,12 +1051,12 @@ private:
     lw_shared_ptr<sstable_data_source> _ds;
     std::function<future<lw_shared_ptr<sstable_data_source>> ()> _get_data_source;
 public:
-    impl(shared_sstable sst, schema_ptr schema, sstable::disk_read_range toread,
+    impl(shared_sstable sst, schema_ptr schema, sstable::disk_read_range toread, uint64_t last_end,
          const io_priority_class &pc,
          streamed_mutation::forwarding fwd)
-        : _get_data_source([this, sst = std::move(sst), s = std::move(schema), toread, &pc, fwd] {
+        : _get_data_source([this, sst = std::move(sst), s = std::move(schema), toread, last_end, &pc, fwd] {
             auto consumer = mp_row_consumer(s, query::full_slice, pc, fwd);
-            auto ds = make_lw_shared<sstable_data_source>(std::move(s), std::move(sst), std::move(consumer), std::move(toread));
+            auto ds = make_lw_shared<sstable_data_source>(std::move(s), std::move(sst), std::move(consumer), std::move(toread), last_end);
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
     impl(shared_sstable sst, schema_ptr schema,
@@ -1072,16 +1072,17 @@ public:
          const dht::partition_range& pr,
          const query::partition_slice& slice,
          const io_priority_class& pc,
-         streamed_mutation::forwarding fwd)
-        : _get_data_source([this, pr, sst = std::move(sst), s = std::move(schema), &pc, &slice, fwd] () mutable {
+         streamed_mutation::forwarding fwd,
+         ::mutation_reader::forwarding fwd_mr)
+        : _get_data_source([this, pr, sst = std::move(sst), s = std::move(schema), &pc, &slice, fwd, fwd_mr] () mutable {
             auto lh_index = sst->get_index_reader(pc); // lh = left hand
             auto rh_index = sst->get_index_reader(pc);
             auto f = seastar::when_all_succeed(lh_index->advance_to_start(pr), rh_index->advance_to_end(pr));
-            return f.then([this, lh_index = std::move(lh_index), rh_index = std::move(rh_index), sst = std::move(sst), s = std::move(s), &pc, &slice, fwd] () mutable {
+            return f.then([this, lh_index = std::move(lh_index), rh_index = std::move(rh_index), sst = std::move(sst), s = std::move(s), &pc, &slice, fwd, fwd_mr] () mutable {
                 sstable::disk_read_range drr{lh_index->data_file_position(),
                                              rh_index->data_file_position()};
                 auto consumer = mp_row_consumer(s, slice, pc, fwd);
-                auto ds = make_lw_shared<sstable_data_source>(std::move(s), std::move(sst), std::move(consumer), drr, std::move(lh_index), std::move(rh_index));
+                auto ds = make_lw_shared<sstable_data_source>(std::move(s), std::move(sst), std::move(consumer), drr, (fwd_mr ? sst->data_size() : drr.end), std::move(lh_index), std::move(rh_index));
                 ds->_index_in_current_partition = true;
                 ds->_will_likely_slice = sstable_data_source::will_likely_slice(slice);
                 return ds;
@@ -1286,9 +1287,10 @@ sstable::read_range_rows(schema_ptr schema,
                          const dht::partition_range& range,
                          const query::partition_slice& slice,
                          const io_priority_class& pc,
-                         streamed_mutation::forwarding fwd) {
+                         streamed_mutation::forwarding fwd,
+                         ::mutation_reader::forwarding fwd_mr) {
     return std::make_unique<mutation_reader::impl>(
-        shared_from_this(), std::move(schema), range, slice, pc, fwd);
+        shared_from_this(), std::move(schema), range, slice, pc, fwd, fwd_mr);
 }
 
 }
