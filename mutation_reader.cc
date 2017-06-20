@@ -285,7 +285,8 @@ public:
                                 mutation_reader::forwarding fwd_mr)
         : _ranges(ranges)
         , _current_range(_ranges.begin())
-        , _reader(source(s, *_current_range, slice, pc, trace_state, fwd, fwd_mr))
+        , _reader(source(s, *_current_range, slice, pc, trace_state, fwd,
+            _ranges.size() > 1 ? mutation_reader::forwarding::yes : fwd_mr))
     {
     }
 
