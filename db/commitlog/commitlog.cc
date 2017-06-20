@@ -90,7 +90,7 @@ class crc32_nbo {
 public:
     template <typename T>
     void process(T t) {
-        _c.process(net::hton(t));
+        _c.process_be(t);
     }
     uint32_t checksum() const {
         return _c.get();
