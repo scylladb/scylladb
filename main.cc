@@ -559,7 +559,7 @@ int main(int ac, char** av) {
                 if (!paths.empty()) {
                     supervisor::notify("replaying commit log");
                     auto rp = db::commitlog_replayer::create_replayer(qp).get0();
-                    rp.recover(paths).get();
+                    rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
                     supervisor::notify("replaying commit log - flushing memtables");
                     db.invoke_on_all([] (database& db) {
                         return db.flush_all_memtables();

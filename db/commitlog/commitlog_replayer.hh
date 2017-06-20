@@ -62,8 +62,8 @@ public:
 
     static future<commitlog_replayer> create_replayer(seastar::sharded<cql3::query_processor>&);
 
-    future<> recover(std::vector<sstring> files);
-    future<> recover(sstring file);
+    future<> recover(std::vector<sstring> files, sstring fname_prefix);
+    future<> recover(sstring file, sstring fname_prefix);
 
 private:
     commitlog_replayer(seastar::sharded<cql3::query_processor>&);
