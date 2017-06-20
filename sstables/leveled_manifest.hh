@@ -522,23 +522,8 @@ public:
         assert(!get_level(level).empty());
 
         logger.debug("Choosing candidates for L{}", level);
-#if 0
-        final Set<SSTableReader> compacting = cfs.getDataTracker().getCompacting();
-#endif
-        if (level == 0) {
-#if 0
-            Set<SSTableReader> compactingL0 = ImmutableSet.copyOf(Iterables.filter(getLevel(0), Predicates.in(compacting)));
 
-            RowPosition lastCompactingKey = null;
-            RowPosition firstCompactingKey = null;
-            for (SSTableReader candidate : compactingL0)
-            {
-                if (firstCompactingKey == null || candidate.first.compareTo(firstCompactingKey) < 0)
-                    firstCompactingKey = candidate.first;
-                if (lastCompactingKey == null || candidate.last.compareTo(lastCompactingKey) > 0)
-                    lastCompactingKey = candidate.last;
-            }
-#endif
+        if (level == 0) {
 
             // L0 is the dumping ground for new sstables which thus may overlap each other.
             //
@@ -553,44 +538,12 @@ public:
             // Note that we ignore suspect-ness of L1 sstables here, since if an L1 sstable is suspect we're
             // basically screwed, since we expect all or most L0 sstables to overlap with each L1 sstable.
             // So if an L1 sstable is suspect we can't do much besides try anyway and hope for the best.
-            std::vector<sstables::shared_sstable> candidates;
-            std::list<sstables::shared_sstable> remaining = get_level(0);
-#if 0
-            Iterables.addAll(remaining, Iterables.filter(getLevel(0), Predicates.not(suspectP)));
-#endif
-            for (auto& sstable : age_sorted_sstables(remaining)) {
-                auto it = std::find(candidates.begin(), candidates.end(), sstable);
-                if (it != candidates.end()) {
-                    continue;
-                }
+            auto candidates = boost::copy_range<std::vector<sstables::shared_sstable>>(get_level(0));
 
-                auto overlappedL0 = overlapping(*_schema, sstable, remaining);
-                it = std::find(overlappedL0.begin(), overlappedL0.end(), sstable);
-                if (it == overlappedL0.end()) {
-                    overlappedL0.push_back(sstable);
-                }
-
-#if 0
-                if (!Sets.intersection(overlappedL0, compactingL0).isEmpty())
-                    continue;
-#endif
-
-                for (auto& new_candidate : overlappedL0) {
-#if 0
-                    if (firstCompactingKey == null || lastCompactingKey == null || overlapping(firstCompactingKey.getToken(), lastCompactingKey.getToken(), Arrays.asList(newCandidate)).size() == 0)
-                        candidates.add(newCandidate);
-#else
-                    candidates.push_back(new_candidate);
-#endif
-                    remaining.remove(new_candidate);
-                }
-
-                if (candidates.size() > MAX_COMPACTING_L0) {
-                    // limit to only the MAX_COMPACTING_L0 oldest candidates
-                    sort_sstables_by_age(candidates);
-                    candidates.resize(MAX_COMPACTING_L0);
-                    break;
-                }
+            if (candidates.size() > MAX_COMPACTING_L0) {
+                // limit to only the MAX_COMPACTING_L0 oldest candidates
+                sort_sstables_by_age(candidates);
+                candidates.resize(MAX_COMPACTING_L0);
             }
 
             // leave everything in L0 if we didn't end up with a full sstable's worth of data
@@ -662,16 +615,6 @@ public:
 
         // all the sstables were suspect or overlapped with something suspect
         return {};
-    }
-
-    std::list<sstables::shared_sstable> age_sorted_sstables(std::list<sstables::shared_sstable>& candidates) {
-        auto age_sorted_candidates = candidates;
-
-        age_sorted_candidates.sort([] (auto& i, auto& j) {
-            return i->compare_by_max_timestamp(*j) < 0;
-        });
-
-        return age_sorted_candidates;
     }
 
     void sort_sstables_by_age(std::vector<sstables::shared_sstable>& candidates) {
