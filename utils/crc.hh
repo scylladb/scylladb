@@ -22,7 +22,12 @@
 #pragma once
 
 #include <cstdint>
+
+#if defined(__x86_64__) || defined(__i386__)
 #include <smmintrin.h>
+#else
+#include <zlib.h>
+#endif
 
 namespace utils {
 
@@ -32,6 +37,8 @@ public:
     // All process() functions assume input is in
     // host byte order (i.e. equivalent to storing
     // the value in a buffer and crcing the buffer).
+#if defined(__x86_64__) || defined(__i386__)
+    // On x86 use the crc32 instruction added in SSE 4.2.
     void process(int8_t in) {
         _r = _mm_crc32_u8(_r, in);
     }
@@ -91,8 +98,20 @@ public:
         if (size >= 1) {
             process(*in);
         }
-
     }
+#else
+    // On non-x86 platforms use the zlib implementation of crc32.
+    // TODO: these should be changed to use platform-specific
+    // assembly and also the Castagnoli polynomial to match x86.
+    template <class T>
+    void process(T in) {
+        static_assert(std::is_integral<T>::value, "T must be integral type.");
+        _r = ::crc32(_r, reinterpret_cast<const uint8_t*>(&in), sizeof(T));
+    }
+    void process(const uint8_t* in, size_t size) {
+        _r = ::crc32(_r, in, size);
+    }
+#endif
     uint32_t get() const {
         return _r;
     }
