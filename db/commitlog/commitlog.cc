@@ -132,8 +132,8 @@ db::commitlog::descriptor::descriptor(std::pair<uint64_t, uint32_t> p)
         : descriptor(p.first, p.second) {
 }
 
-db::commitlog::descriptor::descriptor(sstring filename)
-        : descriptor([filename]() {
+db::commitlog::descriptor::descriptor(const sstring& filename)
+        : descriptor([&filename] () {
             std::smatch m;
             // match both legacy and new version of commitlogs Ex: CommitLog-12345.log and CommitLog-4-12345.log.
                 std::regex rx("(?:.*/)?" + FILENAME_PREFIX + "((\\d+)(" + SEPARATOR + "\\d+)?)" + FILENAME_EXTENSION);

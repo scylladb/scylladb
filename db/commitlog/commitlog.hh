@@ -139,7 +139,7 @@ public:
         descriptor(const descriptor&) = default;
         descriptor(segment_id_type i, uint32_t v = 1);
         descriptor(replay_position p);
-        descriptor(sstring filename);
+        descriptor(const sstring& filename);
 
         sstring filename() const;
         operator replay_position() const;
