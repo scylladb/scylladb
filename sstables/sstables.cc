@@ -2826,7 +2826,11 @@ mutation_source sstable::as_mutation_source() {
             tracing::trace_state_ptr trace_ptr,
             streamed_mutation::forwarding fwd,
             ::mutation_reader::forwarding fwd_mr) mutable {
-        if (!fwd_mr && range.is_singular() && range.start()->value().has_key()) {
+        // CAVEAT: if as_mutation_source() is called on a single partition
+        // we want to optimize and read exactly this partition. As a
+        // consequence, fast_forward_to() will *NOT* work on the result,
+        // regardless of what the fwd_mr parameter says.
+        if (range.is_singular() && range.start()->value().has_key()) {
             const dht::ring_position& pos = range.start()->value();
             return make_mutation_reader<single_partition_reader_adaptor>(sst, s, pos, slice, pc, fwd);
         } else {
