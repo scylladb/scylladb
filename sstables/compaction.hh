@@ -56,6 +56,7 @@ namespace sstables {
         Validation = 2,
         Scrub = 3,
         Index_build = 4,
+        Reshard = 5,
     };
 
     static inline sstring compaction_name(compaction_type type) {
@@ -70,6 +71,8 @@ namespace sstables {
             return "SCRUB";
         case compaction_type::Index_build:
             return "INDEX_BUILD";
+        case compaction_type::Reshard:
+            return "RESHARD";
         default:
             throw std::runtime_error("Invalid Compaction Type");
         }

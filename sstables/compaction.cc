@@ -449,6 +449,7 @@ public:
         , _output_sstables(smp::count)
         , _sstable_creator(std::move(creator))
     {
+        _info->type = compaction_type::Reshard;
     }
 
     void report_start(const sstring& formatted_msg) const override {
