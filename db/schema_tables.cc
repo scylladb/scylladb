@@ -169,9 +169,8 @@ std::vector<const char*> ALL { KEYSPACES, TABLES, COLUMNS, DROPPED_COLUMNS, TRIG
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
-/** add entries to system.schema_* for the hardcoded system definitions */
-future<> save_system_keyspace_schema() {
-    auto& ks = db::qctx->db().find_keyspace(NAME);
+future<> save_system_schema(const sstring & ksname) {
+    auto& ks = db::qctx->db().find_keyspace(ksname);
     auto ksm = ks.metadata();
 
     // delete old, possibly obsolete entries in schema tables
@@ -183,6 +182,11 @@ future<> save_system_keyspace_schema() {
         auto mvec  = make_create_keyspace_mutations(ksm, schema_creation_timestamp(), true);
         return qctx->proxy().mutate_locally(std::move(mvec));
     });
+}
+
+/** add entries to system_schema.* for the hardcoded system definitions */
+future<> save_system_keyspace_schema() {
+    return save_system_schema(NAME);
 }
 
 namespace v3 {

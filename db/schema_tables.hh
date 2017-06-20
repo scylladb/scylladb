@@ -87,6 +87,10 @@ extern std::vector<const char*> ALL;
 
 std::vector<schema_ptr> all_tables();
 
+// saves/creates "ks" + all tables etc, while first deleting all old schema entries (will be rewritten)
+future<> save_system_schema(const sstring & ks);
+
+// saves/creates "system_schema" keyspace
 future<> save_system_keyspace_schema();
 
 future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>& proxy);
