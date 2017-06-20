@@ -20,7 +20,7 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-import os, os.path, textwrap, argparse, sys, shlex, subprocess, tempfile, re
+import os, os.path, textwrap, argparse, sys, shlex, subprocess, tempfile, re, platform
 from distutils.spawn import find_executable
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
@@ -132,6 +132,13 @@ class Thrift(object):
         return [x.replace('.cpp', '.o') for x in self.sources(gen_dir)]
     def endswith(self, end):
         return self.source.endswith(end)
+
+def default_target_arch():
+    mach = platform.machine()
+    if platform.machine() in ['i386', 'i686', 'x86_64']:
+        return 'nehalem'
+    else:
+        return ''
 
 class Antlr3Grammar(object):
     def __init__(self, source):
@@ -281,6 +288,8 @@ arg_parser.add_argument('--cflags', action = 'store', dest = 'user_cflags', defa
                         help = 'Extra flags for the C++ compiler')
 arg_parser.add_argument('--ldflags', action = 'store', dest = 'user_ldflags', default = '',
                         help = 'Extra flags for the linker')
+arg_parser.add_argument('--target', action = 'store', dest = 'target', default = default_target_arch(),
+                        help = 'Target architecture (-march)')
 arg_parser.add_argument('--compiler', action = 'store', dest = 'cxx', default = 'g++',
                         help = 'C++ compiler path')
 arg_parser.add_argument('--c-compiler', action='store', dest='cc', default='gcc',
@@ -812,7 +821,9 @@ if args.gcc6_concepts:
 if args.alloc_failure_injector:
     seastar_flags += ['--enable-alloc-failure-injector']
 
-seastar_cflags = args.user_cflags + " -march=nehalem"
+seastar_cflags = args.user_cflags
+if args.target != '':
+    seastar_cflags += ' -march=' + args.target
 seastar_ldflags = args.user_ldflags
 seastar_flags += ['--compiler', args.cxx, '--c-compiler', args.cc, '--cflags=%s' % (seastar_cflags), '--ldflags=%s' %(seastar_ldflags)]
 
