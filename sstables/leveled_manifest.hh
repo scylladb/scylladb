@@ -84,17 +84,7 @@ public:
         // updated, we will still have sstables of the older, potentially smaller size.  So don't make this
         // dependent on maxSSTableSize.)
         _generations.resize(MAX_LEVELS);
-#if 0
-        compactionCounter = new int[n];
-#endif
     }
-
-#if 0
-    public static LeveledManifest create(ColumnFamilyStore cfs, int maxSSTableSize, List<SSTableReader> sstables)
-    {
-        return create(cfs, maxSSTableSize, sstables, new SizeTieredCompactionStrategyOptions());
-    }
-#endif
 
     static leveled_manifest create(column_family& cfs, std::vector<sstables::shared_sstable>& sstables, int max_sstable_size_in_mb) {
         leveled_manifest manifest = leveled_manifest(cfs, max_sstable_size_in_mb);
@@ -415,10 +405,6 @@ public:
     }
 
     size_t get_level_size(uint32_t level) {
-#if 0
-        if (i >= generations.length)
-            throw new ArrayIndexOutOfBoundsException("Maximum valid generation is " + (generations.length - 1));
-#endif
         return get_level(level).size();
     }
 
