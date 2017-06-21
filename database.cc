@@ -877,7 +877,8 @@ column_family::seal_active_streaming_memtable_immediate() {
             }).then([this, old, newtab] () {
                 add_sstable(newtab, {engine().cpu_id()});
                 trigger_compaction();
-            }).handle_exception([] (auto ep) {
+                return old->clear_gently();
+            }).handle_exception([old] (auto ep) {
                 dblog.error("failed to write streamed sstable: {}", ep);
                 return make_exception_future<>(ep);
             });
