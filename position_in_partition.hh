@@ -85,6 +85,8 @@ public:
     position_in_partition_view(static_row_tag_t) : _ck(nullptr) { }
     position_in_partition_view(clustering_row_tag_t, const clustering_key_prefix& ck)
         : _ck(&ck) { }
+    position_in_partition_view(const clustering_key_prefix& ck)
+        : _ck(&ck) { }
     position_in_partition_view(range_tag_t, bound_view bv)
         : _bound_weight(weight(bv.kind)), _ck(&bv.prefix) { }
 
