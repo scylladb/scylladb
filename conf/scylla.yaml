@@ -235,6 +235,9 @@ batch_size_fail_threshold_in_kb: 50
 # be set.
 # broadcast_rpc_address: 1.2.3.4
 
+# Uncomment to enable experimental features
+# experimental: true
+
 ###################################################
 ## Not currently supported, reserved for future use
 ###################################################
