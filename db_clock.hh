@@ -24,6 +24,8 @@
 
 #include <chrono>
 #include <cstdint>
+#include <ratio>
+#include <type_traits>
 #include "gc_clock.hh"
 
 // the database clock follows Java - 1ms granularity, 64-bit counter, 1970 epoch
@@ -51,8 +53,17 @@ public:
 
 static inline
 gc_clock::time_point to_gc_clock(db_clock::time_point tp) {
-    static_assert(std::is_same<db_clock::base, gc_clock::base>::value, "Below we assume that base is the same");
-    return gc_clock::time_point(std::chrono::duration_cast<gc_clock::duration>(tp.time_since_epoch()));
+    // Converting time points through `std::time_t` means that we don't have to make any assumptions about the epochs
+    // of `gc_clock` and `db_clock`, though we require that that the period of `gc_clock` is also 1 s like
+    // `std::time_t` to avoid loss of information.
+    {
+        using second = std::ratio<1, 1>;
+        static_assert(
+                std::is_same<gc_clock::period, second>::value,
+                "Conversion via std::time_t would lose information.");
+    }
+
+    return gc_clock::from_time_t(db_clock::to_time_t(tp));
 }
 
 #endif /* DB_CLOCK_HH_ */

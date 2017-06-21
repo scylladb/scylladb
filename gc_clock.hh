@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <seastar/core/lowres_clock.hh>
+
 #include <atomic>
 #include <chrono>
 #include <experimental/optional>
@@ -36,7 +38,7 @@ static inline std::chrono::seconds get_clocks_offset()
 // FIXME: wraps around in 2038
 class gc_clock {
 public:
-    using base = std::chrono::system_clock;
+    using base = seastar::lowres_system_clock;
     using rep = int32_t;
     using period = std::ratio<1, 1>; // seconds
     using duration = std::chrono::duration<rep, period>;
