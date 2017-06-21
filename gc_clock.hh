@@ -44,6 +44,8 @@ public:
     using duration = std::chrono::duration<rep, period>;
     using time_point = std::chrono::time_point<gc_clock, duration>;
 
+    static constexpr auto is_steady = base::is_steady;
+
     static constexpr std::time_t to_time_t(time_point t) {
         return std::chrono::duration_cast<std::chrono::seconds>(t.time_since_epoch()).count();
     }
