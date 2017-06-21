@@ -40,6 +40,7 @@
 namespace bi = boost::intrusive;
 
 class row_cache;
+class memtable_entry;
 
 namespace cache {
 
@@ -372,6 +373,14 @@ private:
     //  { snapshot_for_phase(phase_of(pos)), phase_of(pos) };
     //
     snapshot_and_phase snapshot_of(dht::ring_position_view pos);
+
+    // Merges the memtable into cache with configurable logic for handling memtable entries.
+    // The Updater gets invoked for every entry in the memtable with a lower bound iterator
+    // into _partitions (cache_i), and the memtable entry.
+    // It is invoked inside allocating section and in the context of cache's allocator.
+    // All memtable entries will be removed.
+    template <typename Updater>
+    future<> do_update(memtable& m, Updater func);
 public:
     ~row_cache();
     row_cache(schema_ptr, snapshot_source, cache_tracker&);

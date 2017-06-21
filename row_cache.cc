@@ -692,13 +692,14 @@ row_cache::phase_type row_cache::phase_of(dht::ring_position_view pos) {
     return _underlying_phase - 1;
 }
 
-future<> row_cache::update(memtable& m, partition_presence_checker presence_checker) {
+template <typename Updater>
+future<> row_cache::do_update(memtable& m, Updater updater) {
     m.on_detach_from_region_group();
     _tracker.region().merge(m); // Now all data in memtable belongs to cache
     auto attr = seastar::thread_attributes();
     attr.scheduling_group = &_update_thread_scheduling_group;
     STAP_PROBE(scylla, row_cache_update_start);
-    auto t = seastar::thread(attr, [this, &m, presence_checker = std::move(presence_checker)] {
+    auto t = seastar::thread(attr, [this, &m, updater = std::move(updater)] () mutable {
         auto cleanup = defer([&] {
             with_allocator(_tracker.allocator(), [&m, this] () {
                 logalloc::reclaim_lock _(_tracker.region());
@@ -731,7 +732,7 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
             _prev_snapshot = {};
         });
         while (!m.partitions.empty()) {
-            with_allocator(_tracker.allocator(), [this, &m, &presence_checker] () {
+            with_allocator(_tracker.allocator(), [this, &m, &updater] () {
                 unsigned quota = 30;
                 auto cmp = cache_entry::compare(_schema);
                 {
@@ -749,24 +750,7 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                             memtable_entry& mem_e = *i;
                             // FIXME: Optimize knowing we lookup in-order.
                             auto cache_i = _partitions.lower_bound(mem_e.key(), cmp);
-                            // If cache doesn't contain the entry we cannot insert it because the mutation may be incomplete.
-                            // FIXME: keep a bitmap indicating which sstables we do cover, so we don't have to
-                            //        search it.
-                            if (cache_i != partitions_end() && cache_i->key().equal(*_schema, mem_e.key())) {
-                                cache_entry& entry = *cache_i;
-                                upgrade_entry(entry);
-                                entry.partition().apply(*_schema, std::move(mem_e.partition()), *mem_e.schema());
-                                _tracker.touch(entry);
-                                _tracker.on_merge();
-                            } else if (presence_checker(mem_e.key()) ==
-                                    partition_presence_checker_result::definitely_doesnt_exist) {
-                                cache_entry* entry = current_allocator().construct<cache_entry>(
-                                        mem_e.schema(), std::move(mem_e.key()), std::move(mem_e.partition()));
-                                _tracker.insert(*entry);
-                                _partitions.insert(cache_i, *entry);
-                            } else {
-                                _tracker.clear_continuity(*cache_i);
-                            }
+                            updater(cache_i, mem_e);
                             i = m.partitions.erase(i);
                             current_allocator().destroy(&mem_e);
                             --quota;
@@ -794,6 +778,28 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
     STAP_PROBE(scylla, row_cache_update_end);
     return do_with(std::move(t), [] (seastar::thread& t) {
         return t.join();
+    });
+}
+
+future<> row_cache::update(memtable& m, partition_presence_checker is_present) {
+    return do_update(m, [this, is_present = std::move(is_present)] (row_cache::partitions_type::iterator cache_i, memtable_entry& mem_e) mutable {
+        // If cache doesn't contain the entry we cannot insert it because the mutation may be incomplete.
+        // FIXME: keep a bitmap indicating which sstables we do cover, so we don't have to
+        //        search it.
+        if (cache_i != partitions_end() && cache_i->key().equal(*_schema, mem_e.key())) {
+            cache_entry& entry = *cache_i;
+            upgrade_entry(entry);
+            entry.partition().apply(*_schema, std::move(mem_e.partition()), *mem_e.schema());
+            _tracker.touch(entry);
+            _tracker.on_merge();
+        } else if (is_present(mem_e.key()) == partition_presence_checker_result::definitely_doesnt_exist) {
+            cache_entry* entry = current_allocator().construct<cache_entry>(
+                mem_e.schema(), std::move(mem_e.key()), std::move(mem_e.partition()));
+            _tracker.insert(*entry);
+            _partitions.insert(cache_i, *entry);
+        } else {
+            _tracker.clear_continuity(*cache_i);
+        }
     });
 }
 
