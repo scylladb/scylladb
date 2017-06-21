@@ -126,6 +126,11 @@ public:
         return _ck && _ck->is_empty(s) && _bound_weight > 0;
     }
 
+    // Valid when >= before_all_clustered_rows()
+    const clustering_key_prefix& key() const {
+        return *_ck;
+    }
+
     friend std::ostream& operator<<(std::ostream&, position_in_partition_view);
 };
 
