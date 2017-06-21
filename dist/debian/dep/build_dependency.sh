@@ -9,7 +9,6 @@ install_deps() {
     sudo dpkg -P ${DEB_FILE%%_*.deb}
 }
 
-DISTRIBUTION=`lsb_release -i|awk '{print $3}'`
 CODENAME=`lsb_release -c|awk '{print $2}'`
 
 # workaround fix for #2444
@@ -31,7 +30,7 @@ if [ ! -f /usr/bin/equivs ]; then
     sudo apt-get install -y equivs
 fi
 
-if [ "$VERSION_ID" = "14.04" ] || [ "$DISTRIBUTION" = "Debian" ]; then
+if [ "$CODENAME" = "trusty" ] || [ "$CODENAME" = "jessie" ]; then
     if [ ! -f build/antlr3_*.deb ]; then
         rm -rf build/antlr3-3.5.2
         mkdir -p build/antlr3-3.5.2
@@ -89,20 +88,20 @@ if [ ! -f build/antlr3-c++-dev_*.deb ]; then
 fi
 
 if [ ! -f build/libthrift0_*.deb ]; then
-    rm -rf build/thrift-0.9.3
-    if [ ! -f build/thrift-0.9.3.tar.gz ]; then
-        wget -nv -O build/thrift-0.9.3.tar.gz http://archive.apache.org/dist/thrift/0.9.3/thrift-0.9.3.tar.gz
+    rm -rf build/thrift-0.10.0
+    if [ ! -f build/thrift-0.10.0.tar.gz ]; then
+        wget -nv -O build/thrift-0.10.0.tar.gz http://archive.apache.org/dist/thrift/0.10.0/thrift-0.10.0.tar.gz
     fi
     cd build
-    tar xpf thrift-0.9.3.tar.gz
-    cd thrift-0.9.3
+    tar xpf thrift-0.10.0.tar.gz
+    cd thrift-0.10.0
     patch -p0 < ../../dist/debian/dep/thrift.diff
     install_deps
     debuild -r fakeroot --no-tgz-check -us -uc
     cd ../..
 fi
 
-if [ "$DISTRIBUTION" = "Debian" ] && [ "$VERSION_ID" = "8" ]; then
+if [ "$CODENAME" = "jessie" ]; then
     if [ ! -f build/gcc-5_*.deb ]; then
         cd build
         wget https://launchpad.net/debian/+archive/primary/+files/gcc-5_5.4.1-5.dsc

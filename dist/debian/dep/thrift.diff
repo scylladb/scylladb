@@ -1,38 +1,39 @@
-diff -Nur debian/changelog ../thrift-0.9.3.new/debian/changelog
---- debian/changelog	2015-09-27 02:50:44.000000000 +0000
-+++ ../thrift-0.9.3.new/debian/changelog	2016-10-28 15:42:54.337509518 +0000
+diff -Nur debian/changelog ../thrift-0.10.0.new/debian/changelog
+--- debian/changelog	2016-12-19 20:05:45.000000000 +0000
++++ ../thrift-0.10.0.new/debian/changelog	2017-06-20 19:14:33.902186804 +0000
 @@ -1,3 +1,8 @@
-+thrift (0.9.3-ubuntu1) stable; urgency=low
-+  * update to 0.9.3
++thrift (0.10.0-1) stable; urgency=low
++  * update to 0.10.0
 +
-+ -- Takuya ASADA <syuu@scylladb.com>  Wed, 28 Oct 2015 05:11:38 +0900
++ -- Takuya ASADA <syuu@scylladb.com>  Mon, 19 Jun 2017 23:08:43 +0000
 +
- thrift (0.9.3) stable; urgency=low
-   * update to 0.9.3
+ thrift (0.10.0) stable; urgency=low
  
-diff -Nur debian/control ../thrift-0.9.3.new/debian/control
---- debian/control	2015-01-26 02:06:23.000000000 +0000
-+++ ../thrift-0.9.3.new/debian/control	2016-10-28 16:49:35.226677090 +0000
-@@ -1,12 +1,10 @@
+   * update to 0.10.0
+diff -Nur debian/control ../thrift-0.10.0.new/debian/control
+--- debian/control	2016-12-21 03:04:19.000000000 +0000
++++ ../thrift-0.10.0.new/debian/control	2017-06-20 19:14:33.902186804 +0000
+@@ -1,14 +1,10 @@
  Source: thrift
  Section: devel
  Priority: extra
--Build-Depends: debhelper (>= 5), build-essential, mono-gmcs, python-dev, ant,
--    mono-devel,  libmono-system-web2.0-cil, erlang-base, ruby1.8-dev, autoconf, automake,
--    pkg-config, libtool, bison, flex, libboost-dev | libboost1.40-dev, python-all,
--    python-all-dev, python-all-dbg, openjdk-6-jdk | java-sdk,
--    libboost-test-dev | libboost-test1.40-dev, libevent-dev, perl (>= 5.8.0-7),
--    php5, php5-dev, libglib2.0-dev, libqt4-dev
-+Build-Depends: debhelper (>= 5), build-essential, autoconf, automake,
-+    pkg-config, libtool, bison, flex, libboost-dev | libboost1.40-dev,
-+    libboost-test-dev | libboost-test1.40-dev, libevent-dev,
-+    libglib2.0-dev, libqt4-dev, libssl-dev
+-Build-Depends: debhelper (>= 9), build-essential, mono-mcs, python-dev, ant,
+-    mono-devel,  libmono-system-web4.0-cil, erlang-base, ruby-dev | ruby1.9.1-dev, ruby-bundler ,autoconf, automake,
++Build-Depends: debhelper (>= 9), build-essential, autoconf, automake,
+     pkg-config, libtool, bison, flex, libboost-dev | libboost1.53-dev,
+-    python-all, python-setuptools, python-all-dev, python-all-dbg,
+-    python3-all, python3-setuptools, python3-all-dev, python3-all-dbg,
+-    openjdk-7-jdk | openjdk-8-jdk | default-jdk,
+-    libboost-test-dev | libboost-test1.53-dev, libevent-dev, libssl-dev, perl (>= 5.8.0-7),
+-    php5 | php7.0, php5-dev | php7.0-dev, libglib2.0-dev, qtchooser, qtbase5-dev-tools
++    libboost-test-dev | libboost-test1.53-dev, libevent-dev, libssl-dev, 
++    libglib2.0-dev, qtchooser, qtbase5-dev-tools
  Maintainer: Thrift Developer's <dev@thrift.apache.org>
  Homepage: http://thrift.apache.org/
  Vcs-Git: https://git-wip-us.apache.org/repos/asf/thrift.git
-@@ -14,109 +12,6 @@
- Standards-Version: 3.7.2
+@@ -17,144 +13,6 @@
  X-Python-Version: >= 2.6
+ X-Python3-Version: >= 3.3
  
 -Package: thrift-compiler
 -Architecture: any
@@ -49,10 +50,10 @@ diff -Nur debian/control ../thrift-0.9.3.new/debian/control
 -Package: python-thrift
 -Architecture: any
 -Section: python
--Depends: ${python:Depends}, ${shlibs:Depends}, ${misc:Depends}
--Recommends: python-twisted-core
+-Depends: ${python:Depends}, ${shlibs:Depends}, ${misc:Depends}, python-six
+-Recommends: python-twisted-web, python-backports.ssl-match-hostname, python-ipaddress
 -Provides: ${python:Provides}
--Description: Python bindings for Thrift
+-Description: Python bindings for Thrift (Python 2)
 - Thrift is a software framework for scalable cross-language services
 - development. It combines a software stack with a code generation engine to
 - build services that work efficiently and seamlessly.
@@ -61,11 +62,46 @@ diff -Nur debian/control ../thrift-0.9.3.new/debian/control
 - tool (in the thrift-compiler package) to compile your definition to Python
 - classes, and then the modules in this package will allow you to use those
 - classes in your programs.
+- .
+- This package installs the library for Python 2.
 -
 -Package: python-thrift-dbg
 -Architecture: any
--Section: python
+-Section: debug
 -Depends: ${shlibs:Depends}, ${misc:Depends}, python-thrift (= ${binary:Version}), python-all-dbg
+-Provides: ${python:Provides}
+-Description: Python bindings for Thrift (debug version)
+- Thrift is a software framework for scalable cross-language services
+- development. It combines a software stack with a code generation engine to
+- build services that work efficiently and seamlessly.
+- .
+- This package contains the Python bindings for Thrift with debugging symbols.
+- You will need the thrift tool (in the thrift-compiler package) to compile your
+- definition to Python classes, and then the modules in this package will allow
+- you to use those classes in your programs.
+-
+-Package: python3-thrift
+-Architecture: any
+-Section: python
+-Depends: ${python3:Depends}, ${shlibs:Depends}, ${misc:Depends}, python3-six
+-Recommends: python3-twisted-web
+-Provides: ${python:Provides}
+-Description: Python bindings for Thrift (Python 3)
+- Thrift is a software framework for scalable cross-language services
+- development. It combines a software stack with a code generation engine to
+- build services that work efficiently and seamlessly.
+- .
+- This package contains the Python bindings for Thrift. You will need the thrift
+- tool (in the thrift-compiler package) to compile your definition to Python
+- classes, and then the modules in this package will allow you to use those
+- classes in your programs.
+- .
+- This package installs the library for Python 3.
+-
+-Package: python3-thrift-dbg
+-Architecture: any
+-Section: debug
+-Depends: ${shlibs:Depends}, ${misc:Depends}, python3-thrift (= ${binary:Version}), python3-all-dbg
 -Provides: ${python:Provides}
 -Description: Python bindings for Thrift (debug version)
 - Thrift is a software framework for scalable cross-language services
@@ -96,8 +132,8 @@ diff -Nur debian/control ../thrift-0.9.3.new/debian/control
 -
 -Package: libthrift-java
 -Architecture: all
--Section: libs
--Depends: java-gcj-compat | java1-runtime | java2-runtime, ${misc:Depends}
+-Section: java
+-Depends: ${misc:Depends}
 -Description: Java bindings for Thrift
 - Thrift is a software framework for scalable cross-language services
 - development. It combines a software stack with a code generation engine to
@@ -110,9 +146,9 @@ diff -Nur debian/control ../thrift-0.9.3.new/debian/control
 -
 -Package: libthrift-cil
 -Architecture: all
--Section: libs
--Depends: cli-common, libmono-corlib1.0-cil (>= 1.0), libmono-system1.0-cil (>= 1.0), 
--    libmono-system-web2.0-cil, ${misc:Depends}
+-Section: cli-mono
+-Depends: cli-common, libmono-corlib4.0-cil (>= 2.10) | libmono-corlib4.5-cil (>=3.2), libmono-system4.0-cil (>= 2.10),
+-    libmono-system-web4.0-cil (>= 2.10), ${misc:Depends}
 -Description: CLI bindings for Thrift
 - Thrift is a software framework for scalable cross-language services
 - development. It combines a software stack with a code generation engine to
@@ -140,7 +176,7 @@ diff -Nur debian/control ../thrift-0.9.3.new/debian/control
  Package: libthrift0
  Architecture: any
  Depends: ${shlibs:Depends}, ${misc:Depends}
-@@ -139,15 +34,3 @@
+@@ -177,15 +35,3 @@
   .
   This package contains the development libraries required for writing C++
   applications using Thrift.
@@ -156,16 +192,19 @@ diff -Nur debian/control ../thrift-0.9.3.new/debian/control
 - build services that work efficiently and seamlessly.
 - .
 - This package contains the PHP bindings for Thrift.
-diff -Nur debian/dirs ../thrift-0.9.3.new/debian/dirs
---- debian/dirs	2015-01-26 02:06:23.000000000 +0000
-+++ ../thrift-0.9.3.new/debian/dirs	2016-10-28 15:42:54.337509518 +0000
-@@ -1,2 +1 @@
- usr/bin
--usr/sbin
-diff -Nur debian/rules ../thrift-0.9.3.new/debian/rules
---- debian/rules	2015-01-26 02:06:23.000000000 +0000
-+++ ../thrift-0.9.3.new/debian/rules	2016-10-28 15:42:54.337509518 +0000
-@@ -45,18 +45,6 @@
+diff -Nur debian/libthrift0.install ../thrift-0.10.0.new/debian/libthrift0.install
+--- debian/libthrift0.install	2016-04-03 17:19:43.000000000 +0000
++++ ../thrift-0.10.0.new/debian/libthrift0.install	2017-06-20 19:22:46.321957388 +0000
+@@ -1,5 +1,4 @@
+ usr/lib/libthrift.so*
+ usr/lib/libthrift-*.so*
+ usr/lib/libthriftnb*.so*
+-usr/lib/libthriftqt*.so*
+ usr/lib/libthriftz*.so*
+diff -Nur debian/rules ../thrift-0.10.0.new/debian/rules
+--- debian/rules	2016-12-19 20:05:45.000000000 +0000
++++ ../thrift-0.10.0.new/debian/rules	2017-06-20 19:22:48.285956469 +0000
+@@ -51,18 +51,6 @@
  	# Compile C (glib) library
  	$(MAKE) -C $(CURDIR)/lib/c_glib
  
@@ -179,12 +218,12 @@ diff -Nur debian/rules ../thrift-0.9.3.new/debian/rules
 -	# PHP
 -	cd $(CURDIR)/lib/php/src/ext/thrift_protocol && \
 -		phpize && \
--		./configure && make
+-		./configure && $(MAKE)
 -
  	touch $@
  
  build-indep: build-indep-stamp
-@@ -65,19 +53,6 @@
+@@ -71,19 +59,6 @@
  	# Add here commands to compile the indep part of the package.
  	#$(MAKE) doc
  
@@ -204,21 +243,25 @@ diff -Nur debian/rules ../thrift-0.9.3.new/debian/rules
  	touch $@
  
  clean:
-@@ -101,31 +76,6 @@
+@@ -96,8 +71,6 @@
+ 	# Add here commands to clean up after the build process.
+ 	-$(MAKE) clean
+ 
+-	$(CURDIR)/cleanup.sh
+-
+ 	dh_clean
+ 
+ install: install-indep install-arch
+@@ -111,29 +84,6 @@
  	# debian/<package>-doc.
  	#INSTALLDOC#
  
--        # Java
+-	# Java
 -	mkdir -p $(CURDIR)/debian/libthrift-java/usr/share/java/ && \
 -	cp $(CURDIR)/lib/java/build/libthrift*.jar \
 -		$(CURDIR)/debian/libthrift-java/usr/share/java/
 -
--        # Ruby
--	mkdir -p $(CURDIR)/debian/ruby-thrift/usr/lib/ruby/1.8 && \
--	cp $(CURDIR)/lib/rb/lib/thrift.rb \
--		$(CURDIR)/debian/ruby-thrift/usr/lib/ruby/1.8
--	cp -r $(CURDIR)/lib/rb/lib/thrift \
--		$(CURDIR)/debian/ruby-thrift/usr/lib/ruby/1.8
+-	# Ruby
 -	mkdir -p $(CURDIR)/debian/ruby-thrift/usr/lib/ruby/1.9.1 && \
 -	cp $(CURDIR)/lib/rb/lib/thrift.rb \
 -		$(CURDIR)/debian/ruby-thrift/usr/lib/ruby/1.9.1
@@ -231,12 +274,15 @@ diff -Nur debian/rules ../thrift-0.9.3.new/debian/rules
 -		$(CURDIR)/debian/libthrift-cil/usr/lib/cli/thrift/Thrift.dll
 -
 -	# Perl
--	$(MAKE) -C $(CURDIR)/lib/perl install DESTDIR=$(CURDIR)/debian/libthrift-perl/usr
+-	$(MAKE) -C $(CURDIR)/lib/perl install DESTDIR=$(CURDIR)/debian/libthrift-perl
+-	mv $(CURDIR)/debian/libthrift-perl/usr/local/lib/perl5 $(CURDIR)/debian/libthrift-perl/usr/lib
+-	rmdir $(CURDIR)/debian/libthrift-perl/usr/local/lib
+-	rmdir $(CURDIR)/debian/libthrift-perl/usr/local
 -
  	dh_install -i
  
  install-arch:
-@@ -138,29 +88,6 @@
+@@ -146,40 +96,6 @@
  	# debian/tmp.
  	#$(MAKE) DESTDIR=$(CURDIR)/debian/thrift install
  
@@ -248,15 +294,26 @@ diff -Nur debian/rules ../thrift-0.9.3.new/debian/rules
 -
 -	# Python
 -	cd $(CURDIR)/lib/py && \
--	for py in $(PYVERS); do \
--		$$py setup.py install --no-compile --root=$(CURDIR)/debian/python-thrift; \
--		$$py-dbg setup.py install --no-compile --root=$(CURDIR)/debian/python-thrift-dbg; \
--	done
+-	python2 setup.py install --install-layout=deb --no-compile --root=$(CURDIR)/debian/python-thrift && \
+-	python2-dbg setup.py install --install-layout=deb --no-compile --root=$(CURDIR)/debian/python-thrift-dbg && \
+-	python3 setup.py install --install-layout=deb --no-compile --root=$(CURDIR)/debian/python3-thrift && \
+-	python3-dbg setup.py install --install-layout=deb --no-compile --root=$(CURDIR)/debian/python3-thrift-dbg
 -
--	find $(CURDIR)/debian/python-thrift-dbg -name "*.pyc" -print0 | xargs -0 rm -f
+-	find $(CURDIR)/debian/python-thrift -name "*.py[co]" -print0 | xargs -0 rm -f
+-	find $(CURDIR)/debian/python-thrift -name "__pycache__" -print0 | xargs -0 rm -fr
+-	find $(CURDIR)/debian/python-thrift-dbg -name "__pycache__" -print0 | xargs -0 rm -fr
+-	find $(CURDIR)/debian/python-thrift-dbg -name "*.py[co]" -print0 | xargs -0 rm -f
 -	find $(CURDIR)/debian/python-thrift-dbg -name "*.py" -print0 | xargs -0 rm -f
 -	find $(CURDIR)/debian/python-thrift-dbg -name "*.egg-info" -print0 | xargs -0 rm -rf
 -	find $(CURDIR)/debian/python-thrift-dbg -depth -type d -empty -exec rmdir {} \;
+-
+-	find $(CURDIR)/debian/python3-thrift -name "*.py[co]" -print0 | xargs -0 rm -f
+-	find $(CURDIR)/debian/python3-thrift -name "__pycache__" -print0 | xargs -0 rm -fr
+-	find $(CURDIR)/debian/python3-thrift-dbg -name "__pycache__" -print0 | xargs -0 rm -fr
+-	find $(CURDIR)/debian/python3-thrift-dbg -name "*.py[co]" -print0 | xargs -0 rm -f
+-	find $(CURDIR)/debian/python3-thrift-dbg -name "*.py" -print0 | xargs -0 rm -f
+-	find $(CURDIR)/debian/python3-thrift-dbg -name "*.egg-info" -print0 | xargs -0 rm -rf
+-	find $(CURDIR)/debian/python3-thrift-dbg -depth -type d -empty -exec rmdir {} \;
 -
 -	# PHP
 -	mkdir -p $(CURDIR)/debian/php5-thrift
@@ -266,22 +323,22 @@ diff -Nur debian/rules ../thrift-0.9.3.new/debian/rules
  	# C++ and C (glib)
  	mkdir -p $(CURDIR)/debian/tmp; \
  	cd $(CURDIR)/lib/cpp && \
-@@ -182,8 +109,8 @@
+@@ -201,9 +117,8 @@
  	dh_installexamples
  	dh_installman
  	dh_link
--	dh_strip -Npython-thrift-dbg -Nthrift-compiler -Nlibthrift0 --dbg=python-thrift-dbg
--	dh_strip -Npython-thrift-dbg
-+	dh_strip -Nthrift-compiler -Nlibthrift0
+-	dh_strip -ppython-thrift --dbg-package=python-thrift-dbg
+-	dh_strip -ppython3-thrift --dbg-package=python3-thrift-dbg
+ 	dh_strip -pthrift-compiler -plibthrift0
 +	dh_strip
  	dh_compress
  	dh_fixperms
  	dh_makeshlibs
-@@ -199,7 +126,6 @@
+@@ -219,7 +134,6 @@
  
  # Build architecture dependent packages using the common target.
  binary-arch: build-arch install-arch
--	echo "php:Depends=phpapi-$(php-config5 --phpapi)" > debian/substvars
+-	echo "php:Depends=phpapi-$(shell php-config5 --phpapi)" > $(CURDIR)/debian/substvars
  	$(MAKE) -f debian/rules DH_OPTIONS=-s binary-common
  
  binary: binary-arch binary-indep

@@ -1,6 +1,6 @@
 #!/bin/bash -e
 
-    sudo apt update
+sudo apt update
 if [ ! -f /usr/bin/gdebi ]; then
     sudo apt install -y gdebi-core
 fi

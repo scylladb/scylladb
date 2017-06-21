@@ -143,6 +143,20 @@ if [ "$TARGET" = "jessie" ]; then
     sed -i -e "s#@@SCRIPTS_SAVE_COREDUMP@@#dist/debian/scripts/scylla_save_coredump usr/lib/scylla#g" debian/scylla-server.install
     sed -i -e "s#@@SCRIPTS_FSTRIM@@#dist/debian/scripts/scylla_fstrim usr/lib/scylla#g" debian/scylla-server.install
     sed -i -e "s#@@SCRIPTS_DELAY_FSTRIM@@#dist/debian/scripts/scylla_delay_fstrim usr/lib/scylla#g" debian/scylla-server.install
+elif [ "$TARGET" = "stretch" ]; then
+    cp dist/debian/scylla-server.cron.d debian/
+    sed -i -e "s/@@REVISION@@/1/g" debian/changelog
+    sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
+    sed -i -e "s/@@COMPILER@@/g++/g" debian/rules
+    sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++, libunwind8-dev/g" debian/control
+    sed -i -e "s/@@DEPENDS@@//g" debian/control
+    sed -i -e "s#@@INSTALL@@##g" debian/scylla-server.install
+    sed -i -e "s#@@HKDOTTIMER_D@@#dist/common/systemd/scylla-housekeeping-daily.timer /lib/systemd/system#g" debian/scylla-server.install
+    sed -i -e "s#@@HKDOTTIMER_R@@#dist/common/systemd/scylla-housekeeping-restart.timer /lib/systemd/system#g" debian/scylla-server.install
+    sed -i -e "s#@@SYSCTL@@#dist/debian/sysctl.d/99-scylla.conf etc/sysctl.d#g" debian/scylla-server.install
+    sed -i -e "s#@@SCRIPTS_SAVE_COREDUMP@@#dist/debian/scripts/scylla_save_coredump usr/lib/scylla#g" debian/scylla-server.install
+    sed -i -e "s#@@SCRIPTS_FSTRIM@@#dist/debian/scripts/scylla_fstrim usr/lib/scylla#g" debian/scylla-server.install
+    sed -i -e "s#@@SCRIPTS_DELAY_FSTRIM@@#dist/debian/scripts/scylla_delay_fstrim usr/lib/scylla#g" debian/scylla-server.install
 elif [ "$TARGET" = "trusty" ]; then
     cp dist/debian/scylla-server.cron.d debian/
     sed -i -e "s/@@REVISION@@/0ubuntu1/g" debian/changelog
@@ -157,7 +171,7 @@ elif [ "$TARGET" = "trusty" ]; then
     sed -i -e "s#@@SCRIPTS_SAVE_COREDUMP@@#dist/debian/scripts/scylla_save_coredump usr/lib/scylla#g" debian/scylla-server.install
     sed -i -e "s#@@SCRIPTS_FSTRIM@@#dist/debian/scripts/scylla_fstrim usr/lib/scylla#g" debian/scylla-server.install
     sed -i -e "s#@@SCRIPTS_DELAY_FSTRIM@@#dist/debian/scripts/scylla_delay_fstrim usr/lib/scylla#g" debian/scylla-server.install
-else
+elif [ "$TARGET" = "xenial" ]; then
     sed -i -e "s/@@REVISION@@/0ubuntu1/g" debian/changelog
     sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
     sed -i -e "s/@@COMPILER@@/g++/g" debian/rules
@@ -170,6 +184,8 @@ else
     sed -i -e "s#@@SCRIPTS_SAVE_COREDUMP@@##g" debian/scylla-server.install
     sed -i -e "s#@@SCRIPTS_FSTRIM@@##g" debian/scylla-server.install
     sed -i -e "s#@@SCRIPTS_DELAY_FSTRIM@@##g" debian/scylla-server.install
+else
+    echo "Unknown distribution: $TARGET"
 fi
 if [ $DIST -gt 0 ]; then
     sed -i -e "s#@@ADDHKCFG@@#conf/housekeeping.cfg etc/scylla.d/#g" debian/scylla-server.install

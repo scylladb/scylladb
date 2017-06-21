@@ -5,6 +5,7 @@ DISTRIBUTION="$DIST"
 BUILDRESULT="/var/cache/pbuilder/scylla-server-$DIST/result/"
 APTCACHE="/var/cache/pbuilder/scylla-server-$DIST/aptcache/"
 ALLOWUNTRUSTED=yes
+EXTRAPACKAGES="sudo"
 if [ $REBUILD -eq 1 ]; then
     BINDMOUNTS="/var/tmp/pbuilder"
 fi
@@ -33,6 +34,13 @@ elif [ "$DIST" = "jessie" ]; then
     DEBOOTSTRAPOPTS="--keyring=/usr/share/keyrings/debian-archive-keyring.gpg"
     if [ $REBUILD -eq 0 ]; then
         OTHERMIRROR="deb [arch=amd64] http://downloads.scylladb.com/deb/3rdparty/jessie jessie scylladb/non-free"
+    fi
+elif [ "$DIST" = "stretch" ]; then
+    MIRRORSITE="http://deb.debian.org/debian/"
+    COMPONENTS="main contrib non-free"
+    DEBOOTSTRAPOPTS="--keyring=/usr/share/keyrings/debian-archive-keyring.gpg"
+    if [ $REBUILD -eq 0 ]; then
+        OTHERMIRROR="deb [arch=amd64] http://downloads.scylladb.com/deb/3rdparty/stretch stretch scylladb/non-free"
     fi
 else
     echo "Unknown distribution: $DIST"
