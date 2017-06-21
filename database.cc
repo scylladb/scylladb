@@ -883,11 +883,6 @@ column_family::seal_active_streaming_memtable_immediate() {
             // If we ever need to, we'll keep them separate statistics, but we don't want to polute the
             // main stats about memtables with streaming memtables.
             //
-            // Second, we will not bother touching the cache after this flush. The current streaming code
-            // will invalidate the ranges it touches, so we won't do it twice. Even when that changes, the
-            // cache management code in here will have to differ from the main memtable's one. Please see
-            // the comment at flush_streaming_mutations() for details.
-            //
             // Lastly, we don't have any commitlog RP to update, and we don't need to deal manipulate the
             // memtable list, since this memtable was not available for reading up until this point.
             return newtab->write_components(*old, incremental_backups_enabled(), priority).then([this, newtab, old] {
@@ -895,7 +890,12 @@ column_family::seal_active_streaming_memtable_immediate() {
             }).then([this, old, newtab] () {
                 add_sstable(newtab, {engine().cpu_id()});
                 trigger_compaction();
-                return old->clear_gently();
+                // Cache synchronization must be started atomically with add_sstable()
+                if (_config.enable_cache) {
+                    return _cache.update_invalidating(*old);
+                } else {
+                    return old->clear_gently();
+                }
             }).handle_exception([old] (auto ep) {
                 dblog.error("failed to write streamed sstable: {}", ep);
                 return make_exception_future<>(ep);
