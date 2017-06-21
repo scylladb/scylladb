@@ -803,6 +803,20 @@ future<> row_cache::update(memtable& m, partition_presence_checker is_present) {
     });
 }
 
+future<> row_cache::update_invalidating(memtable& m) {
+    return do_update(m, [this] (row_cache::partitions_type::iterator cache_i, memtable_entry& mem_e) {
+        if (cache_i != partitions_end() && cache_i->key().equal(*_schema, mem_e.key())) {
+            // FIXME: Invalidate only affected row ranges.
+            // This invalidates all row ranges and the static row, leaving only the partition tombstone continuous,
+            // which has to always be continuous.
+            cache_entry& e = *cache_i;
+            e.partition() = partition_entry(mutation_partition::make_incomplete(*e.schema(), mem_e.partition().partition_tombstone()));
+        } else {
+            _tracker.clear_continuity(*cache_i);
+        }
+    });
+}
+
 void row_cache::touch(const dht::decorated_key& dk) {
  _read_section(_tracker.region(), [&] {
   with_linearized_managed_bytes([&] {

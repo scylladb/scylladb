@@ -412,6 +412,12 @@ public:
     // After the update is complete, memtable is empty.
     future<> update(memtable&, partition_presence_checker underlying_negative);
 
+    // Like update(), synchronizes cache with an incremental change to the underlying
+    // mutation source, but instead of inserting and merging data, invalidates affected ranges.
+    // Can be thought of as a more fine-grained version of invalidate(), which invalidates
+    // as few elements as possible.
+    future<> update_invalidating(memtable&);
+
     // Moves given partition to the front of LRU if present in cache.
     void touch(const dht::decorated_key&);
 
