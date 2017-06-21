@@ -119,8 +119,8 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
         }
     };
 
-    static auto non_system_filter = [] (const std::pair<utils::UUID, lw_shared_ptr<column_family>>& cf) {
-        return cf.second->schema()->ks_name() != db::system_keyspace::NAME;
+    static auto non_system_filter = [&] (const std::pair<utils::UUID, lw_shared_ptr<column_family>>& cf) {
+        return _db.local().find_keyspace(cf.second->schema()->ks_name()).get_replication_strategy().get_type() != locator::replication_strategy_type::local;
     };
 
     auto cf_to_cache_hit_stats = [] (database& db) {
