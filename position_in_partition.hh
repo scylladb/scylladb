@@ -114,6 +114,7 @@ public:
     }
 
     bool is_static_row() const { return !_ck; }
+    bool is_clustering_row() const { return _ck && !_bound_weight; }
 
     // Returns true if all fragments that can be seen for given schema have
     // positions >= than this.
