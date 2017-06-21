@@ -94,9 +94,6 @@ fi
 if [ ! -f /usr/sbin/pbuilder ]; then
     pkg_install pbuilder
 fi
-if [ ! -f /usr/bin/ant ]; then
-    pkg_install ant
-fi
 if [ ! -f /usr/bin/dh_testdir ]; then
     pkg_install debhelper
 fi
