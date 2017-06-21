@@ -40,10 +40,10 @@ public:
     using time_point = std::chrono::time_point<db_clock, duration>;
 
     static constexpr bool is_steady = base::is_steady;
-    static std::time_t to_time_t(time_point t) {
+    static constexpr std::time_t to_time_t(time_point t) {
         return std::chrono::duration_cast<std::chrono::seconds>(t.time_since_epoch()).count();
     }
-    static time_point from_time_t(std::time_t t) {
+    static constexpr time_point from_time_t(std::time_t t) {
         return time_point(std::chrono::duration_cast<duration>(std::chrono::seconds(t)));
     }
     static time_point now() {
