@@ -581,6 +581,7 @@ void partition_entry::apply_to_incomplete(const schema& s, partition_version* ve
 mutation_partition partition_entry::squashed(schema_ptr from, schema_ptr to)
 {
     mutation_partition mp(to);
+    mp.set_static_row_continuous(_version->partition().static_row_continuous());
     for (auto&& v : _version->all_elements()) {
         mp.apply(*to, v.partition(), *from);
     }
@@ -595,6 +596,7 @@ mutation_partition partition_entry::squashed(const schema& s)
 void partition_entry::upgrade(schema_ptr from, schema_ptr to)
 {
     auto new_version = current_allocator().construct<partition_version>(mutation_partition(to));
+    new_version->partition().set_static_row_continuous(_version->partition().static_row_continuous());
     try {
         for (auto&& v : _version->all_elements()) {
             new_version->partition().apply(*to, v.partition(), *from);
