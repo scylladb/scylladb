@@ -789,7 +789,7 @@ inline void write(file_writer& out, const utils::estimated_histogram& eh) {
     out.write(p, bytes).get();
 }
 
-future<> parse(random_access_reader& in, sstables::streaming_histogram& sh) {
+future<> parse(random_access_reader& in, utils::streaming_histogram& sh) {
     auto bin = std::make_unique<disk_hash<uint32_t, double, uint64_t>>();
     auto f = parse(in, sh.max_bin_size, *bin);
     return f.then([&sh, bin = std::move(bin)] {
@@ -798,7 +798,7 @@ future<> parse(random_access_reader& in, sstables::streaming_histogram& sh) {
     });
 }
 
-inline void write(file_writer& out, const sstables::streaming_histogram& sh) {
+inline void write(file_writer& out, const utils::streaming_histogram& sh) {
     uint32_t max_bin_size;
     check_truncate_and_assign(max_bin_size, sh.max_bin_size);
 
