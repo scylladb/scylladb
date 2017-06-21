@@ -857,7 +857,7 @@ seastar_deps = 'practically_anything_can_change_so_lets_run_it_every_time_and_re
 
 args.user_cflags += " " + pkg_config("--cflags", "jsoncpp")
 libs = ' '.join(['-lyaml-cpp', '-llz4', '-lz', '-lsnappy', pkg_config("--libs", "jsoncpp"),
-                 maybe_static(args.staticboost, '-lboost_filesystem'), ' -lcrypt',
+                 maybe_static(args.staticboost, '-lboost_filesystem'), ' -lcrypt', ' -lcryptopp',
                  maybe_static(args.staticboost, '-lboost_date_time'),
                 ])
 
