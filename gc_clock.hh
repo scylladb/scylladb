@@ -42,6 +42,14 @@ public:
     using duration = std::chrono::duration<rep, period>;
     using time_point = std::chrono::time_point<gc_clock, duration>;
 
+    static constexpr std::time_t to_time_t(time_point t) {
+        return std::chrono::duration_cast<std::chrono::seconds>(t.time_since_epoch()).count();
+    }
+
+    static constexpr time_point from_time_t(std::time_t t) {
+        return time_point(std::chrono::duration_cast<duration>(std::chrono::seconds(t)));
+    }
+
     static time_point now() {
         return time_point(std::chrono::duration_cast<duration>(base::now().time_since_epoch())) + get_clocks_offset();
     }
