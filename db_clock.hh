@@ -19,14 +19,14 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef DB_CLOCK_HH_
-#define DB_CLOCK_HH_
+#pragma once
+
+#include "gc_clock.hh"
 
 #include <chrono>
 #include <cstdint>
 #include <ratio>
 #include <type_traits>
-#include "gc_clock.hh"
 
 // the database clock follows Java - 1ms granularity, 64-bit counter, 1970 epoch
 
@@ -65,5 +65,3 @@ gc_clock::time_point to_gc_clock(db_clock::time_point tp) {
 
     return gc_clock::from_time_t(db_clock::to_time_t(tp));
 }
-
-#endif /* DB_CLOCK_HH_ */
