@@ -1045,9 +1045,6 @@ future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp
     }).then([] {
         return db::schema_tables::save_system_keyspace_schema();
     }).then([] {
-        // #2514 - make sure "system" is written to system_schema.keyspaces.
-        return db::schema_tables::save_system_schema(NAME);
-    }).then([] {
         return netw::get_messaging_service().invoke_on_all([] (auto& ms){
             return ms.init_local_preferred_ip_cache();
         });
