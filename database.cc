@@ -1358,7 +1358,6 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
 
         auto create_sstable = [this] {
                 auto gen = this->calculate_generation_for_new_table();
-                // FIXME: use "tmp" marker in names of incomplete sstable
                 auto sst = make_lw_shared<sstables::sstable>(_schema, _config.datadir, gen,
                         sstables::sstable::version_types::ka,
                         sstables::sstable::format_types::big);
@@ -1413,7 +1412,6 @@ future<> column_family::cleanup_sstables(sstables::compaction_descriptor descrip
     });
 }
 
-// FIXME: this is just an example, should be changed to something more general
 // Note: We assume that the column_family does not get destroyed during compaction.
 future<>
 column_family::compact_all_sstables() {
