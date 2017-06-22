@@ -47,14 +47,7 @@
 #include "log.hh"
 
 class leveled_manifest {
-    logging::logger logger;
-
-    /**
-     * limit the number of L0 sstables we do at once, because compaction bloom filter creation
-     * uses a pessimistic estimate of how many keys overlap (none), so we risk wasting memory
-     * or even OOMing when compacting highly overlapping sstables
-     */
-    static constexpr int MAX_COMPACTING_L0 = 32;
+    static logging::logger logger;
 
     schema_ptr _schema;
     std::vector<std::list<sstables::shared_sstable>> _generations;
@@ -69,6 +62,12 @@ class leveled_manifest {
     };
 public:
     /**
+     * limit the number of L0 sstables we do at once, because compaction bloom filter creation
+     * uses a pessimistic estimate of how many keys overlap (none), so we risk wasting memory
+     * or even OOMing when compacting highly overlapping sstables
+     */
+    static constexpr int MAX_COMPACTING_L0 = 32;
+    /**
      * If we go this many rounds without compacting
      * in the highest level, we start bringing in sstables from
      * that level into lower level compactions
@@ -78,25 +77,14 @@ public:
     static constexpr int MAX_LEVELS = 9; // log10(1000^3);
 
     leveled_manifest(column_family& cfs, int max_sstable_size_in_MB)
-        : logger("LeveledManifest")
-        , _schema(cfs.schema())
+        : _schema(cfs.schema())
         , _max_sstable_size_in_bytes(max_sstable_size_in_MB * 1024 * 1024)
     {
         // allocate enough generations for a PB of data, with a 1-MB sstable size.  (Note that if maxSSTableSize is
         // updated, we will still have sstables of the older, potentially smaller size.  So don't make this
         // dependent on maxSSTableSize.)
         _generations.resize(MAX_LEVELS);
-#if 0
-        compactionCounter = new int[n];
-#endif
     }
-
-#if 0
-    public static LeveledManifest create(ColumnFamilyStore cfs, int maxSSTableSize, List<SSTableReader> sstables)
-    {
-        return create(cfs, maxSSTableSize, sstables, new SizeTieredCompactionStrategyOptions());
-    }
-#endif
 
     static leveled_manifest create(column_family& cfs, std::vector<sstables::shared_sstable>& sstables, int max_sstable_size_in_mb) {
         leveled_manifest manifest = leveled_manifest(cfs, max_sstable_size_in_mb);
@@ -417,10 +405,6 @@ public:
     }
 
     size_t get_level_size(uint32_t level) {
-#if 0
-        if (i >= generations.length)
-            throw new ArrayIndexOutOfBoundsException("Maximum valid generation is " + (generations.length - 1));
-#endif
         return get_level(level).size();
     }
 
@@ -538,23 +522,8 @@ public:
         assert(!get_level(level).empty());
 
         logger.debug("Choosing candidates for L{}", level);
-#if 0
-        final Set<SSTableReader> compacting = cfs.getDataTracker().getCompacting();
-#endif
-        if (level == 0) {
-#if 0
-            Set<SSTableReader> compactingL0 = ImmutableSet.copyOf(Iterables.filter(getLevel(0), Predicates.in(compacting)));
 
-            RowPosition lastCompactingKey = null;
-            RowPosition firstCompactingKey = null;
-            for (SSTableReader candidate : compactingL0)
-            {
-                if (firstCompactingKey == null || candidate.first.compareTo(firstCompactingKey) < 0)
-                    firstCompactingKey = candidate.first;
-                if (lastCompactingKey == null || candidate.last.compareTo(lastCompactingKey) > 0)
-                    lastCompactingKey = candidate.last;
-            }
-#endif
+        if (level == 0) {
 
             // L0 is the dumping ground for new sstables which thus may overlap each other.
             //
@@ -569,46 +538,12 @@ public:
             // Note that we ignore suspect-ness of L1 sstables here, since if an L1 sstable is suspect we're
             // basically screwed, since we expect all or most L0 sstables to overlap with each L1 sstable.
             // So if an L1 sstable is suspect we can't do much besides try anyway and hope for the best.
-            std::vector<sstables::shared_sstable> candidates;
-            std::list<sstables::shared_sstable> remaining = get_level(0);
-#if 0
-            Iterables.addAll(remaining, Iterables.filter(getLevel(0), Predicates.not(suspectP)));
-#endif
-            for (auto& sstable : age_sorted_sstables(remaining)) {
-                auto it = std::find(candidates.begin(), candidates.end(), sstable);
-                if (it != candidates.end()) {
-                    continue;
-                }
+            auto candidates = boost::copy_range<std::vector<sstables::shared_sstable>>(get_level(0));
 
-                auto overlappedL0 = overlapping(*_schema, sstable, remaining);
-                it = std::find(overlappedL0.begin(), overlappedL0.end(), sstable);
-                if (it == overlappedL0.end()) {
-                    overlappedL0.push_back(sstable);
-                }
-
-#if 0
-                if (!Sets.intersection(overlappedL0, compactingL0).isEmpty())
-                    continue;
-#endif
-
-                for (auto& new_candidate : overlappedL0) {
-#if 0
-                    if (firstCompactingKey == null || lastCompactingKey == null || overlapping(firstCompactingKey.getToken(), lastCompactingKey.getToken(), Arrays.asList(newCandidate)).size() == 0)
-                        candidates.add(newCandidate);
-#else
-                    candidates.push_back(new_candidate);
-#endif
-                    remaining.remove(new_candidate);
-                }
-
-                if (candidates.size() > MAX_COMPACTING_L0) {
-                    // limit to only the MAX_COMPACTING_L0 oldest candidates
-                    auto age_sorted_candidates = age_sorted_sstables(candidates);
-                    // create a sub list of age_sorted_candidates by resizing it.
-                    age_sorted_candidates.resize(MAX_COMPACTING_L0);
-                    candidates = std::move(age_sorted_candidates);
-                    break;
-                }
+            if (candidates.size() > MAX_COMPACTING_L0) {
+                // limit to only the MAX_COMPACTING_L0 oldest candidates
+                sort_sstables_by_age(candidates);
+                candidates.resize(MAX_COMPACTING_L0);
             }
 
             // leave everything in L0 if we didn't end up with a full sstable's worth of data
@@ -617,13 +552,7 @@ public:
                 // if the overlapping ones are already busy in a compaction, leave it out.
                 // TODO try to find a set of L0 sstables that only overlaps with non-busy L1 sstables
                 auto l1overlapping = overlapping(*_schema, candidates, get_level(1));
-                for (auto candidate : l1overlapping) {
-                    auto it = std::find(candidates.begin(), candidates.end(), candidate);
-                    if (it != candidates.end()) {
-                        continue;
-                    }
-                    candidates.push_back(candidate);
-                }
+                candidates.insert(candidates.end(), l1overlapping.begin(), l1overlapping.end());
             }
             if (candidates.size() < 2) {
                 return {};
@@ -688,24 +617,10 @@ public:
         return {};
     }
 
-    std::list<sstables::shared_sstable> age_sorted_sstables(std::list<sstables::shared_sstable>& candidates) {
-        auto age_sorted_candidates = candidates;
-
-        age_sorted_candidates.sort([] (auto& i, auto& j) {
-            return i->compare_by_max_timestamp(*j) > 0;
+    void sort_sstables_by_age(std::vector<sstables::shared_sstable>& candidates) {
+        std::sort(candidates.begin(), candidates.end(), [] (auto& i, auto& j) {
+            return i->compare_by_max_timestamp(*j) < 0;
         });
-
-        return age_sorted_candidates;
-    }
-
-    std::vector<sstables::shared_sstable> age_sorted_sstables(std::vector<sstables::shared_sstable>& candidates) {
-        auto age_sorted_candidates = candidates;
-
-        std::sort(age_sorted_candidates.begin(), age_sorted_candidates.end(), [] (auto& i, auto& j) {
-            return i->compare_by_max_timestamp(*j) > 0;
-        });
-
-        return age_sorted_candidates;
     }
 #if 0
     @Override
