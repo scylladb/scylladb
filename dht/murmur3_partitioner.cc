@@ -130,7 +130,7 @@ murmur3_partitioner::bias(uint64_t n) const {
 }
 
 sstring murmur3_partitioner::to_sstring(const token& t) const {
-    return ::to_sstring<sstring>(long_token(t));
+    return seastar::to_sstring<sstring>(long_token(t));
 }
 
 dht::token murmur3_partitioner::from_sstring(const sstring& t) const {
