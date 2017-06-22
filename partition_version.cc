@@ -123,6 +123,12 @@ mutation_partition partition_snapshot::squashed() const {
                                [this] (mutation_partition& a, const mutation_partition& b) { a.apply(*_schema, b, *_schema); });
 }
 
+tombstone partition_entry::partition_tombstone() const {
+    return ::squashed<tombstone>(_version,
+        [] (const mutation_partition& mp) { return mp.partition_tombstone(); },
+        [] (tombstone& a, tombstone b) { a.apply(b); });
+}
+
 partition_snapshot::~partition_snapshot() {
     if (_version && _version.is_unique_owner()) {
         auto v = &*_version;

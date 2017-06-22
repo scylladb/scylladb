@@ -343,6 +343,7 @@ public:
 
     mutation_partition squashed(schema_ptr from, schema_ptr to);
     mutation_partition squashed(const schema&);
+    tombstone partition_tombstone() const;
 
     // needs to be called with reclaiming disabled
     void upgrade(schema_ptr from, schema_ptr to);
