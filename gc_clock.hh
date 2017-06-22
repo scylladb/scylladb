@@ -29,7 +29,7 @@
 #include <experimental/optional>
 
 // FIXME: wraps around in 2038
-class gc_clock {
+class gc_clock final {
 public:
     using base = seastar::lowres_system_clock;
     using rep = int32_t;

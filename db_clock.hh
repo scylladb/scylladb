@@ -31,7 +31,7 @@
 
 // the database clock follows Java - 1ms granularity, 64-bit counter, 1970 epoch
 
-class db_clock {
+class db_clock final {
 public:
     using base = std::chrono::system_clock;
     using rep = int64_t;

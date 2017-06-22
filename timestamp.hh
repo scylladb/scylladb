@@ -36,7 +36,7 @@ timestamp_type constexpr max_timestamp = std::numeric_limits<timestamp_type>::ma
 // Used for generating server-side mutation timestamps.
 // Same epoch as Java's System.currentTimeMillis() for compatibility.
 // Satisfies requirements of Clock.
-class timestamp_clock {
+class timestamp_clock final {
     using base = std::chrono::system_clock;
 public:
     using rep = timestamp_type;
