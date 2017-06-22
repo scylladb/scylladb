@@ -3814,24 +3814,26 @@ future<> column_family::flush_streaming_mutations(utils::UUID plan_id, dht::part
     // be to change seal_active_streaming_memtable_delayed to take a range parameter. However, we
     // need this code to go away as soon as we can (see FIXME above). So the double gate is a better
     // temporary counter measure.
-    return with_gate(_streaming_flush_gate, [this, plan_id, ranges = std::move(ranges)] {
-        return flush_streaming_big_mutations(plan_id).then([this] {
-            return _streaming_memtables->seal_active_memtable(memtable_list::flush_behavior::delayed);
-        }).finally([this] {
-            return _streaming_flush_phaser.advance_and_await();
-        }).finally([this, ranges = std::move(ranges)] () mutable {
-            if (!_config.enable_cache) {
-                return make_ready_future<>();
-            }
-            return _cache.invalidate(std::move(ranges));
+    return with_gate(_streaming_flush_gate, [this, plan_id, ranges = std::move(ranges)] () mutable {
+        return flush_streaming_big_mutations(plan_id).then([this, ranges = std::move(ranges)] (auto sstables) mutable {
+            return _streaming_memtables->seal_active_memtable(memtable_list::flush_behavior::delayed).then([this] {
+                return _streaming_flush_phaser.advance_and_await();
+            }).then([this, sstables = std::move(sstables), ranges = std::move(ranges)] () mutable {
+                for (auto&& sst : sstables) {
+                    // seal_active_streaming_memtable_big() ensures sst is unshared.
+                    this->add_sstable(sst, {engine().cpu_id()});
+                }
+                this->trigger_compaction();
+                return _cache.invalidate(std::move(ranges));
+            });
         });
     });
 }
 
-future<> column_family::flush_streaming_big_mutations(utils::UUID plan_id) {
+future<std::vector<sstables::shared_sstable>> column_family::flush_streaming_big_mutations(utils::UUID plan_id) {
     auto it = _streaming_memtables_big.find(plan_id);
     if (it == _streaming_memtables_big.end()) {
-        return make_ready_future<>();
+        return make_ready_future<std::vector<sstables::shared_sstable>>(std::vector<sstables::shared_sstable>());
     }
     auto entry = it->second;
     _streaming_memtables_big.erase(it);
@@ -3843,11 +3845,7 @@ future<> column_family::flush_streaming_big_mutations(utils::UUID plan_id) {
                 return sst->open_data();
             });
         }).then([this, entry] {
-            for (auto&& sst : entry->sstables) {
-                // seal_active_streaming_memtable_big() ensures sst is unshared.
-                add_sstable(sst, {engine().cpu_id()});
-            }
-            trigger_compaction();
+            return std::move(entry->sstables);
         });
     });
 }

@@ -504,7 +504,7 @@ private:
     };
     std::unordered_map<utils::UUID, lw_shared_ptr<streaming_memtable_big>> _streaming_memtables_big;
 
-    future<> flush_streaming_big_mutations(utils::UUID plan_id);
+    future<std::vector<sstables::shared_sstable>> flush_streaming_big_mutations(utils::UUID plan_id);
     void apply_streaming_big_mutation(schema_ptr m_schema, utils::UUID plan_id, const frozen_mutation& m);
     future<> seal_active_streaming_memtable_big(streaming_memtable_big& smb);
 
