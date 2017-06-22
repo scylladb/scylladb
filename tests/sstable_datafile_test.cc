@@ -3787,3 +3787,17 @@ SEASTAR_TEST_CASE(sstable_tombstone_histogram_test) {
         BOOST_REQUIRE(histogram.bin == histogram2.bin);
     });
 }
+
+SEASTAR_TEST_CASE(sstable_bad_tombstone_histogram_test) {
+    return seastar::async([] {
+        auto builder = schema_builder("tests", "tombstone_histogram_test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        auto s = builder.build();
+        auto sst = reusable_sst(s, "tests/sstables/bad_tombstone_histogram", 1).get0();
+        auto histogram = sst->get_stats_metadata().estimated_tombstone_drop_time;
+        BOOST_REQUIRE(histogram.max_bin_size == sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE);
+        // check that bad histogram was discarded
+        BOOST_REQUIRE(histogram.bin.empty());
+    });
+}
