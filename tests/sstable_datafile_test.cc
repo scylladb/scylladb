@@ -3801,3 +3801,53 @@ SEASTAR_TEST_CASE(sstable_bad_tombstone_histogram_test) {
         BOOST_REQUIRE(histogram.bin.empty());
     });
 }
+
+SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
+    return seastar::async([] {
+        auto tmp = make_lw_shared<tmpdir>();
+        auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+            {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type));
+
+        auto mt = make_lw_shared<memtable>(s);
+
+        static constexpr int total_keys = 100;
+        static constexpr float expired = 0.33;
+        auto insert_key = [&] (bytes k, uint32_t ttl, uint32_t expiration_time) {
+            auto key = partition_key::from_exploded(*s, {k});
+            mutation m(key, s);
+            auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
+            m.set_clustered_cell(c_key, *s->get_column_definition("r1"), make_atomic_cell(bytes("a"), ttl, expiration_time));
+            mt->apply(std::move(m));
+        };
+
+        auto expired_keys = total_keys*expired;
+        auto expiration_time = (gc_clock::now() - gc_clock::duration(DEFAULT_GC_GRACE_SECONDS*2)).time_since_epoch().count();
+        for (auto i = 0; i < expired_keys; i++) {
+            insert_key(to_bytes("expired_key" + to_sstring(i)), 1, expiration_time);
+        }
+        auto remaining = total_keys-expired_keys;
+        expiration_time = (gc_clock::now() + gc_clock::duration(3600)).time_since_epoch().count();
+        for (auto i = 0; i < remaining; i++) {
+            insert_key(to_bytes("key" + to_sstring(i)), 3600, expiration_time);
+        }
+        auto sst = make_lw_shared<sstable>(s, tmp->path, 1, la, big);
+        write_memtable_to_sstable(*mt, sst).get();
+        sst = reusable_sst(s, tmp->path, 1).get0();
+        auto gc_before = gc_clock::now() - s->gc_grace_seconds();
+        // Asserts that two keys are equal to within a positive delta
+        BOOST_REQUIRE(std::fabs(sst->estimate_droppable_tombstone_ratio(gc_before) - expired) <= 0.1);
+
+        auto cm = make_lw_shared<compaction_manager>();
+        auto cl_stats = make_lw_shared<cell_locker_stats>();
+        auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm, *cl_stats);
+        cf->mark_ready_for_writes();
+        auto creator = [&] {
+            auto sst = make_lw_shared<sstables::sstable>(s, tmp->path, 2, la, big);
+            sst->set_unshared();
+            return sst;
+        };
+        auto new_sstables = sstables::compact_sstables({ sst }, *cf, creator, std::numeric_limits<uint64_t>::max(), 0).get0();
+        BOOST_REQUIRE(new_sstables.size() == 1);
+        BOOST_REQUIRE(new_sstables.front()->estimate_droppable_tombstone_ratio(gc_before) == 0.0f);
+    });
+}
