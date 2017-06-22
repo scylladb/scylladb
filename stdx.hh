@@ -23,4 +23,5 @@
 #pragma once
 
 namespace std { namespace experimental {} }
-inline namespace seastar { namespace stdx = std::experimental; }
+namespace seastar { namespace stdx = std::experimental; }
+using namespace seastar;
