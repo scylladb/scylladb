@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "clocks-impl.hh"
 #include "gc_clock.hh"
 
 #include <chrono>

@@ -24,7 +24,7 @@
 #include <cstdint>
 #include <limits>
 #include <chrono>
-#include "db_clock.hh"
+#include "clocks-impl.hh"
 
 namespace api {
 
