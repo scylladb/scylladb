@@ -556,7 +556,7 @@ int main(int argc, char** argv) {
 
                     std::cout << "Config: rows: " << cfg.n_rows << ", value size: " << cfg.value_size << "\n";
 
-                    ::sleep(1s).get(); // wait for system table flushes to quiesce
+                    sleep(1s).get(); // wait for system table flushes to quiesce
 
                     bool cancel = false;
                     engine().at_exit([&] {
