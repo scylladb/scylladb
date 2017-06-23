@@ -1694,3 +1694,61 @@ SEASTAR_TEST_CASE(test_cache_populates_partition_tombstone) {
         }
     });
 }
+
+// Tests the case of cache reader having to reconcile a range tombstone
+// from the underlying mutation source which overlaps with previously emitted
+// tombstones.
+SEASTAR_TEST_CASE(test_tombstone_merging_in_partial_partition) {
+    return seastar::async([] {
+        simple_schema s;
+        cache_tracker tracker;
+        memtable_snapshot_source underlying(s.schema());
+
+        auto pk = s.make_pkey(0);
+        auto pr = dht::partition_range::make_singular(pk);
+
+        tombstone t0{s.new_timestamp(), gc_clock::now()};
+        tombstone t1{s.new_timestamp(), gc_clock::now()};
+
+        mutation m1(pk, s.schema());
+        m1.partition().apply_delete(*s.schema(),
+            s.make_range_tombstone(query::clustering_range::make(s.make_ckey(0), s.make_ckey(10)), t0));
+        underlying.apply(m1);
+
+        mutation m2(pk, s.schema());
+        m2.partition().apply_delete(*s.schema(),
+            s.make_range_tombstone(query::clustering_range::make(s.make_ckey(3), s.make_ckey(6)), t1));
+        m2.partition().apply_delete(*s.schema(),
+            s.make_range_tombstone(query::clustering_range::make(s.make_ckey(7), s.make_ckey(12)), t1));
+        s.add_row(m2, s.make_ckey(4), "val");
+        s.add_row(m2, s.make_ckey(8), "val");
+        underlying.apply(m2);
+
+        row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+        {
+            auto slice = partition_slice_builder(*s.schema())
+                .with_range(query::clustering_range::make_singular(s.make_ckey(4)))
+                .build();
+
+            assert_that(cache.make_reader(s.schema(), pr, slice))
+                .produces(m1 + m2, slice.row_ranges(*s.schema(), pk.key()))
+                .produces_end_of_stream();
+        }
+
+        {
+            auto slice = partition_slice_builder(*s.schema())
+                .with_range(query::clustering_range::make_starting_with(s.make_ckey(4)))
+                .build();
+
+            assert_that(cache.make_reader(s.schema(), pr, slice))
+                .produces(m1 + m2, slice.row_ranges(*s.schema(), pk.key()))
+                .produces_end_of_stream();
+
+            auto rd = cache.make_reader(s.schema(), pr, slice);
+            auto smo = rd().get0();
+            BOOST_REQUIRE(smo);
+            assert_that_stream(std::move(*smo)).has_monotonic_positions();
+        }
+    });
+}
