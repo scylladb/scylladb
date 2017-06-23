@@ -1397,3 +1397,51 @@ SEASTAR_TEST_CASE(test_lru) {
                 .produces_end_of_stream();
     });
 }
+
+SEASTAR_TEST_CASE(test_update_invalidating) {
+    return seastar::async([] {
+        simple_schema s;
+        cache_tracker tracker;
+        memtable_snapshot_source underlying(s.schema());
+
+        auto mutation_for_key = [&] (dht::decorated_key key) {
+            mutation m(key, s.schema());
+            s.add_row(m, s.make_ckey(0), "val");
+            return m;
+        };
+
+        auto keys = s.make_pkeys(4);
+
+        auto m1 = mutation_for_key(keys[1]);
+        underlying.apply(m1);
+
+        auto m2 = mutation_for_key(keys[3]);
+        underlying.apply(m2);
+
+        row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+        assert_that(cache.make_reader(s.schema()))
+            .produces(m1)
+            .produces(m2)
+            .produces_end_of_stream();
+
+        auto mt = make_lw_shared<memtable>(s.schema());
+
+        auto m3 = mutation_for_key(m1.decorated_key());
+        auto m4 = mutation_for_key(keys[2]);
+        auto m5 = mutation_for_key(keys[0]);
+        mt->apply(m3);
+        mt->apply(m4);
+        mt->apply(m5);
+
+        underlying.apply(*mt);
+        cache.update_invalidating(*mt).get();
+
+        assert_that(cache.make_reader(s.schema()))
+            .produces(m5)
+            .produces(m1 + m3)
+            .produces(m4)
+            .produces(m2)
+            .produces_end_of_stream();
+    });
+}
