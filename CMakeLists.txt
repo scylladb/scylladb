@@ -2,7 +2,7 @@
 ## For best results, first compile the project using the Ninja build-system.
 ##
 
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.7)
 project(scylla)
 
 if (NOT DEFINED ENV{CLION_IDE})
@@ -24,6 +24,8 @@ find_package(PkgConfig REQUIRED)
 
 set(ENV{PKG_CONFIG_PATH} "${CMAKE_SOURCE_DIR}/seastar/build/release:$ENV{PKG_CONFIG_PATH}")
 pkg_check_modules(SEASTAR seastar)
+
+find_package(Boost COMPONENTS filesystem program_options system thread)
 
 ##
 ## Populate the names of all source and header files in the indicated paths in a designated variable.
@@ -134,4 +136,5 @@ target_include_directories(scylla PUBLIC
         .
         ${SEASTAR_DPDK_INCLUDE_DIRS}
         ${SEASTAR_INCLUDE_DIRS}
+        ${Boost_INCLUDE_DIRS}
         build/release/gen)
