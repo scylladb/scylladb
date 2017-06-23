@@ -43,6 +43,7 @@ void init_storage_service(distributed<database>& db) {
 void init_ms_fd_gossiper(sstring listen_address_in
                 , uint16_t storage_port
                 , uint16_t ssl_storage_port
+                , bool tcp_nodelay_inter_dc
                 , sstring ms_encrypt_what
                 , sstring ms_trust_store
                 , sstring ms_cert
@@ -59,6 +60,7 @@ void init_ms_fd_gossiper(sstring listen_address_in
 
     using encrypt_what = netw::messaging_service::encrypt_what;
     using compress_what = netw::messaging_service::compress_what;
+    using tcp_nodelay_what = netw::messaging_service::tcp_nodelay_what;
     using namespace seastar::tls;
 
     encrypt_what ew = encrypt_what::none;
@@ -75,6 +77,11 @@ void init_ms_fd_gossiper(sstring listen_address_in
         cw = compress_what::all;
     } else if (ms_compress == "dc") {
         cw = compress_what::dc;
+    }
+
+    tcp_nodelay_what tndw = tcp_nodelay_what::all;
+    if (!tcp_nodelay_inter_dc) {
+        tndw = tcp_nodelay_what::local;
     }
 
     future<> f = make_ready_future<>();
@@ -102,7 +109,7 @@ void init_ms_fd_gossiper(sstring listen_address_in
     // Init messaging_service
     // Delay listening messaging_service until gossip message handlers are registered
     bool listen_now = false;
-    netw::get_messaging_service().start(listen, storage_port, ew, cw, ssl_storage_port, creds, sltba, listen_now).get();
+    netw::get_messaging_service().start(listen, storage_port, ew, cw, tndw, ssl_storage_port, creds, sltba, listen_now).get();
 
     // #293 - do not stop anything
     //engine().at_exit([] { return netw::get_messaging_service().stop(); });

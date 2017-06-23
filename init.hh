@@ -35,6 +35,7 @@ void init_storage_service(distributed<database>& db);
 void init_ms_fd_gossiper(sstring listen_address
                 , uint16_t storage_port
                 , uint16_t ssl_storage_port
+                , bool tcp_nodelay_inter_dc
                 , sstring ms_encrypt_what
                 , sstring ms_trust_store
                 , sstring ms_cert

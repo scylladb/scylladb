@@ -184,12 +184,18 @@ public:
         all,
     };
 
+    enum class tcp_nodelay_what {
+        local,
+        all,
+    };
+
 private:
     gms::inet_address _listen_address;
     uint16_t _port;
     uint16_t _ssl_port;
     encrypt_what _encrypt_what;
     compress_what _compress_what;
+    tcp_nodelay_what _tcp_nodelay_what;
     bool _should_listen_to_broadcast_address;
     // map: Node broadcast address -> Node internal IP for communication within the same data center
     std::unordered_map<gms::inet_address, gms::inet_address> _preferred_ip_cache;
@@ -207,7 +213,7 @@ public:
 public:
     messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"),
             uint16_t port = 7000, bool listen_now = true);
-    messaging_service(gms::inet_address ip, uint16_t port, encrypt_what, compress_what,
+    messaging_service(gms::inet_address ip, uint16_t port, encrypt_what, compress_what, tcp_nodelay_what,
             uint16_t ssl_port, std::shared_ptr<seastar::tls::credentials_builder>,
             bool sltba = false, bool listen_now = true);
     ~messaging_service();

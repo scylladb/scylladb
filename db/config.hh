@@ -538,7 +538,7 @@ public:
             "\tdc : Traffic between data centers is compressed.\n"  \
             "\tnone : No compression."  \
     )   \
-    val(inter_dc_tcp_nodelay, bool, false, Unused,     \
+    val(inter_dc_tcp_nodelay, bool, false, Used,     \
             "Enable or disable tcp_nodelay for inter-data center communication. When disabled larger, but fewer, network packets are sent. This reduces overhead from the TCP protocol itself. However, if cross data-center responses are blocked, it will increase latency."  \
     )   \
     val(streaming_socket_timeout_in_ms, uint32_t, 0, Unused,     \

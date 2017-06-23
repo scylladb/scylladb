@@ -490,6 +490,7 @@ int main(int ac, char** av) {
             sstring cluster_name = cfg->cluster_name();
 
             const auto& ssl_opts = cfg->server_encryption_options();
+            auto tcp_nodelay_inter_dc = cfg->inter_dc_tcp_nodelay();
             auto encrypt_what = get_or_default(ssl_opts, "internode_encryption", "none");
             auto trust_store = get_or_default(ssl_opts, "truststore");
             auto cert = get_or_default(ssl_opts, "certificate", relative_conf_dir("scylla.crt").string());
@@ -499,6 +500,7 @@ int main(int ac, char** av) {
             init_ms_fd_gossiper(listen_address
                     , storage_port
                     , ssl_storage_port
+                    , tcp_nodelay_inter_dc
                     , encrypt_what
                     , trust_store
                     , cert

@@ -237,7 +237,7 @@ void register_handler(messaging_service* ms, messaging_verb verb, Func&& func) {
 }
 
 messaging_service::messaging_service(gms::inet_address ip, uint16_t port, bool listen_now)
-    : messaging_service(std::move(ip), port, encrypt_what::none, compress_what::none, 0, nullptr, false, listen_now)
+    : messaging_service(std::move(ip), port, encrypt_what::none, compress_what::none, tcp_nodelay_what::all, 0, nullptr, false, listen_now)
 {}
 
 static
@@ -256,6 +256,9 @@ void messaging_service::start_listen() {
     if (_compress_what != compress_what::none) {
         so.compressor_factory = &compressor_factory;
     }
+    // FIXME: we don't set so.tcp_nodelay, because we can't tell at this point whether the connection will come from a
+    //        local or remote datacenter, and whether or not the connection will be used for gossip. We can fix
+    //        the first by wrapping its server_socket, but not the second.
     if (!_server[0]) {
         auto listen = [&] (const gms::inet_address& a) {
             auto addr = ipv4_addr{a.raw_addr(), _port};
@@ -300,6 +303,7 @@ messaging_service::messaging_service(gms::inet_address ip
         , uint16_t port
         , encrypt_what ew
         , compress_what cw
+        , tcp_nodelay_what tnw
         , uint16_t ssl_port
         , std::shared_ptr<seastar::tls::credentials_builder> credentials
         , bool sltba
@@ -309,6 +313,7 @@ messaging_service::messaging_service(gms::inet_address ip
     , _ssl_port(ssl_port)
     , _encrypt_what(ew)
     , _compress_what(cw)
+    , _tcp_nodelay_what(tnw)
     , _should_listen_to_broadcast_address(sltba)
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _credentials(credentials ? credentials->build_server_credentials() : nullptr)
@@ -496,6 +501,18 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         return true;
     }();
 
+    auto must_tcp_nodelay = [&] {
+        if (idx == 1) {
+            return true; // gossip
+        }
+        if (_tcp_nodelay_what == tcp_nodelay_what::local) {
+            auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+            return snitch_ptr->get_datacenter(id.addr)
+                            == snitch_ptr->get_datacenter(utils::fb_utilities::get_broadcast_address());
+        }
+        return true;
+    }();
+
     auto remote_addr = ipv4_addr(get_preferred_ip(id.addr).raw_addr(), must_encrypt ? _ssl_port : _port);
     auto local_addr = ipv4_addr{_listen_address.raw_addr(), 0};
 
@@ -505,6 +522,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     if (must_compress) {
         opts.compressor_factory = &compressor_factory;
     }
+    opts.tcp_nodelay = must_tcp_nodelay;
 
     auto client = must_encrypt ?
                     ::make_shared<rpc_protocol_client_wrapper>(*_rpc, std::move(opts),
