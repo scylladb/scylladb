@@ -110,9 +110,12 @@ public:
         return rt;
     }
 
-    range_tombstone make_range_tombstone(const query::clustering_range& range) {
+    range_tombstone make_range_tombstone(const query::clustering_range& range, tombstone t = {}) {
         auto bv_range = bound_view::from_range(range);
-        range_tombstone rt(bv_range.first, bv_range.second, tombstone(new_timestamp(), gc_clock::now()));
+        if (!t) {
+            t = tombstone(new_timestamp(), gc_clock::now());
+        }
+        range_tombstone rt(bv_range.first, bv_range.second, t);
         return rt;
     }
 
