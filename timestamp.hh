@@ -24,7 +24,7 @@
 #include <cstdint>
 #include <limits>
 #include <chrono>
-#include "db_clock.hh"
+#include "clocks-impl.hh"
 
 namespace api {
 
@@ -35,8 +35,8 @@ timestamp_type constexpr max_timestamp = std::numeric_limits<timestamp_type>::ma
 
 // Used for generating server-side mutation timestamps.
 // Same epoch as Java's System.currentTimeMillis() for compatibility.
-// Satisfies requirements of TrivialClock.
-class timestamp_clock {
+// Satisfies requirements of Clock.
+class timestamp_clock final {
     using base = std::chrono::system_clock;
 public:
     using rep = timestamp_type;
@@ -46,9 +46,8 @@ public:
 
     static constexpr bool is_steady = base::is_steady;
 
-    static time_point now() noexcept {
-        auto now_since_epoch = base::now() - base::from_time_t(0);
-        return time_point(std::chrono::duration_cast<duration>(now_since_epoch)) + get_clocks_offset();
+    static time_point now() {
+        return time_point(std::chrono::duration_cast<duration>(base::now().time_since_epoch())) + get_clocks_offset();
     }
 };
 

@@ -19,6 +19,6 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "gc_clock.hh"
+#include "clocks-impl.hh"
 
 std::atomic<int64_t> clocks_offset;
