@@ -12,9 +12,15 @@ endif()
 # Default value. A more accurate list is populated through `pkg-config` below if `seastar.pc` is available.
 set(SEASTAR_INCLUDE_DIRS "seastar")
 
-find_package(PkgConfig REQUIRED)
+# These paths are always available, since they're included in the repository. Additional DPDK headers are placed while
+# Seastar is built, and are captured in `SEASTAR_INCLUDE_DIRS` through parsing the Seastar pkg-config file (below).
+set(SEASTAR_DPDK_INCLUDE_DIRS
+        seastar/dpdk/lib/librte_eal/common/include
+        seastar/dpdk/lib/librte_eal/common/include/generic
+        seastar/dpdk/lib/librte_eal/common/include/x86
+        seastar/dpdk/lib/librte_ether)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++14 -DHAVE_HWLOC -DHAVE_DPDK")
+find_package(PkgConfig REQUIRED)
 
 set(ENV{PKG_CONFIG_PATH} "${CMAKE_SOURCE_DIR}/seastar/build/release:$ENV{PKG_CONFIG_PATH}")
 pkg_check_modules(SEASTAR seastar)
@@ -109,7 +115,23 @@ add_executable(scylla
         ${SEASTAR_SOURCE_FILES}
         ${SCYLLA_SOURCE_FILES})
 
-target_include_directories(scylla PRIVATE
+# Note that since CLion does not undestand GCC6 concepts, we always disable them (even if users configure otherwise).
+# CLion seems to have trouble with `-U` (macro undefinition), so we do it this way instead.
+list(REMOVE_ITEM SEASTAR_CFLAGS "-DHAVE_GCC6_CONCEPTS")
+
+# If the Seastar pkg-config information is available, append to the default flags.
+#
+# For ease of browsing the source code, we always pretend that DPDK is enabled.
+target_compile_options(scylla PUBLIC
+        -std=gnu++14
+        -DHAVE_DPDK
+        -DHAVE_HWLOC
+        "${SEASTAR_CFLAGS}")
+
+# The order matters here: prefer the "static" DPDK directories to any dynamic paths from pkg-config. Some files are only
+# available dynamically, though.
+target_include_directories(scylla PUBLIC
         .
+        ${SEASTAR_DPDK_INCLUDE_DIRS}
         ${SEASTAR_INCLUDE_DIRS}
         build/release/gen)
