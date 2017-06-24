@@ -51,6 +51,7 @@
 #include "disk-error-handler.hh"
 #include "atomic_deletion.hh"
 #include "sstables/shared_index_lists.hh"
+#include "db/commitlog/replay_position.hh"
 
 namespace sstables {
 
@@ -129,6 +130,7 @@ struct sstable_writer_config {
     uint64_t max_sstable_size = std::numeric_limits<uint64_t>::max();
     bool backup = false;
     bool leave_unsealed = false;
+    stdx::optional<db::replay_position> replay_position;
 };
 
 class sstable : public enable_lw_shared_from_this<sstable> {
@@ -308,10 +310,6 @@ public:
     // Returns mutation_source containing all writes contained in this sstable.
     // The mutation_source shares ownership of this sstable.
     mutation_source as_mutation_source();
-
-    // Write sstable components from a memtable.
-    future<> write_components(memtable& mt, bool backup = false,
-                              const io_priority_class& pc = default_priority_class(), bool leave_unsealed = false);
 
     future<> write_components(::mutation_reader mr,
             uint64_t estimated_partitions,

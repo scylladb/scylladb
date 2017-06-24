@@ -23,6 +23,7 @@
 #include "../sstable_test.hh"
 #include "sstables/sstables.hh"
 #include "mutation_reader.hh"
+#include "memtable-sstable.hh"
 #include <boost/accumulators/accumulators.hpp>
 #include <boost/accumulators/statistics.hpp>
 #include <boost/range/irange.hpp>
@@ -131,7 +132,7 @@ public:
         size_t partitions = _mt->partition_count();
         return test_setup::create_empty_test_dir(dir()).then([this, idx] {
             auto sst = sstables::test::make_test_sstable(_cfg.buffer_size, s, dir(), idx, sstable::version_types::ka, sstable::format_types::big);
-            return sst->write_components(*_mt).then([sst] {});
+            return write_memtable_to_sstable(*_mt, sst).then([sst] {});
         }).then([start, partitions] {
             auto end = test_env::now();
             auto duration = std::chrono::duration<double>(end - start).count();

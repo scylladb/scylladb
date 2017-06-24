@@ -15,7 +15,7 @@
 #include "tmpdir.hh"
 #include "cell_locking.hh"
 #include "mutation_reader_assertions.hh"
-
+#include "memtable-sstable.hh"
 #include "disk-error-handler.hh"
 
 thread_local disk_error_signal_type commit_error;
@@ -89,7 +89,7 @@ void run_sstable_resharding_test() {
             mt->apply(std::move(m));
         }
         auto sst = make_lw_shared<sstable>(s, tmp->path, 0, sstables::sstable::version_types::ka, sstables::sstable::format_types::big);
-        sst->write_components(*mt).get();
+        write_memtable_to_sstable(*mt, sst).get();
     }
     auto sst = make_lw_shared<sstables::sstable>(s, tmp->path, 0, sstables::sstable::version_types::ka, sstables::sstable::format_types::big);
     sst->load().get();

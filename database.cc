@@ -71,6 +71,7 @@
 #include "cell_locking.hh"
 #include <seastar/core/execution_stage.hh>
 #include "view_info.hh"
+#include "memtable-sstable.hh"
 
 #include "checked-file-impl.hh"
 #include "disk-error-handler.hh"
@@ -872,7 +873,7 @@ column_family::seal_active_streaming_memtable_immediate() {
             //
             // Lastly, we don't have any commitlog RP to update, and we don't need to deal manipulate the
             // memtable list, since this memtable was not available for reading up until this point.
-            return newtab->write_components(*old, incremental_backups_enabled(), priority).then([this, newtab, old] {
+            return write_memtable_to_sstable(*old, newtab, incremental_backups_enabled(), priority).then([this, newtab, old] {
                 return newtab->open_data();
             }).then([this, old, newtab] () {
                 add_sstable(newtab, {engine().cpu_id()});
@@ -914,7 +915,7 @@ future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_bi
                 newtab->set_unshared();
 
                 auto&& priority = service::get_local_streaming_write_priority();
-                return newtab->write_components(*old, incremental_backups_enabled(), priority, true).then([this, newtab, old, &smb] {
+                return write_memtable_to_sstable(*old, newtab, incremental_backups_enabled(), priority, true).then([this, newtab, old, &smb] {
                     smb.sstables.emplace_back(newtab);
                 }).handle_exception([] (auto ep) {
                     dblog.error("failed to write streamed sstable: {}", ep);
@@ -988,7 +989,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
     // The code as is guarantees that we'll never partially backup a
     // single sstable, so that is enough of a guarantee.
     auto&& priority = service::get_local_memtable_flush_priority();
-    return newtab->write_components(*old, incremental_backups_enabled(), priority).then([this, newtab, old] {
+    return write_memtable_to_sstable(*old, newtab, incremental_backups_enabled(), priority).then([this, newtab, old] {
         return newtab->open_data();
     }).then_wrapped([this, old, newtab] (future<> ret) {
         dblog.debug("Flushing to {} done", newtab->get_filename());
@@ -4100,3 +4101,13 @@ column_family::cache_hit_rate column_family::get_hit_rate(gms::inet_address addr
 void column_family::drop_hit_rate(gms::inet_address addr) {
     _cluster_cache_hit_rates.erase(addr);
 }
+
+future<>
+write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, bool backup, const io_priority_class& pc, bool leave_unsealed) {
+    sstables::sstable_writer_config cfg;
+    cfg.replay_position = mt.replay_position();
+    cfg.backup = backup;
+    cfg.leave_unsealed = leave_unsealed;
+    return sst->write_components(mt.make_flush_reader(mt.schema(), pc), mt.partition_count(), mt.schema(), cfg, pc);
+}
+

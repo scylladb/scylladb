@@ -33,7 +33,7 @@
 #include "tmpdir.hh"
 #include "sstables/sstables.hh"
 #include "canonical_mutation.hh"
-
+#include "memtable-sstable.hh"
 #include "disk-error-handler.hh"
 #include "cql_test_env.hh"
 
@@ -196,7 +196,7 @@ static sizes calculate_sizes(const mutation& m) {
         1 /* generation */,
         sstables::sstable::version_types::la,
         sstables::sstable::format_types::big);
-    sst->write_components(*mt).get();
+    write_memtable_to_sstable(*mt, sst).get();
     sst->load().get();
     result.sstable = sst->data_size();
 

@@ -39,7 +39,7 @@
 #include "partition_slice_builder.hh"
 #include "tests/test_services.hh"
 #include "cell_locking.hh"
-
+#include "memtable-sstable.hh"
 #include "disk-error-handler.hh"
 
 thread_local disk_error_signal_type commit_error;
@@ -1247,7 +1247,7 @@ SEASTAR_TEST_CASE(promoted_index_write) {
         auto sst = make_lw_shared<sstable>(s,
                 "tests/sstables/tests-temporary", 100,
                 sstables::sstable::version_types::ka, big);
-        return sst->write_components(*mtp).then([s] {
+        return write_memtable_to_sstable(*mtp, sst).then([s] {
             return compare_files(
                     "tests/sstables/large_partition/try1-data-ka-3-Index.db",
                     "tests/sstables/tests-temporary/try1-data-ka-100-Index.db");

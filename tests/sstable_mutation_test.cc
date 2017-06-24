@@ -33,7 +33,7 @@
 #include "mutation_reader_assertions.hh"
 #include "mutation_source_test.hh"
 #include "tmpdir.hh"
-
+#include "memtable-sstable.hh"
 #include "disk-error-handler.hh"
 
 thread_local disk_error_signal_type commit_error;
@@ -417,7 +417,7 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
                 1 /* generation */,
                 sstables::sstable::version_types::la,
                 sstables::sstable::format_types::big);
-        sst->write_components(*mt).get();
+        write_memtable_to_sstable(*mt, sst).get();
         sst->load().get();
         auto mr = sst->read_rows(s);
         auto sm = mr.read().get0();
@@ -792,7 +792,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
                                 1 /* generation */,
                                 sstables::sstable::version_types::ka,
                                 sstables::sstable::format_types::big);
-        sst->write_components(*mt).get();
+        write_memtable_to_sstable(*mt, sst).get();
         sst->load().get();
         auto mr = sst->read_rows(s);
         auto sm = mr.read().get0();

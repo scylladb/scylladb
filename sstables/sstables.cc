@@ -1970,14 +1970,6 @@ void components_writer::consume_end_of_stream() {
             _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key());
 }
 
-future<> sstable::write_components(memtable& mt, bool backup, const io_priority_class& pc, bool leave_unsealed) {
-    _collector.set_replay_position(mt.replay_position());
-    sstable_writer_config cfg;
-    cfg.backup = backup;
-    cfg.leave_unsealed = leave_unsealed;
-    return write_components(mt.make_flush_reader(mt.schema(), pc), mt.partition_count(), mt.schema(), cfg, pc);
-}
-
 future<>
 sstable::read_scylla_metadata(const io_priority_class& pc) {
     if (_components->scylla_metadata) {
@@ -2095,6 +2087,9 @@ sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partition
 
 future<> sstable::write_components(::mutation_reader mr,
         uint64_t estimated_partitions, schema_ptr schema, const sstable_writer_config& cfg, const io_priority_class& pc) {
+    if (cfg.replay_position) {
+        _collector.set_replay_position(cfg.replay_position.value());
+    }
     return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), cfg, &pc] () mutable {
         auto wr = get_writer(*schema, estimated_partitions, cfg, pc);
         consume_flattened_in_thread(mr, wr);
