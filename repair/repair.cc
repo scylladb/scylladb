@@ -650,14 +650,24 @@ static future<> repair_cf_range(repair_info& ri,
 
                     auto node_reducer = [] (std::vector<gms::inet_address>& live_neighbors_in_or_out,
                             std::vector<gms::inet_address>& nodes_with_same_checksum, size_t nr_nodes_to_keep) {
+                        // nodes_with_same_checksum contains two types of nodes:
+                        // 1) the nodes we want to remove from live_neighbors_in_or_out.
+                        // 2) the nodes, nr_nodes_to_keep in number, not to remove from
+                        // live_neighbors_in_or_out
                         auto nr_nodes = nodes_with_same_checksum.size();
                         if (nr_nodes <= nr_nodes_to_keep) {
                             return;
                         }
 
-                        // TODO: Remove the "far" nodes and keep the "near" nodes
-                        // to have better streaming performance
-                        nodes_with_same_checksum.resize(nr_nodes - nr_nodes_to_keep);
+                        if (nr_nodes_to_keep == 0) {
+                            // All nodes in nodes_with_same_checksum will be removed from live_neighbors_in_or_out
+                        } else if (nr_nodes_to_keep == 1) {
+                            auto node_is_remote = [] (gms::inet_address ip) { return !service::get_local_storage_service().is_local_dc(ip); };
+                            boost::partition(nodes_with_same_checksum, node_is_remote);
+                            nodes_with_same_checksum.resize(nr_nodes - nr_nodes_to_keep);
+                        } else {
+                            throw std::runtime_error(sprint("nr_nodes_to_keep = {}, but it can only be 1 or 0", nr_nodes_to_keep));
+                        }
 
                         // Now, nodes_with_same_checksum contains nodes we want to remove, remove it from live_neighbors_in_or_out
                         auto it = boost::range::remove_if(live_neighbors_in_or_out, [&nodes_with_same_checksum] (const auto& ip) {
