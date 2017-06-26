@@ -480,7 +480,7 @@ void gossiper::remove_endpoint(inet_address endpoint) {
         logger.info("removed {} from _seeds, updated _seeds list = {}", endpoint, _seeds);
     }
 
-    _live_endpoints.erase(endpoint);
+    _live_endpoints.erase(std::remove(_live_endpoints.begin(), _live_endpoints.end(), endpoint), _live_endpoints.end());
     _live_endpoints_just_added.remove(endpoint);
     _unreachable_endpoints.erase(endpoint);
     quarantine_endpoint(endpoint);
@@ -581,10 +581,33 @@ void gossiper::run() {
 
                 _gossiped_to_seed = false;
 
-                /* Gossip to some random live member */
-                do_gossip_to_live_member(message).handle_exception([] (auto ep) {
-                    logger.trace("Faill to do_gossip_to_live_member: {}", ep);
-                });
+                auto get_random_node = [this] (const std::vector<inet_address>& nodes) {
+                    std::uniform_int_distribution<int> dist(0, nodes.size() - 1);
+                    int index = dist(this->_random);
+                    return nodes[index];
+                };
+
+                /* Gossip to some random live members */
+                // TODO: For now, we choose 10th of all the nodes in the cluster.
+                auto nr_live_nodes = std::max(size_t(1), endpoint_state_map.size() / 10);
+                std::unordered_set<gms::inet_address> live_nodes;
+                while (live_nodes.size() < nr_live_nodes && !_live_endpoints.empty()) {
+                    if (!_live_endpoints_just_added.empty()) {
+                        auto ep = _live_endpoints_just_added.front();
+                        _live_endpoints_just_added.pop_front();
+                        logger.info("Favor newly added node {}", ep);
+                        live_nodes.insert(ep);
+                    } else {
+                        // Get a random live node
+                        live_nodes.insert(get_random_node(_live_endpoints));
+                    }
+                }
+                logger.debug("Talk to {} live nodes: {}", nr_live_nodes, live_nodes);
+                for (auto& ep: live_nodes) {
+                    do_gossip_to_live_member(message, ep).handle_exception([] (auto ep) {
+                        logger.trace("Failed to do_gossip_to_live_member: {}", ep);
+                    });
+                }
 
                 /* Gossip to some unreachable member with some probability to check if he is back up */
                 do_gossip_to_unreachable_member(message).handle_exception([] (auto ep) {
@@ -709,7 +732,7 @@ void gossiper::unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscr
 }
 
 std::set<inet_address> gossiper::get_live_members() {
-    std::set<inet_address> live_members(_live_endpoints);
+    std::set<inet_address> live_members(_live_endpoints.begin(), _live_endpoints.end());
     if (!live_members.count(get_broadcast_address())) {
         live_members.insert(get_broadcast_address());
     }
@@ -966,19 +989,8 @@ future<int> gossiper::get_current_heart_beat_version(inet_address endpoint) {
     });
 }
 
-future<> gossiper::do_gossip_to_live_member(gossip_digest_syn message) {
-    size_t size = _live_endpoints.size();
-    if (size == 0) {
-        return make_ready_future<>();
-    }
-    logger.trace("do_gossip_to_live_member: live_endpoint nr={}", _live_endpoints.size());
-    if (!_live_endpoints_just_added.empty()) {
-        auto ep = _live_endpoints_just_added.front();
-        _live_endpoints_just_added.pop_front();
-        logger.info("do_gossip_to_live_member: Favor newly added node {}", ep);
-        return send_gossip(message, std::set<inet_address>{ep});
-    }
-    return send_gossip(message, _live_endpoints);
+future<> gossiper::do_gossip_to_live_member(gossip_digest_syn message, gms::inet_address ep) {
+    return send_gossip(message, {ep});
 }
 
 future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
@@ -1189,7 +1201,10 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
     logger.trace("marking as alive {}", addr);
     local_state.mark_alive();
     local_state.update_timestamp(); // prevents do_status_check from racing us and evicting if it was down > A_VERY_LONG_TIME
-    _live_endpoints.insert(addr);
+    auto it_ = std::find(_live_endpoints.begin(), _live_endpoints.end(), addr);
+    if (it_ == _live_endpoints.end()) {
+        _live_endpoints.push_back(addr);
+    }
     auto it = std::find(_live_endpoints_just_added.begin(), _live_endpoints_just_added.end(), addr);
     if (it == _live_endpoints_just_added.end()) {
         _live_endpoints_just_added.push_back(addr);
@@ -1211,7 +1226,7 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
 void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     logger.trace("marking as down {}", addr);
     local_state.mark_dead();
-    _live_endpoints.erase(addr);
+    _live_endpoints.erase(std::remove(_live_endpoints.begin(), _live_endpoints.end(), addr), _live_endpoints.end());
     _live_endpoints_just_added.remove(addr);
     _unreachable_endpoints[addr] = now();
     logger.info("InetAddress {} is now DOWN, status = {}", addr, get_gossip_status(local_state));
