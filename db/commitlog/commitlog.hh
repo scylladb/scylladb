@@ -354,6 +354,7 @@ private:
         // Returns segment-independent size of the entry. Must be <= than segment-dependant size.
         virtual size_t size() = 0;
         virtual void write(segment&, output&) = 0;
+        virtual ~entry_writer() {};
     };
 };
 
