@@ -568,7 +568,11 @@ column_family::make_sstable_reader(schema_ptr s,
         }
     };
 
-    if (pr.is_singular() && pr.start()->value().has_key() && !fwd_mr) {
+    // CAVEAT: if make_sstable_reader() is called on a single partition
+    // we want to optimize and read exactly this partition. As a
+    // consequence, fast_forward_to() will *NOT* work on the result,
+    // regardless of what the fwd_mr parameter says.
+    if (pr.is_singular() && pr.start()->value().has_key()) {
         const dht::ring_position& pos = pr.start()->value();
         if (dht::shard_of(pos.token()) != engine().cpu_id()) {
             return make_empty_reader(); // range doesn't belong to this shard
