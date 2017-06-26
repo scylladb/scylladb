@@ -32,6 +32,8 @@
 
 #include "disk-error-handler.hh"
 
+#include <random>
+
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
 
@@ -69,7 +71,7 @@ int main(int argc, char** argv) {
                 }
 
                 // Evict in random order to stress more
-                std::random_shuffle(refs.begin(), refs.end());
+                std::shuffle(refs.begin(), refs.end(), std::random_device());
                 r.make_evictable([&] {
                     return with_allocator(r.allocator(), [&] {
                         if (refs.empty()) {

@@ -94,6 +94,9 @@ int main(int argc, char** argv) {
                 return m;
             };
 
+            std::random_device random;
+            std::default_random_engine random_engine(random());
+
             for (int i = 0; i < 10; i++) {
                 auto key = dht::global_partitioner().decorate_key(*s, new_key(s));
 
@@ -146,7 +149,7 @@ int main(int argc, char** argv) {
                 }
                 std::cout << "Shuffling..\n";
                 // Evict in random order to create fragmentation.
-                std::random_shuffle(cache_stuffing.begin(), cache_stuffing.end());
+                std::shuffle(cache_stuffing.begin(), cache_stuffing.end(), random_engine);
                 for (auto&& key : cache_stuffing) {
                     cache.touch(key);
                 }

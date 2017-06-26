@@ -829,7 +829,7 @@ void gossiper::make_random_gossip_digest(std::vector<gossip_digest>& g_digests) 
     for (auto&& x : endpoint_state_map) {
         endpoints.push_back(x.first);
     }
-    std::random_shuffle(endpoints.begin(), endpoints.end());
+    std::shuffle(endpoints.begin(), endpoints.end(), _random_engine);
     for (auto& endpoint : endpoints) {
         auto it = endpoint_state_map.find(endpoint);
         if (it != endpoint_state_map.end()) {

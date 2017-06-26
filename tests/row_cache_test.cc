@@ -613,7 +613,8 @@ SEASTAR_TEST_CASE(test_eviction) {
             cache.populate(m);
         }
 
-        std::random_shuffle(keys.begin(), keys.end());
+        std::random_device random;
+        std::shuffle(keys.begin(), keys.end(), std::default_random_engine(random()));
 
         for (auto&& key : keys) {
             cache.make_reader(s, dht::partition_range::make_singular(key));

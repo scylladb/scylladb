@@ -147,6 +147,7 @@ public:
 private:
 
     std::random_device _random;
+    std::default_random_engine _random_engine{_random()};
 
     /**
      * subscribers for interest in EndpointState change

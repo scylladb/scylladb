@@ -24,6 +24,7 @@
 #include <boost/intrusive/parent_from_member.hpp>
 #include <algorithm>
 #include <chrono>
+#include <random>
 
 #include <seastar/core/thread.hh>
 #include <seastar/core/timer.hh>
@@ -73,7 +74,9 @@ SEASTAR_TEST_CASE(test_compaction) {
 
             // Free 1/3 randomly
 
-            std::random_shuffle(_allocated.begin(), _allocated.end());
+            std::random_device random_device;
+            std::default_random_engine random(random_device());
+            std::shuffle(_allocated.begin(), _allocated.end(), random);
 
             auto it = _allocated.begin();
             size_t nr_freed = _allocated.size() / 3;
@@ -129,7 +132,8 @@ SEASTAR_TEST_CASE(test_compaction_with_multiple_regions) {
 
         // Shuffle, so that we don't free whole segments back to the pool
         // and there's nothing to reclaim.
-        std::random_shuffle(allocated2.begin(), allocated2.end());
+        std::random_device random;
+        std::shuffle(allocated2.begin(), allocated2.end(), std::default_random_engine(random()));
 
         with_allocator(reg2.allocator(), [&] {
             auto it = allocated2.begin();
@@ -143,7 +147,7 @@ SEASTAR_TEST_CASE(test_compaction_with_multiple_regions) {
 
         // Free 65% from the first pool
 
-        std::random_shuffle(allocated1.begin(), allocated1.end());
+        std::shuffle(allocated1.begin(), allocated1.end(), random);
 
         with_allocator(reg1.allocator(), [&] {
             auto it = allocated1.begin();
@@ -320,7 +324,9 @@ SEASTAR_TEST_CASE(test_region_lock) {
 
             // Evict 30% so that region is compactible, but do it randomly so that
             // segments are not released into the standard allocator without compaction.
-            std::random_shuffle(refs.begin(), refs.end());
+            std::random_device random_device;
+            std::default_random_engine random(random_device());
+            std::shuffle(refs.begin(), refs.end(), random);
             for (size_t i = 0; i < refs.size() * 0.3; ++i) {
                 refs.pop_back();
             }
@@ -386,7 +392,8 @@ SEASTAR_TEST_CASE(test_large_allocation) {
             // expected
         }
 
-        std::random_shuffle(evictable.begin(), evictable.end());
+        std::random_device random;
+        std::shuffle(evictable.begin(), evictable.end(), std::default_random_engine(random()));
         r_evictable.make_evictable([&] {
             return with_allocator(r_evictable.allocator(), [&] {
                 if (evictable.empty()) {
