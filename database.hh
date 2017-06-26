@@ -429,7 +429,6 @@ public:
         restricted_mutation_reader_config read_concurrency_config;
         restricted_mutation_reader_config streaming_read_concurrency_config;
         ::cf_stats* cf_stats = nullptr;
-        uint64_t max_cached_partition_size_in_bytes;
     };
     struct no_commitlog {};
     struct stats {
@@ -505,7 +504,7 @@ private:
     };
     std::unordered_map<utils::UUID, lw_shared_ptr<streaming_memtable_big>> _streaming_memtables_big;
 
-    future<> flush_streaming_big_mutations(utils::UUID plan_id);
+    future<std::vector<sstables::shared_sstable>> flush_streaming_big_mutations(utils::UUID plan_id);
     void apply_streaming_big_mutation(schema_ptr m_schema, utils::UUID plan_id, const frozen_mutation& m);
     future<> seal_active_streaming_memtable_big(streaming_memtable_big& smb);
 
@@ -575,7 +574,9 @@ private:
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, std::vector<unsigned>&& shards_for_the_sstable);
     // Adds new sstable to the set of sstables
-    // Doesn't update the cache.
+    // Doesn't update the cache. The cache must be synchronized in order for reads to see
+    // the writes contained in this sstable.
+    // Cache must be synchronized atomically with this, otherwise write atomicity may not be respected.
     // Doesn't trigger compaction.
     void add_sstable(lw_shared_ptr<sstables::sstable> sstable, std::vector<unsigned>&& shards_for_the_sstable);
     // returns an empty pointer if sstable doesn't belong to current shard.
@@ -619,11 +620,12 @@ private:
     void remove_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancestors);
 private:
     mutation_source_opt _virtual_reader;
-    // Creates a mutation reader which covers sstables.
+    // Creates a mutation reader which covers given sstables.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
     // The 'range' parameter must be live as long as the reader is used.
     // Mutations returned by the reader will all have given schema.
     mutation_reader make_sstable_reader(schema_ptr schema,
+                                        lw_shared_ptr<sstables::sstable_set> sstables,
                                         const dht::partition_range& range,
                                         const query::partition_slice& slice,
                                         const io_priority_class& pc,
@@ -632,6 +634,7 @@ private:
                                         mutation_reader::forwarding fwd_mr) const;
 
     mutation_source sstables_as_mutation_source();
+    snapshot_source sstables_as_snapshot_source();
     partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set>);
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
     void do_trigger_compaction();

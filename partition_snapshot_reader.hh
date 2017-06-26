@@ -30,6 +30,26 @@ struct partition_snapshot_reader_dummy_accounter {
 };
 extern partition_snapshot_reader_dummy_accounter no_accounter;
 
+inline void maybe_merge_versions(lw_shared_ptr<partition_snapshot>& snp,
+                                 logalloc::region& lsa_region,
+                                 logalloc::allocating_section& read_section) {
+    if (!snp.owned()) {
+        return;
+    }
+    // If no one else is using this particular snapshot try to merge partition
+    // versions.
+    with_allocator(lsa_region.allocator(), [&snp, &lsa_region, &read_section] {
+        return with_linearized_managed_bytes([&snp, &lsa_region, &read_section] {
+            try {
+                read_section(lsa_region, [&snp] {
+                    snp->merge_partition_versions();
+                });
+            } catch (...) { }
+            snp = {};
+        });
+    });
+}
+
 template <typename MemoryAccounter = partition_snapshot_reader_dummy_accounter>
 class partition_snapshot_reader : public streamed_mutation::impl, public MemoryAccounter {
     struct rows_position {
@@ -45,21 +65,6 @@ class partition_snapshot_reader : public streamed_mutation::impl, public MemoryA
             return _cmp(*b._position, *a._position);
         }
     };
-    class rows_entry_compare {
-        position_in_partition::less_compare _cmp;
-    public:
-        explicit rows_entry_compare(const schema& s) : _cmp(s) { }
-        bool operator()(const rows_entry& a, const position_in_partition& b) const {
-            position_in_partition_view a_view(position_in_partition_view::clustering_row_tag_t(),
-                                              a.key());
-            return _cmp(a_view, b);
-        }
-        bool operator()(const position_in_partition& a, const rows_entry& b) const {
-            position_in_partition_view b_view(position_in_partition_view::clustering_row_tag_t(),
-                                              b.key());
-            return _cmp(a, b_view);
-        }
-    };
 private:
     // Keeps shared pointer to the container we read mutation from to make sure
     // that its lifetime is appropriately extended.
@@ -70,8 +75,8 @@ private:
     query::clustering_row_ranges::const_iterator _ck_range_end;
     bool _in_ck_range = false;
 
-    rows_entry_compare _cmp;
-    clustering_key_prefix::equality _eq;
+    rows_entry::compare _cmp;
+    position_in_partition::equal_compare _eq;
     heap_compare _heap_cmp;
 
     lw_shared_ptr<partition_snapshot> _snapshot;
@@ -94,8 +99,14 @@ private:
     void refresh_iterators() {
         _clustering_rows.clear();
 
-        if (!_in_ck_range && _current_ck_range == _ck_range_end) {
-            return;
+        if (!_in_ck_range) {
+            if (_current_ck_range == _ck_range_end) {
+                _end_of_stream = true;
+                return;
+            }
+            for (auto&& v : _snapshot->versions()) {
+                _range_tombstones.apply(v.partition().row_tombstones(), *_current_ck_range);
+            }
         }
 
         for (auto&& v : _snapshot->versions()) {
@@ -117,14 +128,27 @@ private:
         boost::range::make_heap(_clustering_rows, _heap_cmp);
     }
 
-    void pop_clustering_row() {
+    // Valid if has_more_rows()
+    const rows_entry& pop_clustering_row() {
+        boost::range::pop_heap(_clustering_rows, _heap_cmp);
         auto& current = _clustering_rows.back();
+        const rows_entry& e = *current._position;
         current._position = std::next(current._position);
         if (current._position == current._end) {
             _clustering_rows.pop_back();
         } else {
             boost::range::push_heap(_clustering_rows, _heap_cmp);
         }
+        return e;
+    }
+
+    // Valid if has_more_rows()
+    const rows_entry& peek_row() const {
+        return *_clustering_rows.front()._position;
+    }
+
+    bool has_more_rows() const {
+        return !_clustering_rows.empty();
     }
 
     mutation_fragment_opt read_static_row() {
@@ -143,20 +167,18 @@ private:
     }
 
     mutation_fragment_opt read_next() {
-        if (!_clustering_rows.empty()) {
-            auto mf = _range_tombstones.get_next(*_clustering_rows.front()._position);
+        while (has_more_rows()) {
+            auto mf = _range_tombstones.get_next(peek_row());
             if (mf) {
                 return mf;
             }
-
-            boost::range::pop_heap(_clustering_rows, _heap_cmp);
-            clustering_row result = *_clustering_rows.back()._position;
-            pop_clustering_row();
-            while (!_clustering_rows.empty() && _eq(_clustering_rows.front()._position->key(), result.key())) {
-                boost::range::pop_heap(_clustering_rows, _heap_cmp);
-                auto& current = _clustering_rows.back();
-                result.apply(*_schema, *current._position);
-                pop_clustering_row();
+            const rows_entry& e = pop_clustering_row();
+            if (e.dummy()) {
+                continue;
+            }
+            clustering_row result = e;
+            while (has_more_rows() && _eq(peek_row().position(), result.position())) {
+                result.apply(*_schema, pop_clustering_row());
             }
             _last_entry = position_in_partition(result.position());
             return mutation_fragment(std::move(result));
@@ -184,18 +206,13 @@ private:
         }
 
         while (!is_end_of_stream() && !is_buffer_full()) {
-            if (_in_ck_range && _clustering_rows.empty()) {
-                _in_ck_range = false;
-                _current_ck_range = std::next(_current_ck_range);
-                refresh_iterators();
-                continue;
-            }
-
             auto mfopt = read_next();
             if (mfopt) {
                 emplace_mutation_fragment(std::move(*mfopt));
             } else {
-                _end_of_stream = true;
+                _in_ck_range = false;
+                _current_ck_range = std::next(_current_ck_range);
+                refresh_iterators();
             }
         }
     }
@@ -226,31 +243,11 @@ public:
     , _range_tombstones(*s)
     , _lsa_region(region)
     , _read_section(read_section) {
-        for (auto&& v : _snapshot->versions()) {
-            auto&& rt_list = v.partition().row_tombstones();
-            for (auto&& range : _ck_ranges.ranges()) {
-                _range_tombstones.apply(rt_list, range);
-            }
-        }
         do_fill_buffer();
     }
 
     ~partition_snapshot_reader() {
-        if (!_snapshot.owned()) {
-            return;
-        }
-        // If no one else is using this particular snapshot try to merge partition
-        // versions.
-        with_allocator(_lsa_region.allocator(), [this] {
-            return with_linearized_managed_bytes([this] {
-                try {
-                    _read_section(_lsa_region, [this] {
-                        _snapshot->merge_partition_versions();
-                    });
-                } catch (...) { }
-                _snapshot = {};
-            });
-        });
+        maybe_merge_versions(_snapshot, _lsa_region, _read_section);
     }
 
     virtual future<> fill_buffer() override {

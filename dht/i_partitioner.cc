@@ -442,7 +442,7 @@ bool ring_position::less_compare(const schema& s, const ring_position& other) co
 }
 
 int ring_position_comparator::operator()(ring_position_view lh, ring_position_view rh) const {
-    auto token_cmp = tri_compare(lh._token, rh._token);
+    auto token_cmp = tri_compare(*lh._token, *rh._token);
     if (token_cmp) {
         return token_cmp;
     }
@@ -464,7 +464,7 @@ int ring_position_comparator::operator()(ring_position_view lh, ring_position_vi
 
 int ring_position_comparator::operator()(ring_position_view lh, sstables::key_view rh) const {
     auto rh_token = global_partitioner().get_token(rh);
-    auto token_cmp = tri_compare(lh._token, rh_token);
+    auto token_cmp = tri_compare(*lh._token, rh_token);
     if (token_cmp) {
         return token_cmp;
     }

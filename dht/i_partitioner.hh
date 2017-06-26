@@ -374,6 +374,14 @@ private:
     token_bound _token_bound; // valid when !_key
     std::experimental::optional<partition_key> _key;
 public:
+    static ring_position min() {
+        return { minimum_token(), token_bound::start };
+    }
+
+    static ring_position max() {
+        return { maximum_token(), token_bound::end };
+    }
+
     static ring_position starting_at(dht::token token) {
         return { std::move(token), token_bound::start };
     }
@@ -463,7 +471,7 @@ class ring_position_view {
     // For example {_token=t1, _key=nullptr, _weight=1} is ordered after {_token=t1, _key=k1, _weight=0},
     // but {_token=t1, _key=nullptr, _weight=-1} is ordered before it.
     //
-    const dht::token& _token;
+    const dht::token* _token; // always not nullptr
     const partition_key* _key; // Can be nullptr
     int8_t _weight;
 public:
@@ -479,11 +487,11 @@ public:
     }
 
     bool is_min() const {
-        return _token.is_minimum();
+        return _token->is_minimum();
     }
 
     bool is_max() const {
-        return _token.is_maximum();
+        return _token->is_maximum();
     }
 
     static ring_position_view for_range_start(const partition_range& r) {
@@ -503,10 +511,13 @@ public:
     }
 
     ring_position_view(const dht::ring_position& pos, after_key after = after_key::no)
-        : _token(pos.token())
+        : _token(&pos.token())
         , _key(pos.has_key() ? &*pos.key() : nullptr)
         , _weight(pos.has_key() ? bool(after) : pos.relation_to_keys())
     { }
+
+    ring_position_view(const ring_position_view& pos) = default;
+    ring_position_view& operator=(const ring_position_view& other) = default;
 
     ring_position_view(after_key_tag, const ring_position_view& v)
         : _token(v._token)
@@ -515,13 +526,13 @@ public:
     { }
 
     ring_position_view(const dht::decorated_key& key, after_key after_key = after_key::no)
-        : _token(key.token())
+        : _token(&key.token())
         , _key(&key.key())
         , _weight(bool(after_key))
     { }
 
     ring_position_view(const dht::token& token, partition_key* key, int8_t weight)
-        : _token(token)
+        : _token(&token)
         , _key(key)
         , _weight(weight)
     { }

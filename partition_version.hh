@@ -117,6 +117,8 @@ class partition_version : public anchorless_list_base_hook<partition_version> {
 
     friend class partition_version_ref;
 public:
+    explicit partition_version(schema_ptr s) noexcept
+        : _partition(std::move(s)) { }
     explicit partition_version(mutation_partition mp) noexcept
         : _partition(std::move(mp)) { }
     partition_version(partition_version&& pv) noexcept;
@@ -126,9 +128,11 @@ public:
     mutation_partition& partition() { return _partition; }
     const mutation_partition& partition() const { return _partition; }
 
-    bool is_referenced() { return _backref; }
+    bool is_referenced() const { return _backref; }
     partition_version_ref& back_reference() { return *_backref; }
 };
+
+using partition_version_range = anchorless_list_base_hook<partition_version>::range;
 
 class partition_version_ref {
     partition_version* _version = nullptr;
@@ -160,13 +164,17 @@ public:
         return *this;
     }
 
-    explicit operator bool() { return _version; }
+    explicit operator bool() const { return _version; }
 
     partition_version& operator*() {
         assert(_version);
         return *_version;
     }
     partition_version* operator->() {
+        assert(_version);
+        return _version;
+    }
+    const partition_version* operator->() const {
         assert(_version);
         return _version;
     }
@@ -178,15 +186,24 @@ public:
 class partition_entry;
 
 class partition_snapshot : public enable_lw_shared_from_this<partition_snapshot> {
+public:
+    // Only snapshots created with the same value of phase can point to the same version.
+    using phase_type = uint64_t;
+    static constexpr phase_type default_phase = 0;
+    static constexpr phase_type max_phase = std::numeric_limits<phase_type>::max();
+private:
     schema_ptr _schema;
     // Either _version or _entry is non-null.
     partition_version_ref _version;
     partition_entry* _entry;
+    phase_type _phase;
 
     friend class partition_entry;
 public:
-    explicit partition_snapshot(schema_ptr s, partition_entry* entry)
-        : _schema(std::move(s)), _entry(entry) { }
+    explicit partition_snapshot(schema_ptr s,
+                                partition_entry* entry,
+                                phase_type phase = default_phase)
+        : _schema(std::move(s)), _entry(entry), _phase(phase) { }
     partition_snapshot(const partition_snapshot&) = delete;
     partition_snapshot(partition_snapshot&&) = delete;
     partition_snapshot& operator=(const partition_snapshot&) = delete;
@@ -201,23 +218,48 @@ public:
 
     partition_version_ref& version();
 
-    auto versions() {
+    const partition_version_ref& version() const;
+
+    partition_version_range versions() {
         return version()->elements_from_this();
     }
 
     unsigned version_count();
+
+    bool at_latest_version() const {
+        return _entry != nullptr;
+    }
+
+    tombstone partition_tombstone() const;
+    row static_row() const;
+    mutation_partition squashed() const;
+    // Returns range tombstones overlapping with [start, end)
+    std::vector<range_tombstone> range_tombstones(const schema& s, position_in_partition_view start, position_in_partition_view end);
 };
 
+// Represents mutation_partition with snapshotting support a la MVCC.
+//
+// Internally the state is represented by an ordered list of mutation_partition
+// objects called versions. The logical mutation_partition state represented
+// by that chain is equal to reducing the chain using mutation_partition::apply()
+// from left (latest version) to right.
 class partition_entry {
     partition_snapshot* _snapshot = nullptr;
     partition_version_ref _version;
 
     friend class partition_snapshot;
+    friend class cache_entry;
 private:
+    // Detaches all versions temporarily around execution of the function.
+    // The function receives partition_version* pointing to the latest version.
+    template<typename Func>
+    void with_detached_versions(Func&&);
+
     void set_version(partition_version*);
 
-    void apply(const schema& s, partition_version* pv, const schema& pv_schema);
+    void apply_to_incomplete(const schema& s, partition_version* other);
 public:
+    class rows_iterator;
     partition_entry() = default;
     explicit partition_entry(mutation_partition mp);
     ~partition_entry();
@@ -238,31 +280,80 @@ public:
         return *this;
     }
 
+    partition_version_ref& version() {
+        return _version;
+    }
+
+    partition_version_range versions() {
+        return _version->elements_from_this();
+    }
+
     // Strong exception guarantees.
+    // Assumes this instance and mp are fully continuous.
     void apply(const schema& s, const mutation_partition& mp, const schema& mp_schema);
 
-    // Same exception guarantees as:
-    // mutation_partition::apply(const schema&, mutation_partition&&, const schema&)
-    void apply(const schema& s, mutation_partition&& mp, const schema& mp_schema);
-
     // Strong exception guarantees.
+    // Assumes this instance and mpv are fully continuous.
     void apply(const schema& s, mutation_partition_view mpv, const schema& mp_schema);
 
+    // Adds mutation_partition represented by "other" to the one represented
+    // by this entry.
+    //
+    // The argument must be fully-continuous.
+    //
+    // The rules of addition differ from that used by regular
+    // mutation_partition addition with regards to continuity. The continuity
+    // of the result is the same as in this instance. Information from "other"
+    // which is incomplete in this instance is dropped. In other words, this
+    // performs set intersection on continuity information, drops information
+    // which falls outside of the continuity range, and applies regular merging
+    // rules for the rest.
+    //
     // Weak exception guarantees.
     // If an exception is thrown this and pe will be left in some valid states
     // such that if the operation is retried (possibly many times) and eventually
     // succeeds the result will be as if the first attempt didn't fail.
-    void apply(const schema& s, partition_entry&& pe, const schema& pe_schema);
+    void apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema);
+
+    // Ensures that the latest version can be populated with data from given phase
+    // by inserting a new version if necessary.
+    // Doesn't affect value or continuity of the partition.
+    // Returns a reference to the new latest version.
+    partition_version& open_version(const schema& s, partition_snapshot::phase_type phase = partition_snapshot::max_phase) {
+        if (_snapshot && _snapshot->_phase != phase) {
+            auto new_version = current_allocator().construct<partition_version>(mutation_partition(s.shared_from_this()));
+            new_version->partition().set_static_row_continuous(_version->partition().static_row_continuous());
+            new_version->insert_before(*_version);
+            set_version(new_version);
+            return *new_version;
+        }
+        return *_version;
+    }
 
     mutation_partition squashed(schema_ptr from, schema_ptr to);
+    mutation_partition squashed(const schema&);
+    tombstone partition_tombstone() const;
 
     // needs to be called with reclaiming disabled
     void upgrade(schema_ptr from, schema_ptr to);
 
-    lw_shared_ptr<partition_snapshot> read(schema_ptr entry_schema);
+    // Snapshots with different values of phase will point to different partition_version objects.
+    lw_shared_ptr<partition_snapshot> read(schema_ptr entry_schema,
+        partition_snapshot::phase_type phase = partition_snapshot::default_phase);
+
+    friend std::ostream& operator<<(std::ostream& out, partition_entry& e);
 };
 
 inline partition_version_ref& partition_snapshot::version()
+{
+    if (_version) {
+        return _version;
+    } else {
+        return _entry->_version;
+    }
+}
+
+inline const partition_version_ref& partition_snapshot::version() const
 {
     if (_version) {
         return _version;

@@ -29,10 +29,9 @@
 #include "tombstone.hh"
 #include "clustering_bounds_comparator.hh"
 #include "stdx.hh"
+#include "position_in_partition.hh"
 
 namespace bi = boost::intrusive;
-
-class position_in_partition_view;
 
 /**
  * Represents a ranged deletion operation. Can be empty.
@@ -148,6 +147,27 @@ public:
     // of this is not changed. The start bound of the remainder (if there is any)
     // is larger than the end bound of this.
     stdx::optional<range_tombstone> apply(const schema& s, range_tombstone&& src);
+
+    // Intersects the range of this tombstone with [pos, +inf) and replaces
+    // the range of the tombstone if there is an overlap.
+    // Returns true if there is an overlap. When returns false, the tombstone
+    // is not modified.
+    //
+    // pos must satisfy:
+    //   1) before_all_clustered_rows() <= pos
+    //   2) !pos.is_clustering_row() - because range_tombstone bounds can't represent such positions
+    bool trim_front(const schema& s, position_in_partition_view pos) {
+        position_in_partition::less_compare less(s);
+        if (!less(pos, end_position())) {
+            return false;
+        }
+        if (less(position(), pos)) {
+            bound_view new_start = pos.as_start_bound_view();
+            start = new_start.prefix;
+            start_kind = new_start.kind;
+        }
+        return true;
+    }
 
     size_t external_memory_usage() const {
         return start.external_memory_usage() + end.external_memory_usage();

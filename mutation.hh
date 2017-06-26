@@ -133,6 +133,10 @@ public:
     mutation operator+(const mutation& other) const;
     mutation& operator+=(const mutation& other);
     mutation& operator+=(mutation&& other);
+
+    // Returns a subset of this mutation holding only information relevant for given clustering ranges.
+    // Range tombstones will be trimmed to the boundaries of the clustering ranges.
+    mutation sliced(const query::clustering_row_ranges&) const;
 private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };
@@ -185,4 +189,3 @@ boost::iterator_range<std::vector<mutation>::const_iterator> slice(
 
 future<mutation_opt> mutation_from_streamed_mutation(streamed_mutation_opt sm);
 future<mutation> mutation_from_streamed_mutation(streamed_mutation& sm);
-future<mutation_opt> mutation_from_streamed_mutation_with_limit(streamed_mutation sm, size_t limit);

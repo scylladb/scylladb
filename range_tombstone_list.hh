@@ -23,6 +23,8 @@
 
 #include "range_tombstone.hh"
 #include "query-request.hh"
+#include "position_in_partition.hh"
+#include <iosfwd>
 
 class range_tombstone_list final {
     using range_tombstones_type = range_tombstone::container_type;
@@ -139,7 +141,12 @@ public:
     tombstone search_tombstone_covering(const schema& s, const clustering_key_prefix& key) const;
     // Returns range of tombstones which overlap with given range
     boost::iterator_range<const_iterator> slice(const schema& s, const query::clustering_range&) const;
+    // Returns range tombstones which overlap with [start, end)
+    boost::iterator_range<const_iterator> slice(const schema& s, position_in_partition_view start, position_in_partition_view end) const;
     iterator erase(const_iterator, const_iterator);
+    // Ensures that every range tombstone is strictly contained within given clustering ranges.
+    // Preserves all information which may be relevant for rows from that ranges.
+    void trim(const schema& s, const query::clustering_row_ranges&);
     range_tombstone_list difference(const schema& s, const range_tombstone_list& rt_list) const;
     // Erases the range tombstones for which filter returns true.
     template <typename Pred>
@@ -161,6 +168,9 @@ public:
     void apply(const schema& s, const range_tombstone_list& rt_list);
     // See reversibly_mergeable.hh
     reverter apply_reversibly(const schema& s, range_tombstone_list& rt_list);
+
+    friend std::ostream& operator<<(std::ostream& out, const range_tombstone_list&);
+    bool equal(const schema&, const range_tombstone_list&) const;
 private:
     void apply_reversibly(const schema& s, clustering_key_prefix start, bound_kind start_kind,
                           clustering_key_prefix end, bound_kind end_kind, tombstone tomb, reverter& rev);

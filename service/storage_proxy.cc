@@ -2042,9 +2042,10 @@ private:
             virtual void accept_static_cell(column_id, atomic_cell_view) override { }
             virtual void accept_static_cell(column_id, collection_mutation_view) override { }
             virtual void accept_row_tombstone(const range_tombstone&) override { }
-            virtual void accept_row(clustering_key_view key, const row_tombstone&, const row_marker&) override {
+            virtual void accept_row(position_in_partition_view pos, const row_tombstone&, const row_marker&, is_dummy dummy, is_continuous) override {
+                assert(!dummy);
                 if (!_is_reversed || !_last_ck) {
-                    _last_ck = clustering_key(key);
+                    _last_ck = pos.key();
                 }
             }
             virtual void accept_row_cell(column_id id, atomic_cell_view) override { }

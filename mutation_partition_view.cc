@@ -210,7 +210,7 @@ mutation_partition_view::accept(const column_mapping& cm, mutation_partition_vis
 
     for (auto&& cr : mpv.rows()) {
         auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
-        visitor.accept_row(cr.key(), t, read_row_marker(cr.marker()));
+        visitor.accept_row(position_in_partition_view::for_key(cr.key()), t, read_row_marker(cr.marker()));
 
         struct cell_visitor {
             mutation_partition_visitor& _visitor;

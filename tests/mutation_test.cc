@@ -48,6 +48,7 @@
 #include "cell_locking.hh"
 
 #include "disk-error-handler.hh"
+#include "simple_schema.hh"
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
@@ -830,7 +831,8 @@ SEASTAR_TEST_CASE(test_apply_is_atomic_in_case_of_allocation_failures) {
                         break; // we exhausted all allocation points
                     } catch (const std::bad_alloc&) {
                         BOOST_TEST_MESSAGE("Checking that apply was reverted");
-                        assert_that(m).is_equal_to(target);
+                        assert_that(m).is_equal_to(target)
+                            .has_same_continuity(target);
                     }
                 }
             }
@@ -851,7 +853,8 @@ SEASTAR_TEST_CASE(test_apply_is_atomic_in_case_of_allocation_failures) {
                         assert_that(m).is_equal_to(target);
                         // they should still commute
                         m.apply(copy_of_second);
-                        assert_that(m).is_equal_to(expected_apply_result);
+                        assert_that(m).is_equal_to(expected_apply_result)
+                            .has_same_continuity(expected_apply_result);
                     }
                 }
             }
@@ -1511,5 +1514,195 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
             check_partitions_match(m1.partition(), m1.partition().difference(s, mutation_partition{s}), *s);
             check_partitions_match(mutation_partition{s}, mutation_partition{s}.difference(s, m1.partition()), *s);
         });
+    });
+}
+
+SEASTAR_TEST_CASE(test_continuity_merging) {
+    return seastar::async([] {
+        simple_schema table;
+        auto&& s = *table.schema();
+
+        auto new_mutation = [&] {
+            return mutation(table.make_pkey(0), table.schema());
+        };
+
+        {
+            auto left = new_mutation();
+            auto right = new_mutation();
+            auto result = new_mutation();
+
+            left.partition().clustered_row(s, table.make_ckey(0), is_dummy::no, is_continuous::yes);
+            right.partition().clustered_row(s, table.make_ckey(0), is_dummy::no, is_continuous::no);
+            result.partition().clustered_row(s, table.make_ckey(0), is_dummy::no, is_continuous::yes);
+
+            left.partition().clustered_row(s, table.make_ckey(1), is_dummy::yes, is_continuous::yes);
+            right.partition().clustered_row(s, table.make_ckey(2), is_dummy::yes, is_continuous::no);
+            result.partition().clustered_row(s, table.make_ckey(1), is_dummy::yes, is_continuous::yes);
+            result.partition().clustered_row(s, table.make_ckey(2), is_dummy::yes, is_continuous::no);
+
+            left.partition().clustered_row(s, table.make_ckey(3), is_dummy::yes, is_continuous::yes);
+            right.partition().clustered_row(s, table.make_ckey(3), is_dummy::no, is_continuous::no);
+            result.partition().clustered_row(s, table.make_ckey(3), is_dummy::yes, is_continuous::yes);
+
+            left.partition().clustered_row(s, table.make_ckey(4), is_dummy::no, is_continuous::no);
+            right.partition().clustered_row(s, table.make_ckey(4), is_dummy::no, is_continuous::yes);
+            result.partition().clustered_row(s, table.make_ckey(4), is_dummy::no, is_continuous::no);
+
+            left.partition().clustered_row(s, table.make_ckey(5), is_dummy::no, is_continuous::no);
+            right.partition().clustered_row(s, table.make_ckey(5), is_dummy::yes, is_continuous::yes);
+            result.partition().clustered_row(s, table.make_ckey(5), is_dummy::no, is_continuous::no);
+
+            left.partition().clustered_row(s, table.make_ckey(6), is_dummy::no, is_continuous::yes);
+            right.partition().clustered_row(s, table.make_ckey(6), is_dummy::yes, is_continuous::no);
+            result.partition().clustered_row(s, table.make_ckey(6), is_dummy::no, is_continuous::yes);
+
+            left.partition().clustered_row(s, table.make_ckey(7), is_dummy::yes, is_continuous::yes);
+            right.partition().clustered_row(s, table.make_ckey(7), is_dummy::yes, is_continuous::no);
+            result.partition().clustered_row(s, table.make_ckey(7), is_dummy::yes, is_continuous::yes);
+
+            left.partition().clustered_row(s, table.make_ckey(8), is_dummy::yes, is_continuous::no);
+            right.partition().clustered_row(s, table.make_ckey(8), is_dummy::yes, is_continuous::yes);
+            result.partition().clustered_row(s, table.make_ckey(8), is_dummy::yes, is_continuous::no);
+
+            assert_that(left + right).has_same_continuity(result);
+        }
+
+        // static row continuity
+        {
+            auto complete = mutation(table.make_pkey(0), table.schema());
+            auto incomplete = mutation(table.make_pkey(0), table.schema());
+            incomplete.partition().set_static_row_continuous(false);
+
+            assert_that(complete + complete).has_same_continuity(complete);
+            assert_that(complete + incomplete).has_same_continuity(complete);
+            assert_that(incomplete + complete).has_same_continuity(incomplete);
+            assert_that(incomplete + incomplete).has_same_continuity(incomplete);
+        }
+    });
+
+}
+
+SEASTAR_TEST_CASE(test_apply_to_incomplete) {
+    return seastar::async([] {
+        simple_schema table;
+        auto&& s = *table.schema();
+
+        auto new_mutation = [&] {
+            return mutation(table.make_pkey(0), table.schema());
+        };
+
+        auto mutation_with_row = [&] (clustering_key ck) {
+            auto m = new_mutation();
+            table.add_row(m, ck, "v");
+            return m;
+        };
+
+        // FIXME: There is no assert_that() for mutation_partition
+        auto assert_equal = [&] (mutation_partition mp1, mutation_partition mp2) {
+            auto key = table.make_pkey(0);
+            assert_that(mutation(table.schema(), key, std::move(mp1)))
+                .is_equal_to(mutation(table.schema(), key, std::move(mp2)));
+        };
+
+        auto apply = [&] (partition_entry& e, const mutation& m) {
+            e.apply_to_incomplete(s, partition_entry(m.partition()), s);
+        };
+
+        auto ck1 = table.make_ckey(1);
+        auto ck2 = table.make_ckey(2);
+
+        BOOST_TEST_MESSAGE("Check that insert falling into discontinuous range is dropped");
+        {
+            auto e = partition_entry(mutation_partition::make_incomplete(s));
+            auto m = new_mutation();
+            table.add_row(m, ck1, "v");
+            apply(e, m);
+            assert_equal(e.squashed(s), mutation_partition::make_incomplete(s));
+        }
+
+        BOOST_TEST_MESSAGE("Check that continuity from latest version wins");
+        {
+            auto m1 = mutation_with_row(ck2);
+            auto e = partition_entry(m1.partition());
+
+            auto snap1 = e.read(table.schema());
+
+            auto m2 = mutation_with_row(ck2);
+            apply(e, m2);
+
+            partition_version* latest = &*e.version();
+            partition_version* prev = latest->next();
+
+            for (rows_entry& row : prev->partition().clustered_rows()) {
+                row.set_continuous(is_continuous::no);
+            }
+
+            auto m3 = mutation_with_row(ck1);
+            apply(e, m3);
+            assert_equal(e.squashed(s), (m2 + m3).partition());
+
+            // Check that snapshot data is not stolen when its entry is applied
+            auto e2 = partition_entry(mutation_partition(table.schema()));
+            e2.apply_to_incomplete(s, std::move(e), s);
+            assert_equal(snap1->squashed(), m1.partition());
+            assert_equal(e2.squashed(s), (m2 + m3).partition());
+        }
+    });
+
+}
+
+SEASTAR_TEST_CASE(test_schema_upgrade_preserves_continuity) {
+    return seastar::async([] {
+        simple_schema table;
+
+        auto new_mutation = [&] {
+            return mutation(table.make_pkey(0), table.schema());
+        };
+
+        auto mutation_with_row = [&] (clustering_key ck) {
+            auto m = new_mutation();
+            table.add_row(m, ck, "v");
+            return m;
+        };
+
+        // FIXME: There is no assert_that() for mutation_partition
+        auto assert_entry_equal = [&] (schema_ptr e_schema, partition_entry& e, mutation m) {
+            auto key = table.make_pkey(0);
+            assert_that(mutation(e_schema, key, e.squashed(*e_schema)))
+                .is_equal_to(m)
+                .has_same_continuity(m);
+        };
+
+        auto apply = [&] (schema_ptr e_schema, partition_entry& e, const mutation& m) {
+            e.apply_to_incomplete(*e_schema, partition_entry(m.partition()), *m.schema());
+        };
+
+        auto m1 = mutation_with_row(table.make_ckey(1));
+        m1.partition().clustered_rows().begin()->set_continuous(is_continuous::no);
+        m1.partition().set_static_row_continuous(false);
+        m1.partition().ensure_last_dummy(*m1.schema());
+
+        auto e = partition_entry(m1.partition());
+        auto rd1 = e.read(table.schema());
+
+        auto m2 = mutation_with_row(table.make_ckey(3));
+        m2.partition().ensure_last_dummy(*m2.schema());
+        apply(table.schema(), e, m2);
+
+        auto new_schema = schema_builder(table.schema()).with_column("__new_column", utf8_type).build();
+
+        e.upgrade(table.schema(), new_schema);
+        rd1 = {};
+
+        assert_entry_equal(new_schema, e, m1 + m2);
+
+        auto m3 = mutation_with_row(table.make_ckey(2));
+        apply(new_schema, e, m3);
+
+        auto m4 = mutation_with_row(table.make_ckey(0));
+        table.add_static_row(m4, "s_val");
+        apply(new_schema, e, m4);
+
+        assert_entry_equal(new_schema, e, m1 + m2 + m3);
     });
 }

@@ -54,8 +54,8 @@ static inline bound_kind flip_bound_kind(bound_kind bk)
 }
 
 class bound_view {
-    const static thread_local clustering_key empty_prefix;
 public:
+    const static thread_local clustering_key empty_prefix;
     const clustering_key_prefix& prefix;
     bound_kind kind;
     bound_view(const clustering_key_prefix& prefix, bound_kind kind)

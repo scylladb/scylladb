@@ -159,7 +159,7 @@ public:
 mutation_reader make_combined_reader(std::vector<mutation_reader>);
 mutation_reader make_combined_reader(mutation_reader&& a, mutation_reader&& b);
 // reads from the input readers, in order
-mutation_reader make_reader_returning(mutation);
+mutation_reader make_reader_returning(mutation, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 mutation_reader make_reader_returning(streamed_mutation);
 mutation_reader make_reader_returning_many(std::vector<mutation>,
     const query::partition_slice& slice = query::full_slice,
@@ -279,34 +279,36 @@ class mutation_source {
     // We could have our own version of std::function<> that is nothrow
     // move constructible and save some indirection and allocation.
     // Probably not worth the effort though.
-    std::unique_ptr<func_type> _fn;
+    lw_shared_ptr<func_type> _fn;
 private:
     mutation_source() = default;
     explicit operator bool() const { return bool(_fn); }
     friend class optimized_optional<mutation_source>;
 public:
-    mutation_source(func_type fn) : _fn(std::make_unique<func_type>(std::move(fn))) {}
+    mutation_source(func_type fn) : _fn(make_lw_shared<func_type>(std::move(fn))) {}
+    // For sources which don't care about the mutation_reader::forwarding flag (always fast forwardable)
+    mutation_source(std::function<mutation_reader(schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr, streamed_mutation::forwarding)> fn)
+        : _fn(make_lw_shared<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr tr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
+            return fn(s, range, slice, pc, std::move(tr), fwd);
+        })) {}
     mutation_source(std::function<mutation_reader(schema_ptr, partition_range, const query::partition_slice&, io_priority)> fn)
-        : _fn(std::make_unique<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr, streamed_mutation::forwarding, mutation_reader::forwarding) {
+        : _fn(make_lw_shared<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
+            assert(!fwd);
             return fn(s, range, slice, pc);
         })) {}
     mutation_source(std::function<mutation_reader(schema_ptr, partition_range, const query::partition_slice&)> fn)
-        : _fn(std::make_unique<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding, mutation_reader::forwarding) {
+        : _fn(make_lw_shared<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
+            assert(!fwd);
             return fn(s, range, slice);
         })) {}
     mutation_source(std::function<mutation_reader(schema_ptr, partition_range range)> fn)
-        : _fn(std::make_unique<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice&, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding, mutation_reader::forwarding) {
+        : _fn(make_lw_shared<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice&, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
+            assert(!fwd);
             return fn(s, range);
         })) {}
 
-    mutation_source(const mutation_source& other)
-        : _fn(std::make_unique<func_type>(*other._fn)) { }
-
-    mutation_source& operator=(const mutation_source& other) {
-        _fn = std::make_unique<func_type>(*other._fn);
-        return *this;
-    }
-
+    mutation_source(const mutation_source& other) = default;
+    mutation_source& operator=(const mutation_source& other) = default;
     mutation_source(mutation_source&&) = default;
     mutation_source& operator=(mutation_source&&) = default;
 
@@ -325,6 +327,32 @@ public:
         return (*_fn)(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
     }
 };
+
+// Returns a mutation_source which is the sum of given mutation_sources.
+//
+// Adding two mutation sources gives a mutation source which contains
+// the sum of writes contained in the addends.
+mutation_source make_combined_mutation_source(std::vector<mutation_source>);
+
+// Represent mutation_source which can be snapshotted.
+class snapshot_source {
+private:
+    std::function<mutation_source()> _func;
+public:
+    snapshot_source(std::function<mutation_source()> func)
+        : _func(std::move(func))
+    { }
+
+    // Creates a new snapshot.
+    // The returned mutation_source represents all earlier writes and only those.
+    // Note though that the mutations in the snapshot may get compacted over time.
+    mutation_source operator()() {
+        return _func();
+    }
+};
+
+mutation_source make_empty_mutation_source();
+snapshot_source make_empty_snapshot_source();
 
 template<>
 struct move_constructor_disengages<mutation_source> {

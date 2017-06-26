@@ -154,6 +154,10 @@ std::ostream& operator<<(std::ostream& os, const mutation_fragment& mf) {
     return os;
 }
 
+streamed_mutation make_empty_streamed_mutation(schema_ptr s, dht::decorated_key key, streamed_mutation::forwarding fwd) {
+    return streamed_mutation_from_mutation(mutation(std::move(key), std::move(s)), fwd);
+}
+
 streamed_mutation streamed_mutation_from_mutation(mutation m, streamed_mutation::forwarding fwd)
 {
     class reader final : public streamed_mutation::impl {
@@ -165,10 +169,16 @@ streamed_mutation streamed_mutation_from_mutation(mutation m, streamed_mutation:
     private:
         void prepare_next_clustering_row() {
             auto& crs = _mutation.partition().clustered_rows();
-            auto re = crs.unlink_leftmost_without_rebalance();
-            if (re) {
+            while (true) {
+                auto re = crs.unlink_leftmost_without_rebalance();
+                if (!re) {
+                    break;
+                }
                 auto re_deleter = defer([re] { current_deleter<rows_entry>()(re); });
-                _cr = mutation_fragment(std::move(*re));
+                if (!re->dummy()) {
+                    _cr = mutation_fragment(std::move(*re));
+                    break;
+                }
             }
         }
         void prepare_next_range_tombstone() {
@@ -260,6 +270,44 @@ streamed_mutation streamed_mutation_from_mutation(mutation m, streamed_mutation:
         return make_forwardable(std::move(sm)); // FIXME: optimize
     }
     return std::move(sm);
+}
+
+streamed_mutation streamed_mutation_from_forwarding_streamed_mutation(streamed_mutation&& sm)
+{
+    class reader final : public streamed_mutation::impl {
+        streamed_mutation _sm;
+        bool _static_row_done = false;
+    public:
+        explicit reader(streamed_mutation&& sm)
+            : streamed_mutation::impl(sm.schema(), sm.decorated_key(), sm.partition_tombstone())
+            , _sm(std::move(sm))
+        { }
+
+        virtual future<> fill_buffer() override {
+            if (!_static_row_done) {
+                _static_row_done = true;
+                return _sm().then([this] (auto&& mf) {
+                    if (mf) {
+                        this->push_mutation_fragment(std::move(*mf));
+                    }
+                    return _sm.fast_forward_to(query::clustering_range{}).then([this] {
+                        return this->fill_buffer();
+                    });
+                });
+            }
+            return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
+                return _sm().then([this] (auto&& mf) {
+                    if (mf) {
+                        this->push_mutation_fragment(std::move(*mf));
+                    } else {
+                        _end_of_stream = true;
+                    }
+                });
+            });
+        }
+    };
+
+    return make_streamed_mutation<reader>(std::move(sm));
 }
 
 streamed_mutation make_forwardable(streamed_mutation m) {
@@ -472,8 +520,7 @@ mutation_fragment_opt range_tombstone_stream::do_get_next()
 mutation_fragment_opt range_tombstone_stream::get_next(const rows_entry& re)
 {
     if (!_list.empty()) {
-        position_in_partition_view view(position_in_partition_view::clustering_row_tag_t(), re.key());
-        return !_cmp(view, _list.begin()->position()) ? do_get_next() : mutation_fragment_opt();
+        return !_cmp(re.position(), _list.begin()->position()) ? do_get_next() : mutation_fragment_opt();
     }
     return { };
 }
@@ -631,4 +678,8 @@ bool mutation_fragment::relevant_for_range_assuming_after(const schema& s, posit
     position_in_partition::less_compare cmp(s);
     // Range tombstones overlapping with the new range are let in
     return is_range_tombstone() && cmp(pos, as_range_tombstone().end_position());
+}
+
+std::ostream& operator<<(std::ostream& out, const range_tombstone_stream& rtl) {
+    return out << rtl._list;
 }

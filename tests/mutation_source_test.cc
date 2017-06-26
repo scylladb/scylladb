@@ -90,7 +90,7 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populat
         }
 
         mutation sliced_m = mutation_from_streamed_mutation(sliced_sm).get0();
-        assert_that(sliced_m).is_equal_to(fwd_m);
+        assert_that(sliced_m).is_equal_to(fwd_m, slice_with_ranges.row_ranges(*m.schema(), m.key()));
     }
 }
 
@@ -295,9 +295,9 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
         auto sm = assert_that_stream(std::move(*smo));
 
         sm.produces_row_with_key(keys[2]);
-        sm.produces_range_tombstone(rt3);
+        sm.produces_range_tombstone(rt3, slice.row_ranges(*s, m.key()));
         sm.produces_row_with_key(keys[8]);
-        sm.produces_range_tombstone(rt4);
+        sm.produces_range_tombstone(rt4, slice.row_ranges(*s, m.key()));
         sm.produces_end_of_stream();
     }
 
@@ -314,9 +314,9 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
         streamed_mutation_opt smo = rd().get0();
         BOOST_REQUIRE(bool(smo));
         assert_that_stream(std::move(*smo))
-            .produces_range_tombstone(rt3)
+            .produces_range_tombstone(rt3, slice.row_ranges(*s, m.key()))
             .produces_row_with_key(keys[8])
-            .produces_range_tombstone(rt4)
+            .produces_range_tombstone(rt4, slice.row_ranges(*s, m.key()))
             .produces_end_of_stream();
     }
 }
@@ -676,7 +676,7 @@ static void test_clustering_slices(populate_fn populate) {
             .with_range(query::clustering_range::make_singular(make_ck(2)))
             .build();
         assert_that(ds(s, pr, slice))
-            .produces(row6 + row7 + del_1 + del_2)
+            .produces(row6 + row7 + del_1 + del_2, slice.row_ranges(*s, pk.key()))
             .produces_end_of_stream();
     }
 
@@ -761,7 +761,6 @@ static mutation_sets generate_mutation_sets() {
 
         auto m1 = mutation(partition_key::from_single_value(*s1, to_bytes("key1")), s1);
         auto m2 = mutation(partition_key::from_single_value(*s2, to_bytes("key1")), s2);
-
         result.equal.emplace_back(mutations{m1, m2});
 
         clustering_key ck1 = clustering_key::from_deeply_exploded(*s1, {data_value(bytes("ck1_0")), data_value(bytes("ck1_1"))});
@@ -838,6 +837,14 @@ static mutation_sets generate_mutation_sets() {
             m1.set_static_cell("static_col_2", data_value(bytes("static_col_value")), ts);
             result.unequal.emplace_back(mutations{m1, m2});
             m2.set_static_cell("static_col_2", data_value(bytes("static_col_value")), ts);
+            result.equal.emplace_back(mutations{m1, m2});
+        }
+
+        {
+            m1.partition().ensure_last_dummy(*m1.schema());
+            result.equal.emplace_back(mutations{m1, m2});
+
+            m2.partition().ensure_last_dummy(*m2.schema());
             result.equal.emplace_back(mutations{m1, m2});
         }
 
@@ -934,6 +941,7 @@ class random_mutation_generator::impl {
     std::vector<bytes> _blobs;
     std::uniform_int_distribution<size_t> _ck_index_dist{0, n_blobs - 1};
     std::uniform_int_distribution<int> _bool_dist{0, 1};
+    std::uniform_int_distribution<int> _not_dummy_dist{0, 19};
 
     template <typename Generator>
     static gc_clock::time_point expiry_dist(Generator& gen) {
@@ -1164,9 +1172,14 @@ public:
         size_t row_count = row_count_dist(_gen);
         for (size_t i = 0; i < row_count; ++i) {
             auto ckey = make_random_key();
-            deletable_row& row = m.partition().clustered_row(*_schema, ckey);
-            set_random_cells(row.cells(), column_kind::regular_column);
-            row.marker() = random_row_marker();
+            is_continuous continuous = is_continuous(_bool_dist(_gen));
+            if (_not_dummy_dist(_gen)) {
+                deletable_row& row = m.partition().clustered_row(*_schema, ckey, is_dummy::no, continuous);
+                set_random_cells(row.cells(), column_kind::regular_column);
+                row.marker() = random_row_marker();
+            } else {
+                m.partition().clustered_row(*_schema, ckey, is_dummy::yes, continuous);
+            }
         }
 
         size_t range_tombstone_count = row_count_dist(_gen);
@@ -1180,6 +1193,12 @@ public:
             m.partition().apply_row_tombstone(*_schema,
                     range_tombstone(std::move(start), std::move(end), random_tombstone()));
         }
+
+        if (_bool_dist(_gen)) {
+            m.partition().ensure_last_dummy(*_schema);
+            m.partition().clustered_rows().rbegin()->set_continuous(is_continuous(_bool_dist(_gen)));
+        }
+
         return m;
     }
 };

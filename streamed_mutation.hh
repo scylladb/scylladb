@@ -23,6 +23,7 @@
 
 #include "mutation_partition.hh"
 #include "utils/optimized_optional.hh"
+#include "position_in_partition.hh"
 
 #include <experimental/optional>
 
@@ -37,8 +38,6 @@
 // There exists an ordering (implemented in position_in_partition class) between
 // mutation_fragment objects. It reflects the order in which content of
 // partition appears in the sstables.
-
-class position_in_partition_view;
 
 class clustering_row {
     clustering_key_prefix _ck;
@@ -111,6 +110,13 @@ public:
         return sizeof(clustering_row) + external_memory_usage();
     }
 
+    bool equal(const schema& s, const clustering_row& other) const {
+        return _ck.equal(s, other._ck)
+               && _t == other._t
+               && _marker == other._marker
+               && _cells.equal(column_kind::static_column, s, other._cells, s);
+    }
+
     friend std::ostream& operator<<(std::ostream& os, const clustering_row& row);
 };
 
@@ -146,6 +152,10 @@ public:
 
     size_t memory_usage() const {
         return sizeof(static_row) + external_memory_usage();
+    }
+
+    bool equal(const schema& s, const static_row& other) const {
+        return _cells.equal(column_kind::static_column, s, other._cells, s);
     }
 
     friend std::ostream& operator<<(std::ostream& is, const static_row& row);
@@ -185,9 +195,29 @@ public:
     mutation_fragment(clustering_row&& r);
     mutation_fragment(range_tombstone&& r);
 
-    mutation_fragment(const mutation_fragment&) = delete;
+    mutation_fragment(const mutation_fragment& o)
+        : _kind(o._kind), _data(std::make_unique<data>()) {
+        switch(_kind) {
+            case kind::static_row:
+                new (&_data->_static_row) static_row(o._data->_static_row);
+                break;
+            case kind::clustering_row:
+                new (&_data->_clustering_row) clustering_row(o._data->_clustering_row);
+                break;
+            case kind::range_tombstone:
+                new (&_data->_range_tombstone) range_tombstone(o._data->_range_tombstone);
+                break;
+        }
+    }
     mutation_fragment(mutation_fragment&& other) = default;
-    mutation_fragment& operator=(const mutation_fragment&) = delete;
+    mutation_fragment& operator=(const mutation_fragment& other) {
+        if (this != &other) {
+            mutation_fragment copy(other);
+            this->~mutation_fragment();
+            new (this) mutation_fragment(std::move(copy));
+        }
+        return *this;
+    }
     mutation_fragment& operator=(mutation_fragment&& other) noexcept {
         if (this != &other) {
             this->~mutation_fragment();
@@ -297,394 +327,23 @@ public:
         return *_data->_size_in_bytes;
     }
 
+    bool equal(const schema& s, const mutation_fragment& other) const {
+        if (other._kind != _kind) {
+            return false;
+        }
+        switch(_kind) {
+        case kind::static_row:
+            return as_static_row().equal(s, other.as_static_row());
+        case kind::clustering_row:
+            return as_clustering_row().equal(s, other.as_clustering_row());
+        case kind::range_tombstone:
+            return as_range_tombstone().equal(s, other.as_range_tombstone());
+        }
+        abort();
+    }
+
     friend std::ostream& operator<<(std::ostream&, const mutation_fragment& mf);
 };
-
-std::ostream& operator<<(std::ostream&, mutation_fragment::kind);
-
-std::ostream& operator<<(std::ostream&, const mutation_fragment& mf);
-
-class position_in_partition;
-
-inline
-lexicographical_relation relation_for_lower_bound(composite_view v) {
-    switch (v.last_eoc()) {
-        case composite::eoc::start:
-        case composite::eoc::none:
-            return lexicographical_relation::before_all_prefixed;
-        case composite::eoc::end:
-            return lexicographical_relation::after_all_prefixed;
-        default:
-            assert(0);
-    }
-}
-
-inline
-lexicographical_relation relation_for_upper_bound(composite_view v) {
-    switch (v.last_eoc()) {
-        case composite::eoc::start:
-            return lexicographical_relation::before_all_prefixed;
-        case composite::eoc::none:
-            return lexicographical_relation::before_all_strictly_prefixed;
-        case composite::eoc::end:
-            return lexicographical_relation::after_all_prefixed;
-        default:
-            assert(0);
-    }
-}
-
-class position_in_partition_view {
-    friend class position_in_partition;
-
-    int _bound_weight = 0;
-    const clustering_key_prefix* _ck; // nullptr for static row
-private:
-    position_in_partition_view(int bound_weight, const clustering_key_prefix* ck)
-        : _bound_weight(bound_weight)
-        , _ck(ck)
-    { }
-    // Returns placement of this position_in_partition relative to *_ck,
-    // or lexicographical_relation::at_prefix if !_ck.
-    lexicographical_relation relation() const {
-        // FIXME: Currently position_range cannot represent a range end bound which
-        // includes just the prefix key or a range start which excludes just a prefix key.
-        // In both cases we should return lexicographical_relation::before_all_strictly_prefixed here.
-        // Refs #1446.
-        if (_bound_weight <= 0) {
-            return lexicographical_relation::before_all_prefixed;
-        } else {
-            return lexicographical_relation::after_all_prefixed;
-        }
-    }
-public:
-    struct static_row_tag_t { };
-    struct clustering_row_tag_t { };
-    struct range_tag_t { };
-    using range_tombstone_tag_t = range_tag_t;
-
-    position_in_partition_view(static_row_tag_t) : _ck(nullptr) { }
-    position_in_partition_view(clustering_row_tag_t, const clustering_key_prefix& ck)
-        : _ck(&ck) { }
-    position_in_partition_view(range_tag_t, bound_view bv)
-        : _bound_weight(weight(bv.kind)), _ck(&bv.prefix) { }
-
-    static position_in_partition_view for_range_start(const query::clustering_range&);
-    static position_in_partition_view for_range_end(const query::clustering_range&);
-
-    static position_in_partition_view before_all_clustered_rows() {
-        return {range_tag_t(), bound_view::bottom()};
-    }
-
-    static position_in_partition_view for_static_row() {
-        return {static_row_tag_t()};
-    }
-
-    bool is_static_row() const { return !_ck; }
-
-    // Returns true if all fragments that can be seen for given schema have
-    // positions >= than this.
-    bool is_before_all_fragments(const schema& s) const {
-        return !_ck || (!s.has_static_columns() && _bound_weight < 0 && _ck->is_empty(s));
-    }
-
-    friend std::ostream& operator<<(std::ostream&, position_in_partition_view);
-};
-
-inline
-position_in_partition_view position_in_partition_view::for_range_start(const query::clustering_range& r) {
-    return {position_in_partition_view::range_tag_t(), bound_view::from_range_start(r)};
-}
-
-inline
-position_in_partition_view position_in_partition_view::for_range_end(const query::clustering_range& r) {
-    return {position_in_partition_view::range_tag_t(), bound_view::from_range_end(r)};
-}
-
-class position_in_partition {
-    int _bound_weight = 0;
-    stdx::optional<clustering_key_prefix> _ck;
-public:
-    struct static_row_tag_t { };
-    struct after_static_row_tag_t { };
-    struct clustering_row_tag_t { };
-    struct after_clustering_row_tag_t { };
-    struct range_tag_t { };
-    using range_tombstone_tag_t = range_tag_t;
-
-    explicit position_in_partition(static_row_tag_t) { }
-    position_in_partition(clustering_row_tag_t, clustering_key_prefix ck)
-        : _ck(std::move(ck)) { }
-    position_in_partition(after_clustering_row_tag_t, clustering_key_prefix ck)
-        // FIXME: Use lexicographical_relation::before_strictly_prefixed here. Refs #1446
-        : _bound_weight(1), _ck(std::move(ck)) { }
-    position_in_partition(range_tag_t, bound_view bv)
-        : _bound_weight(weight(bv.kind)), _ck(bv.prefix) { }
-    position_in_partition(after_static_row_tag_t) :
-        position_in_partition(range_tag_t(), bound_view::bottom()) { }
-    explicit position_in_partition(position_in_partition_view view)
-        : _bound_weight(view._bound_weight)
-        {
-            if (view._ck) {
-                _ck = *view._ck;
-            }
-        }
-
-    static position_in_partition before_all_clustered_rows() {
-        return {position_in_partition::range_tag_t(), bound_view::bottom()};
-    }
-
-    static position_in_partition after_all_clustered_rows() {
-        return {position_in_partition::range_tag_t(), bound_view::top()};
-    }
-
-    static position_in_partition after_key(clustering_key ck) {
-        return {after_clustering_row_tag_t(), std::move(ck)};
-    }
-
-    static position_in_partition for_key(clustering_key ck) {
-        return {clustering_row_tag_t(), std::move(ck)};
-    }
-
-    bool is_static_row() const { return !_ck; }
-    bool is_clustering_row() const { return _ck && !_bound_weight; }
-
-    template<typename Hasher>
-    void feed_hash(Hasher& hasher, const schema& s) const {
-        ::feed_hash(hasher, _bound_weight);
-        if (_ck) {
-            ::feed_hash(hasher, true);
-            _ck->feed_hash(hasher, s);
-        } else {
-            ::feed_hash(hasher, false);
-        }
-    }
-
-    clustering_key_prefix& key() {
-        return *_ck;
-    }
-    const clustering_key_prefix& key() const {
-        return *_ck;
-    }
-    operator position_in_partition_view() const {
-        return { _bound_weight, _ck ? &*_ck : nullptr };
-    }
-
-    // Defines total order on the union of position_and_partition and composite objects.
-    //
-    // The ordering is compatible with position_range (r). The following is satisfied for
-    // all cells with name c included by the range:
-    //
-    //   r.start() <= c < r.end()
-    //
-    // The ordering on composites given by this is compatible with but weaker than the cell name order.
-    //
-    // The ordering on position_in_partition given by this is compatible but weaker than the ordering
-    // given by position_in_partition::tri_compare.
-    //
-    class composite_tri_compare {
-        const schema& _s;
-    public:
-        composite_tri_compare(const schema& s) : _s(s) {}
-
-        int operator()(position_in_partition_view a, position_in_partition_view b) const {
-            if (a.is_static_row() || b.is_static_row()) {
-                return b.is_static_row() - a.is_static_row();
-            }
-            auto&& types = _s.clustering_key_type()->types();
-            auto cmp = [&] (const data_type& t, bytes_view c1, bytes_view c2) { return t->compare(c1, c2); };
-            return lexicographical_tri_compare(types.begin(), types.end(),
-                a._ck->begin(_s), a._ck->end(_s),
-                b._ck->begin(_s), b._ck->end(_s),
-                cmp, a.relation(), b.relation());
-        }
-
-        int operator()(position_in_partition_view a, composite_view b) const {
-            if (b.empty()) {
-                return 1; // a cannot be empty.
-            }
-            if (a.is_static_row() || b.is_static()) {
-                return b.is_static() - a.is_static_row();
-            }
-            auto&& types = _s.clustering_key_type()->types();
-            auto b_values = b.values();
-            auto cmp = [&] (const data_type& t, bytes_view c1, bytes_view c2) { return t->compare(c1, c2); };
-            return lexicographical_tri_compare(types.begin(), types.end(),
-                a._ck->begin(_s), a._ck->end(_s),
-                b_values.begin(), b_values.end(),
-                cmp, a.relation(), relation_for_lower_bound(b));
-        }
-
-        int operator()(composite_view a, position_in_partition_view b) const {
-            return -(*this)(b, a);
-        }
-
-        int operator()(composite_view a, composite_view b) const {
-            if (a.is_static() != b.is_static()) {
-                return a.is_static() ? -1 : 1;
-            }
-            auto&& types = _s.clustering_key_type()->types();
-            auto a_values = a.values();
-            auto b_values = b.values();
-            auto cmp = [&] (const data_type& t, bytes_view c1, bytes_view c2) { return t->compare(c1, c2); };
-            return lexicographical_tri_compare(types.begin(), types.end(),
-                a_values.begin(), a_values.end(),
-                b_values.begin(), b_values.end(),
-                cmp,
-                relation_for_lower_bound(a),
-                relation_for_lower_bound(b));
-        }
-    };
-
-    // Less comparator giving the same order as composite_tri_compare.
-    class composite_less_compare {
-        composite_tri_compare _cmp;
-    public:
-        composite_less_compare(const schema& s) : _cmp(s) {}
-
-        template<typename T, typename U>
-        bool operator()(const T& a, const U& b) const {
-            return _cmp(a, b) < 0;
-        }
-    };
-
-    class tri_compare {
-        bound_view::tri_compare _cmp;
-    private:
-        template<typename T, typename U>
-        int compare(const T& a, const U& b) const {
-            bool a_rt_weight = bool(a._ck);
-            bool b_rt_weight = bool(b._ck);
-            if (!a_rt_weight || !b_rt_weight) {
-                return a_rt_weight - b_rt_weight;
-            }
-            return _cmp(*a._ck, a._bound_weight, *b._ck, b._bound_weight);
-        }
-    public:
-        tri_compare(const schema& s) : _cmp(s) { }
-        int operator()(const position_in_partition& a, const position_in_partition& b) const {
-            return compare(a, b);
-        }
-        int operator()(const position_in_partition_view& a, const position_in_partition_view& b) const {
-            return compare(a, b);
-        }
-        int operator()(const position_in_partition& a, const position_in_partition_view& b) const {
-            return compare(a, b);
-        }
-        int operator()(const position_in_partition_view& a, const position_in_partition& b) const {
-            return compare(a, b);
-        }
-    };
-    class less_compare {
-        tri_compare _cmp;
-    public:
-        less_compare(const schema& s) : _cmp(s) { }
-        bool operator()(const position_in_partition& a, const position_in_partition& b) const {
-            return _cmp(a, b) < 0;
-        }
-        bool operator()(const position_in_partition_view& a, const position_in_partition_view& b) const {
-            return _cmp(a, b) < 0;
-        }
-        bool operator()(const position_in_partition& a, const position_in_partition_view& b) const {
-            return _cmp(a, b) < 0;
-        }
-        bool operator()(const position_in_partition_view& a, const position_in_partition& b) const {
-            return _cmp(a, b) < 0;
-        }
-    };
-    class equal_compare {
-        clustering_key_prefix::equality _equal;
-        template<typename T, typename U>
-        bool compare(const T& a, const U& b) const {
-            bool a_rt_weight = bool(a._ck);
-            bool b_rt_weight = bool(b._ck);
-            return a_rt_weight == b_rt_weight
-                   && (!a_rt_weight || (_equal(*a._ck, *b._ck)
-                        && a._bound_weight == b._bound_weight));
-        }
-    public:
-        equal_compare(const schema& s) : _equal(s) { }
-        bool operator()(const position_in_partition& a, const position_in_partition& b) const {
-            return compare(a, b);
-        }
-        bool operator()(const position_in_partition_view& a, const position_in_partition_view& b) const {
-            return compare(a, b);
-        }
-        bool operator()(const position_in_partition_view& a, const position_in_partition& b) const {
-            return compare(a, b);
-        }
-        bool operator()(const position_in_partition& a, const position_in_partition_view& b) const {
-            return compare(a, b);
-        }
-    };
-    friend std::ostream& operator<<(std::ostream&, const position_in_partition&);
-};
-
-// Includes all position_in_partition objects "p" for which: start <= p < end
-// And only those.
-class position_range {
-private:
-    position_in_partition _start;
-    position_in_partition _end;
-public:
-    static position_range from_range(const query::clustering_range&);
-
-    static position_range for_static_row() {
-        return {
-            position_in_partition(position_in_partition::static_row_tag_t()),
-            position_in_partition(position_in_partition::after_static_row_tag_t())
-        };
-    }
-
-    static position_range full() {
-        return {
-            position_in_partition(position_in_partition::static_row_tag_t()),
-            position_in_partition::after_all_clustered_rows()
-        };
-    }
-
-    static position_range all_clustered_rows() {
-        return {
-            position_in_partition::before_all_clustered_rows(),
-            position_in_partition::after_all_clustered_rows()
-        };
-    }
-
-    position_range(position_range&&) = default;
-    position_range& operator=(position_range&&) = default;
-    position_range(const position_range&) = default;
-    position_range& operator=(const position_range&) = default;
-
-    // Constructs position_range which covers the same rows as given clustering_range.
-    // position_range includes a fragment if it includes position of that fragment.
-    position_range(const query::clustering_range&);
-    position_range(query::clustering_range&&);
-
-    position_range(position_in_partition start, position_in_partition end)
-        : _start(std::move(start))
-        , _end(std::move(end))
-    { }
-
-    const position_in_partition& start() const& { return _start; }
-    position_in_partition&& start() && { return std::move(_start); }
-    const position_in_partition& end() const& { return _end; }
-    position_in_partition&& end() && { return std::move(_end); }
-    bool contains(const schema& s, position_in_partition_view pos) const;
-    bool overlaps(const schema& s, position_in_partition_view start, position_in_partition_view end) const;
-
-    friend std::ostream& operator<<(std::ostream&, const position_range&);
-};
-
-inline
-bool position_range::contains(const schema& s, position_in_partition_view pos) const {
-    position_in_partition::less_compare less(s);
-    return !less(pos, _start) && less(pos, _end);
-}
-
-inline
-bool position_range::overlaps(const schema& s, position_in_partition_view start, position_in_partition_view end) const {
-    position_in_partition::less_compare less(s);
-    return !less(end, _start) && less(start, _end);
-}
 
 inline position_in_partition_view static_row::position() const
 {
@@ -695,6 +354,10 @@ inline position_in_partition_view clustering_row::position() const
 {
     return position_in_partition_view(position_in_partition_view::clustering_row_tag_t(), _ck);
 }
+
+std::ostream& operator<<(std::ostream&, mutation_fragment::kind);
+
+std::ostream& operator<<(std::ostream&, const mutation_fragment& mf);
 
 template<>
 struct move_constructor_disengages<mutation_fragment> {
@@ -889,10 +552,13 @@ class mutation;
 
 streamed_mutation streamed_mutation_from_mutation(mutation, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 streamed_mutation streamed_mutation_returning(schema_ptr, dht::decorated_key, std::vector<mutation_fragment>, tombstone t = {});
+streamed_mutation streamed_mutation_from_forwarding_streamed_mutation(streamed_mutation&&);
 
 //Requires all streamed_mutations to have the same schema.
 streamed_mutation merge_mutations(std::vector<streamed_mutation>);
 streamed_mutation reverse_streamed_mutation(streamed_mutation);
+
+streamed_mutation make_empty_streamed_mutation(schema_ptr, dht::decorated_key, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
 // range_tombstone_stream is a helper object that simplifies producing a stream
 // of range tombstones and merging it with a stream of clustering rows.
@@ -935,6 +601,7 @@ public:
     }
     void apply(const range_tombstone_list&, const query::clustering_range&);
     void reset();
+    friend std::ostream& operator<<(std::ostream& out, const range_tombstone_stream&);
 };
 
 // mutation_hasher is an equivalent of hashing_partition_visitor for
@@ -1049,3 +716,50 @@ public:
         consume_range_tombstones_until_end();
     }
 };
+
+
+GCC6_CONCEPT(
+    // F gets a stream element as an argument and returns the new value which replaces that element
+    // in the transformed stream.
+    template<typename F>
+    concept bool StreamedMutationTranformer() {
+        return requires(F f, mutation_fragment mf, schema_ptr s) {
+            { f(std::move(mf)) } -> mutation_fragment
+            { f(s) } -> schema_ptr
+        };
+    }
+)
+
+// Creates a stream which is like sm but with transformation applied to the elements.
+template<typename T>
+GCC6_CONCEPT(
+    requires StreamedMutationTranformer<T>()
+)
+streamed_mutation transform(streamed_mutation sm, T t) {
+    class reader : public streamed_mutation::impl {
+        streamed_mutation _sm;
+        T _t;
+    public:
+        explicit reader(streamed_mutation sm, T&& t)
+            : impl(t(sm.schema()), sm.decorated_key(), sm.partition_tombstone())
+            , _sm(std::move(sm))
+            , _t(std::move(t))
+        { }
+
+        virtual future<> fill_buffer() override {
+            return _sm.fill_buffer().then([this] {
+                while (!_sm.is_buffer_empty()) {
+                    push_mutation_fragment(_t(_sm.pop_mutation_fragment()));
+                }
+                _end_of_stream = _sm.is_end_of_stream();
+            });
+        }
+
+        virtual future<> fast_forward_to(position_range pr) override {
+            _end_of_stream = false;
+            forward_buffer_to(pr.start());
+            return _sm.fast_forward_to(std::move(pr));
+        }
+    };
+    return make_streamed_mutation<reader>(std::move(sm), std::move(t));
+}

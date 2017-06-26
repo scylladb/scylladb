@@ -29,8 +29,10 @@
 #include "tests/test_services.hh"
 #include "schema_builder.hh"
 #include "total_order_check.hh"
+#include "schema_upgrader.hh"
 
 #include "disk-error-handler.hh"
+#include "mutation_assertions.hh"
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
@@ -241,7 +243,7 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing_streamed_mutations) {
                 return make_ready_future<>();
             }, 1).get0();
 
-            auto expected_fragments = m.partition().clustered_rows().calculate_size()
+            auto expected_fragments = boost::size(m.partition().non_dummy_rows())
                                       + m.partition().row_tombstones().size()
                                       + !m.partition().static_row().empty();
             BOOST_REQUIRE_EQUAL(fms.size(), std::max(expected_fragments, size_t(1)));
@@ -536,5 +538,23 @@ SEASTAR_TEST_CASE(test_ordering_of_position_in_partition_and_composite_view_in_a
                 .equal_to(composite_after_prefixed(*s, ck6))
             .next(position_range::full().end())
             .check();
+    });
+}
+
+SEASTAR_TEST_CASE(test_schema_upgrader_is_equivalent_with_mutation_upgrade) {
+    return seastar::async([] {
+        for_each_mutation_pair([](const mutation& m1, const mutation& m2, are_equal eq) {
+            if (m1.schema()->version() != m2.schema()->version()) {
+                // upgrade m1 to m2's schema
+
+                auto from_upgrader = mutation_from_streamed_mutation(
+                    transform(streamed_mutation_from_mutation(m1), schema_upgrader(m2.schema()))).get0();
+
+                auto regular = m1;
+                regular.upgrade(m2.schema());
+
+                assert_that(from_upgrader).has_mutation().is_equal_to(regular);
+            }
+        });
     });
 }

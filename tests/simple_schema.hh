@@ -28,15 +28,18 @@
 #include "keys.hh"
 #include "streamed_mutation.hh"
 #include "mutation.hh"
+#include "schema_builder.hh"
+#include "streamed_mutation.hh"
 
 // Helper for working with the following table:
 //
-//   CREATE TABLE ks.cf (pk utf8, ck utf8, v utf8, s1 utf8 static, PRIMARY KEY (pk, ck));
+//   CREATE TABLE ks.cf (pk text, ck text, v text, s1 text static, PRIMARY KEY (pk, ck));
 //
 class simple_schema {
     schema_ptr _s;
     api::timestamp_type _timestamp = api::min_timestamp;
-private:
+    const column_definition& _v_def;
+public:
     api::timestamp_type new_timestamp() {
         return _timestamp++;
     }
@@ -48,6 +51,7 @@ public:
             .with_column("s1", utf8_type, column_kind::static_column)
             .with_column("v", utf8_type)
             .build())
+        , _v_def(*_s->get_column_definition(to_bytes("v")))
     { }
 
     clustering_key make_ckey(sstring ck) {
@@ -70,8 +74,23 @@ public:
         return dht::global_partitioner().decorate_key(*_s, key);
     }
 
-    void add_row(mutation& m, const clustering_key& key, sstring v) {
-        m.set_clustered_cell(key, to_bytes("v"), data_value(v), new_timestamp());
+    void add_row(mutation& m, const clustering_key& key, const sstring& v, api::timestamp_type t = api::missing_timestamp) {
+        if (t == api::missing_timestamp) {
+            t = new_timestamp();
+        }
+        m.set_clustered_cell(key, _v_def, atomic_cell::make_live(t, data_value(v).serialize()));
+    }
+
+    std::pair<sstring, api::timestamp_type> get_value(const clustering_row& row) {
+        auto cell = row.cells().find_cell(_v_def.id);
+        if (!cell) {
+            throw std::runtime_error("cell not found");
+        }
+        atomic_cell_view ac = cell->as_atomic_cell();
+        if (!ac.is_live()) {
+            throw std::runtime_error("cell is dead");
+        }
+        return std::make_pair(value_cast<sstring>(utf8_type->deserialize(ac.value())), ac.timestamp());
     }
 
     mutation_fragment make_row(const clustering_key& key, sstring v) {
@@ -91,9 +110,12 @@ public:
         return rt;
     }
 
-    range_tombstone make_range_tombstone(const query::clustering_range& range) {
+    range_tombstone make_range_tombstone(const query::clustering_range& range, tombstone t = {}) {
         auto bv_range = bound_view::from_range(range);
-        range_tombstone rt(bv_range.first, bv_range.second, tombstone(new_timestamp(), gc_clock::now()));
+        if (!t) {
+            t = tombstone(new_timestamp(), gc_clock::now());
+        }
+        range_tombstone rt(bv_range.first, bv_range.second, t);
         return rt;
     }
 
@@ -112,6 +134,15 @@ public:
             keys.push_back(make_pkey(i));
         }
         std::sort(keys.begin(), keys.end(), dht::decorated_key::less_comparator(_s));
+        return keys;
+    }
+
+    // Returns n clustering keys in their natural order
+    std::vector<clustering_key> make_ckeys(int n) {
+        std::vector<clustering_key> keys;
+        for (int i = 0; i < n; ++i) {
+            keys.push_back(make_ckey(i));
+        }
         return keys;
     }
 };

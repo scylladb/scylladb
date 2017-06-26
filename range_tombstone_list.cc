@@ -307,9 +307,44 @@ range_tombstone_list::slice(const schema& s, const query::clustering_range& r) c
         _tombstones.upper_bound(bv_range.second, order_by_start{s}));
 }
 
+boost::iterator_range<range_tombstone_list::const_iterator>
+range_tombstone_list::slice(const schema& s, position_in_partition_view start, position_in_partition_view end) const {
+    struct order_by_end {
+        position_in_partition::less_compare less;
+        order_by_end(const schema& s) : less(s) {}
+        bool operator()(position_in_partition_view v, const range_tombstone& rt) const { return less(v, rt.end_position()); }
+        bool operator()(const range_tombstone& rt, position_in_partition_view v) const { return less(rt.end_position(), v); }
+    };
+    struct order_by_start {
+        position_in_partition::less_compare less;
+        order_by_start(const schema& s) : less(s) {}
+        bool operator()(position_in_partition_view v, const range_tombstone& rt) const { return less(v, rt.position()); }
+        bool operator()(const range_tombstone& rt, position_in_partition_view v) const { return less(rt.position(), v); }
+    };
+    return boost::make_iterator_range(
+        _tombstones.upper_bound(start, order_by_end{s}), // end_position() is exclusive, hence upper_bound()
+        _tombstones.lower_bound(end, order_by_start{s}));
+}
+
 range_tombstone_list::iterator
 range_tombstone_list::erase(const_iterator a, const_iterator b) {
     return _tombstones.erase_and_dispose(a, b, current_deleter<range_tombstone>());
+}
+
+void range_tombstone_list::trim(const schema& s, const query::clustering_row_ranges& ranges) {
+    range_tombstone_list list(s);
+    bound_view::compare less(s);
+    for (auto&& range : ranges) {
+        auto start = bound_view::from_range_start(range);
+        auto end = bound_view::from_range_end(range);
+        for (const range_tombstone& rt : slice(s, range)) {
+            list.apply(s, range_tombstone(
+                std::max(rt.start_bound(), start, less),
+                std::min(rt.end_bound(), end, less),
+                rt.tomb));
+        }
+    }
+    *this = std::move(list);
 }
 
 range_tombstone_list::range_tombstones_type::iterator
@@ -367,4 +402,14 @@ void range_tombstone_list::update_undo_op::undo(const schema& s, range_tombstone
     auto it = rt_list.find(s, _new_rt);
     assert (it != rt_list.end());
     *it = std::move(_old_rt);
+}
+
+std::ostream& operator<<(std::ostream& out, const range_tombstone_list& list) {
+    return out << "{" << ::join(", ", list) << "}";
+}
+
+bool range_tombstone_list::equal(const schema& s, const range_tombstone_list& other) const {
+    return boost::equal(_tombstones, other._tombstones, [&s] (auto&& rt1, auto&& rt2) {
+        return rt1.equal(s, rt2);
+    });
 }
