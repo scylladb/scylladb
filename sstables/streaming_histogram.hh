@@ -41,7 +41,7 @@
 
 #pragma once
 
-#include "disk_types.hh"
+#include <unordered_map>
 
 namespace sstables {
 
@@ -54,7 +54,7 @@ namespace sstables {
  */
 struct streaming_histogram {
     // TreeMap to hold bins of histogram.
-    disk_hash<uint32_t, double, uint64_t> bin;
+    std::unordered_map<double, uint64_t> bin;
 
     // maximum bin size for this histogram
     uint32_t max_bin_size;
@@ -67,7 +67,7 @@ struct streaming_histogram {
         max_bin_size = max_bin_size_p;
     }
 
-    streaming_histogram(int max_bin_size_p, disk_hash<uint32_t, double, uint64_t>&& bin_p)
+    streaming_histogram(int max_bin_size_p, std::unordered_map<double, uint64_t>&& bin_p)
     {
         max_bin_size = max_bin_size_p;
         bin = std::move(bin_p);
@@ -88,22 +88,22 @@ struct streaming_histogram {
      * @param m
      */
     void update(double p, uint64_t m) {
-        auto it = bin.map.find(p);
-        if (it != bin.map.end()) {
-            bin.map[p] = it->second + m;
+        auto it = bin.find(p);
+        if (it != bin.end()) {
+            bin[p] = it->second + m;
         } else {
-            bin.map[p] = m;
+            bin[p] = m;
             // if bin size exceeds maximum bin size then trim down to max size
-            while (bin.map.size() > max_bin_size) {
+            while (bin.size() > max_bin_size) {
                 // find points p1, p2 which have smallest difference
-                auto it = bin.map.begin();
+                auto it = bin.begin();
                 double p1 = it->first;
                 it++;
                 double p2 = it->first;
                 it++;
                 double smallestDiff = p2 - p1;
                 double q1 = p1, q2 = p2;
-                while(it != bin.map.end()) {
+                while(it != bin.end()) {
                     p1 = p2;
                     p2 = it->first;
                     it++;
@@ -116,9 +116,9 @@ struct streaming_histogram {
                     }
                 }
                 // merge those two
-                uint64_t k1 = bin.map.erase(q1);
-                uint64_t k2 = bin.map.erase(q2);
-                bin.map.insert({(q1 * k1 + q2 * k2) / (k1 + k2), k1 + k2});
+                uint64_t k1 = bin.erase(q1);
+                uint64_t k2 = bin.erase(q2);
+                bin.insert({(q1 * k1 + q2 * k2) / (k1 + k2), k1 + k2});
             }
         }
     }
@@ -131,19 +131,13 @@ struct streaming_histogram {
      */
     void merge(streaming_histogram& other)
     {
-        if (!other.bin.map.size())
+        if (!other.bin.size())
             return;
 
-        for (auto& it : other.bin.map) {
+        for (auto& it : other.bin) {
             update(it.first, it.second);
         }
     }
-
-    /**
-     * Function used to describe the type.
-     */
-    template <typename Describer>
-    auto describe_type(Describer f) { return f(max_bin_size, bin); }
 
     // FIXME: convert Java code below.
 #if 0
