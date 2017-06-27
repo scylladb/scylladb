@@ -1024,17 +1024,6 @@ static std::vector<mutation> updated_ring(std::vector<mutation>& mutations) {
     return result;
 }
 
-static mutation_source make_mutation_source(std::vector<lw_shared_ptr<memtable>>& memtables) {
-    return mutation_source([&memtables] (schema_ptr s, const dht::partition_range& pr,
-            const query::partition_slice& slice, const io_priority_class& pc, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd) {
-        std::vector<mutation_reader> readers;
-        for (auto&& mt : memtables) {
-            readers.emplace_back(mt->make_reader(s, pr, slice, pc, trace, fwd));
-        }
-        return make_combined_reader(std::move(readers));
-    });
-}
-
 SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
     return seastar::async([] {
         auto s = make_schema();
