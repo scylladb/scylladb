@@ -769,9 +769,13 @@ void gossiper::unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscr
 
 std::set<inet_address> gossiper::get_live_members() {
     std::set<inet_address> live_members(_live_endpoints.begin(), _live_endpoints.end());
-    if (!live_members.count(get_broadcast_address())) {
-        live_members.insert(get_broadcast_address());
+    auto myip = get_broadcast_address();
+    logger.debug("live_members before={}", live_members);
+    live_members.insert(myip);
+    if (is_shutdown(myip)) {
+        live_members.erase(myip);
     }
+    logger.debug("live_members after={}", live_members);
     return live_members;
 }
 
