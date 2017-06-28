@@ -3834,6 +3834,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         write_memtable_to_sstable(*mt, sst).get();
         sst = reusable_sst(s, tmp->path, 1).get0();
         auto gc_before = gc_clock::now() - s->gc_grace_seconds();
+        auto uncompacted_size = sst->data_size();
         // Asserts that two keys are equal to within a positive delta
         BOOST_REQUIRE(std::fabs(sst->estimate_droppable_tombstone_ratio(gc_before) - expired) <= 0.1);
 
@@ -3849,5 +3850,16 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         auto new_sstables = sstables::compact_sstables({ sst }, *cf, creator, std::numeric_limits<uint64_t>::max(), 0).get0();
         BOOST_REQUIRE(new_sstables.size() == 1);
         BOOST_REQUIRE(new_sstables.front()->estimate_droppable_tombstone_ratio(gc_before) == 0.0f);
+        BOOST_REQUIRE_CLOSE(new_sstables.front()->data_size(), uncompacted_size*(1-expired), 5);
+
+        std::map<sstring, sstring> options;
+        options.emplace("tombstone_threshold", "0.3f");
+
+        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
+        // that's needed because sstable with expired data should be old enough.
+        sstables::test(sst).set_data_file_write_time(db_clock::from_time_t(std::numeric_limits<time_t>::max()));
+        auto descriptor = cs.get_sstables_for_compaction(*cf, { sst });
+        BOOST_REQUIRE(descriptor.sstables.size() == 1);
+        BOOST_REQUIRE(descriptor.sstables.front() == sst);
     });
 }
