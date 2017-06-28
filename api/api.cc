@@ -49,7 +49,7 @@ static std::unique_ptr<reply> exception_reply(std::exception_ptr eptr) {
         throw bad_param_exception(ex.what());
     }
     // We never going to get here
-    return std::make_unique<reply>();
+    throw std::runtime_error("exception_reply");
 }
 
 future<> set_server_init(http_context& ctx) {
