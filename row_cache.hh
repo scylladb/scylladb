@@ -185,11 +185,6 @@ public:
     using lru_type = bi::list<cache_entry,
         bi::member_hook<cache_entry, cache_entry::lru_link_type, &cache_entry::_lru_link>,
         bi::constant_time_size<false>>; // we need this to have bi::auto_unlink on hooks.
-private:
-    // We will try to evict large partition after that many normal evictions
-    const uint32_t _normal_large_eviction_ratio = 1000;
-    // Number of normal evictions to perform before we try to evict large partition
-    uint32_t _normal_eviction_count = _normal_large_eviction_ratio;
 public:
     struct stats {
         uint64_t hits;
