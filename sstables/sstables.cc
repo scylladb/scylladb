@@ -50,6 +50,7 @@
 #include <boost/range/algorithm_ext/insert.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/algorithm/set_algorithm.hpp>
+#include <boost/range/algorithm_ext/is_sorted.hpp>
 #include <regex>
 #include <core/align.hh>
 #include "utils/phased_barrier.hh"
@@ -804,10 +805,27 @@ future<> parse(random_access_reader& in, utils::streaming_histogram& sh) {
 
     auto f = parse(in, sh.max_bin_size, *a);
     return f.then([&sh, a = std::move(a)] {
+        auto length = a->elements.size();
+        if (length > sh.max_bin_size) {
+            throw malformed_sstable_exception("Streaming histogram with more entries than allowed. Can't continue!");
+        }
+
+        // Find bad histogram which had incorrect elements merged due to use of
+        // unordered map. The keys will be unordered. Histogram which size is
+        // less than max allowed will be correct because no entries needed to be
+        // merged, so we can avoid discarding those.
+        // look for commit with title 'streaming_histogram: fix update' for more details.
+        auto possibly_broken_histogram = length == sh.max_bin_size;
+        auto less_comp = [] (auto& x, auto& y) { return x.key < y.key; };
+        if (possibly_broken_histogram && !boost::is_sorted(a->elements, less_comp)) {
+            return make_ready_future<>();
+        }
+
         auto transform = [] (auto element) -> std::pair<streaming_histogram_element::key_type, streaming_histogram_element::value_type> {
             return { element.key, element.value };
         };
         boost::copy(a->elements | boost::adaptors::transformed(transform), std::inserter(sh.bin, sh.bin.end()));
+
         return make_ready_future<>();
     });
 }
