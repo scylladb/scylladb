@@ -1413,7 +1413,7 @@ public:
         if (_segment_descs.empty()) {
             return {};
         }
-        return _segment_descs.largest().occupancy();
+        return _segment_descs.one_of_largest().occupancy();
     }
 
     void compact_single_segment_locked() {
