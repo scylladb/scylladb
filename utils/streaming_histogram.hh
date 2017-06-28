@@ -63,22 +63,20 @@ struct streaming_histogram {
      * Creates a new histogram with max bin size of maxBinSize
      * @param maxBinSize maximum number of bins this histogram can have
      */
-    streaming_histogram(int max_bin_size_p = 0) {
-        max_bin_size = max_bin_size_p;
+    streaming_histogram(int max_bin_size = 0)
+        : max_bin_size(max_bin_size) {
     }
 
-    streaming_histogram(int max_bin_size_p, std::map<double, uint64_t>&& bin_p)
-    {
-        max_bin_size = max_bin_size_p;
-        bin = std::move(bin_p);
+    streaming_histogram(int max_bin_size, std::map<double, uint64_t>&& bin)
+        : bin(std::move(bin))
+        , max_bin_size(max_bin_size) {
     }
 
     /**
      * Adds new point p to this histogram.
      * @param p
      */
-    void update(double p)
-    {
+    void update(double p) {
         update(p, 1);
     }
 
@@ -131,10 +129,10 @@ struct streaming_histogram {
      *
      * @param other histogram to merge
      */
-    void merge(streaming_histogram& other)
-    {
-        if (!other.bin.size())
+    void merge(streaming_histogram& other) {
+        if (!other.bin.size()) {
             return;
+        }
 
         for (auto& it : other.bin) {
             update(it.first, it.second);
@@ -157,9 +155,7 @@ struct streaming_histogram {
             for (auto& e : bin) {
                 sum += e.second;
             }
-        }
-        else
-        {
+        } else {
             // return key-value mapping associated with the greatest key less than or equal to the given key
             auto pi = bin.lower_bound(b);
             if (pi == bin.end() || (pi == bin.begin() && b < pi->first)) {
