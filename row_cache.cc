@@ -790,13 +790,12 @@ future<> row_cache::update(memtable& m, partition_presence_checker is_present) {
             entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema());
             _tracker.touch(entry);
             _tracker.on_merge();
-        } else if (is_present(mem_e.key()) == partition_presence_checker_result::definitely_doesnt_exist) {
+        } else if (cache_i->continuous() || is_present(mem_e.key()) == partition_presence_checker_result::definitely_doesnt_exist) {
             cache_entry* entry = current_allocator().construct<cache_entry>(
                 mem_e.schema(), std::move(mem_e.key()), std::move(mem_e.partition()));
+            entry->set_continuous(cache_i->continuous());
             _tracker.insert(*entry);
             _partitions.insert(cache_i, *entry);
-        } else {
-            _tracker.clear_continuity(*cache_i);
         }
     });
 }
