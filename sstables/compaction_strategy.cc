@@ -322,11 +322,12 @@ class compaction_strategy_impl {
     static constexpr float DEFAULT_TOMBSTONE_THRESHOLD = 0.2f;
     // minimum interval needed to perform tombstone removal compaction in seconds, default 86400 or 1 day.
     static constexpr long DEFAULT_TOMBSTONE_COMPACTION_INTERVAL = 86400;
-
+protected:
     const sstring TOMBSTONE_THRESHOLD_OPTION = "tombstone_threshold";
     const sstring TOMBSTONE_COMPACTION_INTERVAL_OPTION = "tombstone_compaction_interval";
-protected:
+
     bool _use_clustering_key_filter = false;
+    bool _disable_tombstone_compaction = false;
     float _tombstone_threshold = DEFAULT_TOMBSTONE_THRESHOLD;
     db_clock::duration _tombstone_compaction_interval = std::chrono::seconds(DEFAULT_TOMBSTONE_COMPACTION_INTERVAL);
 public:
@@ -371,6 +372,9 @@ public:
     // Check if a given sstable is entitled for tombstone compaction based on its
     // droppable tombstone histogram and gc_before.
     bool worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point gc_before) {
+        if (_disable_tombstone_compaction) {
+            return false;
+        }
         // ignore sstables that were created just recently because there's a chance
         // that expired tombstones still cover old data and thus cannot be removed.
         // We want to avoid a compaction loop here on the same data by considering
@@ -938,19 +942,46 @@ class date_tiered_compaction_strategy : public compaction_strategy_impl {
     date_tiered_manifest _manifest;
 public:
     date_tiered_compaction_strategy(const std::map<sstring, sstring>& options)
-        : _manifest(options)
+        : compaction_strategy_impl(options), _manifest(options)
     {
+        // tombstone compaction is disabled by default because:
+        // - deletion shouldn't be used with DTCS; rather data is deleted through TTL.
+        // - with time series workloads, it's usually better to wait for whole sstable to be expired rather than
+        // compacting a single sstable when it's more than 20% (default value) expired.
+        // For more details, see CASSANDRA-9234
+        if (!options.count(TOMBSTONE_COMPACTION_INTERVAL_OPTION) && !options.count(TOMBSTONE_THRESHOLD_OPTION)) {
+            _disable_tombstone_compaction = true;
+            clogger.debug("Disabling tombstone compactions for DTCS");
+        } else {
+            clogger.debug("Enabling tombstone compactions for DTCS");
+        }
+
         _use_clustering_key_filter = true;
     }
 
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override {
         auto gc_before = gc_clock::now() - cfs.schema()->gc_grace_seconds();
         auto sstables = _manifest.get_next_sstables(cfs, candidates, gc_before);
-        clogger.debug("datetiered: Compacting {} out of {} sstables", sstables.size(), candidates.size());
-        if (sstables.empty()) {
+
+        if (!sstables.empty()) {
+            clogger.debug("datetiered: Compacting {} out of {} sstables", sstables.size(), candidates.size());
+            return sstables::compaction_descriptor(std::move(sstables));
+        }
+
+        // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
+        auto e = boost::range::remove_if(candidates, [this, &gc_before] (const sstables::shared_sstable& sst) -> bool {
+            return !worth_dropping_tombstones(sst, gc_before);
+        });
+        candidates.erase(e, candidates.end());
+        if (candidates.empty()) {
             return sstables::compaction_descriptor();
         }
-        return sstables::compaction_descriptor(std::move(sstables));
+        // find oldest sstable which is worth dropping tombstones because they are more unlikely to
+        // shadow data from other sstables, and it also tends to be relatively big.
+        auto it = std::min_element(candidates.begin(), candidates.end(), [] (auto& i, auto& j) {
+            return i->get_stats_metadata().min_timestamp < j->get_stats_metadata().min_timestamp;
+        });
+        return sstables::compaction_descriptor({ *it });
     }
 
     virtual int64_t estimated_pending_compactions(column_family& cf) const override {
