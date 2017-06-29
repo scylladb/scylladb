@@ -133,19 +133,7 @@ public:
     date_tiered_manifest() = delete;
 
     date_tiered_manifest(const std::map<sstring, sstring>& options)
-        : _options(options)
-    {
-        // FIXME: implement option to disable tombstone compaction.
-#if 0
-        if (!options.containsKey(AbstractCompactionStrategy.TOMBSTONE_COMPACTION_INTERVAL_OPTION) && !options.containsKey(AbstractCompactionStrategy.TOMBSTONE_THRESHOLD_OPTION))
-        {
-            disableTombstoneCompactions = true;
-            logger.debug("Disabling tombstone compactions for DTCS");
-        }
-        else
-            logger.debug("Enabling tombstone compactions for DTCS");
-#endif
-    }
+        : _options(options) {}
 
     std::vector<sstables::shared_sstable>
     get_next_sstables(column_family& cf, std::vector<sstables::shared_sstable>& uncompacting, gc_clock::time_point gc_before) {

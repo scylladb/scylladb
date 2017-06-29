@@ -41,9 +41,9 @@
 
 #pragma once
 
-#include "disk_types.hh"
+#include <map>
 
-namespace sstables {
+namespace utils {
 
 /**
  * Histogram that can be constructed from streaming of data.
@@ -54,7 +54,7 @@ namespace sstables {
  */
 struct streaming_histogram {
     // TreeMap to hold bins of histogram.
-    disk_hash<uint32_t, double, uint64_t> bin;
+    std::map<double, uint64_t> bin;
 
     // maximum bin size for this histogram
     uint32_t max_bin_size;
@@ -63,22 +63,20 @@ struct streaming_histogram {
      * Creates a new histogram with max bin size of maxBinSize
      * @param maxBinSize maximum number of bins this histogram can have
      */
-    streaming_histogram(int max_bin_size_p = 0) {
-        max_bin_size = max_bin_size_p;
+    streaming_histogram(int max_bin_size = 0)
+        : max_bin_size(max_bin_size) {
     }
 
-    streaming_histogram(int max_bin_size_p, disk_hash<uint32_t, double, uint64_t>&& bin_p)
-    {
-        max_bin_size = max_bin_size_p;
-        bin = std::move(bin_p);
+    streaming_histogram(int max_bin_size, std::map<double, uint64_t>&& bin)
+        : bin(std::move(bin))
+        , max_bin_size(max_bin_size) {
     }
 
     /**
      * Adds new point p to this histogram.
      * @param p
      */
-    void update(double p)
-    {
+    void update(double p) {
         update(p, 1);
     }
 
@@ -88,22 +86,22 @@ struct streaming_histogram {
      * @param m
      */
     void update(double p, uint64_t m) {
-        auto it = bin.map.find(p);
-        if (it != bin.map.end()) {
-            bin.map[p] = it->second + m;
+        auto it = bin.find(p);
+        if (it != bin.end()) {
+            bin[p] = it->second + m;
         } else {
-            bin.map[p] = m;
+            bin[p] = m;
             // if bin size exceeds maximum bin size then trim down to max size
-            while (bin.map.size() > max_bin_size) {
+            while (bin.size() > max_bin_size) {
                 // find points p1, p2 which have smallest difference
-                auto it = bin.map.begin();
+                auto it = bin.begin();
                 double p1 = it->first;
                 it++;
                 double p2 = it->first;
                 it++;
                 double smallestDiff = p2 - p1;
                 double q1 = p1, q2 = p2;
-                while(it != bin.map.end()) {
+                while(it != bin.end()) {
                     p1 = p2;
                     p2 = it->first;
                     it++;
@@ -116,9 +114,11 @@ struct streaming_histogram {
                     }
                 }
                 // merge those two
-                uint64_t k1 = bin.map.erase(q1);
-                uint64_t k2 = bin.map.erase(q2);
-                bin.map.insert({(q1 * k1 + q2 * k2) / (k1 + k2), k1 + k2});
+                uint64_t k1 = bin.at(q1);
+                uint64_t k2 = bin.at(q2);
+                bin.erase(q1);
+                bin.erase(q2);
+                bin.insert({(q1 * k1 + q2 * k2) / (k1 + k2), k1 + k2});
             }
         }
     }
@@ -129,59 +129,59 @@ struct streaming_histogram {
      *
      * @param other histogram to merge
      */
-    void merge(streaming_histogram& other)
-    {
-        if (!other.bin.map.size())
+    void merge(streaming_histogram& other) {
+        if (!other.bin.size()) {
             return;
+        }
 
-        for (auto& it : other.bin.map) {
+        for (auto& it : other.bin) {
             update(it.first, it.second);
         }
     }
 
-    /**
-     * Function used to describe the type.
-     */
-    template <typename Describer>
-    auto describe_type(Describer f) { return f(max_bin_size, bin); }
-
-    // FIXME: convert Java code below.
-#if 0
     /**
      * Calculates estimated number of points in interval [-inf,b].
      *
      * @param b upper bound of a interval to calculate sum
      * @return estimated number of points in a interval [-inf,b].
      */
-    public double sum(double b)
-    {
+    double sum(double b) const {
         double sum = 0;
         // find the points pi, pnext which satisfy pi <= b < pnext
-        Map.Entry<Double, Long> pnext = bin.higherEntry(b);
-        if (pnext == null)
-        {
+        auto pnext = bin.upper_bound(b);
+        if (pnext == bin.end()) {
             // if b is greater than any key in this histogram,
             // just count all appearance and return
-            for (Long value : bin.values())
-                sum += value;
-        }
-        else
-        {
-            Map.Entry<Double, Long> pi = bin.floorEntry(b);
-            if (pi == null)
+            for (auto& e : bin) {
+                sum += e.second;
+            }
+        } else {
+            // return key-value mapping associated with the greatest key less than or equal to the given key
+            auto pi = bin.lower_bound(b);
+            if (pi == bin.end() || (pi == bin.begin() && b < pi->first)) {
                 return 0;
-            // calculate estimated count mb for point b
-            double weight = (b - pi.getKey()) / (pnext.getKey() - pi.getKey());
-            double mb = pi.getValue() + (pnext.getValue() - pi.getValue()) * weight;
-            sum += (pi.getValue() + mb) * weight / 2;
+            }
+            if (pi->first != b) {
+                --pi;
+            }
 
-            sum += pi.getValue() / 2.0;
-            for (Long value : bin.headMap(pi.getKey(), false).values())
-                sum += value;
+            // calculate estimated count mb for point b
+            double weight = (b - pi->first) / (pnext->first - pi->first);
+            double mb = pi->second + (int64_t(pnext->second) - int64_t(pi->second)) * weight;
+            sum += (pi->second + mb) * weight / 2;
+
+            sum += pi->second / 2.0;
+            // iterate through portion of map whose keys are less than pi->first
+            auto it_end = bin.lower_bound(pi->first);
+            for (auto it = bin.begin(); it != it_end; it++) {
+                sum += it->second;
+            }
         }
         return sum;
     }
 
+    // FIXME: convert Java code below.
+#if 0
     public Map<Double, Long> getAsMap()
     {
         return Collections.unmodifiableMap(bin);

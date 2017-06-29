@@ -352,7 +352,7 @@ filter_sstable_for_reader(std::vector<sstables::shared_sstable>&& sstables, colu
     auto sstable_has_relevant_tombstone = [&min_timestamp] (const sstables::shared_sstable& sst) {
         const auto& stats = sst->get_stats_metadata();
         // re-add sstable as candidate if it contains a tombstone that may cover a row in an included sstable.
-        return (stats.max_timestamp > min_timestamp && stats.estimated_tombstone_drop_time.bin.map.size());
+        return (stats.max_timestamp > min_timestamp && stats.estimated_tombstone_drop_time.bin.size());
     };
     auto skipped = std::partition(sstables.begin(), sstables.end(), sstable_has_clustering_key);
     auto actually_skipped = std::partition(skipped, sstables.end(), sstable_has_relevant_tombstone);

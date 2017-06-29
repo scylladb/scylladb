@@ -50,6 +50,7 @@
 #include <boost/range/algorithm_ext/insert.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/algorithm/set_algorithm.hpp>
+#include <boost/range/algorithm_ext/is_sorted.hpp>
 #include <regex>
 #include <core/align.hh>
 #include "utils/phased_barrier.hh"
@@ -789,6 +790,57 @@ inline void write(file_writer& out, const utils::estimated_histogram& eh) {
     out.write(p, bytes).get();
 }
 
+struct streaming_histogram_element {
+    using key_type = typename decltype(utils::streaming_histogram::bin)::key_type;
+    using value_type = typename decltype(utils::streaming_histogram::bin)::mapped_type;
+    key_type key;
+    value_type value;
+
+    template <typename Describer>
+    auto describe_type(Describer f) { return f(key, value); }
+};
+
+future<> parse(random_access_reader& in, utils::streaming_histogram& sh) {
+    auto a = std::make_unique<disk_array<uint32_t, streaming_histogram_element>>();
+
+    auto f = parse(in, sh.max_bin_size, *a);
+    return f.then([&sh, a = std::move(a)] {
+        auto length = a->elements.size();
+        if (length > sh.max_bin_size) {
+            throw malformed_sstable_exception("Streaming histogram with more entries than allowed. Can't continue!");
+        }
+
+        // Find bad histogram which had incorrect elements merged due to use of
+        // unordered map. The keys will be unordered. Histogram which size is
+        // less than max allowed will be correct because no entries needed to be
+        // merged, so we can avoid discarding those.
+        // look for commit with title 'streaming_histogram: fix update' for more details.
+        auto possibly_broken_histogram = length == sh.max_bin_size;
+        auto less_comp = [] (auto& x, auto& y) { return x.key < y.key; };
+        if (possibly_broken_histogram && !boost::is_sorted(a->elements, less_comp)) {
+            return make_ready_future<>();
+        }
+
+        auto transform = [] (auto element) -> std::pair<streaming_histogram_element::key_type, streaming_histogram_element::value_type> {
+            return { element.key, element.value };
+        };
+        boost::copy(a->elements | boost::adaptors::transformed(transform), std::inserter(sh.bin, sh.bin.end()));
+
+        return make_ready_future<>();
+    });
+}
+
+inline void write(file_writer& out, const utils::streaming_histogram& sh) {
+    uint32_t max_bin_size;
+    check_truncate_and_assign(max_bin_size, sh.max_bin_size);
+
+    disk_array<uint32_t, streaming_histogram_element> a;
+    a.elements = boost::copy_range<std::deque<streaming_histogram_element>>(sh.bin
+        | boost::adaptors::transformed([&] (auto& kv) { return streaming_histogram_element{kv.first, kv.second}; }));
+
+    write(out, max_bin_size, a);
+}
+
 // This is small enough, and well-defined. Easier to just read it all
 // at once
 future<> sstable::read_toc() {
@@ -1114,6 +1166,16 @@ void sstable::set_clustering_components_ranges() {
 
 const std::vector<nonwrapping_range<bytes_view>>& sstable::clustering_components_ranges() const {
     return _clustering_components_ranges;
+}
+
+double sstable::estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const {
+    auto& st = get_stats_metadata();
+    auto estimated_count = st.estimated_column_count.mean() * st.estimated_column_count.count();
+    if (estimated_count > 0) {
+        double droppable = st.estimated_tombstone_drop_time.sum(gc_before.time_since_epoch().count());
+        return droppable / estimated_count;
+    }
+    return 0.0f;
 }
 
 future<> sstable::read_statistics(const io_priority_class& pc) {
@@ -1457,6 +1519,10 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
         disk_string_view<uint32_t> cell_value { cell.value() };
 
         _c_stats.update_max_local_deletion_time(expiration);
+        // tombstone histogram is updated with expiration time because if ttl is longer
+        // than gc_grace_seconds for all data, sstable will be considered fully expired
+        // when actually nothing is expired.
+        _c_stats.tombstone_histogram.update(expiration);
 
         write(out, mask, ttl, expiration, timestamp, cell_value);
     } else {

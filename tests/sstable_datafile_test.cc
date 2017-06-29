@@ -3283,7 +3283,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
             auto sst = make_lw_shared<sstable>(s, tmp->path, 1, la, big);
             write_memtable_to_sstable(*mt, sst).get();
             sst = reusable_sst(s, tmp->path, 1).get0();
-            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.map.size());
+            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
         }
 
         {
@@ -3294,7 +3294,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
             auto sst = make_lw_shared<sstable>(s, tmp->path, 2, la, big);
             write_memtable_to_sstable(*mt, sst).get();
             sst = reusable_sst(s, tmp->path, 2).get0();
-            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.map.size());
+            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
         }
 
         {
@@ -3305,7 +3305,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
             auto sst = make_lw_shared<sstable>(s, tmp->path, 3, la, big);
             write_memtable_to_sstable(*mt, sst).get();
             sst = reusable_sst(s, tmp->path, 3).get0();
-            BOOST_REQUIRE(!sst->get_stats_metadata().estimated_tombstone_drop_time.bin.map.size());
+            BOOST_REQUIRE(!sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
         }
 
         {
@@ -3324,7 +3324,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
             auto sst = make_lw_shared<sstable>(s, tmp->path, 4, la, big);
             write_memtable_to_sstable(*mt, sst).get();
             sst = reusable_sst(s, tmp->path, 4).get0();
-            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.map.size());
+            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
         }
 
         {
@@ -3336,7 +3336,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
             auto sst = make_lw_shared<sstable>(s, tmp->path, 5, la, big);
             write_memtable_to_sstable(*mt, sst).get();
             sst = reusable_sst(s, tmp->path, 5).get0();
-            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.map.size());
+            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
         }
 
         {
@@ -3349,7 +3349,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
             auto sst = make_lw_shared<sstable>(s, tmp->path, 6, la, big);
             write_memtable_to_sstable(*mt, sst).get();
             sst = reusable_sst(s, tmp->path, 6).get0();
-            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.map.size());
+            BOOST_REQUIRE(sst->get_stats_metadata().estimated_tombstone_drop_time.bin.size());
         }
     });
 }
@@ -3744,4 +3744,157 @@ SEASTAR_TEST_CASE(sstable_resharding_strategy_tests) {
     }
 
     return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(sstable_tombstone_histogram_test) {
+    return seastar::async([] {
+        auto builder = schema_builder("tests", "tombstone_histogram_test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        auto s = builder.build();
+
+        auto tmp = make_lw_shared<tmpdir>();
+        auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            return make_lw_shared<sstable>(s, tmp->path, (*gen)++, la, big);
+        };
+
+        auto next_timestamp = [] {
+            static thread_local api::timestamp_type next = 1;
+            return next++;
+        };
+
+        auto make_delete = [&] (partition_key key) {
+            mutation m(key, s);
+            tombstone tomb(next_timestamp(), gc_clock::now());
+            m.partition().apply(tomb);
+            return m;
+        };
+
+        std::vector<mutation> mutations;
+        for (auto i = 0; i < sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE*2; i++) {
+            auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(i))});
+            mutations.push_back(make_delete(key));
+            forward_jump_clocks(std::chrono::seconds(1));
+        }
+        auto sst = make_sstable_containing(sst_gen, mutations);
+        auto histogram = sst->get_stats_metadata().estimated_tombstone_drop_time;
+        sst = reusable_sst(s, tmp->path, sst->generation()).get0();
+        auto histogram2 = sst->get_stats_metadata().estimated_tombstone_drop_time;
+
+        // check that histogram respected limit
+        BOOST_REQUIRE(histogram.bin.size() == TOMBSTONE_HISTOGRAM_BIN_SIZE);
+        // check that load procedure will properly load histogram from statistics component
+        BOOST_REQUIRE(histogram.bin == histogram2.bin);
+    });
+}
+
+SEASTAR_TEST_CASE(sstable_bad_tombstone_histogram_test) {
+    return seastar::async([] {
+        auto builder = schema_builder("tests", "tombstone_histogram_test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        auto s = builder.build();
+        auto sst = reusable_sst(s, "tests/sstables/bad_tombstone_histogram", 1).get0();
+        auto histogram = sst->get_stats_metadata().estimated_tombstone_drop_time;
+        BOOST_REQUIRE(histogram.max_bin_size == sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE);
+        // check that bad histogram was discarded
+        BOOST_REQUIRE(histogram.bin.empty());
+    });
+}
+
+SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
+    return seastar::async([] {
+        auto tmp = make_lw_shared<tmpdir>();
+        auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+            {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type));
+
+        auto mt = make_lw_shared<memtable>(s);
+
+        static constexpr int total_keys = 100;
+        static constexpr float expired = 0.33;
+        auto insert_key = [&] (bytes k, uint32_t ttl, uint32_t expiration_time) {
+            auto key = partition_key::from_exploded(*s, {k});
+            mutation m(key, s);
+            auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
+            m.set_clustered_cell(c_key, *s->get_column_definition("r1"), make_atomic_cell(bytes("a"), ttl, expiration_time));
+            mt->apply(std::move(m));
+        };
+
+        auto expired_keys = total_keys*expired;
+        auto expiration_time = (gc_clock::now() - gc_clock::duration(DEFAULT_GC_GRACE_SECONDS*2)).time_since_epoch().count();
+        for (auto i = 0; i < expired_keys; i++) {
+            insert_key(to_bytes("expired_key" + to_sstring(i)), 1, expiration_time);
+        }
+        auto remaining = total_keys-expired_keys;
+        expiration_time = (gc_clock::now() + gc_clock::duration(3600)).time_since_epoch().count();
+        for (auto i = 0; i < remaining; i++) {
+            insert_key(to_bytes("key" + to_sstring(i)), 3600, expiration_time);
+        }
+        auto sst = make_lw_shared<sstable>(s, tmp->path, 1, la, big);
+        write_memtable_to_sstable(*mt, sst).get();
+        sst = reusable_sst(s, tmp->path, 1).get0();
+        auto gc_before = gc_clock::now() - s->gc_grace_seconds();
+        auto uncompacted_size = sst->data_size();
+        // Asserts that two keys are equal to within a positive delta
+        BOOST_REQUIRE(std::fabs(sst->estimate_droppable_tombstone_ratio(gc_before) - expired) <= 0.1);
+
+        auto cm = make_lw_shared<compaction_manager>();
+        auto cl_stats = make_lw_shared<cell_locker_stats>();
+        auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm, *cl_stats);
+        cf->mark_ready_for_writes();
+        auto creator = [&] {
+            auto sst = make_lw_shared<sstables::sstable>(s, tmp->path, 2, la, big);
+            sst->set_unshared();
+            return sst;
+        };
+        auto new_sstables = sstables::compact_sstables({ sst }, *cf, creator, std::numeric_limits<uint64_t>::max(), 0).get0();
+        BOOST_REQUIRE(new_sstables.size() == 1);
+        BOOST_REQUIRE(new_sstables.front()->estimate_droppable_tombstone_ratio(gc_before) == 0.0f);
+        BOOST_REQUIRE_CLOSE(new_sstables.front()->data_size(), uncompacted_size*(1-expired), 5);
+
+        std::map<sstring, sstring> options;
+        options.emplace("tombstone_threshold", "0.3f");
+
+        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
+        // that's needed because sstable with expired data should be old enough.
+        sstables::test(sst).set_data_file_write_time(db_clock::from_time_t(std::numeric_limits<time_t>::max()));
+        auto descriptor = cs.get_sstables_for_compaction(*cf, { sst });
+        BOOST_REQUIRE(descriptor.sstables.size() == 1);
+        BOOST_REQUIRE(descriptor.sstables.front() == sst);
+
+        cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, options);
+        sst->set_sstable_level(1);
+        descriptor = cs.get_sstables_for_compaction(*cf, { sst });
+        BOOST_REQUIRE(descriptor.sstables.size() == 1);
+        BOOST_REQUIRE(descriptor.sstables.front() == sst);
+        // make sure sstable picked for tombstone compaction removal won't be promoted or demoted.
+        BOOST_REQUIRE(descriptor.sstables.front()->get_sstable_level() == 1U);
+
+        // check tombstone compaction is disabled by default for DTCS
+        cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::date_tiered, {});
+        descriptor = cs.get_sstables_for_compaction(*cf, { sst });
+        BOOST_REQUIRE(descriptor.sstables.size() == 0);
+        cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::date_tiered, options);
+        descriptor = cs.get_sstables_for_compaction(*cf, { sst });
+        BOOST_REQUIRE(descriptor.sstables.size() == 1);
+        BOOST_REQUIRE(descriptor.sstables.front() == sst);
+
+        // sstable with droppable ratio of 0.3 won't be included due to threshold
+        {
+            std::map<sstring, sstring> options;
+            options.emplace("tombstone_threshold", "0.5f");
+            auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
+            auto descriptor = cs.get_sstables_for_compaction(*cf, { sst });
+            BOOST_REQUIRE(descriptor.sstables.size() == 0);
+        }
+        // sstable which was recently created won't be included due to min interval
+        {
+            std::map<sstring, sstring> options;
+            options.emplace("tombstone_compaction_interval", "3600");
+            auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
+            sstables::test(sst).set_data_file_write_time(db_clock::now());
+            auto descriptor = cs.get_sstables_for_compaction(*cf, { sst });
+            BOOST_REQUIRE(descriptor.sstables.size() == 0);
+        }
+    });
 }

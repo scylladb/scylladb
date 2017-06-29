@@ -121,6 +121,10 @@ public:
         _sst->_data_file_size = size;
     }
 
+    void set_data_file_write_time(db_clock::time_point wtime) {
+        _sst->_data_file_write_time = wtime;
+    }
+
     future<> store() {
         _sst->_recognized_components.erase(sstable::component_type::Index);
         _sst->_recognized_components.erase(sstable::component_type::Data);

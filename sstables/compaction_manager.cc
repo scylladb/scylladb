@@ -344,6 +344,15 @@ void compaction_manager::register_metrics() {
 void compaction_manager::start() {
     _stopped = false;
     register_metrics();
+    _compaction_submission_timer.arm(periodic_compaction_submission_interval);
+}
+
+std::function<void()> compaction_manager::compaction_submission_callback() {
+    return [this] () mutable {
+        for (auto& e: _compaction_locks) {
+            submit(e.first);
+        }
+    };
 }
 
 future<> compaction_manager::stop() {
@@ -367,6 +376,7 @@ future<> compaction_manager::stop() {
         });
     }).then([this] {
         _weight_tracker.clear();
+        _compaction_submission_timer.cancel();
         cmlog.info("Stopped");
         return make_ready_future<>();
     });

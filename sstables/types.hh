@@ -26,7 +26,7 @@
 #include "bytes.hh"
 #include "gc_clock.hh"
 #include "tombstone.hh"
-#include "streaming_histogram.hh"
+#include "utils/streaming_histogram.hh"
 #include "utils/estimated_histogram.hh"
 #include "column_name_helper.hh"
 #include "sstables/key.hh"
@@ -290,7 +290,7 @@ struct ka_stats_metadata : public metadata_base<ka_stats_metadata> {
     int64_t max_timestamp;
     int32_t max_local_deletion_time;
     double compression_ratio;
-    streaming_histogram estimated_tombstone_drop_time;
+    utils::streaming_histogram estimated_tombstone_drop_time;
     uint32_t sstable_level;
     uint64_t repaired_at;
     disk_array<uint32_t, disk_string<uint16_t>> min_column_names;

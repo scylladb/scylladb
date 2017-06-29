@@ -153,7 +153,7 @@ struct column_stats {
     max_long_tracker max_timestamp;
     max_int_tracker max_local_deletion_time;
     /** histogram of tombstone drop time */
-    streaming_histogram tombstone_histogram;
+    utils::streaming_histogram tombstone_histogram;
 
     bool has_legacy_counter_shards;
 
@@ -205,7 +205,7 @@ private:
     int _max_local_deletion_time = std::numeric_limits<int>::min();
     double _compression_ratio = NO_COMPRESSION_RATIO;
     std::set<int> _ancestors;
-    streaming_histogram _estimated_tombstone_drop_time{TOMBSTONE_HISTOGRAM_BIN_SIZE};
+    utils::streaming_histogram _estimated_tombstone_drop_time{TOMBSTONE_HISTOGRAM_BIN_SIZE};
     int _sstable_level = 0;
     std::vector<bytes_opt> _min_column_names;
     std::vector<bytes_opt> _max_column_names;
@@ -246,7 +246,7 @@ public:
         _estimated_column_count.add(column_count);
     }
 
-    void merge_tombstone_histogram(streaming_histogram& histogram) {
+    void merge_tombstone_histogram(utils::streaming_histogram& histogram) {
         _estimated_tombstone_drop_time.merge(histogram);
     }
 
