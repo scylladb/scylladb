@@ -408,12 +408,12 @@ public:
                     return _cache._read_section(_cache._tracker.region(), [&] {
                         cache_entry& e = _cache.find_or_create(smopt->decorated_key(), smopt->partition_tombstone(), _reader.creation_phase(),
                             can_set_continuity() ? &*_last_key : nullptr);
-                        _last_key = smopt->decorated_key();
+                        _last_key = row_cache::previous_entry_pointer(smopt->decorated_key());
                         return e.read(_cache, _read_context, std::move(*smopt), _reader.creation_phase());
                     });
                 } else {
                     _cache._tracker.on_mispopulate();
-                    _last_key = smopt->decorated_key();
+                    _last_key = row_cache::previous_entry_pointer(smopt->decorated_key());
                     return read_directly_from_underlying(std::move(*smopt), _read_context);
                 }
             }
@@ -424,7 +424,7 @@ public:
         if (!pr.start()) {
             _last_key = row_cache::previous_entry_pointer();
         } else if (!pr.start()->is_inclusive() && pr.start()->value().has_key()) {
-            _last_key = pr.start()->value().as_decorated_key();
+            _last_key = row_cache::previous_entry_pointer(pr.start()->value().as_decorated_key());
         } else {
             // Inclusive start bound, cannot set continuity flag.
             _last_key = {};
@@ -469,7 +469,7 @@ private:
                     }
                     cache_entry& e = _primary.entry();
                     auto sm = read_from_entry(e);
-                    _lower_bound = {e.key(), false};
+                    _lower_bound = dht::partition_range::bound{e.key(), false};
                     // Delay the call to next() so that we don't see stale continuity on next invocation.
                     _advance_primary = true;
                     return streamed_mutation_opt(std::move(sm));
@@ -478,7 +478,7 @@ private:
                         cache_entry& e = _primary.entry();
                         _secondary_range = dht::partition_range(_lower_bound ? std::move(_lower_bound) : _pr->start(),
                             dht::partition_range::bound{e.key(), false});
-                        _lower_bound = {e.key(), true};
+                        _lower_bound = dht::partition_range::bound{e.key(), true};
                         _secondary_in_progress = true;
                         return stdx::nullopt;
                     } else {
@@ -487,7 +487,7 @@ private:
                         if (!range) {
                             return stdx::nullopt;
                         }
-                        _lower_bound = {dht::ring_position::max()};
+                        _lower_bound = dht::partition_range::bound{dht::ring_position::max()};
                         _secondary_range = std::move(*range);
                         _secondary_in_progress = true;
                         return stdx::nullopt;
@@ -760,7 +760,7 @@ future<> row_cache::do_update(memtable& m, Updater updater) {
                             if (m.partitions.empty()) {
                                 _prev_snapshot_pos = {};
                             } else {
-                                _prev_snapshot_pos = m.partitions.begin()->key();
+                                _prev_snapshot_pos = dht::ring_position(m.partitions.begin()->key());
                             }
                         });
                         STAP_PROBE1(scylla, row_cache_update_one_batch_end, quota_before - quota);
