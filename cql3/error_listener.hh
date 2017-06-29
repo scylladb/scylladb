@@ -53,6 +53,7 @@ namespace cql3 {
 template<typename RecognizerType, typename ExceptionBaseType>
 class error_listener {
 public:
+    virtual ~error_listener() = default;
 
     /**
      * Invoked when a syntax error occurs.
