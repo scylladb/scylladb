@@ -1393,23 +1393,23 @@ static bool needs_cleanup(const lw_shared_ptr<sstables::sstable>& sst,
 future<> column_family::cleanup_sstables(sstables::compaction_descriptor descriptor) {
     dht::token_range_vector r = service::get_local_storage_service().get_local_ranges(_schema->ks_name());
 
-  return do_with(std::move(descriptor.sstables), std::move(r), [this] (auto& sstables, auto& owned_ranges) {
-    return do_for_each(sstables, [this, &owned_ranges] (auto& sst) {
-        if (!owned_ranges.empty() && !needs_cleanup(sst, owned_ranges, _schema)) {
-           return make_ready_future<>();
-        }
+    return do_with(std::move(descriptor.sstables), std::move(r), [this] (auto& sstables, auto& owned_ranges) {
+        return do_for_each(sstables, [this, &owned_ranges] (auto& sst) {
+            if (!owned_ranges.empty() && !needs_cleanup(sst, owned_ranges, _schema)) {
+            return make_ready_future<>();
+            }
 
-        // this semaphore ensures that only one cleanup will run per shard.
-        // That's to prevent node from running out of space when almost all sstables
-        // need cleanup, so if sstables are cleaned in parallel, we may need almost
-        // twice the disk space used by those sstables.
-        static thread_local semaphore sem(1);
+            // this semaphore ensures that only one cleanup will run per shard.
+            // That's to prevent node from running out of space when almost all sstables
+            // need cleanup, so if sstables are cleaned in parallel, we may need almost
+            // twice the disk space used by those sstables.
+            static thread_local semaphore sem(1);
 
-        return with_semaphore(sem, 1, [this, &sst] {
-            return this->compact_sstables(sstables::compaction_descriptor({ sst }, sst->get_sstable_level()), true);
+            return with_semaphore(sem, 1, [this, &sst] {
+                return this->compact_sstables(sstables::compaction_descriptor({ sst }, sst->get_sstable_level()), true);
+            });
         });
     });
-  });
 }
 
 // Note: We assume that the column_family does not get destroyed during compaction.
