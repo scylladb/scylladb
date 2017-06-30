@@ -51,8 +51,6 @@ Result do_with_parser(const sstring_view& cql, Func&& f) {
     cql3_parser::CqlParser parser{&tstream};
     parser.set_error_listener(parser_error_collector);
     auto result = f(parser);
-    lexer_error_collector.throw_first_syntax_error();
-    parser_error_collector.throw_first_syntax_error();
     return result;
 }
 

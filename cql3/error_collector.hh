@@ -67,10 +67,6 @@ class error_collector : public error_listener<RecognizerType, ExceptionBaseType>
      */
     const sstring_view _query;
 
-    /**
-     * The error messages.
-     */
-    std::vector<sstring> _error_msgs;
 public:
 
     /**
@@ -81,7 +77,10 @@ public:
      */
     error_collector(const sstring_view& query) : _query(query) {}
 
-    virtual void syntax_error(RecognizerType& recognizer, ANTLR_UINT8** token_names, ExceptionBaseType* ex) override {
+    /**
+     * Format and throw a new \c exceptions::syntax_exception.
+     */
+    [[noreturn]] virtual void syntax_error(RecognizerType& recognizer, ANTLR_UINT8** token_names, ExceptionBaseType* ex) override {
         auto hdr = get_error_header(ex);
         auto msg = get_error_message(recognizer, ex, token_names);
         std::stringstream result;
@@ -90,22 +89,15 @@ public:
         if (recognizer instanceof Parser)
             appendQuerySnippet((Parser) recognizer, builder);
 #endif
-        _error_msgs.emplace_back(result.str());
-    }
 
-    virtual void syntax_error(RecognizerType& recognizer, const sstring& msg) override {
-        _error_msgs.emplace_back(msg);
+        throw exceptions::syntax_exception(result.str());
     }
 
     /**
-     * Throws the first syntax error found by the lexer or the parser if it exists.
-     *
-     * @throws SyntaxException the syntax error.
+     * Throw a new \c exceptions::syntax_exception.
      */
-    void throw_first_syntax_error() {
-        if (!_error_msgs.empty()) {
-            throw exceptions::syntax_exception(_error_msgs[0]);
-        }
+    [[noreturn]] virtual void syntax_error(RecognizerType&, const sstring& msg) override {
+        throw exceptions::syntax_exception(msg);
     }
 
 private:
