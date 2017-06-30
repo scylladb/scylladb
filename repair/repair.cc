@@ -41,11 +41,6 @@
 
 static logging::logger logger("repair");
 
-struct failed_range {
-    sstring cf;
-    ::dht::token_range range;
-};
-
 class repair_info {
 public:
     seastar::sharded<database>& db;
@@ -56,7 +51,7 @@ public:
     shard_id shard;
     std::vector<sstring> data_centers;
     std::vector<sstring> hosts;
-    std::vector<failed_range> failed_ranges;
+    size_t nr_failed_ranges = 0;
     // Map of peer -> <cf, ranges>
     std::unordered_map<gms::inet_address, std::unordered_map<sstring, dht::token_range_vector>> ranges_need_repair_in;
     std::unordered_map<gms::inet_address, std::unordered_map<sstring, dht::token_range_vector>> ranges_need_repair_out;
@@ -132,14 +127,11 @@ public:
         });
     }
     void check_failed_ranges() {
-        if (failed_ranges.empty()) {
-            logger.info("repair {} on shard {} completed successfully", id, shard);
+        if (nr_failed_ranges) {
+            logger.info("repair {} on shard {} failed - {} ranges failed", id, shard, nr_failed_ranges);
+            throw std::runtime_error(sprint("repair %d on shard %d failed to do checksum for %d sub ranges", id, shard, nr_failed_ranges));
         } else {
-            logger.info("repair {} on shard {} failed - {} ranges failed", id, shard, failed_ranges.size());
-            for (auto& frange: failed_ranges) {
-                logger.info("repair cf {} range {} failed", frange.cf, frange.range);
-            }
-            throw std::runtime_error(sprint("repair %d on shard %d failed to do checksum for %d sub ranges", id, shard, failed_ranges.size()));
+            logger.info("repair {} on shard {} completed successfully", id, shard);
         }
     }
     future<> request_transfer_ranges(const sstring& cf,
@@ -626,7 +618,7 @@ static future<> repair_cf_range(repair_info& ri,
                                  utils::fb_utilities::get_broadcast_address()),
                                 checksums[i].get_exception());
                             success = false;
-                            ri.failed_ranges.push_back(failed_range{cf, range});
+                            ri.nr_failed_ranges++;
                             // Do not break out of the loop here, so we can log
                             // (and discard) all the exceptions.
                         } else if (i > 0) {
@@ -751,7 +743,7 @@ static future<> repair_cf_range(repair_info& ri,
                     // any case, we need to remember that the repair failed to
                     // tell the caller.
                     success = false;
-                    ri.failed_ranges.push_back(failed_range{cf, range});
+                    ri.nr_failed_ranges++;
                     logger.warn("Failed sync of range {}: {}", range, eptr);
                 }).finally([&completion] {
                     parallelism_semaphore.signal(1);
