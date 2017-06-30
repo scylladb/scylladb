@@ -1373,7 +1373,7 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
 }
 
 static bool needs_cleanup(const lw_shared_ptr<sstables::sstable>& sst,
-                   const lw_shared_ptr<dht::token_range_vector>& owned_ranges,
+                   const dht::token_range_vector& owned_ranges,
                    schema_ptr s) {
     auto first = sst->get_first_partition_key();
     auto last = sst->get_last_partition_key();
@@ -1382,7 +1382,7 @@ static bool needs_cleanup(const lw_shared_ptr<sstables::sstable>& sst,
     dht::token_range sst_token_range = dht::token_range::make(first_token, last_token);
 
     // return true iff sst partition range isn't fully contained in any of the owned ranges.
-    for (auto& r : *owned_ranges) {
+    for (auto& r : owned_ranges) {
         if (r.contains(sst_token_range, dht::token_comparator())) {
             return false;
         }
@@ -1392,11 +1392,10 @@ static bool needs_cleanup(const lw_shared_ptr<sstables::sstable>& sst,
 
 future<> column_family::cleanup_sstables(sstables::compaction_descriptor descriptor) {
     dht::token_range_vector r = service::get_local_storage_service().get_local_ranges(_schema->ks_name());
-    auto owned_ranges = make_lw_shared<dht::token_range_vector>(std::move(r));
-    auto sstables_to_cleanup = make_lw_shared<std::vector<sstables::shared_sstable>>(std::move(descriptor.sstables));
 
-    return do_for_each(*sstables_to_cleanup, [this, owned_ranges = std::move(owned_ranges), sstables_to_cleanup] (auto& sst) {
-        if (!owned_ranges->empty() && !needs_cleanup(sst, owned_ranges, _schema)) {
+  return do_with(std::move(descriptor.sstables), std::move(r), [this] (auto& sstables, auto& owned_ranges) {
+    return do_for_each(sstables, [this, &owned_ranges] (auto& sst) {
+        if (!owned_ranges.empty() && !needs_cleanup(sst, owned_ranges, _schema)) {
            return make_ready_future<>();
         }
 
@@ -1410,6 +1409,7 @@ future<> column_family::cleanup_sstables(sstables::compaction_descriptor descrip
             return this->compact_sstables(sstables::compaction_descriptor({ sst }, sst->get_sstable_level()), true);
         });
     });
+  });
 }
 
 // Note: We assume that the column_family does not get destroyed during compaction.
