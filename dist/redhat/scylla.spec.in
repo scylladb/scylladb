@@ -206,6 +206,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/scylla_selinux_setup
 %{_prefix}/lib/scylla/scylla_io_setup
 %{_prefix}/lib/scylla/scylla_dev_mode_setup
+%{_prefix}/lib/scylla/scylla_ec2_check
 %{_prefix}/lib/scylla/scylla_kernel_check
 %{_prefix}/lib/scylla/scylla_cpuset_setup
 %{_prefix}/lib/scylla/scylla_cpuscaling_setup

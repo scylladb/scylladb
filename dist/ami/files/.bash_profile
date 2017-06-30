@@ -13,27 +13,6 @@ PATH=$PATH:$HOME/.local/bin:$HOME/bin
 
 export PATH
 
-get_en_interface_type() {
-	TYPE=`curl -s http://169.254.169.254/latest/meta-data/instance-type|cut -d . -f 1`
-	SUBTYPE=`curl -s http://169.254.169.254/latest/meta-data/instance-type|cut -d . -f 2`
-	case $TYPE in
-		"c3"|"c4"|"d2"|"i2"|"r3") echo -n "ixgbevf";;
-		"i3"|"p2"|"r4"|"x1") echo -n "ena";;
-		"m4")
-			if [ "$SUBTYPE" = "16xlarge" ]; then
-				echo -n "ena"
-			else
-				echo -n "ixgbevf"
-			fi;;
-	esac
-}
-
-is_vpc_enabled() {
-	MAC=`cat /sys/class/net/eth0/address`
-	VPC_AVAIL=`curl -s http://169.254.169.254/latest/meta-data/network/interfaces/macs/$MAC/|grep vpc-id`
-	[ -n "$VPC_AVAIL" ]
-}
-
 echo
 echo '   _____            _ _       _____  ____  '
 echo '  / ____|          | | |     |  __ \|  _ \ '
@@ -130,28 +109,8 @@ else
 		fi
 	fi
 fi
-TYPE=`curl -s http://169.254.169.254/latest/meta-data/instance-type`
-EN=`get_en_interface_type`
-DRIVER=`ethtool -i eth0|awk '/^driver:/ {print $2}'`
-if [ "$EN" = "" ]; then
-	tput setaf 1
-	tput bold
-	echo "    $TYPE doesn't support enahanced networking!"
-	tput sgr0
-	echo "To enable enhanced networking, please use the instance type which supports it."
-	echo "More documentation available at: "
-	echo "http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/enhanced-networking.html#enabling_enhanced_networking"
-elif ! is_vpc_enabled; then
-	tput setaf 1
-	tput bold
-	echo "    VPC is not enabled!"
-	tput sgr0
-	echo "To enable enhanced networking, please enable VPC."
-elif [ "$DRIVER" != "$EN" ]; then
-	tput setaf 1
-	tput bold
-	echo "    Enhanced networking is disabled!"
-	tput sgr0
-	echo "More documentation available at: "
-	echo "http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/enhanced-networking.html"
+echo -n "    "
+/usr/lib/scylla/scylla_ec2_check
+if [ $? -eq 0 ]; then
+    echo
 fi
