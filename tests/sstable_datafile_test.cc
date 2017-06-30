@@ -40,6 +40,7 @@
 #include "dht/i_partitioner.hh"
 #include "range.hh"
 #include "partition_slice_builder.hh"
+#include "sstables/compaction_strategy_impl.hh"
 #include "sstables/date_tiered_compaction_strategy.hh"
 #include "mutation_assertions.hh"
 #include "mutation_reader_assertions.hh"
