@@ -207,19 +207,9 @@ public:
     const T& one_of_largest() const {
         return _buckets[_watermark].front();
     }
-    // Returns the largest element in the histogram.
-    // Too expensive to be called from anything other than tests.
-    const T& largest() const {
-        return *boost::max_element(_buckets[_watermark], hist_size_less_compare());
-    }
     // Returns one of the largest elements in the histogram.
     T& one_of_largest() {
         return _buckets[_watermark].front();
-    }
-    // Returns the largest element in the histogram.
-    // Too expensive to be called from anything other than tests.
-    T& largest() {
-        return *boost::max_element(_buckets[_watermark], hist_size_less_compare());
     }
     // Pushes a new element onto the histogram.
     void push(T& v) {
