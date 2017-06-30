@@ -4,6 +4,10 @@
 
 . /usr/lib/scylla/scylla_lib.sh
 
+if [ ! -f /sys/devices/system/cpu/cpufreq/policy0/scaling_governor ]; then
+    echo "This computer doesn't supported CPU scaling configuration."
+    exit 0
+fi
 if is_debian_variant; then
     apt-get install -y cpufrequtils
     service cpufrequtils stop
