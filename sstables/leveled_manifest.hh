@@ -47,8 +47,6 @@
 #include "log.hh"
 
 class leveled_manifest {
-    static logging::logger logger;
-
     schema_ptr _schema;
     std::vector<std::list<sstables::shared_sstable>> _generations;
     uint64_t _max_sstable_size_in_bytes;
@@ -61,6 +59,8 @@ class leveled_manifest {
         bool can_promote = true;
     };
 public:
+    static logging::logger logger;
+
     /**
      * limit the number of L0 sstables we do at once, because compaction bloom filter creation
      * uses a pessimistic estimate of how many keys overlap (none), so we risk wasting memory
