@@ -321,7 +321,7 @@ std::unique_ptr<incremental_selector_impl> partitioned_sstable_set::make_increme
 class compaction_strategy_impl {
     static constexpr float DEFAULT_TOMBSTONE_THRESHOLD = 0.2f;
     // minimum interval needed to perform tombstone removal compaction in seconds, default 86400 or 1 day.
-    static constexpr long DEFAULT_TOMBSTONE_COMPACTION_INTERVAL = 86400;
+    static constexpr std::chrono::seconds DEFAULT_TOMBSTONE_COMPACTION_INTERVAL = std::chrono::seconds(86400);
 protected:
     const sstring TOMBSTONE_THRESHOLD_OPTION = "tombstone_threshold";
     const sstring TOMBSTONE_COMPACTION_INTERVAL_OPTION = "tombstone_compaction_interval";
@@ -329,7 +329,7 @@ protected:
     bool _use_clustering_key_filter = false;
     bool _disable_tombstone_compaction = false;
     float _tombstone_threshold = DEFAULT_TOMBSTONE_THRESHOLD;
-    db_clock::duration _tombstone_compaction_interval = std::chrono::seconds(DEFAULT_TOMBSTONE_COMPACTION_INTERVAL);
+    db_clock::duration _tombstone_compaction_interval = DEFAULT_TOMBSTONE_COMPACTION_INTERVAL;
 public:
     static stdx::optional<sstring> get_value(const std::map<sstring, sstring>& options, const sstring& name) {
         auto it = options.find(name);
@@ -347,7 +347,7 @@ protected:
         _tombstone_threshold = property_definitions::to_double(TOMBSTONE_THRESHOLD_OPTION, tmp_value, DEFAULT_TOMBSTONE_THRESHOLD);
 
         tmp_value = get_value(options, TOMBSTONE_COMPACTION_INTERVAL_OPTION);
-        auto interval = property_definitions::to_long(TOMBSTONE_COMPACTION_INTERVAL_OPTION, tmp_value, DEFAULT_TOMBSTONE_COMPACTION_INTERVAL);
+        auto interval = property_definitions::to_long(TOMBSTONE_COMPACTION_INTERVAL_OPTION, tmp_value, DEFAULT_TOMBSTONE_COMPACTION_INTERVAL.count());
         _tombstone_compaction_interval = db_clock::duration(std::chrono::seconds(interval));
 
         // FIXME: validate options.
