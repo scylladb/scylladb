@@ -44,8 +44,8 @@
 #include "compaction.hh"
 #include "database.hh"
 #include "compaction_strategy.hh"
+#include "compaction_strategy_impl.hh"
 #include "schema.hh"
-#include "cql3/statements/property_definitions.hh"
 #include "leveled_manifest.hh"
 #include "sstable_set.hh"
 #include "compatible_ring_position.hh"
@@ -318,73 +318,9 @@ std::unique_ptr<incremental_selector_impl> partitioned_sstable_set::make_increme
     return std::make_unique<incremental_selector>(_schema, _unleveled_sstables, _leveled_sstables);
 }
 
-class compaction_strategy_impl {
-    static constexpr float DEFAULT_TOMBSTONE_THRESHOLD = 0.2f;
-    // minimum interval needed to perform tombstone removal compaction in seconds, default 86400 or 1 day.
-    static constexpr std::chrono::seconds DEFAULT_TOMBSTONE_COMPACTION_INTERVAL = std::chrono::seconds(86400);
-protected:
-    const sstring TOMBSTONE_THRESHOLD_OPTION = "tombstone_threshold";
-    const sstring TOMBSTONE_COMPACTION_INTERVAL_OPTION = "tombstone_compaction_interval";
-
-    bool _use_clustering_key_filter = false;
-    bool _disable_tombstone_compaction = false;
-    float _tombstone_threshold = DEFAULT_TOMBSTONE_THRESHOLD;
-    db_clock::duration _tombstone_compaction_interval = DEFAULT_TOMBSTONE_COMPACTION_INTERVAL;
-public:
-    static stdx::optional<sstring> get_value(const std::map<sstring, sstring>& options, const sstring& name) {
-        auto it = options.find(name);
-        if (it == options.end()) {
-            return stdx::nullopt;
-        }
-        return it->second;
-    }
-protected:
-    compaction_strategy_impl() = default;
-    explicit compaction_strategy_impl(const std::map<sstring, sstring>& options) {
-        using namespace cql3::statements;
-
-        auto tmp_value = get_value(options, TOMBSTONE_THRESHOLD_OPTION);
-        _tombstone_threshold = property_definitions::to_double(TOMBSTONE_THRESHOLD_OPTION, tmp_value, DEFAULT_TOMBSTONE_THRESHOLD);
-
-        tmp_value = get_value(options, TOMBSTONE_COMPACTION_INTERVAL_OPTION);
-        auto interval = property_definitions::to_long(TOMBSTONE_COMPACTION_INTERVAL_OPTION, tmp_value, DEFAULT_TOMBSTONE_COMPACTION_INTERVAL.count());
-        _tombstone_compaction_interval = db_clock::duration(std::chrono::seconds(interval));
-
-        // FIXME: validate options.
-    }
-public:
-    virtual ~compaction_strategy_impl() {}
-    virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) = 0;
-    virtual std::vector<resharding_descriptor> get_resharding_jobs(column_family& cf, std::vector<sstables::shared_sstable> candidates);
-    virtual void notify_completion(const std::vector<lw_shared_ptr<sstable>>& removed, const std::vector<lw_shared_ptr<sstable>>& added) { }
-    virtual compaction_strategy_type type() const = 0;
-    virtual bool parallel_compaction() const {
-        return true;
-    }
-    virtual int64_t estimated_pending_compactions(column_family& cf) const = 0;
-    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(schema_ptr schema) const {
-        return std::make_unique<bag_sstable_set>();
-    }
-    bool use_clustering_key_filter() const {
-        return _use_clustering_key_filter;
-    }
-
-    // Check if a given sstable is entitled for tombstone compaction based on its
-    // droppable tombstone histogram and gc_before.
-    bool worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point gc_before) {
-        if (_disable_tombstone_compaction) {
-            return false;
-        }
-        // ignore sstables that were created just recently because there's a chance
-        // that expired tombstones still cover old data and thus cannot be removed.
-        // We want to avoid a compaction loop here on the same data by considering
-        // only old enough sstables.
-        if (db_clock::now()-_tombstone_compaction_interval < sst->data_file_write_time()) {
-            return false;
-        }
-        return sst->estimate_droppable_tombstone_ratio(gc_before) >= _tombstone_threshold;
-    }
-};
+std::unique_ptr<sstable_set_impl> compaction_strategy_impl::make_sstable_set(schema_ptr schema) const {
+    return std::make_unique<bag_sstable_set>();
+}
 
 std::vector<resharding_descriptor>
 compaction_strategy_impl::get_resharding_jobs(column_family& cf, std::vector<sstables::shared_sstable> candidates) {
