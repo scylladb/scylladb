@@ -344,7 +344,7 @@ void compaction_manager::register_metrics() {
 void compaction_manager::start() {
     _stopped = false;
     register_metrics();
-    _compaction_submission_timer.arm(periodic_compaction_submission_interval);
+    _compaction_submission_timer.arm(periodic_compaction_submission_interval());
 }
 
 std::function<void()> compaction_manager::compaction_submission_callback() {

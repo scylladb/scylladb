@@ -87,7 +87,7 @@ private:
     // all registered column families are submitted for compaction at a constant interval.
     // Submission is a NO-OP when there's nothing to do, so it's fine to call it regularly.
     timer<lowres_clock> _compaction_submission_timer = timer<lowres_clock>(compaction_submission_callback());
-    static constexpr std::chrono::seconds periodic_compaction_submission_interval = std::chrono::seconds(3600);
+    static constexpr std::chrono::seconds periodic_compaction_submission_interval() { return std::chrono::seconds(3600); }
 private:
     future<> task_stop(lw_shared_ptr<task> task);
 
