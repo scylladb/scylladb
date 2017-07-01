@@ -46,15 +46,19 @@
 
 namespace cql3 {
 
+sstring
+operation::set_element::to_string(const column_definition& receiver) const {
+    return format("{}[{}] = {}", receiver.name_as_text(), *_selector, *_value);
+}
 
 shared_ptr<operation>
 operation::set_element::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
     using exceptions::invalid_request_exception;
     auto rtype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!rtype) {
-        throw invalid_request_exception(sprint("Invalid operation (%s) for non collection column %s", receiver, receiver.name()));
+        throw invalid_request_exception(sprint("Invalid operation (%s) for non collection column %s", to_string(receiver), receiver.name()));
     } else if (!rtype->is_multi_cell()) {
-        throw invalid_request_exception(sprint("Invalid operation (%s) for frozen collection column %s", receiver, receiver.name()));
+        throw invalid_request_exception(sprint("Invalid operation (%s) for frozen collection column %s", to_string(receiver), receiver.name()));
     }
 
     if (&rtype->_kind == &collection_type_impl::kind::list) {
@@ -67,7 +71,7 @@ operation::set_element::prepare(database& db, const sstring& keyspace, const col
             return make_shared<lists::setter_by_index>(receiver, idx, lval);
         }
     } else if (&rtype->_kind == &collection_type_impl::kind::set) {
-        throw invalid_request_exception(sprint("Invalid operation (%s) for set column %s", receiver, receiver.name()));
+        throw invalid_request_exception(sprint("Invalid operation (%s) for set column %s", to_string(receiver), receiver.name()));
     } else if (&rtype->_kind == &collection_type_impl::kind::map) {
         auto key = _selector->prepare(db, keyspace, maps::key_spec_of(*receiver.column_specification));
         auto mval = _value->prepare(db, keyspace, maps::value_spec_of(*receiver.column_specification));
@@ -83,6 +87,11 @@ operation::set_element::is_compatible_with(shared_ptr<raw_update> other) {
     return !dynamic_pointer_cast<set_value>(std::move(other));
 }
 
+sstring
+operation::addition::to_string(const column_definition& receiver) const {
+    return format("{} = {} + {}", receiver.name_as_text(), receiver.name_as_text(), *_value);
+}
+
 shared_ptr<operation>
 operation::addition::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
     auto v = _value->prepare(db, keyspace, receiver.column_specification);
@@ -90,11 +99,11 @@ operation::addition::prepare(database& db, const sstring& keyspace, const column
     auto ctype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!ctype) {
         if (!receiver.is_counter()) {
-            throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for non counter column %s", receiver, receiver.name()));
+            throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for non counter column %s", to_string(receiver), receiver.name()));
         }
         return make_shared<constants::adder>(receiver, v);
     } else if (!ctype->is_multi_cell()) {
-        throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for frozen collection column %s", receiver, receiver.name()));
+        throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for frozen collection column %s", to_string(receiver), receiver.name()));
     }
 
     if (&ctype->_kind == &collection_type_impl::kind::list) {
@@ -113,19 +122,24 @@ operation::addition::is_compatible_with(shared_ptr<raw_update> other) {
     return !dynamic_pointer_cast<set_value>(other);
 }
 
+sstring
+operation::subtraction::to_string(const column_definition& receiver) const {
+    return format("{} = {} - {}", receiver.name_as_text(), receiver.name_as_text(), *_value);
+}
+
 shared_ptr<operation>
 operation::subtraction::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
     auto ctype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!ctype) {
         if (!receiver.is_counter()) {
-            throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for non counter column %s", receiver, receiver.name()));
+            throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for non counter column %s", to_string(receiver), receiver.name()));
         }
         auto v = _value->prepare(db, keyspace, receiver.column_specification);
         return make_shared<constants::subtracter>(receiver, v);
     }
     if (!ctype->is_multi_cell()) {
         throw exceptions::invalid_request_exception(
-                sprint("Invalid operation (%s) for frozen collection column %s", receiver, receiver.name()));
+                sprint("Invalid operation (%s) for frozen collection column %s", to_string(receiver), receiver.name()));
     }
 
     if (&ctype->_kind == &collection_type_impl::kind::list) {
@@ -150,14 +164,19 @@ operation::subtraction::is_compatible_with(shared_ptr<raw_update> other) {
     return !dynamic_pointer_cast<set_value>(other);
 }
 
+sstring
+operation::prepend::to_string(const column_definition& receiver) const {
+    return format("{} = {} + {}", receiver.name_as_text(), *_value, receiver.name_as_text());
+}
+
 shared_ptr<operation>
 operation::prepend::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
     auto v = _value->prepare(db, keyspace, receiver.column_specification);
 
     if (!dynamic_cast<const list_type_impl*>(receiver.type.get())) {
-        throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for non list column %s", receiver, receiver.name()));
+        throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for non list column %s", to_string(receiver), receiver.name()));
     } else if (!receiver.type->is_multi_cell()) {
-        throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for frozen list column %s", receiver, receiver.name()));
+        throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for frozen list column %s", to_string(receiver), receiver.name()));
     }
 
     return make_shared<lists::prepender>(receiver, std::move(v));

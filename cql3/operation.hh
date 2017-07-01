@@ -203,6 +203,8 @@ public:
         const shared_ptr<term::raw> _selector;
         const shared_ptr<term::raw> _value;
         const bool _by_uuid;
+    private:
+        sstring to_string(const column_definition& receiver) const;
     public:
         set_element(shared_ptr<term::raw> selector, shared_ptr<term::raw> value, bool by_uuid = false)
             : _selector(std::move(selector)), _value(std::move(value)), _by_uuid(by_uuid) {
@@ -215,6 +217,8 @@ public:
 
     class addition : public raw_update {
         const shared_ptr<term::raw> _value;
+    private:
+        sstring to_string(const column_definition& receiver) const;
     public:
         addition(shared_ptr<term::raw> value)
                 : _value(value) {
@@ -227,6 +231,8 @@ public:
 
     class subtraction : public raw_update {
         const shared_ptr<term::raw> _value;
+    private:
+        sstring to_string(const column_definition& receiver) const;
     public:
         subtraction(shared_ptr<term::raw> value)
                 : _value(value) {
@@ -239,6 +245,8 @@ public:
 
     class prepend : public raw_update {
         shared_ptr<term::raw> _value;
+    private:
+        sstring to_string(const column_definition& receiver) const;
     public:
         prepend(shared_ptr<term::raw> value)
                 : _value(std::move(value)) {
