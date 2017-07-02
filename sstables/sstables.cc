@@ -1039,7 +1039,7 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
             auto f = make_checked_file(_read_error_handler, fi);
             auto r = make_lw_shared<file_random_access_reader>(std::move(f), size, sstable_buffer_size);
             auto fut = parse(*r, component);
-            return fut.finally([r = std::move(r)] {
+            return fut.finally([r] {
                 return r->close();
             }).then([r] {});
         });
