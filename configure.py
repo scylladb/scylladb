@@ -517,7 +517,6 @@ scylla_core = (['database.cc',
                  'tracing/tracing.cc',
                  'tracing/trace_keyspace_helper.cc',
                  'tracing/trace_state.cc',
-                 'table_helper.cc',
                  'range_tombstone.cc',
                  'range_tombstone_list.cc',
                  'disk-error-handler.cc'

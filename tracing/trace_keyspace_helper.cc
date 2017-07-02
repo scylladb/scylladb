@@ -41,8 +41,9 @@
 #include <seastar/core/metrics.hh>
 #include "types.hh"
 #include "tracing/trace_keyspace_helper.hh"
+#include "service/migration_manager.hh"
+#include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/batch_statement.hh"
-#include "cql3/statements/modification_statement.hh"
 
 namespace tracing {
 
@@ -65,7 +66,7 @@ struct trace_keyspace_backend_sesssion_state final : public backend_session_stat
 trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
             : i_tracing_backend_helper(tr)
             , _dummy_query_state(service::client_state(service::client_state::external_tag{}))
-            , _sessions(KEYSPACE_NAME, SESSIONS,
+            , _sessions(SESSIONS, *this,
                         sprint("CREATE TABLE IF NOT EXISTS %s.%s ("
                                   "session_id uuid,"
                                   "command text,"
@@ -89,7 +90,7 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                   "started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
                                   "USING TTL ?", KEYSPACE_NAME, SESSIONS))
 
-            , _sessions_time_idx(KEYSPACE_NAME, SESSIONS_TIME_IDX,
+            , _sessions_time_idx(SESSIONS_TIME_IDX, *this,
                                  sprint("CREATE TABLE IF NOT EXISTS %s.%s ("
                                            "minute timestamp,"
                                            "started_at timestamp,"
@@ -103,7 +104,7 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                            "session_id) VALUES (?, ?, ?) "
                                            "USING TTL ?", KEYSPACE_NAME, SESSIONS_TIME_IDX))
 
-            , _events(KEYSPACE_NAME, EVENTS,
+            , _events(EVENTS, *this,
                       sprint("CREATE TABLE IF NOT EXISTS %s.%s ("
                                 "session_id uuid,"
                                 "event_id timeuuid,"
@@ -127,7 +128,7 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                 "scylla_span_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
                                 "USING TTL ?", KEYSPACE_NAME, EVENTS))
 
-            , _slow_query_log(KEYSPACE_NAME, NODE_SLOW_QUERY_LOG,
+            , _slow_query_log(NODE_SLOW_QUERY_LOG, *this,
                               sprint("CREATE TABLE IF NOT EXISTS %s.%s ("
                                         "node_ip inet,"
                                         "shard int,"
@@ -157,7 +158,7 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                         "username) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                                         "USING TTL ?", KEYSPACE_NAME, NODE_SLOW_QUERY_LOG))
 
-            , _slow_query_log_time_idx(KEYSPACE_NAME, NODE_SLOW_QUERY_LOG_TIME_IDX,
+            , _slow_query_log_time_idx(NODE_SLOW_QUERY_LOG_TIME_IDX, *this,
                                        sprint("CREATE TABLE IF NOT EXISTS %s.%s ("
                                                  "minute timestamp,"
                                                  "started_at timestamp,"
@@ -192,10 +193,63 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
     });
 }
 
+future<> trace_keyspace_helper::table_helper::setup_table() const {
+    auto& qp = cql3::get_local_query_processor();
+    auto& db = qp.db().local();
+
+    if (db.has_schema(KEYSPACE_NAME, _name)) {
+        return make_ready_future<>();
+    }
+
+    ::shared_ptr<cql3::statements::raw::cf_statement> parsed = static_pointer_cast<
+                    cql3::statements::raw::cf_statement>(cql3::query_processor::parse_statement(_create_cql));
+    parsed->prepare_keyspace(KEYSPACE_NAME);
+    ::shared_ptr<cql3::statements::create_table_statement> statement =
+                    static_pointer_cast<cql3::statements::create_table_statement>(
+                                    parsed->prepare(db, qp.get_cql_stats())->statement);
+    auto schema = statement->get_cf_meta_data();
+
+    // Generate the CF UUID based on its KF names. This is needed to ensure that
+    // all Nodes that create it would create it with the same UUID and we don't
+    // hit the #420 issue.
+    auto uuid = generate_legacy_id(schema->ks_name(), schema->cf_name());
+
+    schema_builder b(schema);
+    b.set_uuid(uuid);
+
+    // We don't care it it fails really - this may happen due to concurrent
+    // "CREATE TABLE" invocation on different Nodes.
+    // The important thing is that it will converge eventually (some traces may
+    // be lost in a process but that's ok).
+    return service::get_local_migration_manager().announce_new_column_family(b.build(), false).discard_result().handle_exception([this] (auto ep) {});;
+}
+
 future<> trace_keyspace_helper::start() {
-    return table_helper::setup_keyspace(KEYSPACE_NAME, "2", _sessions, _sessions_time_idx, _events, _slow_query_log, _slow_query_log_time_idx).then([this] {
-        _dummy_query_state.get_client_state().set_keyspace(cql3::get_local_query_processor().db(), KEYSPACE_NAME);
-    });
+    if (engine().cpu_id() == 0) {
+        return seastar::async([this] {
+            auto& db = cql3::get_local_query_processor().db().local();
+
+            // Create a keyspace
+            if (!db.has_keyspace(KEYSPACE_NAME)) {
+                std::map<sstring, sstring> opts;
+                opts["replication_factor"] = "2";
+                auto ksm = keyspace_metadata::new_keyspace(KEYSPACE_NAME, "org.apache.cassandra.locator.SimpleStrategy", std::move(opts), true);
+                // We use min_timestamp so that default keyspace metadata will loose with any manual adjustments. See issue #2129.
+                service::get_local_migration_manager().announce_new_keyspace(ksm, api::min_timestamp, false).get();
+            }
+
+            _dummy_query_state.get_client_state().set_keyspace(cql3::get_local_query_processor().db(), KEYSPACE_NAME);
+
+            // Create tables
+            _sessions.setup_table().get();
+            _sessions_time_idx.setup_table().get();
+            _events.setup_table().get();
+            _slow_query_log.setup_table().get();
+            _slow_query_log_time_idx.setup_table().get();
+        });
+    } else {
+        return make_ready_future<>();
+    }
 }
 
 void trace_keyspace_helper::write_one_session_records(lw_shared_ptr<one_session_records> records) {
@@ -332,7 +386,7 @@ std::vector<cql3::raw_value> trace_keyspace_helper::make_event_mutation_data(one
 
     std::vector<cql3::raw_value> values({
         cql3::raw_value::make_value(uuid_type->decompose(session_records.session_id)),
-        cql3::raw_value::make_value(timeuuid_type->decompose(utils::UUID_gen::get_time_UUID(table_helper::make_monotonic_UUID_tp(backend_state_ptr->last_nanos, record.event_time_point)))),
+        cql3::raw_value::make_value(timeuuid_type->decompose(utils::UUID_gen::get_time_UUID(make_monotonic_UUID_tp(backend_state_ptr->last_nanos, record.event_time_point)))),
         cql3::raw_value::make_value(utf8_type->decompose(record.message)),
         cql3::raw_value::make_value(inet_addr_type->decompose(utils::fb_utilities::get_broadcast_address().addr())),
         cql3::raw_value::make_value(int32_type->decompose(elapsed_to_micros(record.elapsed))),
@@ -350,7 +404,7 @@ future<> trace_keyspace_helper::apply_events_mutation(lw_shared_ptr<one_session_
         return now();
     }
 
-    return _events.cache_table_info(_dummy_query_state).then([this, records, &events_records] {
+    return _events.cache_table_info().then([this, records, &events_records] {
         tlogger.trace("{}: storing {} events records: parent_id {} span_id {}", records->session_id, events_records.size(), records->parent_id, records->my_span_id);
 
         std::vector<shared_ptr<cql3::statements::modification_statement>> modifications(events_records.size(), _events.insert_stmt());
@@ -397,20 +451,20 @@ future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_se
 
                     // if session is finished - store a session and a session time index entries
                     tlogger.trace("{}: going to store a session event", records->session_id);
-                    return _sessions.insert(_dummy_query_state, make_session_mutation_data, *records).then([this, records] {
+                    return _sessions.insert(make_session_mutation_data, *records).then([this, records] {
                         tlogger.trace("{}: going to store a {} entry", records->session_id, _sessions_time_idx.name());
-                        return _sessions_time_idx.insert(_dummy_query_state, make_session_time_idx_mutation_data, *records);
+                        return _sessions_time_idx.insert(make_session_time_idx_mutation_data, *records);
                     }).then([this, records] {
                         if (!records->do_log_slow_query) {
                             return now();
                         }
 
                         // if slow query log is requested - store a slow query log and a slow query log time index entries
-                        auto start_time_id = utils::UUID_gen::get_time_UUID(table_helper::make_monotonic_UUID_tp(_slow_query_last_nanos, records->session_rec.started_at));
+                        auto start_time_id = utils::UUID_gen::get_time_UUID(make_monotonic_UUID_tp(_slow_query_last_nanos, records->session_rec.started_at));
                         tlogger.trace("{}: going to store a slow query event", records->session_id);
-                        return _slow_query_log.insert(_dummy_query_state, make_slow_query_mutation_data, *records, start_time_id).then([this, records, start_time_id] {
+                        return _slow_query_log.insert(make_slow_query_mutation_data, *records, start_time_id).then([this, records, start_time_id] {
                             tlogger.trace("{}: going to store a {} entry", records->session_id, _slow_query_log_time_idx.name());
-                            return _slow_query_log_time_idx.insert(_dummy_query_state, make_slow_query_time_idx_mutation_data, *records, start_time_id);
+                            return _slow_query_log_time_idx.insert(make_slow_query_time_idx_mutation_data, *records, start_time_id);
                         });
                     });
                 } else {
@@ -423,6 +477,34 @@ future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_se
 
 std::unique_ptr<backend_session_state_base> trace_keyspace_helper::allocate_session_state() const {
     return std::make_unique<trace_keyspace_backend_sesssion_state>();
+}
+
+future<> trace_keyspace_helper::table_helper::cache_table_info() {
+    if (_prepared_stmt) {
+        return now();
+    } else {
+        // if prepared statement has been invalidated - drop cached pointers
+        _insert_stmt = nullptr;
+    }
+
+    return cql3::get_local_query_processor().prepare(_insert_cql, _ks_helper.get_dummy_qs().get_client_state(), false).then([this] (shared_ptr<cql_transport::messages::result_message::prepared> msg_ptr) {
+        _prepared_stmt = std::move(msg_ptr->get_prepared());
+        shared_ptr<cql3::cql_statement> cql_stmt = _prepared_stmt->statement;
+        _insert_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(cql_stmt);
+    }).handle_exception([this] (auto eptr) {
+        // One of the possible causes for an error here could be the table that doesn't exist.
+        this->setup_table().discard_result();
+
+        // We throw the bad_column_family exception because the caller
+        // expects and accounts this type of errors.
+        try {
+            std::rethrow_exception(eptr);
+        } catch (std::exception& e) {
+            throw bad_column_family(_name, e);
+        } catch (...) {
+            throw bad_column_family(_name);
+        }
+    });
 }
 
 using registry = class_registrator<i_tracing_backend_helper, trace_keyspace_helper, tracing&>;
