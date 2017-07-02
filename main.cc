@@ -625,13 +625,13 @@ int main(int ac, char** av) {
             lb->start_broadcasting();
             service::get_local_storage_service().set_load_broadcaster(lb);
             engine().at_exit([lb = std::move(lb)] () mutable { return lb->stop_broadcasting(); });
+            supervisor::notify("starting cf cache hit rate calculator");
             cf_cache_hitrate_calculator.start(std::ref(db), std::ref(cf_cache_hitrate_calculator)).get();
             engine().at_exit([&cf_cache_hitrate_calculator] { return cf_cache_hitrate_calculator.stop(); });
             cf_cache_hitrate_calculator.local().run_on(engine().cpu_id());
-            supervisor::notify("starting native transport");
-            gms::get_local_gossiper().wait_for_gossip_to_settle();
+            gms::get_local_gossiper().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx).get();
-            supervisor::notify("starting cf cache hit rate calculator");
+            supervisor::notify("starting native transport");
             service::get_local_storage_service().start_native_transport().get();
             if (start_thrift) {
                 service::get_local_storage_service().start_rpc_server().get();
