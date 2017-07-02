@@ -3857,7 +3857,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
 
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
         // that's needed because sstable with expired data should be old enough.
-        sstables::test(sst).set_data_file_write_time(db_clock::from_time_t(std::numeric_limits<time_t>::max()));
+        sstables::test(sst).set_data_file_write_time(db_clock::time_point::min());
         auto descriptor = cs.get_sstables_for_compaction(*cf, { sst });
         BOOST_REQUIRE(descriptor.sstables.size() == 1);
         BOOST_REQUIRE(descriptor.sstables.front() == sst);
