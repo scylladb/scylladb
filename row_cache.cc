@@ -102,6 +102,8 @@ cache_tracker::setup_metrics() {
         sm::make_derive("partition_hits", sm::description("number of partitions needed by reads and found in cache"), _stats.partition_hits),
         sm::make_derive("partition_misses", sm::description("number of partitions needed by reads and missing in cache"), _stats.partition_misses),
         sm::make_derive("partition_insertions", sm::description("total number of partitions added to cache"), _stats.partition_insertions),
+        sm::make_derive("row_hits", sm::description("total number of rows needed by reads and found in cache"), _stats.row_hits),
+        sm::make_derive("row_misses", sm::description("total number of rows needed by reads and missing in cache"), _stats.row_misses),
         sm::make_derive("concurrent_misses_same_key", sm::description("total number of operation with misses same key"), _stats.concurrent_misses_same_key),
         sm::make_derive("partition_merges", sm::description("total number of partitions merged"), _stats.partition_merges),
         sm::make_derive("partition_evictions", sm::description("total number of evicted partitions"), _stats.partition_evictions),
@@ -170,6 +172,14 @@ void cache_tracker::on_partition_hit() {
 
 void cache_tracker::on_partition_miss() {
     ++_stats.partition_misses;
+}
+
+void cache_tracker::on_row_hit() {
+    ++_stats.row_hits;
+}
+
+void cache_tracker::on_row_miss() {
+    ++_stats.row_misses;
 }
 
 void cache_tracker::on_mispopulate() {
@@ -363,6 +373,14 @@ void row_cache::on_partition_hit() {
 void row_cache::on_partition_miss() {
     _stats.misses.mark();
     _tracker.on_partition_miss();
+}
+
+void row_cache::on_row_hit() {
+    _tracker.on_row_hit();
+}
+
+void row_cache::on_row_miss() {
+    _tracker.on_row_miss();
 }
 
 class range_populating_reader {

@@ -154,12 +154,14 @@ public:
 inline
 future<> cache_streamed_mutation::process_static_row() {
     if (_snp->version()->partition().static_row_continuous()) {
+        _read_context->cache().on_row_hit();
         row sr = _snp->static_row();
         if (!sr.empty()) {
             push_mutation_fragment(mutation_fragment(static_row(std::move(sr))));
         }
         return make_ready_future<>();
     } else {
+        _read_context->cache().on_row_miss();
         return _read_context->get_next_fragment().then([this] (mutation_fragment_opt&& sr) {
             if (sr) {
                 assert(sr->is_static_row());
@@ -231,6 +233,7 @@ future<> cache_streamed_mutation::read_from_underlying() {
                     }
                 });
             } else {
+                _read_context->cache().on_row_miss();
                 this->maybe_add_to_cache(*mfopt);
                 this->add_to_buffer(std::move(*mfopt));
                 return make_ready_future<>();
@@ -415,6 +418,7 @@ void cache_streamed_mutation::add_to_buffer(mutation_fragment&& mf) {
 inline
 void cache_streamed_mutation::add_to_buffer(const partition_snapshot_row_cursor& row) {
     if (!row.dummy()) {
+        _read_context->cache().on_row_hit();
         add_to_buffer(row.row());
     }
 }

@@ -192,6 +192,8 @@ public:
     struct stats {
         uint64_t partition_hits;
         uint64_t partition_misses;
+        uint64_t row_hits;
+        uint64_t row_misses;
         uint64_t partition_insertions;
         uint64_t concurrent_misses_same_key;
         uint64_t partition_merges;
@@ -229,6 +231,8 @@ public:
     void on_merge();
     void on_partition_hit();
     void on_partition_miss();
+    void on_row_hit();
+    void on_row_miss();
     void on_miss_already_populated();
     void on_mispopulate();
     allocation_strategy& allocator();
@@ -325,6 +329,8 @@ private:
     mutation_reader make_scanning_reader(const dht::partition_range&, lw_shared_ptr<cache::read_context>);
     void on_partition_hit();
     void on_partition_miss();
+    void on_row_hit();
+    void on_row_miss();
     void upgrade_entry(cache_entry&);
     void invalidate_locked(const dht::decorated_key&);
     void invalidate_unwrapped(const dht::partition_range&);
