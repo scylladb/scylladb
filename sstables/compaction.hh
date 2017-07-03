@@ -122,10 +122,7 @@ namespace sstables {
 
     // Return the most interesting bucket applying the size-tiered strategy.
     std::vector<sstables::shared_sstable>
-    size_tiered_most_interesting_bucket(lw_shared_ptr<sstable_list> candidates);
-
-    std::vector<sstables::shared_sstable>
-    size_tiered_most_interesting_bucket(const std::list<sstables::shared_sstable>& candidates);
+    size_tiered_most_interesting_bucket(const std::vector<sstables::shared_sstable>& candidates);
 
     // Return list of expired sstables for column family cf.
     // A sstable is fully expired *iff* its max_local_deletion_time precedes gc_before and its

@@ -149,12 +149,11 @@ public:
 
     virtual int64_t estimated_pending_compactions(column_family& cf) const override;
 
-    friend std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(lw_shared_ptr<sstable_list>);
-    friend std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(const std::list<sstables::shared_sstable>&);
-
     virtual compaction_strategy_type type() const {
         return compaction_strategy_type::size_tiered;
     }
+
+    friend std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(const std::vector<sstables::shared_sstable>&);
 };
 
 std::vector<std::pair<sstables::shared_sstable, uint64_t>>
