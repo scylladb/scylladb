@@ -46,6 +46,7 @@ thread_local seastar::thread_scheduling_group row_cache::_update_thread_scheduli
 
 mutation_reader
 row_cache::create_underlying_reader(read_context& ctx, mutation_source& src, const dht::partition_range& pr) {
+    ctx.on_underlying_created();
     return src(_schema, pr, ctx.slice(), ctx.pc(), ctx.trace_state(), streamed_mutation::forwarding::yes);
 }
 
@@ -106,7 +107,10 @@ cache_tracker::setup_metrics() {
         sm::make_derive("evictions", sm::description("total number of operation eviction"), _stats.evictions),
         sm::make_derive("removals", sm::description("total number of operation removals"), _stats.removals),
         sm::make_derive("mispopulations", sm::description("number of entries not inserted by reads"), _stats.mispopulations),
-        sm::make_gauge("partitions", sm::description("total number of cached partitions"), _stats.partitions)
+        sm::make_gauge("partitions", sm::description("total number of cached partitions"), _stats.partitions),
+        sm::make_derive("reads", sm::description("number of started reads"), _stats.reads),
+        sm::make_derive("reads_with_misses", sm::description("number of reads which had to read from sstables"), _stats.reads_with_misses),
+        sm::make_gauge("active_reads", sm::description("number of currently active reads"), [this] { return _stats.active_reads(); }),
     });
 }
 

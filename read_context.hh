@@ -121,6 +121,7 @@ class read_context final : public enable_lw_shared_from_this<read_context> {
     mutation_reader::forwarding _fwd_mr;
     bool _range_query;
     autoupdating_underlying_reader _underlying;
+    uint64_t _underlying_created = 0;
 
     // When reader enters a partition, it must be set up for reading that
     // partition from the underlying mutation source (_sm) in one of two ways:
@@ -155,7 +156,18 @@ public:
         , _fwd_mr(fwd_mr)
         , _range_query(!range.is_singular() || !range.start()->value().has_key())
         , _underlying(_cache, *this)
-    { }
+    {
+        ++_cache._tracker._stats.reads;
+    }
+    ~read_context() {
+        ++_cache._tracker._stats.reads_done;
+        if (_underlying_created) {
+            _cache._stats.reads_with_misses.mark();
+            ++_cache._tracker._stats.reads_with_misses;
+        } else {
+            _cache._stats.reads_with_no_misses.mark();
+        }
+    }
     read_context(const read_context&) = delete;
     row_cache& cache() { return _cache; }
     const schema_ptr& schema() const { return _schema; }
@@ -169,6 +181,7 @@ public:
     autoupdating_underlying_reader& underlying() { return _underlying; }
     row_cache::phase_type phase() const { return _phase; }
     const dht::decorated_key& key() const { return _sm->decorated_key(); }
+    void on_underlying_created() { ++_underlying_created; }
 private:
     future<> create_sm();
     future<> ensure_sm_created() {

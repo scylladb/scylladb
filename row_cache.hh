@@ -186,6 +186,9 @@ public:
         bi::member_hook<cache_entry, cache_entry::lru_link_type, &cache_entry::_lru_link>,
         bi::constant_time_size<false>>; // we need this to have bi::auto_unlink on hooks.
 public:
+    friend class row_cache;
+    friend class cache::read_context;
+    friend class cache::autoupdating_underlying_reader;
     struct stats {
         uint64_t hits;
         uint64_t misses;
@@ -197,6 +200,13 @@ public:
         uint64_t partitions;
         uint64_t modification_count;
         uint64_t mispopulations;
+        uint64_t reads;
+        uint64_t reads_with_misses;
+        uint64_t reads_done;
+
+        uint64_t active_reads() const {
+            return reads_done - reads;
+        }
     };
 private:
     stats _stats{};
@@ -258,6 +268,8 @@ public:
     struct stats {
         utils::timed_rate_moving_average hits;
         utils::timed_rate_moving_average misses;
+        utils::timed_rate_moving_average reads_with_misses;
+        utils::timed_rate_moving_average reads_with_no_misses;
     };
 private:
     cache_tracker& _tracker;
