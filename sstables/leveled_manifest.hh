@@ -140,64 +140,6 @@ public:
         return std::vector<sstables::shared_sstable>(result.begin(), result.end());
     }
 
-    /**
-     * Checks if adding the sstable creates an overlap in the level
-     * @param sstable the sstable to add
-     * @return true if it is safe to add the sstable in the level.
-     */
-    bool can_add_sstable(sstables::shared_sstable& sstable) {
-        uint32_t level = sstable->get_sstable_level();
-        const schema& s = *_schema;
-
-        if (level == 0) {
-            return true;
-        }
-
-        auto copy_level = _generations[level];
-        copy_level.push_back(sstable);
-        copy_level.sort([&s] (auto& i, auto& j) {
-            return i->compare_by_first_key(*j) < 0;
-        });
-
-        const sstables::sstable *previous = nullptr;
-        for (auto& current : copy_level) {
-            if (previous != nullptr) {
-                auto current_first = current->get_first_decorated_key();
-                auto previous_last = previous->get_last_decorated_key();
-
-                if (current_first.tri_compare(s, previous_last) <= 0) {
-                    return false;
-                }
-            }
-            previous = &*current;
-        }
-
-        return true;
-    }
-
-    void send_back_to_L0(sstables::shared_sstable& sstable) {
-        remove(sstable);
-        _generations[0].push_back(sstable);
-        sstable->set_sstable_level(0);
-    }
-
-#if 0
-    private String toString(Collection<SSTableReader> sstables)
-    {
-        StringBuilder builder = new StringBuilder();
-        for (SSTableReader sstable : sstables)
-        {
-            builder.append(sstable.descriptor.cfname)
-                   .append('-')
-                   .append(sstable.descriptor.generation)
-                   .append("(L")
-                   .append(sstable.getSSTableLevel())
-                   .append("), ");
-        }
-        return builder.toString();
-    }
-#endif
-
     static uint64_t max_bytes_for_level(int level, uint64_t max_sstable_size_in_bytes) {
         if (level == 0) {
             return 4L * max_sstable_size_in_bytes;
@@ -319,19 +261,6 @@ public:
         return sstables::compaction_descriptor(std::move(info.candidates), next_level, _max_sstable_size_in_bytes);
     }
 
-#if 0
-    private List<SSTableReader> getSSTablesForSTCS(Collection<SSTableReader> sstables)
-    {
-        Iterable<SSTableReader> candidates = cfs.getDataTracker().getUncompactingSSTables(sstables);
-        List<Pair<SSTableReader,Long>> pairs = SizeTieredCompactionStrategy.createSSTableAndLengthPairs(AbstractCompactionStrategy.filterSuspectSSTables(candidates));
-        List<List<SSTableReader>> buckets = SizeTieredCompactionStrategy.getBuckets(pairs,
-                                                                                    options.bucketHigh,
-                                                                                    options.bucketLow,
-                                                                                    options.minSSTableSize);
-        return SizeTieredCompactionStrategy.mostInterestingBucket(buckets, 4, 32);
-    }
-#endif
-
     /**
      * If we do something that makes many levels contain too little data (cleanup, change sstable size) we will "never"
      * compact the high levels.
@@ -408,40 +337,6 @@ public:
         return get_level(level).size();
     }
 
-#if 0
-    public synchronized int[] getAllLevelSize()
-    {
-        int[] counts = new int[generations.length];
-        for (int i = 0; i < counts.length; i++)
-            counts[i] = getLevel(i).size();
-        return counts;
-    }
-
-    private void logDistribution()
-    {
-        if (logger.isDebugEnabled())
-        {
-            for (int i = 0; i < generations.length; i++)
-            {
-                if (!getLevel(i).isEmpty())
-                {
-                    logger.debug("L{} contains {} SSTables ({} bytes) in {}",
-                                 i, getLevel(i).size(), SSTableReader.getTotalBytes(getLevel(i)), this);
-                }
-            }
-        }
-    }
-#endif
-
-    uint32_t remove(sstables::shared_sstable& sstable) {
-        uint32_t level = sstable->get_sstable_level();
-        if (level >= _generations.size()) {
-            throw std::runtime_error("Invalid level");
-        }
-        _generations[level].remove(sstable);
-        return level;
-    }
-
     template <typename T>
     static std::vector<sstables::shared_sstable> overlapping(const schema& s, std::vector<sstables::shared_sstable>& candidates, T& others) {
         assert(!candidates.empty());
@@ -497,16 +392,6 @@ public:
         }
         return overlapped;
     }
-
-#if 0
-    private static final Predicate<SSTableReader> suspectP = new Predicate<SSTableReader>()
-    {
-        public boolean apply(SSTableReader candidate)
-        {
-            return candidate.isMarkedSuspect();
-        }
-    };
-#endif
 
     bool worth_promoting_L0_candidates(uint64_t candidates_total_size) const {
         return candidates_total_size >= _max_sstable_size_in_bytes;
@@ -622,13 +507,7 @@ public:
             return i->compare_by_max_timestamp(*j) < 0;
         });
     }
-#if 0
-    @Override
-    public String toString()
-    {
-        return "Manifest@" + hashCode();
-    }
-#endif
+
     uint32_t get_level_count() {
         for (int i = _generations.size() - 1; i >= 0; i--) {
             if (get_level(i).size() > 0) {
@@ -637,12 +516,7 @@ public:
         }
         return 0;
     }
-#if 0
-    public synchronized SortedSet<SSTableReader> getLevelSorted(int level, Comparator<SSTableReader> comparator)
-    {
-        return ImmutableSortedSet.copyOf(comparator, getLevel(level));
-    }
-#endif
+
     std::list<sstables::shared_sstable>& get_level(uint32_t level) {
         if (level >= _generations.size()) {
             throw std::runtime_error("Invalid level");
