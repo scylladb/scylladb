@@ -504,6 +504,19 @@ static future<partition_checksum> checksum_range_shard(database &db,
     });
 }
 
+// It is counter-productive to allow a large number of range checksum
+// operations to proceed in parallel (on the same shard), because the read
+// operation can already parallelize itself as much as needed, and doing
+// multiple reads in parallel just adds a lot of memory overheads.
+// So checksum_parallelism_semaphore is used to limit this parallelism,
+// and should be set to 1, or another small number.
+//
+// Note that checksumming_parallelism_semaphore applies not just in the
+// repair master, but also in the slave: The repair slave may receive many
+// checksum requests in parallel, but will only work on one or a few
+// (checksum_parallelism_semaphore) at once.
+static thread_local semaphore checksum_parallelism_semaphore(2);
+
 // Calculate the checksum of the data held on all shards of a column family,
 // in the given token range.
 // In practice, we only need to consider one or two shards which intersect the
@@ -526,7 +539,9 @@ future<partition_checksum> checksum_range(seastar::sharded<database> &db,
             auto& prs = shard_range.second;
             return db.invoke_on(shard, [keyspace, cf, prs = std::move(prs), hash_version] (database& db) mutable {
                 return do_with(std::move(keyspace), std::move(cf), std::move(prs), [&db, hash_version] (auto& keyspace, auto& cf, auto& prs) {
-                    return checksum_range_shard(db, keyspace, cf, prs, hash_version);
+                    return seastar::with_semaphore(checksum_parallelism_semaphore, 1, [&db, hash_version, &keyspace, &cf, &prs] {
+                        return checksum_range_shard(db, keyspace, cf, prs, hash_version);
+                    });
                 });
             }).then([&result] (partition_checksum sum) {
                 result.add(sum);
@@ -537,14 +552,15 @@ future<partition_checksum> checksum_range(seastar::sharded<database> &db,
     });
 }
 
-// We don't need to wait for one checksum to finish before we start the
-// next, but doing too many of these operations in parallel also doesn't
-// make sense, so we limit the number of concurrent ongoing checksum
-// requests with a semaphore.
-//
-// FIXME: We shouldn't use a magic number here, but rather bind it to
-// some resource. Otherwise we'll be doing too little in some machines,
-// and too much in others.
+// parallelism_semaphore limits the number of parallel ongoing checksum
+// comparisons. This could mean, for example, that this number of checksum
+// requests have been sent to other nodes and we are waiting for them to
+// return so we can compare those to our own checksums. This limit can be
+// set fairly high because the outstanding comparisons take only few
+// resources. In particular, we do NOT do this number of file reads in
+// parallel because file reads have large memory overhads (read buffers,
+// partitions, etc.) - the number of concurrent reads is further limited
+// by an additional semaphore checksum_parallelism_semaphore (see above).
 //
 // FIXME: This would be better of in a repair service, or even a per-shard
 // repair instance holding all repair state. However, since we are anyway
