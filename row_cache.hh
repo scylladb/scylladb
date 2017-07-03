@@ -189,12 +189,14 @@ public:
     friend class row_cache;
     friend class cache::read_context;
     friend class cache::autoupdating_underlying_reader;
+    friend class cache::cache_streamed_mutation;
     struct stats {
         uint64_t partition_hits;
         uint64_t partition_misses;
         uint64_t row_hits;
         uint64_t row_misses;
         uint64_t partition_insertions;
+        uint64_t row_insertions;
         uint64_t concurrent_misses_same_key;
         uint64_t partition_merges;
         uint64_t partition_evictions;
@@ -331,6 +333,7 @@ private:
     void on_partition_miss();
     void on_row_hit();
     void on_row_miss();
+    void on_row_insert();
     void upgrade_entry(cache_entry&);
     void invalidate_locked(const dht::decorated_key&);
     void invalidate_unwrapped(const dht::partition_range&);

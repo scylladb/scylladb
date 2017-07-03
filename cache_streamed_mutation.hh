@@ -288,6 +288,7 @@ void cache_streamed_mutation::maybe_add_to_cache(const clustering_row& cr) {
                   ? _next_row.get_iterator_in_latest_version() : mp.clustered_rows().lower_bound(cr.key(), less);
         auto insert_result = mp.clustered_rows().insert_check(it, *new_entry, less);
         if (insert_result.second) {
+            _read_context->cache().on_row_insert();
             new_entry.release();
         }
         it = insert_result.first;
@@ -454,6 +455,7 @@ void cache_streamed_mutation::maybe_add_to_cache(const range_tombstone& rt) {
 inline
 void cache_streamed_mutation::maybe_add_to_cache(const static_row& sr) {
     if (can_populate()) {
+        _read_context->cache().on_row_insert();
         _lsa_manager.run_in_update_section_with_allocator([&] {
             _snp->version()->partition().static_row().apply(*_schema, column_kind::static_column, sr.cells());
         });
