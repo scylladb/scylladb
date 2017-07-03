@@ -75,7 +75,7 @@ cache_tracker::cache_tracker() {
             }
             evict_last(_lru);
             --_stats.partitions;
-            ++_stats.evictions;
+            ++_stats.partition_evictions;
             ++_stats.modification_count;
             return memory::reclaiming_result::reclaimed_something;
            } catch (std::bad_alloc&) {
@@ -99,13 +99,13 @@ cache_tracker::setup_metrics() {
     _metrics.add_group("cache", {
         sm::make_gauge("bytes_used", sm::description("current bytes used by the cache out of the total size of memory"), [this] { return _region.occupancy().used_space(); }),
         sm::make_gauge("bytes_total", sm::description("total size of memory for the cache"), [this] { return _region.occupancy().total_space(); }),
-        sm::make_derive("hits", sm::description("total number of operation hits"), _stats.hits),
-        sm::make_derive("misses", sm::description("total number of operation misses"), _stats.misses),
-        sm::make_derive("insertions", sm::description("total number of operation insert"), _stats.insertions),
+        sm::make_derive("partition_hits", sm::description("number of partitions needed by reads and found in cache"), _stats.partition_hits),
+        sm::make_derive("partition_misses", sm::description("number of partitions needed by reads and missing in cache"), _stats.partition_misses),
+        sm::make_derive("partition_insertions", sm::description("total number of partitions added to cache"), _stats.partition_insertions),
         sm::make_derive("concurrent_misses_same_key", sm::description("total number of operation with misses same key"), _stats.concurrent_misses_same_key),
-        sm::make_derive("merges", sm::description("total number of operation merged"), _stats.merges),
-        sm::make_derive("evictions", sm::description("total number of operation eviction"), _stats.evictions),
-        sm::make_derive("removals", sm::description("total number of operation removals"), _stats.removals),
+        sm::make_derive("partition_merges", sm::description("total number of partitions merged"), _stats.partition_merges),
+        sm::make_derive("partition_evictions", sm::description("total number of evicted partitions"), _stats.partition_evictions),
+        sm::make_derive("partition_removals", sm::description("total number of invalidated partitions"), _stats.partition_removals),
         sm::make_derive("mispopulations", sm::description("number of entries not inserted by reads"), _stats.mispopulations),
         sm::make_gauge("partitions", sm::description("total number of cached partitions"), _stats.partitions),
         sm::make_derive("reads", sm::description("number of started reads"), _stats.reads),
@@ -134,7 +134,7 @@ void cache_tracker::clear() {
         };
         clear(_lru);
     });
-    _stats.removals += _stats.partitions;
+    _stats.partition_removals += _stats.partitions;
     _stats.partitions = 0;
     ++_stats.modification_count;
 }
@@ -148,7 +148,7 @@ void cache_tracker::touch(cache_entry& e) {
 }
 
 void cache_tracker::insert(cache_entry& entry) {
-    ++_stats.insertions;
+    ++_stats.partition_insertions;
     ++_stats.partitions;
     ++_stats.modification_count;
     _lru.push_front(entry);
@@ -156,20 +156,20 @@ void cache_tracker::insert(cache_entry& entry) {
 
 void cache_tracker::on_erase() {
     --_stats.partitions;
-    ++_stats.removals;
+    ++_stats.partition_removals;
     ++_stats.modification_count;
 }
 
 void cache_tracker::on_merge() {
-    ++_stats.merges;
+    ++_stats.partition_merges;
 }
 
-void cache_tracker::on_hit() {
-    ++_stats.hits;
+void cache_tracker::on_partition_hit() {
+    ++_stats.partition_hits;
 }
 
-void cache_tracker::on_miss() {
-    ++_stats.misses;
+void cache_tracker::on_partition_miss() {
+    ++_stats.partition_misses;
 }
 
 void cache_tracker::on_mispopulate() {
@@ -355,14 +355,14 @@ void cache_tracker::clear_continuity(cache_entry& ce) {
     ce.set_continuous(false);
 }
 
-void row_cache::on_hit() {
+void row_cache::on_partition_hit() {
     _stats.hits.mark();
-    _tracker.on_hit();
+    _tracker.on_partition_hit();
 }
 
-void row_cache::on_miss() {
+void row_cache::on_partition_miss() {
     _stats.misses.mark();
-    _tracker.on_miss();
+    _tracker.on_partition_miss();
 }
 
 class range_populating_reader {
@@ -410,7 +410,7 @@ public:
                     handle_end_of_stream();
                     return std::move(smopt);
                 }
-                _cache.on_miss();
+                _cache.on_partition_miss();
                 if (_reader.creation_phase() == _cache.phase_of(smopt->decorated_key())) {
                     return _cache._read_section(_cache._tracker.region(), [&] {
                         cache_entry& e = _cache.find_or_create(smopt->decorated_key(), smopt->partition_tombstone(), _reader.creation_phase(),
@@ -455,7 +455,7 @@ private:
     streamed_mutation read_from_entry(cache_entry& ce) {
         _cache.upgrade_entry(ce);
         _cache._tracker.touch(ce);
-        _cache.on_hit();
+        _cache.on_partition_hit();
         return ce.read(_cache, *_read_context);
     }
 
@@ -577,10 +577,10 @@ row_cache::make_reader(schema_ptr s,
                 cache_entry& e = *i;
                 _tracker.touch(e);
                 upgrade_entry(e);
-                on_hit();
+                on_partition_hit();
                 return make_reader_returning(e.read(*this, *ctx));
             } else {
-                on_miss();
+                on_partition_miss();
                 return make_mutation_reader<single_partition_populating_reader>(*this, std::move(ctx));
             }
           });

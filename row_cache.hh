@@ -190,13 +190,13 @@ public:
     friend class cache::read_context;
     friend class cache::autoupdating_underlying_reader;
     struct stats {
-        uint64_t hits;
-        uint64_t misses;
-        uint64_t insertions;
+        uint64_t partition_hits;
+        uint64_t partition_misses;
+        uint64_t partition_insertions;
         uint64_t concurrent_misses_same_key;
-        uint64_t merges;
-        uint64_t evictions;
-        uint64_t removals;
+        uint64_t partition_merges;
+        uint64_t partition_evictions;
+        uint64_t partition_removals;
         uint64_t partitions;
         uint64_t modification_count;
         uint64_t mispopulations;
@@ -227,8 +227,8 @@ public:
     void clear_continuity(cache_entry& ce);
     void on_erase();
     void on_merge();
-    void on_hit();
-    void on_miss();
+    void on_partition_hit();
+    void on_partition_miss();
     void on_miss_already_populated();
     void on_mispopulate();
     allocation_strategy& allocator();
@@ -323,8 +323,8 @@ private:
     logalloc::allocating_section _read_section;
     mutation_reader create_underlying_reader(cache::read_context&, mutation_source&, const dht::partition_range&);
     mutation_reader make_scanning_reader(const dht::partition_range&, lw_shared_ptr<cache::read_context>);
-    void on_hit();
-    void on_miss();
+    void on_partition_hit();
+    void on_partition_miss();
     void upgrade_entry(cache_entry&);
     void invalidate_locked(const dht::decorated_key&);
     void invalidate_unwrapped(const dht::partition_range&);
