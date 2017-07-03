@@ -252,13 +252,13 @@ void set_cache_service(http_context& ctx, routes& r) {
         // In origin row size is the weighted size.
         // We currently do not support weights, so we use num entries instead
         return map_reduce_cf(ctx, 0, [](const column_family& cf) {
-            return cf.get_row_cache().num_entries();
+            return cf.get_row_cache().partitions();
         }, std::plus<uint64_t>());
     });
 
     cs::get_row_entries.set(r, [&ctx] (std::unique_ptr<request> req) {
         return map_reduce_cf(ctx, 0, [](const column_family& cf) {
-            return cf.get_row_cache().num_entries();
+            return cf.get_row_cache().partitions();
         }, std::plus<uint64_t>());
     });
 

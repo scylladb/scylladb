@@ -469,7 +469,7 @@ public:
     // If it did, use invalidate() instead.
     void evict(const dht::partition_range& = query::full_partition_range);
 
-    auto num_entries() const {
+    size_t partitions() const {
         return _partitions.size();
     }
     const cache_tracker& get_cache_tracker() const {
