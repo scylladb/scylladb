@@ -376,6 +376,7 @@ private:
     }
     void handle_end_of_stream() {
         if (!can_set_continuity()) {
+            _cache.on_mispopulate();
             return;
         }
         if (!_reader.range().end() || !_reader.range().end()->is_inclusive()) {
@@ -386,11 +387,15 @@ private:
                 if (it == _cache._partitions.begin()) {
                     if (!_last_key->_key) {
                         it->set_continuous(true);
+                    } else {
+                        _cache.on_mispopulate();
                     }
                 } else {
                     auto prev = std::prev(it);
                     if (prev->key().equal(*_cache._schema, *_last_key->_key)) {
                         it->set_continuous(true);
+                    } else {
+                        _cache.on_mispopulate();
                     }
                 }
             }
@@ -636,6 +641,8 @@ cache_entry& row_cache::do_find_or_create_entry(const dht::decorated_key& key,
                     || (previous->_key && i != _partitions.begin()
                         && std::prev(i)->key().equal(*_schema, *previous->_key))) {
                     i->set_continuous(true);
+                } else {
+                    on_mispopulate();
                 }
 
                 return *i;
