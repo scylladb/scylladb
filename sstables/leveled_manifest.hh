@@ -48,7 +48,7 @@
 
 class leveled_manifest {
     schema_ptr _schema;
-    std::vector<std::list<sstables::shared_sstable>> _generations;
+    std::vector<std::vector<sstables::shared_sstable>> _generations;
     uint64_t _max_sstable_size_in_bytes;
 #if 0
     private final SizeTieredCompactionStrategyOptions options;
@@ -222,8 +222,7 @@ public:
                 // before proceeding with a higher level, let's see if L0 is far enough behind to warrant STCS
                 // TODO: we shouldn't proceed with size tiered strategy if cassandra.disable_stcs_in_l0 is true.
                 if (get_level_size(0) > MAX_COMPACTING_L0) {
-                    std::vector<sstables::shared_sstable> l0_sstables(get_level(0).begin(), get_level(0).end());
-                    auto most_interesting = size_tiered_most_interesting_bucket(l0_sstables);
+                    auto most_interesting = size_tiered_most_interesting_bucket(get_level(0));
                     if (!most_interesting.empty()) {
                         logger.debug("L0 is too far behind, performing size-tiering there first");
                         return sstables::compaction_descriptor(std::move(most_interesting));
@@ -448,8 +447,8 @@ public:
         }
 
         // for non-L0 compactions, pick up where we left off last time
-        std::list<sstables::shared_sstable>& sstables = get_level(level);
-        sstables.sort([&s] (auto& i, auto& j) {
+        auto& sstables = get_level(level);
+        boost::sort(sstables, [&s] (auto& i, auto& j) {
             return i->compare_by_first_key(*j) < 0;
         });
 
@@ -518,7 +517,7 @@ public:
         return 0;
     }
 
-    std::list<sstables::shared_sstable>& get_level(uint32_t level) {
+    std::vector<sstables::shared_sstable>& get_level(uint32_t level) {
         if (level >= _generations.size()) {
             throw std::runtime_error("Invalid level");
         }

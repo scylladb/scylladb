@@ -123,7 +123,7 @@ std::vector<resharding_descriptor> leveled_compaction_strategy::get_resharding_j
     for (auto level = 0U; level <= manifest.get_level_count(); level++) {
         uint64_t max_sstable_size = !level ? std::numeric_limits<uint64_t>::max() : (_max_sstable_size_in_mb*1024*1024);
         auto& sstables = manifest.get_level(level);
-        sstables.sort([] (auto& i, auto& j) {
+        boost::sort(sstables, [] (auto& i, auto& j) {
             return i->compare_by_first_key(*j) < 0;
         });
 
