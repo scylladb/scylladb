@@ -17,7 +17,7 @@
  */
 
 /*
- * Copyright (C) 2016 ScyllaDB
+ * Copyright (C) 2016-2017 ScyllaDB
  *
  * Modified by ScyllaDB
  */
@@ -126,10 +126,10 @@ private:
 };
 
 class date_tiered_manifest {
-    static logging::logger logger;
-
     date_tiered_compaction_strategy_options _options;
 public:
+    static logging::logger logger;
+
     date_tiered_manifest() = delete;
 
     date_tiered_manifest(const std::map<sstring, sstring>& options)
@@ -413,3 +413,62 @@ private:
         bucket.resize(std::min(bucket.size(), size_t(max_threshold)));
     }
 };
+
+namespace sstables {
+
+class date_tiered_compaction_strategy : public compaction_strategy_impl {
+    date_tiered_manifest _manifest;
+public:
+    date_tiered_compaction_strategy(const std::map<sstring, sstring>& options)
+        : compaction_strategy_impl(options), _manifest(options)
+    {
+        // tombstone compaction is disabled by default because:
+        // - deletion shouldn't be used with DTCS; rather data is deleted through TTL.
+        // - with time series workloads, it's usually better to wait for whole sstable to be expired rather than
+        // compacting a single sstable when it's more than 20% (default value) expired.
+        // For more details, see CASSANDRA-9234
+        if (!options.count(TOMBSTONE_COMPACTION_INTERVAL_OPTION) && !options.count(TOMBSTONE_THRESHOLD_OPTION)) {
+            _disable_tombstone_compaction = true;
+            date_tiered_manifest::logger.debug("Disabling tombstone compactions for DTCS");
+        } else {
+            date_tiered_manifest::logger.debug("Enabling tombstone compactions for DTCS");
+        }
+
+        _use_clustering_key_filter = true;
+    }
+
+    virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override {
+        auto gc_before = gc_clock::now() - cfs.schema()->gc_grace_seconds();
+        auto sstables = _manifest.get_next_sstables(cfs, candidates, gc_before);
+
+        if (!sstables.empty()) {
+            date_tiered_manifest::logger.debug("datetiered: Compacting {} out of {} sstables", sstables.size(), candidates.size());
+            return sstables::compaction_descriptor(std::move(sstables));
+        }
+
+        // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
+        auto e = boost::range::remove_if(candidates, [this, &gc_before] (const sstables::shared_sstable& sst) -> bool {
+            return !worth_dropping_tombstones(sst, gc_before);
+        });
+        candidates.erase(e, candidates.end());
+        if (candidates.empty()) {
+            return sstables::compaction_descriptor();
+        }
+        // find oldest sstable which is worth dropping tombstones because they are more unlikely to
+        // shadow data from other sstables, and it also tends to be relatively big.
+        auto it = std::min_element(candidates.begin(), candidates.end(), [] (auto& i, auto& j) {
+            return i->get_stats_metadata().min_timestamp < j->get_stats_metadata().min_timestamp;
+        });
+        return sstables::compaction_descriptor({ *it });
+    }
+
+    virtual int64_t estimated_pending_compactions(column_family& cf) const override {
+        return _manifest.get_estimated_tasks(cf);
+    }
+
+    virtual compaction_strategy_type type() const {
+        return compaction_strategy_type::date_tiered;
+    }
+};
+
+}
