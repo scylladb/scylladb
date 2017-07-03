@@ -71,6 +71,9 @@ public:
                 _range = std::move(*new_range);
                 _last_key = {};
             }
+            if (_reader) {
+                ++_cache._tracker._stats.underlying_recreations;
+            }
             auto& snap = _cache.snapshot_for_phase(phase);
             _reader = _cache.create_underlying_reader(_read_context, snap, _range);
             _reader_creation_phase = phase;
@@ -90,8 +93,13 @@ public:
         _range = std::move(range);
         _last_key = { };
         _new_last_key = { };
-        if (_reader && _reader_creation_phase == phase) {
-            return _reader->fast_forward_to(_range);
+        if (_reader) {
+            if (_reader_creation_phase == phase) {
+                ++_cache._tracker._stats.underlying_partition_skips;
+                return _reader->fast_forward_to(_range);
+            } else {
+                ++_cache._tracker._stats.underlying_recreations;
+            }
         }
         _reader = _cache.create_underlying_reader(_read_context, snapshot, _range);
         _reader_creation_phase = phase;
@@ -211,6 +219,7 @@ public:
     // Fast forwards the underlying streamed_mutation to given range.
     future<> fast_forward_to(position_range range) {
         return ensure_sm_created().then([this, range = std::move(range)] () mutable {
+            ++_cache._tracker._stats.underlying_row_skips;
             return _sm->fast_forward_to(std::move(range));
         });
     }

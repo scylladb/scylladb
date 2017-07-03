@@ -200,6 +200,9 @@ public:
         uint64_t partitions;
         uint64_t modification_count;
         uint64_t mispopulations;
+        uint64_t underlying_recreations;
+        uint64_t underlying_partition_skips;
+        uint64_t underlying_row_skips;
         uint64_t reads;
         uint64_t reads_with_misses;
         uint64_t reads_done;

@@ -111,6 +111,9 @@ cache_tracker::setup_metrics() {
         sm::make_derive("reads", sm::description("number of started reads"), _stats.reads),
         sm::make_derive("reads_with_misses", sm::description("number of reads which had to read from sstables"), _stats.reads_with_misses),
         sm::make_gauge("active_reads", sm::description("number of currently active reads"), [this] { return _stats.active_reads(); }),
+        sm::make_derive("sstable_reader_recreations", sm::description("number of times sstable reader was recreated due to memtable flush"), _stats.underlying_recreations),
+        sm::make_derive("sstable_partition_skips", sm::description("number of times sstable reader was fast forwarded across partitions"), _stats.underlying_partition_skips),
+        sm::make_derive("sstable_row_skips", sm::description("number of times sstable reader was fast forwarded within a partition"), _stats.underlying_row_skips),
     });
 }
 
