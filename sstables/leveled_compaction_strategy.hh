@@ -104,7 +104,7 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(c
         if (sstables.empty()) {
             continue;
         }
-        auto& sst = *std::min_element(sstables.begin(), sstables.end(), [&] (auto& i, auto& j) {
+        auto& sst = *std::max_element(sstables.begin(), sstables.end(), [&] (auto& i, auto& j) {
             return i->estimate_droppable_tombstone_ratio(gc_before) < j->estimate_droppable_tombstone_ratio(gc_before);
         });
         return sstables::compaction_descriptor({ sst }, sst->get_sstable_level());
