@@ -334,6 +334,7 @@ private:
     void on_row_hit();
     void on_row_miss();
     void on_row_insert();
+    void on_mispopulate();
     void upgrade_entry(cache_entry&);
     void invalidate_locked(const dht::decorated_key&);
     void invalidate_unwrapped(const dht::partition_range&);

@@ -380,6 +380,10 @@ void row_cache::on_row_hit() {
     _tracker.on_row_hit();
 }
 
+void row_cache::on_mispopulate() {
+    _tracker.on_mispopulate();
+}
+
 void row_cache::on_row_miss() {
     _tracker.on_row_miss();
 }
