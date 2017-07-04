@@ -642,6 +642,7 @@ cache_entry& row_cache::find_or_create(const dht::decorated_key& key, tombstone 
         _tracker.insert(*entry);
         return _partitions.insert(i, *entry);
     }, [&] (auto i) { // visit
+        _tracker.on_miss_already_populated();
         cache_entry& e = *i;
         e.partition().open_version(*e.schema(), phase).partition().apply(t);
         _tracker.touch(e);
