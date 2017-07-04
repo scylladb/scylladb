@@ -925,8 +925,8 @@ BOOST_AUTO_TEST_CASE(test_split_range_single_shard) {
 
 // tests for range_split() utility function in repair/range_split.hh
 static int test_split(int N, int K) {
-    auto t1 = token_from_long(0x6000'0000'0000'0000);
-    auto t2 = token_from_long(0x9000'0000'0000'0000);
+    auto t1 = token_from_long(0x2000'0000'0000'0000);
+    auto t2 = token_from_long(0x5000'0000'0000'0000);
     dht::token_range r{range_bound<dht::token>(t1), range_bound<dht::token>(t2)};
     auto splitter = range_splitter(r, N, K);
     int c = 0;
