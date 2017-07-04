@@ -98,15 +98,15 @@ cache_tracker::setup_metrics() {
     _metrics.add_group("cache", {
         sm::make_gauge("bytes_used", sm::description("current bytes used by the cache out of the total size of memory"), [this] { return _region.occupancy().used_space(); }),
         sm::make_gauge("bytes_total", sm::description("total size of memory for the cache"), [this] { return _region.occupancy().total_space(); }),
-        sm::make_derive("total_operations_hits", sm::description("total number of operation hits"), _stats.hits),
-        sm::make_derive("total_operations_misses", sm::description("total number of operation misses"), _stats.misses),
-        sm::make_derive("total_operations_insertions", sm::description("total number of operation insert"), _stats.insertions),
-        sm::make_derive("total_operations_concurrent_misses_same_key", sm::description("total number of operation with misses same key"), _stats.concurrent_misses_same_key),
-        sm::make_derive("total_operations_merges", sm::description("total number of operation merged"), _stats.merges),
-        sm::make_derive("total_operations_evictions", sm::description("total number of operation eviction"), _stats.evictions),
-        sm::make_derive("total_operations_removals", sm::description("total number of operation removals"), _stats.removals),
-        sm::make_derive("total_operations_mispopulations", sm::description("number of entries not inserted by reads"), _stats.mispopulations),
-        sm::make_gauge("objects_partitions", sm::description("total number of partition objects"), _stats.partitions)
+        sm::make_derive("hits", sm::description("total number of operation hits"), _stats.hits),
+        sm::make_derive("misses", sm::description("total number of operation misses"), _stats.misses),
+        sm::make_derive("insertions", sm::description("total number of operation insert"), _stats.insertions),
+        sm::make_derive("concurrent_misses_same_key", sm::description("total number of operation with misses same key"), _stats.concurrent_misses_same_key),
+        sm::make_derive("merges", sm::description("total number of operation merged"), _stats.merges),
+        sm::make_derive("evictions", sm::description("total number of operation eviction"), _stats.evictions),
+        sm::make_derive("removals", sm::description("total number of operation removals"), _stats.removals),
+        sm::make_derive("mispopulations", sm::description("number of entries not inserted by reads"), _stats.mispopulations),
+        sm::make_gauge("partitions", sm::description("total number of cached partitions"), _stats.partitions)
     });
 }
 
