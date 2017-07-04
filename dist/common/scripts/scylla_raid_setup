@@ -104,7 +104,11 @@ else
     mdadm --create --verbose --force --run $RAID --level=0 -c1024 --raid-devices=$NR_DISK $DISKS
     mkfs.xfs $RAID -f -K
 fi
-mdadm --detail --scan > /etc/mdadm.conf
+if is_debian_variant; then
+    mdadm --detail --scan > /etc/mdadm/mdadm.conf
+else
+    mdadm --detail --scan > /etc/mdadm.conf
+fi
 
 mkdir -p "$MOUNT_AT"
 mount -t xfs -o noatime $RAID "$MOUNT_AT"
@@ -121,4 +125,8 @@ chown scylla:scylla "$ROOT"/*
 if [ $FSTAB -ne 0 ]; then
     UUID=`blkid $RAID | awk '{print $2}'`
     echo "$UUID $MOUNT_AT xfs noatime 0 0" >> /etc/fstab
+fi
+
+if is_debian_variant;
+    update-initramfs -u
 fi
