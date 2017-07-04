@@ -878,7 +878,16 @@ with open(buildfile, 'w') as f:
                 command = thrift -gen cpp:cob_style -out $builddir/{mode}/gen $in
                 description = THRIFT $in
             rule antlr3.{mode}
-                command = sed -e '/^#if 0/,/^#endif/d' $in > $builddir/{mode}/gen/$in && antlr3 $builddir/{mode}/gen/$in && sed -i 's/^\\( *\)\\(ImplTraits::CommonTokenType\\* [a-zA-Z0-9_]* = NULL;\\)$$/\\1const \\2/' build/{mode}/gen/${{stem}}Parser.cpp
+                # We replace many local `ExceptionBaseType* ex` variables with a single function-scope one.
+                # Because we add such a variable to every function, and because `ExceptionBaseType` is not a global
+                # name, we also add a global typedef to avoid compilation errors. 
+                command = sed -e '/^#if 0/,/^#endif/d' $in > $builddir/{mode}/gen/$in $
+                     && antlr3 $builddir/{mode}/gen/$in $
+                     && sed -i -e 's/^\\( *\)\\(ImplTraits::CommonTokenType\\* [a-zA-Z0-9_]* = NULL;\\)$$/\\1const \\2/' $
+                        -e '1i using ExceptionBaseType = int;' $
+                        -e 's/^{{/{{ ExceptionBaseType\* ex = nullptr;/; $
+                            s/ExceptionBaseType\* ex = new/ex = new/' $
+                        build/{mode}/gen/${{stem}}Parser.cpp
                 description = ANTLR3 $in
             ''').format(mode = mode, **modeval))
         f.write('build {mode}: phony {artifacts}\n'.format(mode = mode,
