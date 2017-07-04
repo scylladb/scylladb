@@ -255,6 +255,27 @@ unsigned shard_of(const token& t) {
     return global_partitioner().shard_of(t);
 }
 
+stdx::optional<dht::token_range>
+selective_token_range_sharder::next() {
+    if (_done) {
+        return {};
+    }
+    while (_range.overlaps(dht::token_range(_start_boundary, {}), dht::token_comparator())
+            && !(_start_boundary && _start_boundary->value() == maximum_token())) {
+        auto end_token = _partitioner.token_for_next_shard(_start_token, _next_shard);
+        auto candidate = dht::token_range(std::move(_start_boundary), range_bound<dht::token>(end_token, false));
+        auto intersection = _range.intersection(std::move(candidate), dht::token_comparator());
+        _start_token = _partitioner.token_for_next_shard(end_token, _shard);
+        _start_boundary = range_bound<dht::token>(_start_token);
+        if (intersection) {
+            return *intersection;
+        }
+    }
+
+    _done = true;
+    return {};
+}
+
 stdx::optional<ring_position_range_and_shard>
 ring_position_range_sharder::next(const schema& s) {
     if (_done) {
