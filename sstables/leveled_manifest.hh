@@ -76,6 +76,10 @@ public:
 
     static constexpr int MAX_LEVELS = 9; // log10(1000^3);
 
+    // Lowest score (score is about how much data a level contains vs its ideal amount) for a
+    // level to be considered worth compacting.
+    static constexpr float TARGET_SCORE = 1.001f;
+
     leveled_manifest(column_family& cfs, int max_sstable_size_in_MB)
         : _schema(cfs.schema())
         , _max_sstable_size_in_bytes(max_sstable_size_in_MB * 1024 * 1024)
@@ -218,7 +222,7 @@ public:
 
             logger.debug("Compaction score for level {} is {}", i, score);
 
-            if (score > 1.001) {
+            if (score > TARGET_SCORE) {
                 // before proceeding with a higher level, let's see if L0 is far enough behind to warrant STCS
                 // TODO: we shouldn't proceed with size tiered strategy if cassandra.disable_stcs_in_l0 is true.
                 if (get_level_size(0) > MAX_COMPACTING_L0) {
@@ -535,8 +539,8 @@ public:
             if (total_bytes_for_this_level < max_bytes_for_this_level) {
                 continue;
             }
-            // add to tasks an estimate about number of sstables that make this level go beyond its limit.
-            tasks += (total_bytes_for_this_level - max_bytes_for_this_level) / _max_sstable_size_in_bytes;
+            // If there is 1 byte over TBL - (MBL * 1.001), there is still a task left, so we need to round up.
+            tasks += std::ceil(float(total_bytes_for_this_level - max_bytes_for_this_level*TARGET_SCORE) / _max_sstable_size_in_bytes);
         }
         return tasks;
     }
