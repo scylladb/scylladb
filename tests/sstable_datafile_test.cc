@@ -1185,16 +1185,6 @@ SEASTAR_TEST_CASE(compact) {
     // verify that the compacted sstable look like
 }
 
-// Used to be compatible with API provided by size_tiered_most_interesting_bucket().
-static lw_shared_ptr<sstable_list> create_sstable_list(std::vector<sstables::shared_sstable>& sstables) {
-    sstable_list list;
-    for (auto& sst : sstables) {
-        list.insert(sst);
-    }
-    return make_lw_shared<sstable_list>(std::move(list));
-}
-
-
 static std::vector<sstables::shared_sstable> get_candidates_for_leveled_strategy(column_family& cf) {
     std::vector<sstables::shared_sstable> candidates;
     candidates.reserve(cf.sstables_count());
@@ -1267,9 +1257,8 @@ static future<std::vector<unsigned long>> compact_sstables(std::vector<unsigned 
         BOOST_REQUIRE(generations->size() == sstables->size());
 
         if (strategy == compaction_strategy_type::size_tiered) {
-            auto sstable_list = create_sstable_list(*sstables);
             // Calling function that will return a list of sstables to compact based on size-tiered strategy.
-            auto sstables_to_compact = size_tiered_most_interesting_bucket(sstable_list);
+            auto sstables_to_compact = size_tiered_most_interesting_bucket(*sstables);
             // We do expect that all candidates were selected for compaction (in this case).
             BOOST_REQUIRE(sstables_to_compact.size() == sstables->size());
             return sstables::compact_sstables(std::move(sstables_to_compact), *cf, new_sstable,

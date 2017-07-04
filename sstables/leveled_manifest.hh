@@ -48,7 +48,7 @@
 
 class leveled_manifest {
     schema_ptr _schema;
-    std::vector<std::list<sstables::shared_sstable>> _generations;
+    std::vector<std::vector<sstables::shared_sstable>> _generations;
     uint64_t _max_sstable_size_in_bytes;
 #if 0
     private final SizeTieredCompactionStrategyOptions options;
@@ -75,6 +75,10 @@ public:
     static constexpr int NO_COMPACTION_LIMIT = 25;
 
     static constexpr int MAX_LEVELS = 9; // log10(1000^3);
+
+    // Lowest score (score is about how much data a level contains vs its ideal amount) for a
+    // level to be considered worth compacting.
+    static constexpr float TARGET_SCORE = 1.001f;
 
     leveled_manifest(column_family& cfs, int max_sstable_size_in_MB)
         : _schema(cfs.schema())
@@ -139,64 +143,6 @@ public:
         }
         return std::vector<sstables::shared_sstable>(result.begin(), result.end());
     }
-
-    /**
-     * Checks if adding the sstable creates an overlap in the level
-     * @param sstable the sstable to add
-     * @return true if it is safe to add the sstable in the level.
-     */
-    bool can_add_sstable(sstables::shared_sstable& sstable) {
-        uint32_t level = sstable->get_sstable_level();
-        const schema& s = *_schema;
-
-        if (level == 0) {
-            return true;
-        }
-
-        auto copy_level = _generations[level];
-        copy_level.push_back(sstable);
-        copy_level.sort([&s] (auto& i, auto& j) {
-            return i->compare_by_first_key(*j) < 0;
-        });
-
-        const sstables::sstable *previous = nullptr;
-        for (auto& current : copy_level) {
-            if (previous != nullptr) {
-                auto current_first = current->get_first_decorated_key();
-                auto previous_last = previous->get_last_decorated_key();
-
-                if (current_first.tri_compare(s, previous_last) <= 0) {
-                    return false;
-                }
-            }
-            previous = &*current;
-        }
-
-        return true;
-    }
-
-    void send_back_to_L0(sstables::shared_sstable& sstable) {
-        remove(sstable);
-        _generations[0].push_back(sstable);
-        sstable->set_sstable_level(0);
-    }
-
-#if 0
-    private String toString(Collection<SSTableReader> sstables)
-    {
-        StringBuilder builder = new StringBuilder();
-        for (SSTableReader sstable : sstables)
-        {
-            builder.append(sstable.descriptor.cfname)
-                   .append('-')
-                   .append(sstable.descriptor.generation)
-                   .append("(L")
-                   .append(sstable.getSSTableLevel())
-                   .append("), ");
-        }
-        return builder.toString();
-    }
-#endif
 
     static uint64_t max_bytes_for_level(int level, uint64_t max_sstable_size_in_bytes) {
         if (level == 0) {
@@ -276,7 +222,7 @@ public:
 
             logger.debug("Compaction score for level {} is {}", i, score);
 
-            if (score > 1.001) {
+            if (score > TARGET_SCORE) {
                 // before proceeding with a higher level, let's see if L0 is far enough behind to warrant STCS
                 // TODO: we shouldn't proceed with size tiered strategy if cassandra.disable_stcs_in_l0 is true.
                 if (get_level_size(0) > MAX_COMPACTING_L0) {
@@ -318,19 +264,6 @@ public:
         auto next_level = get_next_level(info.candidates, info.can_promote);
         return sstables::compaction_descriptor(std::move(info.candidates), next_level, _max_sstable_size_in_bytes);
     }
-
-#if 0
-    private List<SSTableReader> getSSTablesForSTCS(Collection<SSTableReader> sstables)
-    {
-        Iterable<SSTableReader> candidates = cfs.getDataTracker().getUncompactingSSTables(sstables);
-        List<Pair<SSTableReader,Long>> pairs = SizeTieredCompactionStrategy.createSSTableAndLengthPairs(AbstractCompactionStrategy.filterSuspectSSTables(candidates));
-        List<List<SSTableReader>> buckets = SizeTieredCompactionStrategy.getBuckets(pairs,
-                                                                                    options.bucketHigh,
-                                                                                    options.bucketLow,
-                                                                                    options.minSSTableSize);
-        return SizeTieredCompactionStrategy.mostInterestingBucket(buckets, 4, 32);
-    }
-#endif
 
     /**
      * If we do something that makes many levels contain too little data (cleanup, change sstable size) we will "never"
@@ -408,40 +341,6 @@ public:
         return get_level(level).size();
     }
 
-#if 0
-    public synchronized int[] getAllLevelSize()
-    {
-        int[] counts = new int[generations.length];
-        for (int i = 0; i < counts.length; i++)
-            counts[i] = getLevel(i).size();
-        return counts;
-    }
-
-    private void logDistribution()
-    {
-        if (logger.isDebugEnabled())
-        {
-            for (int i = 0; i < generations.length; i++)
-            {
-                if (!getLevel(i).isEmpty())
-                {
-                    logger.debug("L{} contains {} SSTables ({} bytes) in {}",
-                                 i, getLevel(i).size(), SSTableReader.getTotalBytes(getLevel(i)), this);
-                }
-            }
-        }
-    }
-#endif
-
-    uint32_t remove(sstables::shared_sstable& sstable) {
-        uint32_t level = sstable->get_sstable_level();
-        if (level >= _generations.size()) {
-            throw std::runtime_error("Invalid level");
-        }
-        _generations[level].remove(sstable);
-        return level;
-    }
-
     template <typename T>
     static std::vector<sstables::shared_sstable> overlapping(const schema& s, std::vector<sstables::shared_sstable>& candidates, T& others) {
         assert(!candidates.empty());
@@ -498,16 +397,6 @@ public:
         return overlapped;
     }
 
-#if 0
-    private static final Predicate<SSTableReader> suspectP = new Predicate<SSTableReader>()
-    {
-        public boolean apply(SSTableReader candidate)
-        {
-            return candidate.isMarkedSuspect();
-        }
-    };
-#endif
-
     bool worth_promoting_L0_candidates(uint64_t candidates_total_size) const {
         return candidates_total_size >= _max_sstable_size_in_bytes;
     }
@@ -562,8 +451,8 @@ public:
         }
 
         // for non-L0 compactions, pick up where we left off last time
-        std::list<sstables::shared_sstable>& sstables = get_level(level);
-        sstables.sort([&s] (auto& i, auto& j) {
+        auto& sstables = get_level(level);
+        boost::sort(sstables, [&s] (auto& i, auto& j) {
             return i->compare_by_first_key(*j) < 0;
         });
 
@@ -622,13 +511,7 @@ public:
             return i->compare_by_max_timestamp(*j) < 0;
         });
     }
-#if 0
-    @Override
-    public String toString()
-    {
-        return "Manifest@" + hashCode();
-    }
-#endif
+
     uint32_t get_level_count() {
         for (int i = _generations.size() - 1; i >= 0; i--) {
             if (get_level(i).size() > 0) {
@@ -637,13 +520,8 @@ public:
         }
         return 0;
     }
-#if 0
-    public synchronized SortedSet<SSTableReader> getLevelSorted(int level, Comparator<SSTableReader> comparator)
-    {
-        return ImmutableSortedSet.copyOf(comparator, getLevel(level));
-    }
-#endif
-    std::list<sstables::shared_sstable>& get_level(uint32_t level) {
+
+    std::vector<sstables::shared_sstable>& get_level(uint32_t level) {
         if (level >= _generations.size()) {
             throw std::runtime_error("Invalid level");
         }
@@ -661,8 +539,8 @@ public:
             if (total_bytes_for_this_level < max_bytes_for_this_level) {
                 continue;
             }
-            // add to tasks an estimate about number of sstables that make this level go beyond its limit.
-            tasks += (total_bytes_for_this_level - max_bytes_for_this_level) / _max_sstable_size_in_bytes;
+            // If there is 1 byte over TBL - (MBL * 1.001), there is still a task left, so we need to round up.
+            tasks += std::ceil(float(total_bytes_for_this_level - max_bytes_for_this_level*TARGET_SCORE) / _max_sstable_size_in_bytes);
         }
         return tasks;
     }

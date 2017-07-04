@@ -382,30 +382,11 @@ public:
     }
 };
 
-std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(lw_shared_ptr<sstable_list> candidates) {
-    size_tiered_compaction_strategy cs;
-
-    std::vector<sstables::shared_sstable> sstables;
-    sstables.reserve(candidates->size());
-    for (auto& entry : *candidates) {
-        sstables.push_back(entry);
-    }
-
-    auto buckets = cs.get_buckets(sstables);
-
-    std::vector<sstables::shared_sstable> most_interesting = cs.most_interesting_bucket(std::move(buckets),
-        DEFAULT_MIN_COMPACTION_THRESHOLD, DEFAULT_MAX_COMPACTION_THRESHOLD);
-
-    return most_interesting;
-}
-
 std::vector<sstables::shared_sstable>
-size_tiered_most_interesting_bucket(const std::list<sstables::shared_sstable>& candidates) {
+size_tiered_most_interesting_bucket(const std::vector<sstables::shared_sstable>& candidates) {
     size_tiered_compaction_strategy cs;
 
-    std::vector<sstables::shared_sstable> sstables(candidates.begin(), candidates.end());
-
-    auto buckets = cs.get_buckets(sstables);
+    auto buckets = cs.get_buckets(candidates);
 
     std::vector<sstables::shared_sstable> most_interesting = cs.most_interesting_bucket(std::move(buckets),
         DEFAULT_MIN_COMPACTION_THRESHOLD, DEFAULT_MAX_COMPACTION_THRESHOLD);
