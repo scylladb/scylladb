@@ -3104,10 +3104,6 @@ lw_shared_ptr<memtable> memtable_list::new_memtable() {
 }
 
 future<> dirty_memory_manager::flush_one(memtable_list& mtlist, semaphore_units<> permit) {
-    if (mtlist.back()->empty()) {
-        return make_ready_future<>();
-    }
-
     auto* region = &(mtlist.back()->region());
     auto schema = mtlist.back()->schema();
 
