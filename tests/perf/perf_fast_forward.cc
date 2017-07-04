@@ -102,9 +102,9 @@ struct test_result {
     uint64_t index_misses() const { return after.index.misses - before.index.misses; }
     uint64_t index_blocks() const { return after.index.blocks - before.index.blocks; }
 
-    uint64_t cache_hits() const { return after.cache.hits - before.cache.hits; }
-    uint64_t cache_misses() const { return after.cache.misses - before.cache.misses; }
-    uint64_t cache_insertions() const { return after.cache.insertions - before.cache.insertions; }
+    uint64_t cache_hits() const { return after.cache.partition_hits - before.cache.partition_hits; }
+    uint64_t cache_misses() const { return after.cache.partition_misses - before.cache.partition_misses; }
+    uint64_t cache_insertions() const { return after.cache.partition_insertions - before.cache.partition_insertions; }
 
     float cpu_utilization() const {
         auto busy_delta = after.busy_time.count() - before.busy_time.count();

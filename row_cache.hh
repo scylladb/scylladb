@@ -185,23 +185,35 @@ public:
     using lru_type = bi::list<cache_entry,
         bi::member_hook<cache_entry, cache_entry::lru_link_type, &cache_entry::_lru_link>,
         bi::constant_time_size<false>>; // we need this to have bi::auto_unlink on hooks.
-private:
-    // We will try to evict large partition after that many normal evictions
-    const uint32_t _normal_large_eviction_ratio = 1000;
-    // Number of normal evictions to perform before we try to evict large partition
-    uint32_t _normal_eviction_count = _normal_large_eviction_ratio;
 public:
+    friend class row_cache;
+    friend class cache::read_context;
+    friend class cache::autoupdating_underlying_reader;
+    friend class cache::cache_streamed_mutation;
     struct stats {
-        uint64_t hits;
-        uint64_t misses;
-        uint64_t insertions;
+        uint64_t partition_hits;
+        uint64_t partition_misses;
+        uint64_t row_hits;
+        uint64_t row_misses;
+        uint64_t partition_insertions;
+        uint64_t row_insertions;
         uint64_t concurrent_misses_same_key;
-        uint64_t merges;
-        uint64_t evictions;
-        uint64_t removals;
+        uint64_t partition_merges;
+        uint64_t partition_evictions;
+        uint64_t partition_removals;
         uint64_t partitions;
         uint64_t modification_count;
         uint64_t mispopulations;
+        uint64_t underlying_recreations;
+        uint64_t underlying_partition_skips;
+        uint64_t underlying_row_skips;
+        uint64_t reads;
+        uint64_t reads_with_misses;
+        uint64_t reads_done;
+
+        uint64_t active_reads() const {
+            return reads_done - reads;
+        }
     };
 private:
     stats _stats{};
@@ -219,8 +231,10 @@ public:
     void clear_continuity(cache_entry& ce);
     void on_erase();
     void on_merge();
-    void on_hit();
-    void on_miss();
+    void on_partition_hit();
+    void on_partition_miss();
+    void on_row_hit();
+    void on_row_miss();
     void on_miss_already_populated();
     void on_mispopulate();
     allocation_strategy& allocator();
@@ -263,6 +277,8 @@ public:
     struct stats {
         utils::timed_rate_moving_average hits;
         utils::timed_rate_moving_average misses;
+        utils::timed_rate_moving_average reads_with_misses;
+        utils::timed_rate_moving_average reads_with_no_misses;
     };
 private:
     cache_tracker& _tracker;
@@ -313,8 +329,12 @@ private:
     logalloc::allocating_section _read_section;
     mutation_reader create_underlying_reader(cache::read_context&, mutation_source&, const dht::partition_range&);
     mutation_reader make_scanning_reader(const dht::partition_range&, lw_shared_ptr<cache::read_context>);
-    void on_hit();
-    void on_miss();
+    void on_partition_hit();
+    void on_partition_miss();
+    void on_row_hit();
+    void on_row_miss();
+    void on_row_insert();
+    void on_mispopulate();
     void upgrade_entry(cache_entry&);
     void invalidate_locked(const dht::decorated_key&);
     void invalidate_unwrapped(const dht::partition_range&);
@@ -449,7 +469,7 @@ public:
     // If it did, use invalidate() instead.
     void evict(const dht::partition_range& = query::full_partition_range);
 
-    auto num_entries() const {
+    size_t partitions() const {
         return _partitions.size();
     }
     const cache_tracker& get_cache_tracker() const {
