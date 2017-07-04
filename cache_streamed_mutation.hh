@@ -154,12 +154,14 @@ public:
 inline
 future<> cache_streamed_mutation::process_static_row() {
     if (_snp->version()->partition().static_row_continuous()) {
+        _read_context->cache().on_row_hit();
         row sr = _snp->static_row();
         if (!sr.empty()) {
             push_mutation_fragment(mutation_fragment(static_row(std::move(sr))));
         }
         return make_ready_future<>();
     } else {
+        _read_context->cache().on_row_miss();
         return _read_context->get_next_fragment().then([this] (mutation_fragment_opt&& sr) {
             if (sr) {
                 assert(sr->is_static_row());
@@ -226,11 +228,13 @@ future<> cache_streamed_mutation::read_from_underlying() {
                             this->maybe_update_continuity();
                         } else {
                             // FIXME: Insert dummy entry at _upper_bound.
+                            _read_context->cache().on_mispopulate();
                         }
                         return this->move_to_next_range();
                     }
                 });
             } else {
+                _read_context->cache().on_row_miss();
                 this->maybe_add_to_cache(*mfopt);
                 this->add_to_buffer(std::move(*mfopt));
                 return make_ready_future<>();
@@ -249,6 +253,8 @@ void cache_streamed_mutation::maybe_update_continuity() {
         } else if (!_ck_ranges_curr->start()) {
             _next_row.set_continuous(true);
         }
+    } else {
+        _read_context->cache().on_mispopulate();
     }
 }
 
@@ -266,6 +272,7 @@ void cache_streamed_mutation::maybe_add_to_cache(const mutation_fragment& mf) {
 inline
 void cache_streamed_mutation::maybe_add_to_cache(const clustering_row& cr) {
     if (!can_populate()) {
+        _read_context->cache().on_mispopulate();
         return;
     }
     _lsa_manager.run_in_update_section_with_allocator([this, &cr] {
@@ -285,6 +292,7 @@ void cache_streamed_mutation::maybe_add_to_cache(const clustering_row& cr) {
                   ? _next_row.get_iterator_in_latest_version() : mp.clustered_rows().lower_bound(cr.key(), less);
         auto insert_result = mp.clustered_rows().insert_check(it, *new_entry, less);
         if (insert_result.second) {
+            _read_context->cache().on_row_insert();
             new_entry.release();
         }
         it = insert_result.first;
@@ -294,6 +302,7 @@ void cache_streamed_mutation::maybe_add_to_cache(const clustering_row& cr) {
             if (it == mp.clustered_rows().begin()) {
                 // FIXME: check whether entry for _last_row_key is in older versions and if so set
                 // continuity to true.
+                _read_context->cache().on_mispopulate();
             } else {
                 auto prev_it = it;
                 --prev_it;
@@ -306,6 +315,7 @@ void cache_streamed_mutation::maybe_add_to_cache(const clustering_row& cr) {
             e.set_continuous(true);
         } else {
             // FIXME: Insert dummy entry at _ck_ranges_curr->start()
+            _read_context->cache().on_mispopulate();
         }
     });
 }
@@ -415,6 +425,7 @@ void cache_streamed_mutation::add_to_buffer(mutation_fragment&& mf) {
 inline
 void cache_streamed_mutation::add_to_buffer(const partition_snapshot_row_cursor& row) {
     if (!row.dummy()) {
+        _read_context->cache().on_row_hit();
         add_to_buffer(row.row());
     }
 }
@@ -444,15 +455,20 @@ void cache_streamed_mutation::maybe_add_to_cache(const range_tombstone& rt) {
         _lsa_manager.run_in_update_section_with_allocator([&] {
             _snp->version()->partition().apply_row_tombstone(*_schema, rt);
         });
+    } else {
+        _read_context->cache().on_mispopulate();
     }
 }
 
 inline
 void cache_streamed_mutation::maybe_add_to_cache(const static_row& sr) {
     if (can_populate()) {
+        _read_context->cache().on_row_insert();
         _lsa_manager.run_in_update_section_with_allocator([&] {
             _snp->version()->partition().static_row().apply(*_schema, column_kind::static_column, sr.cells());
         });
+    } else {
+        _read_context->cache().on_mispopulate();
     }
 }
 
@@ -460,6 +476,8 @@ inline
 void cache_streamed_mutation::maybe_set_static_row_continuous() {
     if (can_populate()) {
         _snp->version()->partition().set_static_row_continuous(true);
+    } else {
+        _read_context->cache().on_mispopulate();
     }
 }
 

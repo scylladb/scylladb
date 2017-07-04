@@ -132,7 +132,7 @@ int main(int argc, char** argv) {
             auto fill_cache_to_the_top = [&] {
                 std::cout << "Filling up memory with evictable data\n";
                 while (true) {
-                    auto evictions_before = tracker.get_stats().evictions;
+                    auto evictions_before = tracker.get_stats().partition_evictions;
                     // Ensure that entries matching memtable partitions are evicted
                     // last, we want to hit the merge path in row_cache::update()
                     for (auto&& key : keys) {
@@ -141,7 +141,7 @@ int main(int argc, char** argv) {
                     auto m = make_small_mutation();
                     cache_stuffing.push_back(m.decorated_key());
                     cache.populate(m);
-                    if (tracker.get_stats().evictions > evictions_before) {
+                    if (tracker.get_stats().partition_evictions > evictions_before) {
                         break;
                     }
                 }

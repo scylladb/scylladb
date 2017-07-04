@@ -127,7 +127,7 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
         return boost::copy_range<std::unordered_map<utils::UUID, stat>>(db.get_column_families() | boost::adaptors::filtered(non_system_filter) |
                 boost::adaptors::transformed([]  (const std::pair<utils::UUID, lw_shared_ptr<column_family>>& cf) {
             auto& stats = cf.second->get_row_cache().stats();
-            return std::make_pair(cf.first, stat{float(stats.hits.rate().rates[0]), float(stats.misses.rate().rates[0])});
+            return std::make_pair(cf.first, stat{float(stats.reads_with_no_misses.rate().rates[0]), float(stats.reads_with_misses.rate().rates[0])});
         }));
     };
 
