@@ -58,6 +58,16 @@ if ! is_rhel7_variant; then
     exit 1
 fi
 
+if [ "$ID" = "centos" ]; then
+    if [ ! -f /etc/yum.repos.d/epel.repo ]; then
+        sudo yum install -y epel-release
+    fi
+else
+    if [ ! -f /etc/yum.repos.d/epel.repo ]; then
+        sudo rpm -Uvh https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+    fi
+fi
+
 if [ ! -f /usr/bin/yumdownloader ]; then
     sudo yum -y install yum-utils
 fi
