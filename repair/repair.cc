@@ -584,7 +584,6 @@ static future<uint64_t> estimate_partitions(seastar::sharded<database>& db, cons
 static future<> repair_cf_range(repair_info& ri,
         sstring cf, ::dht::token_range range,
         const std::vector<gms::inet_address>& neighbors) {
-    ri.ranges_index++;
     if (neighbors.empty()) {
         // Nothing to do in this case...
         return make_ready_future<>();
@@ -592,8 +591,6 @@ static future<> repair_cf_range(repair_info& ri,
 
     return estimate_partitions(ri.db, ri.keyspace, cf, range).then([&ri, cf, range, &neighbors] (uint64_t estimated_partitions) {
     range_splitter ranges(range, estimated_partitions, ri.target_partitions);
-    rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, cf={}, range={}, target_partitions={}, estimated_partitions={}",
-            ri.ranges_index, ri.ranges.size(), ri.id, ri.shard, ri.keyspace, cf, range, ri.target_partitions, estimated_partitions);
     return do_with(seastar::gate(), true, std::move(cf), std::move(ranges),
         [&ri, &neighbors] (auto& completion, auto& success, const auto& cf, auto& ranges) {
         return do_until([&ranges] () { return !ranges.has_next(); },
@@ -1005,8 +1002,22 @@ static future<> repair_ranges(repair_info ri) {
         // repair all the ranges in sequence
         return do_for_each(ri.ranges, [&ri] (auto&& range) {
     #endif
-            check_in_shutdown();
-            return repair_range(ri, range);
+            ri.ranges_index++;
+            rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}",
+                ri.ranges_index, ri.ranges.size(), ri.id, ri.shard, ri.keyspace, ri.cfs, range);
+            return do_with(dht::selective_token_range_sharder(range, ri.shard), [&ri] (auto& sharder) {
+                return repeat([&ri, &sharder] () {
+                    check_in_shutdown();
+                    auto range_shard = sharder.next();
+                    if (range_shard) {
+                        return repair_range(ri, *range_shard).then([] {
+                            return make_ready_future<stop_iteration>(stop_iteration::no);
+                        });
+                    } else {
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
+                    }
+                });
+            });
         }).then([&ri] {
             // Do streaming for the remaining ranges we do not stream in
             // repair_cf_range
@@ -1020,27 +1031,6 @@ static future<> repair_ranges(repair_info ri) {
         });
     });
 }
-
-static void split_and_add(std::vector<::dht::token_range>& ranges,
-        const dht::token_range& range) {
-    // The use of minimum_token() here twice is not a typo - because wrap-
-    // around token ranges are supported by midpoint(), the beyond-maximum
-    // token can also be represented by minimum_token().
-    auto midpoint = dht::global_partitioner().midpoint(
-            range.start() ? range.start()->value() : dht::minimum_token(),
-            range.end() ? range.end()->value() : dht::minimum_token());
-    // This shouldn't happen, but if the range included just one token, we
-    // can't split further (split() may actually fail with assertion failure)
-    if ((range.start() && midpoint == range.start()->value()) ||
-        (range.end() && midpoint == range.end()->value())) {
-        ranges.push_back(range);
-        return;
-    }
-    auto halves = range.split(midpoint, dht::token_comparator());
-    ranges.push_back(halves.first);
-    ranges.push_back(halves.second);
-}
-
 
 // repair_start() can run on any cpu; It runs on cpu0 the function
 // do_repair_start(). The benefit of always running that function on the same
@@ -1133,35 +1123,12 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         cfs = list_column_families(db.local(), keyspace);
     }
 
-    // Split the ranges so that we have more number of ranges than smp::count
-    // Note, the split is not a guaratnee when the range can not be split anmore.
-    dht::token_range_vector tosplit;
-    while (ranges.size() < smp::count) {
-        size_t sz = ranges.size();
-        tosplit.clear();
-        ranges.swap(tosplit);
-        for (const auto& range : tosplit) {
-            split_and_add(ranges, range);
-        }
-        if (sz == ranges.size()) {
-            // We can not split the ranges anymore
-            break;
-        }
-    }
-
-    std::map<shard_id, dht::token_range_vector> shard_ranges_map;
-    unsigned idx = 0;
-    for (auto& range : ranges) {
-        shard_ranges_map[idx++ % smp::count].push_back(std::move(range));
-    }
 
     std::vector<future<>> repair_results;
-    repair_results.reserve(shard_ranges_map.size());
+    repair_results.reserve(smp::count);
 
-    for (auto& x : shard_ranges_map) {
-        shard_id shard = x.first;
-        auto& ranges = x.second;
-        auto f = db.invoke_on(shard, [keyspace, cfs, id, ranges = std::move(ranges),
+    for (auto shard : boost::irange(unsigned(0), smp::count)) {
+        auto f = db.invoke_on(shard, [keyspace, cfs, id, ranges,
                 data_centers = options.data_centers, hosts = options.hosts] (database& localdb) mutable {
             return repair_ranges(repair_info(service::get_local_storage_service().db(),
                     std::move(keyspace), std::move(ranges), std::move(cfs),

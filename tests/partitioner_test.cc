@@ -955,3 +955,92 @@ BOOST_AUTO_TEST_CASE(test_split_1) {
     // 7.8125, so expect 2^7 = 128 ranges:
     BOOST_REQUIRE(test_split(1000, 11) == 128);
 }
+
+static
+void
+test_something_with_some_interesting_ranges_and_partitioners_with_token_range(std::function<void (const dht::i_partitioner&, const schema&, const dht::token_range&)> func_to_test) {
+    auto s = schema_builder("ks", "cf")
+        .with_column("c1", int32_type, column_kind::partition_key)
+        .with_column("c2", int32_type, column_kind::partition_key)
+        .with_column("v", int32_type)
+        .build();
+    auto some_murmur3_partitioners = {
+            dht::murmur3_partitioner(1, 0),
+            dht::murmur3_partitioner(7, 4),
+            dht::murmur3_partitioner(4, 0),
+            dht::murmur3_partitioner(32, 8),  // More, and we OOM since memory isn't configured
+    };
+    auto some_random_partitioners = {
+            dht::random_partitioner(1),
+            dht::random_partitioner(3),
+    };
+    auto t1 = token_from_long(int64_t(-0x7fff'ffff'ffff'fffe));
+    auto t2 = token_from_long(int64_t(-1));
+    auto t3 = token_from_long(int64_t(1));
+    auto t4 = token_from_long(int64_t(0x7fff'ffff'ffff'fffe));
+    auto make_bound = [] (dht::token t) {
+        return range_bound<dht::token>(std::move(t));
+    };
+    auto some_murmur3_ranges = {
+            dht::token_range::make_open_ended_both_sides(),
+            dht::token_range::make_starting_with(make_bound(t1)),
+            dht::token_range::make_starting_with(make_bound(t2)),
+            dht::token_range::make_starting_with(make_bound(t3)),
+            dht::token_range::make_starting_with(make_bound(t4)),
+            dht::token_range::make_ending_with(make_bound(t1)),
+            dht::token_range::make_ending_with(make_bound(t2)),
+            dht::token_range::make_ending_with(make_bound(t3)),
+            dht::token_range::make_ending_with(make_bound(t4)),
+            dht::token_range(make_bound(t2), make_bound(t3)),
+            dht::token_range(make_bound(t1), make_bound(t4)),
+    };
+    for (auto&& part : some_murmur3_partitioners) {
+        for (auto&& range : some_murmur3_ranges) {
+            func_to_test(part, *s, range);
+        }
+    }
+    for (auto&& part : some_random_partitioners) {
+        func_to_test(part, *s, dht::token_range::make_open_ended_both_sides());
+    }
+}
+
+static
+void
+do_test_selective_token_range_sharder(const dht::i_partitioner& part, const schema& s, const dht::token_range& range) {
+    dht::set_global_partitioner(part.name());
+    bool debug = false;
+    for (auto shard : boost::irange(0u, part.shard_count())) {
+        auto sharder = dht::selective_token_range_sharder(part, range, shard);
+        auto range_shard = sharder.next();
+        while (range_shard) {
+            if (range_shard->start() && range_shard->start()->is_inclusive()) {
+                auto start_shard = part.shard_of(range_shard->start()->value());
+                if (debug) {
+                    std::cout << " start_shard " << start_shard << " shard " << shard << " range " << range_shard << "\n";
+                }
+                BOOST_REQUIRE(start_shard == shard);
+            }
+            if (range_shard->end() && range_shard->end()->is_inclusive()) {
+                auto end_shard = part.shard_of(range_shard->end()->value());
+                if (debug) {
+                    std::cout << " end_shard " << end_shard << " shard " << shard << " range " << range_shard << "\n";
+                }
+                BOOST_REQUIRE(end_shard == shard);
+            }
+            auto midpoint = part.midpoint(
+                    range_shard->start() ? range_shard->start()->value() : dht::minimum_token(),
+                    range_shard->end() ? range_shard->end()->value() : dht::minimum_token());
+            auto mid_shard = part.shard_of(midpoint);
+            if (debug) {
+                std::cout << " mid " << mid_shard << " shard " << shard << " range " << range_shard << "\n";
+            }
+            BOOST_REQUIRE(mid_shard == shard);
+
+            range_shard = sharder.next();
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_selective_token_range_sharder) {
+    return test_something_with_some_interesting_ranges_and_partitioners_with_token_range(do_test_selective_token_range_sharder);
+}

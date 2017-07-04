@@ -671,6 +671,29 @@ split_ranges_to_shards(const dht::token_range_vector& ranges, const schema& s);
 std::vector<partition_range> split_range_to_single_shard(const schema& s, const dht::partition_range& pr, shard_id shard);
 std::vector<partition_range> split_range_to_single_shard(const i_partitioner& partitioner, const schema& s, const dht::partition_range& pr, shard_id shard);
 
+class selective_token_range_sharder {
+    const i_partitioner& _partitioner;
+    dht::token_range _range;
+    shard_id _shard;
+    bool _done = false;
+    shard_id _next_shard;
+    dht::token _start_token;
+    stdx::optional<range_bound<dht::token>> _start_boundary;
+public:
+    explicit selective_token_range_sharder(dht::token_range range, shard_id shard)
+            : selective_token_range_sharder(global_partitioner(), std::move(range), shard) {}
+    selective_token_range_sharder(const i_partitioner& partitioner, dht::token_range range, shard_id shard)
+            : _partitioner(partitioner)
+            , _range(std::move(range))
+            , _shard(shard)
+            , _next_shard(_shard + 1 == _partitioner.shard_count() ? 0 : _shard + 1)
+            , _start_token(_range.start() ? _range.start()->value() : minimum_token())
+            , _start_boundary(_partitioner.shard_of(_start_token) == shard ?
+                _range.start() : range_bound<dht::token>(_partitioner.token_for_next_shard(_start_token, shard))) {
+    }
+    stdx::optional<dht::token_range> next();
+};
+
 } // dht
 
 namespace std {
