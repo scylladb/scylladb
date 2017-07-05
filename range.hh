@@ -352,10 +352,10 @@ public:
             return *this;
         }
     }
-    template<typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
-    static stdx::optional<typename wrapping_range<U>::bound> transform_bound(optional<bound> b, Transformer&& transformer) {
+    template<typename Bound, typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
+    static stdx::optional<typename wrapping_range<U>::bound> transform_bound(Bound&& b, Transformer&& transformer) {
         if (b) {
-            return { { transformer(std::move(*b).value()), b->is_inclusive() } };
+            return { { transformer(std::forward<Bound>(b).value().value()), b->is_inclusive() } };
         };
         return {};
     }
