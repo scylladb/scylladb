@@ -1565,11 +1565,9 @@ private:
             abort();
         }
         void accept_new_row(const clustering_key_prefix& key, const query::result_row_view& static_row, const query::result_row_view& row) {
-            std::cout << "accept new row\n";
             auto it = row.iterator();
             auto cell = it.next_atomic_cell();
             if (cell && _current_cell_limit > 0) {
-                std::cout << "has normal cell?!\n";
                 bytes column_name = composite::serialize_value(key.components(), _s.thrift().has_compound_comparator()).release_bytes();
                 Aggregator::on_column(_current_aggregation, column_name, *cell);
                 _current_cell_limit -= 1;
@@ -1577,14 +1575,11 @@ private:
             accept_partition_end(static_row);
         }
         void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
-            std::cout << "accept new row static\n";
             accept_partition_end(static_row);
         }
         void accept_partition_end(const query::result_row_view& static_row) {
-            std::cout << "accept row partition end\n";
             auto it = static_row.iterator();
             for (auto&& id : _slice.static_columns) {
-                std::cout << "going over the static cols\n";
                 auto cell = it.next_atomic_cell();
                 if (cell && _current_cell_limit > 0) {
                     Aggregator::on_column(_current_aggregation, _s.static_column_at(id).name(), *cell);
