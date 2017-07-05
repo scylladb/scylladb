@@ -29,11 +29,13 @@
 #include "sstables/sstables.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/file.hh>
+#include <seastar/core/thread.hh>
 
 future<>
 write_memtable_to_sstable(memtable& mt,
         sstables::shared_sstable sst,
         bool backup = false,
         const io_priority_class& pc = default_priority_class(),
-        bool leave_unsealed = false);
+        bool leave_unsealed = false,
+        seastar::thread_scheduling_group* tsg = nullptr);
 

@@ -430,6 +430,7 @@ public:
         restricted_mutation_reader_config read_concurrency_config;
         restricted_mutation_reader_config streaming_read_concurrency_config;
         ::cf_stats* cf_stats = nullptr;
+        seastar::thread_scheduling_group* background_writer_scheduling_group = nullptr;
     };
     struct no_commitlog {};
     struct stats {
@@ -855,6 +856,10 @@ public:
         return _config.cf_stats;
     }
 
+    seastar::thread_scheduling_group* background_writer_scheduling_group() {
+        return _config.background_writer_scheduling_group;
+    }
+
     compaction_manager& get_compaction_manager() const {
         return _compaction_manager;
     }
@@ -1053,6 +1058,7 @@ public:
         restricted_mutation_reader_config read_concurrency_config;
         restricted_mutation_reader_config streaming_read_concurrency_config;
         ::cf_stats* cf_stats = nullptr;
+        seastar::thread_scheduling_group* background_writer_scheduling_group = nullptr;
     };
 private:
     std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;
@@ -1153,6 +1159,8 @@ private:
     std::unique_ptr<cell_locker_stats> _cl_stats;
 
     std::unique_ptr<db::config> _cfg;
+
+    seastar::thread_scheduling_group _background_writer_scheduling_group;
 
     dirty_memory_manager _system_dirty_memory_manager;
     dirty_memory_manager _dirty_memory_manager;
