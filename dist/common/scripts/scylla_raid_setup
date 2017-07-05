@@ -23,7 +23,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         "--disks")
             DISKS=`echo "$2"|tr -s ',' ' '`
-            NR_DISK=$((`echo "$2"|grep , -o|wc -w` + 1))
+            NR_DISK=`echo "$DISKS"|wc -w`
             shift 2
             ;;
         "--raiddev")
