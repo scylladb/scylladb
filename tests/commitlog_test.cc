@@ -208,6 +208,12 @@ SEASTAR_TEST_CASE(test_commitlog_discard_completed_segments){
                             BOOST_REQUIRE(nn <= names.size());
                             BOOST_REQUIRE(dn <= nn);
                         });
+                    }).then([&log] {
+                        return log.shutdown().then([&log] {
+                            return log.list_existing_segments().then([] (auto descs) {
+                                BOOST_REQUIRE(descs.empty());
+                            });
+                        });
                     });
         });
 }
