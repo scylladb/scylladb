@@ -85,4 +85,6 @@ docker run -p $(hostname -i):9042:9042 -i -t <image name>
 
 ## Contributing to Scylla
 
+[Guide to getting started with development](HACKING.md)
+
 [Guidelines for contributing](CONTRIBUTING.md)
