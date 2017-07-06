@@ -190,6 +190,29 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_full_range)
     });
 }
 
+SEASTAR_TEST_CASE(test_cache_uses_continuity_info_for_single_partition_query) {
+    return seastar::async([] {
+        auto s = make_schema();
+        int secondary_calls_count = 0;
+        cache_tracker tracker;
+        row_cache cache(s, snapshot_source_from_snapshot(mutation_source([&secondary_calls_count] (schema_ptr s, const dht::partition_range& range, const query::partition_slice&, const io_priority_class&, tracing::trace_state_ptr, streamed_mutation::forwarding fwd) {
+            return make_counting_reader(make_empty_reader(), secondary_calls_count);
+        })), tracker);
+
+        assert_that(cache.make_reader(s, query::full_partition_range))
+                .produces_end_of_stream();
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 1);
+
+        auto pk = partition_key::from_exploded(*s, { int32_type->decompose(100) });
+        auto dk = dht::global_partitioner().decorate_key(*s, pk);
+        auto range = dht::partition_range::make_singular(dk);
+
+        assert_that(cache.make_reader(s, range))
+                .produces_end_of_stream();
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 2);
+    });
+}
+
 void test_cache_delegates_to_underlying_only_once_with_single_partition(schema_ptr s,
                                                                         const mutation& m,
                                                                         const dht::partition_range& range,
