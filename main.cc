@@ -59,6 +59,8 @@ thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
 seastar::metrics::metric_groups app_metrics;
 
+using namespace std::chrono_literals;
+
 namespace bpo = boost::program_options;
 
 static boost::filesystem::path relative_conf_dir(boost::filesystem::path path) {
@@ -277,7 +279,10 @@ int main(int ac, char** av) {
     }
     runtime::init_uptime();
     std::setvbuf(stdout, nullptr, _IOLBF, 1000);
-    app_template app;
+    app_template::config app_cfg;
+    app_cfg.name = "Scylla";
+    app_cfg.default_task_quota = 500us;
+    app_template app(std::move(app_cfg));
     auto opt_add = app.add_options();
 
     auto cfg = make_lw_shared<db::config>();
