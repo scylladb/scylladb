@@ -67,7 +67,7 @@ class cache_entry {
     schema_ptr _schema;
     dht::decorated_key _key;
     partition_entry _pe;
-    // True when we know that there is nothing between this entry and the next one in cache
+    // True when we know that there is nothing between this entry and the previous one in cache
     struct {
         bool _continuous : 1;
         bool _dummy_entry : 1;
