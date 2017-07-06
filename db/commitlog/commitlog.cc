@@ -511,6 +511,7 @@ public:
         if (shutdown) {
             auto me = shared_from_this();
             return _gate.close().then([me] {
+                me->_closed = true;
                 return me->sync().finally([me] {
                     // When we get here, nothing should add ops,
                     // and we should have waited out all pending.
@@ -1319,6 +1320,7 @@ future<> db::commitlog::segment_manager::shutdown() {
                 return _gate.close().then(std::bind(&segment_manager::sync_all_segments, this, true));
             });
         }).finally([this] {
+            discard_unused_segments();
             // Now that the gate is closed and requests completed we are sure nobody else will pop()
             return clear_reserve_segments().finally([this] {
                 return std::move(_reserve_replenisher).then_wrapped([this] (auto f) {
