@@ -1002,17 +1002,7 @@ public:
                  std::map<sstring, sstring> strategy_options,
                  bool durable_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{},
-                 lw_shared_ptr<user_types_metadata> user_types = make_lw_shared<user_types_metadata>())
-        : _name{std::move(name)}
-        , _strategy_name{strategy_name.empty() ? "NetworkTopologyStrategy" : strategy_name}
-        , _strategy_options{std::move(strategy_options)}
-        , _durable_writes{durable_writes}
-        , _user_types{std::move(user_types)}
-    {
-        for (auto&& s : cf_defs) {
-            _cf_meta_data.emplace(s->cf_name(), s);
-        }
-    }
+                 lw_shared_ptr<user_types_metadata> user_types = make_lw_shared<user_types_metadata>());
     static lw_shared_ptr<keyspace_metadata>
     new_keyspace(sstring name,
                  sstring strategy_name,

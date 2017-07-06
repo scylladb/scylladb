@@ -2630,6 +2630,30 @@ const column_family& database::find_column_family(const schema_ptr& schema) cons
     return find_column_family(schema->id());
 }
 
+using strategy_class_registry = class_registry<
+    locator::abstract_replication_strategy,
+    const sstring&,
+    locator::token_metadata&,
+    locator::snitch_ptr&,
+    const std::map<sstring, sstring>&>;
+
+keyspace_metadata::keyspace_metadata(sstring name,
+             sstring strategy_name,
+             std::map<sstring, sstring> strategy_options,
+             bool durable_writes,
+             std::vector<schema_ptr> cf_defs,
+             lw_shared_ptr<user_types_metadata> user_types)
+    : _name{std::move(name)}
+    , _strategy_name{strategy_class_registry::to_qualified_class_name(strategy_name.empty() ? "NetworkTopologyStrategy" : strategy_name)}
+    , _strategy_options{std::move(strategy_options)}
+    , _durable_writes{durable_writes}
+    , _user_types{std::move(user_types)}
+{
+    for (auto&& s : cf_defs) {
+        _cf_meta_data.emplace(s->cf_name(), s);
+    }
+}
+
 void keyspace_metadata::validate() const {
     using namespace locator;
 

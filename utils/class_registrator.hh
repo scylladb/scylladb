@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <boost/range/algorithm/find_if.hpp>
+
 class no_such_class : public std::runtime_error {
 public:
     using runtime_error::runtime_error;
@@ -42,6 +44,12 @@ public:
 
         return _classes;
     }
+
+    static bool is_class_name_qualified(const sstring& class_name) {
+        return class_name.compare(0, 4, "org.") == 0;
+    }
+
+    static sstring to_qualified_class_name(sstring class_name);
 };
 
 template<typename BaseType, typename... Args>
@@ -55,6 +63,21 @@ void class_registry<BaseType, Args...>::register_class(sstring name) {
     register_class(name, [](Args&&... args) {
         return std::make_unique<T>(std::forward<Args>(args)...);
     });
+}
+
+template<typename BaseType, typename... Args>
+sstring class_registry<BaseType, Args...>::to_qualified_class_name(sstring class_name) {
+    if (class_registry<BaseType, Args...>::is_class_name_qualified(class_name)) {
+        return class_name;
+    } else {
+        const auto& classes{class_registry<BaseType, Args...>::classes()};
+
+        const auto it = boost::find_if(classes, [&class_name](const auto& registered_class) {
+            // the fully qualified name contains the short name
+            return class_registry<BaseType, Args...>::is_class_name_qualified(registered_class.first) && registered_class.first.find(class_name) != sstring::npos;
+        });
+        return it == classes.end() ? class_name : it->first;
+    }
 }
 
 template<typename BaseType, typename T, typename... Args>
