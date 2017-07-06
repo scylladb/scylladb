@@ -209,7 +209,7 @@ SEASTAR_TEST_CASE(test_cache_uses_continuity_info_for_single_partition_query) {
 
         assert_that(cache.make_reader(s, range))
                 .produces_end_of_stream();
-        BOOST_REQUIRE_EQUAL(secondary_calls_count, 2);
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 1);
     });
 }
 

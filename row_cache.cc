@@ -604,13 +604,17 @@ row_cache::make_reader(schema_ptr s,
     if (!ctx->is_range_query()) {
         return _read_section(_tracker.region(), [&] {
           return with_linearized_managed_bytes([&] {
-            auto i = _partitions.find(ctx->range().start()->value(), cache_entry::compare(_schema));
-            if (i != _partitions.end()) {
+            cache_entry::compare cmp(_schema);
+            auto&& pos = ctx->range().start()->value();
+            auto i = _partitions.lower_bound(pos, cmp);
+            if (i != _partitions.end() && !cmp(pos, i->position())) {
                 cache_entry& e = *i;
                 _tracker.touch(e);
                 upgrade_entry(e);
                 on_partition_hit();
                 return make_reader_returning(e.read(*this, *ctx));
+            } else if (i->continuous()) {
+                return make_empty_reader();
             } else {
                 on_partition_miss();
                 return make_mutation_reader<single_partition_populating_reader>(*this, std::move(ctx));
