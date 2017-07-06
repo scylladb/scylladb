@@ -240,9 +240,8 @@ batch_size_fail_threshold_in_kb: 50
 # Uncomment to enable experimental features
 # experimental: true
 
-###################################################
-## Not currently supported, reserved for future use
-###################################################
+# The directory where hints files are stored if hinted handoff is enabled.
+# hints_directory: /var/lib/scylla/hints
 
 # See http://wiki.apache.org/cassandra/HintedHandoff
 # May either be "true" or "false" to enable globally, or contain a list
@@ -265,6 +264,10 @@ batch_size_fail_threshold_in_kb: 50
 # Consider increasing this number when you have multi-dc deployments, since
 # cross-dc handoff tends to be slower
 # max_hints_delivery_threads: 2
+
+###################################################
+## Not currently supported, reserved for future use
+###################################################
 
 # Maximum throttle in KBs per second, total. This will be
 # reduced proportionally to the number of nodes in the cluster.

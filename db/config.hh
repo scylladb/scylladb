@@ -138,6 +138,9 @@ public:
     val(data_file_directories, string_list, { "/var/lib/scylla/data" }, Used,   \
             "The directory location where table data (SSTables) is stored"   \
     )                                           \
+    val(hints_directory, sstring, "/var/lib/scylla/hints", Used,   \
+            "The directory where hints files are stored if hinted handoff is enabled."   \
+    )                                           \
     val(saved_caches_directory, sstring, "/var/lib/scylla/saved_caches", Unused, \
             "The directory location where table key and row caches are stored."  \
     )                                                   \
@@ -560,17 +563,14 @@ public:
     val(dynamic_snitch_update_interval_in_ms, uint32_t, 100, Unused,     \
             "The time interval for how often the snitch calculates node scores. Because score calculation is CPU intensive, be careful when reducing this interval."  \
     )   \
-    val(hinted_handoff_enabled, bool, true, Unused,     \
-            "Enable or disable hinted handoff. To enable per data center, add data center list. For example: hinted_handoff_enabled: DC1,DC2. A hint indicates that the write needs to be replayed to an unavailable node. Where Cassandra writes the hint depends on the version:\n"  \
-            "\n"    \
-            "\tPrior to 1.0: Writes to a live replica node.\n"  \
-            "\t1.0 and later: Writes to the coordinator node.\n"  \
+    val(hinted_handoff_enabled, sstring, "false", Used,     \
+            "Experimental: enable or disable hinted handoff. To enable per data center, add data center list. For example: hinted_handoff_enabled: DC1,DC2. A hint indicates that the write needs to be replayed to an unavailable node. " \
             "Related information: About hinted handoff writes"  \
     )   \
     val(hinted_handoff_throttle_in_kb, uint32_t, 1024, Unused,     \
             "Maximum throttle per delivery thread in kilobytes per second. This rate reduces proportionally to the number of nodes in the cluster. For example, if there are two nodes in the cluster, each delivery thread will use the maximum rate. If there are three, each node will throttle to half of the maximum, since the two nodes are expected to deliver hints simultaneously."  \
     )   \
-    val(max_hint_window_in_ms, uint32_t, 10800000, Unused,     \
+    val(max_hint_window_in_ms, uint32_t, 10800000, Used,     \
             "Maximum amount of time that hints are generates hints for an unresponsive node. After this interval, new hints are no longer generated until the node is back up and responsive. If the node goes down again, a new interval begins. This setting can prevent a sudden demand for resources when a node is brought back online and the rest of the cluster attempts to replay a large volume of hinted writes.\n"  \
             "Related information: Failure detection and recovery"  \
     )   \
