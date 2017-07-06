@@ -1550,6 +1550,8 @@ basic_unreserved_keyword returns [sstring str]
         | K_DISTINCT
         | K_CONTAINS
         | K_STATIC
+        | K_FROZEN
+        | K_TUPLE
         | K_FUNCTION
         | K_AGGREGATE
         | K_SFUNC
