@@ -2466,5 +2466,28 @@ std::vector<schema_ptr> all_tables() {
     };
 }
 
+namespace legacy {
+
+table_schema_version schema_mutations::digest() const {
+    md5_hasher h;
+    db::schema_tables::feed_hash_for_schema_digest(h, _columnfamilies);
+    db::schema_tables::feed_hash_for_schema_digest(h, _columns);
+    return utils::UUID_gen::get_name_UUID(h.finalize());
+}
+
+future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy,
+    sstring keyspace_name, sstring table_name, schema_ptr s)
+{
+    return read_schema_partition_for_table(proxy, s, keyspace_name, table_name)
+        .then([&proxy, keyspace_name, table_name] (mutation cf_m) {
+            return read_schema_partition_for_table(proxy, db::system_keyspace::legacy::columns(), keyspace_name, table_name)
+                .then([cf_m = std::move(cf_m)] (mutation col_m) {
+                    return schema_mutations{std::move(cf_m), std::move(col_m)};
+                });
+        });
+}
+
+} // namespace legacy
+
 } // namespace schema_tables
 } // namespace schema

@@ -81,6 +81,24 @@ schema_ptr views();
 
 }
 
+namespace legacy {
+
+class schema_mutations {
+    mutation _columnfamilies;
+    mutation _columns;
+public:
+    schema_mutations(mutation columnfamilies, mutation columns)
+        : _columnfamilies(std::move(columnfamilies))
+        , _columns(std::move(columns))
+    { }
+    table_schema_version digest() const;
+};
+
+future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy,
+    sstring keyspace_name, sstring table_name, schema_ptr s);
+
+}
+
 using namespace v3;
 
 // Change on non-backwards compatible changes of schema mutations.
