@@ -184,7 +184,7 @@ private:
     } _subscribers;
 
     /* live member set */
-    std::set<inet_address> _live_endpoints;
+    std::vector<inet_address> _live_endpoints;
     std::list<inet_address> _live_endpoints_just_added;
 
     /* nodes are being marked as alive */
@@ -209,7 +209,7 @@ private:
     clk::time_point _last_processed_message_at = now();
 
     std::map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
-    std::set<inet_address> _shadow_live_endpoints;
+    std::vector<inet_address> _shadow_live_endpoints;
 
     void run();
 public:
