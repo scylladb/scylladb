@@ -301,6 +301,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     app_states.emplace(gms::application_state::RELEASE_VERSION, value_factory.release_version());
     app_states.emplace(gms::application_state::SUPPORTED_FEATURES, value_factory.supported_features(features));
     app_states.emplace(gms::application_state::CACHE_HITRATES, value_factory.cache_hitrates(""));
+    app_states.emplace(gms::application_state::SCHEMA_TABLES_VERSION, versioned_value(db::schema_tables::version));
     slogger.info("Starting up server gossip");
 
     auto& gossiper = gms::get_local_gossiper();
