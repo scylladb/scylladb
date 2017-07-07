@@ -25,14 +25,7 @@ if [ "$DIST" = "trusty" ] || [ "$DIST" = "xenial" ] || [ "$DIST" = "yakkety" ] |
             OTHERMIRROR="$OTHERMIRROR|deb [arch=amd64] http://downloads.scylladb.com/deb/3rdparty/$DIST $DIST scylladb/multiverse"
         fi
     fi
-elif [ "$DIST" = "jessie" ]; then
-    MIRRORSITE="http://deb.debian.org/debian/"
-    COMPONENTS="main contrib non-free"
-    DEBOOTSTRAPOPTS="--keyring=/usr/share/keyrings/debian-archive-keyring.gpg"
-    if [ $REBUILD -eq 0 ]; then
-        OTHERMIRROR="deb [arch=amd64] http://downloads.scylladb.com/deb/3rdparty/jessie jessie scylladb/non-free"
-    fi
-elif [ "$DIST" = "stretch" ] || [ "$DIST" = "buster" ] || [ "$DIST" = "sid" ]; then
+elif [ "$DIST" = "jessie" ] || [ "$DIST" = "stretch" ] || [ "$DIST" = "buster" ] || [ "$DIST" = "sid" ]; then
     MIRRORSITE="http://deb.debian.org/debian/"
     COMPONENTS="main contrib non-free"
     DEBOOTSTRAPOPTS="--keyring=/usr/share/keyrings/debian-archive-keyring.gpg"
