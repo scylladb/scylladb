@@ -517,21 +517,12 @@ public:
         });
     }
 
-    future<> unload_legacy_tables() {
-        return _qp.db().invoke_on_all([](database& db) {
-            for (auto& cfname : legacy_schema_tables) {
-                auto& cf = db.find_column_family(db::system_keyspace::NAME, cfname);
-                db.remove(cf);
-            }
-        });
-    }
-
-    future<> truncate_legacy_tables() {
-        mlogger.info("Truncating legacy schema tables");
+    future<> drop_legacy_tables() {
+        mlogger.info("Dropping legacy schema tables");
         return do_with(utils::make_joinpoint([] { return db_clock::now();}),[this](auto& tsf) {
             return _qp.db().invoke_on_all([&tsf](database& db) {
                 return parallel_for_each(legacy_schema_tables, [&db, &tsf](const sstring& cfname) {
-                    return db.truncate(db::system_keyspace::NAME, cfname, [&tsf] { return tsf.value(); });
+                    return db.drop_column_family(db::system_keyspace::NAME, cfname, [&tsf] { return tsf.value(); });
                 });
             });
         });
@@ -590,14 +581,10 @@ public:
 
     future<> migrate() {
         return read_all_keyspaces().then([this]() {
-            if (_keyspaces.empty()) {
-                return unload_legacy_tables();
-            }
             // write metadata to the new schema tables
             return store_keyspaces_in_new_schema_tables().then(std::bind(&migrator::migrate_indexes, this))
                                                 .then(std::bind(&migrator::flush_schemas, this))
-                                                .then(std::bind(&migrator::truncate_legacy_tables, this))
-                                                .then(std::bind(&migrator::unload_legacy_tables, this))
+                                                .then(std::bind(&migrator::drop_legacy_tables, this))
                                                 .then([] { mlogger.info("Completed migration of legacy schema tables"); });
         });
     }
