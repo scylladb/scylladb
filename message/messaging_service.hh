@@ -288,7 +288,7 @@ public:
     future<> send_definitions_update(msg_addr id, std::vector<frozen_mutation> fm);
 
     // Wrapper for MIGRATION_REQUEST
-    void register_migration_request(std::function<future<std::vector<frozen_mutation>> ()>&& func);
+    void register_migration_request(std::function<future<std::vector<frozen_mutation>> (const rpc::client_info&)>&& func);
     void unregister_migration_request();
     future<std::vector<frozen_mutation>> send_migration_request(msg_addr id);
 

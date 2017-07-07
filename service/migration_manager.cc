@@ -86,7 +86,12 @@ void migration_manager::init_messaging_service()
         });
         return netw::messaging_service::no_wait();
     });
-    ms.register_migration_request([this] () {
+    ms.register_migration_request([this] (const rpc::client_info& cinfo) {
+        auto src = netw::messaging_service::get_source(cinfo);
+        if (!has_compatible_schema_tables_version(src.addr)) {
+            mlogger.debug("Ignoring schema request from incompatible node: {}", src);
+            return make_ready_future<std::vector<frozen_mutation>>(std::vector<frozen_mutation>());
+        }
         return db::schema_tables::convert_schema_to_mutations(get_storage_proxy()).finally([p = get_local_shared_storage_proxy()] {
             // keep local proxy alive
         });
