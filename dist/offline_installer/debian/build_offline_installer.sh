@@ -102,6 +102,8 @@ EOS
 fi
 sudo wget -P build/chroot/etc/apt/sources.list.d $REPO
 sudo chroot build/chroot apt-get update --allow-unauthenticated -y
+sudo chroot build/chroot apt-get purge -y python-minimal python3-minimal python2.7-minimal libpython2.7-minimal libpython3.*-minimal libssl1.0.0 libexpat1
+sudo chroot build/chroot apt-get -y install python-minimal python3-minimal
 if [ "$SUITE" = "trusty" ]; then
     sudo chroot build/chroot apt-get -y install software-properties-common
     sudo chroot build/chroot add-apt-repository -y ppa:openjdk-r/ppa
@@ -111,7 +113,6 @@ if [ "$SUITE" = "trusty" ]; then
 fi
 
 sudo chroot build/chroot env DEBIAN_FRONTEND=noninteractive apt-get upgrade --allow-unauthenticated -y
-sudo chroot build/chroot apt-get clean
 sudo chroot build/chroot env DEBIAN_FRONTEND=noninteractive apt-get install -d --allow-unauthenticated -y scylla
 
 mkdir -p build/offline_installer/debs

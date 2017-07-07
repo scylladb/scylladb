@@ -25,7 +25,8 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
-dpkg -i -R debs
+dpkg -i -G -E debs/python-minimal*.deb debs/python2.7-minimal*.deb debs/libpython2.7-minimal*.deb debs/python3-minimal*.deb  debs/python3.*-minimal*.deb debs/libpython3.*-minimal*.deb debs/libssl1.0.0*.deb debs/libexpat1*.deb
+dpkg -i -G -E -R debs
 /usr/lib/scylla/scylla_setup
 
 echo "Scylla offline package installation finished."
