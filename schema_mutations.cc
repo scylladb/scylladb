@@ -52,6 +52,19 @@ void schema_mutations::copy_to(std::vector<mutation>& dst) const {
 }
 
 table_schema_version schema_mutations::digest() const {
+    if (_scylla_tables) {
+        auto rs = query::result_set(*_scylla_tables);
+        if (!rs.empty()) {
+            auto&& row = rs.row(0);
+            if (row.has("version")) {
+                auto val = row.get<utils::UUID>("version");
+                if (val) {
+                    return *val;
+                }
+            }
+        }
+    }
+
     md5_hasher h;
     db::schema_tables::feed_hash_for_schema_digest(h, _columnfamilies);
     db::schema_tables::feed_hash_for_schema_digest(h, _columns);

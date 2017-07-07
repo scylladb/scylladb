@@ -744,6 +744,17 @@ read_tables_for_keyspaces(distributed<service::storage_proxy>& proxy, const std:
     return result;
 }
 
+// Applies deletion of the "version" column to a system_schema.scylla_tables mutation.
+static void delete_schema_version(mutation& m) {
+    if (m.column_family_id() != scylla_tables()->id()) {
+        return;
+    }
+    const column_definition& version_col = *scylla_tables()->get_column_definition(to_bytes("version"));
+    for (auto&& row : m.partition().clustered_rows()) {
+        row.row().cells().apply(version_col, atomic_cell::make_dead(api::new_timestamp(), gc_clock::now()));
+    }
+}
+
 static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush)
 {
    return seastar::async([&proxy, mutations = std::move(mutations), do_flush] () mutable {
@@ -754,6 +765,9 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
        for (auto&& mutation : mutations) {
            keyspaces.emplace(value_cast<sstring>(utf8_type->deserialize(mutation.key().get_component(*s, 0))));
            column_families.emplace(mutation.column_family_id());
+           // We must force recalculation of schema version after the merge, since the resulting
+           // schema may be a mix of the old and new schemas.
+           delete_schema_version(mutation);
        }
 
        // current state of the schema
@@ -1481,7 +1495,9 @@ static void add_dropped_column_to_schema_mutation(schema_ptr table, const sstrin
 static mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type timestamp) {
     schema_ptr s = tables();
     auto pkey = partition_key::from_singular(*s, table->ks_name());
+    auto ckey = clustering_key::from_singular(*s, table->cf_name());
     mutation m(pkey, scylla_tables());
+    m.set_clustered_cell(ckey, "version", utils::UUID(table->version()), timestamp);
     return m;
 }
 
