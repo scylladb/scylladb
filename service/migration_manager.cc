@@ -220,15 +220,18 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
     });
 }
 
-bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoint)
-{
-    /*
-     * Don't request schema from nodes with a differnt or unknonw major version (may have incompatible schema)
-     * Don't request schema from fat clients
-     */
-    auto& ms = netw::get_local_messaging_service();
-    return ms.knows_version(endpoint)
-            && ms.get_raw_version(endpoint) == netw::messaging_service::current_version
+bool migration_manager::has_compatible_schema_tables_version(const gms::inet_address& endpoint) {
+    auto& gossiper = gms::get_local_gossiper();
+    auto ep_state = gossiper.get_endpoint_state_for_endpoint(endpoint);
+    if (!ep_state) {
+        return false;
+    }
+    auto&& version_opt = ep_state->get_application_state(gms::application_state::SCHEMA_TABLES_VERSION);
+    return version_opt && version_opt->value == db::schema_tables::version;
+}
+
+bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoint) {
+    return has_compatible_schema_tables_version(endpoint)
             && !gms::get_local_gossiper().is_gossip_only_member(endpoint);
 }
 
