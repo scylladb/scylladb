@@ -362,7 +362,7 @@ cql_server::do_accepts(int which, bool keepalive, ipv4_addr server_addr) {
         try {
             f.get();
         } catch (...) {
-            clogger.warn("acccept failed: {}", std::current_exception());
+            clogger.debug("acccept failed: {}", std::current_exception());
             do_accepts(which, keepalive, server_addr);
         }
     });
