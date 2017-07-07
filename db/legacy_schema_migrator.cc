@@ -147,15 +147,18 @@ public:
         auto cq = fmt_query(fmt, db::system_keyspace::legacy::COLUMNS);
         auto zq = fmt_query(fmt, db::system_keyspace::legacy::TRIGGERS);
 
-        typedef std::tuple<future<result_set_type>, future<result_set_type>, future<result_set_type>> result_tuple;
+        typedef std::tuple<future<result_set_type>, future<result_set_type>, future<result_set_type>, future<db::schema_tables::legacy::schema_mutations>> result_tuple;
 
         return when_all(_qp.execute_internal(tq, { dst.name, cf_name }),
                         _qp.execute_internal(cq, { dst.name, cf_name }),
-                        _qp.execute_internal(zq, { dst.name, cf_name })).then([this, &dst, cf_name, timestamp](result_tuple&& t) {
+                        _qp.execute_internal(zq, { dst.name, cf_name }),
+                        db::schema_tables::legacy::read_table_mutations(_sp, dst.name, cf_name, db::system_keyspace::legacy::column_families()))
+                    .then([this, &dst, cf_name, timestamp](result_tuple&& t) {
 
             result_set_type tables = std::get<0>(t).get0();
             result_set_type columns = std::get<1>(t).get0();
             result_set_type triggers = std::get<2>(t).get0();
+            db::schema_tables::legacy::schema_mutations sm = std::get<3>(t).get0();
 
             row_type& td = tables->one();
 
@@ -164,6 +167,8 @@ public:
             auto id = td.get_or("cf_id", generate_legacy_id(ks_name, cf_name));
 
             schema_builder builder(dst.name, cf_name, id);
+
+            builder.with_version(sm.digest());
 
             cf_type cf = sstring_to_cf_type(td.get_or("type", sstring("standard")));
             if (cf == cf_type::super) {
