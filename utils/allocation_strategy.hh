@@ -48,7 +48,7 @@ private:
 public:
     explicit migrate_fn_type(size_t align) : _align(align), _index(register_migrator(this)) {}
     virtual ~migrate_fn_type() { unregister_migrator(_index); }
-    virtual void migrate(void* src, void* dsts) const noexcept = 0;
+    virtual void migrate(void* src, void* dsts, size_t size) const noexcept = 0;
     virtual size_t size(const void* obj) const = 0;
     size_t align() const { return _align; }
     uint32_t index() const { return _index; }
@@ -67,7 +67,7 @@ template <typename T>
 class standard_migrator final : public migrate_fn_type {
 public:
     standard_migrator() : migrate_fn_type(alignof(T)) {}
-    virtual void migrate(void* src, void* dst) const noexcept override {
+    virtual void migrate(void* src, void* dst, size_t size) const noexcept override {
         static_assert(std::is_nothrow_move_constructible<T>::value, "T must be nothrow move-constructible.");
         static_assert(std::is_nothrow_destructible<T>::value, "T must be nothrow destructible.");
 
