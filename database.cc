@@ -2328,7 +2328,7 @@ database::init_commitlog() {
                 _commitlog->discard_completed_segments(id);
                 return;
             }
-            _column_families[id]->flush(pos);
+            _column_families[id]->flush();
         }).release(); // we have longer life time than CL. Ignore reg anchor
     });
 }
@@ -3810,22 +3810,6 @@ future<> column_family::flush() {
         // wait for all up until us.
         return _flush_queue->wait_for_pending(desired_rp);
     });
-}
-
-future<> column_family::flush(const db::replay_position& pos) {
-    // Technically possible if we've already issued the
-    // sstable write, but it is not done yet.
-    if (pos < _highest_flushed_rp) {
-        return make_ready_future<>();
-    }
-
-    // TODO: Origin looks at "secondary" memtables
-    // It also consideres "minReplayPosition", which is simply where
-    // the CL "started" (the first ever RP in this run).
-    // We ignore this for now and just say that if we're asked for
-    // a CF and it exists, we pretty much have to have data that needs
-    // flushing. Let's do it.
-    return _memtables->request_flush();
 }
 
 // FIXME: We can do much better than this in terms of cache management. Right

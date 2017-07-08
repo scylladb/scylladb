@@ -753,7 +753,6 @@ public:
     void start();
     future<> stop();
     future<> flush();
-    future<> flush(const db::replay_position&);
     future<> flush_streaming_mutations(utils::UUID plan_id, dht::partition_range_vector ranges = dht::partition_range_vector{});
     future<> fail_streaming_mutations(utils::UUID plan_id);
     future<> clear(); // discards memtable(s) without flushing them to disk.
