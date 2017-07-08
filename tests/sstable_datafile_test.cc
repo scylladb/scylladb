@@ -3800,8 +3800,11 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
 
         auto mt = make_lw_shared<memtable>(s);
 
-        static constexpr int total_keys = 100;
         static constexpr float expired = 0.33;
+        // we want number of expired keys to be ~ 1.5*sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE so as to
+        // test ability of histogram to return a good estimation after merging keys.
+        static constexpr int total_keys = std::ceil(sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE/expired)*1.5;
+
         auto insert_key = [&] (bytes k, uint32_t ttl, uint32_t expiration_time) {
             auto key = partition_key::from_exploded(*s, {k});
             mutation m(key, s);
@@ -3811,18 +3814,22 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         };
 
         auto expired_keys = total_keys*expired;
-        auto expiration_time = (gc_clock::now() - gc_clock::duration(DEFAULT_GC_GRACE_SECONDS*2)).time_since_epoch().count();
+        auto now = gc_clock::now();
         for (auto i = 0; i < expired_keys; i++) {
+            // generate expiration time at different time points or only a few entries would be created in histogram
+            auto expiration_time = (now - gc_clock::duration(DEFAULT_GC_GRACE_SECONDS*2+i)).time_since_epoch().count();
             insert_key(to_bytes("expired_key" + to_sstring(i)), 1, expiration_time);
         }
         auto remaining = total_keys-expired_keys;
-        expiration_time = (gc_clock::now() + gc_clock::duration(3600)).time_since_epoch().count();
+        auto expiration_time = (now + gc_clock::duration(3600)).time_since_epoch().count();
         for (auto i = 0; i < remaining; i++) {
             insert_key(to_bytes("key" + to_sstring(i)), 3600, expiration_time);
         }
         auto sst = make_lw_shared<sstable>(s, tmp->path, 1, la, big);
         write_memtable_to_sstable(*mt, sst).get();
         sst = reusable_sst(s, tmp->path, 1).get0();
+        const auto& stats = sst->get_stats_metadata();
+        BOOST_REQUIRE(stats.estimated_tombstone_drop_time.bin.size() == sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE);
         auto gc_before = gc_clock::now() - s->gc_grace_seconds();
         auto uncompacted_size = sst->data_size();
         // Asserts that two keys are equal to within a positive delta
