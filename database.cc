@@ -958,6 +958,7 @@ column_family::seal_active_memtable(memtable_list::flush_behavior ignored) {
         return make_ready_future<>();
     }
     _memtables->add_memtable();
+    _stats.memtable_switch_count++;
 
     assert(_highest_flushed_rp < old->replay_position()
     || (_highest_flushed_rp == db::replay_position() && old->replay_position() == db::replay_position())
@@ -3804,9 +3805,6 @@ future<> column_family::flush() {
     auto desired_rp = _memtables->back()->empty() ? _highest_flushed_rp : _memtables->back()->replay_position();
     return _memtables->request_flush().finally([this, desired_rp] {
         _stats.pending_flushes--;
-        // In origin memtable_switch_count is incremented inside
-        // ColumnFamilyMeetrics Flush.run
-        _stats.memtable_switch_count++;
         // wait for all up until us.
         return _flush_queue->wait_for_pending(desired_rp);
     });
