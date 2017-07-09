@@ -547,8 +547,6 @@ private:
     db::commitlog* _commitlog;
     compaction_manager& _compaction_manager;
     int _compaction_disabled = 0;
-    class memtable_flush_queue;
-    std::unique_ptr<memtable_flush_queue> _flush_queue;
     utils::phased_barrier _flush_barrier;
     // Because streaming mutations bypass the commitlog, there is
     // no need for the complications of the flush queue. Besides, it
