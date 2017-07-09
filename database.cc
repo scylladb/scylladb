@@ -2046,11 +2046,11 @@ database::setup_metrics() {
     _metrics.add_group("memtables", {
         sm::make_gauge("pending_flushes", _cf_stats.pending_memtables_flushes_count,
                        sm::description("Holds the current number of memtables that are currently being flushed to sstables. "
-                                       "High value in this mertic may be an indication of storage being a bottleneck.")),
+                                       "High value in this metric may be an indication of storage being a bottleneck.")),
 
         sm::make_gauge("pending_flushes_bytes", _cf_stats.pending_memtables_flushes_bytes,
                        sm::description("Holds the current number of bytes in memtables that are currently being flushed to sstables. "
-                                       "High value in this mertic may be an indication of storage being a bottleneck.")),
+                                       "High value in this metric may be an indication of storage being a bottleneck.")),
     });
 
     _metrics.add_group("database", {
