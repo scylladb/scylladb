@@ -955,10 +955,12 @@ column_family::seal_active_memtable(memtable_list::flush_behavior ignored) {
 
     if (old->empty()) {
         dblog.debug("Memtable is empty");
-        return make_ready_future<>();
+        return _flush_barrier.advance_and_await();
     }
     _memtables->add_memtable();
     _stats.memtable_switch_count++;
+    auto previous_flush = _flush_barrier.advance_and_await();
+    auto op = _flush_barrier.start();
 
     assert(_highest_flushed_rp < old->replay_position()
     || (_highest_flushed_rp == db::replay_position() && old->replay_position() == db::replay_position())
@@ -982,10 +984,11 @@ column_family::seal_active_memtable(memtable_list::flush_behavior ignored) {
         _config.cf_stats->pending_memtables_flushes_count--;
         _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
       });
-    }, [old, this] {
+    }, [old, this, op = std::move(op), previous_flush = std::move(previous_flush)] () mutable {
         if (_commitlog) {
             _commitlog->discard_completed_segments(_schema->id(), old->rp_set());
         }
+        return previous_flush.finally([op = std::move(op)] { });
     });
     // FIXME: release commit log
     // FIXME: provide back-pressure to upper layers
@@ -3795,14 +3798,7 @@ future<std::unordered_map<sstring, column_family::snapshot_details>> column_fami
 }
 
 future<> column_family::flush() {
-    // highest_flushed_rp is only updated when we flush. If the memtable is currently alive, then
-    // the most up2date replay position is the one that's in there now. Otherwise, if the memtable
-    // hasn't received any writes yet, that's the one from the last flush we made.
-    auto desired_rp = _memtables->back()->empty() ? _highest_flushed_rp : _memtables->back()->replay_position();
-    return _memtables->request_flush().finally([this, desired_rp] {
-        // wait for all up until us.
-        return _flush_queue->wait_for_pending(desired_rp);
-    });
+    return _memtables->request_flush();
 }
 
 // FIXME: We can do much better than this in terms of cache management. Right

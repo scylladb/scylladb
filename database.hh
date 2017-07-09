@@ -77,6 +77,7 @@
 #include <boost/intrusive/parent_from_member.hpp>
 #include "db/view/view.hh"
 #include "lister.hh"
+#include "utils/phased_barrier.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -548,6 +549,7 @@ private:
     int _compaction_disabled = 0;
     class memtable_flush_queue;
     std::unique_ptr<memtable_flush_queue> _flush_queue;
+    utils::phased_barrier _flush_barrier;
     // Because streaming mutations bypass the commitlog, there is
     // no need for the complications of the flush queue. Besides, it
     // is easier to just use a common gate than it is to modify the flush_queue
