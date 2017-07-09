@@ -539,7 +539,6 @@ private:
     mutable row_cache _cache; // Cache covers only sstables.
     std::experimental::optional<int64_t> _sstable_generation = {};
 
-    db::replay_position _highest_flushed_rp;
     db::replay_position _highest_rp;
     db::replay_position _lowest_allowed_rp;
 
