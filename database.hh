@@ -548,13 +548,6 @@ private:
     compaction_manager& _compaction_manager;
     int _compaction_disabled = 0;
     utils::phased_barrier _flush_barrier;
-    // Because streaming mutations bypass the commitlog, there is
-    // no need for the complications of the flush queue. Besides, it
-    // is easier to just use a common gate than it is to modify the flush_queue
-    // to work both with and without a replay position.
-    //
-    // Last but not least, we seldom need to guarantee any ordering here: as long
-    // as all data is waited for, we're good.
     seastar::gate _streaming_flush_gate;
     std::vector<view_ptr> _views;
     semaphore _cache_update_sem{1};
