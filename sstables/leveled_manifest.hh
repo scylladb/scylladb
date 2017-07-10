@@ -406,27 +406,27 @@ private:
         // 2. At most MAX_COMPACTING_L0 sstables from L0 will be compacted at once
         // 3. If total candidate size is less than maxSSTableSizeInMB, we won't bother compacting with L1,
         //    and the result of the compaction will stay in L0 instead of being promoted
-        auto candidates = boost::copy_range<std::vector<sstables::shared_sstable>>(get_level(0));
-
-        if (candidates.size() > MAX_COMPACTING_L0) {
-            // limit to only the MAX_COMPACTING_L0 oldest candidates
-            sort_sstables_by_age(candidates);
-            candidates.resize(MAX_COMPACTING_L0);
-        }
+        std::vector<sstables::shared_sstable> candidates;
 
         // leave everything in L0 if we didn't end up with a full sstable's worth of data
         bool can_promote = false;
-        if (worth_promoting_L0_candidates(candidates)) {
+        if (worth_promoting_L0_candidates(get_level(0))) {
+            candidates = get_level(0);
+            if (candidates.size() > MAX_COMPACTING_L0) {
+                // limit to only the MAX_COMPACTING_L0 oldest candidates
+                sort_sstables_by_age(candidates);
+                candidates.resize(MAX_COMPACTING_L0);
+            }
             // add sstables from L1 that overlap candidates
             auto l1overlapping = overlapping(*_schema, candidates, get_level(1));
             candidates.insert(candidates.end(), l1overlapping.begin(), l1overlapping.end());
             can_promote = true;
-        }
-        if (candidates.size() < 2) {
-            return {};
         } else {
-            return { candidates, can_promote };
+            // do STCS in L0 when max_sstable_size is high compared to size of new sstables, so we'll
+            // avoid quadratic behavior until L0 is worth promoting.
+            candidates = size_tiered_most_interesting_bucket(get_level(0));
         }
+        return { std::move(candidates), can_promote };
     }
 
     // LCS uses a round-robin heuristic for even distribution of keys in each level.
