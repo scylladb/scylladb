@@ -83,6 +83,10 @@ schema_ptr views();
 
 using namespace v3;
 
+// Change on non-backwards compatible changes of schema mutations.
+// Replication of schema between nodes with different version is inhibited.
+extern const sstring version;
+
 extern std::vector<const char*> ALL;
 
 std::vector<schema_ptr> all_tables();

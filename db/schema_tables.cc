@@ -82,6 +82,8 @@ namespace schema_tables {
 
 logging::logger slogger("schema_tables");
 
+const sstring version = "3";
+
 struct push_back_and_return {
     std::vector<mutation> muts;
 

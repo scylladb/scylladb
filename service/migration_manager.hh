@@ -94,6 +94,7 @@ public:
     future<> notify_drop_view(const view_ptr& view);
 
     bool should_pull_schema_from(const gms::inet_address& endpoint);
+    bool has_compatible_schema_tables_version(const gms::inet_address& endpoint);
 
     future<> announce_keyspace_update(lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally = false);
 
