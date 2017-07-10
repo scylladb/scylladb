@@ -960,19 +960,24 @@ column_family::seal_active_memtable(flush_permit&& permit) {
     _config.cf_stats->pending_memtables_flushes_count++;
     _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
 
-    auto sstable_write_permit = permit.release_sstable_write_permit();
-    return repeat([this, old, permit = std::move(sstable_write_permit)] () mutable {
-        return with_lock(_sstables_lock.for_read(), [this, old, permit = std::move(permit)] () mutable {
-            return try_flush_memtable_to_sstable(old, std::move(permit));
-        }).then([] (auto should_stop) {
-            if (should_stop) {
-                return make_ready_future<stop_iteration>(should_stop);
-            }
-            return sleep(10s).then([] {
-                return make_ready_future<stop_iteration>(stop_iteration::no);
+    return do_with(std::move(permit), [this, old] (auto& permit) {
+        return repeat([this, old, &permit] () mutable {
+            auto sstable_write_permit = permit.release_sstable_write_permit();
+            return with_lock(_sstables_lock.for_read(), [this, old, sstable_write_permit = std::move(sstable_write_permit)] () mutable {
+                return try_flush_memtable_to_sstable(old, std::move(sstable_write_permit));
+            }).then([this, &permit] (auto should_stop) mutable {
+                if (should_stop) {
+                    return make_ready_future<stop_iteration>(should_stop);
+                }
+                return sleep(10s).then([this, &permit] () mutable {
+                    return std::move(permit).reacquire_sstable_write_permit().then([this, &permit] (auto new_permit) mutable {
+                        permit = std::move(new_permit);
+                        return make_ready_future<stop_iteration>(stop_iteration::no);
+                    });
+                });
             });
         });
-    }).then([this, memtable_size, old, op = std::move(op), previous_flush = std::move(previous_flush), permit = std::move(permit)] () mutable {
+    }).then([this, memtable_size, old, op = std::move(op), previous_flush = std::move(previous_flush)] () mutable {
         _stats.pending_flushes--;
         _config.cf_stats->pending_memtables_flushes_count--;
         _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
