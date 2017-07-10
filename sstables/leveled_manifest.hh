@@ -94,22 +94,18 @@ public:
         leveled_manifest manifest = leveled_manifest(cfs, max_sstable_size_in_mb);
 
         // ensure all SSTables are in the manifest
+        // FIXME: there can be tens of thousands of sstables. we can avoid this potentially expensive procedure if
+        // partitioned_sstable_set keeps track of a list for each level.
         for (auto& sstable : sstables) {
-            // unconditionally add a sstable to a list of its level.
-            manifest.add(sstable);
+            uint32_t level = sstable->get_sstable_level();
+            if (level >= _generations.size()) {
+                throw std::runtime_error(sprint("Invalid level %u out of %ld", level, (_generations.size() - 1)));
+            }
+            logger.debug("Adding {} to L{}", sstable->get_filename(), level);
+            _generations[level].push_back(sstable);
         }
 
         return manifest;
-    }
-
-    void add(sstables::shared_sstable& sstable) {
-        uint32_t level = sstable->get_sstable_level();
-
-        if (level >= _generations.size()) {
-            throw std::runtime_error(sprint("Invalid level %u out of %ld", level, (_generations.size() - 1)));
-        }
-        logger.debug("Adding {} to L{}", sstable->get_filename(), level);
-        _generations[level].push_back(sstable);
     }
 
     // Return first set of overlapping sstables for a given level.
