@@ -286,7 +286,7 @@ private:
             }
         }
 
-        for (int i = _generations.size() - 1; i > 0; i--) {
+        for (int i = _generations.size() - 1; i > target_level; i--) {
             if (!get_level_size(i) || compaction_counter[i] <= NO_COMPACTION_LIMIT) {
                 continue;
             }
