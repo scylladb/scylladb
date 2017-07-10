@@ -488,29 +488,11 @@ public:
 
         int start = sstable_index_based_on_last_compacted_key(sstables, level, s, last_compacted_keys);
 
-        // look for a non-suspect keyspace to compact with, starting with where we left off last time,
-        // and wrapping back to the beginning of the generation if necessary
-        for (auto i = 0U; i < sstables.size(); i++) {
-            // get an iterator to the element of position pos from the list get_level(level).
-            auto pos = (start + i) % sstables.size();
-            auto it = sstables.begin();
-            std::advance(it, pos);
+        auto pos = start % sstables.size();
+        auto candidates = overlapping(*_schema, sstables.at(pos), get_level(level + 1));
+        candidates.push_back(sstables.at(pos));
 
-            auto& sstable = *it;
-            auto candidates = overlapping(*_schema, sstable, get_level(level + 1));
-
-            candidates.push_back(sstable);
-#if 0
-            if (Iterables.any(candidates, suspectP))
-                continue;
-            if (Sets.intersection(candidates, compacting).isEmpty())
-                return candidates;
-#endif
-            return { candidates, true };
-        }
-
-        // all the sstables were suspect or overlapped with something suspect
-        return {};
+        return { candidates, true };
     }
 
     void sort_sstables_by_age(std::vector<sstables::shared_sstable>& candidates) {
