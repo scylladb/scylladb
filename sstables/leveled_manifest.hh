@@ -45,6 +45,7 @@
 #include "compaction.hh"
 #include "range.hh"
 #include "log.hh"
+#include <boost/range/algorithm/partial_sort.hpp>
 
 class leveled_manifest {
     schema_ptr _schema;
@@ -414,7 +415,10 @@ private:
             candidates = get_level(0);
             if (candidates.size() > MAX_COMPACTING_L0) {
                 // limit to only the MAX_COMPACTING_L0 oldest candidates
-                sort_sstables_by_age(candidates);
+                auto n = std::min(size_t(MAX_COMPACTING_L0), candidates.size());
+                boost::partial_sort(candidates, candidates.begin() + n, [] (auto& i, auto& j) {
+                    return i->compare_by_max_timestamp(*j) < 0;
+                });
                 candidates.resize(MAX_COMPACTING_L0);
             }
             // add sstables from L1 that overlap candidates
@@ -494,12 +498,6 @@ private:
         return candidates_for_higher_levels_compaction(level, last_compacted_keys);
     }
 public:
-    static void sort_sstables_by_age(std::vector<sstables::shared_sstable>& candidates) {
-        std::sort(candidates.begin(), candidates.end(), [] (auto& i, auto& j) {
-            return i->compare_by_max_timestamp(*j) < 0;
-        });
-    }
-
     uint32_t get_level_count() const {
         for (int i = _generations.size() - 1; i >= 0; i--) {
             if (_generations[i].size() > 0) {
