@@ -5,8 +5,8 @@
 cmake_minimum_required(VERSION 3.7)
 project(scylla)
 
-if (NOT DEFINED ENV{CLION_IDE})
-    message(FATAL_ERROR "This CMakeLists.txt file is only valid for use in CLion")
+if (NOT DEFINED FOR_IDE AND NOT DEFINED ENV{FOR_IDE} AND NOT DEFINED ENV{CLION_IDE})
+    message(FATAL_ERROR "This CMakeLists.txt file is only valid for use in IDEs, please define FOR_IDE to acknowledge this.")
 endif()
 
 # Default value. A more accurate list is populated through `pkg-config` below if `seastar.pc` is available.
