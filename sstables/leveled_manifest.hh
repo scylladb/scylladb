@@ -424,17 +424,19 @@ public:
         }
 
         // leave everything in L0 if we didn't end up with a full sstable's worth of data
+        bool can_promote = false;
         if (worth_promoting_L0_candidates(get_total_bytes(candidates))) {
             // add sstables from L1 that overlap candidates
             // if the overlapping ones are already busy in a compaction, leave it out.
             // TODO try to find a set of L0 sstables that only overlaps with non-busy L1 sstables
             auto l1overlapping = overlapping(*_schema, candidates, get_level(1));
             candidates.insert(candidates.end(), l1overlapping.begin(), l1overlapping.end());
+            can_promote = true;
         }
         if (candidates.size() < 2) {
             return {};
         } else {
-            return { candidates, true };
+            return { candidates, can_promote };
         }
     }
 
@@ -551,7 +553,6 @@ public:
     int get_next_level(const std::vector<sstables::shared_sstable>& sstables, bool can_promote = true) {
         int maximum_level = std::numeric_limits<int>::min();
         int minimum_level = std::numeric_limits<int>::max();
-        auto total_bytes = get_total_bytes(sstables);
 
         for (auto& sstable : sstables) {
             int sstable_level = sstable->get_sstable_level();
@@ -560,7 +561,7 @@ public:
         }
 
         int new_level;
-        if (minimum_level == 0 && minimum_level == maximum_level && !worth_promoting_L0_candidates(total_bytes)) {
+        if (minimum_level == 0 && minimum_level == maximum_level && !can_promote) {
             new_level = 0;
         } else {
             new_level = (minimum_level == maximum_level && can_promote) ? maximum_level + 1 : maximum_level;
