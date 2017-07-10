@@ -964,6 +964,13 @@ column_family::seal_active_memtable(flush_permit&& permit) {
     return repeat([this, old, permit = std::move(sstable_write_permit)] () mutable {
         return with_lock(_sstables_lock.for_read(), [this, old, permit = std::move(permit)] () mutable {
             return try_flush_memtable_to_sstable(old, std::move(permit));
+        }).then([] (auto should_stop) {
+            if (should_stop) {
+                return make_ready_future<stop_iteration>(should_stop);
+            }
+            return sleep(10s).then([] {
+                return make_ready_future<stop_iteration>(stop_iteration::no);
+            });
         });
     }).then([this, memtable_size, old, op = std::move(op), previous_flush = std::move(previous_flush), permit = std::move(permit)] () mutable {
         _stats.pending_flushes--;
@@ -1040,10 +1047,8 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstabl
             // If we failed this write we will try the write again and that will create a new flush reader
             // that will decrease dirty memory again. So we need to reset the accounting.
             old->revert_flushed_memory();
-        }
-        return sleep(10s).then([] {
             return make_ready_future<stop_iteration>(stop_iteration::no);
-        });
+        }
     });
 }
 
