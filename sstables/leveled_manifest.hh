@@ -401,6 +401,43 @@ public:
         return candidates_total_size >= _max_sstable_size_in_bytes;
     }
 
+    candidates_info candidates_for_level_0_compaction() {
+        // L0 is the dumping ground for new sstables which thus may overlap each other.
+        //
+        // We treat L0 compactions specially:
+        // 1a. add sstables to the candidate set until we have at least maxSSTableSizeInMB
+        // 1b. prefer choosing older sstables as candidates, to newer ones
+        // 1c. any L0 sstables that overlap a candidate, will also become candidates
+        // 2. At most MAX_COMPACTING_L0 sstables from L0 will be compacted at once
+        // 3. If total candidate size is less than maxSSTableSizeInMB, we won't bother compacting with L1,
+        //    and the result of the compaction will stay in L0 instead of being promoted (see promote())
+        //
+        // Note that we ignore suspect-ness of L1 sstables here, since if an L1 sstable is suspect we're
+        // basically screwed, since we expect all or most L0 sstables to overlap with each L1 sstable.
+        // So if an L1 sstable is suspect we can't do much besides try anyway and hope for the best.
+        auto candidates = boost::copy_range<std::vector<sstables::shared_sstable>>(get_level(0));
+
+        if (candidates.size() > MAX_COMPACTING_L0) {
+            // limit to only the MAX_COMPACTING_L0 oldest candidates
+            sort_sstables_by_age(candidates);
+            candidates.resize(MAX_COMPACTING_L0);
+        }
+
+        // leave everything in L0 if we didn't end up with a full sstable's worth of data
+        if (worth_promoting_L0_candidates(get_total_bytes(candidates))) {
+            // add sstables from L1 that overlap candidates
+            // if the overlapping ones are already busy in a compaction, leave it out.
+            // TODO try to find a set of L0 sstables that only overlaps with non-busy L1 sstables
+            auto l1overlapping = overlapping(*_schema, candidates, get_level(1));
+            candidates.insert(candidates.end(), l1overlapping.begin(), l1overlapping.end());
+        }
+        if (candidates.size() < 2) {
+            return {};
+        } else {
+            return { candidates, true };
+        }
+    }
+
     /**
      * @return highest-priority sstables to compact for the given level.
      * If no compactions are possible (because of concurrent compactions or because some sstables are blacklisted
@@ -413,41 +450,7 @@ public:
         logger.debug("Choosing candidates for L{}", level);
 
         if (level == 0) {
-
-            // L0 is the dumping ground for new sstables which thus may overlap each other.
-            //
-            // We treat L0 compactions specially:
-            // 1a. add sstables to the candidate set until we have at least maxSSTableSizeInMB
-            // 1b. prefer choosing older sstables as candidates, to newer ones
-            // 1c. any L0 sstables that overlap a candidate, will also become candidates
-            // 2. At most MAX_COMPACTING_L0 sstables from L0 will be compacted at once
-            // 3. If total candidate size is less than maxSSTableSizeInMB, we won't bother compacting with L1,
-            //    and the result of the compaction will stay in L0 instead of being promoted (see promote())
-            //
-            // Note that we ignore suspect-ness of L1 sstables here, since if an L1 sstable is suspect we're
-            // basically screwed, since we expect all or most L0 sstables to overlap with each L1 sstable.
-            // So if an L1 sstable is suspect we can't do much besides try anyway and hope for the best.
-            auto candidates = boost::copy_range<std::vector<sstables::shared_sstable>>(get_level(0));
-
-            if (candidates.size() > MAX_COMPACTING_L0) {
-                // limit to only the MAX_COMPACTING_L0 oldest candidates
-                sort_sstables_by_age(candidates);
-                candidates.resize(MAX_COMPACTING_L0);
-            }
-
-            // leave everything in L0 if we didn't end up with a full sstable's worth of data
-            if (worth_promoting_L0_candidates(get_total_bytes(candidates))) {
-                // add sstables from L1 that overlap candidates
-                // if the overlapping ones are already busy in a compaction, leave it out.
-                // TODO try to find a set of L0 sstables that only overlaps with non-busy L1 sstables
-                auto l1overlapping = overlapping(*_schema, candidates, get_level(1));
-                candidates.insert(candidates.end(), l1overlapping.begin(), l1overlapping.end());
-            }
-            if (candidates.size() < 2) {
-                return {};
-            } else {
-                return { candidates, true };
-            }
+            return candidates_for_level_0_compaction();
         }
 
         // for non-L0 compactions, pick up where we left off last time
