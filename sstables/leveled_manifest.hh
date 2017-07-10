@@ -454,21 +454,8 @@ public:
         return start;
     }
 
-    /**
-     * @return highest-priority sstables to compact for the given level.
-     * If no compactions are possible (because of concurrent compactions or because some sstables are blacklisted
-     * for prior failure), will return an empty list.  Never returns null.
-     */
-    candidates_info get_candidates_for(int level, const std::vector<stdx::optional<dht::decorated_key>>& last_compacted_keys) {
+    candidates_info candidates_for_higher_levels_compaction(int level, const std::vector<stdx::optional<dht::decorated_key>>& last_compacted_keys) {
         const schema& s = *_schema;
-        assert(!get_level(level).empty());
-
-        logger.debug("Choosing candidates for L{}", level);
-
-        if (level == 0) {
-            return candidates_for_level_0_compaction();
-        }
-
         // for non-L0 compactions, pick up where we left off last time
         auto& sstables = get_level(level);
         boost::sort(sstables, [&s] (auto& i, auto& j) {
@@ -493,6 +480,22 @@ public:
         candidates.push_back(sstables.at(pos));
 
         return { candidates, true };
+    }
+
+    /**
+     * @return highest-priority sstables to compact for the given level.
+     * If no compactions are possible (because of concurrent compactions or because some sstables are blacklisted
+     * for prior failure), will return an empty list.  Never returns null.
+     */
+    candidates_info get_candidates_for(int level, const std::vector<stdx::optional<dht::decorated_key>>& last_compacted_keys) {
+        assert(!get_level(level).empty());
+
+        logger.debug("Choosing candidates for L{}", level);
+
+        if (level == 0) {
+            return candidates_for_level_0_compaction();
+        }
+        return candidates_for_higher_levels_compaction(level, last_compacted_keys);
     }
 
     void sort_sstables_by_age(std::vector<sstables::shared_sstable>& candidates) {
