@@ -75,6 +75,10 @@ functions::init() {
     declare(aggregate_fcts::make_max_function<double>());
     declare(aggregate_fcts::make_min_function<double>());
 
+    declare(aggregate_fcts::make_count_function<sstring>());
+    declare(aggregate_fcts::make_max_function<sstring>());
+    declare(aggregate_fcts::make_min_function<sstring>());
+
     //FIXME:
     //declare(aggregate_fcts::make_count_function<bytes>());
     //declare(aggregate_fcts::make_max_function<bytes>());
