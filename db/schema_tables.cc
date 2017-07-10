@@ -1657,17 +1657,13 @@ future<std::vector<mutation>> make_drop_table_mutations(lw_shared_ptr<keyspace_m
 
 static future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy, const qualified_name& table, schema_ptr s)
 {
-    return read_schema_partition_for_table(proxy, s, table.keyspace_name, table.table_name)
-        .then([&proxy, table] (mutation cf_m) {
-            return read_schema_partition_for_table(proxy, columns(), table.keyspace_name, table.table_name)
-                .then([&proxy, table, cf_m = std::move(cf_m)] (mutation col_m) {
-                return read_schema_partition_for_table(proxy, dropped_columns(), table.keyspace_name, table.table_name)
-                    .then([&proxy, table, cf_m = std::move(cf_m), col_m = std::move(col_m)] (mutation dropped_m) {
-                        return read_schema_partition_for_table(proxy, indexes(), table.keyspace_name, table.table_name)
-                            .then([cf_m = std::move(cf_m), col_m = std::move(col_m), dropped_m = std::move(dropped_m)] (mutation idx_m) {
-                                return schema_mutations{std::move(cf_m), std::move(col_m), std::move(idx_m), std::move(dropped_m)};
-                        });
-                    });
+    return when_all_succeed(
+        read_schema_partition_for_table(proxy, s, table.keyspace_name, table.table_name),
+        read_schema_partition_for_table(proxy, columns(), table.keyspace_name, table.table_name),
+        read_schema_partition_for_table(proxy, dropped_columns(), table.keyspace_name, table.table_name),
+        read_schema_partition_for_table(proxy, indexes(), table.keyspace_name, table.table_name)).then(
+            [] (mutation cf_m, mutation col_m, mutation dropped_m, mutation idx_m) {
+                return schema_mutations{std::move(cf_m), std::move(col_m), std::move(idx_m), std::move(dropped_m)};
             });
 #if 0
         // FIXME:
@@ -1682,7 +1678,6 @@ static future<schema_mutations> read_table_mutations(distributed<service::storag
         throw new RuntimeException(e);
     }
 #endif
-    });
 }
 
 future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table)
