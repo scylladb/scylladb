@@ -240,7 +240,11 @@ private:
     using ts_value_lru_entry = typename ts_value_type::lru_entry;
     using set_iterator = typename loading_values_type::iterator;
     using lru_list_type = typename ts_value_lru_entry::lru_list_type;
-    using value_extractor_fn = std::function<Tp& (ts_value_type&)>;
+    struct value_extractor_fn {
+        Tp& operator()(ts_value_type& tv) const {
+            return tv.value();
+        }
+    };
 
 public:
     using value_type = Tp;
@@ -257,7 +261,6 @@ private:
         , _refresh(refresh)
         , _logger(logger)
         , _timer([this] { on_timer(); })
-        , _value_extractor_fn([] (ts_value_type& v) -> value_type& { return v.value(); })
     {
         // Sanity check: if expiration period is given then non-zero refresh period and maximal size are required
         if (caching_enabled() && (_refresh == std::chrono::milliseconds(0) || _max_size == 0)) {
