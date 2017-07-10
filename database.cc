@@ -3033,7 +3033,7 @@ void column_family::apply_streaming_big_mutation(schema_ptr m_schema, utils::UUI
 void
 column_family::check_valid_rp(const db::replay_position& rp) const {
     if (rp != db::replay_position() && rp < _lowest_allowed_rp) {
-        throw replay_position_reordered_exception();
+        throw mutation_reordered_with_truncate_exception();
     }
 }
 
@@ -3188,7 +3188,7 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, ti
             return apply_in_memory(m, cf, std::move(h), timeout).handle_exception([this, &cf, &m, timeout] (auto ep) {
                 try {
                     std::rethrow_exception(ep);
-                } catch (replay_position_reordered_exception&) {
+                } catch (mutation_reordered_with_truncate_exception&) {
                     // expensive, but we're assuming this is super rare.
                     // if we failed to apply the mutation due to future re-ordering
                     // (which should be the ever only reason for rp mismatch in CF)
@@ -3211,7 +3211,7 @@ future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::
             return this->apply_in_memory(m, s, std::move(h), timeout).handle_exception([this, s, &m, timeout] (auto ep) {
                 try {
                     std::rethrow_exception(ep);
-                } catch (replay_position_reordered_exception&) {
+                } catch (mutation_reordered_with_truncate_exception&) {
                     // expensive, but we're assuming this is super rare.
                     // if we failed to apply the mutation due to future re-ordering
                     // (which should be the ever only reason for rp mismatch in CF)

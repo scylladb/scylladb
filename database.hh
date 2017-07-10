@@ -115,7 +115,7 @@ void make(database& db, bool durable, bool volatile_testing_only);
 }
 }
 
-class replay_position_reordered_exception : public std::exception {};
+class mutation_reordered_with_truncate_exception : public std::exception {};
 
 using shared_memtable = lw_shared_ptr<memtable>;
 class memtable_list;
