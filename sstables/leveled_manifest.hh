@@ -219,33 +219,33 @@ public:
 
             logger.debug("Compaction score for level {} is {}", i, score);
 
-            if (score > TARGET_SCORE) {
-                // before proceeding with a higher level, let's see if L0 is far enough behind to warrant STCS
-                // TODO: we shouldn't proceed with size tiered strategy if cassandra.disable_stcs_in_l0 is true.
-                if (get_level_size(0) > MAX_COMPACTING_L0) {
-                    auto most_interesting = size_tiered_most_interesting_bucket(get_level(0));
-                    if (!most_interesting.empty()) {
-                        logger.debug("L0 is too far behind, performing size-tiering there first");
-                        return sstables::compaction_descriptor(std::move(most_interesting));
-                    }
+            if (score <= TARGET_SCORE) {
+                continue;
+            }
+            // before proceeding with a higher level, let's see if L0 is far enough behind to warrant STCS
+            // TODO: we shouldn't proceed with size tiered strategy if cassandra.disable_stcs_in_l0 is true.
+            if (get_level_size(0) > MAX_COMPACTING_L0) {
+                auto most_interesting = size_tiered_most_interesting_bucket(get_level(0));
+                if (!most_interesting.empty()) {
+                    logger.debug("L0 is too far behind, performing size-tiering there first");
+                    return sstables::compaction_descriptor(std::move(most_interesting));
                 }
-                // L0 is fine, proceed with this level
-                auto info = get_candidates_for(i, last_compacted_keys);
-                if (!info.candidates.empty()) {
-                    int next_level = get_next_level(info.candidates, info.can_promote);
+            }
+            // L0 is fine, proceed with this level
+            auto info = get_candidates_for(i, last_compacted_keys);
+            if (!info.candidates.empty()) {
+                int next_level = get_next_level(info.candidates, info.can_promote);
 
-                    if (info.can_promote) {
-                        info.candidates = get_overlapping_starved_sstables(next_level, std::move(info.candidates), compaction_counter);
-                    }
+                if (info.can_promote) {
+                    info.candidates = get_overlapping_starved_sstables(next_level, std::move(info.candidates), compaction_counter);
+                }
 #if 0
-                    if (logger.isDebugEnabled())
-                        logger.debug("Compaction candidates for L{} are {}", i, toString(candidates));
+                if (logger.isDebugEnabled())
+                    logger.debug("Compaction candidates for L{} are {}", i, toString(candidates));
 #endif
-                    return sstables::compaction_descriptor(std::move(info.candidates), next_level, _max_sstable_size_in_bytes);
-                }
-                else {
-                    logger.debug("No compaction candidates for L{}", i);
-                }
+                return sstables::compaction_descriptor(std::move(info.candidates), next_level, _max_sstable_size_in_bytes);
+            } else {
+                logger.debug("No compaction candidates for L{}", i);
             }
         }
 
