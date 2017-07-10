@@ -98,11 +98,11 @@ public:
         // partitioned_sstable_set keeps track of a list for each level.
         for (auto& sstable : sstables) {
             uint32_t level = sstable->get_sstable_level();
-            if (level >= _generations.size()) {
-                throw std::runtime_error(sprint("Invalid level %u out of %ld", level, (_generations.size() - 1)));
+            if (level >= manifest._generations.size()) {
+                throw std::runtime_error(sprint("Invalid level %u out of %ld", level, (manifest._generations.size() - 1)));
             }
             logger.debug("Adding {} to L{}", sstable->get_filename(), level);
-            _generations[level].push_back(sstable);
+            manifest._generations[level].push_back(sstable);
         }
 
         return manifest;
@@ -110,7 +110,7 @@ public:
 
     // Return first set of overlapping sstables for a given level.
     // Assumes _generations[level] is already sorted by first key.
-    std::vector<sstables::shared_sstable> overlapping_sstables(int level) {
+    std::vector<sstables::shared_sstable> overlapping_sstables(int level) const {
         const schema& s = *_schema;
         std::unordered_set<sstables::shared_sstable> result;
         stdx::optional<sstables::shared_sstable> previous;
@@ -153,7 +153,7 @@ public:
         return bytes_u64;
     }
 
-    uint64_t max_bytes_for_level(int level) {
+    uint64_t max_bytes_for_level(int level) const {
         return max_bytes_for_level(level, _max_sstable_size_in_bytes);
     }
 
@@ -500,9 +500,9 @@ public:
         });
     }
 
-    uint32_t get_level_count() {
+    uint32_t get_level_count() const {
         for (int i = _generations.size() - 1; i >= 0; i--) {
-            if (get_level(i).size() > 0) {
+            if (_generations[i].size() > 0) {
                 return i;
             }
         }
@@ -516,11 +516,11 @@ public:
         return _generations[level];
     }
 
-    int64_t get_estimated_tasks() {
+    int64_t get_estimated_tasks() const {
         int64_t tasks = 0;
 
         for (int i = static_cast<int>(_generations.size()) - 1; i >= 0; i--) {
-            const auto& sstables = get_level(i);
+            const auto& sstables = _generations[i];
             uint64_t total_bytes_for_this_level = get_total_bytes(sstables);
             uint64_t max_bytes_for_this_level = max_bytes_for_level(i);
 
@@ -533,7 +533,7 @@ public:
         return tasks;
     }
 
-    int get_next_level(const std::vector<sstables::shared_sstable>& sstables, bool can_promote = true) {
+    int get_next_level(const std::vector<sstables::shared_sstable>& sstables, bool can_promote = true) const {
         int maximum_level = std::numeric_limits<int>::min();
         int minimum_level = std::numeric_limits<int>::max();
 
