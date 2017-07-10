@@ -287,48 +287,47 @@ private:
         }
 
         for (int i = _generations.size() - 1; i > 0; i--) {
-            if (get_level_size(i) > 0) {
-                if (compaction_counter[i] > NO_COMPACTION_LIMIT) {
-                    // we try to find an sstable that is fully contained within  the boundaries we are compacting;
-                    // say we are compacting 3 sstables: 0->30 in L1 and 0->12, 12->33 in L2
-                    // this means that we will not create overlap in L2 if we add an sstable
-                    // contained within 0 -> 33 to the compaction
-                    stdx::optional<dht::decorated_key> max;
-                    stdx::optional<dht::decorated_key> min;
-                    for (auto& candidate : candidates) {
-                        auto& candidate_first = candidate->get_first_decorated_key();
-                        if (!min || candidate_first.tri_compare(*_schema, *min) < 0) {
-                            min = candidate_first;
-                        }
-                        auto& candidate_last = candidate->get_last_decorated_key();
-                        if (!max || candidate_last.tri_compare(*_schema, *max) > 0) {
-                            max = candidate_last;
-                        }
-                    }
-#if 0
-                    // NOTE: We don't need to filter out compacting sstables by now because strategy only deals with
-                    // uncompacting sstables and parallel compaction is also disabled for lcs.
-                    Set<SSTableReader> compacting = cfs.getDataTracker().getCompacting();
-#endif
-                    auto boundaries = ::range<dht::decorated_key>::make(*min, *max);
-                    for (auto& sstable : get_level(i)) {
-                        auto r = ::range<dht::decorated_key>::make(sstable->get_first_decorated_key(), sstable->get_last_decorated_key());
-                        if (boundaries.contains(r, dht::ring_position_comparator(*_schema))) {
-                            logger.info("Adding high-level (L{}) {} to candidates", sstable->get_sstable_level(), sstable->get_filename());
-
-                            auto result = std::find_if(std::begin(candidates), std::end(candidates), [&sstable] (auto& candidate) {
-                                return sstable->generation() == candidate->generation();
-                            });
-                            if (result != std::end(candidates)) {
-                                continue;
-                            }
-                            candidates.push_back(sstable);
-                            return candidates;
-                        }
-                    }
-                }
-                return candidates;
+            if (!get_level_size(i) || compaction_counter[i] <= NO_COMPACTION_LIMIT) {
+                continue;
             }
+            // we try to find an sstable that is fully contained within  the boundaries we are compacting;
+            // say we are compacting 3 sstables: 0->30 in L1 and 0->12, 12->33 in L2
+            // this means that we will not create overlap in L2 if we add an sstable
+            // contained within 0 -> 33 to the compaction
+            stdx::optional<dht::decorated_key> max;
+            stdx::optional<dht::decorated_key> min;
+            for (auto& candidate : candidates) {
+                auto& candidate_first = candidate->get_first_decorated_key();
+                if (!min || candidate_first.tri_compare(*_schema, *min) < 0) {
+                    min = candidate_first;
+                }
+                auto& candidate_last = candidate->get_last_decorated_key();
+                if (!max || candidate_last.tri_compare(*_schema, *max) > 0) {
+                    max = candidate_last;
+                }
+            }
+#if 0
+            // NOTE: We don't need to filter out compacting sstables by now because strategy only deals with
+            // uncompacting sstables and parallel compaction is also disabled for lcs.
+            Set<SSTableReader> compacting = cfs.getDataTracker().getCompacting();
+#endif
+            auto boundaries = ::range<dht::decorated_key>::make(*min, *max);
+            for (auto& sstable : get_level(i)) {
+                auto r = ::range<dht::decorated_key>::make(sstable->get_first_decorated_key(), sstable->get_last_decorated_key());
+                if (boundaries.contains(r, dht::ring_position_comparator(*_schema))) {
+                    logger.info("Adding high-level (L{}) {} to candidates", sstable->get_sstable_level(), sstable->get_filename());
+
+                    auto result = std::find_if(std::begin(candidates), std::end(candidates), [&sstable] (auto& candidate) {
+                        return sstable->generation() == candidate->generation();
+                    });
+                    if (result != std::end(candidates)) {
+                        continue;
+                    }
+                    candidates.push_back(sstable);
+                    return candidates;
+                }
+            }
+            return candidates;
         }
 
         return candidates;
