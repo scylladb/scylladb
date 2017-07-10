@@ -79,7 +79,7 @@ public:
     // Lowest score (score is about how much data a level contains vs its ideal amount) for a
     // level to be considered worth compacting.
     static constexpr float TARGET_SCORE = 1.001f;
-
+private:
     leveled_manifest(column_family& cfs, int max_sstable_size_in_MB)
         : _schema(cfs.schema())
         , _max_sstable_size_in_bytes(max_sstable_size_in_MB * 1024 * 1024)
@@ -89,7 +89,7 @@ public:
         // dependent on maxSSTableSize.)
         _generations.resize(MAX_LEVELS);
     }
-
+public:
     static leveled_manifest create(column_family& cfs, std::vector<sstables::shared_sstable>& sstables, int max_sstable_size_in_mb) {
         leveled_manifest manifest = leveled_manifest(cfs, max_sstable_size_in_mb);
 
@@ -260,7 +260,7 @@ public:
         auto next_level = get_next_level(info.candidates, info.can_promote);
         return sstables::compaction_descriptor(std::move(info.candidates), next_level, _max_sstable_size_in_bytes);
     }
-
+private:
     /**
      * If we do something that makes many levels contain too little data (cleanup, change sstable size) we will "never"
      * compact the high levels.
@@ -332,7 +332,7 @@ public:
 
         return candidates;
     }
-
+public:
     size_t get_level_size(uint32_t level) {
         return get_level(level).size();
     }
@@ -396,7 +396,7 @@ public:
     bool worth_promoting_L0_candidates(const std::vector<sstables::shared_sstable>& candidates) const {
         return get_total_bytes(candidates) >= _max_sstable_size_in_bytes;
     }
-
+private:
     candidates_info candidates_for_level_0_compaction() {
         // L0 is the dumping ground for new sstables which thus may overlap each other.
         //
@@ -493,7 +493,7 @@ public:
         }
         return candidates_for_higher_levels_compaction(level, last_compacted_keys);
     }
-
+public:
     static void sort_sstables_by_age(std::vector<sstables::shared_sstable>& candidates) {
         std::sort(candidates.begin(), candidates.end(), [] (auto& i, auto& j) {
             return i->compare_by_max_timestamp(*j) < 0;
