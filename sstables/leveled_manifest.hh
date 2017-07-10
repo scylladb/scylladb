@@ -494,7 +494,7 @@ public:
         return candidates_for_higher_levels_compaction(level, last_compacted_keys);
     }
 
-    void sort_sstables_by_age(std::vector<sstables::shared_sstable>& candidates) {
+    static void sort_sstables_by_age(std::vector<sstables::shared_sstable>& candidates) {
         std::sort(candidates.begin(), candidates.end(), [] (auto& i, auto& j) {
             return i->compare_by_max_timestamp(*j) < 0;
         });
@@ -533,7 +533,7 @@ public:
         return tasks;
     }
 
-    int get_next_level(const std::vector<sstables::shared_sstable>& sstables, bool can_promote = true) const {
+    static int get_next_level(const std::vector<sstables::shared_sstable>& sstables, bool can_promote = true) {
         int maximum_level = std::numeric_limits<int>::min();
         int minimum_level = std::numeric_limits<int>::max();
 
