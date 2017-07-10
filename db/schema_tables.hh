@@ -64,6 +64,7 @@ namespace v3 {
 static constexpr auto NAME = "system_schema";
 static constexpr auto KEYSPACES = "keyspaces";
 static constexpr auto TABLES = "tables";
+static constexpr auto SCYLLA_TABLES = "scylla_tables";
 static constexpr auto COLUMNS = "columns";
 static constexpr auto DROPPED_COLUMNS = "dropped_columns";
 static constexpr auto TRIGGERS = "triggers";
@@ -77,6 +78,7 @@ schema_ptr columns();
 schema_ptr dropped_columns();
 schema_ptr indexes();
 schema_ptr tables();
+schema_ptr scylla_tables();
 schema_ptr views();
 
 }

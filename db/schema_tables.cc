@@ -258,6 +258,21 @@ schema_ptr tables() {
     return schema;
 }
 
+// Holds Scylla-specific table metadata.
+schema_ptr scylla_tables() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, SCYLLA_TABLES);
+        return schema_builder(NAME, SCYLLA_TABLES, stdx::make_optional(id))
+            .with_column("keyspace_name", utf8_type, column_kind::partition_key)
+            .with_column("table_name", utf8_type, column_kind::clustering_key)
+            .with_column("version", uuid_type)
+            .set_gc_grace_seconds(schema_gc_grace)
+            .with_version(generate_schema_version(id))
+            .build();
+    }();
+    return schema;
+}
+
 schema_ptr columns() {
     static thread_local auto schema = [] {
         schema_builder builder(make_lw_shared(::schema(generate_legacy_id(NAME, COLUMNS), NAME, COLUMNS,
@@ -1463,6 +1478,13 @@ static void add_dropped_column_to_schema_mutation(schema_ptr table, const sstrin
     m.set_clustered_cell(ckey, "type", expand_user_type(column.type)->as_cql3_type()->to_string(), timestamp);
 }
 
+static mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type timestamp) {
+    schema_ptr s = tables();
+    auto pkey = partition_key::from_singular(*s, table->ks_name());
+    mutation m(pkey, scylla_tables());
+    return m;
+}
+
 static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers)
 {
     // When adding new schema properties, don't set cells for default values so that
@@ -1475,6 +1497,8 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
     mutation m{pkey, s};
     auto ckey = clustering_key::from_singular(*s, table->cf_name());
     m.set_clustered_cell(ckey, "id", table->id(), timestamp);
+
+    auto scylla_tables_mutation = make_scylla_tables_mutation(table, timestamp);
 
     {
         list_type_impl::native_type flags;
@@ -1514,7 +1538,8 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
         }
     }
 
-    return schema_mutations{std::move(m), std::move(columns_mutation), std::move(indices_mutation), std::move(dropped_columns_mutation)};
+    return schema_mutations{std::move(m), std::move(columns_mutation), std::move(indices_mutation), std::move(dropped_columns_mutation),
+                            std::move(scylla_tables_mutation)};
 }
 
 void add_table_or_view_to_schema_mutation(schema_ptr s, api::timestamp_type timestamp, bool with_columns, std::vector<mutation>& mutations)
@@ -1628,12 +1653,17 @@ static void make_drop_table_or_view_mutations(schema_ptr schema_table,
             api::timestamp_type timestamp,
             std::vector<mutation>& mutations) {
     auto pkey = partition_key::from_singular(*schema_table, table_or_view->ks_name());
-    mutation m{std::move(pkey), schema_table};
+    mutation m{pkey, schema_table};
     auto ckey = clustering_key::from_singular(*schema_table, table_or_view->cf_name());
-    m.partition().apply_delete(*schema_table, std::move(ckey), tombstone(timestamp, gc_clock::now()));
+    m.partition().apply_delete(*schema_table, ckey, tombstone(timestamp, gc_clock::now()));
     mutations.emplace_back(m);
     for (auto &column : table_or_view->all_columns()) {
         drop_column_from_schema_mutation(table_or_view, column, timestamp, mutations);
+    }
+    {
+        mutation m{pkey, scylla_tables()};
+        m.partition().apply_delete(*scylla_tables(), ckey, tombstone(timestamp, gc_clock::now()));
+        mutations.emplace_back(m);
     }
 }
 
@@ -1661,9 +1691,10 @@ static future<schema_mutations> read_table_mutations(distributed<service::storag
         read_schema_partition_for_table(proxy, s, table.keyspace_name, table.table_name),
         read_schema_partition_for_table(proxy, columns(), table.keyspace_name, table.table_name),
         read_schema_partition_for_table(proxy, dropped_columns(), table.keyspace_name, table.table_name),
-        read_schema_partition_for_table(proxy, indexes(), table.keyspace_name, table.table_name)).then(
-            [] (mutation cf_m, mutation col_m, mutation dropped_m, mutation idx_m) {
-                return schema_mutations{std::move(cf_m), std::move(col_m), std::move(idx_m), std::move(dropped_m)};
+        read_schema_partition_for_table(proxy, indexes(), table.keyspace_name, table.table_name),
+        read_schema_partition_for_table(proxy, scylla_tables(), table.keyspace_name, table.table_name)).then(
+            [] (mutation cf_m, mutation col_m, mutation dropped_m, mutation idx_m, mutation st_m) {
+                return schema_mutations{std::move(cf_m), std::move(col_m), std::move(idx_m), std::move(dropped_m), std::move(st_m)};
             });
 #if 0
         // FIXME:
@@ -2162,7 +2193,10 @@ static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type t
         }
     }
 
-    return schema_mutations{std::move(m), std::move(columns_mutation), std::move(indices_mutation), std::move(dropped_columns_mutation)};
+    auto scylla_tables_mutation = make_scylla_tables_mutation(view, timestamp);
+
+    return schema_mutations{std::move(m), std::move(columns_mutation), std::move(indices_mutation), std::move(dropped_columns_mutation),
+                            std::move(scylla_tables_mutation)};
 }
 
 schema_mutations make_schema_mutations(schema_ptr s, api::timestamp_type timestamp, bool with_columns)
@@ -2456,7 +2490,7 @@ data_type parse_type(sstring str)
 
 std::vector<schema_ptr> all_tables() {
     return {
-        keyspaces(), tables(), columns(), dropped_columns(), triggers(),
+        keyspaces(), tables(), scylla_tables(), columns(), dropped_columns(), triggers(),
         views(), indexes(), types(), functions(), aggregates(),
     };
 }
