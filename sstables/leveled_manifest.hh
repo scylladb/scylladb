@@ -397,8 +397,8 @@ public:
         return overlapped;
     }
 
-    bool worth_promoting_L0_candidates(uint64_t candidates_total_size) const {
-        return candidates_total_size >= _max_sstable_size_in_bytes;
+    bool worth_promoting_L0_candidates(const std::vector<sstables::shared_sstable>& candidates) const {
+        return get_total_bytes(candidates) >= _max_sstable_size_in_bytes;
     }
 
     candidates_info candidates_for_level_0_compaction() {
@@ -425,7 +425,7 @@ public:
 
         // leave everything in L0 if we didn't end up with a full sstable's worth of data
         bool can_promote = false;
-        if (worth_promoting_L0_candidates(get_total_bytes(candidates))) {
+        if (worth_promoting_L0_candidates(candidates)) {
             // add sstables from L1 that overlap candidates
             // if the overlapping ones are already busy in a compaction, leave it out.
             // TODO try to find a set of L0 sstables that only overlaps with non-busy L1 sstables
