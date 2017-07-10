@@ -22,8 +22,8 @@
 bash seastar/install-dependencies.sh
 
 if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
-    apt -y install libyaml-cpp-dev libjsoncpp-dev
+    apt -y install libyaml-cpp-dev libjsoncpp-dev libsnappy-dev
     echo antlr3 and thrift still missing - waiting for ppa
 elif [ "$ID" = "centos" ] || [ "$ID" = "fedora" ]; then
-    yum install -y yaml-cpp-devel thrift-devel antlr3-tool antlr3-C++-devel jsoncpp-devel
+    yum install -y yaml-cpp-devel thrift-devel antlr3-tool antlr3-C++-devel jsoncpp-devel snappy-devel
 fi
