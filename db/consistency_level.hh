@@ -167,6 +167,14 @@ inline void assure_sufficient_live_nodes(
         const PendingRange& pending_endpoints = std::array<gms::inet_address, 0>()) {
     size_t need = block_for(ks, cl);
 
+    auto adjust_live_for_error = [] (size_t live, size_t pending) {
+        // DowngradingConsistencyRetryPolicy uses alive replicas count from Unavailable
+        // exception to adjust CL for retry. When pending node is present CL is increased
+        // by 1 internally, so reported number of live nodes has to be adjusted to take
+        // this into account
+        return pending <= live ? live - pending : 0;
+    };
+
     switch (cl) {
     case consistency_level::ANY:
         // local hint is acceptable, and local node is always live
@@ -181,7 +189,7 @@ inline void assure_sufficient_live_nodes(
         size_t pending = count_local_endpoints(pending_endpoints);
         if (local_live < need + pending) {
             cl_logger.debug("Local replicas {} are insufficient to satisfy LOCAL_QUORUM requirement of needed {} and pending {}", live_endpoints, local_live, pending);
-            throw exceptions::unavailable_exception(cl, need, local_live);
+            throw exceptions::unavailable_exception(cl, need, adjust_live_for_error(local_live, pending));
         }
         break;
     }
@@ -195,7 +203,7 @@ inline void assure_sufficient_live_nodes(
         size_t pending = pending_endpoints.size();
         if (live < need + pending) {
             cl_logger.debug("Live nodes {} do not satisfy ConsistencyLevel ({} required, {} pending)", live, need, pending);
-            throw exceptions::unavailable_exception(cl, need, live);
+            throw exceptions::unavailable_exception(cl, need, adjust_live_for_error(live, pending));
         }
         break;
     }
