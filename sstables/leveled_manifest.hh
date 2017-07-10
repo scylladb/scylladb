@@ -433,6 +433,27 @@ public:
         }
     }
 
+    // LCS uses a round-robin heuristic for even distribution of keys in each level.
+    // FIXME: come up with a general fix instead of this heuristic which potentially has weak points. For example,
+    //  it may be vulnerable to clients that perform operations by scanning the token range.
+    static int sstable_index_based_on_last_compacted_key(const std::vector<sstables::shared_sstable>& sstables, int level,
+            const schema& s, const std::vector<stdx::optional<dht::decorated_key>>& last_compacted_keys) {
+        int start = 0; // handles case where the prior compaction touched the very last range
+        int idx = 0;
+        for (auto& sstable : sstables) {
+            if (uint32_t(level) >= last_compacted_keys.size()) {
+                throw std::runtime_error(sprint("Invalid level %u out of %ld", level, (last_compacted_keys.size() - 1)));
+            }
+            auto& sstable_first = sstable->get_first_decorated_key();
+            if (!last_compacted_keys[level] || sstable_first.tri_compare(s, *last_compacted_keys[level]) > 0) {
+                start = idx;
+                break;
+            }
+            idx++;
+        }
+        return start;
+    }
+
     /**
      * @return highest-priority sstables to compact for the given level.
      * If no compactions are possible (because of concurrent compactions or because some sstables are blacklisted
@@ -465,19 +486,7 @@ public:
             return { overlapping_current_level, false };
         }
 
-        int start = 0; // handles case where the prior compaction touched the very last range
-        int idx = 0;
-        for (auto& sstable : sstables) {
-            if (uint32_t(level) >= last_compacted_keys.size()) {
-                throw std::runtime_error(sprint("Invalid level %u out of %ld", level, (last_compacted_keys.size() - 1)));
-            }
-            auto& sstable_first = sstable->get_first_decorated_key();
-            if (!last_compacted_keys[level] || sstable_first.tri_compare(s, *last_compacted_keys[level]) > 0) {
-                start = idx;
-                break;
-            }
-            idx++;
-        }
+        int start = sstable_index_based_on_last_compacted_key(sstables, level, s, last_compacted_keys);
 
         // look for a non-suspect keyspace to compact with, starting with where we left off last time,
         // and wrapping back to the beginning of the generation if necessary
