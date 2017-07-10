@@ -835,7 +835,7 @@ future<> messaging_service::send_definitions_update(msg_addr id, std::vector<fro
     return send_message_oneway(this, messaging_verb::DEFINITIONS_UPDATE, std::move(id), std::move(fm));
 }
 
-void messaging_service::register_migration_request(std::function<future<std::vector<frozen_mutation>> ()>&& func) {
+void messaging_service::register_migration_request(std::function<future<std::vector<frozen_mutation>> (const rpc::client_info&)>&& func) {
     register_handler(this, netw::messaging_verb::MIGRATION_REQUEST, std::move(func));
 }
 void messaging_service::unregister_migration_request() {
