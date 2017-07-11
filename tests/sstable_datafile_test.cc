@@ -1790,19 +1790,18 @@ SEASTAR_TEST_CASE(leveled_01) {
     auto key_and_token_pair = token_generation_for_current_shard(50);
     auto min_key = key_and_token_pair[0].first;
     auto max_key = key_and_token_pair[key_and_token_pair.size()-1].first;
-    auto max_sstable_size_in_mb = 1;
-    auto max_sstable_size = max_sstable_size_in_mb*1024*1024;
 
     // Creating two sstables which key range overlap.
-    add_sstable_for_leveled_test(cf, /*gen*/1, max_sstable_size, /*level*/0, min_key, max_key);
+    add_sstable_for_leveled_test(cf, /*gen*/1, /*data_size*/0, /*level*/0, min_key, max_key);
     BOOST_REQUIRE(cf->get_sstables()->size() == 1);
 
-    add_sstable_for_leveled_test(cf, /*gen*/2, max_sstable_size, /*level*/0, key_and_token_pair[1].first, max_key);
+    add_sstable_for_leveled_test(cf, /*gen*/2, /*data_size*/0, /*level*/0, key_and_token_pair[1].first, max_key);
     BOOST_REQUIRE(cf->get_sstables()->size() == 2);
 
     BOOST_REQUIRE(key_range_overlaps(min_key, max_key, key_and_token_pair[1].first, max_key) == true);
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 2) == true);
 
+    auto max_sstable_size_in_mb = 1;
     auto candidates = get_candidates_for_leveled_strategy(*cf);
     leveled_manifest manifest = leveled_manifest::create(*cf, candidates, max_sstable_size_in_mb);
     BOOST_REQUIRE(manifest.get_level_size(0) == 2);
@@ -1810,7 +1809,7 @@ SEASTAR_TEST_CASE(leveled_01) {
     std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.sstables.size() == 2);
-    BOOST_REQUIRE(candidate.level == 1);
+    BOOST_REQUIRE(candidate.level == 0);
 
     std::set<unsigned long> gens = { 1, 2 };
     for (auto& sst : candidate.sstables) {
@@ -1839,19 +1838,17 @@ SEASTAR_TEST_CASE(leveled_02) {
     auto key_and_token_pair = token_generation_for_current_shard(50);
     auto min_key = key_and_token_pair[0].first;
     auto max_key = key_and_token_pair[key_and_token_pair.size()-1].first;
-    auto max_sstable_size_in_mb = 1;
-    auto max_sstable_size = max_sstable_size_in_mb*1024*1024;
 
     // Generation 1 will overlap only with generation 2.
     // Remember that for level0, leveled strategy prefer choosing older sstables as candidates.
 
-    add_sstable_for_leveled_test(cf, /*gen*/1, max_sstable_size, /*level*/0, min_key, key_and_token_pair[10].first);
+    add_sstable_for_leveled_test(cf, /*gen*/1, /*data_size*/0, /*level*/0, min_key, key_and_token_pair[10].first);
     BOOST_REQUIRE(cf->get_sstables()->size() == 1);
 
-    add_sstable_for_leveled_test(cf, /*gen*/2, max_sstable_size, /*level*/0, min_key, key_and_token_pair[20].first);
+    add_sstable_for_leveled_test(cf, /*gen*/2, /*data_size*/0, /*level*/0, min_key, key_and_token_pair[20].first);
     BOOST_REQUIRE(cf->get_sstables()->size() == 2);
 
-    add_sstable_for_leveled_test(cf, /*gen*/3, max_sstable_size, /*level*/0, key_and_token_pair[30].first, max_key);
+    add_sstable_for_leveled_test(cf, /*gen*/3, /*data_size*/0, /*level*/0, key_and_token_pair[30].first, max_key);
     BOOST_REQUIRE(cf->get_sstables()->size() == 3);
 
     BOOST_REQUIRE(key_range_overlaps(min_key, key_and_token_pair[10].first, min_key, key_and_token_pair[20].first) == true);
@@ -1862,6 +1859,7 @@ SEASTAR_TEST_CASE(leveled_02) {
     BOOST_REQUIRE(sstable_overlaps(cf, 1, 3) == false);
     BOOST_REQUIRE(sstable_overlaps(cf, 2, 3) == false);
 
+    auto max_sstable_size_in_mb = 1;
     auto candidates = get_candidates_for_leveled_strategy(*cf);
     leveled_manifest manifest = leveled_manifest::create(*cf, candidates, max_sstable_size_in_mb);
     BOOST_REQUIRE(manifest.get_level_size(0) == 3);
@@ -1869,7 +1867,7 @@ SEASTAR_TEST_CASE(leveled_02) {
     std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.sstables.size() == 3);
-    BOOST_REQUIRE(candidate.level == 1);
+    BOOST_REQUIRE(candidate.level == 0);
 
     std::set<unsigned long> gens = { 1, 2, 3 };
     for (auto& sst : candidate.sstables) {
@@ -2087,14 +2085,14 @@ SEASTAR_TEST_CASE(leveled_07) {
     cf->mark_ready_for_writes();
 
     for (auto i = 0; i < leveled_manifest::MAX_COMPACTING_L0*2; i++) {
-        add_sstable_for_leveled_test(cf, i, 1024*1024, /*level*/0, "a", "a", i /* max timestamp */);
+        add_sstable_for_leveled_test(cf, i, 0, /*level*/0, "a", "a", i /* max timestamp */);
     }
     auto candidates = get_candidates_for_leveled_strategy(*cf);
     leveled_manifest manifest = leveled_manifest::create(*cf, candidates, 1);
     std::vector<stdx::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
     auto desc = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
-    BOOST_REQUIRE(desc.level == 1);
+    BOOST_REQUIRE(desc.level == 0);
     BOOST_REQUIRE(desc.sstables.size() == leveled_manifest::MAX_COMPACTING_L0);
     // check that strategy returns the oldest sstables
     for (auto& sst : desc.sstables) {
@@ -2142,56 +2140,6 @@ SEASTAR_TEST_CASE(leveled_invariant_fix) {
     BOOST_REQUIRE(boost::algorithm::all_of(candidate.sstables, [] (auto& sst) {
         return sst->generation() != 0;
     }));
-
-    return make_ready_future<>();
-}
-
-SEASTAR_TEST_CASE(leveled_stcs_on_L0) {
-    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
-        {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
-
-    column_family::config cfg;
-    cell_locker_stats cl_stats;
-    compaction_manager cm;
-    cfg.enable_disk_writes = false;
-    cfg.enable_commitlog = false;
-    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
-    cf->mark_ready_for_writes();
-
-    auto key_and_token_pair = token_generation_for_current_shard(1);
-    auto sstable_max_size_in_mb = 1;
-    auto l0_sstables_no = s->min_compaction_threshold();
-    // we don't want level 0 to be worth promoting.
-    auto l0_sstables_size = (sstable_max_size_in_mb*1024*1024)/(l0_sstables_no+1);
-
-    add_sstable_for_leveled_test(cf, 0, sstable_max_size_in_mb*1024*1024, /*level*/1, key_and_token_pair[0].first, key_and_token_pair[0].first);
-    for (auto gen = 0; gen < l0_sstables_no; gen++) {
-        add_sstable_for_leveled_test(cf, gen+1, l0_sstables_size, /*level*/0, key_and_token_pair[0].first, key_and_token_pair[0].first);
-    }
-    auto candidates = get_candidates_for_leveled_strategy(*cf);
-    BOOST_REQUIRE(candidates.size() == size_t(l0_sstables_no+1));
-    BOOST_REQUIRE(cf->get_sstables()->size() == size_t(l0_sstables_no+1));
-
-    std::vector<stdx::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
-    std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
-
-    {
-        leveled_manifest manifest = leveled_manifest::create(*cf, candidates, sstable_max_size_in_mb);
-        BOOST_REQUIRE(!manifest.worth_promoting_L0_candidates(manifest.get_level(0)));
-        auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
-        BOOST_REQUIRE(candidate.level == 0);
-        BOOST_REQUIRE(candidate.sstables.size() == size_t(l0_sstables_no));
-        BOOST_REQUIRE(boost::algorithm::all_of(candidate.sstables, [] (auto& sst) {
-            return sst->generation() != 0;
-        }));
-    }
-    {
-        candidates.resize(2);
-        leveled_manifest manifest = leveled_manifest::create(*cf, candidates, sstable_max_size_in_mb);
-        auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
-        BOOST_REQUIRE(candidate.level == 0);
-        BOOST_REQUIRE(candidate.sstables.empty());
-    }
 
     return make_ready_future<>();
 }
