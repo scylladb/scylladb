@@ -1751,8 +1751,6 @@ public:
         // For compatibility sake, we still return DateType as the timestamp type in resultSet metadata (#5723)
         if (type == date_type) {
             type = timestamp_type;
-        } else if (type == counter_type) {
-            type = long_type;
         }
 
         auto i = type_id_to_type.right.find(type);
@@ -1814,7 +1812,7 @@ thread_local const type_codec::type_id_to_type_type type_codec::type_id_to_type 
     (type_id::BIGINT    , long_type)
     (type_id::BLOB      , bytes_type)
     (type_id::BOOLEAN   , boolean_type)
-    //(type_id::COUNTER   , CounterColumn_type)
+    (type_id::COUNTER   , counter_type)
     (type_id::DECIMAL   , decimal_type)
     (type_id::DOUBLE    , double_type)
     (type_id::FLOAT     , float_type)
