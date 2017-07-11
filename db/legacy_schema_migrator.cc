@@ -519,9 +519,9 @@ public:
 
     future<> drop_legacy_tables() {
         mlogger.info("Dropping legacy schema tables");
-        return do_with(utils::make_joinpoint([] { return db_clock::now();}),[this](auto& tsf) {
-            return _qp.db().invoke_on_all([&tsf](database& db) {
-                return parallel_for_each(legacy_schema_tables, [&db, &tsf](const sstring& cfname) {
+        return parallel_for_each(legacy_schema_tables, [this](const sstring& cfname) {
+            return do_with(utils::make_joinpoint([] { return db_clock::now();}),[this, cfname](auto& tsf) {
+                return _qp.db().invoke_on_all([&tsf, cfname](database& db) {
                     return db.drop_column_family(db::system_keyspace::NAME, cfname, [&tsf] { return tsf.value(); });
                 });
             });
