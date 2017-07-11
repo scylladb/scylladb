@@ -316,15 +316,8 @@ private:
                 auto r = ::range<dht::decorated_key>::make(sstable->get_first_decorated_key(), sstable->get_last_decorated_key());
                 if (boundaries.contains(r, dht::ring_position_comparator(*_schema))) {
                     logger.info("Adding high-level (L{}) {} to candidates", sstable->get_sstable_level(), sstable->get_filename());
-
-                    auto result = std::find_if(std::begin(candidates), std::end(candidates), [&sstable] (auto& candidate) {
-                        return sstable->generation() == candidate->generation();
-                    });
-                    if (result != std::end(candidates)) {
-                        continue;
-                    }
                     candidates.push_back(sstable);
-                    return candidates;
+                    break;
                 }
             }
             return candidates;
