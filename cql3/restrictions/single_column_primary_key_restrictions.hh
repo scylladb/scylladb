@@ -120,7 +120,7 @@ public:
                 if (restriction->is_slice()) {
                     throw exceptions::invalid_request_exception(sprint(
                         "PRIMARY KEY column \"%s\" cannot be restricted (preceding column \"%s\" is restricted by a non-EQ relation)",
-                        _restrictions->next_column(new_column)->name_as_text(), new_column.name_as_text()));
+                        last_column.name_as_text(), new_column.name_as_text()));
                 }
             }
 
