@@ -868,7 +868,7 @@ future<> mutate_MV(const dht::token& base_token,
                 // frozen form) so don't need to increase its lifetime.
                 fs->push_back(service::get_local_storage_proxy().mutate_locally(mut).handle_exception([] (auto ep) {
                     vlogger.error("Error applying local view update: {}", ep);
-                        return make_exception_future<>(std::move(ep));
+                    return make_exception_future<>(std::move(ep));
                 }));
             } else {
                 vlogger.debug("Sending view update to endpoint {}, with pending endpoints = {}", *paired_endpoint, pending_endpoints);
