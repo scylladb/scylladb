@@ -120,6 +120,18 @@ extern schema_ptr hints();
 extern schema_ptr batchlog();
 extern schema_ptr built_indexes(); // TODO (from Cassandra): make private
 
+namespace legacy {
+
+schema_ptr keyspaces();
+schema_ptr column_families();
+schema_ptr columns();
+schema_ptr triggers();
+schema_ptr usertypes();
+schema_ptr functions();
+schema_ptr aggregates();
+
+}
+
 table_schema_version generate_schema_version(utils::UUID table_id);
 
 // Only for testing.
