@@ -92,7 +92,7 @@ query::clustering_row_ranges calculate_affected_clustering_ranges(
         const mutation_partition& mp,
         const std::vector<view_ptr>& views);
 
-void mutate_MV(const dht::token& base_token,
+future<> mutate_MV(const dht::token& base_token,
         std::vector<mutation> mutations);
 
 }

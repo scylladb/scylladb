@@ -4317,7 +4317,7 @@ future<> column_family::generate_and_propagate_view_updates(const schema_ptr& ba
                         std::move(views),
                         flat_mutation_reader_from_mutations({std::move(m)}),
                         std::move(existings)).then([base_token = std::move(base_token)] (auto&& updates) {
-        db::view::mutate_MV(std::move(base_token), std::move(updates));
+        db::view::mutate_MV(std::move(base_token), std::move(updates)).handle_exception([] (auto ignored) { });
     });
 }
 
