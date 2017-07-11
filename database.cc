@@ -879,8 +879,7 @@ column_family::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
             // Lastly, we don't have any commitlog RP to update, and we don't need to deal manipulate the
             // memtable list, since this memtable was not available for reading up until this point.
             auto sstable_write_permit = permit.release_sstable_write_permit();
-            return write_memtable_to_sstable(*old, newtab, incremental_backups_enabled(), priority, false, _config.background_writer_scheduling_group).then([this, newtab, old, permit = std::move(sstable_write_permit)] {
-                // We release the flush permit here to allow another flush to happen concurrently to keep the disk active.
+            return write_memtable_to_sstable(*old, newtab, std::move(sstable_write_permit), incremental_backups_enabled(), priority, false, _config.background_writer_scheduling_group).then([this, newtab, old] {
                 return newtab->open_data();
             }).then([this, old, newtab] () {
                 return with_semaphore(_cache_update_sem, 1, [this, newtab, old] {
@@ -929,7 +928,8 @@ future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_bi
                 newtab->set_unshared();
 
                 auto&& priority = service::get_local_streaming_write_priority();
-                return write_memtable_to_sstable(*old, newtab, incremental_backups_enabled(), priority, true, _config.background_writer_scheduling_group).then([this, newtab, old, &smb, permit = std::move(permit)] {
+                auto sstable_write_permit = permit.release_sstable_write_permit();
+                return write_memtable_to_sstable(*old, newtab, std::move(sstable_write_permit), incremental_backups_enabled(), priority, true, _config.background_writer_scheduling_group).then([this, newtab, old, &smb, permit = std::move(permit)] {
                     smb.sstables.emplace_back(newtab);
                 }).handle_exception([] (auto ep) {
                     dblog.error("failed to write streamed sstable: {}", ep);
@@ -1002,12 +1002,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstabl
     // The code as is guarantees that we'll never partially backup a
     // single sstable, so that is enough of a guarantee.
     auto&& priority = service::get_local_memtable_flush_priority();
-    return write_memtable_to_sstable(*old, newtab, incremental_backups_enabled(), priority, false, _config.memtable_scheduling_group).finally([permit = std::move(permit)] {
-        // We need to start a flush before the current one finishes, otherwise
-        // we'll have a period without significant disk activity when the current
-        // SSTable is being sealed, the caches are being updated, etc. To do that,
-        // we ensure the permit doesn't outlive this continuation.
-    }).then([this, newtab, old] {
+    return write_memtable_to_sstable(*old, newtab, std::move(permit), incremental_backups_enabled(), priority, false, _config.memtable_scheduling_group).then([this, newtab, old] {
         return newtab->open_data();
     }).then_wrapped([this, old, newtab] (future<> ret) {
         dblog.debug("Flushing to {} done", newtab->get_filename());
@@ -4143,12 +4138,32 @@ void column_family::drop_hit_rate(gms::inet_address addr) {
 }
 
 future<>
-write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, bool backup, const io_priority_class& pc, bool leave_unsealed, seastar::thread_scheduling_group *tsg) {
+write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, sstable_write_permit&& permit, bool backup, const io_priority_class& pc, bool leave_unsealed, seastar::thread_scheduling_group *tsg) {
+    class permit_monitor final : public sstables::write_monitor {
+        sstable_write_permit _permit;
+    public:
+        permit_monitor(sstable_write_permit&& permit)
+                : _permit(std::move(permit)) {
+        }
+        virtual void on_write_completed() override {
+            // We need to start a flush before the current one finishes, otherwise
+            // we'll have a period without significant disk activity when the current
+            // SSTable is being sealed, the caches are being updated, etc. To do that,
+            // we ensure the permit doesn't outlive this continuation.
+            _permit = sstable_write_permit::unconditional();
+        }
+        virtual void on_flush_completed() override { }
+    };
     sstables::sstable_writer_config cfg;
     cfg.replay_position = mt.replay_position();
     cfg.backup = backup;
     cfg.leave_unsealed = leave_unsealed;
     cfg.thread_scheduling_group = tsg;
+    cfg.monitor = seastar::make_shared<permit_monitor>(std::move(permit));
     return sst->write_components(mt.make_flush_reader(mt.schema(), pc), mt.partition_count(), mt.schema(), cfg, pc);
 }
 
+future<>
+write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst) {
+    return write_memtable_to_sstable(mt, std::move(sst), sstable_write_permit::unconditional());
+}

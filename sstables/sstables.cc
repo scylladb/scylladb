@@ -2162,8 +2162,12 @@ sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partition
     return sstable_writer(*this, s, estimated_partitions, cfg, pc, shard);
 }
 
-future<> sstable::write_components(::mutation_reader mr,
-        uint64_t estimated_partitions, schema_ptr schema, const sstable_writer_config& cfg, const io_priority_class& pc) {
+future<> sstable::write_components(
+        ::mutation_reader mr,
+        uint64_t estimated_partitions,
+        schema_ptr schema,
+        const sstable_writer_config& cfg,
+        const io_priority_class& pc) {
     if (cfg.replay_position) {
         _collector.set_replay_position(cfg.replay_position.value());
     }
