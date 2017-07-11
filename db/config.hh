@@ -169,6 +169,9 @@ public:
     val(background_writer_scheduling_quota, double, 1.0, Used, \
             "max cpu usage ratio (between 0 and 1) for compaction process. Not intended for setting in normal operations. Setting it to 1 or higher will disable it, recommended operational setting is 0.5." \
     )   \
+    val(auto_adjust_flush_quota, bool, false, Used, \
+            "true: auto-adjust quota for flush processes. false: put everyone together in the static background writer group - if background writer group is enabled. Not intended for setting in normal operations" \
+    )   \
     /* Initialization properties */             \
     /* The minimal properties needed for configuring a cluster. */  \
     val(cluster_name, sstring, "Test Cluster", Used,   \

@@ -78,6 +78,7 @@
 #include "db/view/view.hh"
 #include "lister.hh"
 #include "utils/phased_barrier.hh"
+#include "cpu_controller.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -431,6 +432,7 @@ public:
         restricted_mutation_reader_config streaming_read_concurrency_config;
         ::cf_stats* cf_stats = nullptr;
         seastar::thread_scheduling_group* background_writer_scheduling_group = nullptr;
+        seastar::thread_scheduling_group* memtable_scheduling_group = nullptr;
     };
     struct no_commitlog {};
     struct stats {
@@ -1059,6 +1061,7 @@ public:
         restricted_mutation_reader_config streaming_read_concurrency_config;
         ::cf_stats* cf_stats = nullptr;
         seastar::thread_scheduling_group* background_writer_scheduling_group = nullptr;
+        seastar::thread_scheduling_group* memtable_scheduling_group = nullptr;
     };
 private:
     std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;
@@ -1160,11 +1163,12 @@ private:
 
     std::unique_ptr<db::config> _cfg;
 
-    seastar::thread_scheduling_group _background_writer_scheduling_group;
-
     dirty_memory_manager _system_dirty_memory_manager;
     dirty_memory_manager _dirty_memory_manager;
     dirty_memory_manager _streaming_dirty_memory_manager;
+
+    seastar::thread_scheduling_group _background_writer_scheduling_group;
+    flush_cpu_controller _memtable_cpu_controller;
 
     semaphore _read_concurrency_sem{max_concurrent_reads()};
     restricted_mutation_reader_config _read_concurrency_config;

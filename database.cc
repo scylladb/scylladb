@@ -989,7 +989,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
     // The code as is guarantees that we'll never partially backup a
     // single sstable, so that is enough of a guarantee.
     auto&& priority = service::get_local_memtable_flush_priority();
-    return write_memtable_to_sstable(*old, newtab, incremental_backups_enabled(), priority, false, _config.background_writer_scheduling_group).then([this, newtab, old] {
+    return write_memtable_to_sstable(*old, newtab, incremental_backups_enabled(), priority, false, _config.memtable_scheduling_group).then([this, newtab, old] {
         return newtab->open_data();
     }).then_wrapped([this, old, newtab] (future<> ret) {
         dblog.debug("Flushing to {} done", newtab->get_filename());
@@ -1963,6 +1963,15 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
 
 }
 
+inline
+flush_cpu_controller
+make_flush_cpu_controller(db::config& cfg, seastar::thread_scheduling_group* backup, std::function<double()> fn) {
+    if (cfg.auto_adjust_flush_quota()) {
+        return flush_cpu_controller(250ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
+    }
+    return flush_cpu_controller(flush_cpu_controller::disabled{backup});
+}
+
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
 
 database::database() : database(db::config())
@@ -1972,11 +1981,14 @@ database::database(const db::config& cfg)
     : _stats(make_lw_shared<db_stats>())
     , _cl_stats(std::make_unique<cell_locker_stats>())
     , _cfg(std::make_unique<db::config>(cfg))
-    , _background_writer_scheduling_group(1ms, _cfg->background_writer_scheduling_quota())
     // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
     , _system_dirty_memory_manager(*this, 10 << 20, cfg.virtual_dirty_soft_limit())
     , _dirty_memory_manager(*this, memory::stats().total_memory() * 0.45, cfg.virtual_dirty_soft_limit())
     , _streaming_dirty_memory_manager(*this, memory::stats().total_memory() * 0.10, cfg.virtual_dirty_soft_limit())
+    , _background_writer_scheduling_group(1ms, _cfg->background_writer_scheduling_quota())
+    , _memtable_cpu_controller(make_flush_cpu_controller(*_cfg, &_background_writer_scheduling_group, [this, limit = 2.0f * _dirty_memory_manager.throttle_threshold()] {
+        return (_dirty_memory_manager.virtual_dirty_memory()) / limit;
+    }))
     , _version(empty_version)
     , _enable_incremental_backups(cfg.incremental_backups())
 {
@@ -1986,6 +1998,32 @@ database::database(const db::config& cfg)
     dblog.info("Row: max_vector_size: {}, internal_count: {}", size_t(row::max_vector_size), size_t(row::internal_count));
 }
 
+void flush_cpu_controller::adjust() {
+    auto mid = _goal + (hard_dirty_limit - _goal) / 2;
+
+    auto dirty = _current_dirty();
+    if (dirty < _goal) {
+        _current_quota = dirty * q1 / _goal;
+    } else if ((dirty >= _goal) && (dirty < mid)) {
+        _current_quota = q1 + (dirty - _goal) * (q2 - q1)/(mid - _goal);
+    } else {
+        _current_quota = q2 + (dirty - mid) * (qmax - q2) / (hard_dirty_limit - mid);
+    }
+
+    dblog.trace("dirty {}, goal {}, mid {} quota {}", dirty, _goal, mid, _current_quota);
+    _scheduling_group.update_usage(_current_quota);
+}
+
+flush_cpu_controller::flush_cpu_controller(std::chrono::milliseconds interval, float soft_limit, std::function<float()> current_dirty)
+    : _goal(soft_limit / 2)
+    , _current_dirty(std::move(current_dirty))
+    , _interval(interval)
+    , _update_timer([this] { adjust(); })
+    , _scheduling_group(1ms, 0.0f)
+    , _current_scheduling_group(&_scheduling_group)
+{
+    _update_timer.arm_periodic(_interval);
+}
 
 void
 dirty_memory_manager::setup_collectd(sstring namestr) {
@@ -2093,6 +2131,9 @@ database::setup_metrics() {
 
         sm::make_gauge("total_result_bytes", [this] { return get_result_memory_limiter().total_used_memory(); },
                        sm::description("Holds the current amount of memory used for results.")),
+
+        sm::make_gauge("cpu_flush_quota", [this] { return _memtable_cpu_controller.current_quota(); },
+                             sm::description("The current quota for memtable CPU scheduling group")),
 
         sm::make_derive("short_data_queries", _stats->short_data_queries,
                        sm::description("The rate of data queries (data or digest reads) that returned less rows than requested due to result size limiting.")),
@@ -2565,6 +2606,7 @@ keyspace::make_column_family_config(const schema& s, const db::config& db_config
     cfg.cf_stats = _config.cf_stats;
     cfg.enable_incremental_backups = _config.enable_incremental_backups;
     cfg.background_writer_scheduling_group = _config.background_writer_scheduling_group;
+    cfg.memtable_scheduling_group = _config.memtable_scheduling_group;
 
     return cfg;
 }
@@ -3307,6 +3349,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
 
     if (_cfg->background_writer_scheduling_quota() < 1.0f) {
         cfg.background_writer_scheduling_group = &_background_writer_scheduling_group;
+        cfg.memtable_scheduling_group = _memtable_cpu_controller.scheduling_group();
     }
 
     return cfg;
