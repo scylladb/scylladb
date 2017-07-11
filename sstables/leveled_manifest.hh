@@ -394,7 +394,7 @@ private:
         // L0 is the dumping ground for new sstables which thus may overlap each other.
         //
         // We treat L0 compactions specially:
-        // 1a. add L0 sstables are candidates
+        // 1a. add L0 sstables as candidates
         // 1b. prefer choosing older sstables as candidates, to newer ones
         // 2. At most MAX_COMPACTING_L0 sstables from L0 will be compacted at once
         // 3. If total candidate size is less than maxSSTableSizeInMB, we won't bother compacting with L1,
@@ -407,8 +407,7 @@ private:
             candidates = get_level(0);
             if (candidates.size() > MAX_COMPACTING_L0) {
                 // limit to only the MAX_COMPACTING_L0 oldest candidates
-                auto n = std::min(size_t(MAX_COMPACTING_L0), candidates.size());
-                boost::partial_sort(candidates, candidates.begin() + n, [] (auto& i, auto& j) {
+                boost::partial_sort(candidates, candidates.begin() + MAX_COMPACTING_L0, [] (auto& i, auto& j) {
                     return i->compare_by_max_timestamp(*j) < 0;
                 });
                 candidates.resize(MAX_COMPACTING_L0);
