@@ -48,10 +48,14 @@ namespace cql3 {
 class query_processor;
 }
 
+namespace service {
+class storage_proxy;
+}
+
 namespace db {
 namespace legacy_schema_migrator {
 
-future<> migrate(cql3::query_processor&);
+future<> migrate(sharded<service::storage_proxy>&, cql3::query_processor&);
 
 }
 }

@@ -130,6 +130,53 @@ SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
     });
 }
 
+SEASTAR_TEST_CASE(test_concurrent_column_addition) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+
+            service::migration_manager& mm = service::get_local_migration_manager();
+
+            auto s0 = schema_builder("ks", "table")
+                    .with_column("pk", bytes_type, column_kind::partition_key)
+                    .with_column("v1", bytes_type)
+                    .build();
+
+            auto s1 = schema_builder("ks", "table")
+                    .with_column("pk", bytes_type, column_kind::partition_key)
+                    .with_column("v1", bytes_type)
+                    .with_column("v3", bytes_type)
+                    .build();
+
+            auto s2 = schema_builder("ks", "table", stdx::make_optional(s1->id()))
+                    .with_column("pk", bytes_type, column_kind::partition_key)
+                    .with_column("v1", bytes_type)
+                    .with_column("v2", bytes_type)
+                    .build();
+
+            mm.announce_new_column_family(s1, false).get();
+            auto old_version = e.db().local().find_schema(s1->id())->version();
+
+            // Apply s0 -> s2 change.
+            {
+                auto&& keyspace = e.db().local().find_keyspace(s0->ks_name()).metadata();
+                auto muts = db::schema_tables::make_update_table_mutations(keyspace, s0, s2,
+                    api::new_timestamp(), false).get0();
+                mm.announce(std::move(muts), true).get();
+            }
+
+            auto new_schema = e.db().local().find_schema(s1->id());
+
+            BOOST_REQUIRE(new_schema->get_column_definition(to_bytes("v1")) != nullptr);
+            BOOST_REQUIRE(new_schema->get_column_definition(to_bytes("v2")) != nullptr);
+            BOOST_REQUIRE(new_schema->get_column_definition(to_bytes("v3")) != nullptr);
+
+            BOOST_REQUIRE(new_schema->version() != old_version);
+            BOOST_REQUIRE(new_schema->version() != s2->version());
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_column_is_dropped) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {

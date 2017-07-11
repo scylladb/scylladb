@@ -32,18 +32,22 @@ class schema_mutations {
     mutation _columns;
     stdx::optional<mutation> _indices;
     stdx::optional<mutation> _dropped_columns;
+    stdx::optional<mutation> _scylla_tables;
 public:
-    schema_mutations(mutation columnfamilies, mutation columns, stdx::optional<mutation> indices, stdx::optional<mutation> dropped_columns)
+    schema_mutations(mutation columnfamilies, mutation columns, stdx::optional<mutation> indices, stdx::optional<mutation> dropped_columns,
+        stdx::optional<mutation> scylla_tables)
             : _columnfamilies(std::move(columnfamilies))
             , _columns(std::move(columns))
             , _indices(std::move(indices))
             , _dropped_columns(std::move(dropped_columns))
+            , _scylla_tables(std::move(scylla_tables))
     { }
     schema_mutations(canonical_mutation columnfamilies,
                      canonical_mutation columns,
                      bool is_view,
                      stdx::optional<canonical_mutation> indices,
-                     stdx::optional<canonical_mutation> dropped_columns);
+                     stdx::optional<canonical_mutation> dropped_columns,
+                     stdx::optional<canonical_mutation> scylla_tables);
 
     schema_mutations(schema_mutations&&) = default;
     schema_mutations& operator=(schema_mutations&&) = default;
@@ -58,6 +62,10 @@ public:
 
     const mutation& columns_mutation() const {
         return _columns;
+    }
+
+    const stdx::optional<mutation>& scylla_tables() const {
+        return _scylla_tables;
     }
 
     const stdx::optional<mutation>& indices_mutation() const {
@@ -84,6 +92,12 @@ public:
     stdx::optional<canonical_mutation> dropped_columns_canonical_mutation() const {
         if (_dropped_columns) {
             return canonical_mutation(_dropped_columns.value());
+        }
+        return {};
+    }
+    stdx::optional<canonical_mutation> scylla_tables_canonical_mutation() const {
+        if (_scylla_tables) {
+            return canonical_mutation(_scylla_tables.value());
         }
         return {};
     }

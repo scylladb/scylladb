@@ -64,6 +64,7 @@ namespace v3 {
 static constexpr auto NAME = "system_schema";
 static constexpr auto KEYSPACES = "keyspaces";
 static constexpr auto TABLES = "tables";
+static constexpr auto SCYLLA_TABLES = "scylla_tables";
 static constexpr auto COLUMNS = "columns";
 static constexpr auto DROPPED_COLUMNS = "dropped_columns";
 static constexpr auto TRIGGERS = "triggers";
@@ -77,7 +78,26 @@ schema_ptr columns();
 schema_ptr dropped_columns();
 schema_ptr indexes();
 schema_ptr tables();
+schema_ptr scylla_tables();
 schema_ptr views();
+
+}
+
+namespace legacy {
+
+class schema_mutations {
+    mutation _columnfamilies;
+    mutation _columns;
+public:
+    schema_mutations(mutation columnfamilies, mutation columns)
+        : _columnfamilies(std::move(columnfamilies))
+        , _columns(std::move(columns))
+    { }
+    table_schema_version digest() const;
+};
+
+future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy,
+    sstring keyspace_name, sstring table_name, schema_ptr s);
 
 }
 
