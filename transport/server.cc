@@ -214,12 +214,9 @@ public:
     void write_string(const sstring& s);
     void write_bytes_as_string(bytes_view s);
     void write_long_string(const sstring& s);
-    void write_uuid(utils::UUID uuid);
     void write_string_list(std::vector<sstring> string_list);
     void write_bytes(bytes b);
     void write_short_bytes(bytes b);
-    void write_option(std::pair<int16_t, data_value> opt);
-    void write_option_list(std::vector<std::pair<int16_t, data_value>> opt_list);
     void write_inet(ipv4_addr inet);
     void write_consistency(db::consistency_level c);
     void write_string_map(std::map<sstring, sstring> string_map);
@@ -1639,12 +1636,6 @@ void cql_server::response::write_long_string(const sstring& s)
     _body.insert(_body.end(), s.begin(), s.end());
 }
 
-void cql_server::response::write_uuid(utils::UUID uuid)
-{
-    // FIXME
-    assert(0);
-}
-
 void cql_server::response::write_string_list(std::vector<sstring> string_list)
 {
     write_short(cast_if_fits<uint16_t>(string_list.size()));
@@ -1663,18 +1654,6 @@ void cql_server::response::write_short_bytes(bytes b)
 {
     write_short(cast_if_fits<uint16_t>(b.size()));
     _body.insert(_body.end(), b.begin(), b.end());
-}
-
-void cql_server::response::write_option(std::pair<int16_t, data_value> opt)
-{
-    // FIXME
-    assert(0);
-}
-
-void cql_server::response::write_option_list(std::vector<std::pair<int16_t, data_value>> opt_list)
-{
-    // FIXME
-    assert(0);
 }
 
 void cql_server::response::write_inet(ipv4_addr inet)
