@@ -130,6 +130,10 @@ single_column_relation::to_receivers(schema_ptr schema, const column_definition&
         }
     }
 
+    if (is_contains() && !receiver->type->is_collection()) {
+        throw exceptions::invalid_request_exception(sprint("Cannot use CONTAINS on non-collection column \"%s\"", receiver->name));
+    }
+
     if (is_contains_key()) {
         if (!dynamic_cast<const map_type_impl*>(receiver->type.get())) {
             throw exceptions::invalid_request_exception(sprint("Cannot use CONTAINS KEY on non-map column %s", receiver->name));
