@@ -182,8 +182,9 @@ public:
             throw exceptions::configuration_exception("loading_cache: caching is enabled but refresh period and/or max_size are zero");
         }
 
+        _timer_period = std::min(_expiry, _refresh);
         _timer.set_callback([this] { on_timer(); });
-        _timer.arm(_refresh);
+        _timer.arm(_timer_period);
     }
 
     ~loading_cache() {
@@ -364,7 +365,7 @@ private:
             return now();
         }).finally([this, timer_start_tp] {
             _logger.trace("on_timer(): rearming");
-            _timer.arm(timer_start_tp + _refresh);
+            _timer.arm(timer_start_tp + _timer_period);
         });
     }
 
@@ -376,6 +377,7 @@ private:
     size_t _max_size;
     std::chrono::milliseconds _expiry;
     std::chrono::milliseconds _refresh;
+    loading_cache_clock_type::duration _timer_period;
     logging::logger& _logger;
     std::function<future<Tp>(const Key&)> _load;
     timer<loading_cache_clock_type> _timer;
