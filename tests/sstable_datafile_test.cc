@@ -3855,7 +3855,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         static constexpr float expired = 0.33;
         // we want number of expired keys to be ~ 1.5*sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE so as to
         // test ability of histogram to return a good estimation after merging keys.
-        static constexpr int total_keys = std::ceil(sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE/expired)*1.5;
+        static int total_keys = std::ceil(sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE/expired)*1.5;
 
         auto insert_key = [&] (bytes k, uint32_t ttl, uint32_t expiration_time) {
             auto key = partition_key::from_exploded(*s, {k});
