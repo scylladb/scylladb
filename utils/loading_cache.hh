@@ -378,7 +378,7 @@ private:
     std::chrono::milliseconds _refresh;
     logging::logger& _logger;
     std::function<future<Tp>(const Key&)> _load;
-    timer<lowres_clock> _timer;
+    timer<loading_cache_clock_type> _timer;
 };
 
 }
