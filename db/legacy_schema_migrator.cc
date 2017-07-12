@@ -257,19 +257,13 @@ public:
                         return comparator.compare(off, end - off, utf8_type->name()) == 0;
                     };
 
-                    if (regular) {
-                        auto name = regular->get_or("column_name", bytes());
-                        // This is a lame attempt at determining if this was in fact a compact_value column
-                        if (!max_cl_idx || (!name.empty() && name != to_bytes("value"))
-                                        || db::schema_tables::parse_type(regular->get_as<sstring>("type")) != default_validator) {
-                            return false;
-                        }
-                        // Ok, we will assume this was in fact a (scylla-created) compact value.
-                    }
-
                     if (max_cl_idx) {
                         auto n = std::count(comparator.begin(), comparator.end(), ','); // num comp - 1
                         return *max_cl_idx == n;
+                    }
+
+                    if (regular) {
+                        return false;
                     }
 
                     return !is_cql3_only_pk_comparator(comparator);
