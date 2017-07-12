@@ -237,6 +237,7 @@ scylla_tests = [
     'tests/counter_test',
     'tests/cell_locker_test',
     'tests/streaming_histogram_test',
+    'tests/duration_test',
 ]
 
 apps = [
@@ -520,7 +521,8 @@ scylla_core = (['database.cc',
                  'table_helper.cc',
                  'range_tombstone.cc',
                  'range_tombstone_list.cc',
-                 'disk-error-handler.cc'
+                 'disk-error-handler.cc',
+                 'duration.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
@@ -617,6 +619,7 @@ pure_boost_tests = set([
     'tests/idl_test',
     'tests/cartesian_product_test',
     'tests/streaming_histogram_test',
+    'tests/duration_test',
 ])
 
 tests_not_using_seastar_test_framework = set([
