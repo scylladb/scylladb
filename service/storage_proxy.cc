@@ -2075,6 +2075,7 @@ private:
                 break;
             }
         }
+        assert(last_partition);
         return get_last_row(s, *last_partition, is_reversed);
     }
 
@@ -2300,6 +2301,10 @@ public:
                     v.emplace_back(r.from, stdx::optional<partition>(), r.reached_end, true);
                 }
             }
+
+            boost::sort(v, [] (const version& x, const version& y) {
+                return x.from < y.from;
+            });
         } while(true);
 
         std::vector<mutation_and_live_row_count> reconciled_partitions;
@@ -2308,7 +2313,10 @@ public:
         // reconcile all versions
         boost::range::transform(boost::make_iterator_range(versions.begin(), versions.end()), std::back_inserter(reconciled_partitions),
                                 [this, schema, original_per_partition_limit] (std::vector<version>& v) {
-            auto m = boost::accumulate(v, mutation(v.front().par->mut().key(*schema), schema), [this, schema] (mutation& m, const version& ver) {
+            auto it = boost::range::find_if(v, [] (auto&& ver) {
+                    return bool(ver.par);
+            });
+            auto m = boost::accumulate(v, mutation(it->par->mut().key(*schema), schema), [this, schema] (mutation& m, const version& ver) {
                 if (ver.par) {
                     m.partition().apply(*schema, ver.par->mut().partition(), *schema);
                 }
