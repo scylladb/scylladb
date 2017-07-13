@@ -190,7 +190,7 @@ class scylla_column_families(gdb.Command):
             db = find_db(shard)
             cfs = db['_column_families']
             for (key, value) in list_unordered_map(cfs):
-                value = value['_p']['_value']  # it's a lw_shared_ptr
+                value = value['_p'].reinterpret_cast(gdb.lookup_type('column_family').pointer()).dereference()  # it's a lw_shared_ptr
                 schema = value['_schema']['_p'].reinterpret_cast(gdb.lookup_type('schema').pointer())
                 name = str(schema['_raw']['_ks_name']) + '/' + str(schema['_raw']['_cf_name'])
                 schema_version = str(schema['_raw']['_version'])
