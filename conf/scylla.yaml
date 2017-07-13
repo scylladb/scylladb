@@ -270,17 +270,17 @@ batch_size_fail_threshold_in_kb: 50
 
 # Validity period for permissions cache (fetching permissions can be an
 # expensive operation depending on the authorizer, CassandraAuthorizer is
-# one example). Defaults to 2000, set to 0 to disable.
+# one example). Defaults to 10000, set to 0 to disable.
 # Will be disabled automatically for AllowAllAuthorizer.
-# permissions_validity_in_ms: 2000
+# permissions_validity_in_ms: 10000
 
 # Refresh interval for permissions cache (if enabled).
 # After this interval, cache entries become eligible for refresh. Upon next
 # access, an async reload is scheduled and the old value returned until it
-# completes. If permissions_validity_in_ms is non-zero, then this must be
-# also.
-# Defaults to the same value as permissions_validity_in_ms.
-# permissions_update_interval_in_ms: 1000
+# completes. If permissions_validity_in_ms is non-zero, then this also must have
+# a non-zero value. Defaults to 2000. It's recommended to set this value to
+# be at least 3 times smaller than the permissions_validity_in_ms.
+# permissions_update_interval_in_ms: 2000
 
 # The partitioner is responsible for distributing groups of rows (by
 # partition key) across nodes in the cluster.  You should leave this
