@@ -351,7 +351,7 @@ SEASTAR_TEST_CASE(test_all_types) {
         msg = e.execute_cql("select k, listval from mv_intval where intval = 456").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {make_list_value(list_type, list_type_impl::native_type({1})).serialize()} });
+                .with_row({ {int32_type->decompose(0)}, {make_list_value(list_type, list_type_impl::native_type({data_value(1)})).serialize()} });
 
         e.execute_cql("update cf set listval = listval + [2] where k = 0;").get();
         msg = e.execute_cql("select k, listval from mv_intval where intval = 456").get0();
