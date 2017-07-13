@@ -196,10 +196,8 @@ public:
              * but we can trust is_dense value of false.
              */
             auto is_dense = td.get_opt<bool>("is_dense");
-            if (is_dense && !*is_dense) {
-                builder.set_is_dense(false);
-            } else {
-                auto calulated_is_dense = [&] {
+            if (!is_dense || *is_dense) {
+                is_dense = [&] {
                     /*
                      * As said above, this method is only here because we need to deal with thrift upgrades.
                      * Once a CF has been "upgraded", i.e. we've rebuilt and save its CQL3 metadata at least once,
@@ -270,13 +268,12 @@ public:
 
                 }();
 
-                builder.set_is_dense(calulated_is_dense);
-
                 // now, if switched to sparse, remove redundant compact_value column and the last clustering column,
                 // directly copying CASSANDRA-11502 logic. See CASSANDRA-11315.
 
-                filter_sparse = !calulated_is_dense && is_dense.value_or(true);
+                filter_sparse = !*is_dense;
             }
+            builder.set_is_dense(*is_dense);
 
             for (auto& row : *columns) {
                 auto kind_str = row.get_as<sstring>("type");
