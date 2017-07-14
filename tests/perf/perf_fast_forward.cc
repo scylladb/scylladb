@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <boost/algorithm/string/replace.hpp>
 #include <boost/range/irange.hpp>
 #include "tests/cql_test_env.hh"
 #include "tests/perf/perf.hh"
@@ -812,9 +813,90 @@ void test_small_partition_slicing(column_family& cf2) {
     test(cfg.n_rows / 2, 4096);
 }
 
+struct test_group {
+    using requires_cache = seastar::bool_class<class requires_cache_tag>;
+    enum type {
+        large_partition,
+        small_partition,
+    };
+
+    std::string name;
+    std::string message;
+    requires_cache needs_cache;
+    type partition_type;
+    void (*test_fn)(column_family& cf);
+};
+
+static std::initializer_list<test_group> test_groups = {
+    {
+        "large-partition-single-key-slice",
+        "Testing effectiveness of caching of large partition, single-key slicing reads",
+        test_group::requires_cache::yes,
+        test_group::type::large_partition,
+        test_large_partition_single_key_slice,
+    },
+    {
+        "large-partition-skips",
+        "Testing scanning large partition with skips.\n" \
+        "Reads whole range interleaving reads with skips according to read-skip pattern",
+        test_group::requires_cache::no,
+        test_group::type::large_partition,
+        test_large_partition_skips,
+    },
+    {
+        "large-partition-slicing",
+        "Testing slicing of large partition",
+        test_group::requires_cache::no,
+        test_group::type::large_partition,
+        test_large_partition_slicing,
+    },
+    {
+        "large-partition-slicing-single-key-reader",
+        "Testing slicing of large partition, single-partition reader",
+        test_group::requires_cache::no,
+        test_group::type::large_partition,
+        test_large_partition_slicing_single_partition_reader,
+    },
+    {
+        "large-partition-select-few-rows",
+        "Testing selecting few rows from a large partition",
+        test_group::requires_cache::no,
+        test_group::type::large_partition,
+        test_large_partition_select_few_rows,
+    },
+    {
+        "large-partition-forwarding",
+        "Testing forwarding with clustering restriction in a large partition",
+        test_group::requires_cache::no,
+        test_group::type::large_partition,
+        test_large_partition_forwarding,
+    },
+    {
+        "small-partition-skips",
+        "Testing scanning small partitions with skips.\n" \
+        "Reads whole range interleaving reads with skips according to read-skip pattern",
+        test_group::requires_cache::no,
+        test_group::type::small_partition,
+        test_small_partition_skips,
+    },
+    {
+        "small-partition-slicing",
+        "Testing slicing small partitions",
+        test_group::requires_cache::no,
+        test_group::type::small_partition,
+        test_small_partition_slicing,
+    },
+};
+
 int main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app.add_options()
+        ("run-tests", bpo::value<std::vector<std::string>>()->default_value(
+                boost::copy_range<std::vector<std::string>>(
+                    test_groups | boost::adaptors::transformed([] (auto&& tc) { return tc.name; }))
+                ),
+            "Test groups to run")
+        ("list-tests", "Show available test groups")
         ("populate", "populate the table")
         ("verbose", "Enables more logging")
         ("trace", "Enables trace-level logging")
@@ -828,6 +910,19 @@ int main(int argc, char** argv) {
 
     return app.run(argc, argv, [] {
         db::config db_cfg;
+
+        if (app.configuration().count("list-tests")) {
+            std::cout << "Test groups:\n";
+            for (auto&& tc : test_groups) {
+                std::cout << "\tname: " << tc.name << "\n"
+                          << (tc.needs_cache ? "\trequires: --enable-cache\n" : "")
+                          << (tc.partition_type == test_group::type::large_partition
+                              ? "\tlarge partition test\n" : "\tsmall partition test\n")
+                          << "\tdescription:\n\t\t" << boost::replace_all_copy(tc.message, "\n", "\n\t\t") << "\n\n";
+            }
+            return make_ready_future<int>(0);
+        }
+
         db_cfg.enable_cache = app.configuration().count("enable-cache");
         db_cfg.enable_commitlog = false;
         db_cfg.data_file_directories({ "./perf_large_partition_data" }, db::config::config_source::CommandLine);
@@ -867,67 +962,40 @@ int main(int argc, char** argv) {
                         return make_ready_future();
                     });
 
-                    cf.run_with_compaction_disabled([&] {
-                        return seastar::async([&] {
-                            live_range = int_range({0}, {cfg.n_rows - 1});
+                    auto requested_test_groups = boost::copy_range<std::unordered_set<std::string>>(
+                            app.configuration()["run-tests"].as<std::vector<std::string>>()
+                    );
+                    auto enabled_test_groups = test_groups | boost::adaptors::filtered([&] (auto&& tc) {
+                        return requested_test_groups.count(tc.name) != 0;
+                    });
 
-                            if (cache_enabled) {
-                                on_test_group();
-                                std::cout
-                                    << "Testing effectiveness of caching of large partition, single-key slicing reads:\n";
-                                test_large_partition_single_key_slice(cf);
-                            }
+                    auto run_tests = [&] (column_family& cf, test_group::type type) {
+                        cf.run_with_compaction_disabled([&] {
+                            return seastar::async([&] {
+                                live_range = int_range({0}, {cfg.n_rows - 1});
 
-                            {
-                                on_test_group();
-                                std::cout << "Testing scanning large partition with skips. \n"
-                                          << "Reads whole range interleaving reads with skips according to read-skip pattern:\n";
-                                test_large_partition_skips(cf);
-                            }
+                                boost::for_each(
+                                    enabled_test_groups
+                                    | boost::adaptors::filtered([type] (auto&& tc) { return tc.partition_type == type; }),
+                                    [&cf] (auto&& tc) {
+                                        if (tc.needs_cache && !cache_enabled) {
+                                            std::cout << "\nskipping: " << tc.name << "\n";
+                                        } else {
+                                            std::cout << "\nrunning: " << tc.name << "\n";
+                                            on_test_group();
+                                            std::cout << tc.message << ":\n";
+                                            tc.test_fn(cf);
+                                        }
+                                    }
+                                );
+                            });
+                        }).get();
+                    };
 
-                            {
-                                on_test_group();
-                                std::cout << "Testing slicing of large partition:\n";
-                                test_large_partition_slicing(cf);
-                            }
-
-                            {
-                                on_test_group();
-                                std::cout << "Testing slicing of large partition, single-partition reader:\n";
-                                test_large_partition_slicing_single_partition_reader(cf);
-                            }
-
-                            {
-                                on_test_group();
-                                std::cout << "Testing selecting few rows from a large partition:\n";
-                                test_large_partition_select_few_rows(cf);
-                            }
-
-                            {
-                                on_test_group();
-                                std::cout << "Testing forwarding with clustering restriction in a large partition:\n";
-                                test_large_partition_forwarding(cf);
-                            }
-                        });
-                    }).get();
+                    run_tests(cf, test_group::type::large_partition);
 
                     column_family& cf2 = db.find_column_family("ks", "small_part");
-                    cf2.run_with_compaction_disabled([&] {
-                        return seastar::async([&] {
-                            {
-                                on_test_group();
-                                std::cout << "Testing scanning small partitions with skips. \n"
-                                          << "Reads whole range interleaving reads with skips according to read-skip pattern:\n";
-                                test_small_partition_skips(cf2);
-                            }
-
-                            {
-                                on_test_group();
-                                std::cout << "Testing slicing small partitions:\n";
-                                test_small_partition_slicing(cf2);
-                            }
-                        });
-                    }).get();
+                    run_tests(cf2, test_group::type::small_partition);
                 }
             });
         }, db_cfg).then([] {
