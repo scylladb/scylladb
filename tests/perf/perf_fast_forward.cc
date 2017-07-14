@@ -507,9 +507,36 @@ static int count_for_skip_pattern(int n, int n_read, int n_skip) {
     return n / (n_read + n_skip) * n_read + std::min(n % (n_read + n_skip), n_read);
 }
 
+app_template app;
+bool cancel = false;
+bool cache_enabled;
+bool new_test_case = false;
+table_config cfg;
+int_range live_range;
+
+void clear_cache() {
+    global_cache_tracker().clear();
+}
+
+void on_test_group() {
+    if (!app.configuration().count("keep-cache-across-test-groups")
+        && !app.configuration().count("keep-cache-across-test-cases")) {
+        clear_cache();
+    }
+};
+
+void on_test_case() {
+    new_test_case = true;
+    if (!app.configuration().count("keep-cache-across-test-cases")) {
+        clear_cache();
+    }
+    if (cancel) {
+        throw std::runtime_error("interrupted");
+    }
+};
+
 int main(int argc, char** argv) {
     namespace bpo = boost::program_options;
-    app_template app;
     app.add_options()
         ("populate", "populate the table")
         ("verbose", "Enables more logging")
@@ -522,11 +549,11 @@ int main(int argc, char** argv) {
         ("name", bpo::value<std::string>()->default_value("default"), "Name of the configuration")
         ;
 
-    return app.run(argc, argv, [&app] {
-        db::config cfg;
-        cfg.enable_cache = app.configuration().count("enable-cache");
-        cfg.enable_commitlog = false;
-        cfg.data_file_directories({ "./perf_large_partition_data" }, db::config::config_source::CommandLine);
+    return app.run(argc, argv, [] {
+        db::config db_cfg;
+        db_cfg.enable_cache = app.configuration().count("enable-cache");
+        db_cfg.enable_commitlog = false;
+        db_cfg.data_file_directories({ "./perf_large_partition_data" }, db::config::config_source::CommandLine);
 
         if (!app.configuration().count("verbose")) {
             logging::logger_registry().set_all_loggers_level(seastar::log_level::warn);
@@ -535,10 +562,10 @@ int main(int argc, char** argv) {
             logging::logger_registry().set_logger_level("sstable", seastar::log_level::trace);
         }
 
-        std::cout << "Data directory: " << cfg.data_file_directories() << "\n";
+        std::cout << "Data directory: " << db_cfg.data_file_directories() << "\n";
 
-        return do_with_cql_env([&app] (cql_test_env& env) {
-            return seastar::async([&app, &env] {
+        return do_with_cql_env([] (cql_test_env& env) {
+            return seastar::async([&env] {
                 sstring name = app.configuration()["name"].as<std::string>();
 
                 if (app.configuration().count("populate")) {
@@ -550,44 +577,22 @@ int main(int argc, char** argv) {
                     database& db = env.local_db();
                     column_family& cf = db.find_column_family("ks", "test");
 
-                    auto cfg = read_config(env, name);
-                    bool cache_enabled = app.configuration().count("enable-cache");
-                    bool new_test_case = false;
+                    cfg = read_config(env, name);
+                    cache_enabled = app.configuration().count("enable-cache");
+                    new_test_case = false;
 
                     std::cout << "Config: rows: " << cfg.n_rows << ", value size: " << cfg.value_size << "\n";
 
                     sleep(1s).get(); // wait for system table flushes to quiesce
 
-                    bool cancel = false;
                     engine().at_exit([&] {
                         cancel = true;
                         return make_ready_future();
                     });
 
-                    auto clear_cache = [] {
-                        global_cache_tracker().clear();
-                    };
-
-                    auto on_test_group = [&] {
-                        if (!app.configuration().count("keep-cache-across-test-groups")
-                            && !app.configuration().count("keep-cache-across-test-cases")) {
-                            clear_cache();
-                        }
-                    };
-
-                    auto on_test_case = [&] {
-                        new_test_case = true;
-                        if (!app.configuration().count("keep-cache-across-test-cases")) {
-                            clear_cache();
-                        }
-                        if (cancel) {
-                            throw std::runtime_error("interrupted");
-                        }
-                    };
-
                     cf.run_with_compaction_disabled([&] {
                         return seastar::async([&] {
-                            int_range live_range({0}, {cfg.n_rows - 1});
+                            live_range = int_range({0}, {cfg.n_rows - 1});
 
                             if (cache_enabled) {
                                 on_test_group();
@@ -893,7 +898,7 @@ int main(int argc, char** argv) {
                     }).get();
                 }
             });
-        }, cfg).then([] {
+        }, db_cfg).then([] {
             return errors_found ? -1 : 0;
         });
     });
