@@ -619,7 +619,7 @@ public:
             } else {
                 row_limit = query::max_rows;
                 clustering_ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
-                auto cmp = [&s](auto&& s1, auto&& s2) { return s.regular_column_name_type()->compare(s1, s2); };
+                auto cmp = [&s](auto&& s1, auto&& s2) { return s.static_column_name_type()->compare(s1, s2); };
                 auto ranges = make_non_overlapping_ranges<bytes>(std::move(request.column_slices), [](auto&& cslice) {
                     return make_range(cslice.start, cslice.finish);
                 }, cmp, [&](auto& range) { return range.is_wrap_around(cmp); }, request.reversed);

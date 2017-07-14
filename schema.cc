@@ -202,7 +202,7 @@ schema::schema(const raw_schema& raw, stdx::optional<raw_view_info> raw_view_inf
             _raw._columns.begin() + column_offset(column_kind::static_column),
             _raw._columns.begin()
                     + column_offset(column_kind::regular_column),
-            name_compare(utf8_type));
+            name_compare(static_column_name_type()));
     std::sort(
             _raw._columns.begin()
                     + column_offset(column_kind::regular_column),

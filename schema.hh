@@ -663,6 +663,12 @@ public:
     const data_type& regular_column_name_type() const {
         return _raw._regular_column_name_type;
     }
+    const data_type& static_column_name_type() const {
+        if (!is_static_compact_table()) {
+            return utf8_type;
+        }
+        return clustering_column_at(0).type;
+    }
     const std::unique_ptr<::view_info>& view_info() const {
         return _view_info;
     }
