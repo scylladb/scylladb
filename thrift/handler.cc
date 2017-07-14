@@ -1120,11 +1120,7 @@ private:
             cf_def.__set_keyspace(s->ks_name());
             cf_def.__set_name(s->cf_name());
             cf_def.__set_column_type(cf_type_to_sstring(s->type()));
-            if (s->clustering_key_size()) {
-                cf_def.__set_comparator_type(class_from_compound_type(*s->clustering_key_type()));
-            } else {
-                cf_def.__set_comparator_type(s->regular_column_name_type()->name());
-            }
+            cf_def.__set_comparator_type(cell_comparator::to_sstring(*s));
             cf_def.__set_comment(s->comment());
             cf_def.__set_read_repair_chance(s->read_repair_chance());
             std::vector<ColumnDef> columns;
