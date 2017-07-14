@@ -535,6 +535,283 @@ void on_test_case() {
     }
 };
 
+void test_large_partition_single_key_slice(column_family& cf) {
+    std::cout << sprint("%-2s %-14s ", "", "range") << test_result::table_header() << "\n";
+    struct first {
+    };
+    auto test = [&](int_range range) {
+        auto r = test_slicing_using_restrictions(cf, range);
+        std::cout << sprint("%-2s %-14s ", new_test_case ? "->" : "", sprint("%s", range))
+                  << r.table_row() << "\n";
+        new_test_case = false;
+        check_fragment_count(r, cardinality(intersection(range, live_range)));
+        return r;
+    };
+
+    on_test_case();
+    test(int_range::make({0}, {1}));
+    test_result r = test(int_range::make({0}, {1}));
+    check_no_disk_reads(r);
+
+    on_test_case();
+    test(int_range::make({0}, {cfg.n_rows / 2}));
+    r = test(int_range::make({0}, {cfg.n_rows / 2}));
+    check_no_disk_reads(r);
+
+    on_test_case();
+    test(int_range::make({0}, {cfg.n_rows}));
+    r = test(int_range::make({0}, {cfg.n_rows}));
+    check_no_disk_reads(r);
+
+    assert(cfg.n_rows > 200); // assumed below
+
+    on_test_case(); // adjacent, no overlap
+    test(int_range::make({1}, {100, false}));
+    test(int_range::make({100}, {109}));
+
+    on_test_case(); // adjacent, contained
+    test(int_range::make({1}, {100}));
+    r = test(int_range::make_singular({100}));
+    check_no_disk_reads(r);
+
+    on_test_case(); // overlap
+    test(int_range::make({1}, {100}));
+    test(int_range::make({51}, {150}));
+
+    on_test_case(); // enclosed
+    test(int_range::make({1}, {100}));
+    r = test(int_range::make({51}, {70}));
+    check_no_disk_reads(r);
+
+    on_test_case(); // enclosing
+    test(int_range::make({51}, {70}));
+    test(int_range::make({41}, {80}));
+    test(int_range::make({31}, {100}));
+
+    on_test_case(); // adjacent, singular excluded
+    test(int_range::make({0}, {100, false}));
+    test(int_range::make_singular({100}));
+
+    on_test_case(); // adjacent, singular excluded
+    test(int_range::make({100, false}, {200}));
+    test(int_range::make_singular({100}));
+
+    on_test_case();
+    test(int_range::make_ending_with({100}));
+    r = test(int_range::make({10}, {20}));
+    check_no_disk_reads(r);
+    r = test(int_range::make_singular({-1}));
+    check_no_disk_reads(r);
+
+    on_test_case();
+    test(int_range::make_starting_with({100}));
+    r = test(int_range::make({150}, {159}));
+    check_no_disk_reads(r);
+    r = test(int_range::make_singular({cfg.n_rows - 1}));
+    check_no_disk_reads(r);
+    r = test(int_range::make_singular({cfg.n_rows + 1}));
+    check_no_disk_reads(r);
+
+    on_test_case(); // many gaps
+    test(int_range::make({10}, {20, false}));
+    test(int_range::make({30}, {40, false}));
+    test(int_range::make({60}, {70, false}));
+    test(int_range::make({90}, {100, false}));
+    test(int_range::make({0}, {100, false}));
+
+    on_test_case(); // many gaps
+    test(int_range::make({10}, {20, false}));
+    test(int_range::make({30}, {40, false}));
+    test(int_range::make({60}, {70, false}));
+    test(int_range::make({90}, {100, false}));
+    test(int_range::make({10}, {100, false}));
+}
+
+void test_large_partition_skips(column_family& cf) {
+    std::cout << sprint("%-7s %-7s ", "read", "skip") << test_result::table_header() << "\n";
+    auto do_test = [&] (int n_read, int n_skip) {
+        auto r = scan_rows_with_stride(cf, cfg.n_rows, n_read, n_skip);
+        std::cout << sprint("%-7d %-7d ", n_read, n_skip) << r.table_row() << "\n";
+        check_fragment_count(r, count_for_skip_pattern(cfg.n_rows, n_read, n_skip));
+    };
+    auto test = [&] (int n_read, int n_skip) {
+        on_test_case();
+        do_test(n_read, n_skip);
+    };
+
+    test(1, 0);
+
+    test(1, 1);
+    test(1, 8);
+    test(1, 16);
+    test(1, 32);
+    test(1, 64);
+    test(1, 256);
+    test(1, 1024);
+    test(1, 4096);
+
+    test(64, 1);
+    test(64, 8);
+    test(64, 16);
+    test(64, 32);
+    test(64, 64);
+    test(64, 256);
+    test(64, 1024);
+    test(64, 4096);
+
+    if (cache_enabled) {
+        std::cout << "Testing cache scan of large partition with varying row continuity.\n";
+        for (auto n_read : {1, 64}) {
+            for (auto n_skip : {1, 64}) {
+                on_test_case();
+                do_test(n_read, n_skip); // populate with gaps
+                do_test(1, 0);
+            }
+        }
+    }
+}
+
+void test_large_partition_slicing(column_family& cf) {
+    std::cout << sprint("%-7s %-7s ", "offset", "read") << test_result::table_header() << "\n";
+    auto test = [&] (int offset, int read) {
+        on_test_case();
+        auto r = slice_rows(cf, offset, read);
+        std::cout << sprint("%-7d %-7d ", offset, read) << r.table_row() << "\n";
+        check_fragment_count(r, std::min(cfg.n_rows - offset, read));
+    };
+
+    test(0, 1);
+    test(0, 32);
+    test(0, 256);
+    test(0, 4096);
+
+    test(cfg.n_rows / 2, 1);
+    test(cfg.n_rows / 2, 32);
+    test(cfg.n_rows / 2, 256);
+    test(cfg.n_rows / 2, 4096);
+}
+
+void test_large_partition_slicing_single_partition_reader(column_family& cf) {
+    std::cout << sprint("%-7s %-7s ", "offset", "read") << test_result::table_header()
+              << "\n";
+    auto test = [&](int offset, int read) {
+        on_test_case();
+        auto r = slice_rows_single_key(cf, offset, read);
+        std::cout << sprint("%-7d %-7d ", offset, read) << r.table_row() << "\n";
+        check_fragment_count(r, std::min(cfg.n_rows - offset, read));
+    };
+
+    test(0, 1);
+    test(0, 32);
+    test(0, 256);
+    test(0, 4096);
+
+    test(cfg.n_rows / 2, 1);
+    test(cfg.n_rows / 2, 32);
+    test(cfg.n_rows / 2, 256);
+    test(cfg.n_rows / 2, 4096);
+}
+
+void test_large_partition_select_few_rows(column_family& cf) {
+    std::cout << sprint("%-7s %-7s ", "stride", "rows") << test_result::table_header()
+              << "\n";
+    auto test = [&](int stride, int read) {
+        on_test_case();
+        auto r = select_spread_rows(cf, stride, read);
+        std::cout << sprint("%-7d %-7d ", stride, read) << r.table_row() << "\n";
+        check_fragment_count(r, read);
+    };
+
+    test(cfg.n_rows / 1, 1);
+    test(cfg.n_rows / 2, 2);
+    test(cfg.n_rows / 4, 4);
+    test(cfg.n_rows / 8, 8);
+    test(cfg.n_rows / 16, 16);
+    test(2, cfg.n_rows / 2);
+}
+
+void test_large_partition_forwarding(column_family& cf) {
+    std::cout << sprint("%-7s ", "pk-scan") << test_result::table_header() << "\n";
+
+    on_test_case();
+    auto r = test_forwarding_with_restriction(cf, cfg, false);
+    check_fragment_count(r, 2);
+    std::cout << sprint("%-7s ", "yes") << r.table_row() << "\n";
+
+    on_test_case();
+    r = test_forwarding_with_restriction(cf, cfg, true);
+    check_fragment_count(r, 2);
+    std::cout << sprint("%-7s ", "no")  << r.table_row() << "\n";
+}
+
+void test_small_partition_skips(column_family& cf2) {
+    std::cout << sprint("%-2s %-7s %-7s ", "", "read", "skip") << test_result::table_header() << "\n";
+
+    auto do_test = [&] (int n_read, int n_skip) {
+        auto r = scan_with_stride_partitions(cf2, cfg.n_rows, n_read, n_skip);
+        std::cout << sprint("%-2s %-7d %-7d ", new_test_case ? "->" : "", n_read, n_skip) << r.table_row() << "\n";
+        new_test_case = false;
+        check_fragment_count(r, count_for_skip_pattern(cfg.n_rows, n_read, n_skip));
+        return r;
+    };
+    auto test = [&] (int n_read, int n_skip) {
+        on_test_case();
+        return do_test(n_read, n_skip);
+    };
+
+    auto r = test(1, 0);
+    check_no_index_reads(r);
+
+    test(1, 1);
+    test(1, 8);
+    test(1, 16);
+    test(1, 32);
+    test(1, 64);
+    test(1, 256);
+    test(1, 1024);
+    test(1, 4096);
+
+    test(64, 1);
+    test(64, 8);
+    test(64, 16);
+    test(64, 32);
+    test(64, 64);
+    test(64, 256);
+    test(64, 1024);
+    test(64, 4096);
+
+    if (cache_enabled) {
+        std::cout << "Testing cache scan with small partitions with varying continuity.\n";
+        for (auto n_read : {1, 64}) {
+            for (auto n_skip : {1, 64}) {
+                on_test_case();
+                do_test(n_read, n_skip); // populate with gaps
+                do_test(1, 0);
+            }
+        }
+    }
+}
+
+void test_small_partition_slicing(column_family& cf2) {
+    std::cout << sprint("%-7s %-7s ", "offset", "read") << test_result::table_header() << "\n";
+    auto test = [&] (int offset, int read) {
+        on_test_case();
+        auto r = slice_partitions(cf2, cfg.n_rows, offset, read);
+        std::cout << sprint("%-7d %-7d ", offset, read) << r.table_row() << "\n";
+        check_fragment_count(r, std::min(cfg.n_rows - offset, read));
+    };
+
+    test(0, 1);
+    test(0, 32);
+    test(0, 256);
+    test(0, 4096);
+
+    test(cfg.n_rows / 2, 1);
+    test(cfg.n_rows / 2, 32);
+    test(cfg.n_rows / 2, 256);
+    test(cfg.n_rows / 2, 4096);
+}
+
 int main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app.add_options()
@@ -598,223 +875,38 @@ int main(int argc, char** argv) {
                                 on_test_group();
                                 std::cout
                                     << "Testing effectiveness of caching of large partition, single-key slicing reads:\n";
-                                std::cout << sprint("%-2s %-14s ", "", "range") << test_result::table_header() << "\n";
-                                struct first {
-                                };
-                                auto test = [&](int_range range) {
-                                    auto r = test_slicing_using_restrictions(cf, range);
-                                    std::cout << sprint("%-2s %-14s ", new_test_case ? "->" : "", sprint("%s", range))
-                                              << r.table_row() << "\n";
-                                    new_test_case = false;
-                                    check_fragment_count(r, cardinality(intersection(range, live_range)));
-                                    return r;
-                                };
-
-                                on_test_case();
-                                test(int_range::make({0}, {1}));
-                                test_result r = test(int_range::make({0}, {1}));
-                                check_no_disk_reads(r);
-
-                                on_test_case();
-                                test(int_range::make({0}, {cfg.n_rows / 2}));
-                                r = test(int_range::make({0}, {cfg.n_rows / 2}));
-                                check_no_disk_reads(r);
-
-                                on_test_case();
-                                test(int_range::make({0}, {cfg.n_rows}));
-                                r = test(int_range::make({0}, {cfg.n_rows}));
-                                check_no_disk_reads(r);
-
-                                assert(cfg.n_rows > 200); // assumed below
-
-                                on_test_case(); // adjacent, no overlap
-                                test(int_range::make({1}, {100, false}));
-                                test(int_range::make({100}, {109}));
-
-                                on_test_case(); // adjacent, contained
-                                test(int_range::make({1}, {100}));
-                                r = test(int_range::make_singular({100}));
-                                check_no_disk_reads(r);
-
-                                on_test_case(); // overlap
-                                test(int_range::make({1}, {100}));
-                                test(int_range::make({51}, {150}));
-
-                                on_test_case(); // enclosed
-                                test(int_range::make({1}, {100}));
-                                r = test(int_range::make({51}, {70}));
-                                check_no_disk_reads(r);
-
-                                on_test_case(); // enclosing
-                                test(int_range::make({51}, {70}));
-                                test(int_range::make({41}, {80}));
-                                test(int_range::make({31}, {100}));
-
-                                on_test_case(); // adjacent, singular excluded
-                                test(int_range::make({0}, {100, false}));
-                                test(int_range::make_singular({100}));
-
-                                on_test_case(); // adjacent, singular excluded
-                                test(int_range::make({100, false}, {200}));
-                                test(int_range::make_singular({100}));
-
-                                on_test_case();
-                                test(int_range::make_ending_with({100}));
-                                r = test(int_range::make({10}, {20}));
-                                check_no_disk_reads(r);
-                                r = test(int_range::make_singular({-1}));
-                                check_no_disk_reads(r);
-
-                                on_test_case();
-                                test(int_range::make_starting_with({100}));
-                                r = test(int_range::make({150}, {159}));
-                                check_no_disk_reads(r);
-                                r = test(int_range::make_singular({cfg.n_rows - 1}));
-                                check_no_disk_reads(r);
-                                r = test(int_range::make_singular({cfg.n_rows + 1}));
-                                check_no_disk_reads(r);
-
-                                on_test_case(); // many gaps
-                                test(int_range::make({10}, {20, false}));
-                                test(int_range::make({30}, {40, false}));
-                                test(int_range::make({60}, {70, false}));
-                                test(int_range::make({90}, {100, false}));
-                                test(int_range::make({0}, {100, false}));
-
-                                on_test_case(); // many gaps
-                                test(int_range::make({10}, {20, false}));
-                                test(int_range::make({30}, {40, false}));
-                                test(int_range::make({60}, {70, false}));
-                                test(int_range::make({90}, {100, false}));
-                                test(int_range::make({10}, {100, false}));
+                                test_large_partition_single_key_slice(cf);
                             }
 
                             {
                                 on_test_group();
                                 std::cout << "Testing scanning large partition with skips. \n"
                                           << "Reads whole range interleaving reads with skips according to read-skip pattern:\n";
-                                std::cout << sprint("%-7s %-7s ", "read", "skip") << test_result::table_header() << "\n";
-                                auto do_test = [&] (int n_read, int n_skip) {
-                                    auto r = scan_rows_with_stride(cf, cfg.n_rows, n_read, n_skip);
-                                    std::cout << sprint("%-7d %-7d ", n_read, n_skip) << r.table_row() << "\n";
-                                    check_fragment_count(r, count_for_skip_pattern(cfg.n_rows, n_read, n_skip));
-                                };
-                                auto test = [&] (int n_read, int n_skip) {
-                                    on_test_case();
-                                    do_test(n_read, n_skip);
-                                };
-
-                                test(1, 0);
-
-                                test(1, 1);
-                                test(1, 8);
-                                test(1, 16);
-                                test(1, 32);
-                                test(1, 64);
-                                test(1, 256);
-                                test(1, 1024);
-                                test(1, 4096);
-
-                                test(64, 1);
-                                test(64, 8);
-                                test(64, 16);
-                                test(64, 32);
-                                test(64, 64);
-                                test(64, 256);
-                                test(64, 1024);
-                                test(64, 4096);
-
-                                if (cache_enabled) {
-                                    std::cout << "Testing cache scan of large partition with varying row continuity.\n";
-                                    for (auto n_read : {1, 64}) {
-                                        for (auto n_skip : {1, 64}) {
-                                            on_test_case();
-                                            do_test(n_read, n_skip); // populate with gaps
-                                            do_test(1, 0);
-                                        }
-                                    }
-                                }
+                                test_large_partition_skips(cf);
                             }
 
                             {
                                 on_test_group();
                                 std::cout << "Testing slicing of large partition:\n";
-                                std::cout << sprint("%-7s %-7s ", "offset", "read") << test_result::table_header() << "\n";
-                                auto test = [&] (int offset, int read) {
-                                    on_test_case();
-                                    auto r = slice_rows(cf, offset, read);
-                                    std::cout << sprint("%-7d %-7d ", offset, read) << r.table_row() << "\n";
-                                    check_fragment_count(r, std::min(cfg.n_rows - offset, read));
-                                };
-
-                                test(0, 1);
-                                test(0, 32);
-                                test(0, 256);
-                                test(0, 4096);
-
-                                test(cfg.n_rows / 2, 1);
-                                test(cfg.n_rows / 2, 32);
-                                test(cfg.n_rows / 2, 256);
-                                test(cfg.n_rows / 2, 4096);
+                                test_large_partition_slicing(cf);
                             }
 
                             {
                                 on_test_group();
                                 std::cout << "Testing slicing of large partition, single-partition reader:\n";
-                                std::cout << sprint("%-7s %-7s ", "offset", "read") << test_result::table_header()
-                                          << "\n";
-                                auto test = [&](int offset, int read) {
-                                    on_test_case();
-                                    auto r = slice_rows_single_key(cf, offset, read);
-                                    std::cout << sprint("%-7d %-7d ", offset, read) << r.table_row() << "\n";
-                                    check_fragment_count(r, std::min(cfg.n_rows - offset, read));
-                                };
-
-                                test(0, 1);
-                                test(0, 32);
-                                test(0, 256);
-                                test(0, 4096);
-
-                                test(cfg.n_rows / 2, 1);
-                                test(cfg.n_rows / 2, 32);
-                                test(cfg.n_rows / 2, 256);
-                                test(cfg.n_rows / 2, 4096);
+                                test_large_partition_slicing_single_partition_reader(cf);
                             }
 
                             {
                                 on_test_group();
                                 std::cout << "Testing selecting few rows from a large partition:\n";
-                                std::cout << sprint("%-7s %-7s ", "stride", "rows") << test_result::table_header()
-                                          << "\n";
-                                auto test = [&](int stride, int read) {
-                                    on_test_case();
-                                    auto r = select_spread_rows(cf, stride, read);
-                                    std::cout << sprint("%-7d %-7d ", stride, read) << r.table_row() << "\n";
-                                    check_fragment_count(r, read);
-                                };
-
-                                test(cfg.n_rows / 1, 1);
-                                test(cfg.n_rows / 2, 2);
-                                test(cfg.n_rows / 4, 4);
-                                test(cfg.n_rows / 8, 8);
-                                test(cfg.n_rows / 16, 16);
-                                test(2, cfg.n_rows / 2);
+                                test_large_partition_select_few_rows(cf);
                             }
 
                             {
                                 on_test_group();
                                 std::cout << "Testing forwarding with clustering restriction in a large partition:\n";
-                                std::cout << sprint("%-7s ", "pk-scan") << test_result::table_header() << "\n";
-
-                                on_test_case();
-                                auto r = test_forwarding_with_restriction(cf, cfg, false);
-                                check_fragment_count(r, 2);
-                                std::cout << sprint("%-7s ", "yes") << r.table_row() << "\n";
-
-                                on_test_case();
-                                r = test_forwarding_with_restriction(cf, cfg, true);
-                                check_fragment_count(r, 2);
-                                std::cout << sprint("%-7s ", "no")  << r.table_row() << "\n";
+                                test_large_partition_forwarding(cf);
                             }
                         });
                     }).get();
@@ -826,73 +918,13 @@ int main(int argc, char** argv) {
                                 on_test_group();
                                 std::cout << "Testing scanning small partitions with skips. \n"
                                           << "Reads whole range interleaving reads with skips according to read-skip pattern:\n";
-                                std::cout << sprint("%-2s %-7s %-7s ", "", "read", "skip") << test_result::table_header() << "\n";
-
-                                auto do_test = [&] (int n_read, int n_skip) {
-                                    auto r = scan_with_stride_partitions(cf2, cfg.n_rows, n_read, n_skip);
-                                    std::cout << sprint("%-2s %-7d %-7d ", new_test_case ? "->" : "", n_read, n_skip) << r.table_row() << "\n";
-                                    new_test_case = false;
-                                    check_fragment_count(r, count_for_skip_pattern(cfg.n_rows, n_read, n_skip));
-                                    return r;
-                                };
-                                auto test = [&] (int n_read, int n_skip) {
-                                    on_test_case();
-                                    return do_test(n_read, n_skip);
-                                };
-
-                                auto r = test(1, 0);
-                                check_no_index_reads(r);
-
-                                test(1, 1);
-                                test(1, 8);
-                                test(1, 16);
-                                test(1, 32);
-                                test(1, 64);
-                                test(1, 256);
-                                test(1, 1024);
-                                test(1, 4096);
-
-                                test(64, 1);
-                                test(64, 8);
-                                test(64, 16);
-                                test(64, 32);
-                                test(64, 64);
-                                test(64, 256);
-                                test(64, 1024);
-                                test(64, 4096);
-
-                                if (cache_enabled) {
-                                    std::cout << "Testing cache scan with small partitions with varying continuity.\n";
-                                    for (auto n_read : {1, 64}) {
-                                        for (auto n_skip : {1, 64}) {
-                                            on_test_case();
-                                            do_test(n_read, n_skip); // populate with gaps
-                                            do_test(1, 0);
-                                        }
-                                    }
-                                }
+                                test_small_partition_skips(cf2);
                             }
 
                             {
                                 on_test_group();
                                 std::cout << "Testing slicing small partitions:\n";
-                                std::cout << sprint("%-7s %-7s ", "offset", "read") << test_result::table_header() << "\n";
-                                auto test = [&] (int offset, int read) {
-                                    on_test_case();
-                                    auto r = slice_partitions(cf2, cfg.n_rows, offset, read);
-                                    std::cout << sprint("%-7d %-7d ", offset, read) << r.table_row() << "\n";
-                                    check_fragment_count(r, std::min(cfg.n_rows - offset, read));
-                                };
-
-                                test(0, 1);
-                                test(0, 32);
-                                test(0, 256);
-                                test(0, 4096);
-
-                                test(cfg.n_rows / 2, 1);
-                                test(cfg.n_rows / 2, 32);
-                                test(cfg.n_rows / 2, 256);
-                                test(cfg.n_rows / 2, 4096);
+                                test_small_partition_slicing(cf2);
                             }
                         });
                     }).get();
