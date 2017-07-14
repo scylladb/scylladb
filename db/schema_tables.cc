@@ -1953,7 +1953,8 @@ static void add_column_to_schema_mutation(schema_ptr table,
                                    api::timestamp_type timestamp,
                                    mutation& m)
 {
-    auto ckey = clustering_key::from_exploded(*m.schema(), {utf8_type->decompose(table->cf_name()), column.name()});
+    auto ckey = clustering_key::from_exploded(*m.schema(), {utf8_type->decompose(table->cf_name()),
+                                                            utf8_type->decompose(column.name_as_text())});
 
     auto order = "NONE";
     if (column.is_clustering_key()) {
