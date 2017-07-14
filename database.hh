@@ -296,32 +296,42 @@ extern thread_local dirty_memory_manager default_dirty_memory_manager;
 // of a common class.
 class memtable_list {
 public:
-    enum class flush_behavior { delayed, immediate };
+    using seal_immediate_fn_type = std::function<future<> ()>;
+    using seal_delayed_fn_type = std::function<future<> ()>;
 private:
     std::vector<shared_memtable> _memtables;
-    std::function<future<> (flush_behavior)> _seal_fn;
+    seal_immediate_fn_type _seal_immediate_fn;
+    seal_delayed_fn_type _seal_delayed_fn;
     std::function<schema_ptr()> _current_schema;
     dirty_memory_manager* _dirty_memory_manager;
     std::experimental::optional<shared_promise<>> _flush_coalescing;
 public:
-    memtable_list(std::function<future<> (flush_behavior)> seal_fn, std::function<schema_ptr()> cs, dirty_memory_manager* dirty_memory_manager)
+    memtable_list(
+            seal_immediate_fn_type seal_immediate_fn,
+            seal_delayed_fn_type seal_delayed_fn,
+            std::function<schema_ptr()> cs,
+            dirty_memory_manager* dirty_memory_manager)
         : _memtables({})
-        , _seal_fn(seal_fn)
+        , _seal_immediate_fn(seal_immediate_fn)
+        , _seal_delayed_fn(seal_delayed_fn)
         , _current_schema(cs)
         , _dirty_memory_manager(dirty_memory_manager) {
         add_memtable();
+    }
+
+    memtable_list(
+            seal_immediate_fn_type seal_immediate_fn,
+            std::function<schema_ptr()> cs,
+            dirty_memory_manager* dirty_memory_manager)
+        : memtable_list(std::move(seal_immediate_fn), {}, std::move(cs), dirty_memory_manager) {
     }
 
     memtable_list(std::function<schema_ptr()> cs, dirty_memory_manager* dirty_memory_manager)
-        : _memtables({})
-        , _seal_fn()
-        , _current_schema(cs)
-        , _dirty_memory_manager(dirty_memory_manager) {
-        add_memtable();
+        : memtable_list({}, {}, std::move(cs), dirty_memory_manager) {
     }
 
     bool may_flush() const {
-        return bool(_seal_fn);
+        return bool(_seal_immediate_fn);
     }
 
     shared_memtable back() {
@@ -340,8 +350,15 @@ public:
         return _memtables.size();
     }
 
-    future<> seal_active_memtable(flush_behavior behavior) {
-        return _seal_fn(behavior);
+    future<> seal_active_memtable_immediate() {
+        return _seal_immediate_fn();
+    }
+
+    future<> seal_active_memtable_delayed() {
+        if (_seal_delayed_fn) {
+            return _seal_delayed_fn();
+        }
+        return request_flush();
     }
 
     auto begin() noexcept {
@@ -909,7 +926,7 @@ private:
     // But it is possible to synchronously wait for the seal to complete by
     // waiting on this future. This is useful in situations where we want to
     // synchronously flush data to disk.
-    future<> seal_active_memtable(memtable_list::flush_behavior behavior = memtable_list::flush_behavior::delayed);
+    future<> seal_active_memtable();
 
     // I am assuming here that the repair process will potentially send ranges containing
     // few mutations, definitely not enough to fill a memtable. It wants to know whether or
@@ -935,16 +952,6 @@ private:
     timer<> _delayed_streaming_flush{[this] { _streaming_memtables->request_flush(); }};
     future<> seal_active_streaming_memtable_delayed();
     future<> seal_active_streaming_memtable_immediate();
-    future<> seal_active_streaming_memtable(memtable_list::flush_behavior behavior) {
-        if (behavior == memtable_list::flush_behavior::delayed) {
-            return seal_active_streaming_memtable_delayed();
-        } else if (behavior == memtable_list::flush_behavior::immediate) {
-            return seal_active_streaming_memtable_immediate();
-        } else {
-            // Impossible
-            assert(0);
-        }
-    }
 
     // filter manifest.json files out
     static bool manifest_json_filter(const lister::path&, const directory_entry& entry);
