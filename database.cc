@@ -65,7 +65,6 @@
 #include <core/fstream.hh>
 #include <seastar/core/enum.hh>
 #include "utils/latency.hh"
-#include "utils/flush_queue.hh"
 #include "schema_registry.hh"
 #include "service/priority_manager.hh"
 #include "cell_locking.hh"
@@ -87,24 +86,6 @@ static const std::unordered_set<sstring> system_keyspaces = {
 static bool is_system_keyspace(const sstring& name) {
     return system_keyspaces.find(name) != system_keyspaces.end();
 }
-
-// Slight extension to the flush_queue type.
-class column_family::memtable_flush_queue : public utils::flush_queue<db::replay_position> {
-public:
-    template<typename Func, typename Post>
-    auto run_cf_flush(db::replay_position rp, Func&& func, Post&& post) {
-        // special case: empty rp, yet still data.
-        // We generate a few memtables with no valid, "high_rp", yet
-        // still containing data -> actual flush.
-        // And to make matters worse, we can initiate a flush of N such
-        // tables at the same time.
-        // Just queue them at the end of the queue and treat them as such.
-        if (rp == db::replay_position() && !empty()) {
-            rp = highest_key();
-        }
-        return run_with_ordered_post_op(rp, std::forward<Func>(func), std::forward<Post>(post));
-    }
-};
 
 // Used for tests where the CF exists without a database object. We need to pass a valid
 // dirty_memory manager in that case.
@@ -147,7 +128,6 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog* cl
     , _cache(_schema, sstables_as_snapshot_source(), global_cache_tracker())
     , _commitlog(cl)
     , _compaction_manager(compaction_manager)
-    , _flush_queue(std::make_unique<memtable_flush_queue>())
     , _counter_cell_locks(std::make_unique<cell_locker>(_schema, cl_stats))
 {
     if (!_config.enable_disk_writes) {
@@ -955,34 +935,32 @@ column_family::seal_active_memtable(memtable_list::flush_behavior ignored) {
 
     if (old->empty()) {
         dblog.debug("Memtable is empty");
-        return make_ready_future<>();
+        return _flush_barrier.advance_and_await();
     }
     _memtables->add_memtable();
+    _stats.memtable_switch_count++;
+    auto previous_flush = _flush_barrier.advance_and_await();
+    auto op = _flush_barrier.start();
 
-    assert(_highest_flushed_rp < old->replay_position()
-    || (_highest_flushed_rp == db::replay_position() && old->replay_position() == db::replay_position())
-    );
-    _highest_flushed_rp = old->replay_position();
+    auto memtable_size = old->occupancy().total_space();
 
-    return _flush_queue->run_cf_flush(old->replay_position(), [old, this] {
-      auto memtable_size = old->occupancy().total_space();
+    _stats.pending_flushes++;
+    _config.cf_stats->pending_memtables_flushes_count++;
+    _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
 
-      _config.cf_stats->pending_memtables_flushes_count++;
-      _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
-
-      return repeat([this, old] {
+    return repeat([this, old] {
         return with_lock(_sstables_lock.for_read(), [this, old] {
-            _flush_queue->check_open_gate();
             return try_flush_memtable_to_sstable(old);
         });
-      }).then([this, memtable_size] {
+    }).then([this, memtable_size, old, op = std::move(op), previous_flush = std::move(previous_flush)] () mutable {
+        _stats.pending_flushes--;
         _config.cf_stats->pending_memtables_flushes_count--;
         _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
-      });
-    }, [old, this] {
+
         if (_commitlog) {
             _commitlog->discard_completed_segments(_schema->id(), old->rp_set());
         }
+        return previous_flush.finally([op = std::move(op)] { });
     });
     // FIXME: release commit log
     // FIXME: provide back-pressure to upper layers
@@ -1067,9 +1045,7 @@ column_family::stop() {
     return when_all(_memtables->request_flush(), _streaming_memtables->request_flush()).discard_result().finally([this] {
         return _compaction_manager.remove(this).then([this] {
             // Nest, instead of using when_all, so we don't lose any exceptions.
-            return _flush_queue->close().then([this] {
-                return _streaming_flush_gate.close();
-            });
+            return _streaming_flush_gate.close();
         }).then([this] {
             return _sstable_deletion_gate.close();
         });
@@ -1212,7 +1188,7 @@ void column_family::set_metrics() {
             ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return _stats.estimated_read.get_histogram();})(cf)(ks),
             ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return _stats.estimated_write.get_histogram();})(cf)(ks),
             ms::make_derive("memtable_switch", ms::description("Number of times flush has resulted in the memtable being switched out"), _stats.memtable_switch_count)(cf)(ks),
-            ms::make_gauge("pending_taks", ms::description("Estimated number of tasks pending for this column family"), _stats.pending_flushes)(cf)(ks),
+            ms::make_gauge("pending_tasks", ms::description("Estimated number of tasks pending for this column family"), _stats.pending_flushes)(cf)(ks),
             ms::make_gauge("live_disk_space", ms::description("Live disk space used"), _stats.live_disk_space_used)(cf)(ks),
             ms::make_gauge("total_disk_space", ms::description("Total disk space used"), _stats.total_disk_space_used)(cf)(ks),
             ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks),
@@ -2328,7 +2304,7 @@ database::init_commitlog() {
                 _commitlog->discard_completed_segments(id);
                 return;
             }
-            _column_families[id]->flush(pos);
+            _column_families[id]->flush();
         }).release(); // we have longer life time than CL. Ignore reg anchor
     });
 }
@@ -3101,10 +3077,6 @@ lw_shared_ptr<memtable> memtable_list::new_memtable() {
 }
 
 future<> dirty_memory_manager::flush_one(memtable_list& mtlist, semaphore_units<> permit) {
-    if (mtlist.back()->empty()) {
-        return make_ready_future<>();
-    }
-
     auto* region = &(mtlist.back()->region());
     auto schema = mtlist.back()->schema();
 
@@ -3796,35 +3768,6 @@ future<std::unordered_map<sstring, column_family::snapshot_details>> column_fami
 }
 
 future<> column_family::flush() {
-    _stats.pending_flushes++;
-
-    // highest_flushed_rp is only updated when we flush. If the memtable is currently alive, then
-    // the most up2date replay position is the one that's in there now. Otherwise, if the memtable
-    // hasn't received any writes yet, that's the one from the last flush we made.
-    auto desired_rp = _memtables->back()->empty() ? _highest_flushed_rp : _memtables->back()->replay_position();
-    return _memtables->request_flush().finally([this, desired_rp] {
-        _stats.pending_flushes--;
-        // In origin memtable_switch_count is incremented inside
-        // ColumnFamilyMeetrics Flush.run
-        _stats.memtable_switch_count++;
-        // wait for all up until us.
-        return _flush_queue->wait_for_pending(desired_rp);
-    });
-}
-
-future<> column_family::flush(const db::replay_position& pos) {
-    // Technically possible if we've already issued the
-    // sstable write, but it is not done yet.
-    if (pos < _highest_flushed_rp) {
-        return make_ready_future<>();
-    }
-
-    // TODO: Origin looks at "secondary" memtables
-    // It also consideres "minReplayPosition", which is simply where
-    // the CL "started" (the first ever RP in this run).
-    // We ignore this for now and just say that if we're asked for
-    // a CF and it exists, we pretty much have to have data that needs
-    // flushing. Let's do it.
     return _memtables->request_flush();
 }
 

@@ -77,6 +77,7 @@
 #include <boost/intrusive/parent_from_member.hpp>
 #include "db/view/view.hh"
 #include "lister.hh"
+#include "utils/phased_barrier.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -538,7 +539,6 @@ private:
     mutable row_cache _cache; // Cache covers only sstables.
     std::experimental::optional<int64_t> _sstable_generation = {};
 
-    db::replay_position _highest_flushed_rp;
     db::replay_position _highest_rp;
     db::replay_position _lowest_allowed_rp;
 
@@ -546,15 +546,7 @@ private:
     db::commitlog* _commitlog;
     compaction_manager& _compaction_manager;
     int _compaction_disabled = 0;
-    class memtable_flush_queue;
-    std::unique_ptr<memtable_flush_queue> _flush_queue;
-    // Because streaming mutations bypass the commitlog, there is
-    // no need for the complications of the flush queue. Besides, it
-    // is easier to just use a common gate than it is to modify the flush_queue
-    // to work both with and without a replay position.
-    //
-    // Last but not least, we seldom need to guarantee any ordering here: as long
-    // as all data is waited for, we're good.
+    utils::phased_barrier _flush_barrier;
     seastar::gate _streaming_flush_gate;
     std::vector<view_ptr> _views;
     semaphore _cache_update_sem{1};
@@ -753,7 +745,6 @@ public:
     void start();
     future<> stop();
     future<> flush();
-    future<> flush(const db::replay_position&);
     future<> flush_streaming_mutations(utils::UUID plan_id, dht::partition_range_vector ranges = dht::partition_range_vector{});
     future<> fail_streaming_mutations(utils::UUID plan_id);
     future<> clear(); // discards memtable(s) without flushing them to disk.
