@@ -1052,10 +1052,10 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
 
         BOOST_REQUIRE(cf->sstables_count() == generations->size());
         cf->trigger_compaction();
-        BOOST_REQUIRE(cm->get_stats().active_tasks == 1);
+        BOOST_REQUIRE(cm->get_stats().pending_tasks == 1 || cm->get_stats().active_tasks == 1);
 
         // wait for submitted job to finish.
-        auto end = [cm] { return cm->get_stats().active_tasks == 0; };
+        auto end = [cm] { return cm->get_stats().pending_tasks == 0 && cm->get_stats().active_tasks == 0; };
         return do_until(end, [] {
             // sleep until compaction manager selects cf for compaction.
             return sleep(std::chrono::milliseconds(100));
