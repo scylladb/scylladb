@@ -105,7 +105,7 @@ partition_slice_builder::with_regular_column(bytes name) {
         throw std::runtime_error(sprint("No such column: %s", _schema.regular_column_name_type()->to_string(name)));
     }
     if (!def->is_regular()) {
-        throw std::runtime_error(sprint("Column is not regular: %s", _schema.regular_column_name_type()->to_string(name)));
+        throw std::runtime_error(sprint("Column is not regular: %s", _schema.column_name_type(*def)->to_string(name)));
     }
     _regular_columns->push_back(def->id);
     return *this;
