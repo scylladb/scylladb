@@ -1032,7 +1032,10 @@ schema::static_upper_bound(const bytes& name) const {
 }
 data_type
 schema::column_name_type(const column_definition& def) const {
-    return def.kind == column_kind::regular_column ? _raw._regular_column_name_type : utf8_type;
+    if (is_static_compact_table() && def.kind == column_kind::static_column) {
+        return clustering_column_at(0).type;
+    }
+    return utf8_type;
 }
 
 const column_definition&
