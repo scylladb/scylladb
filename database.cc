@@ -99,21 +99,26 @@ column_family::make_memory_only_memtable_list() {
 
 lw_shared_ptr<memtable_list>
 column_family::make_memtable_list() {
-    auto seal = [this] (memtable_list::flush_behavior behavior) { return seal_active_memtable(behavior); };
+    auto seal = [this] { return seal_active_memtable(); };
     auto get_schema = [this] { return schema(); };
     return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager);
 }
 
 lw_shared_ptr<memtable_list>
 column_family::make_streaming_memtable_list() {
-    auto seal = [this] (memtable_list::flush_behavior behavior) { return seal_active_streaming_memtable(behavior); };
+    auto seal_immediate = [this] {
+        return seal_active_streaming_memtable_immediate();
+    };
+    auto seal_delayed = [this] {
+        return seal_active_streaming_memtable_delayed();
+    };
     auto get_schema =  [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager);
+    return make_lw_shared<memtable_list>(std::move(seal_immediate), std::move(seal_delayed), std::move(get_schema), _config.streaming_dirty_memory_manager);
 }
 
 lw_shared_ptr<memtable_list>
 column_family::make_streaming_memtable_big_list(streaming_memtable_big& smb) {
-    auto seal = [this, &smb] (memtable_list::flush_behavior) { return seal_active_streaming_memtable_big(smb); };
+    auto seal = [this, &smb] { return seal_active_streaming_memtable_big(smb); };
     auto get_schema =  [this] { return schema(); };
     return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager);
 }
@@ -930,7 +935,7 @@ future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_bi
 }
 
 future<>
-column_family::seal_active_memtable(memtable_list::flush_behavior ignored) {
+column_family::seal_active_memtable() {
     auto old = _memtables->back();
     dblog.debug("Sealing active memtable of {}.{}, partitions: {}, occupancy: {}", _schema->ks_name(), _schema->cf_name(), old->partition_count(), old->occupancy());
 
@@ -3133,7 +3138,7 @@ future<> dirty_memory_manager::flush_one(memtable_list& mtlist, semaphore_units<
 
     add_to_flush_manager(region, std::move(permit));
     return get_units(_background_work_flush_serializer, 1).then([this, &mtlist, region, schema] (auto permit) mutable {
-        return mtlist.seal_active_memtable(memtable_list::flush_behavior::immediate).then_wrapped([this, region, schema, permit = std::move(permit)] (auto f) {
+        return mtlist.seal_active_memtable_immediate().then_wrapped([this, region, schema, permit = std::move(permit)] (auto f) {
             // There are two cases in which we may still need to remove the permits from here.
             //
             // 1) Some exception happenend, and we can't know at which point. It could be that because
@@ -3837,7 +3842,7 @@ future<> column_family::flush_streaming_mutations(utils::UUID plan_id, dht::part
     // temporary counter measure.
     return with_gate(_streaming_flush_gate, [this, plan_id, ranges = std::move(ranges)] () mutable {
         return flush_streaming_big_mutations(plan_id).then([this, ranges = std::move(ranges)] (auto sstables) mutable {
-            return _streaming_memtables->seal_active_memtable(memtable_list::flush_behavior::delayed).then([this] {
+            return _streaming_memtables->seal_active_memtable_delayed().then([this] {
                 return _streaming_flush_phaser.advance_and_await();
             }).then([this, sstables = std::move(sstables), ranges = std::move(ranges)] () mutable {
                 return with_semaphore(_cache_update_sem, 1, [this, sstables = std::move(sstables), ranges = std::move(ranges)] () mutable {
