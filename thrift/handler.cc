@@ -1197,11 +1197,9 @@ private:
             builder.with_column(to_bytes(names.partition_key_name()), bytes_type, column_kind::partition_key);
         }
 
-        data_type regular_column_name_type;
         if (cf_def.column_metadata.empty()) {
             // Dynamic CF
             builder.set_is_dense(true);
-            regular_column_name_type = utf8_type;
             auto p = get_types(cf_def.comparator_type);
             auto ck_types = std::move(p.first);
             builder.set_is_compound(p.second);
@@ -1215,10 +1213,10 @@ private:
         } else {
             // Static CF
             builder.set_is_compound(false);
-            regular_column_name_type = db::marshal::type_parser::parse(to_sstring(cf_def.comparator_type));
+            auto column_name_type = db::marshal::type_parser::parse(to_sstring(cf_def.comparator_type));
             for (const ColumnDef& col_def : cf_def.column_metadata) {
                 auto col_name = to_bytes(col_def.name);
-                regular_column_name_type->validate(col_name);
+                column_name_type->validate(col_name);
                 builder.with_column(std::move(col_name), db::marshal::type_parser::parse(to_sstring(col_def.validation_class)),
                                 column_kind::static_column);
                 auto index = index_metadata_from_thrift(col_def);
@@ -1227,11 +1225,10 @@ private:
                 }
             }
             // CMH composite? Origin seemingly allows composite comparator_type.
-            builder.with_column(to_bytes(names.clustering_name()), regular_column_name_type, column_kind::clustering_key);
+            builder.with_column(to_bytes(names.clustering_name()), column_name_type, column_kind::clustering_key);
             builder.with_column(to_bytes(names.compact_value_name()), db::marshal::type_parser::parse(to_sstring(cf_def.default_validation_class)));
 
         }
-        builder.set_regular_column_name_type(regular_column_name_type);
         if (cf_def.__isset.comment) {
             builder.set_comment(cf_def.comment);
         }
