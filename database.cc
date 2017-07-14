@@ -3132,13 +3132,12 @@ lw_shared_ptr<memtable> memtable_list::new_memtable() {
     return make_lw_shared<memtable>(_current_schema(), *_dirty_memory_manager, this);
 }
 
-future<> dirty_memory_manager::flush_one(memtable_list& mtlist, semaphore_units<> permit) {
+future<> dirty_memory_manager::flush_one(memtable_list& mtlist, std::tuple<semaphore_units<>, semaphore_units<>> permit) {
     auto* region = &(mtlist.back()->region());
     auto schema = mtlist.back()->schema();
 
-    add_to_flush_manager(region, std::move(permit));
-    return get_units(_background_work_flush_serializer, 1).then([this, &mtlist, region, schema] (auto permit) mutable {
-        return mtlist.seal_active_memtable_immediate().then_wrapped([this, region, schema, permit = std::move(permit)] (auto f) {
+    add_to_flush_manager(region, std::get<0>(std::move(permit)));
+        return mtlist.seal_active_memtable_immediate().then_wrapped([this, region, schema, permit = std::get<1>(std::move(permit))] (auto f) {
             // There are two cases in which we may still need to remove the permits from here.
             //
             // 1) Some exception happenend, and we can't know at which point. It could be that because
@@ -3152,7 +3151,6 @@ future<> dirty_memory_manager::flush_one(memtable_list& mtlist, semaphore_units<
             }
             return std::move(f);
         });
-    });
 }
 
 future<> dirty_memory_manager::flush_when_needed() {
@@ -3182,11 +3180,10 @@ future<> dirty_memory_manager::flush_when_needed() {
                 // release the biggest amount of memory and is less likely to be generating tiny
                 // SSTables.
                 memtable& candidate_memtable = memtable::from_region(*(this->_region_group.get_largest_region()));
-                dirty_memory_manager* candidate_dirty_manager = &(dirty_memory_manager::from_region_group(candidate_memtable.region_group()));
                 // Do not wait. The semaphore will protect us against a concurrent flush. But we
                 // want to start a new one as soon as the permits are destroyed and the semaphore is
                 // made ready again, not when we are done with the current one.
-                candidate_dirty_manager->flush_one(*(candidate_memtable.get_memtable_list()), std::move(permit));
+                flush_one(*(candidate_memtable.get_memtable_list()), std::move(permit));
                 return make_ready_future<>();
             });
         });

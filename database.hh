@@ -267,10 +267,14 @@ public:
         return _region_group.memory_used();
     }
 
-    future<> flush_one(memtable_list& cf, semaphore_units<> permit);
+    future<> flush_one(memtable_list& cf, std::tuple<semaphore_units<>, semaphore_units<>> permit);
 
-    future<semaphore_units<>> get_flush_permit() {
-        return get_units(_flush_serializer, 1);
+    future<std::tuple<semaphore_units<>, semaphore_units<>>> get_flush_permit() {
+        return get_units(_background_work_flush_serializer, 1).then([this] (auto&& background_permit) {
+            return get_units(_flush_serializer, 1).then([this, background_permit = std::move(background_permit)] (auto&& flush_permit) mutable {
+                return std::make_tuple(std::move(flush_permit), std::move(background_permit));
+            });
+        });
     }
 };
 
