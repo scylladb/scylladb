@@ -304,7 +304,7 @@ public:
                 auto kind_str = row.get_as<sstring>("type");
                 auto kind = db::schema_tables::deserialize_kind(kind_str);
                 auto component_index = kind > column_kind::clustering_key ? 0 : column_id(row.get_or("component_index", 0));
-                auto name = row.get_or("column_name", bytes());
+                auto name = row.get_or<sstring>("column_name", sstring());
                 auto validator = db::schema_tables::parse_type(row.get_as<sstring>("validator"));
 
                 if (is_empty_compact_value(row)) {
@@ -358,7 +358,7 @@ public:
                             type = "VALUES";
                         }
                     }
-                    auto column = cql3::util::maybe_quote(utf8_type->to_string(name));
+                    auto column = cql3::util::maybe_quote(name);
                     options["target"] = validator->is_collection()
                                     ? type + "(" + column + ")"
                                     : column;
@@ -368,7 +368,22 @@ public:
                     builder.with_index(index_metadata(index_name, options, *index_kind));
                 }
 
-                builder.with_column(std::move(name), std::move(validator), kind, component_index);
+                data_type column_name_type = [&] {
+                    if (is_static_compact && kind == column_kind::static_column) {
+                        return db::schema_tables::parse_type(comparator);
+                    }
+                    return utf8_type;
+                }();
+                auto column_name = [&] {
+                    try {
+                        return column_name_type->from_string(name);
+                    } catch (marshal_exception) {
+                        // #2597: Scylla < 2.0 writes names in serialized form, try to recover
+                        column_name_type->validate(to_bytes_view(name));
+                        return to_bytes(name);
+                    }
+                }();
+                builder.with_column(std::move(column_name), std::move(validator), kind, component_index);
             }
 
             if (needs_upgrade) {
