@@ -50,6 +50,10 @@ public:
         _raw._regular_column_name_type = t;
         return *this;
     }
+    schema_builder& set_default_validation_class(const data_type& t) {
+        _raw._default_validation_class = t;
+        return *this;
+    }
     const data_type& regular_column_name_type() const {
         return _raw._regular_column_name_type;
     }

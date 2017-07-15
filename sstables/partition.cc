@@ -168,12 +168,6 @@ public:
                     }
                 }
             }
-            // See schema::prepare_dense_schema. We can, using v3 schemas, have columns we consider "static" without
-            // the table being compound, i.e. no clustering. We can ignore prefixes, but we still need to produce
-            // static for mutations.
-            if (cdef && !is_static && cdef->is_static() && schema.is_static_compact_table()) {
-                is_static = true;
-            }
             if (is_present && is_static != cdef->is_static()) {
                 throw malformed_sstable_exception(seastar::format("Mismatch between {} cell and {} column definition",
                         is_static ? "static" : "non-static", cdef->is_static() ? "static" : "non-static"));

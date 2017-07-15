@@ -68,7 +68,6 @@ SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
         return seastar::async([&] {
             auto builder = schema_builder("tests", "table")
                     .with_column("pk", bytes_type, column_kind::partition_key)
-                    .with_column("ck", bytes_type, column_kind::clustering_key)
                     .with_column("v1", bytes_type);
 
             e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();

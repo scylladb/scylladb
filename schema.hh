@@ -436,6 +436,7 @@ private:
         sstring _comment;
         gc_clock::duration _default_time_to_live = gc_clock::duration::zero();
         data_type _regular_column_name_type;
+        data_type _default_validation_class = bytes_type;
         double _bloom_filter_fp_chance = 0.01;
         compression_parameters _compressor_params;
         bool _is_dense = false;
@@ -694,10 +695,7 @@ public:
         return _raw._regular_column_name_type;
     }
     const data_type& static_column_name_type() const {
-        if (!is_static_compact_table()) {
-            return utf8_type;
-        }
-        return clustering_column_at(0).type;
+        return utf8_type;
     }
     const std::unique_ptr<::view_info>& view_info() const {
         return _view_info;
