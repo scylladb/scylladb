@@ -193,8 +193,10 @@ public:
 class column_definition final {
 public:
     struct name_comparator {
-        bool operator()(const column_definition& d1, const column_definition& d2) const {
-            return d1.name() < d2.name();
+        data_type type;
+        name_comparator(data_type type) : type(type) {}
+        bool operator()(const column_definition& cd1, const column_definition& cd2) const {
+            return type->less(cd1.name(), cd2.name());
         }
     };
 private:

@@ -117,10 +117,10 @@ void schema::rebuild() {
     }
 
     static_assert(row_column_ids_are_ordered_by_name::value, "row columns don't need to be ordered by name");
-    if (!std::is_sorted(regular_columns().begin(), regular_columns().end(), column_definition::name_comparator())) {
+    if (!std::is_sorted(regular_columns().begin(), regular_columns().end(), column_definition::name_comparator(regular_column_name_type()))) {
         throw std::runtime_error("Regular columns should be sorted by name");
     }
-    if (!std::is_sorted(static_columns().begin(), static_columns().end(), column_definition::name_comparator())) {
+    if (!std::is_sorted(static_columns().begin(), static_columns().end(), column_definition::name_comparator(static_column_name_type()))) {
         throw std::runtime_error("Static columns should be sorted by name");
     }
 
@@ -189,24 +189,15 @@ schema::schema(const raw_schema& raw, stdx::optional<raw_view_info> raw_view_inf
     }())
     , _regular_columns_by_name(serialized_compare(_raw._regular_column_name_type))
 {
-    struct name_compare {
-        data_type type;
-        name_compare(data_type type) : type(type) {}
-        bool operator()(const column_definition& cd1, const column_definition& cd2) const {
-            return type->less(cd1.name(), cd2.name());
-        }
-    };
-
-
     std::sort(
             _raw._columns.begin() + column_offset(column_kind::static_column),
             _raw._columns.begin()
                     + column_offset(column_kind::regular_column),
-            name_compare(static_column_name_type()));
+            column_definition::name_comparator(static_column_name_type()));
     std::sort(
             _raw._columns.begin()
                     + column_offset(column_kind::regular_column),
-            _raw._columns.end(), name_compare(regular_column_name_type()));
+            _raw._columns.end(), column_definition::name_comparator(regular_column_name_type()));
 
     std::sort(_raw._columns.begin(),
               _raw._columns.begin() + column_offset(column_kind::clustering_key),
