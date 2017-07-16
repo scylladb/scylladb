@@ -28,7 +28,7 @@
 // automatically when tmpdir object goes out of scope.
 struct tmpdir {
     tmpdir() {
-        char tmp[] = "tmpdir_XXXXXX";
+        char tmp[] = "/tmp/tmpdir_XXXXXX";
         auto * dir = ::mkdtemp(tmp);
         if (dir == NULL) {
             throw std::runtime_error("Could not create temp dir");
