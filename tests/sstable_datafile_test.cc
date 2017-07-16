@@ -3652,10 +3652,25 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
     });
 }
 
+static void copy_directory(boost::filesystem::path src_dir, boost::filesystem::path dst_dir) {
+    namespace fs = boost::filesystem;
+    fs::create_directory(dst_dir);
+    auto src_dir_components = std::distance(src_dir.begin(), src_dir.end());
+    for (auto&& dirent : fs::recursive_directory_iterator{src_dir}) {
+        auto&& path = dirent.path();
+        auto new_path = dst_dir;
+        for (auto i = std::next(path.begin(), src_dir_components); i != path.end(); ++i) {
+            new_path /= *i;
+        }
+        fs::copy(path, new_path);
+    }
+}
+
 SEASTAR_TEST_CASE(test_unknown_component) {
     return seastar::async([] {
         auto tmp = make_lw_shared<tmpdir>();
-        auto sstp = reusable_sst(uncompressed_schema(), "tests/sstables/unknown_component", 1).get0();
+        copy_directory("tests/sstables/unknown_component", std::string(tmp->path) + "/unknown_component");
+        auto sstp = reusable_sst(uncompressed_schema(), tmp->path + "/unknown_component", 1).get0();
         sstp->create_links(tmp->path).get();
         // check that create_links() moved unknown component to new dir
         BOOST_REQUIRE(file_exists(tmp->path + "/la-1-big-UNKNOWN.txt").get0());
