@@ -42,6 +42,7 @@
 #include "partition_slice_builder.hh"
 #include "sstables/compaction_strategy_impl.hh"
 #include "sstables/date_tiered_compaction_strategy.hh"
+#include "sstables/time_window_compaction_strategy.hh"
 #include "mutation_assertions.hh"
 #include "mutation_reader_assertions.hh"
 #include "counters.hh"
@@ -68,6 +69,8 @@ atomic_cell make_atomic_cell(bytes_view value, uint32_t ttl = 0, uint32_t expira
         return atomic_cell::make_live(0, value);
     }
 }
+
+static shared_sstable make_sstable_containing(std::function<shared_sstable()> sst_factory, std::vector<mutation> muts);
 
 SEASTAR_TEST_CASE(datafile_generation_01) {
     // Data file with clustering key
@@ -3103,6 +3106,124 @@ SEASTAR_TEST_CASE(date_tiered_strategy_test_2) {
     BOOST_REQUIRE(!gens.count(min_threshold + 2));
 
     return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(time_window_strategy_time_window_tests) {
+    using namespace std::chrono;
+
+    api::timestamp_type tstamp1 = duration_cast<microseconds>(milliseconds(1451001601000L)).count(); // 2015-12-25 @ 00:00:01, in milliseconds
+    api::timestamp_type tstamp2 = duration_cast<microseconds>(milliseconds(1451088001000L)).count(); // 2015-12-26 @ 00:00:01, in milliseconds
+    api::timestamp_type low_hour = duration_cast<microseconds>(milliseconds(1451001600000L)).count(); // 2015-12-25 @ 00:00:00, in milliseconds
+
+
+    // A 1 hour window should round down to the beginning of the hour
+    BOOST_REQUIRE(time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), tstamp1) == low_hour);
+
+    // A 1 minute window should round down to the beginning of the hour
+    BOOST_REQUIRE(time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(minutes(1)), tstamp1) == low_hour);
+
+    // A 1 day window should round down to the beginning of the hour
+    BOOST_REQUIRE(time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(24)), tstamp1) == low_hour);
+
+    // The 2 day window of 2015-12-25 + 2015-12-26 should round down to the beginning of 2015-12-25
+    BOOST_REQUIRE(time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(24*2)), tstamp2) == low_hour);
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(time_window_strategy_correctness_test) {
+    using namespace std::chrono;
+
+    return seastar::async([] {
+        auto s = schema_builder("tests", "time_window_strategy")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type).build();
+
+        auto tmp = make_lw_shared<tmpdir>();
+        auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            return make_lw_shared<sstable>(s, tmp->path, (*gen)++, la, big);
+        };
+
+        auto make_insert = [&] (partition_key key, api::timestamp_type t) {
+            mutation m(key, s);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), t);
+            return m;
+        };
+
+        api::timestamp_type tstamp = api::timestamp_clock::now().time_since_epoch().count();
+        api::timestamp_type tstamp2 = tstamp - duration_cast<microseconds>(seconds(2L * 3600L)).count();
+
+        std::vector<shared_sstable> sstables;
+
+        // create 5 sstables
+        for (api::timestamp_type t = 0; t < 3; t++) {
+            auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(t))});
+            auto mut = make_insert(std::move(key), t);
+            sstables.push_back(make_sstable_containing(sst_gen, {std::move(mut)}));
+        }
+        // Decrement the timestamp to simulate a timestamp in the past hour
+        for (api::timestamp_type t = 3; t < 5; t++) {
+            // And add progressively more cells into each sstable
+            auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(t))});
+            auto mut = make_insert(std::move(key), t);
+            sstables.push_back(make_sstable_containing(sst_gen, {std::move(mut)}));
+        }
+
+        std::map<api::timestamp_type, std::vector<shared_sstable>> buckets;
+
+        // We'll put 3 sstables into the newest bucket
+        for (api::timestamp_type i = 0; i < 3; i++) {
+            auto bound = time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), tstamp);
+            buckets[bound].push_back(sstables[i]);
+        }
+        auto now = api::timestamp_clock::now().time_since_epoch().count();
+        auto new_bucket = time_window_compaction_strategy::newest_bucket(buckets, 4, 32, duration_cast<seconds>(hours(1)),
+            time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), now));
+        // incoming bucket should not be accepted when it has below the min threshold SSTables
+        BOOST_REQUIRE(new_bucket.empty());
+
+        now = api::timestamp_clock::now().time_since_epoch().count();
+        new_bucket = time_window_compaction_strategy::newest_bucket(buckets, 2, 32, duration_cast<seconds>(hours(1)),
+            time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), now));
+        // incoming bucket should be accepted when it is larger than the min threshold SSTables
+        // FIXME: enable check below once twcs passes min threshold to size tiered.
+        // BOOST_REQUIRE(!new_bucket.empty());
+
+        // And 2 into the second bucket (1 hour back)
+        for (api::timestamp_type i = 3; i < 5; i++) {
+            auto bound = time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), tstamp2);
+            buckets[bound].push_back(sstables[i]);
+        }
+
+        // "an sstable with a single value should have equal min/max timestamps"
+        for (auto& sst : sstables) {
+            BOOST_REQUIRE(sst->get_stats_metadata().min_timestamp == sst->get_stats_metadata().max_timestamp);
+        }
+
+        // Test trim
+        auto num_sstables = 40;
+        for (int r = 5; r < num_sstables; r++) {
+            auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(r))});
+            std::vector<mutation> mutations;
+            for (int i = 0 ; i < r ; i++) {
+                mutations.push_back(make_insert(key, tstamp + r));
+            }
+            sstables.push_back(make_sstable_containing(sst_gen, std::move(mutations)));
+        }
+
+        // Reset the buckets, overfill it now
+        for (int i = 0 ; i < 40; i++) {
+            auto bound = time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)),
+                sstables[i]->get_stats_metadata().max_timestamp);
+            buckets[bound].push_back(sstables[i]);
+        }
+
+        now = api::timestamp_clock::now().time_since_epoch().count();
+        new_bucket = time_window_compaction_strategy::newest_bucket(buckets, 4, 32, duration_cast<seconds>(hours(1)),
+            time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), now));
+        // new bucket should be trimmed to max threshold of 32
+        BOOST_REQUIRE(new_bucket.size() == size_t(32));
+    });
 }
 
 SEASTAR_TEST_CASE(test_promoted_index_read) {
