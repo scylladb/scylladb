@@ -246,6 +246,10 @@ public:
     schema_builder& with_index(const index_metadata& im);
     schema_builder& without_index(const sstring& name);
 
+    default_names get_default_names() const {
+        return default_names(_raw);
+    }
+
     // Equivalent to with(cp).build()
     schema_ptr build(compact_storage cp);
 

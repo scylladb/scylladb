@@ -193,8 +193,10 @@ public:
 class column_definition final {
 public:
     struct name_comparator {
-        bool operator()(const column_definition& d1, const column_definition& d2) const {
-            return d1.name() < d2.name();
+        data_type type;
+        name_comparator(data_type type) : type(type) {}
+        bool operator()(const column_definition& cd1, const column_definition& cd2) const {
+            return type->less(cd1.name(), cd2.name());
         }
     };
 private:
@@ -597,6 +599,7 @@ public:
     const_iterator static_lower_bound(const bytes& name) const;
     const_iterator static_upper_bound(const bytes& name) const;
     data_type column_name_type(const column_definition& def) const;
+    const column_definition& clustering_column_at(column_id id) const;
     const column_definition& regular_column_at(column_id id) const;
     const column_definition& static_column_at(column_id id) const;
     bool is_last_partition_key(const column_definition& def) const;
@@ -661,6 +664,12 @@ public:
     }
     const data_type& regular_column_name_type() const {
         return _raw._regular_column_name_type;
+    }
+    const data_type& static_column_name_type() const {
+        if (!is_static_compact_table()) {
+            return utf8_type;
+        }
+        return clustering_column_at(0).type;
     }
     const std::unique_ptr<::view_info>& view_info() const {
         return _view_info;
