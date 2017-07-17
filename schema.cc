@@ -110,7 +110,6 @@ void schema::rebuild() {
     _clustering_key_type = make_lw_shared<compound_prefix>(get_column_types(clustering_key_columns()));
 
     _columns_by_name.clear();
-    _regular_columns_by_name.clear();
 
     for (const column_definition& def : all_columns()) {
         _columns_by_name[def.name()] = &def;
@@ -122,10 +121,6 @@ void schema::rebuild() {
     }
     if (!std::is_sorted(static_columns().begin(), static_columns().end(), column_definition::name_comparator(static_column_name_type()))) {
         throw std::runtime_error("Static columns should be sorted by name");
-    }
-
-    for (const column_definition& def : regular_columns()) {
-        _regular_columns_by_name[def.name()] = &def;
     }
 
     {
@@ -187,7 +182,6 @@ schema::schema(const raw_schema& raw, stdx::optional<raw_view_info> raw_view_inf
                 count[0] + count[1] + count[2],
         };
     }())
-    , _regular_columns_by_name(serialized_compare(_raw._regular_column_name_type))
 {
     std::sort(
             _raw._columns.begin() + column_offset(column_kind::static_column),
@@ -289,7 +283,6 @@ schema::schema(std::experimental::optional<utils::UUID> id,
 schema::schema(const schema& o)
     : _raw(o._raw)
     , _offsets(o._offsets)
-    , _regular_columns_by_name(serialized_compare(_raw._regular_column_name_type))
 {
     rebuild();
     if (o.is_view()) {

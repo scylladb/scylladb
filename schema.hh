@@ -446,7 +446,6 @@ private:
     }
 
     std::unordered_map<bytes, const column_definition*> _columns_by_name;
-    std::map<bytes, const column_definition*, serialized_compare> _regular_columns_by_name;
     lw_shared_ptr<compound_type<allow_prefixes::no>> _partition_key_type;
     lw_shared_ptr<compound_type<allow_prefixes::yes>> _clustering_key_type;
     column_mapping _column_mapping;
