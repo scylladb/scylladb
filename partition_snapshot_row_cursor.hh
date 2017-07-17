@@ -169,11 +169,12 @@ public:
 
     // Can be called only when cursor is valid and pointing at a row.
     clustering_row row() const {
-        clustering_row result(key());
-        for (auto&& v : _current_row) {
-            result.apply(_schema, *v.it);
+        auto it = _current_row.begin();
+        auto cr = clustering_row(*it->it);
+        for (++it; it != _current_row.end(); ++it) {
+            cr.apply(_schema, *it->it);
         }
-        return result;
+        return cr;
     }
 
     // Can be called when cursor is pointing at a row, even when invalid.
