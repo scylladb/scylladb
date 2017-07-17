@@ -754,6 +754,8 @@ public:
     val(replace_address_first_boot, sstring, "", Used, "Like replace_address option, but if the node has been bootstrapped successfully it will be ignored. Same as -Dcassandra.replace_address_first_boot.") \
     val(override_decommission, bool, false, Used, "Set true to force a decommissioned node to join the cluster") \
     val(ring_delay_ms, uint32_t, 30 * 1000, Used, "Time a node waits to hear from other nodes before joining the ring in milliseconds. Same as -Dcassandra.ring_delay_ms in cassandra.") \
+    val(fd_max_interval_ms, uint32_t, 2 * 1000, Used, "The maximum failure_detector interval time in milliseconds. Interval larger than the maximum will be ignored. Larger cluster may need to increase the default.") \
+    val(fd_initial_value_ms, uint32_t, 2 * 1000, Used, "The initial failure_detector interval time in milliseconds.") \
     val(shutdown_announce_in_ms, uint32_t, 2 * 1000, Used, "Time a node waits after sending gossip shutdown message in milliseconds. Same as -Dcassandra.shutdown_announce_in_ms in cassandra.") \
     val(developer_mode, bool, false, Used, "Relax environment checks. Setting to true can reduce performance and reliability significantly.") \
     val(skip_wait_for_gossip_to_settle, int32_t, -1, Used, "An integer to configure the wait for gossip to settle. -1: wait normally, 0: do not wait at all, n: wait for at most n polls. Same as -Dcassandra.skip_wait_for_gossip_to_settle in cassandra.") \

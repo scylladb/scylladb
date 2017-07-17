@@ -43,6 +43,7 @@
 #include "gms/endpoint_state.hh"
 #include "gms/application_state.hh"
 #include "gms/inet_address.hh"
+#include "service/storage_service.hh"
 #include "log.hh"
 #include <iostream>
 #include <chrono>
@@ -56,37 +57,13 @@ constexpr std::chrono::milliseconds failure_detector::DEFAULT_MAX_PAUSE;
 using clk = arrival_window::clk;
 
 static clk::duration get_initial_value() {
-#if 0
-    String newvalue = System.getProperty("cassandra.fd_initial_value_ms");
-    if (newvalue == null)
-    {
-        return Gossiper.intervalInMillis * 2;
-    }
-    else
-    {
-        logger.info("Overriding FD INITIAL_VALUE to {}ms", newvalue);
-        return Integer.parseInt(newvalue);
-    }
-#endif
-    warn(unimplemented::cause::GOSSIP);
-    return std::chrono::seconds(2);
+    auto& cfg = service::get_local_storage_service().db().local().get_config();
+    return std::chrono::milliseconds(cfg.fd_initial_value_ms());
 }
 
 clk::duration arrival_window::get_max_interval() {
-#if 0
-    sstring newvalue = System.getProperty("cassandra.fd_max_interval_ms");
-    if (newvalue == null)
-    {
-        return failure_detector.INITIAL_VALUE_NANOS;
-    }
-    else
-    {
-        logger.info("Overriding FD MAX_INTERVAL to {}ms", newvalue);
-        return TimeUnit.NANOSECONDS.convert(Integer.parseInt(newvalue), TimeUnit.MILLISECONDS);
-    }
-#endif
-    warn(unimplemented::cause::GOSSIP);
-    return get_initial_value();
+    auto& cfg = service::get_local_storage_service().db().local().get_config();
+    return std::chrono::milliseconds(cfg.fd_max_interval_ms());
 }
 
 void arrival_window::add(clk::time_point value, const gms::inet_address& ep) {
@@ -95,7 +72,7 @@ void arrival_window::add(clk::time_point value, const gms::inet_address& ep) {
         if (inter_arrival_time <= get_max_interval()) {
             _arrival_intervals.add(inter_arrival_time.count());
         } else  {
-            logger.debug("failure_detector: Ignoring interval time of {} for {}", inter_arrival_time.count(), ep);
+            logger.debug("failure_detector: Ignoring interval time of {} for {}, mean={}, size={}", inter_arrival_time.count(), ep, mean(), size());
         }
     } else {
         // We use a very large initial interval since the "right" average depends on the cluster size
