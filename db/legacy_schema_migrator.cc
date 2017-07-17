@@ -196,10 +196,8 @@ public:
              * but we can trust is_dense value of false.
              */
             auto is_dense = td.get_opt<bool>("is_dense");
-            if (is_dense && !*is_dense) {
-                builder.set_is_dense(false);
-            } else {
-                auto calulated_is_dense = [&] {
+            if (!is_dense || *is_dense) {
+                is_dense = [&] {
                     /*
                      * As said above, this method is only here because we need to deal with thrift upgrades.
                      * Once a CF has been "upgraded", i.e. we've rebuilt and save its CQL3 metadata at least once,
@@ -270,20 +268,52 @@ public:
 
                 }();
 
-                builder.set_is_dense(calulated_is_dense);
-
                 // now, if switched to sparse, remove redundant compact_value column and the last clustering column,
                 // directly copying CASSANDRA-11502 logic. See CASSANDRA-11315.
 
-                filter_sparse = !calulated_is_dense && is_dense.value_or(true);
+                filter_sparse = !*is_dense;
             }
+            builder.set_is_dense(*is_dense);
+
+            auto is_cql = !*is_dense && is_compound;
+            auto is_static_compact = !*is_dense && !is_compound;
+
+            // org.apache.cassandra.schema.LegacySchemaMigrator#isEmptyCompactValueColumn
+            auto is_empty_compact_value = [](const cql3::untyped_result_set::row& column_row) {
+                auto kind_str = column_row.get_as<sstring>("type");
+                // Cassandra only checks for "compact_value", but Scylla generates "regular" instead (#2586)
+                return (kind_str == "compact_value" || kind_str == "regular")
+                       && column_row.get_as<sstring>("column_name").empty();
+            };
+
+            // org.apache.cassandra.schema.LegacySchemaMigrator#checkNeedsUpgrade
+            bool needs_upgrade = !is_cql && [&] {
+                bool has_empty_compact_value = false;
+                bool has_regular = false;
+                bool has_static = false;
+                for (auto& row : *columns) {
+                    auto kind = db::schema_tables::deserialize_kind(row.get_as<sstring>("type"));
+                    has_regular |= kind == column_kind::regular_column;
+                    has_static |= kind == column_kind::static_column;
+                    has_empty_compact_value |= is_empty_compact_value(row);
+                }
+                return (is_static_compact && !has_static) || !has_regular || has_empty_compact_value;
+            }();
 
             for (auto& row : *columns) {
                 auto kind_str = row.get_as<sstring>("type");
                 auto kind = db::schema_tables::deserialize_kind(kind_str);
                 auto component_index = kind > column_kind::clustering_key ? 0 : column_id(row.get_or("component_index", 0));
-                auto name = row.get_or("column_name", bytes());
+                auto name = row.get_or<sstring>("column_name", sstring());
                 auto validator = db::schema_tables::parse_type(row.get_as<sstring>("validator"));
+
+                if (is_empty_compact_value(row)) {
+                    continue;
+                }
+
+                if (needs_upgrade && is_static_compact && kind == column_kind::regular_column) {
+                    kind = column_kind::static_column;
+                }
 
                 if (filter_sparse) {
                     if (kind_str == "compact_value") {
@@ -328,7 +358,7 @@ public:
                             type = "VALUES";
                         }
                     }
-                    auto column = cql3::util::maybe_quote(utf8_type->to_string(name));
+                    auto column = cql3::util::maybe_quote(name);
                     options["target"] = validator->is_collection()
                                     ? type + "(" + column + ")"
                                     : column;
@@ -338,7 +368,34 @@ public:
                     builder.with_index(index_metadata(index_name, options, *index_kind));
                 }
 
-                builder.with_column(std::move(name), std::move(validator), kind, component_index);
+                data_type column_name_type = [&] {
+                    if (is_static_compact && kind == column_kind::static_column) {
+                        return db::schema_tables::parse_type(comparator);
+                    }
+                    return utf8_type;
+                }();
+                auto column_name = [&] {
+                    try {
+                        return column_name_type->from_string(name);
+                    } catch (marshal_exception) {
+                        // #2597: Scylla < 2.0 writes names in serialized form, try to recover
+                        column_name_type->validate(to_bytes_view(name));
+                        return to_bytes(name);
+                    }
+                }();
+                builder.with_column(std::move(column_name), std::move(validator), kind, component_index);
+            }
+
+            if (needs_upgrade) {
+                // org.apache.cassandra.schema.LegacySchemaMigrator#addDefinitionForUpgrade
+                auto&& names = builder.get_default_names();
+                if (is_static_compact) {
+                    builder.with_column(to_bytes(names.clustering_name()),
+                        db::schema_tables::parse_type(comparator), column_kind::clustering_key);
+                    builder.with_column(to_bytes(names.compact_value_name()), default_validator);
+                } else {
+                    builder.with_column(to_bytes(names.compact_value_name()), empty_type, column_kind::regular_column, 0);
+                }
             }
 
             if (td.has("read_repair_chance")) {
@@ -412,8 +469,6 @@ public:
             if (!triggers->empty()) {
                 throw unsupported_feature("triggers");
             }
-
-            // TODO: table upgrades as in origin converter.
 
             dst.tables.emplace_back(table{timestamp, builder.build() });
         });

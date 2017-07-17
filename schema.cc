@@ -117,10 +117,10 @@ void schema::rebuild() {
     }
 
     static_assert(row_column_ids_are_ordered_by_name::value, "row columns don't need to be ordered by name");
-    if (!std::is_sorted(regular_columns().begin(), regular_columns().end(), column_definition::name_comparator())) {
+    if (!std::is_sorted(regular_columns().begin(), regular_columns().end(), column_definition::name_comparator(regular_column_name_type()))) {
         throw std::runtime_error("Regular columns should be sorted by name");
     }
-    if (!std::is_sorted(static_columns().begin(), static_columns().end(), column_definition::name_comparator())) {
+    if (!std::is_sorted(static_columns().begin(), static_columns().end(), column_definition::name_comparator(static_column_name_type()))) {
         throw std::runtime_error("Static columns should be sorted by name");
     }
 
@@ -189,24 +189,15 @@ schema::schema(const raw_schema& raw, stdx::optional<raw_view_info> raw_view_inf
     }())
     , _regular_columns_by_name(serialized_compare(_raw._regular_column_name_type))
 {
-    struct name_compare {
-        data_type type;
-        name_compare(data_type type) : type(type) {}
-        bool operator()(const column_definition& cd1, const column_definition& cd2) const {
-            return type->less(cd1.name(), cd2.name());
-        }
-    };
-
-
     std::sort(
             _raw._columns.begin() + column_offset(column_kind::static_column),
             _raw._columns.begin()
                     + column_offset(column_kind::regular_column),
-            name_compare(utf8_type));
+            column_definition::name_comparator(static_column_name_type()));
     std::sort(
             _raw._columns.begin()
                     + column_offset(column_kind::regular_column),
-            _raw._columns.end(), name_compare(regular_column_name_type()));
+            _raw._columns.end(), column_definition::name_comparator(regular_column_name_type()));
 
     std::sort(_raw._columns.begin(),
               _raw._columns.begin() + column_offset(column_kind::clustering_key),
@@ -1032,7 +1023,10 @@ schema::static_upper_bound(const bytes& name) const {
 }
 data_type
 schema::column_name_type(const column_definition& def) const {
-    return def.kind == column_kind::regular_column ? _raw._regular_column_name_type : utf8_type;
+    if (is_static_compact_table() && def.kind == column_kind::static_column) {
+        return clustering_column_at(0).type;
+    }
+    return utf8_type;
 }
 
 const column_definition&
@@ -1041,6 +1035,14 @@ schema::regular_column_at(column_id id) const {
         throw std::out_of_range("column_id");
     }
     return _raw._columns.at(column_offset(column_kind::regular_column) + id);
+}
+
+const column_definition&
+schema::clustering_column_at(column_id id) const {
+    if (id >= clustering_key_size()) {
+        throw std::out_of_range(sprint("clustering column id %d >= %d", id, clustering_key_size()));
+    }
+    return _raw._columns.at(column_offset(column_kind::clustering_key) + id);
 }
 
 const column_definition&
