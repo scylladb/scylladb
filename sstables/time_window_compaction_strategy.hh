@@ -295,7 +295,7 @@ public:
     }
 
     virtual compaction_strategy_type type() const {
-        throw std::runtime_error("TWCS not wired yet");
+        return compaction_strategy_type::time_window;
     }
 };
 
