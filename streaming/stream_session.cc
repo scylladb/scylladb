@@ -480,9 +480,9 @@ void stream_session::start() {
     }
     auto connecting = netw::get_local_messaging_service().get_preferred_ip(peer);
     if (peer == connecting) {
-        sslog.info("[Stream #{}] Starting streaming to {}", plan_id(), peer);
+        sslog.debug("[Stream #{}] Starting streaming to {}", plan_id(), peer);
     } else {
-        sslog.info("[Stream #{}] Starting streaming to {} through {}", plan_id(), peer, connecting);
+        sslog.debug("[Stream #{}] Starting streaming to {} through {}", plan_id(), peer, connecting);
     }
     on_initialization_complete().handle_exception([this] (auto ep) {
         this->on_error();
