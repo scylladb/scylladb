@@ -894,7 +894,7 @@ public:
             }
 
             auto s = schema_from_thrift(cf_def, cf_def.keyspace, schema->id());
-            if (schema->thrift().is_dynamic() && !s->thrift().is_dynamic()) {
+            if (schema->thrift().is_dynamic() != s->thrift().is_dynamic()) {
                 fail(unimplemented::cause::MIXED_CF);
             }
             return _query_state.get_client_state().has_schema_access(*schema, auth::permission::ALTER).then([this, s = std::move(s)] {
