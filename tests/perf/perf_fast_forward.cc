@@ -155,15 +155,14 @@ static void check_fragment_count(const test_result& r, uint64_t expected) {
 
 static
 uint64_t consume_all(streamed_mutation& sm) {
-    uint64_t fragments = 0;
-    while (1) {
-        mutation_fragment_opt mfo = sm().get0();
-        if (!mfo) {
-            break;
-        }
-        ++fragments;
-    }
-    return fragments;
+    class consumer {
+        uint64_t _fragments = 0;
+    public:
+        stop_iteration consume(tombstone) { return stop_iteration::no; }
+        stop_iteration consume(...) { _fragments++; return stop_iteration::no; }
+        uint64_t consume_end_of_stream() { return _fragments; }
+    };
+    return consume(sm, consumer()).get0();
 }
 
 static
