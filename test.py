@@ -80,6 +80,7 @@ boost_tests = [
     'virtual_reader_test',
     'counter_test',
     'cell_locker_test',
+    'view_schema_test',
 ]
 
 other_tests = [
@@ -150,11 +151,9 @@ if __name__ == "__main__":
         test_to_run.append(('build/release/tests/row_cache_alloc_stress', 'other',
                             '-c1 -m1G'.split()))
         test_to_run.append(('build/release/tests/sstable_test', 'boost', ['-c1']))
-        test_to_run.append(('build/release/tests/view_schema_test', 'boost', ['-c1']))
         test_to_run.append(('build/release/tests/row_cache_stress_test', 'other', '-c1 -m1G --seconds 10'.split()))
     if 'debug' in modes_to_run:
         test_to_run.append(('build/debug/tests/sstable_test', 'boost', ['-c1']))
-        test_to_run.append(('build/debug/tests/view_schema_test', 'boost', ['-c1']))
 
     if args.name:
         test_to_run = [t for t in test_to_run if args.name in t[0]]
