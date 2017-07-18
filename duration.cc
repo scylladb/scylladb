@@ -172,7 +172,7 @@ auto const unit_table = std::unordered_map<stdx::string_view, std::reference_wra
 //
 template <class Match, class Index = typename Match::size_type>
 duration::common_counter_type parse_count(Match const& m, Index group_index) {
-    static_assert(sizeof(duration::common_counter_type) <= sizeof(long long));
+    static_assert(sizeof(duration::common_counter_type) <= sizeof(long long), "must be same");
     return std::stoll(m[group_index].str());
 }
 
