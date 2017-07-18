@@ -1963,8 +1963,7 @@ map_type_impl::to_string(const bytes& b) const {
 
 size_t
 map_type_impl::hash(bytes_view v) const {
-    // FIXME:
-    abort();
+    return std::hash<bytes_view>()(v);
 }
 
 bytes
@@ -2448,8 +2447,7 @@ set_type_impl::to_string(const bytes& b) const {
 
 size_t
 set_type_impl::hash(bytes_view v) const {
-    // FIXME:
-    abort();
+    return std::hash<bytes_view>()(v);
 }
 
 bytes
@@ -2637,8 +2635,7 @@ list_type_impl::to_string(const bytes& b) const {
 
 size_t
 list_type_impl::hash(bytes_view v) const {
-    // FIXME:
-    abort();
+    return std::hash<bytes_view>()(v);
 }
 
 bytes
