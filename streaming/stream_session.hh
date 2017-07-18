@@ -312,11 +312,6 @@ public:
     void complete();
 
     /**
-     * Call back on receiving {@code StreamMessage.Type.SESSION_FAILED} message.
-     */
-    void session_failed();
-
-    /**
      * @return Current snapshot of this session info.
      */
     session_info make_session_info();

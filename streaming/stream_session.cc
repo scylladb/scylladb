@@ -309,10 +309,6 @@ void stream_session::follower_start_sent() {
     this->start_streaming_files();
 }
 
-void stream_session::session_failed() {
-    close_session(stream_session_state::FAILED);
-}
-
 session_info stream_session::make_session_info() {
     std::vector<stream_summary> receiving_summaries;
     for (auto& receiver : _receivers) {
