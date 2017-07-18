@@ -156,7 +156,7 @@ public:
     virtual void before_change(inet_address endpoint, endpoint_state current_state, application_state new_state_key, const versioned_value& new_value) override {}
     virtual void on_change(inet_address endpoint, application_state state, const versioned_value& value) override {}
     virtual void on_alive(inet_address endpoint, endpoint_state state) override {}
-    virtual void on_dead(inet_address endpoint, endpoint_state state) override {}
+    virtual void on_dead(inet_address endpoint, endpoint_state state) override;
     virtual void on_remove(inet_address endpoint) override;
     virtual void on_restart(inet_address endpoint, endpoint_state ep_state) override;
 
