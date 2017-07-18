@@ -480,16 +480,6 @@ void storage_service::join_token_ring(int delay) {
 #endif
 
     if (!_is_survey_mode) {
-        // We have to create the system_auth and system_traces keyspaces and
-        // their tables before Node moves to the NORMAL state so that other
-        // Nodes joining the newly created cluster and serializing on this event
-        // "see" these new objects and don't try to create them.
-        //
-        // Otherwise there is a high chance to hit the issue #420.
-        auth::auth::setup().get();
-        supervisor::notify("starting tracing");
-        tracing::tracing::start_tracing().get();
-
         // start participating in the ring.
         db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
         set_tokens(_bootstrap_tokens);
@@ -505,6 +495,9 @@ void storage_service::join_token_ring(int delay) {
             slogger.error(err.c_str());
             throw std::runtime_error(err);
         }
+        auth::auth::setup().get();
+        supervisor::notify("starting tracing");
+        tracing::tracing::start_tracing().get();
     } else {
         slogger.info("Startup complete, but write survey mode is active, not becoming an active ring member. Use JMX (StorageService->joinRing()) to finalize ring joining.");
     }
