@@ -585,8 +585,13 @@ SEASTAR_TEST_CASE(test_row_cache_conforms_to_mutation_source) {
             }
 
             auto cache = make_lw_shared<row_cache>(s, mt->as_data_source(), tracker);
-            return mutation_source([cache] (schema_ptr s, const dht::partition_range& range) {
-                return cache->make_reader(s, range);
+            return mutation_source([cache] (schema_ptr s,
+                    const dht::partition_range& range,
+                    const query::partition_slice& slice,
+                    const io_priority_class& pc,
+                    tracing::trace_state_ptr trace_state,
+                    mutation_reader::forwarding fwd_mr) {
+                return cache->make_reader(s, range, slice, pc, std::move(trace_state), fwd_mr);
             });
         });
     });

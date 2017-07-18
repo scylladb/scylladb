@@ -284,7 +284,8 @@ private:
                                          const dht::partition_range&,
                                          const io_priority_class& pc,
                                          const query::partition_slice& slice,
-                                         tracing::trace_state_ptr trace_state);
+                                         tracing::trace_state_ptr trace_state,
+                                         mutation_reader::forwarding);
     void on_hit();
     void on_miss();
     void on_uncached_wide_partition();
@@ -335,7 +336,8 @@ public:
                                 const dht::partition_range& = query::full_partition_range,
                                 const query::partition_slice& slice = query::full_slice,
                                 const io_priority_class& = default_priority_class(),
-                                tracing::trace_state_ptr trace_state = nullptr);
+                                tracing::trace_state_ptr trace_state = nullptr,
+                                mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
 
     const stats& stats() const { return _stats; }
 public:
