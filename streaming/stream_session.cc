@@ -464,6 +464,7 @@ void stream_session::close_session(stream_session_state final_state) {
                 receiving_failed(x.first);
                 task.abort();
             }
+            send_failed_complete_message();
         }
 
         // Note that we shouldn't block on this close because this method is called on the handler
