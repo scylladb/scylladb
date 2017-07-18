@@ -2531,10 +2531,8 @@ void storage_service::unbootstrap() {
 }
 
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
-    std::unordered_multimap<sstring, std::unordered_map<inet_address, dht::token_range_vector>> ranges_to_fetch;
-
+    auto streamer = make_lw_shared<dht::range_streamer>(_db, get_token_metadata(), get_broadcast_address(), "Restore_replica_count");
     auto my_address = get_broadcast_address();
-
     auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
     for (const auto& keyspace_name : non_system_keyspaces) {
         std::unordered_multimap<dht::token_range, inet_address> changed_ranges = get_changed_ranges_for_leaving(keyspace_name, endpoint);
@@ -2545,26 +2543,15 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
             }
         }
         std::unordered_multimap<inet_address, dht::token_range> source_ranges = get_new_source_ranges(keyspace_name, my_new_ranges);
-        std::unordered_map<inet_address, dht::token_range_vector> tmp;
+        std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
         for (auto& x : source_ranges) {
-            tmp[x.first].emplace_back(x.second);
+            ranges_per_endpoint[x.first].emplace_back(x.second);
         }
-        ranges_to_fetch.emplace(keyspace_name, std::move(tmp));
+        streamer->add_rx_ranges(keyspace_name, std::move(ranges_per_endpoint));
     }
-    auto sp = make_lw_shared<streaming::stream_plan>("Restore replica count");
-    for (auto& x: ranges_to_fetch) {
-        const sstring& keyspace_name = x.first;
-        std::unordered_map<inet_address, dht::token_range_vector>& maps = x.second;
-        for (auto& m : maps) {
-            auto source = m.first;
-            auto ranges = m.second;
-            slogger.debug("Requesting from {} ranges {}", source, ranges);
-            sp->request_ranges(source, keyspace_name, ranges);
-        }
-    }
-    return sp->execute().then_wrapped([this, sp, notify_endpoint] (auto&& f) {
+    return streamer->stream_async().then_wrapped([this, streamer, notify_endpoint] (auto&& f) {
         try {
-            auto state = f.get0();
+            f.get();
             return this->send_replication_notification(notify_endpoint);
         } catch (...) {
             slogger.warn("Streaming to restore replica count failed: {}", std::current_exception());
