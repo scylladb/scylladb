@@ -356,7 +356,6 @@ void stream_session::send_complete_message() {
 bool stream_session::maybe_completed() {
     bool completed = _receivers.empty() && _transfers.empty();
     if (completed) {
-        send_complete_message();
         sslog.debug("[Stream #{}] maybe_completed: {} -> COMPLETE: session={}, peer={}", plan_id(), _state, this, peer);
         close_session(stream_session_state::COMPLETE);
     }
