@@ -20,13 +20,13 @@ elif [ "$NETWORK_MODE" = "dpdk" ]; then
     for n in /sys/devices/system/node/node?; do
         echo $NR_HUGEPAGES > $n/hugepages/hugepages-2048kB/nr_hugepages
     done
+    if [ "$ID" = "ubuntu" ]; then
+        hugeadm --create-mounts
+    fi
 else # NETWORK_MODE = posix
     if [ "$SET_NIC" = "yes" ]; then
         /usr/lib/scylla/posix_net_conf.sh $IFNAME
     fi
-fi
-if [ "$ID" = "ubuntu" ]; then
-    hugeadm --create-mounts
 fi
 
 /usr/lib/scylla/scylla-blocktune
