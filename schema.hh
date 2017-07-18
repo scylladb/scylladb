@@ -464,6 +464,7 @@ private:
     };
     raw_schema _raw;
     thrift_schema _thrift;
+    v3_columns _v3_columns;
     mutable schema_registry_entry* _registry_entry = nullptr;
     std::unique_ptr<::view_info> _view_info;
 
@@ -725,6 +726,10 @@ public:
     // recent as this version.
     bool is_synced() const;
     bool equal_columns(const schema&) const;
+public:
+    const v3_columns& v3() const {
+        return _v3_columns;
+    }
 };
 
 bool operator==(const schema&, const schema&);

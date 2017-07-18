@@ -219,6 +219,8 @@ void schema::rebuild() {
             }
         }
     }
+
+    _v3_columns = v3_columns(_raw._columns, is_dense(), is_compound());
 }
 
 const column_mapping& schema::get_column_mapping() const {
