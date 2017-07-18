@@ -763,13 +763,12 @@ future<> messaging_service::send_stream_mutation_done(msg_addr id, UUID plan_id,
 }
 
 // COMPLETE_MESSAGE
-void messaging_service::register_complete_message(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id)>&& func) {
+void messaging_service::register_complete_message(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed)>&& func) {
     register_handler(this, messaging_verb::COMPLETE_MESSAGE, std::move(func));
 }
-future<> messaging_service::send_complete_message(msg_addr id, UUID plan_id, unsigned dst_cpu_id) {
-    return send_message_timeout_and_retry<void>(this, messaging_verb::COMPLETE_MESSAGE, id,
-        streaming_timeout, streaming_nr_retry, streaming_wait_before_retry,
-        plan_id, dst_cpu_id);
+future<> messaging_service::send_complete_message(msg_addr id, UUID plan_id, unsigned dst_cpu_id, bool failed) {
+    return send_message_timeout<void>(this, messaging_verb::COMPLETE_MESSAGE, id,
+        streaming_timeout, plan_id, dst_cpu_id, failed);
 }
 
 void messaging_service::register_gossip_echo(std::function<future<> ()>&& func) {
