@@ -43,6 +43,8 @@
 #include "gms/heart_beat_state.hh"
 #include "gms/application_state.hh"
 #include "gms/versioned_value.hh"
+#include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/classification.hpp>
 #include <experimental/optional>
 #include <chrono>
 
@@ -146,6 +148,20 @@ public:
 
     void mark_dead() {
         _is_alive = false;
+    }
+
+    bool is_shutdown() {
+        auto app_state = get_application_state(application_state::STATUS);
+        if (!app_state) {
+            return false;
+        }
+        auto value = app_state->value;
+        std::vector<sstring> pieces;
+        boost::split(pieces, value, boost::is_any_of(","));
+        if (pieces.empty()) {
+            return false;
+        }
+        return pieces[0] == sstring(versioned_value::SHUTDOWN);
     }
 
     friend std::ostream& operator<<(std::ostream& os, const endpoint_state& x);
