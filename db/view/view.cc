@@ -194,13 +194,13 @@ public:
             : _view(std::move(view))
             , _view_info(*_view->view_info())
             , _base(std::move(base))
-            , _updates(8, partition_key::hashing(*_base), partition_key::equality(*_base)) {
+            , _updates(8, partition_key::hashing(*_view), partition_key::equality(*_view)) {
     }
 
     void move_to(std::vector<mutation>& mutations) && {
         auto& partitioner = dht::global_partitioner();
         std::transform(_updates.begin(), _updates.end(), std::back_inserter(mutations), [&, this] (auto&& m) {
-            return mutation(_view, partitioner.decorate_key(*_base, std::move(m.first)), std::move(m.second));
+            return mutation(_view, partitioner.decorate_key(*_view, std::move(m.first)), std::move(m.second));
         });
     }
 
