@@ -81,7 +81,7 @@ The `scylla.yaml` file in the repository by default writes all database data to 
 
 Scylla has a number of requirements for the file-system and operating system to operate ideally and at peak performance. However, during development, these requirements can be relaxed with the `--developer-mode` flag.
 
-Additionally, when running on under-powered platforms like portable laptops, the `--overprovisined` flag is useful.
+Additionally, when running on under-powered platforms like portable laptops, the `--overprovisioned` flag is useful.
 
 On a development machine, one might run Scylla as
 
