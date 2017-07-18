@@ -2656,8 +2656,7 @@ void storage_service::leave_ring() {
 
 future<>
 storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, inet_address>> ranges_to_stream_by_keyspace) {
-    // First, we build a list of ranges to stream to each host, per table
-    std::unordered_map<sstring, std::unordered_map<inet_address, dht::token_range_vector>> sessions_to_stream_by_keyspace;
+    auto streamer = make_lw_shared<dht::range_streamer>(_db, get_token_metadata(), get_broadcast_address(), "Unbootstrap");
     for (auto& entry : ranges_to_stream_by_keyspace) {
         const auto& keyspace = entry.first;
         auto& ranges_with_endpoints = entry.second;
@@ -2672,26 +2671,13 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
             inet_address endpoint = end_point_entry.second;
             ranges_per_endpoint[endpoint].emplace_back(r);
         }
-        sessions_to_stream_by_keyspace.emplace(keyspace, std::move(ranges_per_endpoint));
+        streamer->add_tx_ranges(keyspace, std::move(ranges_per_endpoint));
     }
-    auto sp = make_lw_shared<streaming::stream_plan>("Unbootstrap");
-    for (auto& entry : sessions_to_stream_by_keyspace) {
-        const auto& keyspace_name = entry.first;
-        // TODO: we can move to avoid copy of std::vector
-        auto& ranges_per_endpoint = entry.second;
-
-        for (auto& ranges_entry : ranges_per_endpoint) {
-            auto& ranges = ranges_entry.second;
-            auto new_endpoint = ranges_entry.first;
-            // TODO each call to transferRanges re-flushes, this is potentially a lot of waste
-            sp->transfer_ranges(new_endpoint, keyspace_name, ranges);
-        }
-    }
-    return sp->execute().discard_result().then([sp] {
+    return streamer->stream_async().then([streamer] {
         slogger.info("stream_ranges successful");
     }).handle_exception([] (auto ep) {
-        slogger.info("stream_ranges failed: {}", ep);
-        return make_exception_future(std::runtime_error("stream_ranges failed"));
+        slogger.warn("stream_ranges failed: {}", ep);
+        return make_exception_future<>(std::move(ep));
     });
 }
 
@@ -2725,16 +2711,18 @@ future<> storage_service::stream_hints() {
         // stream all hints -- range list will be a singleton of "the entire ring"
         dht::token_range_vector ranges = {dht::token_range::make_open_ended_both_sides()};
         slogger.debug("stream_hints: ranges={}", ranges);
+        std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint;
+        ranges_per_endpoint[hints_destination_host] = std::move(ranges);
 
-        auto sp = make_lw_shared<streaming::stream_plan>("Hints");
-        std::vector<sstring> column_families = { db::system_keyspace::HINTS };
+        auto streamer = make_lw_shared<dht::range_streamer>(_db, get_token_metadata(), get_broadcast_address(), "Hints");
         auto keyspace = db::system_keyspace::NAME;
-        sp->transfer_ranges(hints_destination_host, keyspace, ranges, column_families);
-        return sp->execute().discard_result().then([sp] {
+        std::vector<sstring> column_families = { db::system_keyspace::HINTS };
+        streamer->add_tx_ranges(keyspace, std::move(ranges_per_endpoint), column_families);
+        return streamer->stream_async().then([streamer] {
             slogger.info("stream_hints successful");
         }).handle_exception([] (auto ep) {
-            slogger.info("stream_hints failed: {}", ep);
-            return make_exception_future(std::runtime_error("stream_hints failed"));
+            slogger.warn("stream_hints failed: {}", ep);
+            return make_exception_future<>(std::move(ep));
         });
     }
 }
