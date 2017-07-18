@@ -335,7 +335,7 @@ void stream_session::transfer_task_completed(UUID cf_id) {
     maybe_completed();
 }
 
-void stream_session::send_complete_message() {
+void stream_session::send_failed_complete_message() {
     if (!_complete_sent) {
         _complete_sent = true;
     } else {
@@ -345,7 +345,8 @@ void stream_session::send_complete_message() {
     auto plan_id = this->plan_id();
     sslog.debug("[Stream #{}] SEND COMPLETE_MESSAGE to {}", plan_id, id);
     auto session = shared_from_this();
-    this->ms().send_complete_message(id, plan_id, this->dst_cpu_id).then([session, id, plan_id] {
+    bool failed = true;
+    this->ms().send_complete_message(id, plan_id, this->dst_cpu_id, failed).then([session, id, plan_id] {
         sslog.debug("[Stream #{}] GOT COMPLETE_MESSAGE Reply from {}", plan_id, id.addr);
     }).handle_exception([session, id, plan_id] (auto ep) {
         sslog.warn("[Stream #{}] COMPLETE_MESSAGE for {} has failed: {}", plan_id, id.addr, ep);

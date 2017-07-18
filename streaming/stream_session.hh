@@ -329,7 +329,7 @@ public:
     void receive_task_completed(UUID cf_id);
     void transfer_task_completed(UUID cf_id);
 private:
-    void send_complete_message();
+    void send_failed_complete_message();
     bool maybe_completed();
     void prepare_receiving(stream_summary& summary);
     void start_streaming_files();
