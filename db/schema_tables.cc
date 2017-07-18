@@ -1461,12 +1461,16 @@ future<schema_ptr> create_table_from_table_row(distributed<service::storage_prox
     return create_table_from_name(proxy, ks_name, cf_name);
 }
 
-void prepare_builder_from_table_row(schema_builder& builder, const query::result_set_row& table_row)
+void prepare_builder_from_table_row(schema_builder& builder, const query::result_set_row& table_row, bool is_dense)
 {
-
     auto comparator = table_row.get_nonnull<sstring>("comparator");
     bool is_compound = cell_comparator::check_compound(comparator);
     builder.set_is_compound(is_compound);
+    if (!is_compound && !is_dense) { // For thrift dynamic tables, the comparator type is encoded in the clustering keys
+        auto regular_column_name_type = db::marshal::type_parser::parse(comparator);
+        builder.set_regular_column_name_type(regular_column_name_type);
+    }
+
     cell_comparator::read_collections(builder, comparator);
 
     if (table_row.has("read_repair_chance")) {
@@ -1582,13 +1586,6 @@ schema_ptr create_table_from_mutations(schema_mutations sm, std::experimental::o
     AbstractType<?> fullRawComparator = CFMetaData.makeRawAbstractType(rawComparator, subComparator);
 #endif
 
-    std::vector<column_definition> column_defs = create_columns_from_column_rows(
-            query::result_set(sm.columns_mutation()),
-            ks_name,
-            cf_name,/*,
-            fullRawComparator, */
-            cf == cf_type::super);
-
     bool is_dense;
     if (table_row.has("is_dense")) {
         is_dense = table_row.get_nonnull<bool>("is_dense");
@@ -1597,6 +1594,16 @@ schema_ptr create_table_from_mutations(schema_mutations sm, std::experimental::o
         // is_dense = CFMetaData.calculateIsDense(fullRawComparator, columnDefs);
         throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
     }
+    builder.set_is_dense(is_dense);
+
+    prepare_builder_from_table_row(builder, table_row, is_dense);
+
+    std::vector<column_definition> column_defs = create_columns_from_column_rows(
+            query::result_set(sm.columns_mutation()),
+            ks_name,
+            cf_name,
+            builder.regular_column_name_type(),
+            cf == cf_type::super);
 
 #if 0
     CellNameType comparator = CellNames.fromAbstractType(fullRawComparator, isDense);
@@ -1608,9 +1615,6 @@ schema_ptr create_table_from_mutations(schema_mutations sm, std::experimental::o
 
     CFMetaData cfm = new CFMetaData(ksName, cfName, cfType, comparator, cfId);
 #endif
-    builder.set_is_dense(is_dense);
-
-    prepare_builder_from_table_row(builder, table_row);
 
     for (auto&& cdef : column_defs) {
         builder.with_column(cdef);
@@ -1642,7 +1646,8 @@ void add_column_to_schema_mutation(schema_ptr table,
                                    api::timestamp_type timestamp,
                                    mutation& m)
 {
-    auto ckey = clustering_key::from_exploded(*m.schema(), {utf8_type->decompose(table->cf_name()), column.name()});
+    auto ckey = clustering_key::from_exploded(*m.schema(), {utf8_type->decompose(table->cf_name()),
+                                                            utf8_type->decompose(column.name_as_text())});
     m.set_clustered_cell(ckey, "validator", column.type->name(), timestamp);
     m.set_clustered_cell(ckey, "type", serialize_kind(column.kind), timestamp);
     if (!column.is_on_all_components()) {
@@ -1694,21 +1699,21 @@ void drop_column_from_schema_mutation(schema_ptr table, const column_definition&
 
 std::vector<column_definition> create_columns_from_column_rows(const query::result_set& rows,
                                                                const sstring& keyspace,
-                                                               const sstring& table, /*,
-                                                               AbstractType<?> rawComparator, */
+                                                               const sstring& table,
+                                                               data_type regular_column_name_type,
                                                                bool is_super)
 {
     std::vector<column_definition> columns;
     for (auto&& row : rows.rows()) {
-        columns.emplace_back(std::move(create_column_from_column_row(row, keyspace, table, /*, rawComparator, */ is_super)));
+        columns.emplace_back(std::move(create_column_from_column_row(row, keyspace, table, regular_column_name_type, is_super)));
     }
     return columns;
 }
 
 column_definition create_column_from_column_row(const query::result_set_row& row,
                                             sstring keyspace,
-                                            sstring table, /*,
-                                            AbstractType<?> rawComparator, */
+                                            sstring table,
+                                            data_type regular_column_name_type,
                                             bool is_super)
 {
     auto kind = deserialize_kind(row.get_nonnull<sstring>("type"));
@@ -1724,13 +1729,8 @@ column_definition create_column_from_column_row(const query::result_set_row& row
         componentIndex = 1; // A ColumnDefinition for super columns applies to the column component
 #endif
 
-#if 0
-    // Note: we save the column name as string, but we should not assume that it is an UTF8 name, we
-    // we need to use the comparator fromString method
-    AbstractType<?> comparator = kind == ColumnDefinition.Kind.REGULAR
-                               ? getComponentComparator(rawComparator, componentIndex)
-                               : UTF8Type.instance;
-#endif
+    auto comparator = kind == column_kind::regular_column ? regular_column_name_type : utf8_type;
+
     auto name_opt = row.get<sstring>("column_name");
     sstring name = name_opt ? *name_opt : sstring();
 
@@ -1749,8 +1749,7 @@ column_definition create_column_from_column_row(const query::result_set_row& row
     if (row.has("index_name"))
         indexName = row.getString("index_name");
 #endif
-    auto c = column_definition{utf8_type->decompose(name), validator, kind, component_index};
-    return c;
+    return column_definition{comparator->from_string(name), validator, kind, component_index};
 }
 
 /*
@@ -1768,7 +1767,7 @@ view_ptr create_view_from_mutations(schema_mutations sm, std::experimental::opti
     schema_builder builder{ks_name, cf_name, id};
     prepare_builder_from_table_row(builder, row);
 
-    auto column_defs = create_columns_from_column_rows(query::result_set(sm.columns_mutation()), ks_name, cf_name, false);
+    auto column_defs = create_columns_from_column_rows(query::result_set(sm.columns_mutation()), ks_name, cf_name, utf8_type, false);
     for (auto&& cdef : column_defs) {
         builder.with_column(cdef);
     }

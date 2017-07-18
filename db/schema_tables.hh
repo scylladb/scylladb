@@ -121,7 +121,7 @@ future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& p
 
 future<schema_ptr> create_table_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row);
 
-void prepare_builder_from_table_row(schema_builder& builder, const query::result_set_row& table_row);
+void prepare_builder_from_table_row(schema_builder& builder, const query::result_set_row& table_row, bool is_dense = false);
 
 schema_ptr create_table_from_mutations(schema_mutations, std::experimental::optional<table_schema_version> version = {});
 
@@ -129,14 +129,14 @@ void drop_column_from_schema_mutation(schema_ptr table, const column_definition&
 
 std::vector<column_definition> create_columns_from_column_rows(const query::result_set& rows,
                                                                const sstring& keyspace,
-                                                               const sstring& table,/*,
-                                                               AbstractType<?> rawComparator, */
+                                                               const sstring& table,
+                                                               data_type regular_column_name_type,
                                                                bool is_super);
 
 column_definition create_column_from_column_row(const query::result_set_row& row,
                                                 sstring keyspace,
-                                                sstring table, /*,
-                                                AbstractType<?> rawComparator, */
+                                                sstring table,
+                                                data_type regular_column_name_type,
                                                 bool is_super);
 
 
