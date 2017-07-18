@@ -211,7 +211,36 @@ bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name)
            && _metadata.get_all_endpoints().size() != strat.get_replication_factor();
 }
 
+void range_streamer::add_tx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint, std::vector<sstring> column_families) {
+    if (_nr_rx_added) {
+        throw std::runtime_error("Mixed sending and receiving is not supported");
+    }
+    _nr_tx_added++;
+    _to_stream.emplace(keyspace_name, std::move(ranges_per_endpoint));
+    auto inserted = _column_families.emplace(keyspace_name, std::move(column_families)).second;
+    if (!inserted) {
+        throw std::runtime_error("Can not add column_families for the same keyspace more than once");
+    }
+}
+
+void range_streamer::add_rx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint, std::vector<sstring> column_families) {
+    if (_nr_tx_added) {
+        throw std::runtime_error("Mixed sending and receiving is not supported");
+    }
+    _nr_rx_added++;
+    _to_stream.emplace(keyspace_name, std::move(ranges_per_endpoint));
+    auto inserted = _column_families.emplace(keyspace_name, std::move(column_families)).second;
+    if (!inserted) {
+        throw std::runtime_error("Can not add column_families for the same keyspace more than once");
+    }
+}
+
+// TODO: This is the legacy range_streamer interface, it is add_rx_ranges which adds rx ranges.
 void range_streamer::add_ranges(const sstring& keyspace_name, dht::token_range_vector ranges) {
+    if (_nr_tx_added) {
+        throw std::runtime_error("Mixed sending and receiving is not supported");
+    }
+    _nr_rx_added++;
     auto ranges_for_keyspace = use_strict_sources_for_ranges(keyspace_name)
         ? get_all_ranges_with_strict_sources_for(keyspace_name, ranges)
         : get_all_ranges_with_sources_for(keyspace_name, ranges);
@@ -232,25 +261,112 @@ void range_streamer::add_ranges(const sstring& keyspace_name, dht::token_range_v
             logger.debug("{} : range {} from source {} for keyspace {}", _description, x.second, x.first, keyspace_name);
         }
     }
-    _to_fetch.emplace(keyspace_name, std::move(range_fetch_map));
+    _to_stream.emplace(keyspace_name, std::move(range_fetch_map));
 }
 
-future<streaming::stream_state> range_streamer::fetch_async() {
-    for (auto& fetch : _to_fetch) {
-        const auto& keyspace = fetch.first;
-        for (auto& x : fetch.second) {
-            auto& source = x.first;
-            auto& ranges = x.second;
-            /* Send messages to respective folks to stream data over to me */
-            if (logger.is_enabled(logging::log_level::debug)) {
-                logger.debug("{}ing from {} ranges {}", _description, source, ranges);
+future<> range_streamer::stream_async() {
+    return seastar::async([this] {
+        int sleep_time = 60;
+        for (;;) {
+            try {
+                do_stream_async().get();
+                break;
+            } catch (...) {
+                logger.warn("{} failed to stream. Will retry in {} seconds ...", _description, sleep_time);
+                sleep_abortable(std::chrono::seconds(sleep_time)).get();
+                sleep_time *= 1.5;
+                if (++_nr_retried >= _nr_max_retry) {
+                    throw;
+                }
             }
-            _stream_plan.request_ranges(source, keyspace, ranges);
+        }
+    });
+}
+
+future<> range_streamer::do_stream_async() {
+    auto nr_ranges_remaining = nr_ranges_to_stream();
+    logger.info("{} starts, nr_ranges_remaining={}", _description, nr_ranges_remaining);
+    auto start = lowres_clock::now();
+    return do_for_each(_to_stream, [this, start, description = _description] (auto& stream) {
+        const auto& keyspace = stream.first;
+        auto& ip_range_vec = stream.second;
+        // Fetch from or send to peer node in parallel
+        return parallel_for_each(ip_range_vec, [this, description, keyspace] (auto& ip_range) {
+            auto& source = ip_range.first;
+            auto& range_vec = ip_range.second;
+            return seastar::async([this, description, keyspace, source, &range_vec] () mutable {
+                // TODO: It is better to use fiber instead of thread here because
+                // creating a thread per peer can be some memory in a large cluster.
+                auto start_time = lowres_clock::now();
+                unsigned sp_index = 0;
+                unsigned nr_ranges_streamed = 0;
+                size_t nr_ranges_total = range_vec.size();
+                dht::token_range_vector ranges_to_stream;
+                auto do_streaming = [&] {
+                    auto sp = stream_plan(sprint("%s-%s-index-%d", description, keyspace, sp_index++));
+                    logger.info("{} with {} for keyspace={}, {} out of {} ranges: ranges = {}",
+                            description, source, keyspace, nr_ranges_streamed, nr_ranges_total, ranges_to_stream.size());
+                    if (_nr_rx_added) {
+                        sp.request_ranges(source, keyspace, ranges_to_stream, _column_families[keyspace]);
+                    } else if (_nr_tx_added) {
+                        sp.transfer_ranges(source, keyspace, ranges_to_stream, _column_families[keyspace]);
+                    }
+                    sp.execute().discard_result().get();
+                    ranges_to_stream.clear();
+                };
+                try {
+                    for (auto it = range_vec.begin(); it < range_vec.end();) {
+                        it = range_vec.erase(it);
+                        ranges_to_stream.push_back(*it);
+                        nr_ranges_streamed++;
+                        if (ranges_to_stream.size() < _nr_ranges_per_stream_plan) {
+                            continue;
+                        } else {
+                            do_streaming();
+                        }
+                    }
+                    if (ranges_to_stream.size() > 0) {
+                        do_streaming();
+                    }
+                } catch (...) {
+                    for (auto& range : ranges_to_stream) {
+                        range_vec.push_back(range);
+                    }
+                    auto t = std::chrono::duration_cast<std::chrono::seconds>(lowres_clock::now() - start_time).count();
+                    logger.warn("{} with {} for keyspace={} failed, took {} seconds: {}", description, keyspace, source, t, std::current_exception());
+                    throw;
+                }
+                auto t = std::chrono::duration_cast<std::chrono::seconds>(lowres_clock::now() - start_time).count();
+                logger.info("{} with {} for keyspace={} succeeded, took {} seconds", description, keyspace, source, t);
+            });
+
+        });
+    }).finally([this, start] {
+        auto t = std::chrono::duration_cast<std::chrono::seconds>(lowres_clock::now() - start).count();
+        auto nr_ranges_remaining = nr_ranges_to_stream();
+        if (nr_ranges_remaining) {
+            logger.warn("{} failed, took {} seconds, nr_ranges_remaining={}", _description, t, nr_ranges_remaining);
+        } else {
+            logger.info("{} succeeded, took {} seconds, nr_ranges_remaining={}", _description, t, nr_ranges_remaining);
+        }
+    });
+}
+
+size_t range_streamer::nr_ranges_to_stream() {
+    size_t nr_ranges_remaining = 0;
+    for (auto& fetch : _to_stream) {
+        const auto& keyspace = fetch.first;
+        auto& ip_range_vec = fetch.second;
+        for (auto& ip_range : ip_range_vec) {
+            auto& source = ip_range.first;
+            auto& range_vec = ip_range.second;
+            nr_ranges_remaining += range_vec.size();
+            logger.debug("Remaining: keyspace={}, source={}, ranges={}", keyspace, source, range_vec);
         }
     }
-
-    return _stream_plan.execute();
+    return nr_ranges_remaining;
 }
+
 
 std::unordered_multimap<inet_address, dht::token_range>
 range_streamer::get_work_map(const std::unordered_multimap<dht::token_range, inet_address>& ranges_with_source_target,
