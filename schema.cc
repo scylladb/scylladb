@@ -105,6 +105,78 @@ schema::make_column_specification(const column_definition& def) {
     return ::make_shared<cql3::column_specification>(_raw._ks_name, _raw._cf_name, std::move(id), def.type);
 }
 
+v3_columns::v3_columns(std::vector<column_definition> cols, bool is_dense, bool is_compound)
+    : _is_dense(is_dense)
+    , _is_compound(is_compound)
+    , _columns(std::move(cols))
+{
+    for (column_definition& def : _columns) {
+        _columns_by_name[def.name()] = &def;
+    }
+}
+
+v3_columns v3_columns::from_v2_schema(const schema& s) {
+    data_type static_column_name_type = utf8_type;
+    std::vector<column_definition> cols;
+
+    if (s.is_static_compact_table()) {
+        if (s.has_static_columns()) {
+            throw std::runtime_error(
+                sprint("v2 static compact table should not have static columns: %s.%s", s.ks_name(), s.cf_name()));
+        }
+        if (s.clustering_key_size()) {
+            throw std::runtime_error(
+                sprint("v2 static compact table should not have clustering columns: %s.%s", s.ks_name(), s.cf_name()));
+        }
+        static_column_name_type = s.regular_column_name_type();
+        for (auto& c : s.all_columns()) {
+            // Note that for "static" no-clustering compact storage we use static for the defined columns
+            if (c.kind == column_kind::regular_column) {
+                auto new_def = c;
+                new_def.kind = column_kind::static_column;
+                cols.push_back(new_def);
+            } else {
+                cols.push_back(c);
+            }
+        }
+        schema_builder::default_names names(s._raw);
+        cols.emplace_back(to_bytes(names.clustering_name()), static_column_name_type, column_kind::clustering_key, 0);
+        cols.emplace_back(to_bytes(names.compact_value_name()), s.make_legacy_default_validator(), column_kind::regular_column, 0);
+    } else {
+        cols = s.all_columns();
+    }
+
+    for (column_definition& def : cols) {
+        data_type name_type = def.is_static() ? static_column_name_type : utf8_type;
+        auto id = ::make_shared<cql3::column_identifier>(def.name(), name_type);
+        def.column_specification = ::make_shared<cql3::column_specification>(s.ks_name(), s.cf_name(), std::move(id), def.type);
+    }
+
+    return v3_columns(std::move(cols), s.is_dense(), s.is_compound());
+}
+
+void v3_columns::apply_to(schema_builder& builder) const {
+    for (auto& c : _columns) {
+        builder.with_column(c);
+    }
+}
+
+bool v3_columns::is_static_compact() const {
+    return !_is_dense && !_is_compound;
+}
+
+bool v3_columns::is_compact() const {
+    return _is_dense || !_is_compound;
+}
+
+const std::unordered_map<bytes, const column_definition*>& v3_columns::columns_by_name() const {
+    return _columns_by_name;
+}
+
+const std::vector<column_definition>& v3_columns::all_columns() const {
+    return _columns;
+}
+
 void schema::rebuild() {
     _partition_key_type = make_lw_shared<compound_type<>>(get_column_types(partition_key_columns()));
     _clustering_key_type = make_lw_shared<compound_prefix>(get_column_types(clustering_key_columns()));

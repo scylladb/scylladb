@@ -380,12 +380,40 @@ std::ostream& operator<<(std::ostream& os, const raw_view_info& view);
 
 class view_info;
 
+// Represents a column set which is compactible with Cassandra 3.x.
+//
+// This layout differs from the layout Scylla uses in schema/schema_builder for static compact tables.
+// For such tables, Scylla expects all columns to be of regular type and no clustering columns,
+// whereas in v3 those columns are static and there is a clustering column with type matching the
+// cell name comparator and a regular column with type matching the default validator.
+// See issues #2555 and #1474.
+class v3_columns {
+    bool _is_dense = false;
+    bool _is_compound = false;
+    std::vector<column_definition> _columns;
+    std::unordered_map<bytes, const column_definition*> _columns_by_name;
+public:
+    v3_columns(std::vector<column_definition> columns, bool is_dense, bool is_compound);
+    v3_columns() = default;
+    v3_columns(v3_columns&&) = default;
+    v3_columns& operator=(v3_columns&&) = default;
+    v3_columns(const v3_columns&) = delete;
+    static v3_columns from_v2_schema(const schema&);
+public:
+    const std::vector<column_definition>& all_columns() const;
+    const std::unordered_map<bytes, const column_definition*>& columns_by_name() const;
+    bool is_static_compact() const;
+    bool is_compact() const;
+    void apply_to(schema_builder&) const;
+};
+
 /*
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
  * Use global_schema_ptr for safe across-shard access.
  */
 class schema final : public enable_lw_shared_from_this<schema> {
+    friend class v3_columns;
 public:
     struct dropped_column {
         data_type type;
