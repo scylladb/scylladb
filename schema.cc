@@ -751,6 +751,16 @@ schema_ptr schema_builder::build() {
     }
 
     prepare_dense_schema(new_raw);
+
+    if (_default_validator) {
+        new_raw._default_validator = *_default_validator;
+    } else if (new_raw._is_dense || !new_raw._is_compound) {
+        auto regular_column = std::find_if(new_raw._columns.begin(), new_raw._columns.end(), [] (auto&& col) {
+            return col.kind == column_kind::regular_column;
+        });
+        new_raw._default_validator = regular_column->type;
+    }
+
     return make_lw_shared<schema>(schema(new_raw));
 }
 

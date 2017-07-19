@@ -31,6 +31,7 @@ private:
     schema::raw_schema _raw;
     std::experimental::optional<compact_storage> _compact_storage;
     std::experimental::optional<table_schema_version> _version;
+    std::experimental::optional<data_type> _default_validator;
     schema_builder(const schema::raw_schema&);
 public:
     schema_builder(const sstring& ks_name, const sstring& cf_name,
@@ -74,7 +75,7 @@ public:
     }
 
     schema_builder& set_default_validator(const data_type& validator) {
-        _raw._default_validator = validator;
+        _default_validator = {validator};
         return *this;
     }
 
