@@ -148,7 +148,7 @@ public:
     index_comparator(const schema& s) : _tri_cmp(s) {}
 
     bool operator()(const summary_entry& e, dht::ring_position_view rp) const {
-        return _tri_cmp(e.get_key(), rp) < 0;
+        return _tri_cmp(e.get_decorated_key(), rp) < 0;
     }
 
     bool operator()(const index_entry& e, dht::ring_position_view rp) const {
@@ -156,7 +156,7 @@ public:
     }
 
     bool operator()(dht::ring_position_view rp, const summary_entry& e) const {
-        return _tri_cmp(e.get_key(), rp) > 0;
+        return _tri_cmp(e.get_decorated_key(), rp) > 0;
     }
 
     bool operator()(dht::ring_position_view rp, const index_entry& e) const {

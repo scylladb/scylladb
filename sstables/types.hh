@@ -164,11 +164,16 @@ public:
 };
 
 struct summary_entry {
+    dht::token token;
     bytes key;
     uint64_t position;
 
     key_view get_key() const {
         return key_view{key};
+    }
+
+    decorated_key_view get_decorated_key() const {
+        return decorated_key_view(token, get_key());
     }
 
     bool operator==(const summary_entry& x) const {
