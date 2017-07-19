@@ -83,7 +83,7 @@ static const std::unordered_set<sstring> system_keyspaces = {
                 db::system_keyspace::NAME, db::schema_tables::NAME
 };
 
-static bool is_system_keyspace(const sstring& name) {
+bool is_system_keyspace(const sstring& name) {
     return system_keyspaces.find(name) != system_keyspaces.end();
 }
 

@@ -536,7 +536,7 @@ future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>&
             for (auto&& p : rs->partitions()) {
                 auto mut = p.mut().unfreeze(s);
                 auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
-                if (partition_key == NAME) {
+                if (is_system_keyspace(partition_key)) {
                     continue;
                 }
                 mutations.emplace_back(std::move(mut));
@@ -569,7 +569,7 @@ future<std::vector<frozen_mutation>> convert_schema_to_mutations(distributed<ser
             for (auto&& p : rs->partitions()) {
                 auto mut = p.mut().unfreeze(s);
                 auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
-                if (partition_key == NAME) {
+                if (is_system_keyspace(partition_key)) {
                     continue;
                 }
                 results.emplace_back(std::move(p.mut()));

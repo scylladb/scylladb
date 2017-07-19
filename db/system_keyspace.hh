@@ -62,6 +62,8 @@ namespace cql3 {
     class query_processor;
 }
 
+bool is_system_keyspace(const sstring& ks_name);
+
 namespace db {
 namespace system_keyspace {
 

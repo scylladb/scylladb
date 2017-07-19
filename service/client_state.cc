@@ -133,7 +133,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
         // prevent system keyspace modification
         auto name = ks;
         std::transform(name.begin(), name.end(), name.begin(), ::tolower);
-        if (name == db::system_keyspace::NAME) {
+        if (is_system_keyspace(name)) {
             throw exceptions::unauthorized_exception(ks + " keyspace is not user-modifiable.");
         }
 

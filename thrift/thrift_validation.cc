@@ -68,7 +68,7 @@ void validate_keyspace_not_system(const std::string& keyspace) {
     std::string name;
     name.resize(keyspace.length());
     std::transform(keyspace.begin(), keyspace.end(), name.begin(), ::tolower);
-    if (name == db::system_keyspace::NAME) {
+    if (is_system_keyspace(name)) {
         throw make_exception<InvalidRequestException>("system keyspace is not user-modifiable");
     }
 }
