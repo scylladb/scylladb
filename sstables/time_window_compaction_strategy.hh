@@ -44,6 +44,7 @@
 #include "compaction_strategy_impl.hh"
 #include "compaction.hh"
 #include "timestamp.hh"
+#include "exceptions/exceptions.hh"
 #include <boost/range/algorithm/partial_sort.hpp>
 #include <boost/range/adaptors.hpp>
 
@@ -53,15 +54,62 @@ extern logging::logger clogger;
 
 using namespace std::chrono_literals;
 
-struct time_window_compaction_strategy_options {
+class time_window_compaction_strategy_options {
+private:
     static constexpr std::chrono::seconds DEFAULT_COMPACTION_WINDOW_UNIT(int window_size) { return window_size * 86400s; }
     static constexpr int DEFAULT_COMPACTION_WINDOW_SIZE = 1;
     static constexpr std::chrono::seconds DEFAULT_EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS() { return 600s; }
 
+    static constexpr auto TIMESTAMP_RESOLUTION_KEY = "timestamp_resolution";
+    static constexpr auto COMPACTION_WINDOW_UNIT_KEY = "compaction_window_unit";
+    static constexpr auto COMPACTION_WINDOW_SIZE_KEY = "compaction_window_size";
+    static constexpr auto EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY = "expired_sstable_check_frequency_seconds";
+
+    const std::unordered_map<sstring, std::chrono::seconds> valid_window_units = { { "MINUTES", 60s }, { "HOURS", 3600s }, { "DAYS", 86400s } };
+    // TODO: add support to timestamp resolution other than microseconds, but it's not that important
+    // because new clients only use this one.
+    const std::unordered_set<sstring> valid_timestamp_resolutions = { "MICROSECONDS" };
+
     std::chrono::seconds sstable_window_size = DEFAULT_COMPACTION_WINDOW_UNIT(DEFAULT_COMPACTION_WINDOW_SIZE);
     db_clock::duration expired_sstable_check_frequency = DEFAULT_EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS();
+public:
+    time_window_compaction_strategy_options(const std::map<sstring, sstring>& options) {
+        std::chrono::seconds window_unit;
 
-    // FIXME: override default values with the ones in schema.
+        auto it = options.find(COMPACTION_WINDOW_UNIT_KEY);
+        if (it != options.end()) {
+            auto valid_window_units_it = valid_window_units.find(it->second);
+            if (valid_window_units_it == valid_window_units.end()) {
+                throw exceptions::syntax_exception(sstring("Invalid window unit ") + it->second + " for " + COMPACTION_WINDOW_UNIT_KEY);
+            }
+            window_unit = valid_window_units_it->second;
+        }
+
+        it = options.find(COMPACTION_WINDOW_SIZE_KEY);
+        if (it != options.end()) {
+            try {
+                sstable_window_size = std::stoi(it->second) * window_unit;
+            } catch (const std::exception& e) {
+                throw exceptions::syntax_exception(sstring("Invalid integer value ") + it->second + " for " + COMPACTION_WINDOW_SIZE_KEY);
+            }
+        }
+
+        it = options.find(EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY);
+        if (it != options.end()) {
+            try {
+                expired_sstable_check_frequency = std::chrono::seconds(std::stol(it->second));
+            } catch (const std::exception& e) {
+                throw exceptions::syntax_exception(sstring("Invalid long value ") + it->second + "for " + EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY);
+            }
+        }
+
+        it = options.find(TIMESTAMP_RESOLUTION_KEY);
+        if (it != options.end() && !valid_timestamp_resolutions.count(it->second)) {
+            throw exceptions::syntax_exception(sstring("Invalid timestamp resolution ") + it->second + "for " + TIMESTAMP_RESOLUTION_KEY);
+        }
+    }
+
+    friend class time_window_compaction_strategy;
 };
 
 using timestamp_type = api::timestamp_type;
@@ -73,7 +121,7 @@ class time_window_compaction_strategy : public compaction_strategy_impl {
     timestamp_type _highest_window_seen;
 public:
     time_window_compaction_strategy(const std::map<sstring, sstring>& options)
-        : compaction_strategy_impl(options)
+        : compaction_strategy_impl(options), _options(options)
     {
         if (!options.count(TOMBSTONE_COMPACTION_INTERVAL_OPTION) && !options.count(TOMBSTONE_THRESHOLD_OPTION)) {
             _disable_tombstone_compaction = true;
