@@ -1960,27 +1960,11 @@ SEASTAR_TEST_CASE(test_compact_storage) {
             });
             return e.execute_cql("create table tcs4 (p1 int PRIMARY KEY, c1 int, c2 int) with compact storage;").discard_result();
         }).then([&e] {
-            // from v3 style schema, tcs4 will be given synthehic clustering, and insert of only PK is not
-            // legal. Must include a value.
-            return make_ready_future().then([&e] {
-                return e.execute_cql("insert into tcs4 (p1) values (1);");
-            }).then_wrapped([](auto f) {
-                try {
-                    f.get();
-                    BOOST_FAIL("Should not reach");
-                } catch (...) {
-                    // ok
-                }
-                return make_ready_future();
-            });
-        }).then([&e] {
-            return e.execute_cql("insert into tcs4 (p1, c1) values (1, 2);").discard_result();
+            return e.execute_cql("insert into tcs4 (p1) values (1);").discard_result();
         }).then([&e] {
             return e.execute_cql("select * from tcs4;");
         }).then([&e] (auto msg) {
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(2), {} },
-            });
+            assert_that(msg).is_rows().with_rows({ });
         });
     });
 }
