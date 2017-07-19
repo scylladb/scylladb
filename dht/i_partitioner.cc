@@ -483,15 +483,6 @@ int ring_position_comparator::operator()(ring_position_view lh, ring_position_vi
     }
 }
 
-int ring_position_comparator::operator()(ring_position_view lh, sstables::key_view rh) const {
-    auto rh_token = global_partitioner().get_token(rh);
-    return operator()(lh, sstables::decorated_key_view(rh_token, rh));
-}
-
-int ring_position_comparator::operator()(sstables::key_view a, ring_position_view b) const {
-    return -(*this)(b, a);
-}
-
 int ring_position_comparator::operator()(ring_position_view lh, sstables::decorated_key_view rh) const {
     auto token_cmp = tri_compare(*lh._token, rh.token());
     if (token_cmp) {
