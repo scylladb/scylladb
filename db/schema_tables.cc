@@ -1541,7 +1541,7 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
     mutation indices_mutation(pkey, indexes());
 
     if (with_columns_and_triggers) {
-        for (auto&& column : table->all_columns()) {
+        for (auto&& column : table->v3().all_columns()) {
             add_column_to_schema_mutation(table, column, timestamp, columns_mutation);
         }
         for (auto&& index : table->indices()) {
@@ -1604,13 +1604,13 @@ static void make_update_columns_mutations(schema_ptr old_table,
         std::vector<mutation>& mutations) {
     mutation columns_mutation(partition_key::from_singular(*columns(), old_table->ks_name()), columns());
 
-    auto diff = difference(old_table->columns_by_name(), new_table->columns_by_name());
+    auto diff = difference(old_table->v3().columns_by_name(), new_table->v3().columns_by_name());
 
     // columns that are no longer needed
     for (auto&& name : diff.entries_only_on_left) {
         // Thrift only knows about the REGULAR ColumnDefinition type, so don't consider other type
         // are being deleted just because they are not here.
-        const column_definition& column = *old_table->columns_by_name().at(name);
+        const column_definition& column = *old_table->v3().columns_by_name().at(name);
         if (from_thrift && !column.is_regular()) {
             continue;
         }
@@ -1620,7 +1620,7 @@ static void make_update_columns_mutations(schema_ptr old_table,
 
     // newly added columns and old columns with updated attributes
     for (auto&& name : boost::range::join(diff.entries_differing, diff.entries_only_on_right)) {
-        const column_definition& column = *new_table->columns_by_name().at(name);
+        const column_definition& column = *new_table->v3().columns_by_name().at(name);
         add_column_to_schema_mutation(new_table, column, timestamp, columns_mutation);
     }
 
@@ -1673,7 +1673,7 @@ static void make_drop_table_or_view_mutations(schema_ptr schema_table,
     auto ckey = clustering_key::from_singular(*schema_table, table_or_view->cf_name());
     m.partition().apply_delete(*schema_table, ckey, tombstone(timestamp, gc_clock::now()));
     mutations.emplace_back(m);
-    for (auto &column : table_or_view->all_columns()) {
+    for (auto &column : table_or_view->v3().all_columns()) {
         drop_column_from_schema_mutation(table_or_view, column, timestamp, mutations);
     }
     {
@@ -1914,9 +1914,8 @@ schema_ptr create_table_from_mutations(schema_mutations sm, std::experimental::o
 
     prepare_builder_from_table_row(builder, table_row);
 
-    for (auto&& cdef : column_defs) {
-        builder.with_column(cdef);
-    }
+    v3_columns columns(std::move(column_defs), is_dense, is_compound);
+    columns.apply_to(builder);
 
     std::vector<index_metadata> index_defs;
     if (sm.indices_mutation()) {
@@ -2198,7 +2197,7 @@ static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type t
     mutation indices_mutation(pkey, indexes());
 
     if (with_columns) {
-        for (auto&& column : view->all_columns()) {
+        for (auto&& column : view->v3().all_columns()) {
             add_column_to_schema_mutation(view, column, timestamp, columns_mutation);
         }
 

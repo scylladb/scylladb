@@ -442,9 +442,10 @@ SEASTAR_TEST_CASE(compact_storage_sparse_read) {
             return sstp->read_row(s, key).then([] (auto sm) {
                 return mutation_from_streamed_mutation(std::move(sm));
             }).then([sstp, s, &key] (auto mutation) {
-                auto sr = mutation->partition().static_row();
-                match_live_cell(sr, *s, "cl1", data_value(to_bytes("cl1")));
-                match_live_cell(sr, *s, "cl2", data_value(to_bytes("cl2")));
+                auto& mp = mutation->partition();
+                auto row = mp.clustered_row(*s, clustering_key::make_empty());
+                match_live_cell(row.cells(), *s, "cl1", data_value(to_bytes("cl1")));
+                match_live_cell(row.cells(), *s, "cl2", data_value(to_bytes("cl2")));
                 return make_ready_future<>();
             });
         });

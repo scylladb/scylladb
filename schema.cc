@@ -105,6 +105,97 @@ schema::make_column_specification(const column_definition& def) {
     return ::make_shared<cql3::column_specification>(_raw._ks_name, _raw._cf_name, std::move(id), def.type);
 }
 
+v3_columns::v3_columns(std::vector<column_definition> cols, bool is_dense, bool is_compound)
+    : _is_dense(is_dense)
+    , _is_compound(is_compound)
+    , _columns(std::move(cols))
+{
+    for (column_definition& def : _columns) {
+        _columns_by_name[def.name()] = &def;
+    }
+}
+
+v3_columns v3_columns::from_v2_schema(const schema& s) {
+    data_type static_column_name_type = utf8_type;
+    std::vector<column_definition> cols;
+
+    if (s.is_static_compact_table()) {
+        if (s.has_static_columns()) {
+            throw std::runtime_error(
+                sprint("v2 static compact table should not have static columns: %s.%s", s.ks_name(), s.cf_name()));
+        }
+        if (s.clustering_key_size()) {
+            throw std::runtime_error(
+                sprint("v2 static compact table should not have clustering columns: %s.%s", s.ks_name(), s.cf_name()));
+        }
+        static_column_name_type = s.regular_column_name_type();
+        for (auto& c : s.all_columns()) {
+            // Note that for "static" no-clustering compact storage we use static for the defined columns
+            if (c.kind == column_kind::regular_column) {
+                auto new_def = c;
+                new_def.kind = column_kind::static_column;
+                cols.push_back(new_def);
+            } else {
+                cols.push_back(c);
+            }
+        }
+        schema_builder::default_names names(s._raw);
+        cols.emplace_back(to_bytes(names.clustering_name()), static_column_name_type, column_kind::clustering_key, 0);
+        cols.emplace_back(to_bytes(names.compact_value_name()), s.make_legacy_default_validator(), column_kind::regular_column, 0);
+    } else {
+        cols = s.all_columns();
+    }
+
+    for (column_definition& def : cols) {
+        data_type name_type = def.is_static() ? static_column_name_type : utf8_type;
+        auto id = ::make_shared<cql3::column_identifier>(def.name(), name_type);
+        def.column_specification = ::make_shared<cql3::column_specification>(s.ks_name(), s.cf_name(), std::move(id), def.type);
+    }
+
+    return v3_columns(std::move(cols), s.is_dense(), s.is_compound());
+}
+
+void v3_columns::apply_to(schema_builder& builder) const {
+    if (is_static_compact()) {
+        for (auto& c : _columns) {
+            if (c.kind == column_kind::regular_column) {
+                builder.set_default_validation_class(c.type);
+            } else if (c.kind == column_kind::static_column) {
+                auto new_def = c;
+                new_def.kind = column_kind::regular_column;
+                builder.with_column(new_def);
+            } else if (c.kind == column_kind::clustering_key) {
+                builder.set_regular_column_name_type(c.type);
+            } else {
+                builder.with_column(c);
+            }
+        }
+    } else {
+        for (auto& c : _columns) {
+            if (is_compact() && c.kind == column_kind::regular_column) {
+                builder.set_default_validation_class(c.type);
+            }
+            builder.with_column(c);
+        }
+    }
+}
+
+bool v3_columns::is_static_compact() const {
+    return !_is_dense && !_is_compound;
+}
+
+bool v3_columns::is_compact() const {
+    return _is_dense || !_is_compound;
+}
+
+const std::unordered_map<bytes, const column_definition*>& v3_columns::columns_by_name() const {
+    return _columns_by_name;
+}
+
+const std::vector<column_definition>& v3_columns::all_columns() const {
+    return _columns;
+}
+
 void schema::rebuild() {
     _partition_key_type = make_lw_shared<compound_type<>>(get_column_types(partition_key_columns()));
     _clustering_key_type = make_lw_shared<compound_prefix>(get_column_types(clustering_key_columns()));
@@ -137,7 +228,7 @@ void schema::rebuild() {
     }
 
     thrift()._compound = is_compound();
-    thrift()._is_dynamic = static_columns_count() == 0;
+    thrift()._is_dynamic = clustering_key_size() > 0;
 
     if (is_counter()) {
         for (auto&& cdef : boost::range::join(static_columns(), regular_columns())) {
@@ -152,6 +243,8 @@ void schema::rebuild() {
             }
         }
     }
+
+    _v3_columns = v3_columns::from_v2_schema(*this);
 }
 
 const column_mapping& schema::get_column_mapping() const {
@@ -742,9 +835,7 @@ sstring schema_builder::default_names::compact_value_name() {
 void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
     auto is_dense = raw._is_dense;
     auto is_compound = raw._is_compound;
-    auto is_static_compact = !is_dense && !is_compound;
     auto is_compact_table = is_dense || !is_compound;
-
 
     if (is_compact_table) {
         auto count_kind = [&raw](column_kind kind) {
@@ -755,37 +846,7 @@ void schema_builder::prepare_dense_schema(schema::raw_schema& raw) {
 
         default_names names(raw);
 
-        if (is_static_compact) {
-            /**
-             * In origin v3 the general cql-ification of the "storage engine" means
-             * that "static compact" tables are expressed as all defined columns static,
-             * but with synthetic clustering + regular columns.
-             * We unfortunately need to play along with this, both because we want
-             * schema tables on disk to be compatible (and they are explicit).
-             * More to the point, we are, at least until we upgrade to version "m"
-             * sstables, stuck with having origins java tools reading our schema tables
-             * for table schemas (this btw applies to db drivers too, though maybe a little
-             * less), and it asserts badly if we don't uphold the origin table tweaks.
-             *
-             * So transform away...
-             *
-             */
-            if (!count_kind(column_kind::static_column)) {
-                assert(!count_kind(column_kind::clustering_key));
-                for (auto& c : raw._columns) {
-                    // Note that for "static" no-clustering compact storage we use static for the defined columns
-                    if (c.kind == column_kind::regular_column) {
-                        c.kind = column_kind::static_column;
-                    }
-                }
-                // Compact tables always have a clustering and a single regular value.
-                raw._columns.emplace_back(to_bytes(names.clustering_name()),
-                                utf8_type, column_kind::clustering_key, 0);
-                raw._columns.emplace_back(to_bytes(names.compact_value_name()),
-                                raw._is_counter ? counter_type : bytes_type,
-                                column_kind::regular_column, 0);
-            }
-        } else if (is_dense) {
+        if (is_dense) {
             auto regular_cols = count_kind(column_kind::regular_column);
             // In Origin, dense CFs always have at least one regular column
             if (regular_cols == 0) {
@@ -827,6 +888,10 @@ schema_ptr schema_builder::build() {
         new_raw._version = *_version;
     } else {
         new_raw._version = utils::UUID_gen::get_time_UUID();
+    }
+
+    if (new_raw._is_counter) {
+        new_raw._default_validation_class = counter_type;
     }
 
     if (_compact_storage) {
@@ -1023,8 +1088,8 @@ schema::static_upper_bound(const bytes& name) const {
 }
 data_type
 schema::column_name_type(const column_definition& def) const {
-    if (is_static_compact_table() && def.kind == column_kind::static_column) {
-        return clustering_column_at(0).type;
+    if (def.kind == column_kind::regular_column) {
+        return _raw._regular_column_name_type;
     }
     return utf8_type;
 }
@@ -1121,12 +1186,8 @@ schema::select_order_range schema::all_columns_in_select_order() const {
                     _raw._columns.begin() + (is_static_compact_table ?
                                     column_offset(column_kind::clustering_key) :
                                     column_offset(column_kind::static_column)));
-    auto ck_v_range =
-                    (is_static_compact_table || no_non_pk_columns) ?
-                                    static_columns() :
-                                    const_iterator_range_type(
-                                                    static_columns().begin(),
-                                                    all_columns().end());
+    auto ck_v_range = no_non_pk_columns ? static_columns()
+                                        : const_iterator_range_type(static_columns().begin(), all_columns().end());
     return boost::range::join(pk_range, ck_v_range);
 }
 
@@ -1165,23 +1226,7 @@ std::vector<sstring> schema::index_names() const {
 }
 
 data_type schema::make_legacy_default_validator() const {
-    if (is_counter()) {
-        return counter_type;
-    }
-    if (is_compact_table()) {
-        // See CFMetaData.
-        if (is_super()) {
-            for (auto& c : regular_columns()) {
-                if (c.name().empty()) {
-                    return c.type;
-                }
-            }
-            assert("Invalid super column table definition, no 'dynamic' map column");
-        } else {
-            return regular_columns().begin()->type;
-        }
-    }
-    return bytes_type;
+    return _raw._default_validation_class;
 }
 
 bool schema::is_synced() const {

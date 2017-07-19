@@ -188,6 +188,7 @@ public:
                 if (default_validator->is_counter()) {
                     builder.set_is_counter(true);
                 }
+                builder.set_default_validation_class(default_validator);
             }
 
             /*
@@ -286,20 +287,6 @@ public:
                        && column_row.get_as<sstring>("column_name").empty();
             };
 
-            // org.apache.cassandra.schema.LegacySchemaMigrator#checkNeedsUpgrade
-            bool needs_upgrade = !is_cql && [&] {
-                bool has_empty_compact_value = false;
-                bool has_regular = false;
-                bool has_static = false;
-                for (auto& row : *columns) {
-                    auto kind = db::schema_tables::deserialize_kind(row.get_as<sstring>("type"));
-                    has_regular |= kind == column_kind::regular_column;
-                    has_static |= kind == column_kind::static_column;
-                    has_empty_compact_value |= is_empty_compact_value(row);
-                }
-                return (is_static_compact && !has_static) || !has_regular || has_empty_compact_value;
-            }();
-
             for (auto& row : *columns) {
                 auto kind_str = row.get_as<sstring>("type");
                 auto kind = db::schema_tables::deserialize_kind(kind_str);
@@ -309,10 +296,6 @@ public:
 
                 if (is_empty_compact_value(row)) {
                     continue;
-                }
-
-                if (needs_upgrade && is_static_compact && kind == column_kind::regular_column) {
-                    kind = column_kind::static_column;
                 }
 
                 if (filter_sparse) {
@@ -369,7 +352,7 @@ public:
                 }
 
                 data_type column_name_type = [&] {
-                    if (is_static_compact && kind == column_kind::static_column) {
+                    if (is_static_compact && kind == column_kind::regular_column) {
                         return db::schema_tables::parse_type(comparator);
                     }
                     return utf8_type;
@@ -386,16 +369,8 @@ public:
                 builder.with_column(std::move(column_name), std::move(validator), kind, component_index);
             }
 
-            if (needs_upgrade) {
-                // org.apache.cassandra.schema.LegacySchemaMigrator#addDefinitionForUpgrade
-                auto&& names = builder.get_default_names();
-                if (is_static_compact) {
-                    builder.with_column(to_bytes(names.clustering_name()),
-                        db::schema_tables::parse_type(comparator), column_kind::clustering_key);
-                    builder.with_column(to_bytes(names.compact_value_name()), default_validator);
-                } else {
-                    builder.with_column(to_bytes(names.compact_value_name()), empty_type, column_kind::regular_column, 0);
-                }
+            if (is_static_compact) {
+                builder.set_regular_column_name_type(db::schema_tables::parse_type(comparator));
             }
 
             if (td.has("read_repair_chance")) {
