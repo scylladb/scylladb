@@ -1189,6 +1189,11 @@ private:
             builder.with_column(to_bytes("key"), bytes_type, column_kind::partition_key);
         }
 
+        auto&& vtype = cf_def.__isset.default_validation_class
+                         ? db::marshal::type_parser::parse(to_sstring(cf_def.default_validation_class))
+                         : bytes_type;
+        builder.set_default_validator(vtype);
+
         data_type regular_column_name_type;
         if (cf_def.column_metadata.empty()) {
             // Dynamic CF
@@ -1200,10 +1205,6 @@ private:
             for (uint32_t i = 0; i < ck_types.size(); ++i) {
                 builder.with_column(to_bytes(sprint("column%d", i + 1)), std::move(ck_types[i]), column_kind::clustering_key);
             }
-            auto&& vtype = cf_def.__isset.default_validation_class
-                         ? db::marshal::type_parser::parse(to_sstring(cf_def.default_validation_class))
-                         : bytes_type;
-            builder.set_default_validator(vtype);
             builder.with_column(to_bytes("value"), std::move(vtype));
         } else {
             // Static CF
