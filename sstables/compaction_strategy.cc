@@ -55,6 +55,7 @@
 #include "size_tiered_compaction_strategy.hh"
 #include "date_tiered_compaction_strategy.hh"
 #include "leveled_compaction_strategy.hh"
+#include "time_window_compaction_strategy.hh"
 
 logging::logger date_tiered_manifest::logger = logging::logger("DateTieredCompactionStrategy");
 logging::logger leveled_manifest::logger("LeveledManifest");
@@ -455,6 +456,9 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, 
         break;
     case compaction_strategy_type::date_tiered:
         impl = make_shared<date_tiered_compaction_strategy>(date_tiered_compaction_strategy(options));
+        break;
+    case compaction_strategy_type::time_window:
+        impl = make_shared<time_window_compaction_strategy>(time_window_compaction_strategy(options));
         break;
     default:
         throw std::runtime_error("strategy not supported");
