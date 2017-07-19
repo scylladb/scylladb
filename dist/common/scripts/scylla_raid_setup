@@ -127,6 +127,6 @@ if [ $FSTAB -ne 0 ]; then
     echo "$UUID $MOUNT_AT xfs noatime 0 0" >> /etc/fstab
 fi
 
-if is_debian_variant;
+if is_debian_variant; then
     update-initramfs -u
 fi
