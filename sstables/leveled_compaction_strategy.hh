@@ -109,6 +109,7 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(c
         });
         return sstables::compaction_descriptor({ sst }, sst->get_sstable_level());
     }
+    return {};
 }
 
 std::vector<resharding_descriptor> leveled_compaction_strategy::get_resharding_jobs(column_family& cf, std::vector<shared_sstable> candidates) {
