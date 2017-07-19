@@ -550,7 +550,7 @@ private:
     template <sstable::component_type Type, typename T>
     void write_simple(const T& comp, const io_priority_class& pc);
 
-    void generate_toc(compressor c, double filter_fp_chance);
+    void generate_toc(compressor_ptr c, double filter_fp_chance);
     void write_toc(const io_priority_class& pc);
     future<> seal_sstable();
 

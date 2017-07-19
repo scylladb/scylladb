@@ -989,7 +989,7 @@ future<> sstable::read_toc() {
 
 }
 
-void sstable::generate_toc(compressor c, double filter_fp_chance) {
+void sstable::generate_toc(compressor_ptr c, double filter_fp_chance) {
     // Creating table of components.
     _recognized_components.insert(component_type::TOC);
     _recognized_components.insert(component_type::Statistics);
@@ -1000,7 +1000,7 @@ void sstable::generate_toc(compressor c, double filter_fp_chance) {
     if (filter_fp_chance != 1.0) {
         _recognized_components.insert(component_type::Filter);
     }
-    if (c == compressor::none) {
+    if (c == nullptr) {
         _recognized_components.insert(component_type::CRC);
     } else {
         _recognized_components.insert(component_type::CompressionInfo);
@@ -1960,17 +1960,6 @@ static void seal_summary(summary& s,
     }
 }
 
-static void prepare_compression(compression& c, const schema& schema) {
-    const auto& cp = schema.get_compressor_params();
-    c.set_compressor(cp.get_compressor());
-    c.set_uncompressed_chunk_length(cp.chunk_length());
-    // FIXME: crc_check_chance can be configured by the user.
-    // probability to verify the checksum of a compressed chunk we read.
-    // defaults to 1.0.
-    c.options.elements.push_back({"crc_check_chance", "1.0"});
-    c.init_full_checksum();
-}
-
 static
 void
 populate_statistics_offsets(statistics& s) {
@@ -2310,8 +2299,7 @@ void sstable_writer::prepare_file_writer()
     if (!_compression_enabled) {
         _writer = std::make_unique<checksummed_file_writer>(std::move(_sst._data_file), std::move(options), true);
     } else {
-        prepare_compression(_sst._components->compression, _schema);
-        _writer = std::make_unique<file_writer>(make_compressed_file_output_stream(std::move(_sst._data_file), std::move(options), &_sst._components->compression));
+        _writer = std::make_unique<file_writer>(make_compressed_file_output_stream(std::move(_sst._data_file), std::move(options), &_sst._components->compression, _schema.get_compressor_params()));
     }
 }
 
