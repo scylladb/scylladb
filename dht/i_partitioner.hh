@@ -55,6 +55,7 @@
 namespace sstables {
 
 class key_view;
+class decorated_key_view;
 
 }
 
@@ -554,6 +555,8 @@ struct ring_position_comparator {
     int operator()(ring_position_view, ring_position_view) const;
     int operator()(ring_position_view, sstables::key_view) const;
     int operator()(sstables::key_view, ring_position_view) const;
+    int operator()(ring_position_view, sstables::decorated_key_view) const;
+    int operator()(sstables::decorated_key_view, ring_position_view) const;
 };
 
 // "less" comparator giving the same order as ring_position_comparator

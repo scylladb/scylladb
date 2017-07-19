@@ -485,12 +485,20 @@ int ring_position_comparator::operator()(ring_position_view lh, ring_position_vi
 
 int ring_position_comparator::operator()(ring_position_view lh, sstables::key_view rh) const {
     auto rh_token = global_partitioner().get_token(rh);
-    auto token_cmp = tri_compare(*lh._token, rh_token);
+    return operator()(lh, sstables::decorated_key_view(rh_token, rh));
+}
+
+int ring_position_comparator::operator()(sstables::key_view a, ring_position_view b) const {
+    return -(*this)(b, a);
+}
+
+int ring_position_comparator::operator()(ring_position_view lh, sstables::decorated_key_view rh) const {
+    auto token_cmp = tri_compare(*lh._token, rh.token());
     if (token_cmp) {
         return token_cmp;
     }
     if (lh._key) {
-        auto rel = rh.tri_compare(s, *lh._key);
+        auto rel = rh.key().tri_compare(s, *lh._key);
         if (rel) {
             return -rel;
         }
@@ -498,7 +506,7 @@ int ring_position_comparator::operator()(ring_position_view lh, sstables::key_vi
     return lh._weight;
 }
 
-int ring_position_comparator::operator()(sstables::key_view a, ring_position_view b) const {
+int ring_position_comparator::operator()(sstables::decorated_key_view a, ring_position_view b) const {
     return -(*this)(b, a);
 }
 
