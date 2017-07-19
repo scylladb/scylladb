@@ -94,7 +94,7 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(c
     // a sstable which droppable data shadow data in older sstable, by starting from highest levels which
     // theoretically contain oldest non-overlapping data.
     auto gc_before = gc_clock::now() - cfs.schema()->gc_grace_seconds();
-    for (auto level = manifest.get_level_count(); level >= 0; level--) {
+    for (auto level = int(manifest.get_level_count()); level >= 0; level--) {
         auto& sstables = manifest.get_level(level);
         // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
         auto e = boost::range::remove_if(sstables, [this, &gc_before] (const sstables::shared_sstable& sst) -> bool {
