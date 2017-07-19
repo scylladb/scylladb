@@ -2270,7 +2270,7 @@ void storage_service::flush_column_families() {
         auto& local_db = ss.db().local();
         auto non_system_cfs = local_db.get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
             auto cf = uuid_and_cf.second;
-            return cf->schema()->ks_name() != db::system_keyspace::NAME;
+            return !is_system_keyspace(cf->schema()->ks_name());
         });
         // count CFs first
         auto total_cfs = boost::distance(non_system_cfs);
@@ -2290,7 +2290,7 @@ void storage_service::flush_column_families() {
         auto& local_db = ss.db().local();
         auto system_cfs = local_db.get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
             auto cf = uuid_and_cf.second;
-            return cf->schema()->ks_name() == db::system_keyspace::NAME;
+            return is_system_keyspace(cf->schema()->ks_name());
         });
         return parallel_for_each(system_cfs, [&ss] (auto&& uuid_and_cf) {
             auto cf = uuid_and_cf.second;

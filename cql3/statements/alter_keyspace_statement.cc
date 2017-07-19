@@ -63,7 +63,7 @@ void cql3::statements::alter_keyspace_statement::validate(distributed<service::s
         service::get_local_storage_proxy().get_db().local().find_keyspace(_name); // throws on failure
         auto tmp = _name;
         std::transform(tmp.begin(), tmp.end(), tmp.begin(), ::tolower);
-        if (tmp == db::system_keyspace::NAME) {
+        if (is_system_keyspace(tmp)) {
             throw exceptions::invalid_request_exception("Cannot alter system keyspace");
         }
 

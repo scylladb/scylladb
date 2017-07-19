@@ -72,7 +72,7 @@ void create_keyspace_statement::validate(distributed<service::storage_proxy>&, c
     std::string name;
     name.resize(_name.length());
     std::transform(_name.begin(), _name.end(), name.begin(), ::tolower);
-    if (name == db::system_keyspace::NAME) {
+    if (is_system_keyspace(name)) {
         throw exceptions::invalid_request_exception("system keyspace is not user-modifiable");
     }
     // keyspace name
