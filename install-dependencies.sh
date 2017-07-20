@@ -21,7 +21,21 @@
 
 bash seastar/install-dependencies.sh
 
-if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
+if [ "$ID" = "ubuntu" ]; then
+    echo "Adding /etc/apt/sources.list.d/scylla.list"
+
+    if wget "http://downloads.scylladb.com/deb/3rdparty/${VERSION_CODENAME}/scylla-3rdparty.list" -q -O /dev/null; then
+        echo "deb  [trusted=yes arch=amd64] http://downloads.scylladb.com/deb/3rdparty/${VERSION_CODENAME} ${VERSION_CODENAME} scylladb/multiverse" > /etc/apt/sources.list.d/scylla-3rdparty.list
+    else
+        echo "Packages are not available for your Ubuntu release yet, using the Xenial (16.04) list instead"
+
+        echo "deb  [trusted=yes arch=amd64] http://downloads.scylladb.com/deb/3rdparty/xenial xenial scylladb/multiverse" > /etc/apt/sources.list.d/scylla-3rdparty.list
+    fi
+
+    apt -y update
+
+    apt -y install libsystemd-dev python3-pyparsing libsnappy-dev libjsoncpp-dev libyaml-cpp-dev libthrift-dev antlr3-c++-dev antlr3 thrift-compiler
+elif [ "$ID" = "debian" ]; then
     apt -y install libyaml-cpp-dev libjsoncpp-dev libsnappy-dev
     echo antlr3 and thrift still missing - waiting for ppa
 elif [ "$ID" = "centos" ] || [ "$ID" = "fedora" ]; then

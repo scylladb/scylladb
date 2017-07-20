@@ -11,11 +11,11 @@ git submodule init
 git submodule update --init --recursive
 ```
 
-### Building and Running Scylla on Fedora
-* Installing required packages:
+### Building Scylla
 
+* Installing required packages
 ```
-sudo dnf install yaml-cpp-devel lz4-devel zlib-devel snappy-devel jsoncpp-devel thrift-devel antlr3-tool antlr3-C++-devel libasan libubsan gcc-c++ gnutls-devel ninja-build ragel libaio-devel cryptopp-devel xfsprogs-devel numactl-devel hwloc-devel libpciaccess-devel libxml2-devel python3-pyparsing lksctp-tools-devel protobuf-devel protobuf-compiler systemd-devel libunwind-devel
+sudo ./install-dependencies.sh
 ```
 
 * Build Scylla
@@ -24,6 +24,8 @@ sudo dnf install yaml-cpp-devel lz4-devel zlib-devel snappy-devel jsoncpp-devel 
 ninja-build build/release/scylla -j2 # you can use more cpus if you have tons of RAM
 
 ```
+
+### Running Scylla
 
 * Run Scylla
 ```
