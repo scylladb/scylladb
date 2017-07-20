@@ -174,12 +174,14 @@ protected:
     uint64_t _estimated_partitions = 0;
     std::vector<unsigned long> _ancestors;
     db::replay_position _rp;
+    seastar::thread_scheduling_group* _tsg;
 protected:
-    compaction(column_family& cf, std::vector<shared_sstable> sstables, uint64_t max_sstable_size, uint32_t sstable_level)
+    compaction(column_family& cf, std::vector<shared_sstable> sstables, uint64_t max_sstable_size, uint32_t sstable_level, seastar::thread_scheduling_group* tsg)
         : _cf(cf)
         , _sstables(std::move(sstables))
         , _max_sstable_size(max_sstable_size)
         , _sstable_level(sstable_level)
+        , _tsg(tsg)
     {
         _cf.get_compaction_manager().register_compaction(_info);
     }
@@ -210,6 +212,12 @@ public:
 
     virtual ~compaction() {
         _cf.get_compaction_manager().deregister_compaction(_info);
+    }
+
+    seastar::thread_attributes thread_attributes() {
+        seastar::thread_attributes attr;
+        attr.scheduling_group = _tsg;
+        return attr;
     }
 private:
     ::mutation_reader setup() {
@@ -339,8 +347,8 @@ class regular_compaction : public compaction {
     stdx::optional<sstable_writer> _writer;
 public:
     regular_compaction(column_family& cf, std::vector<shared_sstable> sstables, std::function<shared_sstable()> creator,
-            uint64_t max_sstable_size, uint32_t sstable_level)
-        : compaction(cf, std::move(sstables), max_sstable_size, sstable_level)
+            uint64_t max_sstable_size, uint32_t sstable_level, seastar::thread_scheduling_group* tsg)
+        : compaction(cf, std::move(sstables), max_sstable_size, sstable_level, tsg)
         , _creator(std::move(creator))
         , _set(cf.get_sstable_set())
         , _selector(_set.make_incremental_selector())
@@ -407,8 +415,8 @@ public:
 class cleanup_compaction final : public regular_compaction {
 public:
     cleanup_compaction(column_family& cf, std::vector<shared_sstable> sstables, std::function<shared_sstable()> creator,
-            uint64_t max_sstable_size, uint32_t sstable_level)
-        : regular_compaction(cf, std::move(sstables), std::move(creator), max_sstable_size, sstable_level)
+            uint64_t max_sstable_size, uint32_t sstable_level, seastar::thread_scheduling_group* tsg)
+        : regular_compaction(cf, std::move(sstables), std::move(creator), max_sstable_size, sstable_level, tsg)
     {
         _info->type = compaction_type::Cleanup;
     }
@@ -444,8 +452,8 @@ class resharding_compaction final : public compaction {
     std::function<shared_sstable(shard_id)> _sstable_creator;
 public:
     resharding_compaction(std::vector<shared_sstable> sstables, column_family& cf, std::function<shared_sstable(shard_id)> creator,
-            uint64_t max_sstable_size, uint32_t sstable_level)
-        : compaction(cf, std::move(sstables), max_sstable_size, sstable_level)
+            uint64_t max_sstable_size, uint32_t sstable_level, seastar::thread_scheduling_group* tsg)
+        : compaction(cf, std::move(sstables), max_sstable_size, sstable_level, tsg)
         , _output_sstables(smp::count)
         , _sstable_creator(std::move(creator))
     {
@@ -494,7 +502,8 @@ public:
 };
 
 future<std::vector<shared_sstable>> compaction::run(std::unique_ptr<compaction> c) {
-    return seastar::async([c = std::move(c)] () mutable {
+    auto attr = c->thread_attributes();
+    return seastar::async(std::move(attr), [c = std::move(c)] () mutable {
         auto reader = c->setup();
 
         auto cr = c->get_compacting_sstable_writer();
@@ -527,21 +536,21 @@ static std::unique_ptr<compaction> make_compaction(bool cleanup, Params&&... par
 
 future<std::vector<shared_sstable>>
 compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::function<shared_sstable()> creator,
-        uint64_t max_sstable_size, uint32_t sstable_level, bool cleanup) {
+        uint64_t max_sstable_size, uint32_t sstable_level, bool cleanup, seastar::thread_scheduling_group *tsg) {
     if (sstables.empty()) {
         throw std::runtime_error(sprint("Called compaction with empty set on behalf of {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name()));
     }
-    auto c = make_compaction(cleanup, cf, std::move(sstables), std::move(creator), max_sstable_size, sstable_level);
+    auto c = make_compaction(cleanup, cf, std::move(sstables), std::move(creator), max_sstable_size, sstable_level, tsg);
     return compaction::run(std::move(c));
 }
 
 future<std::vector<shared_sstable>>
 reshard_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::function<shared_sstable(shard_id)> creator,
-        uint64_t max_sstable_size, uint32_t sstable_level) {
+        uint64_t max_sstable_size, uint32_t sstable_level, seastar::thread_scheduling_group* tsg) {
     if (sstables.empty()) {
         throw std::runtime_error(sprint("Called resharding with empty set on behalf of {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name()));
     }
-    auto c = std::make_unique<resharding_compaction>(std::move(sstables), cf, std::move(creator), max_sstable_size, sstable_level);
+    auto c = std::make_unique<resharding_compaction>(std::move(sstables), cf, std::move(creator), max_sstable_size, sstable_level, tsg);
     return compaction::run(std::move(c));
 }
 
