@@ -225,6 +225,7 @@ public:
         }
         return *this;
     }
+    [[gnu::always_inline]]
     ~mutation_fragment() {
         if (_data) {
             destroy_data();
