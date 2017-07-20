@@ -2462,12 +2462,12 @@ void database::remove(const column_family& cf) {
     }
 }
 
-future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf) {
+future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf, bool snapshot) {
     auto uuid = find_uuid(ks_name, cf_name);
     auto cf = _column_families.at(uuid);
     remove(*cf);
     auto& ks = find_keyspace(ks_name);
-    return truncate(ks, *cf, std::move(tsf)).then([this, cf] {
+    return truncate(ks, *cf, std::move(tsf), snapshot).then([this, cf] {
         return cf->stop();
     }).then([this, cf] {
         return make_ready_future<>();
@@ -3453,10 +3453,10 @@ future<> database::truncate(sstring ksname, sstring cfname, timestamp_func tsf) 
     return truncate(ks, cf, std::move(tsf));
 }
 
-future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf)
+future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf, bool with_snapshot)
 {
     const auto durable = ks.metadata()->durable_writes();
-    const auto auto_snapshot = get_config().auto_snapshot();
+    const auto auto_snapshot = with_snapshot && get_config().auto_snapshot();
 
     // Force mutations coming in to re-acquire higher rp:s
     // This creates a "soft" ordering, in that we will guarantee that
