@@ -497,8 +497,8 @@ public:
                 return make_ready_future<bool>(false);
             }
             return read_partition_data().then([this, key] {
-                dht::ring_position_comparator cmp(*_sstable->_schema);
-                return cmp(key, partition_key()) == 0;
+                index_comparator cmp(*_sstable->_schema);
+                return cmp(key, current_partition_entry()) == 0;
             });
         });
     }
