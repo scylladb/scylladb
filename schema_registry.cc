@@ -273,9 +273,9 @@ schema_ptr global_schema_ptr::get() const {
             s = local_schema_registry().get_or_load(e.version(), [&e](table_schema_version) {
                 return e.frozen();
             });
-            if (e.is_synced()) {
-                s->registry_entry()->mark_synced();
-            }
+        }
+        if (e.is_synced()) {
+            s->registry_entry()->mark_synced();
         }
         return s;
     }
