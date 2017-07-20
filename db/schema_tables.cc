@@ -167,7 +167,7 @@ static void prepare_builder_from_table_row(schema_builder&, const query::result_
 
 using namespace v3;
 
-std::vector<const char*> ALL { KEYSPACES, TABLES, COLUMNS, DROPPED_COLUMNS, TRIGGERS, VIEWS, TYPES, FUNCTIONS, AGGREGATES, INDEXES };
+std::vector<const char*> ALL { KEYSPACES, TABLES, SCYLLA_TABLES, COLUMNS, DROPPED_COLUMNS, TRIGGERS, VIEWS, TYPES, FUNCTIONS, AGGREGATES, INDEXES };
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
