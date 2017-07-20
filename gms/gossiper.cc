@@ -1498,6 +1498,7 @@ future<> gossiper::do_shadow_round() {
             g.init_messaging_service_handler();
         }).get();
 
+        auto& cfg = service::get_local_storage_service().db().local().get_config();
         while (this->_in_shadow_round) {
             // send a completely empty syn
             for (inet_address seed : _seeds) {
@@ -1509,9 +1510,8 @@ future<> gossiper::do_shadow_round() {
                     logger.trace("Fail to send GossipDigestSyn (ShadowRound) to {}: {}", id, ep);
                 });
             }
-            auto& ss = service::get_local_storage_service();
             sleep(std::chrono::seconds(1)).get();
-            if (clk::now() > t + ss.get_ring_delay() * 10) {
+            if (clk::now() > t + std::chrono::milliseconds(cfg.shadow_round_ms())) {
                 throw std::runtime_error(sprint("Unable to gossip with any seeds (ShadowRound)"));
             }
             if (this->_in_shadow_round) {
