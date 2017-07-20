@@ -6,6 +6,7 @@ print_usage() {
     echo "  --target target distribution codename"
     echo "  --dist  create a public distribution package"
     echo "  --rebuild-dep  rebuild dependency packages"
+    echo "  --no-clean  don't rebuild pbuilder tgz"
     exit 1
 }
 install_deps() {
@@ -19,6 +20,7 @@ install_deps() {
 REBUILD=0
 DIST=0
 TARGET=
+NO_CLEAN=0
 while [ $# -gt 0 ]; do
     case "$1" in
         "--rebuild-dep")
@@ -32,6 +34,10 @@ while [ $# -gt 0 ]; do
         "--target")
             TARGET=$2
             shift 2
+            ;;
+        "--no-clean")
+            NO_CLEAN=1
+            shift 1
             ;;
         *)
             print_usage
@@ -203,9 +209,11 @@ if [ $REBUILD -eq 1 ]; then
 fi
 
 cp ./dist/debian/pbuilderrc ~/.pbuilderrc
-sudo rm -fv /var/cache/pbuilder/scylla-server-$TARGET.tgz
-sudo -E DIST=$TARGET REBUILD=$REBUILD /usr/sbin/pbuilder clean
-sudo -E DIST=$TARGET REBUILD=$REBUILD /usr/sbin/pbuilder create
+if [ $NO_CLEAN -eq 0 ]; then
+    sudo rm -fv /var/cache/pbuilder/scylla-server-$TARGET.tgz
+    sudo -E DIST=$TARGET REBUILD=$REBUILD /usr/sbin/pbuilder clean
+    sudo -E DIST=$TARGET REBUILD=$REBUILD /usr/sbin/pbuilder create
+fi
 sudo -E DIST=$TARGET REBUILD=$REBUILD /usr/sbin/pbuilder update
 if [ $REBUILD -eq 1 ]; then
     sudo -E DIST=$TARGET REBUILD=$REBUILD /usr/sbin/pbuilder execute --save-after-exec dist/debian/dep/pbuilder_install_deps.sh
