@@ -932,15 +932,6 @@ rows_entry::equal(const schema& s, const rows_entry& other) const {
     return equal(s, other, s);
 }
 
-position_in_partition_view rows_entry::position() const {
-    if (_flags._last) {
-        return position_in_partition_view::after_all_clustered_rows();
-    } else {
-        return position_in_partition_view(
-            position_in_partition_view::clustering_row_tag_t(), _key);
-    }
-}
-
 bool
 rows_entry::equal(const schema& s, const rows_entry& other, const schema& other_schema) const {
     position_in_partition::equal_compare eq(s);
