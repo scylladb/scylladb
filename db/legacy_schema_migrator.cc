@@ -550,8 +550,9 @@ public:
         mlogger.info("Dropping legacy schema tables");
         return parallel_for_each(legacy_schema_tables, [this](const sstring& cfname) {
             return do_with(utils::make_joinpoint([] { return db_clock::now();}),[this, cfname](auto& tsf) {
-                return _qp.db().invoke_on_all([&tsf, cfname](database& db) {
-                    return db.drop_column_family(db::system_keyspace::NAME, cfname, [&tsf] { return tsf.value(); });
+                auto with_snapshot = !_keyspaces.empty();
+                return _qp.db().invoke_on_all([&tsf, cfname, with_snapshot](database& db) {
+                    return db.drop_column_family(db::system_keyspace::NAME, cfname, [&tsf] { return tsf.value(); }, with_snapshot);
                 });
             });
         });
