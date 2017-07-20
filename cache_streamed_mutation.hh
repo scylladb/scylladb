@@ -110,7 +110,7 @@ class cache_streamed_mutation final : public streamed_mutation::impl {
     // Emits all delayed range tombstones.
     void drain_tombstones();
     void add_to_buffer(const partition_snapshot_row_cursor&);
-    void add_to_buffer(clustering_row&&);
+    void add_clustering_row_to_buffer(mutation_fragment&&);
     void add_to_buffer(range_tombstone&&);
     void add_to_buffer(mutation_fragment&&);
     future<> read_from_underlying();
@@ -419,7 +419,7 @@ void cache_streamed_mutation::drain_tombstones() {
 inline
 void cache_streamed_mutation::add_to_buffer(mutation_fragment&& mf) {
     if (mf.is_clustering_row()) {
-        add_to_buffer(std::move(std::move(mf).as_clustering_row()));
+        add_clustering_row_to_buffer(std::move(mf));
     } else {
         assert(mf.is_range_tombstone());
         add_to_buffer(std::move(mf).as_range_tombstone());
@@ -430,16 +430,17 @@ inline
 void cache_streamed_mutation::add_to_buffer(const partition_snapshot_row_cursor& row) {
     if (!row.dummy()) {
         _read_context->cache().on_row_hit();
-        add_to_buffer(row.row());
+        add_clustering_row_to_buffer(row.row());
     }
 }
 
 inline
-void cache_streamed_mutation::add_to_buffer(clustering_row&& row) {
+void cache_streamed_mutation::add_clustering_row_to_buffer(mutation_fragment&& mf) {
+    auto& row = mf.as_clustering_row();
     drain_tombstones(row.position());
     _last_row_key = row.key();
     _lower_bound = position_in_partition::after_key(row.key());
-    push_mutation_fragment(std::move(row));
+    push_mutation_fragment(std::move(mf));
 }
 
 inline
