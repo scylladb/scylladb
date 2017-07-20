@@ -181,15 +181,11 @@ data_type parse_type(sstring str);
 sstring serialize_index_kind(index_metadata_kind kind);
 index_metadata_kind deserialize_index_kind(sstring kind);
 
+mutation compact_for_schema_digest(const mutation& m);
+
 template<typename Hasher>
 void feed_hash_for_schema_digest(Hasher& h, const mutation& m) {
-    // Cassandra is skipping tombstones from digest calculation
-    // to avoid disagreements due to tombstone GC.
-    // See https://issues.apache.org/jira/browse/CASSANDRA-6862.
-    // We achieve similar effect with compact_for_compaction().
-    mutation m_compacted(m);
-    m_compacted.partition().compact_for_compaction(*m.schema(), always_gc, gc_clock::time_point::max());
-    feed_hash(h, m_compacted);
+    feed_hash(h, compact_for_schema_digest(m));
 }
 
 } // namespace schema_tables
