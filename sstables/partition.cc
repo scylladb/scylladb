@@ -835,12 +835,14 @@ public:
     sstable_streamed_mutation(sstable_streamed_mutation&&) = delete;
 
     virtual future<> fill_buffer() final override {
-        _ds->_consumer.push_ready_fragments();
-        if (is_buffer_full() || is_end_of_stream()) {
-            return make_ready_future<>();
-        }
-        return _ds->_consumer.maybe_skip().then([this] {
-            return _ds->_context.read();
+        return do_until([this] { return !is_buffer_empty() || is_end_of_stream(); }, [this] {
+            _ds->_consumer.push_ready_fragments();
+            if (is_buffer_full() || is_end_of_stream()) {
+                return make_ready_future<>();
+            }
+            return _ds->_consumer.maybe_skip().then([this] {
+                return _ds->_context.read();
+            });
         });
     }
 
