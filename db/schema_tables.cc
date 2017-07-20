@@ -755,7 +755,13 @@ static void delete_schema_version(mutation& m) {
     }
     const column_definition& version_col = *scylla_tables()->get_column_definition(to_bytes("version"));
     for (auto&& row : m.partition().clustered_rows()) {
-        row.row().cells().apply(version_col, atomic_cell::make_dead(api::new_timestamp(), gc_clock::now()));
+        auto&& cells = row.row().cells();
+        auto&& cell = cells.find_cell(version_col.id);
+        api::timestamp_type t = api::new_timestamp();
+        if (cell) {
+            t = std::max(t, cell->as_atomic_cell().timestamp());
+        }
+        cells.apply(version_col, atomic_cell::make_dead(t, gc_clock::now()));
     }
 }
 
