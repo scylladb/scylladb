@@ -27,6 +27,7 @@
 #include "canonical_mutation.hh"
 
 // Commutative representation of table schema
+// Equality ignores tombstones.
 class schema_mutations {
     mutation _columnfamilies;
     mutation _columns;
