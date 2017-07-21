@@ -18,7 +18,18 @@ $ git submodule update --init --recursive
 
 ### Build system
 
+**Note**: Compiling Scylla requires, conservatively, 2 GB of memory per native thread, and up to 3 GB per native thread while linking.
+
 Scylla is built with [Ninja](https://ninja-build.org/), a low-level rule-based system. A Python script, `configure.py`, generates a Ninja file (`build.ninja`) based on configuration options.
+
+To build for the first time:
+
+```bash
+$ ./configure.py
+$ ninja-build
+```
+
+Afterwards, it is sufficient to just execute Ninja.
 
 The full suite of options for project configuration is available via
 
@@ -30,15 +41,11 @@ The most important options are:
 
 - `--mode={release,debug,all}`: Debug mode enables [AddressSanitizer](https://github.com/google/sanitizers/wiki/AddressSanitizer) and allows for debugging with tools like GDB. Debugging builds are generally slower and generate much larger object files than release builds.
 
-- `--with={scylla,tests/schema_registry_test,tests,keys_test, ...}`: Build only the selected targets. Multiple occurrances of `--with` are supported. Scylla's tests add considerable compilation time, so only building a target of interest is often a time-saver.
-
 - `--{enable,disable}-dpdk`: [DPDK](http://dpdk.org/) is a set of libraries and drivers for fast packet processing. During development, it's not necessary to enable support even if it is supported by your platform.
-
-The configuration script will also ensure that you have all necessary system dependencies installed.
 
 Source files and build targets are tracked manually in `configure.py`, so the script needs to be updated when new files or targets are added or removed.
 
-As an alternative to configuring only select targets with the `--with` argument to `configure.py`, you can also specify a specific target to Ninja. For example,
+To save time -- for instance, to avoid compiling all unit tests -- you can also specify specific targets to Ninja. For example,
 
 ```bash
 $ ninja-build build/release/tests/schema_change_test
