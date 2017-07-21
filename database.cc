@@ -931,7 +931,7 @@ future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_bi
 future<>
 column_family::seal_active_memtable(memtable_list::flush_behavior ignored) {
     auto old = _memtables->back();
-    dblog.debug("Sealing active memtable of {}.{}, partitions: {}, occupancy: {}", _schema->cf_name(), _schema->ks_name(), old->partition_count(), old->occupancy());
+    dblog.debug("Sealing active memtable of {}.{}, partitions: {}, occupancy: {}", _schema->ks_name(), _schema->cf_name(), old->partition_count(), old->occupancy());
 
     if (old->empty()) {
         dblog.debug("Memtable is empty");
