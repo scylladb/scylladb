@@ -2119,7 +2119,7 @@ public:
 
 mutation_partition::mutation_partition(mutation_partition::incomplete_tag, const schema& s, tombstone t)
     : _tombstone(t)
-    , _static_row_continuous(false)
+    , _static_row_continuous(!s.has_static_columns())
     , _rows()
     , _row_tombstones(s)
 {
