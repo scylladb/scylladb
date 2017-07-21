@@ -1016,42 +1016,43 @@ private:
 // range for which this node holds a replica, and, importantly, each range
 // is assumed to be a indivisible in the sense that all the tokens in has the
 // same nodes as replicas.
-static future<> repair_ranges(repair_info ri) {
-    return do_with(std::move(ri), [] (auto& ri) {
-    #if 0
-        // repair all the ranges in parallel
-        return parallel_for_each(ri.ranges, [&ri] (auto&& range) {
-    #else
-        // repair all the ranges in sequence
-        return do_for_each(ri.ranges, [&ri] (auto&& range) {
-    #endif
-            ri.ranges_index++;
-            rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}",
-                ri.ranges_index, ri.ranges.size(), ri.id, ri.shard, ri.keyspace, ri.cfs, range);
-            return do_with(dht::selective_token_range_sharder(range, ri.shard), [&ri] (auto& sharder) {
-                return repeat([&ri, &sharder] () {
-                    check_in_shutdown();
-                    auto range_shard = sharder.next();
-                    if (range_shard) {
-                        return repair_range(ri, *range_shard).then([] {
-                            return make_ready_future<stop_iteration>(stop_iteration::no);
-                        });
-                    } else {
-                        return make_ready_future<stop_iteration>(stop_iteration::yes);
-                    }
-                });
+static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
+    repair_tracker.add_repair_info(ri->id, ri);
+#if 0
+    // repair all the ranges in parallel
+    return parallel_for_each(ri.ranges, [&ri] (auto&& range) {
+#else
+    // repair all the ranges in sequence
+    return do_for_each(ri->ranges, [ri] (auto&& range) {
+#endif
+        ri->ranges_index++;
+        rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}",
+            ri->ranges_index, ri->ranges.size(), ri->id, ri->shard, ri->keyspace, ri->cfs, range);
+        return do_with(dht::selective_token_range_sharder(range, ri->shard), [ri] (auto& sharder) {
+            return repeat([ri, &sharder] () {
+                check_in_shutdown();
+                auto range_shard = sharder.next();
+                if (range_shard) {
+                    return repair_range(*ri, *range_shard).then([] {
+                        return make_ready_future<stop_iteration>(stop_iteration::no);
+                    });
+                } else {
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }
             });
-        }).then([&ri] {
-            // Do streaming for the remaining ranges we do not stream in
-            // repair_cf_range
-            return ri.do_streaming();
-        }).then([&ri] {
-            ri.check_failed_ranges();
-            return make_ready_future<>();
-        }).handle_exception([&ri] (std::exception_ptr eptr) {
-            rlogger.info("repair {} failed - {}", ri.id, eptr);
-            return make_exception_future<>(std::move(eptr));
         });
+    }).then([ri] {
+        // Do streaming for the remaining ranges we do not stream in
+        // repair_cf_range
+        return ri->do_streaming();
+    }).then([ri] {
+        ri->check_failed_ranges();
+        repair_tracker.remove_repair_info(ri->id);
+        return make_ready_future<>();
+    }).handle_exception([ri] (std::exception_ptr eptr) {
+        rlogger.info("repair {} failed - {}", ri->id, eptr);
+        repair_tracker.remove_repair_info(ri->id);
+        return make_exception_future<>(std::move(eptr));
     });
 }
 
@@ -1158,9 +1159,10 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     for (auto shard : boost::irange(unsigned(0), smp::count)) {
         auto f = db.invoke_on(shard, [keyspace, cfs, id, ranges,
                 data_centers = options.data_centers, hosts = options.hosts] (database& localdb) mutable {
-            return repair_ranges(repair_info(service::get_local_storage_service().db(),
+            auto ri = make_lw_shared<repair_info>(service::get_local_storage_service().db(),
                     std::move(keyspace), std::move(ranges), std::move(cfs),
-                    id, std::move(data_centers), std::move(hosts)));
+                    id, std::move(data_centers), std::move(hosts));
+            return repair_ranges(ri);
         });
         repair_results.push_back(std::move(f));
     }
