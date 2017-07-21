@@ -16,6 +16,12 @@ $ cd scylla
 $ git submodule update --init --recursive
 ```
 
+### Dependencies
+
+Scylla depends on the system package manager for its development dependencies.
+
+Running `./install_dependencies.sh` (as root) installs the appropriate packages based on your Linux distribution.
+
 ### Build system
 
 **Note**: Compiling Scylla requires, conservatively, 2 GB of memory per native thread, and up to 3 GB per native thread while linking.
