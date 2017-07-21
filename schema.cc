@@ -444,6 +444,7 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._speculative_retry == y._raw._speculative_retry
         && x._raw._compaction_strategy == y._raw._compaction_strategy
         && x._raw._compaction_strategy_options == y._raw._compaction_strategy_options
+        && x._raw._compaction_enabled == y._raw._compaction_enabled
         && x._raw._caching_options == y._raw._caching_options
         && x._raw._dropped_columns == y._raw._dropped_columns
         && x._raw._collections == y._raw._collections
@@ -562,11 +563,10 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
     os << ",compactionStrategyOptions={";
     n = 0;
     for (auto& p : s._raw._compaction_strategy_options) {
-        if (n++ != 0) {
-            os << ", ";
-        }
         os << p.first << "=" << p.second;
+        os << ", ";
     }
+    os << "enabled=" << std::boolalpha << s._raw._compaction_enabled;
     os << "}";
     os << ",compressionParameters={";
     n = 0;

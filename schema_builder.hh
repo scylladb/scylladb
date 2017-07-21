@@ -132,6 +132,15 @@ public:
         return _raw._max_compaction_threshold;
     }
 
+    schema_builder& set_compaction_enabled(bool enabled) {
+        _raw._compaction_enabled = enabled;
+        return *this;
+    }
+
+    bool compaction_enabled() const {
+        return _raw._compaction_enabled;
+    }
+
     schema_builder& set_min_index_interval(int32_t t) {
         _raw._min_index_interval = t;
         return *this;

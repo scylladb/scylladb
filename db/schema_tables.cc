@@ -64,6 +64,7 @@
 #include "db/config.hh"
 #include "md5_hasher.hh"
 
+#include <boost/algorithm/string/predicate.hpp>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/join.hpp>
@@ -1418,7 +1419,7 @@ static void add_table_params_to_mutations(mutation& m, const clustering_key& cke
 
     {
         auto map = table->compaction_strategy_options();
-        map["class"] = sstables::compaction_strategy::name(table->compaction_strategy());
+        map["class"] = sstables::compaction_strategy::name(table->configured_compaction_strategy());
         store_map(m, ckey, "compaction", timestamp, map);
     }
 
@@ -1815,7 +1816,7 @@ static void prepare_builder_from_table_row(schema_builder& builder, const query:
             builder.set_min_compaction_threshold(std::stoi(map["min_threshold"]));
         }
         if (map.count("enabled")) {
-            // TODO: enable/disable?
+            builder.set_compaction_enabled(boost::algorithm::iequals(map["enabled"], "true"));
         }
 
         builder.set_compaction_strategy_options(map);
