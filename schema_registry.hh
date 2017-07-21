@@ -55,6 +55,8 @@ public:
 // In addition to the above the entry is controlled by lw_shared_ptr<> to cope with races between loaders.
 //
 class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_entry> {
+    using erase_clock = seastar::lowres_clock;
+
     enum class state {
         INITIAL, LOADING, LOADED
     };
@@ -74,6 +76,7 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
     enum class sync_state { NOT_SYNCED, SYNCING, SYNCED };
     sync_state _sync_state;
     shared_promise<> _synced_promise; // valid when _sync_state == SYNCING
+    timer<erase_clock> _erase_timer;
 
     friend class schema_registry;
 public:
@@ -110,6 +113,11 @@ class schema_registry {
     std::unordered_map<table_schema_version, lw_shared_ptr<schema_registry_entry>> _entries;
     friend class schema_registry_entry;
     schema_registry_entry& get_entry(table_schema_version) const;
+    // Duration for which unused entries are kept alive to avoid
+    // too frequent re-requests and syncs.
+    schema_registry_entry::erase_clock::duration grace_period() const {
+        return std::chrono::seconds(1);
+    }
 public:
     // Looks up schema by version or loads it using supplied loader.
     schema_ptr get_or_load(table_schema_version, const schema_loader&);

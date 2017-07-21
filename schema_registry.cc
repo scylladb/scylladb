@@ -48,7 +48,17 @@ schema_registry_entry::schema_registry_entry(table_schema_version v, schema_regi
     , _version(v)
     , _registry(r)
     , _sync_state(sync_state::NOT_SYNCED)
-{ }
+{
+    _erase_timer.set_callback([this] {
+        slogger.debug("Dropping {}", _version);
+        assert(!_schema);
+        try {
+            _registry._entries.erase(_version);
+        } catch (...) {
+            slogger.error("Failed to erase schema version {}: {}", _version, std::current_exception());
+        }
+    });
+}
 
 schema_ptr schema_registry::learn(const schema_ptr& s) {
     if (s->registry_entry()) {
@@ -173,6 +183,7 @@ schema_ptr schema_registry_entry::get_schema() {
         if (s->version() != _version) {
             throw std::runtime_error(sprint("Unfrozen schema version doesn't match entry version (%s): %s", _version, *s));
         }
+        _erase_timer.cancel();
         s->_registry_entry = this;
         _schema = &*s;
         return s;
@@ -184,12 +195,7 @@ schema_ptr schema_registry_entry::get_schema() {
 void schema_registry_entry::detach_schema() noexcept {
     slogger.trace("Deactivating {}", _version);
     _schema = nullptr;
-    // TODO: keep the entry for a while (timer)
-    try {
-        _registry._entries.erase(_version);
-    } catch (...) {
-        slogger.error("Failed to erase schema version {}: {}", _version, std::current_exception());
-    }
+    _erase_timer.arm(_registry.grace_period());
 }
 
 frozen_schema schema_registry_entry::frozen() const {
