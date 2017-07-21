@@ -411,6 +411,11 @@ public:
         , _key(std::experimental::make_optional(dk._key))
     { }
 
+    ring_position(dht::decorated_key&& dk)
+        : _token(std::move(dk._token))
+        , _key(std::experimental::make_optional(std::move(dk._key)))
+    { }
+
     const dht::token& token() const {
         return _token;
     }
