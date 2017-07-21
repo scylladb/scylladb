@@ -327,6 +327,9 @@ private:
     seastar::gate _gate;
     // Set when the repair service is being shutdown
     std::atomic_bool _shutdown alignas(64);
+    // Map repair id into repair_info. The vector has smp::count elements, each
+    // element will be accessed by only one shard.
+    std::vector<std::unordered_map<int, lw_shared_ptr<repair_info>>> _repairs;
 public:
     tracker() : _shutdown(false) {
     }
@@ -364,6 +367,27 @@ public:
         if (_shutdown.load(std::memory_order_relaxed)) {
             throw std::runtime_error(sprint("Repair service is being shutdown"));
         }
+    }
+    void init_repair_info() {
+        if (_repairs.size() != smp::count) {
+            _repairs.resize(smp::count);
+        }
+    }
+    void add_repair_info(int id, lw_shared_ptr<repair_info> ri) {
+        init_repair_info();
+        _repairs[engine().cpu_id()].emplace(id, ri);
+    }
+    void remove_repair_info(int id) {
+        init_repair_info();
+        _repairs[engine().cpu_id()].erase(id);
+    }
+    lw_shared_ptr<repair_info> get_repair_info(int id) {
+        init_repair_info();
+        auto it = _repairs[engine().cpu_id()].find(id);
+        if (it != _repairs[engine().cpu_id()].end()) {
+            return it->second;
+        }
+        return {};
     }
 };
 
