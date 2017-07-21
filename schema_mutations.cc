@@ -80,12 +80,23 @@ table_schema_version schema_mutations::digest() const {
     return utils::UUID_gen::get_name_UUID(h.finalize());
 }
 
+static stdx::optional<mutation> compact(const stdx::optional<mutation>& m) {
+    if (!m) {
+        return m;
+    }
+    return db::schema_tables::compact_for_schema_digest(*m);
+}
+
+static stdx::optional<mutation> compact(const mutation& m) {
+    return db::schema_tables::compact_for_schema_digest(m);
+}
+
 bool schema_mutations::operator==(const schema_mutations& other) const {
-    return _columnfamilies == other._columnfamilies
-           && _columns == other._columns
-           && _indices == other._indices
-           && _dropped_columns == other._dropped_columns
-           && _scylla_tables == other._scylla_tables
+    return compact(_columnfamilies) == compact(other._columnfamilies)
+           && compact(_columns) == compact(other._columns)
+           && compact(_indices) == compact(other._indices)
+           && compact(_dropped_columns) == compact(other._dropped_columns)
+           && compact(_scylla_tables) == compact(other._scylla_tables)
            ;
 }
 

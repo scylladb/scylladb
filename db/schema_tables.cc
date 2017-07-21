@@ -168,7 +168,7 @@ static void prepare_builder_from_table_row(schema_builder&, const query::result_
 
 using namespace v3;
 
-std::vector<const char*> ALL { KEYSPACES, TABLES, COLUMNS, DROPPED_COLUMNS, TRIGGERS, VIEWS, TYPES, FUNCTIONS, AGGREGATES, INDEXES };
+std::vector<const char*> ALL { KEYSPACES, TABLES, SCYLLA_TABLES, COLUMNS, DROPPED_COLUMNS, TRIGGERS, VIEWS, TYPES, FUNCTIONS, AGGREGATES, INDEXES };
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -749,6 +749,16 @@ read_tables_for_keyspaces(distributed<service::storage_proxy>& proxy, const std:
     return result;
 }
 
+mutation compact_for_schema_digest(const mutation& m) {
+    // Cassandra is skipping tombstones from digest calculation
+    // to avoid disagreements due to tombstone GC.
+    // See https://issues.apache.org/jira/browse/CASSANDRA-6862.
+    // We achieve similar effect with compact_for_compaction().
+    mutation m_compacted(m);
+    m_compacted.partition().compact_for_compaction(*m.schema(), always_gc, gc_clock::time_point::max());
+    return m_compacted;
+}
+
 // Applies deletion of the "version" column to a system_schema.scylla_tables mutation.
 static void delete_schema_version(mutation& m) {
     if (m.column_family_id() != scylla_tables()->id()) {
@@ -756,7 +766,13 @@ static void delete_schema_version(mutation& m) {
     }
     const column_definition& version_col = *scylla_tables()->get_column_definition(to_bytes("version"));
     for (auto&& row : m.partition().clustered_rows()) {
-        row.row().cells().apply(version_col, atomic_cell::make_dead(api::new_timestamp(), gc_clock::now()));
+        auto&& cells = row.row().cells();
+        auto&& cell = cells.find_cell(version_col.id);
+        api::timestamp_type t = api::new_timestamp();
+        if (cell) {
+            t = std::max(t, cell->as_atomic_cell().timestamp());
+        }
+        cells.apply(version_col, atomic_cell::make_dead(t, gc_clock::now()));
     }
 }
 
