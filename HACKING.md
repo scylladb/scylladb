@@ -138,14 +138,7 @@ A reasonably-powered laptop acts as the coordinator for compilation. A second, m
 Having a direct wired connection between the machines ensures that object files can be transmitted quickly and limits the overhead of remote compilation.
 The coordinator has been assigned the static IP address `10.0.0.1` and the passive compilation machine has been assigned `10.0.0.2`.
 
-First, set up symbolic links for `ccache`. The `PATH` includes `$HOME/bin` on this machine:
-
-```
-$ ls $HOME/bin
-total 0
-lrwxrwxrwx 1 tsmith tsmith 15 Jun 16 13:27 g++ -> /usr/bin/ccache
-lrwxrwxrwx 1 tsmith tsmith 15 Jul  5 10:43 gcc -> /usr/bin/ccache
-```
+On Fedora, installing the `ccache` package places symbolic links for `gcc` and `g++` in the `PATH`. This allows normal compilation to transparently invoke `ccache` for compilation and cache object files on the local file-system.
 
 Next, set `CCACHE_PREFIX` so that `ccache` is responsible for invoking `distcc` as necessary:
 
@@ -160,17 +153,19 @@ This example is for the laptop, which has 2 physical cores (4 logical cores with
 OPTIONS="--allow 10.0.0.2 --allow 127.0.0.1 --jobs 4"
 ```
 
-`10.0.0.2` has 8 physical cores (16 logical cores) and 64 GB of memory. It can usually handle 40 jobs.
+`10.0.0.2` has 8 physical cores (16 logical cores) and 64 GB of memory.
+
+As a rule-of-thumb, the number of jobs that a machine should be specified to support should be equal to the number of its native threads.
 
 Restart the `distccd` service on all machines.
 
 On the coordinator machine, edit `$HOME/.distcc/hosts` with the available hosts for compilation. Order of the hosts indicates preference.
 
 ```
-10.0.0.2/40 localhost/2
+10.0.0.2/16 localhost/2
 ```
 
-In this example, `10.0.0.2` will be sent up to 40 jobs and the local machine will be sent up to 2. Since we've allowed for 42 jobs in total, run `ninja-build -j42`.
+In this example, `10.0.0.2` will be sent up to 16 jobs and the local machine will be sent up to 2. Allowing for two extra threads on the host machine for coordination, we run compilation with `16 + 2 + 2 = 20` jobs in total: `ninja-build -j20`.
 
 When a compilation is in progress, the status of jobs on all remote machines can be visualized in the terminal with `distccmon-text` or graphically as a GTK application with `distccmon-gnome`.
 
