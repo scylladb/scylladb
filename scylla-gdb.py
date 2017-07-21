@@ -470,9 +470,22 @@ class scylla_ptr(gdb.Command):
         cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
         page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
         offset = ptr - int(cpu_mem['memory'])
+        ptr_page_idx = offset / page_size
+        pages = cpu_mem['pages']
+        page = pages[ptr_page_idx];
 
-        page = cpu_mem['pages'][offset / page_size];
-        if page['free']:
+        def is_page_free(page_index):
+            for index in range(int(cpu_mem['nr_span_lists'])):
+                span_list = cpu_mem['fsu']['free_spans'][index]
+                span_page_idx = span_list['_front']
+                while span_page_idx:
+                    span_page = pages[span_page_idx]
+                    if span_page_idx <= page_index < span_page_idx + span_page['span_size']:
+                        return True
+                    span_page_idx = span_page['link']['_next']
+            return False
+
+        if is_page_free(ptr_page_idx):
             msg += ', page is free'
             gdb.write(msg + '\n')
             return
