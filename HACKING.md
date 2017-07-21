@@ -98,7 +98,11 @@ $ SCYLLA_HOME=$HOME/scylla build/release/scylla --overprovisioned --developer-mo
 
 ### Branches and tags
 
-**TODO:** (Describe how releases are branched from `master` and how patches make their way into release series'. Describe tagging conventions.)
+Multiple release branches are maintained on the Git repository at https://github.com/scylladb/scylla. Release 1.5, for instance, is tracked on the `branch-1.5` branch.
+
+Similarly, tags are used to pin-point precise release versions, including hot-fix versions like 1.5.4. These are named `scylla-1.5.4`, for example.
+
+Most development happens on the `master` branch. Release branches are cut from `master` based on time and/or features. When a patch against `master` fixes a serious issue like a node crash or data loss, it is backported to a particular release branch with `git cherry-pick` by the project maintainers.
 
 ## Example: development on Fedora 25
 
