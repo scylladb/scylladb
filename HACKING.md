@@ -65,6 +65,22 @@ A test target can be any executable. A non-zero return code indicates test failu
 
 Most tests in the Scylla repository are built using the [Boost.Test](http://www.boost.org/doc/libs/1_64_0/libs/test/doc/html/index.html) library. Utilities for writing tests with Seastar futures are also included.
 
+Run all tests through the test execution wrapper with
+
+```bash
+$ ./test.py --mode={debug,release}
+```
+
+The `--name` argument can be specified to run a particular test.
+
+Alternatively, you can execute the test executable directly. For example,
+
+```bash
+$ build/release/tests/row_cache_test -- -c1 -m1G
+```
+
+The `-c1 -m1G` arguments limit this Seastar-based test to a single system thread and 1 GB of memory.
+
 ### Preparing patches
 
 All changes to Scylla are submitted as patches to the public mailing list. Once a patch is approved by one of the maintainers of the project, it is committed to the maintainers' copy of the repository at https://github.com/scylladb/scylla.
