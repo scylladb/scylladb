@@ -1,31 +1,19 @@
 # Scylla
 
-## Building Scylla
+## Quick-start
 
-In addition to required packages by Seastar, the following packages are required by Scylla.
-
-### Submodules
-Scylla uses submodules, so make sure you pull the submodules first by doing:
-```
-git submodule init
-git submodule update --init --recursive
-```
-
-### Building Scylla
-
-* Installing required packages
-```
-sudo ./install-dependencies.sh
+```bash
+$ git submodule update --init --recursive
+$ sudo ./install-dependencies.sh
+$ ./configure.py --mode=release
+$ ninja-build -j4 # Assuming 4 system threads.
+$ ./build/release/scylla
+$ # Rejoice!
 ```
 
-* Build Scylla
-```
-./configure.py --mode=release --with=scylla --disable-xen
-ninja-build build/release/scylla -j2 # you can use more cpus if you have tons of RAM
+Please see [HACKING.md](HACKING.md) for detailed information on building and developing Scylla.
 
-```
-
-### Running Scylla
+## Running Scylla
 
 * Run Scylla
 ```
@@ -86,7 +74,5 @@ docker run -p $(hostname -i):9042:9042 -i -t <image name>
 ```
 
 ## Contributing to Scylla
-
-[Guide to getting started with development](HACKING.md)
 
 [Guidelines for contributing](CONTRIBUTING.md)
