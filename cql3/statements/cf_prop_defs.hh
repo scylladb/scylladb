@@ -73,6 +73,7 @@ public:
     static const sstring KW_CRC_CHECK_CHANCE;
 
     static const sstring COMPACTION_STRATEGY_CLASS_KEY;
+    static const sstring COMPACTION_ENABLED_KEY;
 
     // FIXME: In origin the following consts are in CFMetaData.
     static constexpr int32_t DEFAULT_DEFAULT_TIME_TO_LIVE = 0;

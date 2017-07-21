@@ -457,6 +457,7 @@ private:
         // we will use by default - when we have the choice.
         sstables::compaction_strategy_type _compaction_strategy = sstables::compaction_strategy_type::size_tiered;
         std::map<sstring, sstring> _compaction_strategy_options;
+        bool _compaction_enabled = true;
         caching_options _caching_options;
         table_schema_version _version;
         std::unordered_map<sstring, dropped_column> _dropped_columns;
@@ -601,12 +602,20 @@ public:
         return _raw._memtable_flush_period;
     }
 
-    sstables::compaction_strategy_type compaction_strategy() const {
+    sstables::compaction_strategy_type configured_compaction_strategy() const {
         return _raw._compaction_strategy;
+    }
+
+    sstables::compaction_strategy_type compaction_strategy() const {
+        return _raw._compaction_enabled ? _raw._compaction_strategy : sstables::compaction_strategy_type::null;
     }
 
     const std::map<sstring, sstring>& compaction_strategy_options() const {
         return _raw._compaction_strategy_options;
+    }
+
+    bool compaction_enabled() const {
+        return _raw._compaction_enabled;
     }
 
     const ::speculative_retry& speculative_retry() const {

@@ -41,6 +41,8 @@
 
 #include "cql3/statements/cf_prop_defs.hh"
 
+#include <boost/algorithm/string/predicate.hpp>
+
 namespace cql3 {
 
 namespace statements {
@@ -64,6 +66,8 @@ const sstring cf_prop_defs::KW_COMPRESSION = "compression";
 const sstring cf_prop_defs::KW_CRC_CHECK_CHANCE = "crc_check_chance";
 
 const sstring cf_prop_defs::COMPACTION_STRATEGY_CLASS_KEY = "class";
+
+const sstring cf_prop_defs::COMPACTION_ENABLED_KEY = "enabled";
 
 void cf_prop_defs::validate() {
     // Skip validation if the comapction strategy class is already set as it means we've alreayd
@@ -187,6 +191,13 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder) {
         throw exceptions::configuration_exception("Disabling compaction by setting compaction thresholds to 0 has been deprecated, set the compaction option 'enabled' to false instead.");
     builder.set_min_compaction_threshold(min_compaction_threshold);
     builder.set_max_compaction_threshold(max_compaction_threshold);
+
+    if (has_property(KW_COMPACTION)) {
+        if (get_compaction_options().count(COMPACTION_ENABLED_KEY)) {
+            auto enabled = boost::algorithm::iequals(get_compaction_options().at(COMPACTION_ENABLED_KEY), "true");
+            builder.set_compaction_enabled(enabled);
+        }
+    }
 
     builder.set_default_time_to_live(gc_clock::duration(get_int(KW_DEFAULT_TIME_TO_LIVE, DEFAULT_DEFAULT_TIME_TO_LIVE)));
 
