@@ -79,13 +79,14 @@ if [ $LOCALRPM -eq 1 ]; then
             cd ../..
             cp build/scylla-jmx/build/rpms/scylla-jmx-`cat build/scylla-jmx/build/SCYLLA-VERSION-FILE`-`cat build/scylla-jmx/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/files/scylla-jmx.noarch.rpm
         fi
-        if [ ! -f dist/ami/files/scylla-tools.noarch.rpm ]; then
+        if [ ! -f dist/ami/files/scylla-tools.noarch.rpm ] || [ ! -f dist/ami/files/scylla-tools-core.noarch.rpm ]; then
             cd build
             git clone --depth 1 https://github.com/scylladb/scylla-tools-java.git
             cd scylla-tools-java
             sh -x -e dist/redhat/build_rpm.sh
             cd ../..
             cp build/scylla-tools-java/build/rpms/scylla-tools-`cat build/scylla-tools-java/build/SCYLLA-VERSION-FILE`-`cat build/scylla-tools-java/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/files/scylla-tools.noarch.rpm
+            cp build/scylla-tools-java/build/rpms/scylla-tools-core-`cat build/scylla-tools-java/build/SCYLLA-VERSION-FILE`-`cat build/scylla-tools-java/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/files/scylla-tools-core.noarch.rpm
         fi
     else
         sudo apt-get install -y git
