@@ -221,7 +221,7 @@ private:
         if (!_pending_collection || _pending_collection->is_new_collection(cdef)) {
             flush_pending_collection(*_schema);
 
-            if (!cdef->type->is_multi_cell()) {
+            if (!cdef->is_multi_cell()) {
                 throw malformed_sstable_exception("frozen set should behave like a cell\n");
             }
             _pending_collection = collection_mutation(cdef);
@@ -499,7 +499,7 @@ public:
             auto ac = make_atomic_cell(timestamp, value, ttl, expiration);
 
             bool is_multi_cell = col.collection_extra_data.size();
-            if (is_multi_cell != col.cdef->type->is_multi_cell()) {
+            if (is_multi_cell != col.cdef->is_multi_cell()) {
                 return;
             }
             if (is_multi_cell) {
@@ -545,7 +545,7 @@ public:
         auto ac = atomic_cell::make_dead(timestamp, ttl);
 
         bool is_multi_cell = col.collection_extra_data.size();
-        if (is_multi_cell != col.cdef->type->is_multi_cell()) {
+        if (is_multi_cell != col.cdef->is_multi_cell()) {
             return ret;
         }
 
@@ -657,7 +657,7 @@ public:
         } else {
             auto&& column = pop_back(start);
             auto cdef = _schema->get_column_definition(to_bytes(column));
-            if (cdef && cdef->type->is_multi_cell() && deltime.marked_for_delete_at > cdef->dropped_at()) {
+            if (cdef && cdef->is_multi_cell() && deltime.marked_for_delete_at > cdef->dropped_at()) {
                 auto ret = flush_if_needed(cdef->is_static(), start);
                 if (!_skip_in_progress) {
                     update_pending_collection(cdef, tombstone(deltime));
