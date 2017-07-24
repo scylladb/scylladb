@@ -296,13 +296,18 @@ BOOST_AUTO_TEST_CASE(test_composite_from_exploded) {
 }
 
 BOOST_AUTO_TEST_CASE(test_composite_view_explode) {
+    auto to_owning_vector = [] (std::vector<bytes_view> bvs) {
+        return boost::copy_range<std::vector<bytes>>(bvs | boost::adaptors::transformed([] (auto bv) {
+            return bytes(bv.begin(), bv.end());
+        }));
+    };
     {
-        BOOST_REQUIRE_EQUAL(composite_view(composite(bytes({'\x00', '\x03', 'e', 'l', '1', '\x00'}))).explode(),
+        BOOST_REQUIRE_EQUAL(to_owning_vector(composite_view(composite(bytes({'\x00', '\x03', 'e', 'l', '1', '\x00'}))).explode()),
                             std::vector<bytes>({bytes({'e', 'l', '1'})}));
     }
 
     {
-        BOOST_REQUIRE_EQUAL(composite_view(composite(bytes({'e', 'l', '1'}), false)).explode(),
+        BOOST_REQUIRE_EQUAL(to_owning_vector(composite_view(composite(bytes({'e', 'l', '1'}), false)).explode()),
                             std::vector<bytes>({bytes({'e', 'l', '1'})}));
     }
 }

@@ -36,12 +36,12 @@ public:
     explicit key_view(bytes_view b) : _bytes(b) {}
     key_view() : _bytes() {}
 
-    std::vector<bytes> explode(const schema& s) const {
+    std::vector<bytes_view> explode(const schema& s) const {
         return composite_view(_bytes, s.partition_key_size() > 1).explode();
     }
 
     partition_key to_partition_key(const schema& s) const {
-        return partition_key::from_exploded(s, explode(s));
+        return partition_key::from_exploded_view(explode(s));
     }
 
     bool operator==(const key_view& k) const { return k._bytes == _bytes; }
@@ -106,10 +106,10 @@ public:
         return make_key(s, pk);
     }
     partition_key to_partition_key(const schema& s) const {
-        return partition_key::from_exploded(s, explode(s));
+        return partition_key::from_exploded_view(explode(s));
     }
 
-    std::vector<bytes> explode(const schema& s) const {
+    std::vector<bytes_view> explode(const schema& s) const {
         return composite_view(_bytes, is_compound(s)).explode();
     }
 

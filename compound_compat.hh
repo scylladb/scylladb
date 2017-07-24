@@ -499,14 +499,14 @@ public:
             , _is_compound(true)
     { }
 
-    std::vector<bytes> explode() const {
+    std::vector<bytes_view> explode() const {
         if (!_is_compound) {
-            return { to_bytes(_bytes) };
+            return { _bytes };
         }
 
-        std::vector<bytes> ret;
+        std::vector<bytes_view> ret;
         for (auto it = begin(), e = end(); it != e; ) {
-            ret.push_back(to_bytes(it->first));
+            ret.push_back(it->first);
             auto marker = it->second;
             ++it;
             if (it != e && marker != composite::eoc::none) {
