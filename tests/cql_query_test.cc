@@ -1142,6 +1142,102 @@ SEASTAR_TEST_CASE(test_user_type) {
     });
 }
 
+//
+// Since durations don't have a well-defined ordering on their semantic value, a number of restrictions exist on their
+// use.
+//
+SEASTAR_TEST_CASE(test_duration_restrictions) {
+    static constexpr auto validate_request_failure = [](cql_test_env& env,
+                                                        const sstring& request,
+                                                        const sstring& expected_message) {
+        BOOST_REQUIRE_EXCEPTION(env.execute_cql(request).get(),
+                                exceptions::invalid_request_exception,
+                                [&expected_message](auto &&ire) {
+                                    BOOST_REQUIRE_EQUAL(expected_message, ire.what());
+                                    return true;
+                                });
+
+        return make_ready_future<>();
+    };
+
+    return do_with_cql_env([](cql_test_env& env) {
+        return make_ready_future<>().then([&env] {
+            // Disallow "direct" use of durations in ordered collection types to avoid user confusion when their
+            // ordering doesn't match expectations.
+            return make_ready_future<>().then([&env] {
+                return validate_request_failure(
+                        env,
+                        "create type my_type (a set<duration>);",
+                        "Durations are not allowed inside sets: set<duration>");
+            }).then([&env] {
+                return validate_request_failure(
+                        env,
+                        "create type my_type (a map<duration, int>);",
+                        "Durations are not allowed as map keys: map<duration, int>");
+            });
+        }).then([&env] {
+            // Disallow any type referring to a duration from being used in a primary key of a table or a materialized
+            // view.
+            return make_ready_future<>().then([&env] {
+                return validate_request_failure(
+                        env,
+                        "create table my_table (direct_key duration PRIMARY KEY);",
+                        "duration type is not supported for PRIMARY KEY part direct_key");
+            }).then([&env] {
+                return validate_request_failure(
+                        env,
+                        "create table my_table (collection_key frozen<list<duration>> PRIMARY KEY);",
+                        "duration type is not supported for PRIMARY KEY part collection_key");
+            }).then([&env] {
+                return env.execute_cql("create type my_type0 (span duration);").discard_result().then([&env] {
+                    return validate_request_failure(
+                            env,
+                            "create table my_table (udt_key frozen<my_type0> PRIMARY KEY);",
+                            "duration type is not supported for PRIMARY KEY part udt_key");
+                });
+            }).then([&env] {
+                return validate_request_failure(
+                        env,
+                        "create table my_table (tuple_key tuple<int, duration, int> PRIMARY KEY);",
+                        "duration type is not supported for PRIMARY KEY part tuple_key");
+            }).then([&env] {
+                return env.execute_cql("create table my_table0 (key int PRIMARY KEY, name text, span duration);")
+                        .discard_result().then([&env] {
+                            return validate_request_failure(
+                                    env,
+                                    "create materialized view my_mv as"
+                                    " select * from my_table0 "
+                                    " where name = 'abc' "
+                                    " primary key (key, span);",
+                                    "Cannot use Duration column 'span' in PRIMARY KEY of materialized view");
+                        });
+            });
+        }).then([&env] {
+            // Disallow creating secondary indexes on durations.
+            return validate_request_failure(
+                    env,
+                    "create index my_index on my_table0 (span);",
+                    "Secondary indexes are not supported on duration columns");
+        }).then([&env] {
+            // Disallow slice-based restrictions and conditions on durations.
+            //
+            // Note that multi-column restrictions are only supported on clustering columns (which cannot be `duration`)
+            // and that multi-column conditions are not supported in the grammar.
+            return make_ready_future<>().then([&env] {
+                return validate_request_failure(
+                        env,
+                        "select * from my_table0 where key = 0 and span < 3d;",
+                        "Slice restrictions are not supported on duration columns");
+            }).then([&env] {
+                return validate_request_failure(
+                        env,
+                        "update my_table0 set name = 'joe' where key = 0 if span >= 5m",
+                        "Slice conditions are not supported on durations");
+            });
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_select_multiple_ranges) {
     return do_with_cql_env([] (auto&& e) {
         return e.execute_cql("create table cf (p1 varchar, r1 int, PRIMARY KEY (p1));").discard_result().then([&e] {
@@ -1397,11 +1493,12 @@ SEASTAR_TEST_CASE(test_types) {
                     "    q smallint,"
                     "    r date,"
                     "    s time,"
+                    "    u duration,"
                     ");").discard_result();
         }).then([&e] {
             e.require_table_exists("ks", "all_types");
             return e.execute_cql(
-                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s) VALUES ("
+                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, u) VALUES ("
                     "    'ascii',"
                     "    123456789,"
                     "    0xdeadbeef,"
@@ -1420,7 +1517,8 @@ SEASTAR_TEST_CASE(test_types) {
                     "    3,"
                     "    3,"
                     "    '1970-01-02',"
-                    "    '00:00:00.000000001'"
+                    "    '00:00:00.000000001',"
+                    "    1y2mo3w4d5h6m7s8ms9us10ns"
                     ");").discard_result();
         }).then([&e] {
             return e.execute_cql("SELECT * FROM all_types WHERE a = 'ascii'");
@@ -1449,10 +1547,11 @@ SEASTAR_TEST_CASE(test_types) {
                     short_type->decompose(int16_t(3)),
                     simple_date_type->decompose(int32_t(0x80000001)),
                     time_type->decompose(int64_t(0x0000000000000001)),
+                    duration_type->decompose(cql_duration("1y2mo3w4d5h6m7s8ms9us10ns"))
                 }
             });
             return e.execute_cql(
-                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s) VALUES ("
+                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, u) VALUES ("
                     "    blobAsAscii(asciiAsBlob('ascii2')),"
                     "    blobAsBigint(bigintAsBlob(123456789)),"
                     "    bigintAsBlob(12),"
@@ -1470,7 +1569,8 @@ SEASTAR_TEST_CASE(test_types) {
                     "    blobAsTinyint(tinyintAsBlob(3)),"
                     "    blobAsSmallint(smallintAsBlob(3)),"
                     "    blobAsDate(dateAsBlob('1970-01-02')),"
-                    "    blobAsTime(timeAsBlob('00:00:00.000000001'))"
+                    "    blobAsTime(timeAsBlob('00:00:00.000000001')),"
+                    "    blobAsDuration(durationAsBlob(10y9mo8w7d6h5m4s3ms2us1ns))"
                     ");").discard_result();
         }).then([&e] {
              return e.execute_cql("SELECT * FROM all_types WHERE a = 'ascii2'");
@@ -1499,6 +1599,7 @@ SEASTAR_TEST_CASE(test_types) {
                     short_type->decompose(int16_t(3)),
                     simple_date_type->decompose(int32_t(0x80000001)),
                     time_type->decompose(int64_t(0x0000000000000001)),
+                    duration_type->decompose(cql_duration("10y9mo8w7d6h5m4s3ms2us1ns"))
                 }
             });
         });

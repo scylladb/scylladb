@@ -40,10 +40,28 @@
  */
 
 #include "cql3/column_condition.hh"
+#include "statements/request_validations.hh"
 #include "unimplemented.hh"
 #include "lists.hh"
 #include "maps.hh"
 #include <boost/range/algorithm_ext/push_back.hpp>
+
+namespace {
+
+void validate_operation_on_durations(const abstract_type& type, const cql3::operator_type& op) {
+    using cql3::statements::request_validations::check_false;
+
+    if (op.is_slice() && type.references_duration()) {
+        check_false(type.is_collection(), "Slice conditions are not supported on collections containing durations");
+        check_false(type.is_tuple(), "Slice conditions are not supported on tuples containing durations");
+        check_false(type.is_user_type(), "Slice conditions are not supported on UDTs containing durations");
+
+        // We're a duration.
+        throw exceptions::invalid_request_exception(sprint("Slice conditions are not supported on durations"));
+    }
+}
+
+}
 
 namespace cql3 {
 
@@ -95,6 +113,7 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
             }
             return column_condition::in_condition(receiver, std::move(terms));
         } else {
+            validate_operation_on_durations(*receiver.type, _op);
             return column_condition::condition(receiver, _value->prepare(db, keyspace, receiver.column_specification), _op);
         }
     }
@@ -129,6 +148,8 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
                                 | boost::adaptors::transformed(std::bind(&term::raw::prepare, std::placeholders::_1, std::ref(db), std::ref(keyspace), value_spec)));
         return column_condition::in_condition(receiver, _collection_element->prepare(db, keyspace, element_spec), terms);
     } else {
+        validate_operation_on_durations(*receiver.type, _op);
+
         return column_condition::condition(receiver,
                 _collection_element->prepare(db, keyspace, element_spec),
                 _value->prepare(db, keyspace, value_spec),

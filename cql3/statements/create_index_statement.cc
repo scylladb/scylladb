@@ -47,6 +47,7 @@
 #include "service/storage_service.hh"
 #include "schema.hh"
 #include "schema_builder.hh"
+#include "request_validations.hh"
 
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/algorithm/string/join.hpp>
@@ -106,6 +107,18 @@ create_index_statement::validate(distributed<service::storage_proxy>& proxy, con
         if (cd == nullptr) {
             throw exceptions::invalid_request_exception(
                     sprint("No column definition found for column %s", *target->column));
+        }
+
+        if (cd->type->references_duration()) {
+            using request_validations::check_false;
+            const auto& ty = *cd->type;
+
+            check_false(ty.is_collection(), "Secondary indexes are not supported on collections containing durations");
+            check_false(ty.is_tuple(), "Secondary indexes are not supported on tuples containing durations");
+            check_false(ty.is_user_type(), "Secondary indexes are not supported on UDTs containing durations");
+
+            // We're a duration.
+            throw exceptions::invalid_request_exception("Secondary indexes are not supported on duration columns");
         }
 
         // Origin TODO: we could lift that limitation

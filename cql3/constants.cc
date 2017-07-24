@@ -52,12 +52,13 @@ std::ostream&
 operator<<(std::ostream&out, constants::type t)
 {
     switch (t) {
-        case constants::type::STRING:  return out << "STRING";
-        case constants::type::INTEGER: return out << "INTEGER";
-        case constants::type::UUID:    return out << "UUID";
-        case constants::type::FLOAT:   return out << "FLOAT";
-        case constants::type::BOOLEAN: return out << "BOOLEAN";
-        case constants::type::HEX:     return out << "HEX";
+        case constants::type::STRING:   return out << "STRING";
+        case constants::type::INTEGER:  return out << "INTEGER";
+        case constants::type::UUID:     return out << "UUID";
+        case constants::type::FLOAT:    return out << "FLOAT";
+        case constants::type::BOOLEAN:  return out << "BOOLEAN";
+        case constants::type::HEX:      return out << "HEX";
+        case constants::type::DURATION: return out << "DURATION";
     };
     assert(0);
 }
@@ -143,6 +144,11 @@ constants::literal::test_assignment(database& db, const sstring& keyspace, ::sha
         case type::HEX:
             if (kind == cql3_type::kind_enum_set::prepare<cql3_type::kind::BLOB>()) {
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+            }
+            break;
+        case type::DURATION:
+            if (kind == cql3_type::kind_enum_set::prepare<cql3_type::kind::DURATION>()) {
+                return assignment_testable::test_result::EXACT_MATCH;
             }
             break;
     }

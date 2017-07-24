@@ -37,6 +37,7 @@
 #include "cql_serialization_format.hh"
 #include "tombstone.hh"
 #include "to_string.hh"
+#include "duration.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/for_each.hpp>
 #include <boost/range/numeric.hpp>
@@ -363,6 +364,7 @@ public:
     data_value(db_clock::time_point);
     data_value(boost::multiprecision::cpp_int);
     data_value(big_decimal);
+    data_value(cql_duration);
     explicit data_value(std::experimental::optional<bytes>);
     template <typename NativeType>
     data_value(std::experimental::optional<NativeType>);
@@ -476,6 +478,9 @@ public:
     }
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const = 0;
     virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const = 0;
+    virtual bool references_duration() const {
+        return false;
+    }
 protected:
     virtual bool equals(const abstract_type& other) const {
         return this == &other;
@@ -1030,6 +1035,7 @@ public:
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
     virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
+    virtual bool references_duration() const override;
 };
 
 using map_type = shared_ptr<const map_type_impl>;
@@ -1069,6 +1075,7 @@ public:
             const std::vector<bytes_view>& v, cql_serialization_format sf) const;
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
     virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
+    virtual bool references_duration() const override;
 };
 
 using set_type = shared_ptr<const set_type_impl>;
@@ -1106,6 +1113,7 @@ public:
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
     virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
+    virtual bool references_duration() const override;
 };
 
 using list_type = shared_ptr<const list_type_impl>;
@@ -1173,6 +1181,7 @@ extern thread_local const shared_ptr<const abstract_type> double_type;
 extern thread_local const shared_ptr<const abstract_type> varint_type;
 extern thread_local const shared_ptr<const abstract_type> decimal_type;
 extern thread_local const shared_ptr<const abstract_type> counter_type;
+extern thread_local const shared_ptr<const abstract_type> duration_type;
 extern thread_local const data_type empty_type;
 
 template <>
@@ -1565,6 +1574,7 @@ public:
     virtual bool is_tuple() const override { return true; }
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
     virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
+    virtual bool references_duration() const override;
 private:
     bool check_compatibility(const abstract_type& previous, bool (abstract_type::*predicate)(const abstract_type&) const) const;
     static sstring make_name(const std::vector<data_type>& types);

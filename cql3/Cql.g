@@ -1167,6 +1167,7 @@ constant returns [shared_ptr<cql3::constants::literal> constant]
     | t=INTEGER        { $constant = cql3::constants::literal::integer(sstring{$t.text}); }
     | t=FLOAT          { $constant = cql3::constants::literal::floating_point(sstring{$t.text}); }
     | t=BOOLEAN        { $constant = cql3::constants::literal::bool_(sstring{$t.text}); }
+    | t=DURATION       { $constant = cql3::constants::literal::duration(sstring{$t.text}); }
     | t=UUID           { $constant = cql3::constants::literal::uuid(sstring{$t.text}); }
     | t=HEXNUMBER      { $constant = cql3::constants::literal::hex(sstring{$t.text}); }
     | { sign=""; } ('-' {sign = "-"; } )? t=(K_NAN | K_INFINITY) { $constant = cql3::constants::literal::floating_point(sstring{sign + $t.text}); }
@@ -1464,6 +1465,7 @@ native_type returns [shared_ptr<cql3_type> t]
     | K_COUNTER   { $t = cql3_type::counter; }
     | K_DECIMAL   { $t = cql3_type::decimal; }
     | K_DOUBLE    { $t = cql3_type::double_; }
+    | K_DURATION  { $t = cql3_type::duration; }
     | K_FLOAT     { $t = cql3_type::float_; }
     | K_INET      { $t = cql3_type::inet; }
     | K_INT       { $t = cql3_type::int_; }
@@ -1649,6 +1651,7 @@ K_BOOLEAN:     B O O L E A N;
 K_COUNTER:     C O U N T E R;
 K_DECIMAL:     D E C I M A L;
 K_DOUBLE:      D O U B L E;
+K_DURATION:    D U R A T I O N;
 K_FLOAT:       F L O A T;
 K_INET:        I N E T;
 K_INT:         I N T;
@@ -1778,6 +1781,20 @@ fragment EXPONENT
     : E ('+' | '-')? DIGIT+
     ;
 
+fragment DURATION_UNIT
+    : Y
+    | M O
+    | W
+    | D
+    | H
+    | M
+    | S
+    | M S
+    | U S
+    | '\u00B5' S
+    | N S
+    ;
+
 INTEGER
     : '-'? DIGIT+
     ;
@@ -1800,6 +1817,13 @@ FLOAT
  */
 BOOLEAN
     : T R U E | F A L S E
+    ;
+
+DURATION
+    : '-'? DIGIT+ DURATION_UNIT (DIGIT+ DURATION_UNIT)*
+    | '-'? 'P' (DIGIT+ 'Y')? (DIGIT+ 'M')? (DIGIT+ 'D')? ('T' (DIGIT+ 'H')? (DIGIT+ 'M')? (DIGIT+ 'S')?)? // ISO 8601 "format with designators"
+    | '-'? 'P' DIGIT+ 'W'
+    | '-'? 'P' DIGIT DIGIT DIGIT DIGIT '-' DIGIT DIGIT '-' DIGIT DIGIT 'T' DIGIT DIGIT ':' DIGIT DIGIT ':' DIGIT DIGIT // ISO 8601 "alternative format"
     ;
 
 IDENT

@@ -48,6 +48,10 @@ shared_ptr<cql3_type> cql3_type::raw::prepare(database& db, const sstring& keysp
     }
 }
 
+bool cql3_type::raw::is_duration() const {
+    return false;
+}
+
 bool cql3_type::raw::references_user_type(const sstring& name) const {
     return false;
 }
@@ -77,6 +81,10 @@ public:
 
     virtual sstring to_string() const {
         return _type->to_string();
+    }
+
+    virtual bool is_duration() const override {
+        return _type->get_type()->equals(duration_type);
     }
 };
 
@@ -126,9 +134,15 @@ public:
         if (_kind == &collection_type_impl::kind::list) {
             return make_shared(cql3_type(to_string(), list_type_impl::get_instance(_values->prepare_internal(keyspace, user_types)->get_type(), !_frozen), false));
         } else if (_kind == &collection_type_impl::kind::set) {
+            if (_values->is_duration()) {
+                throw exceptions::invalid_request_exception(sprint("Durations are not allowed inside sets: %s", *this));
+            }
             return make_shared(cql3_type(to_string(), set_type_impl::get_instance(_values->prepare_internal(keyspace, user_types)->get_type(), !_frozen), false));
         } else if (_kind == &collection_type_impl::kind::map) {
             assert(_keys); // "Got null keys type for a collection";
+            if (_keys->is_duration()) {
+                throw exceptions::invalid_request_exception(sprint("Durations are not allowed as map keys: %s", *this));
+            }
             return make_shared(cql3_type(to_string(), map_type_impl::get_instance(_keys->prepare_internal(keyspace, user_types)->get_type(), _values->prepare_internal(keyspace, user_types)->get_type(), !_frozen), false));
         }
         abort();
@@ -136,6 +150,10 @@ public:
 
     bool references_user_type(const sstring& name) const override {
         return (_keys && _keys->references_user_type(name)) || _values->references_user_type(name);
+    }
+
+    bool is_duration() const override {
+        return false;
     }
 
     virtual sstring to_string() const override {
@@ -329,6 +347,7 @@ thread_local shared_ptr<cql3_type> cql3_type::inet = make("inet", inet_addr_type
 thread_local shared_ptr<cql3_type> cql3_type::varint = make("varint", varint_type, cql3_type::kind::VARINT);
 thread_local shared_ptr<cql3_type> cql3_type::decimal = make("decimal", decimal_type, cql3_type::kind::DECIMAL);
 thread_local shared_ptr<cql3_type> cql3_type::counter = make("counter", counter_type, cql3_type::kind::COUNTER);
+thread_local shared_ptr<cql3_type> cql3_type::duration = make("duration", duration_type, cql3_type::kind::DURATION);
 
 const std::vector<shared_ptr<cql3_type>>&
 cql3_type::values() {
@@ -354,6 +373,7 @@ cql3_type::values() {
         cql3_type::timeuuid,
         cql3_type::date,
         cql3_type::time,
+        cql3_type::duration,
     };
     return v;
 }

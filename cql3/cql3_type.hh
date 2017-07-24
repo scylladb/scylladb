@@ -75,6 +75,7 @@ public:
         virtual bool supports_freezing() const = 0;
         virtual bool is_collection() const;
         virtual bool is_counter() const;
+        virtual bool is_duration() const;
         virtual bool references_user_type(const sstring&) const;
         virtual std::experimental::optional<sstring> keyspace() const;
         virtual void freeze();
@@ -102,7 +103,7 @@ private:
 
 public:
     enum class kind : int8_t {
-        ASCII, BIGINT, BLOB, BOOLEAN, COUNTER, DECIMAL, DOUBLE, EMPTY, FLOAT, INT, SMALLINT, TINYINT, INET, TEXT, TIMESTAMP, UUID, VARCHAR, VARINT, TIMEUUID, DATE, TIME
+        ASCII, BIGINT, BLOB, BOOLEAN, COUNTER, DECIMAL, DOUBLE, EMPTY, FLOAT, INT, SMALLINT, TINYINT, INET, TEXT, TIMESTAMP, UUID, VARCHAR, VARINT, TIMEUUID, DATE, TIME, DURATION
     };
     using kind_enum = super_enum<kind,
         kind::ASCII,
@@ -125,7 +126,8 @@ public:
         kind::VARINT,
         kind::TIMEUUID,
         kind::DATE,
-        kind::TIME>;
+        kind::TIME,
+        kind::DURATION>;
     using kind_enum_set = enum_set<kind_enum>;
 private:
     std::experimental::optional<kind_enum_set::prepared> _kind;
@@ -154,6 +156,7 @@ public:
     static thread_local shared_ptr<cql3_type> varint;
     static thread_local shared_ptr<cql3_type> decimal;
     static thread_local shared_ptr<cql3_type> counter;
+    static thread_local shared_ptr<cql3_type> duration;
 
     static const std::vector<shared_ptr<cql3_type>>& values();
 public:
