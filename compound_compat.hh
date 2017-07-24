@@ -505,6 +505,7 @@ public:
         }
 
         std::vector<bytes_view> ret;
+        ret.reserve(8);
         for (auto it = begin(), e = end(); it != e; ) {
             ret.push_back(it->first);
             auto marker = it->second;
