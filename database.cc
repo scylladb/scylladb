@@ -170,7 +170,6 @@ column_family::sstables_as_mutation_source() {
 snapshot_source
 column_family::sstables_as_snapshot_source() {
     return snapshot_source([this] () {
-        // FIXME: Will keep sstables on disk until next memtable flush. Make compaction force cache refresh.
         auto sst_set = _sstables;
         return mutation_source([this, sst_set = std::move(sst_set)] (schema_ptr s,
                 const dht::partition_range& r,
@@ -1289,6 +1288,10 @@ column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>&
             } catch (sstables::atomic_deletion_cancelled& adc) {
                 dblog.debug("Failed to delete sstables after compaction: {}", adc);
             }
+        }).then([this] {
+            // refresh underlying data source in row cache to prevent it from holding reference
+            // to sstables files which were previously deleted.
+            _cache.refresh_snapshot();
         });
     });
 }

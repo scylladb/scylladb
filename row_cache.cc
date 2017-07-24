@@ -860,6 +860,10 @@ future<> row_cache::update_invalidating(memtable& m) {
     });
 }
 
+void row_cache::refresh_snapshot() {
+    _underlying = _snapshot_source();
+}
+
 void row_cache::touch(const dht::decorated_key& dk) {
  _read_section(_tracker.region(), [&] {
   with_linearized_managed_bytes([&] {
