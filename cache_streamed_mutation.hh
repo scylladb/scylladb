@@ -313,8 +313,8 @@ void cache_streamed_mutation::maybe_add_to_cache(const clustering_row& cr) {
             } else {
                 auto prev_it = it;
                 --prev_it;
-                clustering_key_prefix::tri_compare tri_comp(*_schema);
-                if (tri_comp(*_last_row_key, prev_it->key()) == 0) {
+                clustering_key_prefix::equality eq(*_schema);
+                if (eq(*_last_row_key, prev_it->key())) {
                     e.set_continuous(true);
                 }
             }

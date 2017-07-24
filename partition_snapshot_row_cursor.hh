@@ -200,8 +200,8 @@ bool partition_snapshot_row_cursor::previous_row_in_latest_version_has_key(const
     }
     auto prev_it = _current_row[0].it;
     --prev_it;
-    clustering_key_prefix::tri_compare tri_comp(_schema);
-    return tri_comp(prev_it->key(), key) == 0;
+    clustering_key_prefix::equality eq(_schema);
+    return eq(prev_it->key(), key);
 }
 
 inline
