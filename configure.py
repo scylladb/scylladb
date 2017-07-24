@@ -86,7 +86,7 @@ def try_compile(compiler, source = '', flags = []):
     with tempfile.NamedTemporaryFile() as sfile:
         sfile.file.write(bytes(source, 'utf-8'))
         sfile.file.flush()
-        return subprocess.call([compiler, '-x', 'c++', '-o', '/dev/null', '-c', sfile.name] + flags,
+        return subprocess.call([compiler, '-x', 'c++', '-o', '/dev/null', '-c', sfile.name] + args.user_cflags.split() + flags,
                                stdout = subprocess.DEVNULL,
                                stderr = subprocess.DEVNULL) == 0
 
