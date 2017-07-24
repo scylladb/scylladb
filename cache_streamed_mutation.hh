@@ -177,7 +177,7 @@ inline
 future<> cache_streamed_mutation::fill_buffer() {
     if (!_static_row_done) {
         _static_row_done = true;
-        return process_static_row().then([this] {
+        auto after_static_row = [this] {
             if (_ck_ranges_curr == _ck_ranges_end) {
                 _end_of_stream = true;
                 return make_ready_future<>();
@@ -187,7 +187,12 @@ future<> cache_streamed_mutation::fill_buffer() {
             }).then([this] {
                 return fill_buffer();
             });
-        });
+        };
+        if (_schema->has_static_columns()) {
+            return process_static_row().then(std::move(after_static_row));
+        } else {
+            return after_static_row();
+        }
     }
     return do_until([this] { return _end_of_stream || is_buffer_full(); }, [this] {
         return do_fill_buffer();
