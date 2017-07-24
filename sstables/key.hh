@@ -26,6 +26,7 @@
 #include "database_fwd.hh"
 #include "keys.hh"
 #include "compound_compat.hh"
+#include "dht/i_partitioner.hh"
 
 namespace sstables {
 
@@ -140,6 +141,22 @@ inline key minimum_key() {
 
 inline key maximum_key() {
     return key(key::kind::after_all_keys);
+};
+
+class decorated_key_view {
+    const dht::token& _token;
+    key_view _partition_key;
+public:
+    decorated_key_view(const dht::token& token, key_view partition_key) noexcept
+        : _token(token), _partition_key(partition_key) { }
+
+    const dht::token& token() const {
+        return _token;
+    }
+
+    key_view key() const {
+        return _partition_key;
+    }
 };
 
 }
