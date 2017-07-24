@@ -3779,8 +3779,11 @@ static void copy_directory(boost::filesystem::path src_dir, boost::filesystem::p
     namespace fs = boost::filesystem;
     fs::create_directory(dst_dir);
     auto src_dir_components = std::distance(src_dir.begin(), src_dir.end());
-    for (auto&& dirent : fs::recursive_directory_iterator{src_dir}) {
-        auto&& path = dirent.path();
+    using rdi = fs::recursive_directory_iterator;
+    // Boost 1.55.0 doesn't support range for on recursive_directory_iterator
+    // (even though previous and later versions do support it)
+    for (auto&& dirent = rdi{src_dir}; dirent != rdi(); ++dirent) {
+        auto&& path = dirent->path();
         auto new_path = dst_dir;
         for (auto i = std::next(path.begin(), src_dir_components); i != path.end(); ++i) {
             new_path /= *i;
