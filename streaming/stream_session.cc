@@ -181,8 +181,8 @@ void stream_session::init_messaging_service_handler() {
         if (failed && *failed) {
             return smp::submit_to(dst_cpu_id, [plan_id, from, dst_cpu_id] () {
                 auto session = get_session(plan_id, from, "COMPLETE_MESSAGE");
-                sslog.warn("[Stream #{}] COMPLETE_MESSAGE with error flag from {} dst_cpu_id={}", plan_id, from, dst_cpu_id);
-                session->on_error();
+                sslog.debug("[Stream #{}] COMPLETE_MESSAGE with error flag from {} dst_cpu_id={}", plan_id, from, dst_cpu_id);
+                session->received_failed_complete_message();
                 return make_ready_future<>();
             });
         } else {
@@ -255,6 +255,12 @@ future<> stream_session::on_initialization_complete() {
         sslog.debug("[Stream #{}] Initiator starts to sent", this->plan_id());
         this->start_streaming_files();
     });
+}
+
+void stream_session::received_failed_complete_message() {
+    sslog.info("[Stream #{}] Received failed complete message, peer={}", plan_id(), peer);
+    _received_failed_complete_message = true;
+    close_session(stream_session_state::FAILED);
 }
 
 void stream_session::on_error() {
@@ -345,20 +351,24 @@ void stream_session::transfer_task_completed(UUID cf_id) {
 }
 
 void stream_session::send_failed_complete_message() {
+    auto plan_id = this->plan_id();
+    if (_received_failed_complete_message) {
+        sslog.debug("[Stream #{}] Skip sending failed message back to peer", plan_id);
+        return;
+    }
     if (!_complete_sent) {
         _complete_sent = true;
     } else {
         return;
     }
     auto id = msg_addr{this->peer, this->dst_cpu_id};
-    auto plan_id = this->plan_id();
     sslog.debug("[Stream #{}] SEND COMPLETE_MESSAGE to {}", plan_id, id);
     auto session = shared_from_this();
     bool failed = true;
     this->ms().send_complete_message(id, plan_id, this->dst_cpu_id, failed).then([session, id, plan_id] {
         sslog.debug("[Stream #{}] GOT COMPLETE_MESSAGE Reply from {}", plan_id, id.addr);
     }).handle_exception([session, id, plan_id] (auto ep) {
-        sslog.warn("[Stream #{}] COMPLETE_MESSAGE for {} has failed: {}", plan_id, id.addr, ep);
+        sslog.debug("[Stream #{}] COMPLETE_MESSAGE for {} has failed: {}", plan_id, id.addr, ep);
     });
 }
 

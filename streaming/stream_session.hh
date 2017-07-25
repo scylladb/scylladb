@@ -174,6 +174,7 @@ private:
 
     stream_session_state _state = stream_session_state::INITIALIZED;
     bool _complete_sent = false;
+    bool _received_failed_complete_message = false;
 
     // If the session is idle for 300 minutes, close the session
     std::chrono::seconds _keep_alive_timeout{60 * 300};
@@ -298,6 +299,8 @@ public:
      * @param e thrown exception
      */
     void on_error();
+
+    void received_failed_complete_message();
 
     /**
      * Prepare this session for sending/receiving files.
