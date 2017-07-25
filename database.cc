@@ -170,7 +170,6 @@ column_family::sstables_as_mutation_source() {
 snapshot_source
 column_family::sstables_as_snapshot_source() {
     return snapshot_source([this] () {
-        // FIXME: Will keep sstables on disk until next memtable flush. Make compaction force cache refresh.
         auto sst_set = _sstables;
         return mutation_source([this, sst_set = std::move(sst_set)] (schema_ptr s,
                 const dht::partition_range& r,
@@ -873,14 +872,16 @@ column_family::seal_active_streaming_memtable_immediate() {
             return write_memtable_to_sstable(*old, newtab, incremental_backups_enabled(), priority, false, _config.background_writer_scheduling_group).then([this, newtab, old] {
                 return newtab->open_data();
             }).then([this, old, newtab] () {
-                add_sstable(newtab, {engine().cpu_id()});
-                trigger_compaction();
-                // Cache synchronization must be started atomically with add_sstable()
-                if (_config.enable_cache) {
-                    return _cache.update_invalidating(*old);
-                } else {
-                    return old->clear_gently();
-                }
+                return with_semaphore(_cache_update_sem, 1, [this, newtab, old] {
+                    add_sstable(newtab, {engine().cpu_id()});
+                    trigger_compaction();
+                    // Cache synchronization must be started atomically with add_sstable()
+                    if (_config.enable_cache) {
+                        return _cache.update_invalidating(*old);
+                    } else {
+                        return old->clear_gently();
+                    }
+                });
             }).handle_exception([old] (auto ep) {
                 dblog.error("failed to write streamed sstable: {}", ep);
                 return make_exception_future<>(ep);
@@ -1287,6 +1288,10 @@ column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>&
             } catch (sstables::atomic_deletion_cancelled& adc) {
                 dblog.debug("Failed to delete sstables after compaction: {}", adc);
             }
+        }).then([this] {
+            // refresh underlying data source in row cache to prevent it from holding reference
+            // to sstables files which were previously deleted.
+            _cache.refresh_snapshot();
         });
     });
 }
@@ -1779,15 +1784,17 @@ future<> distributed_loader::load_new_sstables(distributed<database>& db, sstrin
     }).then([&db, ks, cf] {
         return db.invoke_on_all([ks = std::move(ks), cfname = std::move(cf)] (database& db) {
             auto& cf = db.find_column_family(ks, cfname);
-            // atomically load all opened sstables into column family.
-            for (auto& sst : cf._sstables_opened_but_not_loaded) {
-                cf.load_sstable(sst, true);
-            }
-            cf._sstables_opened_but_not_loaded.clear();
-            cf.trigger_compaction();
-            // Drop entire cache for this column family because it may be populated
-            // with stale data.
-            return cf.get_row_cache().invalidate();
+            return with_semaphore(cf._cache_update_sem, 1, [&cf] {
+                // atomically load all opened sstables into column family.
+                for (auto& sst : cf._sstables_opened_but_not_loaded) {
+                    cf.load_sstable(sst, true);
+                }
+                cf._sstables_opened_but_not_loaded.clear();
+                cf.trigger_compaction();
+                // Drop entire cache for this column family because it may be populated
+                // with stale data.
+                return cf.get_row_cache().invalidate();
+            });
         });
     }).then([&db, ks, cf] () mutable {
         return smp::submit_to(0, [&db, ks = std::move(ks), cf = std::move(cf)] () mutable {
@@ -3826,12 +3833,14 @@ future<> column_family::flush_streaming_mutations(utils::UUID plan_id, dht::part
             return _streaming_memtables->seal_active_memtable(memtable_list::flush_behavior::delayed).then([this] {
                 return _streaming_flush_phaser.advance_and_await();
             }).then([this, sstables = std::move(sstables), ranges = std::move(ranges)] () mutable {
-                for (auto&& sst : sstables) {
-                    // seal_active_streaming_memtable_big() ensures sst is unshared.
-                    this->add_sstable(sst, {engine().cpu_id()});
-                }
-                this->trigger_compaction();
-                return _cache.invalidate(std::move(ranges));
+                return with_semaphore(_cache_update_sem, 1, [this, sstables = std::move(sstables), ranges = std::move(ranges)] () mutable {
+                    for (auto&& sst : sstables) {
+                        // seal_active_streaming_memtable_big() ensures sst is unshared.
+                        this->add_sstable(sst, {engine().cpu_id()});
+                    }
+                    this->trigger_compaction();
+                    return _cache.invalidate(std::move(ranges));
+                });
             });
         });
     });
