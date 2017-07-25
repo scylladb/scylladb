@@ -51,7 +51,7 @@ public:
         return *this;
     }
 
-    reader_assertions& produces(mutation m, const query::clustering_row_ranges& ck_ranges = {}) {
+    reader_assertions& produces(mutation m, stdx::optional<query::clustering_row_ranges> ck_ranges = {}) {
         BOOST_TEST_MESSAGE(sprint("Expecting %s", m));
         auto mo = read_next();
         BOOST_REQUIRE(bool(mo));
