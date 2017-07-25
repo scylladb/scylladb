@@ -265,6 +265,11 @@ void stream_session::received_failed_complete_message() {
     close_session(stream_session_state::FAILED);
 }
 
+void stream_session::abort() {
+    sslog.info("[Stream #{}] Aborted stream session, peer={}", plan_id(), peer);
+    close_session(stream_session_state::FAILED);
+}
+
 void stream_session::on_error() {
     sslog.warn("[Stream #{}] Streaming error occurred, peer={}", plan_id(), peer);
     close_session(stream_session_state::FAILED);
