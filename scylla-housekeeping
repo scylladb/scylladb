@@ -117,12 +117,23 @@ def check_version(ar):
             params = params + "&rid=" + repo_id
         if repo_type:
             params = params + "&rtype=" + repo_type
-        latest_version = get_json_from_url(version_url + params)["version"]
+        versions = get_json_from_url(version_url + params)
+        latest_version = versions["version"]
+        latest_patch_version = versions["latest_patch_version"]
     except:
         traceln("Unable to retrieve version information")
         return
-    if version_compare(current_version, latest_version):
-        traceln("A new version was found, current version=", current_version, " latest version=", latest_version)
+
+    if latest_patch_version != latest_version:
+        # user is using an older minor version
+        if version_compare(current_version, latest_patch_version):
+            # user is also running an older patch version
+            traceln("Your current Scylla release is " + current_version + ", while the latest patch release is " + latest_patch_version +
+                    ", and the latest minor release is " + latest_version + " (recommended)")
+        else:
+            traceln("You current Scylla release is ", current_version, " the latest minor release is ", latest_version, " go to http://www.scylladb.com for upgrade instructions")
+    elif version_compare(current_version, latest_patch_version):
+            traceln("You current Scylla release is ", current_version, " while the latest patch release is ", latest_patch_version, ", update for the latest bug fixes and improvements")
 
 parser = argparse.ArgumentParser(description='ScyllaDB help report tool', conflict_handler="resolve")
 parser.add_argument('-q', '--quiet', action='store_true', default=False, help='Quiet mode')
