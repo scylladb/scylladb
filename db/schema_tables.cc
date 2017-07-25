@@ -1652,7 +1652,7 @@ static void make_update_columns_mutations(schema_ptr old_table,
 
     // newly dropped columns
     // columns added then dropped again
-    for (auto& name : dc_diff.entries_only_on_right) {
+    for (auto& name : boost::range::join(dc_diff.entries_differing, dc_diff.entries_only_on_right)) {
         add_drop_column_to_mutations(new_table, name, new_table->dropped_columns().at(name), timestamp, mutations);
     }
 }
