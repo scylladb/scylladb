@@ -590,8 +590,11 @@ void gossiper::run() {
                 /* Gossip to some random live members */
                 // TODO: For now, we choose 10th of all the nodes in the cluster.
                 auto nr_live_nodes = std::max(size_t(1), endpoint_state_map.size() / 10);
+                nr_live_nodes = std::min(nr_live_nodes, _live_endpoints.size());
                 std::unordered_set<gms::inet_address> live_nodes;
-                while (live_nodes.size() < nr_live_nodes && !_live_endpoints.empty()) {
+                logger.debug("nr_live_nodes={}, endpoint_state_map.size()={}, live_endpoints.size={}",
+                    nr_live_nodes, endpoint_state_map.size(), _live_endpoints.size());
+                while (live_nodes.size() < nr_live_nodes && nr_live_nodes <= _live_endpoints.size()) {
                     if (!_live_endpoints_just_added.empty()) {
                         auto ep = _live_endpoints_just_added.front();
                         _live_endpoints_just_added.pop_front();
