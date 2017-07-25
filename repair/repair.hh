@@ -70,6 +70,9 @@ future<repair_status> repair_get_status(seastar::sharded<database>& db, int id);
 // stop them abruptly).
 future<> repair_shutdown(seastar::sharded<database>& db);
 
+// Abort all the repairs
+future<> repair_abort_all(seastar::sharded<database>& db);
+
 enum class repair_checksum {
     legacy = 0,
     streamed = 1,

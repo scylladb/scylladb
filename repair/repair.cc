@@ -53,6 +53,7 @@ public:
     std::vector<sstring> data_centers;
     std::vector<sstring> hosts;
     size_t nr_failed_ranges = 0;
+    bool aborted = false;
     // Map of peer -> <cf, ranges>
     std::unordered_map<gms::inet_address, std::unordered_map<sstring, dht::token_range_vector>> ranges_need_repair_in;
     std::unordered_map<gms::inet_address, std::unordered_map<sstring, dht::token_range_vector>> ranges_need_repair_out;
@@ -68,6 +69,8 @@ public:
     int ranges_index = 0;
     // Only allow one stream_plan in flight
     semaphore sp_parallelism_semaphore{1};
+    lw_shared_ptr<streaming::stream_plan> _sp_in;
+    lw_shared_ptr<streaming::stream_plan> _sp_out;
 public:
     repair_info(seastar::sharded<database>& db_,
             const sstring& keyspace_,
@@ -88,8 +91,8 @@ public:
     future<> do_streaming() {
         size_t ranges_in = 0;
         size_t ranges_out = 0;
-        auto sp_in = make_lw_shared<streaming::stream_plan>(sprint("repair-in-id-%d-shard-%d-index-%d", id, shard, sp_index));
-        auto sp_out = make_lw_shared<streaming::stream_plan>(sprint("repair-out-id-%d-shard-%d-index-%d", id, shard, sp_index));
+        _sp_in = make_lw_shared<streaming::stream_plan>(sprint("repair-in-id-%d-shard-%d-index-%d", id, shard, sp_index));
+        _sp_out = make_lw_shared<streaming::stream_plan>(sprint("repair-out-id-%d-shard-%d-index-%d", id, shard, sp_index));
 
         for (auto& x : ranges_need_repair_in) {
             auto& peer = x.first;
@@ -97,7 +100,7 @@ public:
                 auto& cf = y.first;
                 auto& stream_ranges = y.second;
                 ranges_in += stream_ranges.size();
-                sp_in->request_ranges(peer, keyspace, std::move(stream_ranges), {cf});
+                _sp_in->request_ranges(peer, keyspace, std::move(stream_ranges), {cf});
             }
         }
         ranges_need_repair_in.clear();
@@ -109,7 +112,7 @@ public:
                 auto& cf = y.first;
                 auto& stream_ranges = y.second;
                 ranges_out += stream_ranges.size();
-                sp_out->transfer_ranges(peer, keyspace, std::move(stream_ranges), {cf});
+                _sp_out->transfer_ranges(peer, keyspace, std::move(stream_ranges), {cf});
             }
         }
         ranges_need_repair_out.clear();
@@ -120,11 +123,14 @@ public:
         }
         sp_index++;
 
-        return sp_in->execute().discard_result().then([sp_in, sp_out] {
-                return sp_out->execute().discard_result();
-        }).handle_exception([] (auto ep) {
+        return _sp_in->execute().discard_result().then([this, sp_in = _sp_in, sp_out = _sp_out] {
+            return _sp_out->execute().discard_result();
+        }).handle_exception([this] (auto ep) {
             rlogger.warn("repair's stream failed: {}", ep);
             return make_exception_future(ep);
+        }).finally([this] {
+            _sp_in = {};
+            _sp_out = {};
         });
     }
     void check_failed_ranges() {
@@ -154,6 +160,20 @@ public:
             }
             return make_ready_future<>();
         });
+    }
+    void abort() {
+        if (_sp_in) {
+            _sp_in->abort();
+        }
+        if (_sp_out) {
+            _sp_out->abort();
+        }
+        aborted = true;
+    }
+    void check_in_abort() {
+        if (aborted) {
+            throw std::runtime_error(sprint("repair id %d is aborted on shard %d", id, shard));
+        }
     }
 };
 
@@ -389,6 +409,28 @@ public:
         }
         return {};
     }
+    size_t nr_running_repair_jobs() {
+        size_t count = 0;
+        if (engine().cpu_id() != 0) {
+            return count;
+        }
+        for (auto& x : _status) {
+            auto& status = x.second;
+            if (status == repair_status::RUNNING) {
+                count++;
+            }
+        }
+        return count;
+    }
+    void abort_all_repairs() {
+        init_repair_info();
+        size_t count = nr_running_repair_jobs();
+        for (auto& x : _repairs[engine().cpu_id()]) {
+            auto& ri = x.second;
+            ri->abort();
+        }
+        rlogger.info0("Aborted {} repair job(s)", count);
+    }
 };
 
 static tracker repair_tracker;
@@ -612,6 +654,7 @@ static future<> repair_cf_range(repair_info& ri,
         return make_ready_future<>();
     }
 
+    ri.check_in_abort();
     return estimate_partitions(ri.db, ri.keyspace, cf, range).then([&ri, cf, range, &neighbors] (uint64_t estimated_partitions) {
     range_splitter ranges(range, estimated_partitions, ri.target_partitions);
     return do_with(seastar::gate(), true, std::move(cf), std::move(ranges),
@@ -620,6 +663,7 @@ static future<> repair_cf_range(repair_info& ri,
             [&ranges, &ri, &completion, &success, &neighbors, &cf] () {
             auto range = ranges.next();
             check_in_shutdown();
+            ri.check_in_abort();
             return seastar::get_units(parallelism_semaphore, 1).then([&ri, &completion, &success, &neighbors, &cf, range] (auto signal_sem) {
                 auto checksum_type = service::get_local_storage_service().cluster_supports_large_partitions()
                                      ? repair_checksum::streamed : repair_checksum::legacy;
@@ -771,6 +815,7 @@ static future<> repair_cf_range(repair_info& ri,
                     if (!(live_neighbors_in.empty() && live_neighbors_out.empty())) {
                         rlogger.debug("Found differing range {} on nodes {}, in = {}, out = {}", range,
                                 live_neighbors, live_neighbors_in, live_neighbors_out);
+                        ri.check_in_abort();
                         return ri.request_transfer_ranges(cf, range, live_neighbors_in, live_neighbors_out);
                     }
                     return make_ready_future<>();
@@ -1025,12 +1070,14 @@ static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
     // repair all the ranges in sequence
     return do_for_each(ri->ranges, [ri] (auto&& range) {
 #endif
+        ri->check_in_abort();
         ri->ranges_index++;
         rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}",
             ri->ranges_index, ri->ranges.size(), ri->id, ri->shard, ri->keyspace, ri->cfs, range);
         return do_with(dht::selective_token_range_sharder(range, ri->shard), [ri] (auto& sharder) {
             return repeat([ri, &sharder] () {
                 check_in_shutdown();
+                ri->check_in_abort();
                 auto range_shard = sharder.next();
                 if (range_shard) {
                     return repair_range(*ri, *range_shard).then([] {
@@ -1044,6 +1091,7 @@ static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
     }).then([ri] {
         // Do streaming for the remaining ranges we do not stream in
         // repair_cf_range
+        ri->check_in_abort();
         return ri->do_streaming();
     }).then([ri] {
         ri->check_failed_ranges();
@@ -1175,6 +1223,9 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
             repair_tracker.done(id, true);
             rlogger.info("repair {} completed successfully", id);
         }
+        for (auto& f : results) {
+            f.ignore_ready_future();
+        }
         return make_ready_future<>();
     }).handle_exception([id] (std::exception_ptr eptr) {
          rlogger.info("repair {} failed: {}", id, eptr);
@@ -1202,5 +1253,11 @@ future<> repair_shutdown(seastar::sharded<database>& db) {
         return repair_tracker.shutdown().then([] {
             rlogger.info("Completed shutdown of repair");
         });
+    });
+}
+
+future<> repair_abort_all(seastar::sharded<database>& db) {
+    return db.invoke_on_all([] (database& localdb) {
+        repair_tracker.abort_all_repairs();
     });
 }
