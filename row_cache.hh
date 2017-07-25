@@ -442,6 +442,10 @@ public:
     // as few elements as possible.
     future<> update_invalidating(memtable&);
 
+    // Refreshes snapshot. Must only be used if logical state in the underlying data
+    // source hasn't changed.
+    void refresh_snapshot();
+
     // Moves given partition to the front of LRU if present in cache.
     void touch(const dht::decorated_key&);
 
