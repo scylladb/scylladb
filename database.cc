@@ -3217,6 +3217,7 @@ future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_
 }
 
 future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
+  return update_write_metrics(seastar::futurize_apply([&] {
     if (!s->is_synced()) {
         throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
                                         s->ks_name(), s->cf_name(), s->version()));
@@ -3228,6 +3229,7 @@ future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutat
         dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
         throw;
     }
+  }));
 }
 
 static future<> maybe_handle_reorder(std::exception_ptr exp) {
@@ -3289,11 +3291,9 @@ struct db_apply_executor {
 };
 static thread_local auto apply_stage = seastar::make_execution_stage("db_apply", db_apply_executor::get());
 
-future<> database::apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
-    if (dblog.is_enabled(logging::log_level::trace)) {
-        dblog.trace("apply {}", m.pretty_printer(s));
-    }
-    return apply_stage(this, std::move(s), seastar::cref(m), timeout).then_wrapped([this, s = _stats] (auto f) {
+template<typename Future>
+Future database::update_write_metrics(Future&& f) {
+    return f.then_wrapped([this, s = _stats] (auto f) {
         if (f.failed()) {
             ++s->total_writes_failed;
             try {
@@ -3307,6 +3307,13 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m, timeout_clock::
         ++s->total_writes;
         return f;
     });
+}
+
+future<> database::apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
+    if (dblog.is_enabled(logging::log_level::trace)) {
+        dblog.trace("apply {}", m.pretty_printer(s));
+    }
+    return update_write_metrics(apply_stage(this, std::move(s), seastar::cref(m), timeout));
 }
 
 future<> database::apply_streaming_mutation(schema_ptr s, utils::UUID plan_id, const frozen_mutation& m, bool fragmented) {

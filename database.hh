@@ -1207,6 +1207,9 @@ private:
 
     future<mutation> do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema, timeout_clock::time_point timeout,
                                              tracing::trace_state_ptr trace_state);
+
+    template<typename Future>
+    Future update_write_metrics(Future&& f);
 public:
     static utils::UUID empty_version;
 
