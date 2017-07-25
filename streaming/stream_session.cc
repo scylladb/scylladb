@@ -81,13 +81,13 @@ static auto get_session(utils::UUID plan_id, gms::inet_address from, const char*
     auto sr = get_stream_result_future(plan_id);
     if (!sr) {
         auto err = sprint("[Stream #%s] GOT %s from %s: Can not find stream_manager", plan_id, verb, from);
-        sslog.warn(err.c_str());
+        sslog.debug(err.c_str());
         throw std::runtime_error(err);
     }
     auto coordinator = sr->get_coordinator();
     if (!coordinator) {
         auto err = sprint("[Stream #%s] GOT %s from %s: Can not find coordinator", plan_id, verb, from);
-        sslog.warn(err.c_str());
+        sslog.debug(err.c_str());
         throw std::runtime_error(err);
     }
     return coordinator->get_or_create_session(from);
