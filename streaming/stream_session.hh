@@ -300,6 +300,8 @@ public:
      */
     void on_error();
 
+    void abort();
+
     void received_failed_complete_message();
 
     /**
