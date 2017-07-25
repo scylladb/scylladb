@@ -1742,3 +1742,40 @@ SEASTAR_TEST_CASE(test_tombstone_merging_in_partial_partition) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_query_only_static_row) {
+    return seastar::async([] {
+        simple_schema s;
+        auto cache_mt = make_lw_shared<memtable>(s.schema());
+
+        auto pkeys = s.make_pkeys(1);
+
+        mutation m1(pkeys[0], s.schema());
+        s.add_static_row(m1, "s1");
+        s.add_row(m1, s.make_ckey(0), "v1");
+        s.add_row(m1, s.make_ckey(1), "v2");
+        cache_mt->apply(m1);
+
+        cache_tracker tracker;
+        row_cache cache(s.schema(), snapshot_source_from_snapshot(cache_mt->as_data_source()), tracker);
+
+        // fully populate cache
+        {
+            auto prange = dht::partition_range::make_ending_with(dht::ring_position(m1.decorated_key()));
+            assert_that(cache.make_reader(s.schema(), prange, query::full_slice))
+                    .produces(m1)
+                    .produces_end_of_stream();
+        }
+
+        // query just a static row
+        {
+            auto slice = partition_slice_builder(*s.schema())
+                    .with_ranges({ })
+                    .build();
+            auto prange = dht::partition_range::make_ending_with(dht::ring_position(m1.decorated_key()));
+            assert_that(cache.make_reader(s.schema(), prange, slice))
+                    .produces(m1, slice.row_ranges(*s.schema(), m1.key()))
+                    .produces_end_of_stream();
+        }
+    });
+}
