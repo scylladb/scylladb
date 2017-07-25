@@ -235,7 +235,8 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
             // with the same name unless the types are compatible (see #6276).
             auto& dropped = schema->dropped_columns();
             auto i = dropped.find(column_name->text());
-            if (i != dropped.end() && !type->is_compatible_with(*i->second.type)) {
+            if (i != dropped.end() && i->second.type->is_collection() && i->second.type->is_multi_cell()
+                    && !type->is_compatible_with(*i->second.type)) {
                 throw exceptions::invalid_request_exception(sprint("Cannot add a collection with the name %s "
                     "because a collection with the same name and a different type has already been used in the past", column_name));
             }
