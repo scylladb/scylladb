@@ -178,6 +178,10 @@ future<> cache_streamed_mutation::fill_buffer() {
     if (!_static_row_done) {
         _static_row_done = true;
         return process_static_row().then([this] {
+            if (_ck_ranges_curr == _ck_ranges_end) {
+                _end_of_stream = true;
+                return make_ready_future<>();
+            }
             return _lsa_manager.run_in_read_section([this] {
                 return move_to_current_range();
             }).then([this] {
