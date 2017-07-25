@@ -82,6 +82,14 @@ To configure resource limits for your Docker container, you can use the `--smp`,
 
 If you run multiple Scylla instances on the same machine, it is highly recommended that you enable the `--overprovisioned` command line option, which enables certain optimizations for Scylla to run efficiently in an overprovisioned environment.
 
+## Restart Scylla
+
+The Docker image uses supervisord to manage Scylla processes. You can restart Scylla in a Docker container using
+
+```
+docker exec -it some-scylla supervisorctl restart scylla
+```
+
 ## Command-line options
 
 The Scylla image supports many command line options that are passed to the `docker run` command.
