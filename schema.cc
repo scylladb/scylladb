@@ -725,11 +725,7 @@ schema_builder& schema_builder::without_column(bytes name)
         return column.name() == name;
     });
     assert(it != _raw._columns.end());
-    auto now = api::new_timestamp();
-    auto ret = _raw._dropped_columns.emplace(it->name_as_text(), schema::dropped_column{it->type, now});
-    if (!ret.second) {
-        ret.first->second.timestamp = std::max(ret.first->second.timestamp, now);
-    }
+    without_column(it->name_as_text(), it->type, api::new_timestamp());
     _raw._columns.erase(it);
     return *this;
 }
@@ -741,8 +737,9 @@ schema_builder& schema_builder::without_column(sstring name, api::timestamp_type
 schema_builder& schema_builder::without_column(sstring name, data_type type, api::timestamp_type timestamp)
 {
     auto ret = _raw._dropped_columns.emplace(name, schema::dropped_column{type, timestamp});
-    if (!ret.second) {
-        ret.first->second.timestamp = std::max(ret.first->second.timestamp, timestamp);
+    if (!ret.second && ret.first->second.timestamp < timestamp) {
+        ret.first->second.type = type;
+        ret.first->second.timestamp = timestamp;
     }
     return *this;
 }
