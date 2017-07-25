@@ -584,7 +584,6 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
     os << ",minIndexInterval=" << s._raw._min_index_interval;
     os << ",maxIndexInterval=" << s._raw._max_index_interval;
     os << ",speculativeRetry=" << s._raw._speculative_retry.to_sstring();
-    os << ",droppedColumns={}";
     os << ",triggers=[]";
     os << ",isDense=" << std::boolalpha << s._raw._is_dense;
     os << ",version=" << s.version();
