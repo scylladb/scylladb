@@ -26,6 +26,7 @@
 #include <seastar/util/defer.hh>
 
 #include "tests/cql_test_env.hh"
+#include "tests/cql_assertions.hh"
 #include "tests/mutation_source_test.hh"
 #include "tests/result_set_assertions.hh"
 #include "service/migration_manager.hh"
@@ -188,6 +189,59 @@ SEASTAR_TEST_CASE(test_column_is_dropped) {
             BOOST_REQUIRE(s->columns_by_name().count(to_bytes("c1")));
             BOOST_REQUIRE(!s->columns_by_name().count(to_bytes("c2")));
             BOOST_REQUIRE(s->columns_by_name().count(to_bytes("s1")));
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            service::migration_manager& mm = service::get_local_migration_manager();
+
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+
+            auto s1 = schema_builder("ks", "table1")
+                    .with_column("pk", bytes_type, column_kind::partition_key)
+                    .with_column("v1", bytes_type)
+                    .build();
+
+            mm.announce_new_column_family(s1, false).get();
+
+            auto&& keyspace = e.db().local().find_keyspace(s1->ks_name()).metadata();
+
+            auto s2 = schema_builder("ks", "table1", stdx::make_optional(s1->id()))
+                    .with_column("pk", bytes_type, column_kind::partition_key)
+                    .without_column("v1", bytes_type, api::new_timestamp())
+                    .build();
+
+            // Drop v1
+            {
+                auto muts = db::schema_tables::make_update_table_mutations(keyspace, s1, s2,
+                    api::new_timestamp(), false).get0();
+                mm.announce(std::move(muts), true).get();
+            }
+
+            // Add a new v1 and drop it
+            {
+                auto s3 = schema_builder("ks", "table1", stdx::make_optional(s1->id()))
+                        .with_column("pk", bytes_type, column_kind::partition_key)
+                        .with_column("v1", list_type_impl::get_instance(int32_type, true))
+                        .build();
+
+                auto s4 = schema_builder("ks", "table1", stdx::make_optional(s1->id()))
+                        .with_column("pk", bytes_type, column_kind::partition_key)
+                        .without_column("v1", list_type_impl::get_instance(int32_type, true), api::new_timestamp())
+                        .build();
+
+                auto muts = db::schema_tables::make_update_table_mutations(keyspace, s3, s4,
+                    api::new_timestamp(), false).get0();
+                mm.announce(std::move(muts), true).get();
+            }
+
+            auto new_schema = e.db().local().find_schema(s1->id());
+            BOOST_REQUIRE(new_schema->get_column_definition(to_bytes("v1")) == nullptr);
+
+            assert_that_failed(e.execute_cql("alter table ks.table1 add v1 list<text>;"));
         });
     });
 }
