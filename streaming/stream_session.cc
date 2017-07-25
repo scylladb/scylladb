@@ -264,8 +264,7 @@ void stream_session::received_failed_complete_message() {
 }
 
 void stream_session::on_error() {
-    sslog.warn("[Stream #{}] Streaming error occurred", plan_id());
-    // fail session
+    sslog.warn("[Stream #{}] Streaming error occurred, peer={}", plan_id(), peer);
     close_session(stream_session_state::FAILED);
 }
 
