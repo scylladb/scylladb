@@ -13,4 +13,8 @@ Cql.tokens
 .kdev4
 *.kdev4
 CMakeLists.txt.user
+.cache
+.tox
+*.egg-info
+__pycache__CMakeLists.txt.user
 .gdbinit
