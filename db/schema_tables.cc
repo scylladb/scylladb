@@ -152,8 +152,8 @@ static void add_index_to_schema_mutation(schema_ptr table,
                 const index_metadata& index, api::timestamp_type timestamp,
                 mutation& mutation);
 
-static void drop_column_from_schema_mutation(schema_ptr,
-                const column_definition&, long timestamp,
+static void drop_column_from_schema_mutation(schema_ptr schema_table, schema_ptr table,
+                const sstring& column_name, long timestamp,
                 std::vector<mutation>&);
 
 static void drop_index_from_schema_mutation(schema_ptr table,
@@ -1636,7 +1636,7 @@ static void make_update_columns_mutations(schema_ptr old_table,
             continue;
         }
 
-        drop_column_from_schema_mutation(old_table, column, timestamp, mutations);
+        drop_column_from_schema_mutation(columns(), old_table, column.name_as_text(), timestamp, mutations);
     }
 
     // newly added columns and old columns with updated attributes
@@ -1694,8 +1694,11 @@ static void make_drop_table_or_view_mutations(schema_ptr schema_table,
     auto ckey = clustering_key::from_singular(*schema_table, table_or_view->cf_name());
     m.partition().apply_delete(*schema_table, ckey, tombstone(timestamp, gc_clock::now()));
     mutations.emplace_back(m);
-    for (auto &column : table_or_view->v3().all_columns()) {
-        drop_column_from_schema_mutation(table_or_view, column, timestamp, mutations);
+    for (auto& column : table_or_view->v3().all_columns()) {
+        drop_column_from_schema_mutation(columns(), table_or_view, column.name_as_text(), timestamp, mutations);
+    }
+    for (auto& column : table_or_view->dropped_columns() | boost::adaptors::map_keys) {
+        drop_column_from_schema_mutation(dropped_columns(), table_or_view, column, timestamp, mutations);
     }
     {
         mutation m{pkey, scylla_tables()};
@@ -2068,14 +2071,19 @@ static void drop_index_from_schema_mutation(schema_ptr table, const index_metada
     mutations.push_back(std::move(m));
 }
 
-static void drop_column_from_schema_mutation(schema_ptr table, const column_definition& column, long timestamp, std::vector<mutation>& mutations) {
-    schema_ptr s = columns();
-    auto pkey = partition_key::from_singular(*s, table->ks_name());
-    auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table->cf_name()),
-                                                   utf8_type->decompose(column.name_as_text())});
+static void drop_column_from_schema_mutation(
+        schema_ptr schema_table,
+        schema_ptr table,
+        const sstring& column_name,
+        long timestamp,
+        std::vector<mutation>& mutations)
+{
+    auto pkey = partition_key::from_singular(*schema_table, table->ks_name());
+    auto ckey = clustering_key::from_exploded(*schema_table, {utf8_type->decompose(table->cf_name()),
+                                                              utf8_type->decompose(column_name)});
 
-    mutation m{pkey, s};
-    m.partition().apply_delete(*s, ckey, tombstone(timestamp, gc_clock::now()));
+    mutation m{pkey, schema_table};
+    m.partition().apply_delete(*schema_table, ckey, tombstone(timestamp, gc_clock::now()));
     mutations.emplace_back(m);
 }
 
