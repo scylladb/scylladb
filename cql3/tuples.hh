@@ -134,7 +134,7 @@ public:
             try {
                 validate_assignable_to(db, keyspace, receiver);
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
-            } catch (exceptions::invalid_request_exception e) {
+            } catch (exceptions::invalid_request_exception& e) {
                 return assignment_testable::test_result::NOT_ASSIGNABLE;
             }
         }
