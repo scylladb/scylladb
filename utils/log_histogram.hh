@@ -33,27 +33,32 @@ namespace bi = boost::intrusive;
 
 // Returns largest N such that 2^N <= v.
 // Undefined for v == 0.
-inline constexpr size_t pow2_rank(size_t v) {
+inline size_t pow2_rank(size_t v) {
     return std::numeric_limits<size_t>::digits - 1 - count_leading_zeros(v);
+}
+ 
+
+// Returns largest N such that 2^N <= v.
+// Undefined for v == 0.
+inline constexpr size_t pow2_rank_constexpr(size_t v) {
+    return v <= 1 ? 1 : 1 + pow2_rank_constexpr(v >> 1);
 }
 
 // Configures log_histogram.
 // Only values <= max_size can be inserted into the histogram.
 // log_histogram::contains_above_min() returns true if and only if the histogram contains any value >= min_size.
 struct log_histogram_options {
-    size_t min_size;
-    size_t sub_bucket_shift;
-    size_t max_size;
+    const size_t min_size;
+    const size_t sub_bucket_shift;
+    const size_t max_size;
 
-    constexpr log_histogram_options(size_t min_size, size_t sub_bucket_shift, size_t max_size)
+    constexpr log_histogram_options(const size_t min_size, size_t sub_bucket_shift, size_t max_size)
             : min_size(min_size)
             , sub_bucket_shift(sub_bucket_shift)
             , max_size(max_size) {
-        // Ensure that (value << sub_bucket_index) in bucket_of() doesn't overflow
-        assert(pow2_rank(max_size - min_size + 1) + sub_bucket_shift < std::numeric_limits<size_t>::digits);
     }
 
-    constexpr size_t bucket_of(size_t value) const {
+    size_t bucket_of(size_t value) const {
         const auto min_mask = -size_t(value >= min_size); // 0 when below min_size, all bits on otherwise
         value = value - min_size + 1;
         const auto pow2_index = pow2_rank(value);
@@ -65,7 +70,15 @@ struct log_histogram_options {
     }
 
     constexpr size_t number_of_buckets() const {
-        return bucket_of(max_size) + 1;
+        const auto min_mask = -size_t(max_size >= min_size); // 0 when below min_size, all bits on otherwise
+        const auto value = max_size - min_size + 1;
+        const auto pow2_index = pow2_rank_constexpr(value);
+        const auto bucket = (pow2_index + 1) & min_mask;
+        const auto unmasked_sub_bucket_index = (value << sub_bucket_shift) >> pow2_index;
+        const auto mask = ((1 << sub_bucket_shift) - 1) & min_mask;
+        const auto sub_bucket_index = unmasked_sub_bucket_index & mask;
+        const auto ret = (bucket << sub_bucket_shift) - mask + sub_bucket_index;
+        return bucket + 1;
     }
 };
 
@@ -120,6 +133,8 @@ GCC6_CONCEPT(
     }
 )
 class log_histogram final {
+    // Ensure that (value << sub_bucket_index) in bucket_of() doesn't overflow
+    static_assert(pow2_rank_constexpr(opts.max_size - opts.min_size + 1) + opts.sub_bucket_shift < std::numeric_limits<size_t>::digits, "overflow");
 private:
     using traits = log_histogram_element_traits<T, opts>;
     using bucket = typename traits::bucket_type;
