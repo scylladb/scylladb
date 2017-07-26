@@ -52,6 +52,24 @@ A test target can be any executable. A non-zero return code indicates test failu
 
 Most tests in the Scylla repository are built using the [Boost.Test](http://www.boost.org/doc/libs/1_64_0/libs/test/doc/html/index.html) library. Utilities for writing tests with Seastar futures are also included.
 
+### Testing python code
+
+Python code style guidelines are tested and validated using `tox` and its `tox.ini` configuration file.
+
+To run those tests locally, setup a virtualenv like this:
+
+```bash
+$ virtualenv -p python3 $HOME/scylla_venv
+$ source $HOME/scylla_venv/bin/activate
+(scylla_venv) $ pip install tox
+```
+
+Then execute `tox` to run the tests on the python code base:
+
+```bash
+(scylla_venv) $ tox
+```
+
 ### Preparing patches
 
 All changes to Scylla are submitted as patches to the public mailing list. Once a patch is approved by one of the maintainers of the project, it is committed to the maintainers' copy of the repository at https://github.com/scylladb/scylla.
