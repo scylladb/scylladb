@@ -889,7 +889,8 @@ with open(buildfile, 'w') as f:
                      && sed -i -e 's/^\\( *\)\\(ImplTraits::CommonTokenType\\* [a-zA-Z0-9_]* = NULL;\\)$$/\\1const \\2/' $
                         -e '1i using ExceptionBaseType = int;' $
                         -e 's/^{{/{{ ExceptionBaseType\* ex = nullptr;/; $
-                            s/ExceptionBaseType\* ex = new/ex = new/' $
+                            s/ExceptionBaseType\* ex = new/ex = new/; $
+                            s/exceptions::syntax_exception e/exceptions::syntax_exception\& e/' $
                         build/{mode}/gen/${{stem}}Parser.cpp
                 description = ANTLR3 $in
             ''').format(mode = mode, **modeval))
