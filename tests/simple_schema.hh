@@ -54,6 +54,10 @@ public:
         , _v_def(*_s->get_column_definition(to_bytes("v")))
     { }
 
+    sstring cql() const {
+        return "CREATE TABLE ks.cf (pk text, ck text, v text, s1 text static, PRIMARY KEY (pk, ck))";
+    }
+
     clustering_key make_ckey(sstring ck) {
         return clustering_key::from_single_value(*_s, data_value(ck).serialize());
     }
