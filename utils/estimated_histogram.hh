@@ -280,33 +280,31 @@ public:
         }
         return 0;
     }
+#endif
 
     /**
      * @param percentile
      * @return estimated value at given percentile
      */
-    public long percentile(double percentile)
-    {
-        assert percentile >= 0 && percentile <= 1.0;
-        int lastBucket = buckets.length() - 1;
-        if (buckets.get(lastBucket) > 0)
-            throw new IllegalStateException("Unable to compute when histogram overflowed");
+    int64_t percentile(double perc) const {
+        assert(perc >= 0 && perc <= 1.0);
+        auto last_bucket = buckets.size() - 1;
+        if (buckets[last_bucket] > 0) {
+            throw std::runtime_error("Unable to compute when histogram overflowed");
+        }
 
-        long pcount = (long) Math.floor(count() * percentile);
-        if (pcount == 0)
-            return 0;
-
-        long elements = 0;
-        for (int i = 0; i < lastBucket; i++)
-        {
-            elements += buckets.get(i);
-            if (elements >= pcount)
-                return bucketOffsets[i];
+        auto pcount = int64_t(std::floor(count() * perc));
+        int64_t elements = 0;
+        for (size_t i = 0; i < last_bucket; i++) {
+            if (buckets[i]) {
+                elements += buckets[i];
+                if (elements >= pcount) {
+                    return bucket_offsets[i];
+                }
+            }
         }
         return 0;
     }
-
-#endif
 
     /**
      * @return the mean histogram value (average of bucket offsets, weighted by count)
