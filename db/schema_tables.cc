@@ -2071,7 +2071,8 @@ static void drop_index_from_schema_mutation(schema_ptr table, const index_metada
 static void drop_column_from_schema_mutation(schema_ptr table, const column_definition& column, long timestamp, std::vector<mutation>& mutations) {
     schema_ptr s = columns();
     auto pkey = partition_key::from_singular(*s, table->ks_name());
-    auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table->cf_name()), column.name()});
+    auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table->cf_name()),
+                                                   utf8_type->decompose(column.name_as_text())});
 
     mutation m{pkey, s};
     m.partition().apply_delete(*s, ckey, tombstone(timestamp, gc_clock::now()));
