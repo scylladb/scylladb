@@ -153,16 +153,18 @@ static void check_fragment_count(const test_result& r, uint64_t expected) {
     }
 }
 
+class counting_consumer {
+    uint64_t _fragments = 0;
+public:
+    stop_iteration consume(tombstone) { return stop_iteration::no; }
+    template<typename Fragment>
+    stop_iteration consume(Fragment&& f) { _fragments++; return stop_iteration::no; }
+    uint64_t consume_end_of_stream() { return _fragments; }
+};
+
 static
 uint64_t consume_all(streamed_mutation& sm) {
-    class consumer {
-        uint64_t _fragments = 0;
-    public:
-        stop_iteration consume(tombstone) { return stop_iteration::no; }
-        stop_iteration consume(...) { _fragments++; return stop_iteration::no; }
-        uint64_t consume_end_of_stream() { return _fragments; }
-    };
-    return consume(sm, consumer()).get0();
+    return consume(sm, counting_consumer()).get0();
 }
 
 static
