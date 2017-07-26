@@ -7,7 +7,7 @@ Group:          Applications/Databases
 License:        AGPLv3
 URL:            http://www.scylladb.com/
 Source0:        %{name}-@@VERSION@@-@@RELEASE@@.tar
-Requires:       scylla-server scylla-jmx scylla-tools scylla-kernel-conf
+Requires:       scylla-server = @@VERSION@@ scylla-jmx = @@VERSION@@ scylla-tools = @@VERSION@@ scylla-kernel-conf = @@VERSION@@
 Obsoletes:	scylla-server < 1.1
 
 %description
