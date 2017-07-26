@@ -79,7 +79,7 @@ int64_t attributes::get_timestamp(int64_t now, const query_options& options) {
     }
     try {
         data_type_for<int64_t>()->validate(*tval);
-    } catch (marshal_exception e) {
+    } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception("Invalid timestamp value");
     }
     return value_cast<int64_t>(data_type_for<int64_t>()->deserialize(*tval));
@@ -99,7 +99,7 @@ int32_t attributes::get_time_to_live(const query_options& options) {
     try {
         data_type_for<int32_t>()->validate(*tval);
     }
-    catch (marshal_exception e) {
+    catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception("Invalid TTL value");
     }
 

@@ -134,7 +134,7 @@ void stream_session::init_messaging_service_handler() {
                     try {
                         f.get();
                         return make_ready_future<>();
-                    } catch (no_such_column_family) {
+                    } catch (no_such_column_family&) {
                         sslog.warn("[Stream #{}] STREAM_MUTATION from {}: cf_id={} is missing, assume the table is dropped",
                                    plan_id, from.addr, cf_id);
                         return make_ready_future<>();
@@ -164,7 +164,7 @@ void stream_session::init_messaging_service_handler() {
                         query_ranges.push_back(dht::to_partition_range(range));
                     }
                     return cf.flush_streaming_mutations(plan_id, std::move(query_ranges));
-                } catch (no_such_column_family) {
+                } catch (no_such_column_family&) {
                     sslog.warn("[Stream #{}] STREAM_MUTATION_DONE from {}: cf_id={} is missing, assume the table is dropped",
                                 plan_id, from, cf_id);
                     return make_ready_future<>();
@@ -278,7 +278,7 @@ future<prepare_message> stream_session::prepare(std::vector<stream_request> requ
         for (auto& cf : request.column_families) {
             try {
                 db.find_column_family(ks, cf);
-            } catch (no_such_column_family) {
+            } catch (no_such_column_family&) {
                 auto err = sprint("[Stream #{}] prepare requested ks={} cf={} does not exist", ks, cf);
                 sslog.warn(err.c_str());
                 throw std::runtime_error(err);
@@ -292,7 +292,7 @@ future<prepare_message> stream_session::prepare(std::vector<stream_request> requ
         // Make sure cf the peer node will send to us exists
         try {
             db.find_column_family(cf_id);
-        } catch (no_such_column_family) {
+        } catch (no_such_column_family&) {
             auto err = sprint("[Stream #{}] prepare cf_id=%s does not exist", plan_id, cf_id);
             sslog.warn(err.c_str());
             throw std::runtime_error(err);
@@ -410,7 +410,7 @@ std::vector<column_family*> stream_session::get_column_family_stores(const sstri
             try {
                 auto& x = db.find_column_family(keyspace, cf_name);
                 stores.push_back(&x);
-            } catch (no_such_column_family) {
+            } catch (no_such_column_family&) {
                 sslog.warn("stream_session: {}.{} does not exist: {}\n", keyspace, cf_name, std::current_exception());
                 continue;
             }
@@ -440,7 +440,7 @@ future<> stream_session::receiving_failed(UUID cf_id)
         try {
             auto& cf = db.find_column_family(cf_id);
             return cf.fail_streaming_mutations(plan_id);
-        } catch (no_such_column_family) {
+        } catch (no_such_column_family&) {
             return make_ready_future<>();
         }
     });

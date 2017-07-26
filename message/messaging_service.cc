@@ -600,7 +600,7 @@ auto send_message(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOu
                 assert(false); // never reached
             }
             return std::move(f);
-        } catch (rpc::closed_error) {
+        } catch (rpc::closed_error&) {
             // This is a transport error
             ms->remove_error_rpc_client(verb, id);
             throw;
@@ -629,7 +629,7 @@ auto send_message_timeout(messaging_service* ms, messaging_verb verb, msg_addr i
                 assert(false); // never reached
             }
             return std::move(f);
-        } catch (rpc::closed_error) {
+        } catch (rpc::closed_error&) {
             // This is a transport error
             ms->remove_error_rpc_client(verb, id);
             throw;
@@ -655,10 +655,10 @@ auto send_message_timeout_and_retry(messaging_service* ms, messaging_verb verb, 
                         mlogger.info("Retry verb={} to {}, retry={}: OK", vb, id, retry);
                     }
                     return make_ready_future<stdx::optional<MsgInTuple>>(std::move(ret));
-                } catch (rpc::timeout_error) {
+                } catch (rpc::timeout_error&) {
                     mlogger.info("Retry verb={} to {}, retry={}: timeout in {} seconds", vb, id, retry, timeout.count());
                     throw;
-                } catch (rpc::closed_error) {
+                } catch (rpc::closed_error&) {
                     mlogger.info("Retry verb={} to {}, retry={}: {}", vb, id, retry, std::current_exception());
                     // Stop retrying if retry reaches 0 or message service is shutdown
                     // or the remote node is removed from gossip (on_remove())

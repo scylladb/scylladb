@@ -342,7 +342,7 @@ function_call::execute_internal(cql_serialization_format sf, scalar_function& fu
             fun.return_type()->validate(*result);
         }
         return result;
-    } catch (marshal_exception e) {
+    } catch (marshal_exception& e) {
         throw runtime_exception(sprint("Return of function %s (%s) is not a valid value for its declared return type %s",
                                        fun, to_hex(result),
                                        *fun.return_type()->as_cql3_type()
