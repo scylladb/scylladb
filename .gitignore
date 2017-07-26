@@ -12,3 +12,7 @@ dist/ami/scylla_deploy.sh
 Cql.tokens
 .kdev4
 *.kdev4
+.cache
+.tox
+*.egg-info
+__pycache__
