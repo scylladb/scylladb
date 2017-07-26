@@ -67,7 +67,10 @@ migration_manager::migration_manager()
 future<> migration_manager::stop()
 {
     uninit_messaging_service();
-    return make_ready_future<>();
+    return parallel_for_each(_schema_pulls.begin(), _schema_pulls.end(), [] (auto&& e) {
+        serialized_action& sp = e.second;
+        return sp.join();
+    });
 }
 
 void migration_manager::init_messaging_service()
@@ -201,7 +204,7 @@ future<> migration_manager::submit_migration_task(const gms::inet_address& endpo
     return service::migration_task::run_may_throw(get_storage_proxy(), endpoint);
 }
 
-future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr id)
+future<> migration_manager::do_merge_schema_from(netw::messaging_service::msg_addr id)
 {
     auto& ms = netw::get_local_messaging_service();
     return ms.send_migration_request(std::move(id)).then([this, id] (std::vector<frozen_mutation> mutations) {
@@ -209,6 +212,20 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
             return this->merge_schema_from(id, mutations);
         });
     });
+}
+
+future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr id)
+{
+    auto i = _schema_pulls.find(id);
+    if (i == _schema_pulls.end()) {
+        // FIXME: Drop entries for removed nodes (or earlier).
+        i = _schema_pulls.emplace(std::piecewise_construct,
+                std::tuple<netw::messaging_service::msg_addr>(id),
+                std::tuple<std::function<future<>()>>([id, this] {
+                    return do_merge_schema_from(id);
+                })).first;
+    }
+    return i->second.trigger();
 }
 
 future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr src, const std::vector<frozen_mutation>& mutations)
