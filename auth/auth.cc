@@ -130,7 +130,7 @@ public:
                         }) {}
 
     future<> stop() {
-        return make_ready_future<>();
+        return _cache.stop();
     }
 
     future<permission_set> get(::shared_ptr<authenticated_user> user, data_resource resource) {

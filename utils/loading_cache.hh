@@ -27,6 +27,7 @@
 #include <boost/intrusive/unordered_set.hpp>
 
 #include <seastar/core/timer.hh>
+#include <seastar/core/gate.hh>
 
 #include "utils/exceptions.hh"
 
@@ -209,6 +210,11 @@ public:
         }
     }
 
+    future<> stop() {
+        _timer.cancel();
+        return _timer_reads_gate.close();
+    }
+
 private:
     bool caching_enabled() const {
         return _expiry != std::chrono::milliseconds(0);
@@ -356,16 +362,18 @@ private:
         rehash();
 
         // Reload all those which vlaue needs to be reloaded.
-        parallel_for_each(_set.begin(), _set.end(), [this, curr_time = timer_start_tp] (auto& ts_val) {
-            _logger.trace("on_timer(): {}: checking the value age", ts_val.key());
-            if (ts_val && ts_val.loaded() + _refresh < curr_time) {
-                _logger.trace("on_timer(): {}: reloading the value", ts_val.key());
-                return this->reload(ts_val);
-            }
-            return now();
-        }).finally([this, timer_start_tp] {
-            _logger.trace("on_timer(): rearming");
-            _timer.arm(timer_start_tp + _timer_period);
+        with_gate(_timer_reads_gate, [this, timer_start_tp] {
+            return parallel_for_each(_set.begin(), _set.end(), [this, curr_time = timer_start_tp] (auto& ts_val) {
+                _logger.trace("on_timer(): {}: checking the value age", ts_val.key());
+                if (ts_val && ts_val.loaded() + _refresh < curr_time) {
+                    _logger.trace("on_timer(): {}: reloading the value", ts_val.key());
+                    return this->reload(ts_val);
+                }
+                return now();
+            }).finally([this, timer_start_tp] {
+                _logger.trace("on_timer(): rearming");
+                _timer.arm(timer_start_tp + _timer_period);
+            });
         });
     }
 
@@ -381,6 +389,7 @@ private:
     logging::logger& _logger;
     std::function<future<Tp>(const Key&)> _load;
     timer<loading_cache_clock_type> _timer;
+    seastar::gate _timer_reads_gate;
 };
 
 }
