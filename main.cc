@@ -108,7 +108,7 @@ static void do_help_loggers() {
 static logging::log_level to_loglevel(sstring level) {
     try {
         return boost::lexical_cast<logging::log_level>(std::string(level));
-    } catch(boost::bad_lexical_cast e) {
+    } catch(boost::bad_lexical_cast& e) {
         throw std::runtime_error("Unknown log level '" + level + "'");
     }
 }
@@ -130,7 +130,7 @@ static void apply_logger_settings(sstring default_level, db::config::string_map 
         auto&& v = kv.second;
         try {
             logging::logger_registry().set_logger_level(k, to_loglevel(v));
-        } catch(std::out_of_range e) {
+        } catch(std::out_of_range& e) {
             throw std::runtime_error("Unknown logger '" + k + "'. Use --help-loggers to list available loggers.");
         }
     }
