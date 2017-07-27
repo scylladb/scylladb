@@ -135,6 +135,8 @@ sed -i -e "s/@@CODENAME@@/$TARGET/g" debian/changelog
 cp dist/debian/rules.in debian/rules
 cp dist/debian/control.in debian/control
 cp dist/debian/scylla-server.install.in debian/scylla-server.install
+cp dist/debian/scylla-conf.preinst.in debian/scylla-conf.preinst
+sed -i -e "s/@@VERSION@@/$SCYLLA_VERSION/g" debian/scylla-conf.preinst
 if [ "$TARGET" = "jessie" ]; then
     cp dist/debian/scylla-server.cron.d debian/
     sed -i -e "s/@@REVISION@@/1/g" debian/changelog

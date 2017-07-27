@@ -1,0 +1,28 @@
+#!/bin/bash
+
+ver=$(dpkg -l|grep scylla-server|awk '{print $3}'|sed -e "s/-.*$//")
+if [ -n "$ver" ]; then
+    ver_fmt=$(echo $ver | awk -F. '{printf "%d%02d%02d", $1,$2,$3}')
+    if [ $ver_fmt -lt 10703 ]; then
+        # for <scylla-1.2
+        if [ ! -f /usr/lib/scylla/scylla_config_get.py ]; then
+            echo
+            echo "Error: Upgrading from scylla-$ver to scylla-@@VERSION@@ is not supported."
+            echo "Please upgrade to scylla-1.7.3 or later, before upgrade to @@VERSION@@."
+            echo
+            exit 1
+        fi
+        commitlog_directory=$(/usr/lib/scylla/scylla_config_get.py -g commitlog_directory)
+        commitlog_files=$(ls $commitlog_directory | wc -l)
+        if [ $commitlog_files -ne 0 ]; then
+            echo
+            echo "Error: Upgrading from scylla-$ver to scylla-@@VERSION@@ is not supported when commitlog is not clean."
+            echo "Please upgrade to scylla-1.7.3 or later, before upgrade to @@VERSION@@."
+            echo "Also make sure $commitlog_directory is empty."
+            echo
+            exit 1
+        fi
+    fi
+fi
+
+#DEBHELPER#
