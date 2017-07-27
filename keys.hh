@@ -182,6 +182,9 @@ public:
     static TopLevel from_exploded(const schema& s, const std::vector<bytes>& v) {
         return from_exploded(v);
     }
+    static TopLevel from_exploded_view(const std::vector<bytes_view>& v) {
+        return from_exploded(v);
+    }
 
     // We don't allow optional values, but provide this method as an efficient adaptor
     static TopLevel from_optional_exploded(const schema& s, const std::vector<bytes_opt>& v) {

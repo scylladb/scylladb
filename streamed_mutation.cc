@@ -466,7 +466,10 @@ protected:
             std::vector<future<>> more_data;
             for (auto& rd : _next_readers) {
                 if (rd->is_buffer_empty() && !rd->is_end_of_stream()) {
-                    more_data.emplace_back(rd->fill_buffer());
+                    auto f = rd->fill_buffer();
+                    if (!f.available() || f.failed()) {
+                        more_data.emplace_back(std::move(f));
+                    }
                 }
             }
             if (!more_data.empty()) {

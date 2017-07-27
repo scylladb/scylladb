@@ -168,12 +168,14 @@ public:
     const clustering_key& key() const { return _current_row[0].it->key(); }
 
     // Can be called only when cursor is valid and pointing at a row.
-    clustering_row row() const {
-        clustering_row result(key());
-        for (auto&& v : _current_row) {
-            result.apply(_schema, *v.it);
+    mutation_fragment row() const {
+        auto it = _current_row.begin();
+        auto mf = mutation_fragment(clustering_row(*it->it));
+        auto& cr = mf.as_mutable_clustering_row();
+        for (++it; it != _current_row.end(); ++it) {
+            cr.apply(_schema, *it->it);
         }
-        return result;
+        return mf;
     }
 
     // Can be called when cursor is pointing at a row, even when invalid.
@@ -198,8 +200,8 @@ bool partition_snapshot_row_cursor::previous_row_in_latest_version_has_key(const
     }
     auto prev_it = _current_row[0].it;
     --prev_it;
-    clustering_key_prefix::tri_compare tri_comp(_schema);
-    return tri_comp(prev_it->key(), key) == 0;
+    clustering_key_prefix::equality eq(_schema);
+    return eq(prev_it->key(), key);
 }
 
 inline

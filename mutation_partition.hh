@@ -712,7 +712,15 @@ public:
     const deletable_row& row() const {
         return _row;
     }
-    position_in_partition_view position() const;
+    position_in_partition_view position() const {
+        if (_flags._last) {
+            return position_in_partition_view::after_all_clustered_rows();
+        } else {
+            return position_in_partition_view(
+                    position_in_partition_view::clustering_row_tag_t(), _key);
+        }
+    }
+
     is_continuous continuous() const { return is_continuous(_flags._continuous); }
     void set_continuous(bool value) { _flags._continuous = value; }
     void set_continuous(is_continuous value) { set_continuous(bool(value)); }

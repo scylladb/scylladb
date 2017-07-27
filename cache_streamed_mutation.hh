@@ -110,7 +110,7 @@ class cache_streamed_mutation final : public streamed_mutation::impl {
     // Emits all delayed range tombstones.
     void drain_tombstones();
     void add_to_buffer(const partition_snapshot_row_cursor&);
-    void add_to_buffer(clustering_row&&);
+    void add_clustering_row_to_buffer(mutation_fragment&&);
     void add_to_buffer(range_tombstone&&);
     void add_to_buffer(mutation_fragment&&);
     future<> read_from_underlying();
@@ -177,7 +177,7 @@ inline
 future<> cache_streamed_mutation::fill_buffer() {
     if (!_static_row_done) {
         _static_row_done = true;
-        return process_static_row().then([this] {
+        auto after_static_row = [this] {
             if (_ck_ranges_curr == _ck_ranges_end) {
                 _end_of_stream = true;
                 return make_ready_future<>();
@@ -187,7 +187,12 @@ future<> cache_streamed_mutation::fill_buffer() {
             }).then([this] {
                 return fill_buffer();
             });
-        });
+        };
+        if (_schema->has_static_columns()) {
+            return process_static_row().then(std::move(after_static_row));
+        } else {
+            return after_static_row();
+        }
     }
     return do_until([this] { return _end_of_stream || is_buffer_full(); }, [this] {
         return do_fill_buffer();
@@ -216,35 +221,33 @@ future<> cache_streamed_mutation::do_fill_buffer() {
 
 inline
 future<> cache_streamed_mutation::read_from_underlying() {
-    return do_until([this] { return !_reading_underlying || is_buffer_full(); }, [this] {
-        return _read_context->get_next_fragment().then([this] (auto&& mfopt) {
-            if (!mfopt) {
-                _reading_underlying = false;
-                return _lsa_manager.run_in_update_section([this] {
-                    auto same_pos = _next_row.maybe_refresh();
-                    assert(same_pos); // FIXME: handle eviction
-                    if (_next_row_in_range) {
+    return consume_mutation_fragments_until(_read_context->get_streamed_mutation(),
+        [this] { return !_reading_underlying || is_buffer_full(); },
+        [this] (mutation_fragment mf) {
+            _read_context->cache().on_row_miss();
+            maybe_add_to_cache(mf);
+            add_to_buffer(std::move(mf));
+        },
+        [this] {
+            _reading_underlying = false;
+            return _lsa_manager.run_in_update_section([this] {
+                auto same_pos = _next_row.maybe_refresh();
+                assert(same_pos); // FIXME: handle eviction
+                if (_next_row_in_range) {
+                    maybe_update_continuity();
+                    add_to_buffer(_next_row);
+                    return move_to_next_entry();
+                } else {
+                    if (no_clustering_row_between(*_schema, _upper_bound, _next_row.position())) {
                         this->maybe_update_continuity();
-                        this->add_to_buffer(_next_row);
-                        return this->move_to_next_entry();
                     } else {
-                        if (no_clustering_row_between(*_schema, _upper_bound, _next_row.position())) {
-                            this->maybe_update_continuity();
-                        } else {
-                            // FIXME: Insert dummy entry at _upper_bound.
-                            _read_context->cache().on_mispopulate();
-                        }
-                        return this->move_to_next_range();
+                        // FIXME: Insert dummy entry at _upper_bound.
+                        _read_context->cache().on_mispopulate();
                     }
-                });
-            } else {
-                _read_context->cache().on_row_miss();
-                this->maybe_add_to_cache(*mfopt);
-                this->add_to_buffer(std::move(*mfopt));
-                return make_ready_future<>();
-            }
+                    return move_to_next_range();
+                }
+            });
         });
-    });
 }
 
 inline
@@ -310,8 +313,8 @@ void cache_streamed_mutation::maybe_add_to_cache(const clustering_row& cr) {
             } else {
                 auto prev_it = it;
                 --prev_it;
-                clustering_key_prefix::tri_compare tri_comp(*_schema);
-                if (tri_comp(*_last_row_key, prev_it->key()) == 0) {
+                clustering_key_prefix::equality eq(*_schema);
+                if (eq(*_last_row_key, prev_it->key())) {
                     e.set_continuous(true);
                 }
             }
@@ -419,7 +422,7 @@ void cache_streamed_mutation::drain_tombstones() {
 inline
 void cache_streamed_mutation::add_to_buffer(mutation_fragment&& mf) {
     if (mf.is_clustering_row()) {
-        add_to_buffer(std::move(std::move(mf).as_clustering_row()));
+        add_clustering_row_to_buffer(std::move(mf));
     } else {
         assert(mf.is_range_tombstone());
         add_to_buffer(std::move(mf).as_range_tombstone());
@@ -430,16 +433,17 @@ inline
 void cache_streamed_mutation::add_to_buffer(const partition_snapshot_row_cursor& row) {
     if (!row.dummy()) {
         _read_context->cache().on_row_hit();
-        add_to_buffer(row.row());
+        add_clustering_row_to_buffer(row.row());
     }
 }
 
 inline
-void cache_streamed_mutation::add_to_buffer(clustering_row&& row) {
+void cache_streamed_mutation::add_clustering_row_to_buffer(mutation_fragment&& mf) {
+    auto& row = mf.as_clustering_row();
     drain_tombstones(row.position());
     _last_row_key = row.key();
     _lower_bound = position_in_partition::after_key(row.key());
-    push_mutation_fragment(std::move(row));
+    push_mutation_fragment(std::move(mf));
 }
 
 inline
