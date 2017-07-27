@@ -315,6 +315,7 @@ public:
                         }
                         return make_ready_future<streamed_mutation_opt>(streamed_mutation_opt());
                     } else {
+                        _delegate = make_empty_reader(); // See issue #2623
                         _cache.on_uncached_wide_partition();
                         _cache._tracker.on_wide_partition_mispopulation();
                         _cache.mark_partition_as_wide(dk);
@@ -460,6 +461,7 @@ private:
                     return;
                 }
             }
+            _reader = {}; // See issue #2644
             _reader = _cache._underlying(_cache._schema, _range, query::full_slice, _pc, _trace_state);
         }
     }
@@ -471,6 +473,7 @@ private:
         _last_key.reset(dk, _populate_phase);
 
         _large_partition_range = dht::partition_range::make_singular(dk);
+        // FIXME: This may deadlock with _reader due to #2644. We can't reset _reader here, because it's still used after this.
         _large_partition_reader = _cache._underlying(_schema, _large_partition_range, _slice, _pc, _trace_state);
         return _large_partition_reader().then([this, dk = std::move(dk)] (auto smopt) mutable -> streamed_mutation_opt {
             _large_partition_reader = {};
@@ -564,6 +567,7 @@ public:
 
         if (!_reader_created || phase != _populate_phase) {
             _populate_phase = _cache._populate_phaser.phase();
+            _reader = {}; // See issue #2644
             _reader = _cache._underlying(_cache._schema, _range, query::full_slice, _pc, _trace_state);
             _reader_created = true;
             return make_ready_future();
