@@ -129,6 +129,20 @@ struct sstable_open_info;
 
 class index_reader;
 
+class write_monitor {
+public:
+    virtual ~write_monitor() { }
+    virtual void on_write_completed() = 0;
+    virtual void on_flush_completed() = 0;
+};
+
+struct noop_write_monitor final : public write_monitor {
+    virtual void on_write_completed() override { }
+    virtual void on_flush_completed() override { }
+};
+
+seastar::shared_ptr<write_monitor> default_write_monitor();
+
 struct sstable_writer_config {
     std::experimental::optional<size_t> promoted_index_block_size;
     uint64_t max_sstable_size = std::numeric_limits<uint64_t>::max();
@@ -136,6 +150,7 @@ struct sstable_writer_config {
     bool leave_unsealed = false;
     stdx::optional<db::replay_position> replay_position;
     seastar::thread_scheduling_group* thread_scheduling_group = nullptr;
+    seastar::shared_ptr<write_monitor> monitor = default_write_monitor();
 };
 
 class sstable : public enable_lw_shared_from_this<sstable> {
@@ -810,6 +825,7 @@ class sstable_writer {
     std::unique_ptr<file_writer> _writer;
     stdx::optional<components_writer> _components_writer;
     shard_id _shard; // Specifies which shard new sstable will belong to.
+    seastar::shared_ptr<write_monitor> _monitor;
 private:
     void prepare_file_writer();
     void finish_file_writer();
