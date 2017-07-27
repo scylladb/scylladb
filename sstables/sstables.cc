@@ -1397,8 +1397,9 @@ static bytes serialize_colname(const composite& clustering_key,
 // (which might be gone later).
 void sstable::maybe_flush_pi_block(file_writer& out,
         const composite& clustering_key,
-        const std::vector<bytes_view>& column_names) {
-    bytes colname = serialize_colname(clustering_key, column_names, composite::eoc::none);
+        const std::vector<bytes_view>& column_names,
+        composite::eoc marker) {
+    bytes colname = serialize_colname(clustering_key, column_names, marker);
     if (_pi_write.block_first_colname.empty()) {
         // This is the first column in the partition, or first column since we
         // closed a promoted-index block. Remember its name and position -
@@ -1993,7 +1994,7 @@ stop_iteration components_writer::consume(range_tombstone&& rt) {
     auto start_marker = bound_kind_to_start_marker(rt.start_kind);
     auto end = composite::from_clustering_element(_schema, std::move(rt.end));
     auto end_marker = bound_kind_to_end_marker(rt.end_kind);
-    _sst.maybe_flush_pi_block(_out, start, {});
+    _sst.maybe_flush_pi_block(_out, start, {}, start_marker);
     _sst.write_range_tombstone(_out, std::move(start), start_marker, std::move(end), end_marker, {}, rt.tomb);
     return stop_iteration::no;
 }

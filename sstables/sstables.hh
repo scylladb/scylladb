@@ -497,7 +497,8 @@ private:
 
     void maybe_flush_pi_block(file_writer& out,
             const composite& clustering_key,
-            const std::vector<bytes_view>& column_names);
+            const std::vector<bytes_view>& column_names,
+            composite::eoc marker = composite::eoc::none);
 
     schema_ptr _schema;
     sstring _dir;
