@@ -26,6 +26,7 @@
 #include "database_fwd.hh"
 #include "keys.hh"
 #include "compound_compat.hh"
+#include "dht/i_partitioner.hh"
 
 namespace sstables {
 
@@ -35,12 +36,12 @@ public:
     explicit key_view(bytes_view b) : _bytes(b) {}
     key_view() : _bytes() {}
 
-    std::vector<bytes> explode(const schema& s) const {
+    std::vector<bytes_view> explode(const schema& s) const {
         return composite_view(_bytes, s.partition_key_size() > 1).explode();
     }
 
     partition_key to_partition_key(const schema& s) const {
-        return partition_key::from_exploded(s, explode(s));
+        return partition_key::from_exploded_view(explode(s));
     }
 
     bool operator==(const key_view& k) const { return k._bytes == _bytes; }
@@ -105,10 +106,10 @@ public:
         return make_key(s, pk);
     }
     partition_key to_partition_key(const schema& s) const {
-        return partition_key::from_exploded(s, explode(s));
+        return partition_key::from_exploded_view(explode(s));
     }
 
-    std::vector<bytes> explode(const schema& s) const {
+    std::vector<bytes_view> explode(const schema& s) const {
         return composite_view(_bytes, is_compound(s)).explode();
     }
 
@@ -140,6 +141,22 @@ inline key minimum_key() {
 
 inline key maximum_key() {
     return key(key::kind::after_all_keys);
+};
+
+class decorated_key_view {
+    const dht::token& _token;
+    key_view _partition_key;
+public:
+    decorated_key_view(const dht::token& token, key_view partition_key) noexcept
+        : _token(token), _partition_key(partition_key) { }
+
+    const dht::token& token() const {
+        return _token;
+    }
+
+    key_view key() const {
+        return _partition_key;
+    }
 };
 
 }

@@ -225,6 +225,13 @@ public:
             return _sm->fast_forward_to(std::move(range));
         });
     }
+    // Returns the underlying streamed_mutation.
+    // The caller has to ensure that the streamed mutation was already created
+    // (e.g. the most recent call to enter_partition(const dht::decorated_key&, ...)
+    // was followed by a call to fast_forward_to()).
+    streamed_mutation& get_streamed_mutation() noexcept {
+        return *_sm;
+    }
     // Gets the next fragment from the underlying streamed_mutation
     future<mutation_fragment_opt> get_next_fragment() {
         return ensure_sm_created().then([this] {

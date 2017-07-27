@@ -649,6 +649,7 @@ future<> parse(random_access_reader& in, summary& s) {
                     buf.trim_front(keysize);
                     // FIXME: This is a le read. We should make this explicit
                     entry.position = *(reinterpret_cast<const net::packed<uint64_t> *>(buf.get()));
+                    entry.token = dht::global_partitioner().get_token(entry.get_key());
 
                     return make_ready_future<>();
                 });
@@ -1721,10 +1722,10 @@ static void prepare_compression(compression& c, const schema& schema) {
     c.init_full_checksum();
 }
 
-static void maybe_add_summary_entry(summary& s, bytes_view key, uint64_t offset) {
+static void maybe_add_summary_entry(summary& s, const dht::token& token,  bytes_view key, uint64_t offset) {
     // Maybe add summary entry into in-memory representation of summary file.
     if ((s.keys_written++ % s.header.min_index_interval) == 0) {
-        s.entries.push_back({ bytes(key.data(), key.size()), offset });
+        s.entries.push_back({ token, bytes(key.data(), key.size()), offset });
     }
 }
 
@@ -1847,7 +1848,7 @@ void components_writer::consume_new_partition(const dht::decorated_key& dk) {
 
     _partition_key = key::from_partition_key(_schema, dk.key());
 
-    maybe_add_summary_entry(_sst._components->summary, bytes_view(*_partition_key), _index.offset());
+    maybe_add_summary_entry(_sst._components->summary, dk.token(), bytes_view(*_partition_key), _index.offset());
     _sst._components->filter->add(bytes_view(*_partition_key));
     _sst._collector.add_key(bytes_view(*_partition_key));
 
@@ -2114,7 +2115,8 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
             return true;
         }
         void consume_entry(index_entry&& ie, uint64_t offset) {
-            maybe_add_summary_entry(_summary, ie.get_key_bytes(), offset);
+            auto token = dht::global_partitioner().get_token(ie.get_key());
+            maybe_add_summary_entry(_summary, token, ie.get_key_bytes(), offset);
             if (!first_key) {
                 first_key = key(to_bytes(ie.get_key_bytes()));
             } else {

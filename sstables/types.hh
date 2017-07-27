@@ -118,6 +118,7 @@ public:
 
 class index_entry {
     temporary_buffer<char> _key;
+    mutable stdx::optional<dht::token> _token;
     uint64_t _position;
     temporary_buffer<char> _promoted_index_bytes;
     stdx::optional<promoted_index> _promoted_index;
@@ -129,6 +130,13 @@ public:
 
     key_view get_key() const {
         return key_view{get_key_bytes()};
+    }
+
+    decorated_key_view get_decorated_key() const {
+        if (!_token) {
+            _token.emplace(dht::global_partitioner().get_token(get_key()));
+        }
+        return decorated_key_view(*_token, get_key());
     }
 
     uint64_t position() const {
@@ -164,11 +172,16 @@ public:
 };
 
 struct summary_entry {
+    dht::token token;
     bytes key;
     uint64_t position;
 
     key_view get_key() const {
         return key_view{key};
+    }
+
+    decorated_key_view get_decorated_key() const {
+        return decorated_key_view(token, get_key());
     }
 
     bool operator==(const summary_entry& x) const {

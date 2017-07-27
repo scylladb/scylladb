@@ -37,10 +37,10 @@
 
 namespace sstables {
 
-static inline bytes pop_back(std::vector<bytes>& vec) {
+static inline bytes_view pop_back(std::vector<bytes_view>& vec) {
     auto b = std::move(vec.back());
     vec.pop_back();
-    return std::move(b);
+    return b;
 }
 
 class sstable_streamed_mutation;
@@ -104,11 +104,11 @@ public:
     struct column {
         bool is_static;
         bytes_view col_name;
-        std::vector<bytes> clustering;
+        std::vector<bytes_view> clustering;
         // see is_collection. collections have an extra element aside from the name.
         // This will be non-zero size if this is a collection, and zero size othersize.
-        bytes collection_extra_data;
-        bytes cell;
+        bytes_view collection_extra_data;
+        bytes_view cell;
         const column_definition *cdef;
         bool is_present;
 
@@ -148,7 +148,7 @@ public:
             return col;
         }
 
-        std::vector<bytes> extract_clustering_key(const schema& schema) {
+        std::vector<bytes_view> extract_clustering_key(const schema& schema) {
             return composite_view(col_name, schema.is_compound()).explode();
         }
         column(const schema& schema, bytes_view col, api::timestamp_type timestamp)
@@ -157,7 +157,7 @@ public:
             , clustering(extract_clustering_key(schema))
             , collection_extra_data(is_collection(schema) ? pop_back(clustering) : bytes()) // collections are not supported with COMPACT STORAGE, so this is fine
             , cell(!schema.is_dense() ? pop_back(clustering) : (*(schema.regular_begin())).name()) // dense: cell name is not provided. It is the only regular column
-            , cdef(schema.get_column_definition(cell))
+            , cdef(schema.get_column_definition(to_bytes(cell)))
             , is_present(cdef && timestamp > cdef->dropped_at())
         {
 
@@ -221,7 +221,7 @@ private:
         if (!_pending_collection || _pending_collection->is_new_collection(cdef)) {
             flush_pending_collection(*_schema);
 
-            if (!cdef->type->is_multi_cell()) {
+            if (!cdef->is_multi_cell()) {
                 throw malformed_sstable_exception("frozen set should behave like a cell\n");
             }
             _pending_collection = collection_mutation(cdef);
@@ -397,12 +397,12 @@ public:
         return ret;
     }
 
-    proceed flush_if_needed(bool is_static, const exploded_clustering_prefix& ecp) {
+    proceed flush_if_needed(bool is_static, const std::vector<bytes_view>& ecp) {
         auto pos = [&] {
             if (is_static) {
                 return position_in_partition(position_in_partition::static_row_tag_t());
             } else {
-                auto ck = clustering_key_prefix::from_clustering_prefix(*_schema, ecp);
+                auto ck = clustering_key_prefix::from_exploded_view(ecp);
                 return position_in_partition(position_in_partition::clustering_row_tag_t(), std::move(ck));
             }
         }();
@@ -454,8 +454,7 @@ public:
 
         struct column col(*_schema, col_name, timestamp);
 
-        auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
-        auto ret = flush_if_needed(col.is_static, clustering_prefix);
+        auto ret = flush_if_needed(col.is_static, col.clustering);
         if (_skip_in_progress) {
             return ret;
         }
@@ -500,11 +499,11 @@ public:
             auto ac = make_atomic_cell(timestamp, value, ttl, expiration);
 
             bool is_multi_cell = col.collection_extra_data.size();
-            if (is_multi_cell != col.cdef->type->is_multi_cell()) {
+            if (is_multi_cell != col.cdef->is_multi_cell()) {
                 return;
             }
             if (is_multi_cell) {
-                update_pending_collection(col.cdef, std::move(col.collection_extra_data), std::move(ac));
+                update_pending_collection(col.cdef, to_bytes(col.collection_extra_data), std::move(ac));
                 return;
             }
 
@@ -529,8 +528,7 @@ public:
     }
 
     proceed consume_deleted_cell(column &col, int64_t timestamp, gc_clock::time_point ttl) {
-        auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
-        auto ret = flush_if_needed(col.is_static, clustering_prefix);
+        auto ret = flush_if_needed(col.is_static, col.clustering);
         if (_skip_in_progress) {
             return ret;
         }
@@ -547,12 +545,12 @@ public:
         auto ac = atomic_cell::make_dead(timestamp, ttl);
 
         bool is_multi_cell = col.collection_extra_data.size();
-        if (is_multi_cell != col.cdef->type->is_multi_cell()) {
+        if (is_multi_cell != col.cdef->is_multi_cell()) {
             return ret;
         }
 
         if (is_multi_cell) {
-            update_pending_collection(col.cdef, std::move(col.collection_extra_data), std::move(ac));
+            update_pending_collection(col.cdef, to_bytes(col.collection_extra_data), std::move(ac));
         } else if (col.is_static) {
             _in_progress->as_mutable_static_row().set_cell(*col.cdef, atomic_cell_or_collection(std::move(ac)));
         } else {
@@ -574,7 +572,7 @@ public:
             return proceed::yes;
         }
         auto key = composite_view(column::fix_static_name(*_schema, col_name)).explode();
-        auto ck = clustering_key_prefix::from_exploded(std::move(key));
+        auto ck = clustering_key_prefix::from_exploded_view(key);
         auto ret = flush_if_needed(std::move(ck));
         if (!_skip_in_progress) {
             _in_progress->as_mutable_clustering_row().apply(shadowable_tombstone(tombstone(deltime)));
@@ -630,9 +628,9 @@ public:
         // Still, it is enough to check if we're dealing with a collection, since any other tombstone
         // won't have a full clustering prefix (otherwise it isn't a range)
         if (start.size() <= _schema->clustering_key_size()) {
-            auto start_ck = clustering_key_prefix::from_exploded(std::move(start));
+            auto start_ck = clustering_key_prefix::from_exploded_view(start);
             auto start_kind = start_marker_to_bound_kind(start_col);
-            auto end = clustering_key_prefix::from_exploded(composite_view(column::fix_static_name(*_schema, end_col)).explode());
+            auto end = clustering_key_prefix::from_exploded_view(composite_view(column::fix_static_name(*_schema, end_col)).explode());
             auto end_kind = end_marker_to_bound_kind(end_col);
             if (range_tombstone::is_single_clustering_row_tombstone(*_schema, start_ck, start_kind, end, end_kind)) {
                 auto ret = flush_if_needed(std::move(start_ck));
@@ -658,9 +656,9 @@ public:
             }
         } else {
             auto&& column = pop_back(start);
-            auto cdef = _schema->get_column_definition(column);
-            if (cdef && cdef->type->is_multi_cell() && deltime.marked_for_delete_at > cdef->dropped_at()) {
-                auto ret = flush_if_needed(cdef->is_static(), exploded_clustering_prefix(std::move(start)));
+            auto cdef = _schema->get_column_definition(to_bytes(column));
+            if (cdef && cdef->is_multi_cell() && deltime.marked_for_delete_at > cdef->dropped_at()) {
+                auto ret = flush_if_needed(cdef->is_static(), start);
                 if (!_skip_in_progress) {
                     update_pending_collection(cdef, tombstone(deltime));
                 }
@@ -835,12 +833,14 @@ public:
     sstable_streamed_mutation(sstable_streamed_mutation&&) = delete;
 
     virtual future<> fill_buffer() final override {
-        _ds->_consumer.push_ready_fragments();
-        if (is_buffer_full() || is_end_of_stream()) {
-            return make_ready_future<>();
-        }
-        return _ds->_consumer.maybe_skip().then([this] {
-            return _ds->_context.read();
+        return do_until([this] { return !is_buffer_empty() || is_end_of_stream(); }, [this] {
+            _ds->_consumer.push_ready_fragments();
+            if (is_buffer_full() || is_end_of_stream()) {
+                return make_ready_future<>();
+            }
+            return _ds->_consumer.maybe_skip().then([this] {
+                return _ds->_context.read();
+            });
         });
     }
 

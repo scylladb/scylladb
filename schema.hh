@@ -236,6 +236,7 @@ public:
     bool is_clustering_key() const { return kind == column_kind::clustering_key; }
     bool is_primary_key() const { return kind == column_kind::partition_key || kind == column_kind::clustering_key; }
     bool is_atomic() const { return _is_atomic; }
+    bool is_multi_cell() const { return !_is_atomic; }
     bool is_counter() const { return _is_counter; }
     const sstring& name_as_text() const;
     const bytes& name() const;
