@@ -731,10 +731,10 @@ future<> consume_mutation_fragments_until(streamed_mutation& sm, StopCondition&&
                                           ConsumeMutationFragment&& consume_mf, ConsumeEndOfStream&& consume_eos) {
     return do_until([stop] { return stop(); }, [&sm, stop, consume_mf, consume_eos] {
         while (!sm.is_buffer_empty()) {
+            consume_mf(sm.pop_mutation_fragment());
             if (stop()) {
                 return make_ready_future<>();
             }
-            consume_mf(sm.pop_mutation_fragment());
         }
         if (sm.is_end_of_stream()) {
             return consume_eos();
