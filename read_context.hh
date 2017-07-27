@@ -75,6 +75,7 @@ public:
                 ++_cache._tracker._stats.underlying_recreations;
             }
             auto& snap = _cache.snapshot_for_phase(phase);
+            _reader = {}; // See issue #2644
             _reader = _cache.create_underlying_reader(_read_context, snap, _range);
             _reader_creation_phase = phase;
         }
@@ -99,6 +100,7 @@ public:
                 return _reader->fast_forward_to(_range);
             } else {
                 ++_cache._tracker._stats.underlying_recreations;
+                _reader = {}; // See issue #2644
             }
         }
         _reader = _cache.create_underlying_reader(_read_context, snapshot, _range);
