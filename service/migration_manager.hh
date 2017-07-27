@@ -46,8 +46,9 @@
 #include "db/schema_tables.hh"
 #include "core/distributed.hh"
 #include "gms/inet_address.hh"
-#include "message/messaging_service_fwd.hh"
+#include "message/messaging_service.hh"
 #include "utils/UUID.hh"
+#include "utils/serialized_action.hh"
 
 #include <vector>
 
@@ -55,7 +56,7 @@ namespace service {
 
 class migration_manager : public seastar::async_sharded_service<migration_manager> {
     std::vector<migration_listener*> _listeners;
-
+    std::unordered_map<netw::messaging_service::msg_addr, serialized_action, netw::messaging_service::msg_addr::hash> _schema_pulls;
     static const std::chrono::milliseconds migration_delay;
 public:
     migration_manager();
@@ -74,7 +75,9 @@ public:
 
     // Fetches schema from remote node and applies it locally.
     // Differs from submit_migration_task() in that all errors are propagated.
+    // Coalesces requests.
     future<> merge_schema_from(netw::msg_addr);
+    future<> do_merge_schema_from(netw::msg_addr);
 
     // Merge mutations received from src.
     // Keep mutations alive around whole async operation.
