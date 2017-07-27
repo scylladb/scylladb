@@ -206,6 +206,8 @@ For example, to enable experimental mode:
 $ docker run --name some-scylla -d scylladb/scylla --experimental 1
 ```
 
+**Since: 2.0**
+
 # User Feedback
 
 ## Issues
