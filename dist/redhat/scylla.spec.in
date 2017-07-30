@@ -7,7 +7,7 @@ Group:          Applications/Databases
 License:        AGPLv3
 URL:            http://www.scylladb.com/
 Source0:        %{name}-@@VERSION@@-@@RELEASE@@.tar
-Requires:       scylla-server = @@VERSION@@ scylla-jmx = @@VERSION@@ scylla-tools = @@VERSION@@ scylla-kernel-conf = @@VERSION@@
+Requires:       scylla-server = @@VERSION@@ scylla-jmx = @@VERSION@@ scylla-tools = @@VERSION@@ scylla-kernel-conf = @@VERSION@@ scylla-libgcc scylla-libstdc++
 Obsoletes:	scylla-server < 1.1
 
 %description
@@ -73,7 +73,7 @@ This package contains ScyllaDB server.
 %endif
 %if 0%{?rhel}
 . /etc/profile.d/scylla.sh
-python3.4 ./configure.py --enable-dpdk --mode=release --static-stdc++ --static-boost --compiler=/opt/scylladb/bin/g++ --python python3.4
+python3.4 ./configure.py --enable-dpdk --mode=release --static-boost --compiler=/opt/scylladb/bin/g++ --python python3.4 --ldflag=-Wl,-rpath=/opt/scylladb/lib64
 %endif
 ninja-build %{?_smp_mflags} build/release/scylla build/release/iotune
 cp dist/common/systemd/scylla-server.service.in build/scylla-server.service
