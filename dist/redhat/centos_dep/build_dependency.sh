@@ -85,18 +85,19 @@ if [ ! -f build/rpms/scylla-isl-0.14-4.el7*.x86_64.rpm ]; then
     sudo mock --root=$TARGET --rebuild --resultdir=`pwd`/build/rpms build/srpms/scylla-isl-0.14-4.el7*.src.rpm
 fi
 
-if [ ! -f build/srpms/scylla-gcc-5.3.1-2.el7*.src.rpm ]; then
+if [ ! -f build/srpms/scylla-gcc-5.3.1-2.1.el7*.src.rpm ]; then
     rpm --define "_topdir $RPMBUILD" -ivh build/downloads/gcc-5.3.1-2.fc23.src.rpm
     patch $RPMBUILD/SPECS/gcc.spec < dist/redhat/centos_dep/gcc.diff
+    cp dist/redhat/centos_dep/unwind_dw2_fde_nolock.patch  $RPMBUILD/SOURCES/
     sudo mock --buildsrpm --root=$TARGET --resultdir=`pwd`/build/srpms --spec=$RPMBUILD/SPECS/gcc.spec --sources=$RPMBUILD/SOURCES
 fi
-if [ ! -f build/rpms/scylla-gcc-5.3.1-2.el7*.x86_64.rpm ]; then
+if [ ! -f build/rpms/scylla-gcc-5.3.1-2.1.el7*.x86_64.rpm ]; then
     sudo mock --root=$TARGET --init
     sudo mock --root=$TARGET --install build/rpms/scylla-env-1.0-1.el7*.noarch.rpm
     sudo mock --root=$TARGET --install build/rpms/scylla-binutils-2.25-15.el7*.x86_64.rpm
     sudo mock --root=$TARGET --install build/rpms/scylla-isl-0.14-4.el7*.x86_64.rpm
     sudo mock --root=$TARGET --install build/rpms/scylla-isl-devel-0.14-4.el7*.x86_64.rpm
-    sudo mock --root=$TARGET --rebuild --resultdir=`pwd`/build/rpms --no-clean build/srpms/scylla-gcc-5.3.1-2.el7*.src.rpm
+    sudo mock --root=$TARGET --rebuild --resultdir=`pwd`/build/rpms --no-clean build/srpms/scylla-gcc-5.3.1-2.1.el7*.src.rpm
 fi
 
 if [ ! -f build/srpms/scylla-boost-1.58.0-11.el7*.src.rpm ]; then
