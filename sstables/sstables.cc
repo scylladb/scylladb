@@ -68,6 +68,11 @@ namespace sstables {
 
 logging::logger sstlog("sstable");
 
+seastar::shared_ptr<write_monitor> default_write_monitor() {
+    static seastar::shared_ptr<write_monitor> monitor = seastar::make_shared<noop_write_monitor>();
+    return monitor;
+}
+
 future<file> new_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags) {
     return open_checked_file_dma(error_handler, name, flags).handle_exception([name] (auto ep) {
         sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
@@ -2109,6 +2114,7 @@ sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated
     , _backup(cfg.backup)
     , _leave_unsealed(cfg.leave_unsealed)
     , _shard(shard)
+    , _monitor(cfg.monitor)
 {
     _sst.generate_toc(_schema.get_compressor_params().get_compressor(), _schema.bloom_filter_fp_chance());
     _sst.write_toc(_pc);
@@ -2129,9 +2135,13 @@ void sstable_writer::consume_end_of_stream()
     _sst.write_compression(_pc);
     _sst.write_scylla_metadata(_pc, _shard);
 
+    _monitor->on_write_completed();
+
     if (!_leave_unsealed) {
         _sst.seal_sstable(_backup).get();
     }
+
+    _monitor->on_flush_completed();
 }
 
 future<> sstable::seal_sstable(bool backup)
@@ -2152,8 +2162,12 @@ sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partition
     return sstable_writer(*this, s, estimated_partitions, cfg, pc, shard);
 }
 
-future<> sstable::write_components(::mutation_reader mr,
-        uint64_t estimated_partitions, schema_ptr schema, const sstable_writer_config& cfg, const io_priority_class& pc) {
+future<> sstable::write_components(
+        ::mutation_reader mr,
+        uint64_t estimated_partitions,
+        schema_ptr schema,
+        const sstable_writer_config& cfg,
+        const io_priority_class& pc) {
     if (cfg.replay_position) {
         _collector.set_replay_position(cfg.replay_position.value());
     }
