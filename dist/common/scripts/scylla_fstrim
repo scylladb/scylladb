@@ -44,11 +44,14 @@ def main():
         mountpoints.add(find_mount_point(d))
 
     mountpoints.add(find_mount_point(cfg['commitlog_directory']))
+    # workaround of #2649
+    subprocess.call(["/usr/lib/scylla/scylla-blocktune", "--set-nomerges", "1"])
     for d in mountpoints:
         print("Running fstrim on {} ...".format(d))
         res = subprocess.call(["fstrim", d])
         if res != 0:
             print("{} doesn't support TRIM.".format(d))
+    subprocess.call(["/usr/lib/scylla/scylla-blocktune", "--set-nomerges", "2"])
 
 if __name__ == "__main__":
     main()

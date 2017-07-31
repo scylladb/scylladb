@@ -49,7 +49,7 @@ tuned_blockdevs = set()
 
 # tune a blockdevice (sysfs node); updates I/O scheduler
 # and merge behavior.  Tunes dependent devices
-def tune_blockdev(path):
+def tune_blockdev(path, nomerges):
     from os.path import join, exists, dirname, realpath
     path = realpath(path)
     print('tuning {}'.format(path))
@@ -58,37 +58,42 @@ def tune_blockdev(path):
     tuned_blockdevs.add(path)
     def check_sched(current):
         return current == 'none' or '[noop]' in current
-    tune_path(join(path, 'queue', 'scheduler'), 'noop', check_sched)
-    tune_path(join(path, 'queue', 'nomerges'), '2')
+    if not nomerges:
+        tune_path(join(path, 'queue', 'scheduler'), 'noop', check_sched)
+        tune_path(join(path, 'queue', 'nomerges'), '2')
+    else:
+        tune_path(join(path, 'queue', 'nomerges'), nomerges)
     slaves = join(path, 'slaves')
     if exists(slaves):
         for slave in os.listdir(slaves):
-            tune_blockdev(join(slaves, slave))
+            tune_blockdev(join(slaves, slave), nomerges)
     if exists(join(path, 'partition')):
-        tune_blockdev(dirname(path))
+        tune_blockdev(dirname(path), nomerges)
 
 # tunes a /dev/foo blockdev
-def tune_dev(path):
+def tune_dev(path, nomerges):
     dev = os.stat(path).st_rdev
     devfile = '/sys/dev/block/{}:{}'.format(dev // 256, dev % 256)
-    tune_blockdev(devfile)
+    tune_blockdev(devfile, nomerges)
 
 # tunes a filesystem
 # FIXME: btrfs
-def tune_fs(path):
+def tune_fs(path, nomerges):
     dev = os.stat(path).st_dev
     devfile = '/sys/dev/block/{}:{}'.format(dev // 256, dev % 256)
-    tune_blockdev(devfile)
+    tune_blockdev(devfile, nomerges)
 
 # tunes all filesystems referenced from a scylla.yaml
-def tune_yaml(path):
+def tune_yaml(path, nomerges):
     import yaml
     y = yaml.load(open(path))
     for fs in y['data_file_directories']:
-        tune_fs(fs)
-    tune_fs(y['commitlog_directory'])
+        tune_fs(fs, nomerges)
+    tune_fs(y['commitlog_directory'], nomerges)
 
 ap = argparse.ArgumentParser('Tune filesystems for ScyllaDB')
+ap.add_argument('--set-nomerges', metavar='VAL', dest='nomerges',
+                help='Overwrite nomerges parameter')
 ap.add_argument('--filesystem', metavar='PATH', action='append', dest='fs', default=[],
                 help='Tune filesystem containing PATH')
 ap.add_argument('--dev', metavar='PATH', action='append', dest='dev', default=[],
@@ -99,11 +104,11 @@ ap.add_argument('--config', metavar='YAML', action='append', dest='yaml', defaul
 args = ap.parse_args()
 
 if not args.yaml and not args.fs and not args.dev:
-    tune_yaml('/etc/scylla/scylla.yaml')
+    tune_yaml('/etc/scylla/scylla.yaml', args.nomerges)
 else:
     for yaml in args.yaml:
-        tune_yaml(yaml)
+        tune_yaml(yaml, args.nomerges)
     for fs in args.fs:
-        tune_fs(fs)
+        tune_fs(fs, args.nomerges)
     for dev in args.dev:
-        tune_dev(dev)
+        tune_dev(dev, args.nomerges)

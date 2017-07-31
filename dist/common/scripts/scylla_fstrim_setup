@@ -20,16 +20,11 @@
 
 . /usr/lib/scylla/scylla_lib.sh
 
-#
-# We need to setup fstrim using different scripts for each distribution,
-# as follows:
-#
-# - CentOS 7/RHEL 7/Fedora: use fstrim.timer that included the distribution
-# - Debian 8: use scylla-fstrim via /etc/cron.d
-# - Ubuntu 14.04: use scylla-fstrim via /etc/cron.d
-# - Ubuntu 16.04: use /etc/cron.weekly/fstrim that included the distribution
-#
+# We need to disable distribution provided fstrim scripts for each distribution
 
 if is_redhat_variant; then
-    systemctl enable fstrim.timer
+    systemctl disable fstrim.timer
+fi
+if [ "$ID" = "ubuntu" ] && [ -f /etc/cron.weekly/fstrim ]; then
+	mv -fv /etc/cron.weekly/fstrim /etc/cron.weekly/fstrim.old    
 fi
