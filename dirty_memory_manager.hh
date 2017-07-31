@@ -189,7 +189,7 @@ public:
 
     future<flush_permit> get_flush_permit() {
         return get_units(_background_work_flush_serializer, 1).then([this] (auto&& units) {
-            return get_flush_permit(std::move(units));
+            return this->get_flush_permit(std::move(units));
         });
     }
 

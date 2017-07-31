@@ -965,7 +965,7 @@ column_family::seal_active_memtable(flush_permit&& permit) {
         return repeat([this, old, &permit] () mutable {
             auto sstable_write_permit = permit.release_sstable_write_permit();
             return with_lock(_sstables_lock.for_read(), [this, old, sstable_write_permit = std::move(sstable_write_permit)] () mutable {
-                return try_flush_memtable_to_sstable(old, std::move(sstable_write_permit));
+                return this->try_flush_memtable_to_sstable(old, std::move(sstable_write_permit));
             }).then([this, &permit] (auto should_stop) mutable {
                 if (should_stop) {
                     return make_ready_future<stop_iteration>(should_stop);
@@ -3193,7 +3193,7 @@ future<> dirty_memory_manager::flush_when_needed() {
                 // Do not wait. The semaphore will protect us against a concurrent flush. But we
                 // want to start a new one as soon as the permits are destroyed and the semaphore is
                 // made ready again, not when we are done with the current one.
-                flush_one(*(candidate_memtable.get_memtable_list()), std::move(permit));
+                this->flush_one(*(candidate_memtable.get_memtable_list()), std::move(permit));
                 return make_ready_future<>();
             });
         });
