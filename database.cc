@@ -71,6 +71,7 @@
 #include <seastar/core/execution_stage.hh>
 #include "view_info.hh"
 #include "memtable-sstable.hh"
+#include "db/schema_tables.hh"
 
 #include "checked-file-impl.hh"
 #include "disk-error-handler.hh"
@@ -1208,8 +1209,6 @@ void column_family::set_metrics() {
     auto ks = keyspace_label(_schema->ks_name());
     namespace ms = seastar::metrics;
     _metrics.add_group("column_family", {
-            ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return _stats.estimated_read.get_histogram();})(cf)(ks),
-            ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return _stats.estimated_write.get_histogram();})(cf)(ks),
             ms::make_derive("memtable_switch", ms::description("Number of times flush has resulted in the memtable being switched out"), _stats.memtable_switch_count)(cf)(ks),
             ms::make_gauge("pending_tasks", ms::description("Estimated number of tasks pending for this column family"), _stats.pending_flushes)(cf)(ks),
             ms::make_gauge("live_disk_space", ms::description("Live disk space used"), _stats.live_disk_space_used)(cf)(ks),
@@ -1217,8 +1216,10 @@ void column_family::set_metrics() {
             ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks),
             ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks)
     });
-    if (_schema->ks_name() != db::system_keyspace::NAME) {
+    if (_schema->ks_name() != db::system_keyspace::NAME && _schema->ks_name() != db::schema_tables::v3::NAME && _schema->ks_name() != "system_traces") {
         _metrics.add_group("column_family", {
+                ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return _stats.estimated_read.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
+                ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return _stats.estimated_write.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
                 ms::make_gauge("cache_hit_rate", ms::description("Cache hit rate"), [this] {return float(_global_cache_hit_rate);})(cf)(ks)
         });
     }
