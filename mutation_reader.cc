@@ -28,13 +28,6 @@
 #include "utils/move.hh"
 #include "stdx.hh"
 
-template<typename T>
-T move_and_clear(T& obj) {
-    T x = std::move(obj);
-    obj = T();
-    return x;
-}
-
 future<> combined_mutation_reader::prepare_next() {
     return parallel_for_each(_next, [this] (mutation_reader* mr) {
         return (*mr)().then([this, mr] (streamed_mutation_opt next) {
@@ -75,7 +68,7 @@ future<streamed_mutation_opt> combined_mutation_reader::next() {
         _current.pop_back();
         return make_ready_future<streamed_mutation_opt>(std::move(m));
     }
-    return make_ready_future<streamed_mutation_opt>(merge_mutations(move_and_clear(_current)));
+    return make_ready_future<streamed_mutation_opt>(merge_mutations(std::exchange(_current, {})));
 }
 
 void combined_mutation_reader::init_mutation_reader_set(std::vector<mutation_reader*> readers)
