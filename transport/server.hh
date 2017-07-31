@@ -115,6 +115,7 @@ private:
     uint64_t _connects = 0;
     uint64_t _connections = 0;
     uint64_t _requests_served = 0;
+    uint64_t _unpaged_queries = 0;
     uint64_t _requests_serving = 0;
     cql_load_balance _lb;
 public:
@@ -127,6 +128,7 @@ public:
     using response_type = std::pair<shared_ptr<cql_server::response>, service::client_state>;
 private:
     class fmt_visitor;
+    friend class connection;
     friend class process_request_executor;
     class connection : public boost::intrusive::list_base_hook<> {
         cql_server& _server;
