@@ -78,7 +78,7 @@ struct log_histogram_options {
         const auto mask = ((1 << sub_bucket_shift) - 1) & min_mask;
         const auto sub_bucket_index = unmasked_sub_bucket_index & mask;
         const auto ret = (bucket << sub_bucket_shift) - mask + sub_bucket_index;
-        return bucket + 1;
+        return ret + 1;
     }
 };
 
