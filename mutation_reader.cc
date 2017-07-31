@@ -70,6 +70,11 @@ future<streamed_mutation_opt> combined_mutation_reader::next() {
             break;
         }
     }
+    if (_current.size() == 1) {
+        auto m = std::move(_current.back());
+        _current.pop_back();
+        return make_ready_future<streamed_mutation_opt>(std::move(m));
+    }
     return make_ready_future<streamed_mutation_opt>(merge_mutations(move_and_clear(_current)));
 }
 
