@@ -342,6 +342,14 @@ public:
 	{}
     ~flush_memory_accounter() {
         assert(_mt._flushed_memory <= _mt.occupancy().used_space());
+
+        // Flushed the current memtable. There is still some work to do, like finish sealing the
+        // SSTable and updating the cache, but we can already allow the next one to start.
+        //
+        // By erasing this memtable from the flush_manager we'll destroy the semaphore_units
+        // associated with this flush and will allow another one to start. We'll signal the
+        // condition variable to let them know we might be ready early.
+        _mt._dirty_mgr.remove_from_flush_manager(&_mt);
     }
     void account_component(memtable_entry& e) {
         auto delta = _mt.allocator().object_memory_size_in_allocator(&e)
