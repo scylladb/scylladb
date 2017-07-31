@@ -61,15 +61,19 @@ future<streamed_mutation_opt> combined_mutation_reader::next() {
         auto& candidate = _ptables.back();
         streamed_mutation& m = candidate.m;
 
-        if (!_current.empty() && !_current.back().decorated_key().equal(*m.schema(), m.decorated_key())) {
-            // key has changed, so emit accumulated mutation
-            boost::range::push_heap(_ptables, &heap_compare);
-            return make_ready_future<streamed_mutation_opt>(merge_mutations(move_and_clear(_current)));
-        }
-
         _current.emplace_back(std::move(m));
         _next.emplace_back(candidate.read);
         _ptables.pop_back();
+
+        if (_ptables.empty() || !_current.back().decorated_key().equal(*_current.back().schema(), _ptables.front().m.decorated_key())) {
+            // key has changed, so emit accumulated mutation
+            break;
+        }
+    }
+    if (_current.size() == 1) {
+        auto m = std::move(_current.back());
+        _current.pop_back();
+        return make_ready_future<streamed_mutation_opt>(std::move(m));
     }
     return make_ready_future<streamed_mutation_opt>(merge_mutations(move_and_clear(_current)));
 }
