@@ -47,6 +47,7 @@ SEASTAR_TEST_CASE(test_serialized_action_triggering) {
         };
 
         auto t1 = act.trigger();
+        later().get(); // wait for t1 action to block
         current = 1;
         auto t2 = act.trigger();
         auto t3 = act.trigger();
@@ -81,6 +82,7 @@ SEASTAR_TEST_CASE(test_serialized_action_triggering) {
 
         current = 5;
         auto t5 = act.trigger();
+        later().get(); // wait for t5 action to block
         release();
         t5.get();
 
