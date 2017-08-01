@@ -339,7 +339,7 @@ cql_server::do_accepts(int which, bool keepalive, ipv4_addr server_addr) {
         if (_stopping) {
             f_cs_sa.ignore_ready_future();
             maybe_idle();
-            return;
+            return make_ready_future<>();
         }
         auto cs_sa = f_cs_sa.get();
         auto fd = std::get<0>(std::move(cs_sa));
@@ -357,14 +357,15 @@ cql_server::do_accepts(int which, bool keepalive, ipv4_addr server_addr) {
                 clogger.debug("connection error: {}", std::current_exception());
             }
         });
-        do_accepts(which, keepalive, server_addr);
+        return do_accepts(which, keepalive, server_addr);
     }).then_wrapped([this, which, keepalive, server_addr] (future<> f) {
         try {
             f.get();
         } catch (...) {
             clogger.warn("acccept failed: {}", std::current_exception());
-            do_accepts(which, keepalive, server_addr);
+            return do_accepts(which, keepalive, server_addr);
         }
+        return make_ready_future<>();
     });
 }
 
