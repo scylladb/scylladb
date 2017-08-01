@@ -350,7 +350,7 @@ cql_server::do_accepts(int which, bool keepalive) {
         if (_stopping) {
             f_cs_sa.ignore_ready_future();
             maybe_idle();
-            return;
+            return make_ready_future<>();
         }
         auto cs_sa = f_cs_sa.get();
         auto fd = std::get<0>(std::move(cs_sa));
@@ -368,14 +368,15 @@ cql_server::do_accepts(int which, bool keepalive) {
                 logger.debug("connection error: {}", std::current_exception());
             }
         });
-        do_accepts(which, keepalive);
+        return do_accepts(which, keepalive);
     }).then_wrapped([this, which, keepalive] (future<> f) {
         try {
             f.get();
         } catch (...) {
             logger.warn("acccept failed: {}", std::current_exception());
-            do_accepts(which, keepalive);
+            return do_accepts(which, keepalive);
         }
+        return make_ready_future<>();
     });
 }
 
