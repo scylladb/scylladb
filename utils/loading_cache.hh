@@ -211,8 +211,7 @@ public:
     }
 
     future<> stop() {
-        _timer.cancel();
-        return _timer_reads_gate.close();
+        return _timer_reads_gate.close().finally([this] { _timer.cancel(); });
     }
 
 private:
