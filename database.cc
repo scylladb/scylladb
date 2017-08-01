@@ -351,6 +351,113 @@ filter_sstable_for_reader(std::vector<sstables::shared_sstable>&& sstables, colu
     return sstables;
 }
 
+// Incremental selector implementation for combined_mutation_reader that
+// selects readers on-demand as the read progresses through the token
+// range.
+class incremental_reader_selector : public reader_selector {
+    schema_ptr _s;
+    const dht::partition_range* _pr;
+    lw_shared_ptr<sstables::sstable_set> _sstables;
+    const io_priority_class& _pc;
+    const query::partition_slice& _slice;
+    tracing::trace_state_ptr _trace_state;
+    streamed_mutation::forwarding _fwd;
+    mutation_reader::forwarding _fwd_mr;
+    sstables::sstable_set::incremental_selector _selector;
+    std::unordered_set<sstables::shared_sstable> _read_sstables;
+
+    mutation_reader create_reader(sstables::shared_sstable sst) {
+        tracing::trace(_trace_state, "Reading partition range {} from sstable {}", *_pr, seastar::value_of([&sst] { return sst->get_filename(); }));
+        // FIXME: make sstable::read_range_rows() return ::mutation_reader so that we can drop this wrapper.
+        mutation_reader reader =
+            make_mutation_reader<sstable_range_wrapping_reader>(sst, _s, *_pr, _slice, _pc, _fwd, _fwd_mr);
+        if (sst->is_shared()) {
+            reader = make_filtering_reader(std::move(reader), belongs_to_current_shard);
+        }
+        return std::move(reader);
+    }
+
+public:
+    explicit incremental_reader_selector(schema_ptr s,
+            lw_shared_ptr<sstables::sstable_set> sstables,
+            const dht::partition_range& pr,
+            const query::partition_slice& slice,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state,
+            streamed_mutation::forwarding fwd,
+            mutation_reader::forwarding fwd_mr)
+        : _s(s)
+        , _pr(&pr)
+        , _sstables(std::move(sstables))
+        , _pc(pc)
+        , _slice(slice)
+        , _trace_state(std::move(trace_state))
+        , _fwd(fwd)
+        , _fwd_mr(fwd_mr)
+        , _selector(_sstables->make_incremental_selector()) {
+        _selector_position = _pr->start()->value().token();
+
+        dblog.trace("incremental_reader_selector {}: created for range: ({},{}) with {} sstables",
+                this,
+                _pr->start()->value().token(),
+                _pr->end()->value().token(),
+                _sstables->all()->size());
+    }
+
+    incremental_reader_selector(const incremental_reader_selector&) = delete;
+    incremental_reader_selector& operator=(const incremental_reader_selector&) = delete;
+
+    incremental_reader_selector(incremental_reader_selector&&) = delete;
+    incremental_reader_selector& operator=(incremental_reader_selector&&) = delete;
+
+    virtual std::vector<mutation_reader> create_new_readers(const dht::token* const t) override {
+        //TODO: fix after lazy_deref() is available
+        dblog.trace("incremental_reader_selector {}: {}({})", this, __FUNCTION__, t ? sprint("{}", *t) : "null");
+
+        const auto& position = (t ? *t : _selector_position);
+        auto selection = _selector.select(position);
+
+        if (selection.sstables.empty()) {
+            // For the lower bound of the token range the _selector
+            // might not return any sstables, in this case try again
+            // with next_token unless it's maximum token.
+            if (position == _pr->start()->value().token() && !selection.next_token.is_maximum()) {
+                dblog.trace("incremental_reader_selector {}: no sstables intersect with the lower bound, retrying", this);
+                _selector_position = std::move(selection.next_token);
+                return create_new_readers(nullptr);
+            }
+
+            _selector_position = dht::maximum_token();
+            return {};
+        }
+
+        dblog.trace("incremental_reader_selector {}: {} new sstables to consider", this, selection.sstables.size());
+
+        if (selection.next_token == _selector_position) {
+            _selector_position = dht::maximum_token();
+            dblog.trace(
+                    "incremental_reader_selector {}: selector ({}) is the same as next_token, setting it to max",
+                    this,
+                    selection.next_token);
+        } else {
+            _selector_position = std::move(selection.next_token);
+            dblog.trace("incremental_reader_selector {}: advancing selector to {}", this, _selector_position);
+        }
+
+        return boost::copy_range<std::vector<mutation_reader>>(selection.sstables
+                | boost::adaptors::filtered([this] (auto& sst) { return _read_sstables.emplace(sst).second; })
+                | boost::adaptors::transformed([this] (auto& sst) { return this->create_reader(sst); }));
+    }
+
+    virtual std::vector<mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
+        _pr = &pr;
+        _selector_position = _pr->start()->value().token();
+        _read_sstables.clear();
+
+        return create_new_readers(nullptr);
+    }
+};
+
 class range_sstable_reader final : public combined_mutation_reader {
     schema_ptr _s;
     const dht::partition_range* _pr;
@@ -569,8 +676,15 @@ column_family::make_sstable_reader(schema_ptr s,
         return restrict_reader(make_mutation_reader<single_key_sstable_reader>(const_cast<column_family*>(this), std::move(s), std::move(sstables),
             _stats.estimated_sstable_per_read, pr, slice, pc, std::move(trace_state), fwd));
     } else {
-        // range_sstable_reader is not movable so we need to wrap it
-        return restrict_reader(make_mutation_reader<range_sstable_reader>(std::move(s), std::move(sstables), pr, slice, pc, std::move(trace_state), fwd, fwd_mr));
+        return restrict_reader(make_mutation_reader<combined_mutation_reader>(
+                    std::make_unique<incremental_reader_selector>(std::move(s),
+                            std::move(sstables),
+                            pr,
+                            slice,
+                            pc,
+                            std::move(trace_state),
+                            fwd,
+                            fwd_mr)));
     }
 }
 
