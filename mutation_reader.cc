@@ -134,30 +134,6 @@ future<streamed_mutation_opt> combined_mutation_reader::next() {
     return make_ready_future<streamed_mutation_opt>(merge_mutations(std::exchange(_current, {})));
 }
 
-void combined_mutation_reader::init_mutation_reader_set(std::vector<mutation_reader*> readers)
-{
-    _all_readers = std::move(readers);
-    _next.assign(_all_readers.begin(), _all_readers.end());
-    _ptables.reserve(_all_readers.size());
-}
-
-future<> combined_mutation_reader::fast_forward_to(std::vector<mutation_reader*> to_add, std::vector<mutation_reader*> to_remove, const dht::partition_range& pr)
-{
-    _ptables.clear();
-
-    std::vector<mutation_reader*> new_readers;
-    boost::range::sort(_all_readers);
-    boost::range::sort(to_remove);
-    boost::range::set_difference(_all_readers, to_remove, std::back_inserter(new_readers));
-    _all_readers = std::move(new_readers);
-    return parallel_for_each(_all_readers, [this, &pr] (mutation_reader* mr) {
-        return mr->fast_forward_to(pr);
-    }).then([this, to_add = std::move(to_add)] {
-        _all_readers.insert(_all_readers.end(), to_add.begin(), to_add.end());
-        _next.assign(_all_readers.begin(), _all_readers.end());
-    });
-}
-
 combined_mutation_reader::combined_mutation_reader(std::unique_ptr<reader_selector> selector)
     : _selector(std::move(selector))
 {

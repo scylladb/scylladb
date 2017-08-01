@@ -162,10 +162,6 @@ private:
     future<> prepare_next();
     // Produces next mutation or disengaged optional if there are no more.
     future<streamed_mutation_opt> next();
-protected:
-    combined_mutation_reader() = default;
-    void init_mutation_reader_set(std::vector<mutation_reader*>);
-    future<> fast_forward_to(std::vector<mutation_reader*> to_add, std::vector<mutation_reader*> to_remove, const dht::partition_range& pr);
 public:
     combined_mutation_reader(std::unique_ptr<reader_selector> selector);
     virtual future<streamed_mutation_opt> operator()() override;
