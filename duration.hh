@@ -30,26 +30,26 @@
 
 // Wrapper for a value with a type-tag for differentiating instances.
 template <class Value, class Tag>
-class duration_counter final {
+class cql_duration_counter final {
 public:
     using value_type = Value;
 
-    explicit constexpr duration_counter(value_type count) noexcept : _count(count) {}
+    explicit constexpr cql_duration_counter(value_type count) noexcept : _count(count) {}
 
     constexpr operator value_type() const noexcept { return _count; }
 private:
     value_type _count;
 };
 
-using months_counter = duration_counter<int32_t, struct month_tag>;
-using days_counter = duration_counter<int32_t, struct day_tag>;
-using nanoseconds_counter = duration_counter<int64_t, struct nanosecond_tag>;
+using months_counter = cql_duration_counter<int32_t, struct month_tag>;
+using days_counter = cql_duration_counter<int32_t, struct day_tag>;
+using nanoseconds_counter = cql_duration_counter<int64_t, struct nanosecond_tag>;
 
-class duration_error : public std::invalid_argument {
+class cql_duration_error : public std::invalid_argument {
 public:
-    explicit duration_error(std::experimental::string_view what) : std::invalid_argument(what.data()) {}
+    explicit cql_duration_error(std::experimental::string_view what) : std::invalid_argument(what.data()) {}
 
-    virtual ~duration_error() = default;
+    virtual ~cql_duration_error() = default;
 };
 
 //
@@ -65,7 +65,7 @@ public:
 // The primary use of this type is to manipulate absolute time-stamps with relative offsets. For example,
 // `"Jan. 31 2005 at 23:15" + 3mo5d`.
 //
-class duration final {
+class cql_duration final {
 public:
     using common_counter_type = int64_t;
 
@@ -76,10 +76,10 @@ public:
             "The common counter type is smaller than one of the component counter types.");
 
     // A zero-valued duration.
-    constexpr duration() noexcept = default;
+    constexpr cql_duration() noexcept = default;
 
     // Construct a duration with explicit values for its three counters.
-    constexpr duration(months_counter m, days_counter d, nanoseconds_counter n) noexcept :
+    constexpr cql_duration(months_counter m, days_counter d, nanoseconds_counter n) noexcept :
             months(m),
             days(d),
             nanoseconds(n) {}
@@ -116,9 +116,9 @@ public:
     // For all formats, a negative duration is indicated by beginning the string with the '-' symbol. For example,
     // "-2y10ns".
     //
-    // Throws `duration_error` in the event of a parsing error.
+    // Throws `cql_duration_error` in the event of a parsing error.
     //
-    explicit duration(std::experimental::string_view s);
+    explicit cql_duration(std::experimental::string_view s);
 
     months_counter::value_type months{0};
     days_counter::value_type days{0};
@@ -130,15 +130,15 @@ public:
 //
 // Durations are simplified during printing so that `duration(24, 0, 0)` is printed as "2y".
 //
-std::ostream& operator<<(std::ostream& os, duration const& d);
+std::ostream& operator<<(std::ostream& os, cql_duration const& d);
 
 // See above.
-seastar::sstring to_string(duration const&);
+seastar::sstring to_string(cql_duration const&);
 
 //
 // Note that equality comparison is based on exact counter matches. It is not valid to expect equivalency across
 // counters like months and days. See the documentation for `duration` for more.
 //
 
-bool operator==(duration const&, duration const&) noexcept;
-bool operator!=(duration const&, duration const&) noexcept;
+bool operator==(cql_duration const&, cql_duration const&) noexcept;
+bool operator!=(cql_duration const&, cql_duration const&) noexcept;
