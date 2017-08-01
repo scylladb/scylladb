@@ -240,6 +240,7 @@ scylla_tests = [
     'tests/cell_locker_test',
     'tests/streaming_histogram_test',
     'tests/duration_test',
+    'tests/vint_serialization_test',
 ]
 
 apps = [
@@ -525,6 +526,7 @@ scylla_core = (['database.cc',
                  'range_tombstone_list.cc',
                  'disk-error-handler.cc',
                  'duration.cc',
+                 'vint-serialization.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
@@ -622,6 +624,7 @@ pure_boost_tests = set([
     'tests/cartesian_product_test',
     'tests/streaming_histogram_test',
     'tests/duration_test',
+    'tests/vint_serialization_test',
 ])
 
 tests_not_using_seastar_test_framework = set([
