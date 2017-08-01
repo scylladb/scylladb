@@ -105,9 +105,25 @@ make_mutation_reader(Args&&... args) {
     return mutation_reader(std::make_unique<Impl>(std::forward<Args>(args)...));
 }
 
+class reader_selector {
+protected:
+    dht::token _selector_position;
+public:
+    virtual ~reader_selector() = default;
+    // Call only if has_new_readers() returned true.
+    virtual std::vector<mutation_reader> create_new_readers(const dht::token* const t) = 0;
+    virtual std::vector<mutation_reader> fast_forward_to(const dht::partition_range& pr) = 0;
+
+    // Can be false-positive but never false-negative!
+    bool has_new_readers(const dht::token* const t) const noexcept {
+        return !_selector_position.is_maximum() && (!t || *t >= _selector_position);
+    }
+};
+
 // Combines multiple mutation_readers into one.
 class combined_mutation_reader : public mutation_reader::impl {
-    std::vector<mutation_reader> _readers;
+    std::unique_ptr<reader_selector> _selector;
+    std::list<mutation_reader> _readers;
     std::vector<mutation_reader*> _all_readers;
 
     struct mutation_and_reader {
@@ -140,6 +156,9 @@ class combined_mutation_reader : public mutation_reader::impl {
     std::vector<streamed_mutation> _current;
     std::vector<mutation_reader*> _next;
 private:
+    const dht::token* current_position() const;
+    void maybe_add_readers(const dht::token* const t);
+    void add_readers(std::vector<mutation_reader> new_readers);
     future<> prepare_next();
     // Produces next mutation or disengaged optional if there are no more.
     future<streamed_mutation_opt> next();
@@ -148,7 +167,7 @@ protected:
     void init_mutation_reader_set(std::vector<mutation_reader*>);
     future<> fast_forward_to(std::vector<mutation_reader*> to_add, std::vector<mutation_reader*> to_remove, const dht::partition_range& pr);
 public:
-    combined_mutation_reader(std::vector<mutation_reader> readers);
+    combined_mutation_reader(std::unique_ptr<reader_selector> selector);
     virtual future<streamed_mutation_opt> operator()() override;
     virtual future<> fast_forward_to(const dht::partition_range& pr) override;
 };
