@@ -69,7 +69,7 @@ namespace sstables {
 logging::logger sstlog("sstable");
 
 seastar::shared_ptr<write_monitor> default_write_monitor() {
-    static seastar::shared_ptr<write_monitor> monitor = seastar::make_shared<noop_write_monitor>();
+    static thread_local seastar::shared_ptr<write_monitor> monitor = seastar::make_shared<noop_write_monitor>();
     return monitor;
 }
 
