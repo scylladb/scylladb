@@ -90,7 +90,7 @@ static api::timestamp_type get_max_purgeable_timestamp(const column_family& cf, 
         const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk) {
     auto timestamp = api::max_timestamp;
     stdx::optional<utils::hashed_key> hk;
-    for (auto&& sst : boost::range::join(selector.select(dk.token()), cf.compacted_undeleted_sstables())) {
+    for (auto&& sst : boost::range::join(selector.select(dk.token()).sstables, cf.compacted_undeleted_sstables())) {
         if (compacting_set.count(sst)) {
             continue;
         }

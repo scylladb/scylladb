@@ -3840,7 +3840,7 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
     auto key_and_token_pair = token_generation_for_current_shard(8);
 
     auto check = [] (sstable_set::incremental_selector& selector, const dht::token& token, std::unordered_set<int64_t> expected_gens) {
-        auto sstables = selector.select(token);
+        auto sstables = selector.select(token).sstables;
         BOOST_REQUIRE(sstables.size() == expected_gens.size());
         for (auto& sst : sstables) {
             BOOST_REQUIRE(expected_gens.count(sst->generation()) == 1);

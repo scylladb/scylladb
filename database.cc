@@ -150,7 +150,7 @@ partition_presence_checker
 column_family::make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set> sstables) {
     auto sel = make_lw_shared(sstables->make_incremental_selector());
     return [this, sstables = std::move(sstables), sel = std::move(sel)] (const dht::decorated_key& key) {
-        auto& sst = sel->select(key.token());
+        auto& sst = sel->select(key.token()).sstables;
         if (sst.empty()) {
             return partition_presence_checker_result::definitely_doesnt_exist;
         }
