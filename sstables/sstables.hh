@@ -497,7 +497,8 @@ private:
 
     void maybe_flush_pi_block(file_writer& out,
             const composite& clustering_key,
-            const std::vector<bytes_view>& column_names);
+            const std::vector<bytes_view>& column_names,
+            composite::eoc marker = composite::eoc::none);
 
     schema_ptr _schema;
     sstring _dir;
@@ -602,9 +603,9 @@ private:
     void write_cell(file_writer& out, atomic_cell_view cell, const column_definition& cdef);
     void write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none);
     void write_column_name(file_writer& out, bytes_view column_names);
-    void write_range_tombstone(file_writer& out, const composite& start, bound_kind start_kind, const composite& end, bound_kind stop_kind, std::vector<bytes_view> suffix, const tombstone t);
+    void write_range_tombstone(file_writer& out, const composite& start, composite::eoc start_marker, const composite& end, composite::eoc end_marker, std::vector<bytes_view> suffix, const tombstone t);
     void write_range_tombstone(file_writer& out, const composite& start, const composite& end, std::vector<bytes_view> suffix, const tombstone t) {
-        write_range_tombstone(out, start, bound_kind::incl_start, end, bound_kind::incl_end, std::move(suffix), std::move(t));
+        write_range_tombstone(out, start, composite::eoc::start, end, composite::eoc::end, std::move(suffix), std::move(t));
     }
     void write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation_view collection);
     void write_row_tombstone(file_writer& out, const composite& key, const row_tombstone t);
