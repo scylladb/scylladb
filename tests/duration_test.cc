@@ -170,6 +170,7 @@ BOOST_AUTO_TEST_CASE(pretty_print) {
     BOOST_REQUIRE_EQUAL(to_string(cql_duration("25mo")), "2y1mo");
     BOOST_REQUIRE_EQUAL(to_string(cql_duration("1y2mo3w4d5h6m7s8ms9us10ns")), "1y2mo25d5h6m7s8ms9us10ns");
     BOOST_REQUIRE_EQUAL(to_string(cql_duration("-1d5m")), "-1d5m");
+    BOOST_REQUIRE_EQUAL(to_string(cql_duration("0d")), "");
 }
 
 BOOST_AUTO_TEST_CASE(equality) {
