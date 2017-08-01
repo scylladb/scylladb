@@ -35,6 +35,7 @@
 #include "tmpdir.hh"
 #include "memtable-sstable.hh"
 #include "disk-error-handler.hh"
+#include "tests/sstable_assertions.hh"
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
@@ -799,5 +800,54 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
         auto sm = mr.read().get0();
         auto mut = mutation_from_streamed_mutation(std::move(sm)).get0();
         BOOST_REQUIRE(bool(mut));
+    });
+}
+
+SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
+    return seastar::async([] {
+        auto dir = make_lw_shared<tmpdir>();
+        schema_builder builder("ks", "cf");
+        builder.with_column("p", utf8_type, column_kind::partition_key);
+        builder.with_column("c1", int32_type, column_kind::clustering_key);
+        builder.with_column("c2", int32_type, column_kind::clustering_key);
+        builder.with_column("v", int32_type);
+        auto s = builder.build();
+
+        auto k = partition_key::from_exploded(*s, {to_bytes("key1")});
+        auto cell = atomic_cell::make_live(1, int32_type->decompose(88), { });
+        mutation m(k, s);
+
+        auto ck = clustering_key::from_exploded(*s, {int32_type->decompose(1), int32_type->decompose(2)});
+        m.set_clustered_cell(ck, *s->get_column_definition("v"), cell);
+
+        ck = clustering_key::from_exploded(*s, {int32_type->decompose(1), int32_type->decompose(4)});
+        m.set_clustered_cell(ck, *s->get_column_definition("v"), std::move(cell));
+
+        ck = clustering_key::from_exploded(*s, {int32_type->decompose(1), int32_type->decompose(6)});
+        m.set_clustered_cell(ck, *s->get_column_definition("v"), std::move(cell));
+
+        ck = clustering_key::from_exploded(*s, {int32_type->decompose(3), int32_type->decompose(9)});
+        m.set_clustered_cell(ck, *s->get_column_definition("v"), std::move(cell));
+
+        m.partition().apply_row_tombstone(*s, range_tombstone(
+                clustering_key_prefix::from_exploded(*s, {int32_type->decompose(1)}),
+                bound_kind::excl_start,
+                clustering_key_prefix::from_exploded(*s, {int32_type->decompose(2)}),
+                bound_kind::incl_end,
+                {1, gc_clock::now()}));
+
+        auto mt = make_lw_shared<memtable>(s);
+        mt->apply(std::move(m));
+
+        auto sst = make_lw_shared<sstables::sstable>(s,
+                                dir->path,
+                                1 /* generation */,
+                                sstables::sstable::version_types::ka,
+                                sstables::sstable::format_types::big);
+        sstable_writer_config cfg;
+        cfg.promoted_index_block_size = 1;
+        sst->write_components(mt->make_reader(s), 1, s, cfg).get();
+        sst->load().get();
+        assert_that(sst->get_index_reader(default_priority_class())).has_monotonic_positions(*s);
     });
 }
