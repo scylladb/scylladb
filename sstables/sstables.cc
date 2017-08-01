@@ -1257,6 +1257,18 @@ future<sstable_open_info> sstable::load_shared_components(const schema_ptr& s, s
     });
 }
 
+static composite::eoc bound_kind_to_start_marker(bound_kind start_kind) {
+    return start_kind == bound_kind::excl_start
+         ? composite::eoc::end
+         : composite::eoc::start;
+}
+
+static composite::eoc bound_kind_to_end_marker(bound_kind end_kind) {
+    return end_kind == bound_kind::excl_end
+         ? composite::eoc::start
+         : composite::eoc::end;
+}
+
 static void output_promoted_index_entry(bytes_ostream& promoted_index,
         const bytes& first_col,
         const bytes& last_col,
@@ -1313,8 +1325,9 @@ static bytes serialize_colname(const composite& clustering_key,
 // (which might be gone later).
 void sstable::maybe_flush_pi_block(file_writer& out,
         const composite& clustering_key,
-        const std::vector<bytes_view>& column_names) {
-    bytes colname = serialize_colname(clustering_key, column_names, composite::eoc::none);
+        const std::vector<bytes_view>& column_names,
+        composite::eoc marker) {
+    bytes colname = serialize_colname(clustering_key, column_names, marker);
     if (_pi_write.block_first_colname.empty()) {
         // This is the first column in the partition, or first column since we
         // closed a promoted-index block. Remember its name and position -
@@ -1346,7 +1359,9 @@ void sstable::maybe_flush_pi_block(file_writer& out,
                 auto start = composite::from_clustering_element(*_pi_write.schemap, rt.start);
                 auto end = composite::from_clustering_element(*_pi_write.schemap, rt.end);
                 write_range_tombstone(out,
-                        start, rt.start_kind, end, rt.end_kind, {}, rt.tomb);
+                        start, bound_kind_to_start_marker(rt.start_kind),
+                        end, bound_kind_to_end_marker(rt.end_kind),
+                        {}, rt.tomb);
             }
         }
         _pi_write.block_next_start_offset = out.offset() + _pi_write.desired_block_size;
@@ -1495,24 +1510,18 @@ void sstable::write_row_marker(file_writer& out, const row_marker& marker, const
 
 void sstable::write_range_tombstone(file_writer& out,
         const composite& start,
-        bound_kind start_kind,
+        composite::eoc start_marker,
         const composite& end,
-        bound_kind end_kind,
+        composite::eoc end_marker,
         std::vector<bytes_view> suffix,
         const tombstone t) {
     if (!t) {
         return;
     }
 
-    auto start_marker = start_kind == bound_kind::excl_start
-                      ? composite::eoc::end
-                      : composite::eoc::start;
     write_column_name(out, start, suffix, start_marker);
     column_mask mask = column_mask::range_tombstone;
     write(out, mask);
-    auto end_marker = end_kind == bound_kind::excl_end
-                    ? composite::eoc::start
-                    : composite::eoc::end;
     write_column_name(out, end, suffix, end_marker);
     uint64_t timestamp = t.timestamp;
     uint32_t deletion_time = t.deletion_time.time_since_epoch().count();
@@ -1876,9 +1885,11 @@ stop_iteration components_writer::consume(range_tombstone&& rt) {
     // already closed by rt.start, so the accumulator doesn't grow boundless.
     _sst._pi_write.tombstone_accumulator->apply(rt);
     auto start = composite::from_clustering_element(_schema, std::move(rt.start));
+    auto start_marker = bound_kind_to_start_marker(rt.start_kind);
     auto end = composite::from_clustering_element(_schema, std::move(rt.end));
-    _sst.maybe_flush_pi_block(_out, start, {});
-    _sst.write_range_tombstone(_out, std::move(start), rt.start_kind, std::move(end), rt.end_kind, {}, rt.tomb);
+    auto end_marker = bound_kind_to_end_marker(rt.end_kind);
+    _sst.maybe_flush_pi_block(_out, start, {}, start_marker);
+    _sst.write_range_tombstone(_out, std::move(start), start_marker, std::move(end), end_marker, {}, rt.tomb);
     return stop_iteration::no;
 }
 
