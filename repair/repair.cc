@@ -598,7 +598,7 @@ static future<> repair_cf_range(repair_info& ri,
             [&ranges, &ri, &completion, &success, &neighbors, &cf] () {
             auto range = ranges.next();
             check_in_shutdown();
-            return parallelism_semaphore.wait(1).then([&ri, &completion, &success, &neighbors, &cf, range] {
+            return seastar::get_units(parallelism_semaphore, 1).then([&ri, &completion, &success, &neighbors, &cf, range] (auto signal_sem) {
                 auto checksum_type = service::get_local_storage_service().cluster_supports_large_partitions()
                                      ? repair_checksum::streamed : repair_checksum::legacy;
 
@@ -615,9 +615,11 @@ static future<> repair_cf_range(repair_info& ri,
                 }
 
                 completion.enter();
+                auto leave = defer([&completion] { completion.leave(); });
+
                 when_all(checksums.begin(), checksums.end()).then(
-                        [&ri, &cf, range, &neighbors, &success]
-                        (std::vector<future<partition_checksum>> checksums) {
+                        [&ri, &cf, range, &neighbors, &success, leave = std::move(leave), signal_sem = std::move(signal_sem)]
+                        (std::vector<future<partition_checksum>> checksums) mutable {
                     // If only some of the replicas of this range are alive,
                     // we set success=false so repair will fail, but we can
                     // still do our best to repair available replicas.
@@ -759,9 +761,6 @@ static future<> repair_cf_range(repair_info& ri,
                     success = false;
                     ri.nr_failed_ranges++;
                     rlogger.warn("Failed sync of range {}: {}", range, eptr);
-                }).finally([&completion] {
-                    parallelism_semaphore.signal(1);
-                    completion.leave(); // notify do_for_each that we're done
                 });
             });
         }).finally([&success, &completion] {
