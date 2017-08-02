@@ -3370,8 +3370,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     };
     // No timeouts or queue length limits - a failure here can kill an entire repair.
     // Trust the caller to limit concurrency.
-    // FIXME: consider a separate semaphore
-    cfg.streaming_read_concurrency_config.sem = &_read_concurrency_sem;
+    cfg.streaming_read_concurrency_config.sem = &_streaming_concurrency_sem;
     cfg.cf_stats = &_cf_stats;
     cfg.enable_incremental_backups = _enable_incremental_backups;
 

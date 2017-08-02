@@ -997,6 +997,7 @@ public:
 private:
     ::cf_stats _cf_stats;
     static constexpr size_t max_concurrent_reads() { return 100; }
+    static constexpr size_t max_streaming_concurrent_reads() { return 10; } // They're rather heavyweight, so limit more
     static constexpr size_t max_system_concurrent_reads() { return 10; }
     static constexpr size_t max_concurrent_sstable_loads() { return 3; }
     struct db_stats {
@@ -1024,6 +1025,7 @@ private:
     flush_cpu_controller _memtable_cpu_controller;
 
     semaphore _read_concurrency_sem{max_concurrent_reads()};
+    semaphore _streaming_concurrency_sem{max_streaming_concurrent_reads()};
     restricted_mutation_reader_config _read_concurrency_config;
     semaphore _system_read_concurrency_sem{max_system_concurrent_reads()};
     restricted_mutation_reader_config _system_read_concurrency_config;
