@@ -4150,6 +4150,25 @@ void column_family::drop_hit_rate(gms::inet_address addr) {
     _cluster_cache_hit_rates.erase(addr);
 }
 
+mutation_reader make_range_sstable_reader(schema_ptr s,
+        lw_shared_ptr<sstables::sstable_set> sstables,
+        const dht::partition_range& pr,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr)
+{
+    return make_mutation_reader<combined_mutation_reader>(std::make_unique<incremental_reader_selector>(std::move(s),
+                std::move(sstables),
+                pr,
+                slice,
+                pc,
+                std::move(trace_state),
+                fwd,
+                fwd_mr));
+}
+
 future<>
 write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, sstable_write_permit&& permit, bool backup, const io_priority_class& pc, bool leave_unsealed, seastar::thread_scheduling_group *tsg) {
     class permit_monitor final : public sstables::write_monitor {
