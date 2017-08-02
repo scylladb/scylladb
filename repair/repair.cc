@@ -38,6 +38,7 @@
 
 #include <cryptopp/sha.h>
 #include <seastar/core/gate.hh>
+#include <seastar/util/defer.hh>
 
 static logging::logger rlogger("repair");
 
@@ -597,7 +598,7 @@ static future<> repair_cf_range(repair_info& ri,
             [&ranges, &ri, &completion, &success, &neighbors, &cf] () {
             auto range = ranges.next();
             check_in_shutdown();
-            return parallelism_semaphore.wait(1).then([&ri, &completion, &success, &neighbors, &cf, range] {
+            return seastar::get_units(parallelism_semaphore, 1).then([&ri, &completion, &success, &neighbors, &cf, range] (auto signal_sem) {
                 auto checksum_type = service::get_local_storage_service().cluster_supports_large_partitions()
                                      ? repair_checksum::streamed : repair_checksum::legacy;
 
@@ -614,9 +615,11 @@ static future<> repair_cf_range(repair_info& ri,
                 }
 
                 completion.enter();
+                auto leave = defer([&completion] { completion.leave(); });
+
                 when_all(checksums.begin(), checksums.end()).then(
-                        [&ri, &cf, range, &neighbors, &success]
-                        (std::vector<future<partition_checksum>> checksums) {
+                        [&ri, &cf, range, &neighbors, &success, leave = std::move(leave), signal_sem = std::move(signal_sem)]
+                        (std::vector<future<partition_checksum>> checksums) mutable {
                     // If only some of the replicas of this range are alive,
                     // we set success=false so repair will fail, but we can
                     // still do our best to repair available replicas.
@@ -758,9 +761,6 @@ static future<> repair_cf_range(repair_info& ri,
                     success = false;
                     ri.nr_failed_ranges++;
                     rlogger.warn("Failed sync of range {}: {}", range, eptr);
-                }).finally([&completion] {
-                    parallelism_semaphore.signal(1);
-                    completion.leave(); // notify do_for_each that we're done
                 });
             });
         }).finally([&success, &completion] {
@@ -1050,6 +1050,7 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     int id = repair_tracker.next_repair_command();
     rlogger.info("starting user-requested repair for keyspace {}, repair id {}, options {}", keyspace, id, options_map);
     repair_tracker.start(id);
+    auto fail = defer([&repair_tracker, id] { repair_tracker.done(id, false); });
 
     // If the "ranges" option is not explicitly specified, we repair all the
     // local ranges (the token ranges for which this node holds a replica of).
@@ -1137,17 +1138,16 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         repair_results.push_back(std::move(f));
     }
 
-    when_all(repair_results.begin(), repair_results.end()).then([id] (std::vector<future<>> results) {
+    when_all(repair_results.begin(), repair_results.end()).then([id, fail = std::move(fail)] (std::vector<future<>> results) mutable {
         if (std::any_of(results.begin(), results.end(), [] (auto&& f) { return f.failed(); })) {
-            repair_tracker.done(id, false);
             rlogger.info("repair {} failed", id);
         } else {
+            fail.cancel();
             repair_tracker.done(id, true);
             rlogger.info("repair {} completed successfully", id);
         }
         return make_ready_future<>();
     }).handle_exception([id] (std::exception_ptr eptr) {
-         repair_tracker.done(id, false);
          rlogger.info("repair {} failed: {}", id, eptr);
     });
 
