@@ -964,8 +964,8 @@ void messaging_service::unregister_repair_checksum_range() {
 future<partition_checksum> messaging_service::send_repair_checksum_range(
         msg_addr id, sstring keyspace, sstring cf, ::dht::token_range range, repair_checksum hash_version)
 {
-    return send_message<partition_checksum>(this,
-            messaging_verb::REPAIR_CHECKSUM_RANGE, std::move(id),
+    return send_message_timeout<partition_checksum>(this,
+            messaging_verb::REPAIR_CHECKSUM_RANGE, std::move(id), streaming_timeout,
             std::move(keyspace), std::move(cf), std::move(range), hash_version);
 }
 
