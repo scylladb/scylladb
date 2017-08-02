@@ -101,6 +101,13 @@ public:
     template <typename... Args>
     static inline future<> setup_keyspace(const sstring& keyspace_name, sstring replication_factor, service::query_state& qs, const Args&... args) {
         if (engine().cpu_id() == 0) {
+            size_t n = sizeof...(args);
+            const table_helper* tables[sizeof...(args)] = {&args...};
+            for (size_t i = 0; i < n; ++i) {
+                if (tables[i]->_keyspace != keyspace_name) {
+                    throw std::invalid_argument("setup_keyspace called with table_helper for different keyspace");
+                }
+            }
             return seastar::async([&keyspace_name, replication_factor, &qs, &args...] {
                 auto& db = cql3::get_local_query_processor().db().local();
 
