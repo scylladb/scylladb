@@ -1051,7 +1051,7 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     int id = repair_tracker.next_repair_command();
     rlogger.info("starting user-requested repair for keyspace {}, repair id {}, options {}", keyspace, id, options_map);
     repair_tracker.start(id);
-    auto fail = defer([&repair_tracker, id] { repair_tracker.done(id, false); });
+    auto fail = defer([id] { repair_tracker.done(id, false); });
 
     // If the "ranges" option is not explicitly specified, we repair all the
     // local ranges (the token ranges for which this node holds a replica of).
