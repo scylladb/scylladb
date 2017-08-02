@@ -821,13 +821,13 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
         m.set_clustered_cell(ck, *s->get_column_definition("v"), cell);
 
         ck = clustering_key::from_exploded(*s, {int32_type->decompose(1), int32_type->decompose(4)});
-        m.set_clustered_cell(ck, *s->get_column_definition("v"), std::move(cell));
+        m.set_clustered_cell(ck, *s->get_column_definition("v"), cell);
 
         ck = clustering_key::from_exploded(*s, {int32_type->decompose(1), int32_type->decompose(6)});
-        m.set_clustered_cell(ck, *s->get_column_definition("v"), std::move(cell));
+        m.set_clustered_cell(ck, *s->get_column_definition("v"), cell);
 
         ck = clustering_key::from_exploded(*s, {int32_type->decompose(3), int32_type->decompose(9)});
-        m.set_clustered_cell(ck, *s->get_column_definition("v"), std::move(cell));
+        m.set_clustered_cell(ck, *s->get_column_definition("v"), cell);
 
         m.partition().apply_row_tombstone(*s, range_tombstone(
                 clustering_key_prefix::from_exploded(*s, {int32_type->decompose(1)}),
