@@ -753,7 +753,7 @@ static future<> repair_cf_range(repair_info& ri,
                     }
                     return make_ready_future<>();
                 }).handle_exception([&ri, &success, &cf, range, leave = std::move(leave),
-                        signal_sem = std::move(signal_sem)] (std::exception_ptr eptr) mutable {
+                        signal_sem = std::move(signal_sem)] (std::exception_ptr eptr) {
                     // Something above (e.g., request_transfer_ranges) failed. We could
                     // stop the repair immediately, or let it continue with
                     // other ranges (at the moment, we do the latter). But in
