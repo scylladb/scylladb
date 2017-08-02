@@ -110,6 +110,13 @@ public:
                            cql_serialization_format sf);
     explicit query_options(db::consistency_level consistency,
                            std::experimental::optional<std::vector<sstring_view>> names,
+                           std::vector<cql3::raw_value> values,
+                           std::vector<cql3::raw_value_view> value_views,
+                           bool skip_metadata,
+                           specific_options options,
+                           cql_serialization_format sf);
+    explicit query_options(db::consistency_level consistency,
+                           std::experimental::optional<std::vector<sstring_view>> names,
                            std::vector<cql3::raw_value_view> value_views,
                            bool skip_metadata,
                            specific_options options,
@@ -140,7 +147,8 @@ public:
 
     // forInternalUse
     explicit query_options(std::vector<cql3::raw_value> values);
-    explicit query_options(db::consistency_level, std::vector<cql3::raw_value> values);
+    explicit query_options(db::consistency_level, std::vector<cql3::raw_value> values, specific_options options = specific_options::DEFAULT);
+    explicit query_options(std::unique_ptr<query_options>, ::shared_ptr<service::pager::paging_state> paging_state);
 
     db::consistency_level get_consistency() const;
     cql3::raw_value_view get_value_at(size_t idx) const;

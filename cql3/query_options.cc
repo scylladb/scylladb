@@ -50,6 +50,23 @@ thread_local query_options query_options::DEFAULT{db::consistency_level::ONE, st
     std::vector<cql3::raw_value_view>(), false, query_options::specific_options::DEFAULT, cql_serialization_format::latest()};
 
 query_options::query_options(db::consistency_level consistency,
+                           std::experimental::optional<std::vector<sstring_view>> names,
+                           std::vector<cql3::raw_value> values,
+                           std::vector<cql3::raw_value_view> value_views,
+                           bool skip_metadata,
+                           specific_options options,
+                           cql_serialization_format sf)
+   : _consistency(consistency)
+   , _names(std::move(names))
+   , _values(std::move(values))
+   , _value_views(value_views)
+   , _skip_metadata(skip_metadata)
+   , _options(std::move(options))
+   , _cql_serialization_format(sf)
+{
+}
+
+query_options::query_options(db::consistency_level consistency,
                              std::experimental::optional<std::vector<sstring_view>> names,
                              std::vector<cql3::raw_value> values,
                              bool skip_metadata,
@@ -82,16 +99,27 @@ query_options::query_options(db::consistency_level consistency,
 {
 }
 
-query_options::query_options(db::consistency_level cl, std::vector<cql3::raw_value> values)
+query_options::query_options(db::consistency_level cl, std::vector<cql3::raw_value> values, specific_options options)
     : query_options(
           cl,
           {},
           std::move(values),
           false,
-          query_options::specific_options::DEFAULT,
+          std::move(options),
           cql_serialization_format::latest()
       )
 {
+}
+
+query_options::query_options(std::unique_ptr<query_options> qo, ::shared_ptr<service::pager::paging_state> paging_state)
+        : query_options(qo->_consistency,
+        std::move(qo->_names),
+        std::move(qo->_values),
+        std::move(qo->_value_views),
+        qo->_skip_metadata,
+        std::move(query_options::specific_options{qo->_options.page_size, paging_state, qo->_options.serial_consistency, qo->_options.timestamp}),
+        qo->_cql_serialization_format) {
+
 }
 
 query_options::query_options(std::vector<cql3::raw_value> values)

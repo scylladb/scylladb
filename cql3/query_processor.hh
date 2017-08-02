@@ -64,6 +64,13 @@ namespace statements {
 class batch_statement;
 }
 
+/*!
+ * \brief to allow paging, holds
+ * internal state, that needs to be passed to the execute statement.
+ *
+ */
+struct internal_query_state;
+
 class query_processor {
 public:
     class migration_subscriber;
@@ -340,7 +347,30 @@ public:
     }
 #endif
 private:
-    query_options make_internal_options(const statements::prepared_statement::checked_weak_ptr& p, const std::initializer_list<data_value>&, db::consistency_level = db::consistency_level::ONE);
+    query_options make_internal_options(const statements::prepared_statement::checked_weak_ptr& p, const std::initializer_list<data_value>&, db::consistency_level = db::consistency_level::ONE,
+            int32_t page_size = -1);
+
+    /*!
+     * \brief created a state object for paging
+     *
+     * When using paging internally a state object is needed.
+     */
+    ::shared_ptr<internal_query_state> create_paged_state(const sstring& query_string, const std::initializer_list<data_value>& = { }, int32_t page_size = 1000);
+    /*!
+     * \brief run a query using paging
+     */
+    future<::shared_ptr<untyped_result_set>> execute_paged_internal(::shared_ptr<internal_query_state> state);
+
+    /*!
+     * \brief iterate over all results using paging
+     */
+    future<> for_each_cql_result(::shared_ptr<cql3::internal_query_state> state,
+                std::function<stop_iteration(const cql3::untyped_result_set::row&)>&& f);
+    /*!
+     * \brief check, based on the state if there are additional results
+     * Users of the paging, should not use the internal_query_state directly
+     */
+    bool has_more_results(::shared_ptr<cql3::internal_query_state> state) const;
 public:
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const sstring& query_string,
@@ -351,6 +381,35 @@ public:
     future<::shared_ptr<untyped_result_set>> execute_internal(
             statements::prepared_statement::checked_weak_ptr p,
             const std::initializer_list<data_value>& = { });
+
+    /*!
+     * \brief iterate over all cql results using paging
+     *
+     * You Create a statement with optional paraemter and pass
+     * a function that goes over the results.
+     *
+     * The passed function would be called for all the results, return stop_iteration::yes
+     * to stop during iteration.
+     *
+     * For example:
+            return query("SELECT * from system.compaction_history",  [&history] (const cql3::untyped_result_set::row& row) mutable {
+                ....
+                ....
+                return stop_iteration::no;
+            });
+
+     * You can use place holder in the query, the prepared statement will only be done once.
+     *
+     *
+     * query_string - the cql string, can contain place holder
+     * f - a function to be run on each of the query result, if the function return false the iteration would stop
+     * args - arbitrary number of query parameters
+     */
+
+    template<typename... Args>
+    future<> query(const sstring& query_string, std::function<stop_iteration(const cql3::untyped_result_set::row&)>&& f, Args&&... args) {
+        return for_each_cql_result(create_paged_state(query_string, { data_value(std::forward<Args>(args))... }), std::move(f));
+    }
 
     future<::shared_ptr<untyped_result_set>> process(
                     const sstring& query_string,

@@ -341,6 +341,10 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy,
                                    service::query_state& state,
                                    const query_options& options)
 {
+    if (options.get_specific_options().page_size > 0) {
+        // need page, use regular execute
+        return do_execute(proxy, state, options);
+    }
     int32_t limit = get_limit(options);
     auto now = gc_clock::now();
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),

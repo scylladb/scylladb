@@ -1704,13 +1704,11 @@ future<> update_compaction_history(sstring ksname, sstring cfname, int64_t compa
                        make_map_value(map_type, prepare_rows_merged(rows_merged))).discard_result();
 }
 
-future<std::vector<compaction_history_entry>> get_compaction_history()
-{
-    sstring req = sprint("SELECT * from system.%s", COMPACTION_HISTORY);
-    return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
-        std::vector<compaction_history_entry> history;
-
-        for (auto& row : *msg) {
+future<std::vector<compaction_history_entry>> get_compaction_history() {
+    return do_with(std::vector<compaction_history_entry>(), ::shared_ptr<cql3::internal_query_state>(),
+            [](auto& history, auto& state) mutable {
+        sstring req = sprint("SELECT * from system.%s", COMPACTION_HISTORY);
+        return qctx->qp().query(req, [&history] (const cql3::untyped_result_set::row& row) mutable {
             compaction_history_entry entry;
             entry.id = row.get_as<utils::UUID>("id");
             entry.ks = row.get_as<sstring>("keyspace_name");
@@ -1722,8 +1720,10 @@ future<std::vector<compaction_history_entry>> get_compaction_history()
                 entry.rows_merged = row.get_map<int32_t, int64_t>("rows_merged");
             }
             history.push_back(std::move(entry));
-        }
-        return std::move(history);
+            return stop_iteration::no;
+        }).then([&history]() {
+            return make_ready_future<std::vector<compaction_history_entry>>(history);
+        });
     });
 }
 

@@ -345,7 +345,8 @@ query_processor::parse_statement(const sstring_view& query)
 
 query_options query_processor::make_internal_options(const statements::prepared_statement::checked_weak_ptr& p,
                                                      const std::initializer_list<data_value>& values,
-                                                     db::consistency_level cl)
+                                                     db::consistency_level cl,
+                                                     int32_t page_size)
 {
     if (p->bound_names.size() != values.size()) {
         throw std::invalid_argument(sprint("Invalid number of values. Expecting %d but got %d", p->bound_names.size(), values.size()));
@@ -361,6 +362,12 @@ query_options query_processor::make_internal_options(const statements::prepared_
         } else {
             bound_values.push_back(cql3::raw_value::make_value(n->type->decompose(v)));
         }
+    }
+    if (page_size > 0) {
+        ::shared_ptr<service::pager::paging_state> paging_state;
+        db::consistency_level serial_consistency = db::consistency_level::SERIAL;
+        api::timestamp_type ts = api::missing_timestamp;
+        return query_options(cl, bound_values, cql3::query_options::specific_options{page_size, std::move(paging_state), serial_consistency, ts});
     }
     return query_options(cl, bound_values);
 }
@@ -386,13 +393,101 @@ query_processor::execute_internal(const sstring& query_string,
     return execute_internal(prepare_internal(query_string), values);
 }
 
+struct internal_query_state {
+    sstring query_string;
+    std::unique_ptr<query_options> opts;
+    statements::prepared_statement::checked_weak_ptr p;
+    bool more_results = true;
+};
+
+::shared_ptr<internal_query_state> query_processor::create_paged_state(const sstring& query_string,
+        const std::initializer_list<data_value>& values, int32_t page_size) {
+
+    auto p = prepare_internal(query_string);
+    auto opts = make_internal_options(p, values, db::consistency_level::ONE, page_size);
+    ::shared_ptr<internal_query_state> res = ::make_shared<internal_query_state>(internal_query_state{query_string, std::make_unique<cql3::query_options>(std::move(opts)), std::move(p), true});
+    return res;
+}
+
+bool query_processor::has_more_results(::shared_ptr<cql3::internal_query_state> state) const {
+    if (state) {
+        return state->more_results;
+    }
+    return false;
+}
+
+future<> query_processor::for_each_cql_result(::shared_ptr<cql3::internal_query_state> state,
+            std::function<stop_iteration(const cql3::untyped_result_set::row&)>&& f) {
+    return do_with(seastar::shared_ptr<bool>(), [f, this, state](auto& is_done) mutable {
+        is_done = seastar::make_shared<bool>(false);
+
+        auto stop_when = [is_done]() {
+            return *is_done;
+        };
+        auto do_resuls = [is_done, state, f, this]() mutable {
+            return this->execute_paged_internal(state).then([is_done, state, f, this](::shared_ptr<cql3::untyped_result_set> msg) mutable {
+                if (msg->empty()) {
+                    *is_done = true;
+                } else {
+                    if (!this->has_more_results(state)) {
+                        *is_done = true;
+                    }
+                    for (auto& row : *msg) {
+                        if (f(row) == stop_iteration::yes) {
+                            *is_done = true;
+                            break;
+                        }
+                    }
+                }
+            });
+        };
+        return do_until(stop_when, do_resuls);
+    });
+}
+
+future<::shared_ptr<untyped_result_set>> query_processor::execute_paged_internal(::shared_ptr<internal_query_state> state) {
+    return state->p->statement->execute_internal(_proxy, *_internal_state, *state->opts).then(
+            [state, this](::shared_ptr<cql_transport::messages::result_message> msg) mutable {
+        class visitor : public result_message::visitor_base {
+            ::shared_ptr<internal_query_state> _state;
+            query_processor& _qp;
+        public:
+            visitor(::shared_ptr<internal_query_state> state, query_processor& qp) : _state(state), _qp(qp) {
+            }
+            virtual ~visitor() = default;
+            void visit(const result_message::rows& rmrs) override {
+                auto& rs = rmrs.rs();
+                if (rs.get_metadata().paging_state()) {
+                    bool done = !rs.get_metadata().flags().contains<cql3::metadata::flag::HAS_MORE_PAGES>();
+
+                    if (done) {
+                        _state->more_results = false;
+                    } else {
+                        const service::pager::paging_state& st = *rs.get_metadata().paging_state();
+                        shared_ptr<service::pager::paging_state> shrd = ::make_shared<service::pager::paging_state>(st);
+                        _state->opts = std::make_unique<query_options>(std::move(_state->opts), shrd);
+                        _state->p = _qp.prepare_internal(_state->query_string);
+                    }
+                } else {
+                    _state->more_results = false;
+                }
+            }
+        };
+        visitor v(state, *this);
+        if (msg != nullptr) {
+            msg->accept(v);
+        }
+        return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
+    });
+}
+
 future<::shared_ptr<untyped_result_set>>
 query_processor::execute_internal(statements::prepared_statement::checked_weak_ptr p,
                                   const std::initializer_list<data_value>& values)
 {
-    auto opts = make_internal_options(p, values);
+    query_options opts = make_internal_options(p, values);
     return do_with(std::move(opts), [this, p = std::move(p)](auto& opts) {
-        return p->statement->execute_internal(_proxy, *_internal_state, opts).then([stmt = p->statement](auto msg) {
+        return p->statement->execute_internal(_proxy, *_internal_state, opts).then([&opts, stmt = p->statement](auto msg) {
             return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
         });
     });
