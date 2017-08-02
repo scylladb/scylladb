@@ -68,9 +68,9 @@ public:
     // Units with larger indicies are greater. For example, "months" have a greater index than "days".
     virtual index_type index() const noexcept = 0;
 
-    virtual const char* const short_name() const noexcept = 0;
+    virtual const char* short_name() const noexcept = 0;
 
-    virtual const char* const long_name() const noexcept = 0;
+    virtual const char* long_name() const noexcept = 0;
 
     // Increment the appropriate counter in the duration instance based on a count of this unit.
     virtual void increment_count(cql_duration&, common_counter_type) const noexcept = 0;
@@ -104,53 +104,53 @@ public:
 };
 
 struct nanosecond_unit final : public duration_unit_impl<0, nanoseconds_counter , 1> {
-    const char* const short_name() const noexcept override { return "ns"; }
-    const char* const long_name() const noexcept override { return "nanoseconds"; }
+    const char* short_name() const noexcept override { return "ns"; }
+    const char* long_name() const noexcept override { return "nanoseconds"; }
 } const nanosecond{};
 
 struct microsecond_unit final : public duration_unit_impl<1, nanoseconds_counter, 1000> {
-    const char* const short_name() const noexcept override { return "us"; }
-    const char* const long_name() const noexcept override { return "microseconds"; }
+    const char* short_name() const noexcept override { return "us"; }
+    const char* long_name() const noexcept override { return "microseconds"; }
 } const microsecond{};
 
 struct millisecond_unit final : public duration_unit_impl<2, nanoseconds_counter, microsecond_unit::factor * 1000> {
-    const char* const short_name() const noexcept override { return "ms"; }
-    const char* const long_name() const noexcept override { return "milliseconds"; }
+    const char* short_name() const noexcept override { return "ms"; }
+    const char* long_name() const noexcept override { return "milliseconds"; }
 } const millisecond{};
 
 struct second_unit final : public duration_unit_impl<3, nanoseconds_counter, millisecond_unit::factor * 1000> {
-    const char* const short_name() const noexcept override { return "s"; }
-    const char* const long_name() const noexcept override { return "seconds"; }
+    const char* short_name() const noexcept override { return "s"; }
+    const char* long_name() const noexcept override { return "seconds"; }
 } const second{};
 
 struct minute_unit final : public duration_unit_impl<4, nanoseconds_counter, second_unit::factor * 60> {
-    const char* const short_name() const noexcept override { return "m"; }
-    const char* const long_name() const noexcept override { return "minutes"; }
+    const char* short_name() const noexcept override { return "m"; }
+    const char* long_name() const noexcept override { return "minutes"; }
 } const minute{};
 
 struct hour_unit final : public duration_unit_impl<5, nanoseconds_counter, minute_unit::factor * 60> {
-    const char* const short_name() const noexcept override { return "h"; }
-    const char* const long_name() const noexcept override { return "hours"; }
+    const char* short_name() const noexcept override { return "h"; }
+    const char* long_name() const noexcept override { return "hours"; }
 } const hour{};
 
 struct day_unit final : public duration_unit_impl<6, days_counter, 1> {
-    const char* const short_name() const noexcept override { return "d"; }
-    const char* const long_name() const noexcept override { return "days"; }
+    const char* short_name() const noexcept override { return "d"; }
+    const char* long_name() const noexcept override { return "days"; }
 } const day{};
 
 struct week_unit final : public duration_unit_impl<7, days_counter, 7> {
-    const char* const short_name() const noexcept override { return "w"; }
-    const char* const long_name() const noexcept override { return "weeks"; }
+    const char* short_name() const noexcept override { return "w"; }
+    const char* long_name() const noexcept override { return "weeks"; }
 } const week{};
 
 struct month_unit final : public duration_unit_impl<8, months_counter, 1> {
-    const char* const short_name() const noexcept override { return "mo"; }
-    const char* const long_name() const noexcept override { return "months"; }
+    const char* short_name() const noexcept override { return "mo"; }
+    const char* long_name() const noexcept override { return "months"; }
 } const month{};
 
 struct year_unit final : public duration_unit_impl<9, months_counter, 12> {
-    const char* const short_name() const noexcept override { return "y"; }
-    const char* const long_name() const noexcept override { return "years"; }
+    const char* short_name() const noexcept override { return "y"; }
+    const char* long_name() const noexcept override { return "years"; }
 } const year{};
 
 const auto unit_table = std::unordered_map<stdx::string_view, std::reference_wrapper<const duration_unit>>{
