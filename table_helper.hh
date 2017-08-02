@@ -37,7 +37,7 @@
  */
 class table_helper {
 private:
-    const sstring& _keyspace; /** a keyspace name */
+    const sstring _keyspace; /** a keyspace name */
     const sstring _name; /** a table name */
     const sstring _create_cql; /** a CQL CREATE TABLE statement for the table */
     const sstring _insert_cql; /** a CQL INSERT statement */
@@ -46,8 +46,8 @@ private:
     shared_ptr<cql3::statements::modification_statement> _insert_stmt; /** INSERT prepared statement */
 
 public:
-    table_helper(const sstring& keyspace, sstring name, sstring create_cql, sstring insert_cql)
-        : _keyspace(keyspace)
+    table_helper(sstring keyspace, sstring name, sstring create_cql, sstring insert_cql)
+        : _keyspace(std::move(keyspace))
         , _name(std::move(name))
         , _create_cql(std::move(create_cql))
         , _insert_cql(std::move(insert_cql)) {}
