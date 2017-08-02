@@ -3328,8 +3328,10 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
         ++_stats->sstable_read_queue_overloaded;
         throw std::runtime_error("sstable inactive read queue overloaded");
     };
-    cfg.streaming_read_concurrency_config = cfg.read_concurrency_config;
-    cfg.streaming_read_concurrency_config.timeout = {};
+    // No timeouts or queue length limits - a failure here can kill an entire repair.
+    // Trust the caller to limit concurrency.
+    // FIXME: consider a separate semaphore
+    cfg.streaming_read_concurrency_config.sem = &_read_concurrency_sem;
     cfg.cf_stats = &_cf_stats;
     cfg.enable_incremental_backups = _enable_incremental_backups;
 
