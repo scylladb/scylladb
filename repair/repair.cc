@@ -598,7 +598,7 @@ static future<> repair_cf_range(repair_info& ri,
             [&ranges, &ri, &completion, &success, &neighbors, &cf] () {
             auto range = ranges.next();
             check_in_shutdown();
-            return parallelism_semaphore.wait(1).then([&ri, &completion, &success, &neighbors, &cf, range] {
+            return seastar::get_units(parallelism_semaphore, 1).then([&ri, &completion, &success, &neighbors, &cf, range] (auto signal_sem) {
                 auto checksum_type = service::get_local_storage_service().cluster_supports_large_partitions()
                                      ? repair_checksum::streamed : repair_checksum::legacy;
 
@@ -615,6 +615,8 @@ static future<> repair_cf_range(repair_info& ri,
                 }
 
                 completion.enter();
+                auto leave = defer([&completion] { completion.leave(); });
+
                 when_all(checksums.begin(), checksums.end()).then(
                         [&ri, &cf, range, &neighbors, &success]
                         (std::vector<future<partition_checksum>> checksums) {
@@ -750,7 +752,8 @@ static future<> repair_cf_range(repair_info& ri,
                         return ri.request_transfer_ranges(cf, range, live_neighbors_in, live_neighbors_out);
                     }
                     return make_ready_future<>();
-                }).handle_exception([&ri, &success, &cf, range] (std::exception_ptr eptr) {
+                }).handle_exception([&ri, &success, &cf, range, leave = std::move(leave),
+                        signal_sem = std::move(signal_sem)] (std::exception_ptr eptr) mutable {
                     // Something above (e.g., request_transfer_ranges) failed. We could
                     // stop the repair immediately, or let it continue with
                     // other ranges (at the moment, we do the latter). But in
@@ -759,9 +762,6 @@ static future<> repair_cf_range(repair_info& ri,
                     success = false;
                     ri.nr_failed_ranges++;
                     rlogger.warn("Failed sync of range {}: {}", range, eptr);
-                }).finally([&completion] {
-                    parallelism_semaphore.signal(1);
-                    completion.leave(); // notify do_for_each that we're done
                 });
             });
         }).finally([&success, &completion] {
