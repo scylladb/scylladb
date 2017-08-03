@@ -247,11 +247,11 @@ private:
     std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token);
     db::read_repair_decision new_read_repair_decision(const schema& s);
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, tracing::trace_state_ptr trace_state);
-    future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> query_singular_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
+    future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> query_result_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
                                                                            query::result_request request,
                                                                            tracing::trace_state_ptr trace_state,
                                                                            uint64_t max_size = query::result_memory_limiter::maximum_result_size);
-    future<query::result_digest, api::timestamp_type, cache_temperature> query_singular_local_digest(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state,
+    future<query::result_digest, api::timestamp_type, cache_temperature> query_result_local_digest(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state,
                                                                                   uint64_t max_size  = query::result_memory_limiter::maximum_result_size);
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_partition_key_range(lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state);
     dht::partition_range_vector get_restricted_ranges(keyspace& ks, const schema& s, dht::partition_range range);

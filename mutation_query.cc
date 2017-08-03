@@ -57,8 +57,8 @@ bool reconcilable_result::operator!=(const reconcilable_result& other) const {
 }
 
 query::result
-to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::partition_slice& slice, uint32_t max_rows, uint32_t max_partitions) {
-    query::result::builder builder(slice, query::result_request::only_result, { });
+to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::partition_slice& slice, uint32_t max_rows, uint32_t max_partitions, query::result_request result_type) {
+    query::result::builder builder(slice, result_type, { });
     for (const partition& p : r.partitions()) {
         if (builder.row_count() >= max_rows || builder.partition_count() >= max_partitions) {
             break;
