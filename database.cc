@@ -2116,7 +2116,7 @@ database::setup_metrics() {
                                        "A sum of this value plus total_writes represents a total amount of writes attempted on this shard.")),
 
         sm::make_derive("total_writes_timedout", _stats->total_writes_timedout,
-                       sm::description("Counts write operations failed due to a timeout. None zero value is a sign of storage being overloaded.")),
+                       sm::description("Counts write operations failed due to a timeout. A positive value is a sign of storage being overloaded.")),
 
         sm::make_derive("total_reads", _stats->total_reads,
                        sm::description("Counts the total number of successful reads on this shard.")),
@@ -2131,7 +2131,7 @@ database::setup_metrics() {
 
         sm::make_gauge("active_reads", [this] { return max_concurrent_reads() - _read_concurrency_sem.current(); },
                        sm::description(seastar::format("Holds the number of currently active read operations. "
-                                                       "If this vlaue gets close to {} we are likely to start dropping new read requests. "
+                                                       "If this value gets close to {} we are likely to start dropping new read requests. "
                                                        "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_concurrent_reads()))),
 
         sm::make_gauge("queued_reads", [this] { return _read_concurrency_sem.waiters(); },
@@ -2147,7 +2147,7 @@ database::setup_metrics() {
 
         sm::make_gauge("active_reads_system_keyspace", [this] { return max_system_concurrent_reads() - _system_read_concurrency_sem.current(); },
                        sm::description(seastar::format("Holds the number of currently active read operations from \"system\" keyspace tables. "
-                                                       "If this vlaue gets close to {} we are likely to start dropping new read requests. "
+                                                       "If this value gets close to {} we are likely to start dropping new read requests. "
                                                        "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_system_concurrent_reads()))),
 
         sm::make_gauge("queued_reads_system_keyspace", [this] { return _system_read_concurrency_sem.waiters(); },

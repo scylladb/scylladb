@@ -128,7 +128,7 @@ gossiper::gossiper() {
                 } else {
                     return 0;
                 }
-            }, sm::description("Heart beat of the current Node.")),
+            }, sm::description("Heartbeat of the current Node.")),
     });
 }
 
