@@ -12,7 +12,7 @@ ScyllaDB is released under the GNU Affero General Public License version 3 and t
 ## Start a `scylla` server instance
 
 ```console
-$ docker run --name some-scylla -d scylladb/scylla
+$ docker run --name some-scylla --hostname some-scylla -d scylladb/scylla
 ```
 
 ## Run `nodetool` utility
@@ -40,7 +40,7 @@ cqlsh>
 ## Make a cluster
 
 ```console
-$ docker run --name some-scylla2 -d scylladb/scylla --seeds="$(docker inspect --format='{{ .NetworkSettings.IPAddress }}' some-scylla)"
+$ docker run --name some-scylla2  --hostname some-scylla2 -d scylladb/scylla --seeds="$(docker inspect --format='{{ .NetworkSettings.IPAddress }}' some-scylla)"
 ```
 
 ## Check `scylla` logs
