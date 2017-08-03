@@ -70,5 +70,7 @@ class ScyllaSetup:
         if self._experimental == "1":
             args += [ "--experimental=on" ]
 
+        args += ["--blocked-reactor-notify-ms 999999999"]
+
         with open("/etc/scylla.d/docker.conf", "w") as cqlshrc:
             cqlshrc.write("SCYLLA_DOCKER_ARGS=\"%s\"\n" % " ".join(args))
