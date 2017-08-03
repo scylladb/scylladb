@@ -2683,7 +2683,10 @@ public:
 
 class never_speculating_read_executor : public abstract_read_executor {
 public:
-    using abstract_read_executor::abstract_read_executor;
+    never_speculating_read_executor(schema_ptr s, lw_shared_ptr<column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, std::vector<gms::inet_address> targets, tracing::trace_state_ptr trace_state) :
+                                        abstract_read_executor(std::move(s), std::move(cf), std::move(proxy), std::move(cmd), std::move(pr), cl, 0, std::move(targets), std::move(trace_state)) {
+        _block_for = _targets.size();
+    }
 };
 
 // this executor always asks for one additional data reply
@@ -2808,7 +2811,7 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     // Speculative retry is disabled *OR* there are simply no extra replicas to speculate.
     if (retry_type == speculative_retry::type::NONE || block_for == all_replicas.size()
             || (repair_decision == db::read_repair_decision::DC_LOCAL && is_datacenter_local(cl) && block_for == target_replicas.size())) {
-        return ::make_shared<never_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
+        return ::make_shared<never_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state));
     }
 
     if (target_replicas.size() == all_replicas.size()) {
@@ -2822,7 +2825,7 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     if (target_replicas.size() == block_for) { // If RRD.DC_LOCAL extra replica may already be present
         if (is_datacenter_local(cl) && !db::is_local(extra_replica)) {
             slogger.trace("read executor no extra target to speculate");
-            return ::make_shared<never_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas), std::move(trace_state));
+            return ::make_shared<never_speculating_read_executor>(schema, cf, p, cmd, std::move(pr), cl, std::move(target_replicas), std::move(trace_state));
         } else {
             target_replicas.push_back(extra_replica);
             slogger.trace("creating read executor with extra target {}", extra_replica);
