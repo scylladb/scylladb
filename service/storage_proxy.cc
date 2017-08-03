@@ -2749,13 +2749,15 @@ public:
     }
 };
 
-class range_slice_read_executor : public abstract_read_executor {
+class range_slice_read_executor : public never_speculating_read_executor {
 public:
-    range_slice_read_executor(schema_ptr s, lw_shared_ptr<column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, std::vector<gms::inet_address> targets, tracing::trace_state_ptr trace_state) :
-                                    abstract_read_executor(std::move(s), std::move(cf), std::move(proxy), std::move(cmd), std::move(pr), cl, targets.size(), std::move(targets), std::move(trace_state)) {}
+    using never_speculating_read_executor::never_speculating_read_executor;
     virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(storage_proxy::clock_type::time_point timeout) override {
-        reconcile(_cl, timeout);
-        return _result_promise.get_future();
+        if (!service::get_local_storage_service().cluster_supports_digest_multipartition_reads()) {
+            reconcile(_cl, timeout);
+            return _result_promise.get_future();
+        }
+        return never_speculating_read_executor::execute(timeout);
     }
 };
 

@@ -263,6 +263,7 @@ private:
     gms::feature _materialized_views_feature;
     gms::feature _counters_feature;
     gms::feature _indexes_feature;
+    gms::feature _digest_multipartition_read_feature;
 
 public:
     void enable_all_features() {
@@ -271,6 +272,7 @@ public:
         _materialized_views_feature.enable();
         _counters_feature.enable();
         _indexes_feature.enable();
+        _digest_multipartition_read_feature.enable();
     }
 
     void finish_bootstrapping() {
@@ -2235,6 +2237,10 @@ public:
 
     bool cluster_supports_indexes() const {
         return bool(_indexes_feature);
+    }
+
+    bool cluster_supports_digest_multipartition_reads() const {
+        return bool(_digest_multipartition_read_feature);
     }
 };
 
