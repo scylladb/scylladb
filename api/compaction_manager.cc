@@ -103,29 +103,37 @@ void set_compaction_manager(http_context& ctx, routes& r) {
     });
 
     cm::get_compaction_history.set(r, [] (std::unique_ptr<request> req) {
-        return db::system_keyspace::get_compaction_history().then([] (std::vector<db::system_keyspace::compaction_history_entry> history) {
-            std::vector<cm::history> res;
-            res.reserve(history.size());
-
-            for (auto& entry : history) {
-                cm::history h;
-                h.id = entry.id.to_sstring();
-                h.ks = std::move(entry.ks);
-                h.cf = std::move(entry.cf);
-                h.compacted_at = entry.compacted_at;
-                h.bytes_in = entry.bytes_in;
-                h.bytes_out =  entry.bytes_out;
-                for (auto it : entry.rows_merged) {
-                    httpd::compaction_manager_json::row_merged e;
-                    e.key = it.first;
-                    e.value = it.second;
-                    h.rows_merged.push(std::move(e));
-                }
-                res.push_back(std::move(h));
-            }
-
-            return make_ready_future<json::json_return_type>(res);
-        });
+        std::function<future<>(output_stream<char>&&)> f = [](output_stream<char>&& s) {
+            return do_with(output_stream<char>(std::move(s)), true, [] (output_stream<char>& s, bool& first){
+                return s.write("[").then([&s, &first] {
+                    return db::system_keyspace::get_compaction_history([&s, &first](const db::system_keyspace::compaction_history_entry& entry) mutable {
+                        cm::history h;
+                        h.id = entry.id.to_sstring();
+                        h.ks = std::move(entry.ks);
+                        h.cf = std::move(entry.cf);
+                        h.compacted_at = entry.compacted_at;
+                        h.bytes_in = entry.bytes_in;
+                        h.bytes_out =  entry.bytes_out;
+                        for (auto it : entry.rows_merged) {
+                            httpd::compaction_manager_json::row_merged e;
+                            e.key = it.first;
+                            e.value = it.second;
+                            h.rows_merged.push(std::move(e));
+                        }
+                        auto fut = first ? make_ready_future<>() : s.write(", ");
+                        first = false;
+                        return fut.then([&s, h = std::move(h)] {
+                            return formatter::write(s, h);
+                        });
+                    }).then([&s] {
+                        return s.write("]").then([&s] {
+                            return s.close();
+                        });
+                    });
+                });
+            });
+        };
+        return make_ready_future<json::json_return_type>(std::move(f));
     });
 
     cm::get_compaction_info.set(r, [] (std::unique_ptr<request> req) {
