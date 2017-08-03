@@ -1,3 +1,0 @@
-#!/bin/sh
-
-exec /usr/bin/java -jar /opt/scylladb/lib/java/antlr3.jar $*

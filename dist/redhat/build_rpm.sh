@@ -3,24 +3,18 @@
 . /etc/os-release
 print_usage() {
     echo "build_rpm.sh --rebuild-dep --jobs 2 --target epel-7-x86_64 --configure-user"
-    echo "  --rebuild-dep  rebuild dependency packages (CentOS)"
     echo "  --jobs  specify number of jobs"
     echo "  --dist  create a public distribution rpm"
     echo "  --target target distribution in mock cfg name"
     echo "  --configure-user  configure current user as mock group member"
     exit 1
 }
-REBUILD=0
 JOBS=0
 DIST=0
 TARGET=
 USERMOD=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        "--rebuild-dep")
-            REBUILD=1
-            shift 1
-            ;;
         "--jobs")
             JOBS=$2
             shift 2
@@ -107,12 +101,7 @@ if [ $JOBS -gt 0 ]; then
     SRPM_OPTS="$SRPM_OPTS --define='_smp_mflags -j$JOBS'"
 fi
 sudo mock --buildsrpm --root=$TARGET --resultdir=`pwd`/build/srpms --spec=build/scylla.spec --sources=build/scylla-$VERSION.tar $SRPM_OPTS
-if [ "$TARGET" = "epel-7-x86_64" ] && [ $REBUILD = 1 ]; then
-    ./dist/redhat/centos_dep/build_dependency.sh
-    sudo mock --init --root=$TARGET
-    sudo mock --install --root=$TARGET build/rpms/*.{x86_64,noarch}.rpm
-    RPM_OPTS="$RPM_OPTS --no-clean"
-elif [ "$TARGET" = "epel-7-x86_64" ] && [ $REBUILD = 0 ]; then
+if [ "$TARGET" = "epel-7-x86_64" ]; then
     TARGET=scylla-$TARGET
     RPM_OPTS="$RPM_OPTS --configdir=dist/redhat/mock"
 fi
