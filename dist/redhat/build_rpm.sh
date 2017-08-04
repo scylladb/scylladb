@@ -7,6 +7,7 @@ print_usage() {
     echo "  --dist  create a public distribution rpm"
     echo "  --target target distribution in mock cfg name"
     echo "  --configure-user  configure current user as mock group member"
+    echo "  --rebuild-deb  ignored (for compatibility with previous versions)"
     exit 1
 }
 JOBS=0
@@ -31,6 +32,9 @@ while [ $# -gt 0 ]; do
             USERMOD=1
             shift 1
             ;;
+	"--rebuild-dep")
+	    shift 1
+	    ;;
         *)
             print_usage
             ;;
