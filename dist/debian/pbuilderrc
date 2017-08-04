@@ -17,12 +17,12 @@ if [ "$DIST" = "trusty" ] || [ "$DIST" = "xenial" ] || [ "$DIST" = "yakkety" ] |
     if [ "$DIST" = "trusty" ]; then
         OTHERMIRROR="deb http://archive.ubuntu.com/ubuntu/ trusty-updates main restricted universe multiverse|deb http://ppa.launchpad.net/ubuntu-toolchain-r/test/ubuntu trusty main|deb http://ppa.launchpad.net/ubuntu-toolchain-r/test/ubuntu trusty main"
         if [ $REBUILD -eq 0 ]; then
-            OTHERMIRROR="$OTHERMIRROR|deb [arch=amd64] http://downloads.scylladb.com/deb/3rdparty/trusty trusty scylladb/multiverse"
+            OTHERMIRROR="$OTHERMIRROR|deb [arch=amd64] http://ppa.launchpad.net/scylladb/ppa/ubuntu $DIST main"
         fi
     else
         OTHERMIRROR="deb http://archive.ubuntu.com/ubuntu/ $DIST-updates main restricted universe multiverse"
         if [ $REBUILD -eq 0 ]; then
-            OTHERMIRROR="$OTHERMIRROR|deb [arch=amd64] http://downloads.scylladb.com/deb/3rdparty/$DIST $DIST scylladb/multiverse"
+            OTHERMIRROR="$OTHERMIRROR|deb [arch=amd64] http://ppa.launchpad.net/scylladb/ppa/ubuntu $DIST main"
         fi
     fi
 elif [ "$DIST" = "jessie" ] || [ "$DIST" = "stretch" ] || [ "$DIST" = "buster" ] || [ "$DIST" = "sid" ]; then
