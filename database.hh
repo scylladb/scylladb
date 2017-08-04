@@ -74,7 +74,6 @@
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/metrics_registration.hh>
 #include "tracing/trace_state.hh"
-#include <boost/intrusive/parent_from_member.hpp>
 #include "db/view/view.hh"
 #include "lister.hh"
 #include "utils/phased_barrier.hh"

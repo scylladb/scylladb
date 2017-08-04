@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <boost/intrusive/parent_from_member.hpp>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/metrics_registration.hh>
