@@ -2151,6 +2151,14 @@ database::setup_metrics() {
         sm::make_gauge("queued_reads", [this] { return _read_concurrency_sem.waiters(); },
                        sm::description("Holds the number of currently queued read operations.")),
 
+        sm::make_gauge("active_reads_streaming", [this] { return max_streaming_concurrent_reads() - _streaming_concurrency_sem.current(); },
+                       sm::description(seastar::format("Holds the number of currently active read operations issued on behalf of streaming "
+                                                       "If this value gets close to {} we are likely to start dropping new read requests. "
+                                                       "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_streaming_concurrent_reads()))),
+
+        sm::make_gauge("queued_reads_streaming", [this] { return _streaming_concurrency_sem.waiters(); },
+                       sm::description("Holds the number of currently queued read operations on behalf of streaming.")),
+
         sm::make_gauge("active_reads_system_keyspace", [this] { return max_system_concurrent_reads() - _system_read_concurrency_sem.current(); },
                        sm::description(seastar::format("Holds the number of currently active read operations from \"system\" keyspace tables. "
                                                        "If this vlaue gets close to {} we are likely to start dropping new read requests. "
