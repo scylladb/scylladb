@@ -1,7 +1,7 @@
 #!/usr/bin/make -f
 
 override_dh_auto_configure:
-	./configure.py --enable-dpdk --mode=release --static-stdc++ --static-thrift --compiler=@@COMPILER@@ --cflags="-I/opt/scylladb/include"
+	./configure.py --enable-dpdk --mode=release --static-stdc++ --static-thrift --compiler=@@COMPILER@@ --cflags="-I/opt/scylladb/include -L/opt/scylladb/lib"
 
 override_dh_auto_build:
 	ninja
