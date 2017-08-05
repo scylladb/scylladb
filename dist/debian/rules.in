@@ -4,7 +4,7 @@ override_dh_auto_configure:
 	./configure.py --enable-dpdk --mode=release --static-stdc++ --static-thrift --compiler=@@COMPILER@@ --cflags="-I/opt/scylladb/include -L/opt/scylladb/lib"
 
 override_dh_auto_build:
-	PATH="/opt/scylladb/bin:$PATH" ninja
+	PATH="/opt/scylladb/bin:$$PATH" ninja
 
 override_dh_auto_clean:
 	rm -rf build/release seastar/build
