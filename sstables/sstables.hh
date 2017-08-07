@@ -791,6 +791,7 @@ class components_writer {
     const schema& _schema;
     file_writer& _out;
     file_writer _index;
+    bool _index_needs_close;
     uint64_t _max_sstable_size;
     bool _tombstone_written;
     // Remember first and last keys, which we need for the summary file.
@@ -806,6 +807,12 @@ private:
     }
 public:
     components_writer(sstable& sst, const schema& s, file_writer& out, uint64_t estimated_partitions, const sstable_writer_config&, const io_priority_class& pc);
+    ~components_writer();
+    components_writer(components_writer&& o) : _sst(o._sst), _schema(o._schema), _out(o._out), _index(std::move(o._index)),
+            _index_needs_close(o._index_needs_close), _max_sstable_size(o._max_sstable_size), _tombstone_written(o._tombstone_written),
+            _first_key(std::move(o._first_key)), _last_key(std::move(o._last_key)), _partition_key(std::move(o._partition_key)) {
+        o._index_needs_close = false;
+    }
 
     void consume_new_partition(const dht::decorated_key& dk);
     void consume(tombstone t);
