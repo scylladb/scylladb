@@ -1800,6 +1800,7 @@ components_writer::components_writer(sstable& sst, const schema& s, file_writer&
     , _schema(s)
     , _out(out)
     , _index(index_file_writer(sst, pc))
+    , _index_needs_close(true)
     , _max_sstable_size(max_sstable_size)
     , _tombstone_written(false)
 {
@@ -1931,6 +1932,7 @@ stop_iteration components_writer::consume_end_of_partition() {
 void components_writer::consume_end_of_stream() {
     seal_summary(_sst._components->summary, std::move(_first_key), std::move(_last_key)); // what if there is only one partition? what if it is empty?
 
+    _index_needs_close = false;
     _index.close().get();
 
     if (_sst.has_component(sstable::component_type::CompressionInfo)) {
@@ -1946,6 +1948,16 @@ future<> sstable::write_components(memtable& mt, bool backup, const io_priority_
     _collector.set_replay_position(mt.replay_position());
     return write_components(mt.make_flush_reader(mt.schema(), pc),
             mt.partition_count(), mt.schema(), std::numeric_limits<uint64_t>::max(), backup, pc, leave_unsealed);
+}
+
+components_writer::~components_writer() {
+    if (_index_needs_close) {
+        try {
+            _index.close().get();
+        } catch (...) {
+            sstlog.error("components_writer failed to close file: {}", std::current_exception());
+        }
+    }
 }
 
 future<>
