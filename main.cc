@@ -502,6 +502,10 @@ int main(int ac, char** av) {
             auto key = get_or_default(ssl_opts, "keyfile", relative_conf_dir("scylla.key").string());
             auto prio = get_or_default(ssl_opts, "priority_string", sstring());
             auto clauth = is_true(get_or_default(ssl_opts, "require_client_auth", "false"));
+            if (cluster_name.empty()) {
+                cluster_name = "ScyllaDB Cluster";
+                startlog.warn("Using default cluster name is not recommended. Using a unique cluster name will reduce the chance of adding nodes to the wrong cluster by mistake");
+            }
             init_ms_fd_gossiper(listen_address
                     , storage_port
                     , ssl_storage_port

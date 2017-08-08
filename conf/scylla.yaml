@@ -14,7 +14,7 @@
 # one logical cluster from joining another.
 # It is recommended to change the default value when creating a new cluster.
 # You can NOT modify this value for an existing cluster
-cluster_name: 'Test Cluster'
+#cluster_name: 'ScyllaDB Cluster'
 
 # This defines the number of tokens randomly assigned to this node on the ring
 # The more tokens, relative to other nodes, the larger the proportion of data

@@ -174,7 +174,7 @@ public:
     )   \
     /* Initialization properties */             \
     /* The minimal properties needed for configuring a cluster. */  \
-    val(cluster_name, sstring, "Test Cluster", Used,   \
+    val(cluster_name, sstring, "", Used,   \
             "The name of the cluster; used to prevent machines in one logical cluster from joining another. All nodes participating in a cluster must have the same value."   \
     )                                           \
     val(listen_address, sstring, "localhost", Used,     \
