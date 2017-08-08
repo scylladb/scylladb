@@ -364,7 +364,7 @@ public:
             "See memtable_heap_space_in_mb"  \
     )   \
     /* Cache and index settings */  \
-    val(column_index_size_in_kb, uint32_t, 64, Unused,     \
+    val(column_index_size_in_kb, uint32_t, 64, Used,     \
             "Granularity of the index of rows within a partition. For huge rows, decrease this setting to improve seek time. If you use key cache, be careful not to make this setting too large because key cache will be overwhelmed. If you're unsure of the size of the rows, it's best to use the default setting."  \
     )   \
     val(index_summary_capacity_in_mb, uint32_t, 0, Unused,     \
