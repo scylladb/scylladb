@@ -90,8 +90,6 @@ if is_debian_variant; then
     env DEBIAN_FRONTEND=noninteractive apt-get -y install mdadm xfsprogs
 elif is_gentoo_variant; then
     emerge -uq sys-fs/mdadm sys-fs/xfsprogs
-else
-    yum -y install mdadm xfsprogs
 fi
 if [ "$ID" = "ubuntu" ] && [ "$VERSION_ID" = "14.04" ]; then
     mdadm --create --verbose --force --run $RAID --level=0 -c1024 --raid-devices=$NR_DISK $DISKS
