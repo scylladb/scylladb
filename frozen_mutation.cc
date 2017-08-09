@@ -262,7 +262,7 @@ future<> fragment_and_freeze(streamed_mutation sm, frozen_mutation_consumer_fn c
                 if (!mfopt) {
                     return freezer.consume_end_of_stream();
                 }
-                return std::move(*mfopt).consume(freezer);
+                return std::move(*mfopt).consume_streamed_mutation(freezer);
             });
         });
     });

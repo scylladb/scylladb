@@ -163,13 +163,43 @@ public:
     friend std::ostream& operator<<(std::ostream& is, const static_row& row);
 };
 
+class partition_start final {
+    dht::decorated_key _key;
+    tombstone _partition_tombstone;
+public:
+    partition_start(dht::decorated_key pk, tombstone pt)
+        : _key(std::move(pk))
+        , _partition_tombstone(std::move(pt))
+    { }
+
+    dht::decorated_key& key() { return _key; }
+    tombstone& partition_tombstone() { return _partition_tombstone; }
+
+    position_in_partition_view position() const;
+
+    size_t external_memory_usage() const {
+        return _key.external_memory_usage();
+    }
+
+    size_t memory_usage() const {
+        return sizeof(partition_start) + external_memory_usage();
+    }
+
+    bool equal(const schema& s, const partition_start& other) const {
+        return _key.equal(s, other._key) && _partition_tombstone == other._partition_tombstone;
+    }
+
+    friend std::ostream& operator<<(std::ostream& is, const partition_start& row);
+};
+
 GCC6_CONCEPT(
 template<typename T, typename ReturnType>
 concept bool MutationFragmentConsumer() {
-    return requires(T t, static_row sr, clustering_row cr, range_tombstone rt) {
+    return requires(T t, static_row sr, clustering_row cr, range_tombstone rt, partition_start ph) {
         { t.consume(std::move(sr)) } -> ReturnType;
         { t.consume(std::move(cr)) } -> ReturnType;
         { t.consume(std::move(rt)) } -> ReturnType;
+        { t.consume(std::move(ph)) } -> ReturnType;
     };
 }
 )
@@ -205,10 +235,11 @@ concept bool StreamedMutationConsumer() {
 GCC6_CONCEPT(
 template<typename T, typename ReturnType>
 concept bool MutationFragmentVisitor() {
-    return requires(T t, const static_row& sr, const clustering_row& cr, const range_tombstone& rt) {
+    return requires(T t, const static_row& sr, const clustering_row& cr, const range_tombstone& rt, const partition_start& ph) {
         { t(sr) } -> ReturnType;
         { t(cr) } -> ReturnType;
         { t(rt) } -> ReturnType;
+        { t(ph) } -> ReturnType;
     };
 }
 )
@@ -219,6 +250,7 @@ public:
         static_row,
         clustering_row,
         range_tombstone,
+        partition_start,
     };
 private:
     struct data {
@@ -230,6 +262,7 @@ private:
             static_row _static_row;
             clustering_row _clustering_row;
             range_tombstone _range_tombstone;
+            partition_start _partition_start;
         };
     };
 private:
@@ -246,6 +279,7 @@ public:
     mutation_fragment(static_row&& r);
     mutation_fragment(clustering_row&& r);
     mutation_fragment(range_tombstone&& r);
+    mutation_fragment(partition_start&& r);
 
     mutation_fragment(const mutation_fragment& o)
         : _kind(o._kind), _data(std::make_unique<data>()) {
@@ -258,6 +292,9 @@ public:
                 break;
             case kind::range_tombstone:
                 new (&_data->_range_tombstone) range_tombstone(o._data->_range_tombstone);
+                break;
+            case kind::partition_start:
+                new (&_data->_partition_start) partition_start(o._data->_partition_start);
                 break;
         }
     }
@@ -293,7 +330,7 @@ public:
     // than the starting position of this fragment.
     bool relevant_for_range_assuming_after(const schema& s, position_in_partition_view pos) const;
 
-    bool has_key() const { return !is_static_row(); }
+    bool has_key() const { return !is_static_row() && !is_partition_start(); }
     // Requirements: has_key() == true
     const clustering_key_prefix& key() const;
 
@@ -302,6 +339,7 @@ public:
     bool is_static_row() const { return _kind == kind::static_row; }
     bool is_clustering_row() const { return _kind == kind::clustering_row; }
     bool is_range_tombstone() const { return _kind == kind::range_tombstone; }
+    bool is_partition_start() const { return _kind == kind::partition_start; }
 
     static_row& as_mutable_static_row() {
         _data->_size_in_bytes = stdx::nullopt;
@@ -315,14 +353,20 @@ public:
         _data->_size_in_bytes = stdx::nullopt;
         return _data->_range_tombstone;
     }
+    partition_start& as_mutable_partition_start() {
+        _data->_size_in_bytes = stdx::nullopt;
+        return _data->_partition_start;
+    }
 
     static_row&& as_static_row() && { return std::move(_data->_static_row); }
     clustering_row&& as_clustering_row() && { return std::move(_data->_clustering_row); }
     range_tombstone&& as_range_tombstone() && { return std::move(_data->_range_tombstone); }
+    partition_start&& as_partition_start() && { return std::move(_data->_partition_start); }
 
     const static_row& as_static_row() const & { return _data->_static_row; }
     const clustering_row& as_clustering_row() const & { return _data->_clustering_row; }
     const range_tombstone& as_range_tombstone() const & { return _data->_range_tombstone; }
+    const partition_start& as_partition_start() const & { return _data->_partition_start; }
 
     // Requirements: mutation_fragment_kind() == mf.mutation_fragment_kind() && !is_range_tombstone()
     void apply(const schema& s, mutation_fragment&& mf);
@@ -339,6 +383,26 @@ public:
             return consumer.consume(std::move(_data->_clustering_row));
         case kind::range_tombstone:
             return consumer.consume(std::move(_data->_range_tombstone));
+        case kind::partition_start:
+            return consumer.consume(std::move(_data->_partition_start));
+        }
+        abort();
+    }
+
+    template<typename Consumer>
+    GCC6_CONCEPT(
+        requires StreamedMutationConsumer<Consumer>()
+    )
+    decltype(auto) consume_streamed_mutation(Consumer& consumer) && {
+        switch (_kind) {
+            case kind::static_row:
+                return consumer.consume(std::move(_data->_static_row));
+            case kind::clustering_row:
+                return consumer.consume(std::move(_data->_clustering_row));
+            case kind::range_tombstone:
+                return consumer.consume(std::move(_data->_range_tombstone));
+            case kind::partition_start:
+                abort();
         }
         abort();
     }
@@ -355,6 +419,8 @@ public:
             return visitor(as_clustering_row());
         case kind::range_tombstone:
             return visitor(as_range_tombstone());
+        case kind::partition_start:
+            return visitor(as_partition_start());
         }
         abort();
     }
@@ -377,6 +443,8 @@ public:
             return as_clustering_row().equal(s, other.as_clustering_row());
         case kind::range_tombstone:
             return as_range_tombstone().equal(s, other.as_range_tombstone());
+        case kind::partition_start:
+            return as_partition_start().equal(s, other.as_partition_start());
         }
         abort();
     }
@@ -392,6 +460,11 @@ inline position_in_partition_view static_row::position() const
 inline position_in_partition_view clustering_row::position() const
 {
     return position_in_partition_view(position_in_partition_view::clustering_row_tag_t(), _ck);
+}
+
+inline position_in_partition_view partition_start::position() const
+{
+    return position_in_partition_view(position_in_partition_view::partition_start_tag_t{});
 }
 
 std::ostream& operator<<(std::ostream&, mutation_fragment::kind);
@@ -575,7 +648,7 @@ auto consume(streamed_mutation& m, Consumer consumer) {
                 }
                 return m.fill_buffer().then([] { return stop_iteration::no; });
             }
-            return make_ready_future<stop_iteration>(m.pop_mutation_fragment().consume(c));
+            return make_ready_future<stop_iteration>(m.pop_mutation_fragment().consume_streamed_mutation(c));
         }).then([&c] {
             return c.consume_end_of_stream();
         });

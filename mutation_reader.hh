@@ -411,7 +411,7 @@ future<stop_iteration> do_consume_streamed_mutation_flattened(streamed_mutation&
             }
             f.get();
         } else {
-            if (sm.pop_mutation_fragment().consume(c) == stop_iteration::yes) {
+            if (sm.pop_mutation_fragment().consume_streamed_mutation(c) == stop_iteration::yes) {
                 break;
             }
         }
@@ -488,7 +488,7 @@ auto consume_flattened_in_thread(mutation_reader& mr, FlattenedConsumer& c, Stre
                 }
                 sm.fill_buffer().get0();
             } else {
-                if (sm.pop_mutation_fragment().consume(c) == stop_iteration::yes) {
+                if (sm.pop_mutation_fragment().consume_streamed_mutation(c) == stop_iteration::yes) {
                     break;
                 }
             }

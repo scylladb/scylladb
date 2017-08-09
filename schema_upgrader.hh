@@ -58,6 +58,9 @@ public:
     mutation_fragment consume(range_tombstone&& rt) {
         return std::move(rt);
     }
+    mutation_fragment consume(partition_start&& ph) {
+        return std::move(ph);
+    }
     mutation_fragment operator()(mutation_fragment&& mf) {
         return std::move(mf).consume(*this);
     }

@@ -153,6 +153,10 @@ public:
     stop_iteration consume_end_of_partition() {
         return stop_iteration::no;
     }
+
+    stop_iteration consume_end_of_stream() {
+        return stop_iteration::no;
+    }
 };
 
 SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {

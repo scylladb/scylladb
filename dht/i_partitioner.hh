@@ -111,6 +111,14 @@ public:
     bool is_maximum() const {
         return _kind == kind::after_all_keys;
     }
+
+    size_t external_memory_usage() const {
+        return _data.external_memory_usage();
+    }
+
+    size_t memory_usage() const {
+        return sizeof(token) + external_memory_usage();
+    }
 };
 
 token midpoint_unsigned(const token& t1, const token& t2);
@@ -165,6 +173,14 @@ public:
 
     const partition_key& key() const {
         return _key;
+    }
+
+    size_t external_memory_usage() const {
+        return _key.external_memory_usage() + _token.external_memory_usage();
+    }
+
+    size_t memory_usage() const {
+        return sizeof(decorated_key) + external_memory_usage();
     }
 };
 
