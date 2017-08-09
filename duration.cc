@@ -23,6 +23,7 @@
 
 #include "stdx.hh"
 
+#include <boost/lexical_cast.hpp>
 #include <seastar/core/print.hh>
 
 #include <cctype>
@@ -171,9 +172,12 @@ auto const unit_table = std::unordered_map<stdx::string_view, std::reference_wra
 // Throws `std::out_of_range` if a counter is out of range.
 //
 template <class Match, class Index = typename Match::size_type>
-cql_duration::common_counter_type parse_count(Match const& m, Index group_index) {
-    static_assert(sizeof(cql_duration::common_counter_type) <= sizeof(long long), "must be same");
-    return std::stoll(m[group_index].str());
+cql_duration::common_counter_type parse_count(const Match& m, Index group_index) {
+    try {
+        return boost::lexical_cast<cql_duration::common_counter_type>(m[group_index].str());
+    } catch (const boost::bad_lexical_cast&) {
+        throw std::out_of_range("duration counter");
+    }
 }
 
 //
