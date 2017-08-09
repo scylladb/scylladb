@@ -119,6 +119,8 @@ public:
     }
 
     void add_ranges(const sstring& keyspace_name, dht::token_range_vector ranges);
+    void add_tx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint, std::vector<sstring> column_families = {});
+    void add_rx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint, std::vector<sstring> column_families = {});
 private:
     bool use_strict_sources_for_ranges(const sstring& keyspace_name);
     /**
@@ -159,16 +161,27 @@ public:
     }
 #endif
 public:
-    future<streaming::stream_state> fetch_async();
+    future<> stream_async();
+    future<> do_stream_async();
+    size_t nr_ranges_to_stream();
 private:
     distributed<database>& _db;
     token_metadata& _metadata;
     std::unordered_set<token> _tokens;
     inet_address _address;
     sstring _description;
-    std::unordered_multimap<sstring, std::unordered_map<inet_address, dht::token_range_vector>> _to_fetch;
+    std::unordered_multimap<sstring, std::unordered_map<inet_address, dht::token_range_vector>> _to_stream;
     std::unordered_set<std::unique_ptr<i_source_filter>> _source_filters;
     stream_plan _stream_plan;
+    std::unordered_map<sstring, std::vector<sstring>> _column_families;
+    // Number of ranges to stream per stream plan
+    unsigned _nr_ranges_per_stream_plan = 10;
+    // Retry the stream plan _nr_max_retry times
+    unsigned _nr_retried = 0;
+    unsigned _nr_max_retry = 5;
+    // Number of tx and rx ranges added
+    unsigned _nr_tx_added = 0;
+    unsigned _nr_rx_added = 0;
 };
 
 } // dht
