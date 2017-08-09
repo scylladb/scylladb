@@ -130,15 +130,15 @@ public:
 //
 // Durations are simplified during printing so that `duration(24, 0, 0)` is printed as "2y".
 //
-std::ostream& operator<<(std::ostream& os, cql_duration const& d);
+std::ostream& operator<<(std::ostream& os, const cql_duration& d);
 
 // See above.
-seastar::sstring to_string(cql_duration const&);
+seastar::sstring to_string(const cql_duration&);
 
 //
 // Note that equality comparison is based on exact counter matches. It is not valid to expect equivalency across
 // counters like months and days. See the documentation for `duration` for more.
 //
 
-bool operator==(cql_duration const&, cql_duration const&) noexcept;
-bool operator!=(cql_duration const&, cql_duration const&) noexcept;
+bool operator==(const cql_duration&, const cql_duration&) noexcept;
+bool operator!=(const cql_duration&, const cql_duration&) noexcept;
