@@ -50,6 +50,7 @@
 
 #define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
 #include <cryptopp/md5.h>
+#include "cql3/prepared_statements_cache.hh"
 
 namespace cql3 {
 
@@ -61,6 +62,8 @@ logging::logger log("query_processor");
 distributed<query_processor> _the_query_processor;
 
 const sstring query_processor::CQL_VERSION = "3.3.1";
+
+const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono::minutes(60);
 
 class query_processor::internal_state {
     service::query_state _qs;
