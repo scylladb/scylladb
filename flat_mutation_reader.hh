@@ -74,6 +74,7 @@ public:
             _buffer_size = 0;
         }
         void forward_buffer_to(schema_ptr& s, const position_in_partition& pos);
+        void clear_buffer_to_next_partition();
     public:
         virtual ~impl() {}
         virtual future<> fill_buffer() = 0;
@@ -183,3 +184,7 @@ template<typename Impl, typename... Args>
 flat_mutation_reader make_flat_mutation_reader(Args &&... args) {
     return flat_mutation_reader(std::make_unique<Impl>(std::forward<Args>(args)...));
 }
+
+class mutation_reader;
+
+flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr, mutation_reader&&, streamed_mutation::forwarding);
