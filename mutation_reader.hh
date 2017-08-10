@@ -535,3 +535,7 @@ make_multi_range_reader(schema_ptr s, mutation_source source, const dht::partiti
                         const query::partition_slice& slice, const io_priority_class& pc = default_priority_class(),
                         tracing::trace_state_ptr trace_state = nullptr, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
                         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
+
+class flat_mutation_reader;
+
+mutation_reader mutation_reader_from_flat_mutation_reader(schema_ptr s, flat_mutation_reader&&);
