@@ -3011,7 +3011,6 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                    cl, cmd, concurrency_factor, timeout, remaining_row_count, remaining_partition_count, trace_state = std::move(trace_state)]
                    (foreign_ptr<lw_shared_ptr<query::result>>&& result) mutable {
         if (!result->row_count() || !result->partition_count()) {
-            slogger.error("no row count in query result, should not happen here");
             result->calculate_counts(cmd->slice);
         }
         remaining_row_count -= result->row_count().value();
