@@ -582,8 +582,7 @@ SEASTAR_TEST_CASE(datafile_generation_08) {
 
         const column_definition& r1_col = *s->get_column_definition("r1");
 
-        // Create 150 partitions so that summary file store 2 entries, assuming min index
-        // interval is 128.
+        // TODO: generate sstable which will have 2 samples with size-based sampling.
         for (int32_t i = 0; i < 150; i++) {
             auto key = partition_key::from_exploded(*s, {int32_type->decompose(i)});
             auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
@@ -605,23 +604,19 @@ SEASTAR_TEST_CASE(datafile_generation_08) {
                     auto buf = bufptr.get();
                     size_t offset = 0;
 
-                    std::vector<uint8_t> header = { /* min_index_interval */ 0, 0, 0, 0x80, /* size */ 0, 0, 0, 2,
-                        /* memory_size */ 0, 0, 0, 0, 0, 0, 0, 0x20, /* sampling_level */ 0, 0, 0, 0x80,
-                        /* size_at_full_sampling */  0, 0, 0, 2 };
+                    std::vector<uint8_t> header = { /* min_index_interval */ 0, 0, 0, 0x80, /* size */ 0, 0, 0, 1,
+                        /* memory_size */ 0, 0, 0, 0, 0, 0, 0, 0x10, /* sampling_level */ 0, 0, 0, 0x80,
+                        /* size_at_full_sampling */  0, 0, 0, 1 };
                     BOOST_REQUIRE(::memcmp(header.data(), &buf[offset], header.size()) == 0);
                     offset += header.size();
 
-                    std::vector<uint8_t> positions = { 0x8, 0, 0, 0, 0x14, 0, 0, 0 };
+                    std::vector<uint8_t> positions = { 0x4, 0, 0, 0 };
                     BOOST_REQUIRE(::memcmp(positions.data(), &buf[offset], positions.size()) == 0);
                     offset += positions.size();
 
                     std::vector<uint8_t> first_entry = { /* key */ 0, 0, 0, 0x17, /* position */ 0, 0, 0, 0, 0, 0, 0, 0 };
                     BOOST_REQUIRE(::memcmp(first_entry.data(), &buf[offset], first_entry.size()) == 0);
                     offset += first_entry.size();
-
-                    std::vector<uint8_t> second_entry = { /* key */ 0, 0, 0, 0x65, /* position */ 0, 0x9, 0, 0, 0, 0, 0, 0 };
-                    BOOST_REQUIRE(::memcmp(second_entry.data(), &buf[offset], second_entry.size()) == 0);
-                    offset += second_entry.size();
 
                     std::vector<uint8_t> first_key = { 0, 0, 0, 0x4, 0, 0, 0, 0x17 };
                     BOOST_REQUIRE(::memcmp(first_key.data(), &buf[offset], first_key.size()) == 0);

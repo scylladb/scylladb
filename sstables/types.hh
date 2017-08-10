@@ -219,10 +219,6 @@ struct summary_ka {
     disk_string<uint32_t> first_key;
     disk_string<uint32_t> last_key;
 
-    // Used to determine when a summary entry should be added based on min_index_interval.
-    // NOTE: keys_written isn't part of on-disk format of summary.
-    size_t keys_written;
-
     // NOTE4: There is a structure written by Cassandra into the end of the Summary
     // file, after the field last_key, that we haven't understand yet, but we know
     // that its content isn't related to the summary itself.
