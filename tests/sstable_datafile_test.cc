@@ -56,6 +56,8 @@
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/algorithm/cxx11/all_of.hpp>
 
+#include "sstable_utils.hh"
+
 using namespace sstables;
 
 static sstring some_keyspace("ks");
@@ -69,8 +71,6 @@ atomic_cell make_atomic_cell(bytes_view value, uint32_t ttl = 0, uint32_t expira
         return atomic_cell::make_live(0, value);
     }
 }
-
-static shared_sstable make_sstable_containing(std::function<shared_sstable()> sst_factory, std::vector<mutation> muts);
 
 SEASTAR_TEST_CASE(datafile_generation_01) {
     // Data file with clustering key
@@ -2287,37 +2287,6 @@ SEASTAR_TEST_CASE(check_read_indexes) {
     });
 }
 
-// Must run in a seastar thread
-static shared_sstable make_sstable_containing(std::function<shared_sstable()> sst_factory, std::vector<mutation> muts) {
-    auto sst = sst_factory();
-    schema_ptr s = muts[0].schema();
-    auto mt = make_lw_shared<memtable>(s);
-    for (auto&& m : muts) {
-        mt->apply(m);
-    }
-    write_memtable_to_sstable(*mt, sst).get();
-    sst->open_data().get();
-
-    std::set<mutation, mutation_decorated_key_less_comparator> merged;
-    for (auto&& m : muts) {
-        auto result = merged.insert(m);
-        if (!result.second) {
-            auto old = *result.first;
-            merged.erase(result.first);
-            merged.insert(old + m);
-        }
-    }
-
-    // validate the sstable
-    auto rd = assert_that(sstable_reader(sst, s));
-    for (auto&& m : merged) {
-        rd.produces(m);
-    }
-    rd.produces_end_of_stream();
-
-    return sst;
-}
-
 SEASTAR_TEST_CASE(tombstone_purge_test) {
     BOOST_REQUIRE(smp::count == 1);
     return seastar::async([] {
@@ -3840,7 +3809,7 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
     auto key_and_token_pair = token_generation_for_current_shard(8);
 
     auto check = [] (sstable_set::incremental_selector& selector, const dht::token& token, std::unordered_set<int64_t> expected_gens) {
-        auto sstables = selector.select(token);
+        auto sstables = selector.select(token).sstables;
         BOOST_REQUIRE(sstables.size() == expected_gens.size());
         for (auto& sst : sstables) {
             BOOST_REQUIRE(expected_gens.count(sst->generation()) == 1);

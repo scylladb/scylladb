@@ -67,7 +67,7 @@ extern logging::logger clogger;
 class incremental_selector_impl {
 public:
     virtual ~incremental_selector_impl() {}
-    virtual std::pair<dht::token_range, std::vector<shared_sstable>> select(const dht::token& token) = 0;
+    virtual std::tuple<dht::token_range, std::vector<shared_sstable>, dht::token> select(const dht::token& token) = 0;
 };
 
 class sstable_set_impl {
@@ -136,14 +136,12 @@ sstable_set::incremental_selector::~incremental_selector() = default;
 
 sstable_set::incremental_selector::incremental_selector(sstable_set::incremental_selector&&) noexcept = default;
 
-const std::vector<shared_sstable>&
+sstable_set::incremental_selector::selection
 sstable_set::incremental_selector::select(const dht::token& t) const {
     if (!_current_token_range || !_current_token_range->contains(t, dht::token_comparator())) {
-        auto&& x = _impl->select(t);
-        _current_token_range = std::move(std::get<0>(x));
-        _current_sstables = std::move(std::get<1>(x));
+        std::tie(_current_token_range, _current_sstables, _current_next_token) = _impl->select(t);
     }
-    return _current_sstables;
+    return {_current_sstables, _current_next_token};
 }
 
 sstable_set::incremental_selector
@@ -178,8 +176,8 @@ public:
     incremental_selector(const std::vector<shared_sstable>& sstables)
         : _sstables(sstables) {
     }
-    virtual std::pair<dht::token_range, std::vector<shared_sstable>> select(const dht::token& token) override {
-        return std::make_pair(dht::token_range::make_open_ended_both_sides(), _sstables);
+    virtual std::tuple<dht::token_range, std::vector<shared_sstable>, dht::token> select(const dht::token& token) override {
+        return std::make_tuple(dht::token_range::make_open_ended_both_sides(), _sstables, dht::maximum_token());
     }
 };
 
@@ -295,24 +293,30 @@ public:
         , _it(leveled_sstables.begin())
         , _end(leveled_sstables.end()) {
     }
-    virtual std::pair<dht::token_range, std::vector<shared_sstable>> select(const dht::token& token) override {
+    virtual std::tuple<dht::token_range, std::vector<shared_sstable>, dht::token> select(const dht::token& token) override {
         auto pr = dht::partition_range::make(dht::ring_position::starting_at(token), dht::ring_position::ending_at(token));
         auto interval = make_interval(*_schema, std::move(pr));
         auto ssts = _unleveled_sstables;
 
+        const auto next_token =  [&] {
+            const auto next = std::next(_it);
+            return next == _end ? dht::maximum_token() : next->first.lower().token();
+        };
+
         while (_it != _end) {
             if (boost::icl::contains(_it->first, interval)) {
                 ssts.insert(ssts.end(), _it->second.begin(), _it->second.end());
-                return std::make_pair(to_token_range(_it->first), std::move(ssts));
+                return std::make_tuple(to_token_range(_it->first), std::move(ssts), next_token());
             }
             // we don't want to skip current interval if token lies before it.
             if (boost::icl::lower_less(interval, _it->first)) {
-                return std::make_pair(dht::token_range::make({token, true}, {_it->first.lower().token(), false}),
-                    std::move(ssts));
+                return std::make_tuple(dht::token_range::make({token, true}, {_it->first.lower().token(), false}),
+                    std::move(ssts),
+                    next_token());
             }
             _it++;
         }
-        return std::make_pair(dht::token_range::make_open_ended_both_sides(), std::move(ssts));
+        return std::make_tuple(dht::token_range::make_open_ended_both_sides(), std::move(ssts), dht::maximum_token());
     }
 };
 

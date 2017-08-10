@@ -200,6 +200,7 @@ scylla_tests = [
     'tests/sstable_test',
     'tests/sstable_mutation_test',
     'tests/sstable_resharding_test',
+    'tests/combined_mutation_reader_test',
     'tests/memtable_test',
     'tests/commitlog_test',
     'tests/cartesian_product_test',
@@ -654,7 +655,8 @@ for t in scylla_tests:
     else:
         deps[t] += scylla_core + api + idls + ['tests/cql_test_env.cc']
 
-deps['tests/sstable_test'] += ['tests/sstable_datafile_test.cc']
+deps['tests/sstable_test'] += ['tests/sstable_datafile_test.cc', 'tests/sstable_utils.cc']
+deps['tests/combined_mutation_reader_test'] += ['tests/sstable_utils.cc']
 
 deps['tests/bytes_ostream_test'] = ['tests/bytes_ostream_test.cc', 'utils/managed_bytes.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
 deps['tests/input_stream_test'] = ['tests/input_stream_test.cc']

@@ -55,11 +55,24 @@ public:
         std::unique_ptr<incremental_selector_impl> _impl;
         mutable stdx::optional<dht::token_range> _current_token_range;
         mutable std::vector<shared_sstable> _current_sstables;
+        mutable dht::token _current_next_token;
     public:
         ~incremental_selector();
         incremental_selector(std::unique_ptr<incremental_selector_impl> impl);
         incremental_selector(incremental_selector&&) noexcept;
-        const std::vector<shared_sstable>& select(const dht::token& t) const;
+
+        struct selection {
+            const std::vector<shared_sstable>& sstables;
+            dht::token next_token;
+        };
+
+        // Return the sstables that intersect with t and the best next
+        // token (inclusive) to call select() with so that the least
+        // amount of sstables will be returned (without skipping any).
+        // NOTE: selection.sstables is a reference to an internal cache
+        // and can be invalidated by another call to select().
+        // If you need it long-term copy it!
+        selection select(const dht::token& t) const;
     };
     incremental_selector make_incremental_selector() const;
 };

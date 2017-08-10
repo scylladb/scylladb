@@ -150,7 +150,7 @@ partition_presence_checker
 column_family::make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set> sstables) {
     auto sel = make_lw_shared(sstables->make_incremental_selector());
     return [this, sstables = std::move(sstables), sel = std::move(sel)] (const dht::decorated_key& key) {
-        auto& sst = sel->select(key.token());
+        auto& sst = sel->select(key.token()).sstables;
         if (sst.empty()) {
             return partition_presence_checker_result::definitely_doesnt_exist;
         }
@@ -351,46 +351,22 @@ filter_sstable_for_reader(std::vector<sstables::shared_sstable>&& sstables, colu
     return sstables;
 }
 
-class range_sstable_reader final : public combined_mutation_reader {
+// Incremental selector implementation for combined_mutation_reader that
+// selects readers on-demand as the read progresses through the token
+// range.
+class incremental_reader_selector : public reader_selector {
     schema_ptr _s;
     const dht::partition_range* _pr;
     lw_shared_ptr<sstables::sstable_set> _sstables;
-
-    struct sstable_and_reader {
-        sstables::shared_sstable _sstable;
-        // This indirection is sad, but we need stable pointers to mutation
-        // readers. If this ever becomes a performance issue we could store
-        // mutation readers in an object pool (we don't need to preserve order
-        // and can have holes left in the container when elements are removed).
-        std::unique_ptr<mutation_reader> _reader;
-
-        bool operator<(const sstable_and_reader& other) const {
-            return _sstable < other._sstable;
-        }
-
-        struct less_compare {
-            bool operator()(const sstable_and_reader& a, const sstable_and_reader& b) {
-                return a < b;
-            }
-            bool operator()(const sstable_and_reader& a, const sstables::shared_sstable& b) {
-                return a._sstable < b;
-            }
-            bool operator()(const sstables::shared_sstable& a, const sstable_and_reader& b) {
-                return a < b._sstable;
-            }
-        };
-    };
-    std::vector<sstable_and_reader> _current_readers;
-
-    // Use a pointer instead of copying, so we don't need to regenerate the reader if
-    // the priority changes.
     const io_priority_class& _pc;
-    tracing::trace_state_ptr _trace_state;
     const query::partition_slice& _slice;
+    tracing::trace_state_ptr _trace_state;
     streamed_mutation::forwarding _fwd;
     mutation_reader::forwarding _fwd_mr;
-private:
-    std::unique_ptr<mutation_reader> create_reader(sstables::shared_sstable sst) {
+    sstables::sstable_set::incremental_selector _selector;
+    std::unordered_set<sstables::shared_sstable> _read_sstables;
+
+    mutation_reader create_reader(sstables::shared_sstable sst) {
         tracing::trace(_trace_state, "Reading partition range {} from sstable {}", *_pr, seastar::value_of([&sst] { return sst->get_filename(); }));
         // FIXME: make sstable::read_range_rows() return ::mutation_reader so that we can drop this wrapper.
         mutation_reader reader =
@@ -398,77 +374,87 @@ private:
         if (sst->is_shared()) {
             reader = make_filtering_reader(std::move(reader), belongs_to_current_shard);
         }
-        return std::make_unique<mutation_reader>(std::move(reader));
+        return std::move(reader);
     }
+
 public:
-    range_sstable_reader(schema_ptr s,
-                         lw_shared_ptr<sstables::sstable_set> sstables,
-                         const dht::partition_range& pr,
-                         const query::partition_slice& slice,
-                         const io_priority_class& pc,
-                         tracing::trace_state_ptr trace_state,
-                         streamed_mutation::forwarding fwd,
-                         mutation_reader::forwarding fwd_mr)
+    explicit incremental_reader_selector(schema_ptr s,
+            lw_shared_ptr<sstables::sstable_set> sstables,
+            const dht::partition_range& pr,
+            const query::partition_slice& slice,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state,
+            streamed_mutation::forwarding fwd,
+            mutation_reader::forwarding fwd_mr)
         : _s(s)
         , _pr(&pr)
         , _sstables(std::move(sstables))
         , _pc(pc)
-        , _trace_state(std::move(trace_state))
         , _slice(slice)
+        , _trace_state(std::move(trace_state))
         , _fwd(fwd)
         , _fwd_mr(fwd_mr)
-    {
-        auto ssts = _sstables->select(pr);
-        std::vector<mutation_reader*> readers;
-        readers.reserve(ssts.size());
-        _current_readers.reserve(ssts.size());
-        for (auto& sst : ssts) {
-            auto reader = create_reader(sst);
-            readers.emplace_back(reader.get());
-            _current_readers.emplace_back(sstable_and_reader { sst, std::move(reader) });
-        }
-        init_mutation_reader_set(std::move(readers));
+        , _selector(_sstables->make_incremental_selector()) {
+        _selector_position = _pr->start()->value().token();
+
+        dblog.trace("incremental_reader_selector {}: created for range: ({},{}) with {} sstables",
+                this,
+                _pr->start()->value().token(),
+                _pr->end()->value().token(),
+                _sstables->all()->size());
     }
 
-    range_sstable_reader(range_sstable_reader&&) = delete; // reader takes reference to member fields
+    incremental_reader_selector(const incremental_reader_selector&) = delete;
+    incremental_reader_selector& operator=(const incremental_reader_selector&) = delete;
 
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+    incremental_reader_selector(incremental_reader_selector&&) = delete;
+    incremental_reader_selector& operator=(incremental_reader_selector&&) = delete;
+
+    virtual std::vector<mutation_reader> create_new_readers(const dht::token* const t) override {
+        //TODO: fix after lazy_deref() is available
+        dblog.trace("incremental_reader_selector {}: {}({})", this, __FUNCTION__, t ? sprint("{}", *t) : "null");
+
+        const auto& position = (t ? *t : _selector_position);
+        auto selection = _selector.select(position);
+
+        if (selection.sstables.empty()) {
+            // For the lower bound of the token range the _selector
+            // might not return any sstables, in this case try again
+            // with next_token unless it's maximum token.
+            if (position == _pr->start()->value().token() && !selection.next_token.is_maximum()) {
+                dblog.trace("incremental_reader_selector {}: no sstables intersect with the lower bound, retrying", this);
+                _selector_position = std::move(selection.next_token);
+                return create_new_readers(nullptr);
+            }
+
+            _selector_position = dht::maximum_token();
+            return {};
+        }
+
+        dblog.trace("incremental_reader_selector {}: {} new sstables to consider", this, selection.sstables.size());
+
+        if (selection.next_token == _selector_position) {
+            _selector_position = dht::maximum_token();
+            dblog.trace(
+                    "incremental_reader_selector {}: selector ({}) is the same as next_token, setting it to max",
+                    this,
+                    selection.next_token);
+        } else {
+            _selector_position = std::move(selection.next_token);
+            dblog.trace("incremental_reader_selector {}: advancing selector to {}", this, _selector_position);
+        }
+
+        return boost::copy_range<std::vector<mutation_reader>>(selection.sstables
+                | boost::adaptors::filtered([this] (auto& sst) { return _read_sstables.emplace(sst).second; })
+                | boost::adaptors::transformed([this] (auto& sst) { return this->create_reader(sst); }));
+    }
+
+    virtual std::vector<mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
         _pr = &pr;
+        _selector_position = _pr->start()->value().token();
+        _read_sstables.clear();
 
-        auto new_sstables = _sstables->select(pr);
-        boost::range::sort(new_sstables);
-        boost::range::sort(_current_readers);
-
-        std::vector<sstables::shared_sstable> to_add;
-        std::vector<sstable_and_reader> to_remove, unchanged;
-        sstable_and_reader::less_compare cmp;
-        boost::set_difference(new_sstables, _current_readers, std::back_inserter(to_add), cmp);
-        std::set_difference(_current_readers.begin(), _current_readers.end(), new_sstables.begin(), new_sstables.end(),
-                            boost::back_move_inserter(to_remove), cmp);
-        std::set_intersection(_current_readers.begin(), _current_readers.end(), new_sstables.begin(), new_sstables.end(),
-                              boost::back_move_inserter(unchanged), cmp);
-
-        std::vector<sstable_and_reader> to_add_sar;
-        boost::transform(to_add, std::back_inserter(to_add_sar), [&] (const sstables::shared_sstable& sst) {
-            return sstable_and_reader { sst, create_reader(sst) };
-        });
-
-        auto get_mutation_readers = [] (std::vector<sstable_and_reader>& ssts) {
-            std::vector<mutation_reader*> mrs;
-            mrs.reserve(ssts.size());
-            boost::range::transform(ssts, std::back_inserter(mrs), [] (const sstable_and_reader& s_a_r) {
-                return s_a_r._reader.get();
-            });
-            return mrs;
-        };
-
-        auto to_add_mrs = get_mutation_readers(to_add_sar);
-        auto to_remove_mrs = get_mutation_readers(to_remove);
-
-        unchanged.insert(unchanged.end(), std::make_move_iterator(to_add_sar.begin()), std::make_move_iterator(to_add_sar.end()));
-        return combined_mutation_reader::fast_forward_to(std::move(to_add_mrs), std::move(to_remove_mrs), pr).then([this, new_readers = std::move(unchanged)] () mutable {
-            _current_readers = std::move(new_readers);
-        });
+        return create_new_readers(nullptr);
     }
 };
 
@@ -569,8 +555,15 @@ column_family::make_sstable_reader(schema_ptr s,
         return restrict_reader(make_mutation_reader<single_key_sstable_reader>(const_cast<column_family*>(this), std::move(s), std::move(sstables),
             _stats.estimated_sstable_per_read, pr, slice, pc, std::move(trace_state), fwd));
     } else {
-        // range_sstable_reader is not movable so we need to wrap it
-        return restrict_reader(make_mutation_reader<range_sstable_reader>(std::move(s), std::move(sstables), pr, slice, pc, std::move(trace_state), fwd, fwd_mr));
+        return restrict_reader(make_mutation_reader<combined_mutation_reader>(
+                    std::make_unique<incremental_reader_selector>(std::move(s),
+                            std::move(sstables),
+                            pr,
+                            slice,
+                            pc,
+                            std::move(trace_state),
+                            fwd,
+                            fwd_mr)));
     }
 }
 
@@ -4155,6 +4148,25 @@ column_family::cache_hit_rate column_family::get_hit_rate(gms::inet_address addr
 
 void column_family::drop_hit_rate(gms::inet_address addr) {
     _cluster_cache_hit_rates.erase(addr);
+}
+
+mutation_reader make_range_sstable_reader(schema_ptr s,
+        lw_shared_ptr<sstables::sstable_set> sstables,
+        const dht::partition_range& pr,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr)
+{
+    return make_mutation_reader<combined_mutation_reader>(std::make_unique<incremental_reader_selector>(std::move(s),
+                std::move(sstables),
+                pr,
+                slice,
+                pc,
+                std::move(trace_state),
+                fwd,
+                fwd_mr));
 }
 
 future<>

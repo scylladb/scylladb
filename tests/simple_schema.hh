@@ -78,11 +78,12 @@ public:
         return dht::global_partitioner().decorate_key(*_s, key);
     }
 
-    void add_row(mutation& m, const clustering_key& key, const sstring& v, api::timestamp_type t = api::missing_timestamp) {
+    api::timestamp_type add_row(mutation& m, const clustering_key& key, const sstring& v, api::timestamp_type t = api::missing_timestamp) {
         if (t == api::missing_timestamp) {
             t = new_timestamp();
         }
         m.set_clustered_cell(key, _v_def, atomic_cell::make_live(t, data_value(v).serialize()));
+        return t;
     }
 
     std::pair<sstring, api::timestamp_type> get_value(const clustering_row& row) {
@@ -104,8 +105,13 @@ public:
         return mutation_fragment(std::move(row));
     }
 
-    void add_static_row(mutation& m, sstring s1) {
-        m.set_static_cell(to_bytes("s1"), data_value(s1), new_timestamp());
+    api::timestamp_type add_static_row(mutation& m, sstring s1, api::timestamp_type t = api::missing_timestamp) {
+        if (t == api::missing_timestamp) {
+            t = new_timestamp();
+        }
+        m.set_static_cell(to_bytes("s1"), data_value(s1), t);
+
+        return t;
     }
 
     range_tombstone delete_range(mutation& m, const query::clustering_range& range) {
