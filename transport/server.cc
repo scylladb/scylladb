@@ -831,8 +831,7 @@ future<response_type> cql_server::connection::process_prepare(uint16_t stream, b
     return parallel_for_each(cpus.begin(), cpus.end(), [this, query, cpu_id, &cs] (unsigned int c) mutable {
         if (c != cpu_id) {
             return smp::submit_to(c, [this, query, &cs] () mutable {
-                _server._query_processor.local().prepare(query, cs, false);
-                // FIXME: error handling
+                return _server._query_processor.local().prepare(query, cs, false).discard_result();
             });
         } else {
             return make_ready_future<>();
