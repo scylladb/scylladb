@@ -374,6 +374,8 @@ public:
 
     void operator()(const partition_start& ph) {}
 
+    void operator()(const partition_end& eop) {}
+
     void operator()(const clustering_row& cr) {
         // Every clustering row is stored in a rows_entry object, and that has some significant
         // overhead - so add it here. We will be a bit short on our estimate because we can't know
