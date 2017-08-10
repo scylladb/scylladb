@@ -55,6 +55,7 @@ enum class partition_region {
     partition_start,
     static_row,
     clustered,
+    partition_end,
 };
 
 
@@ -63,7 +64,7 @@ class position_in_partition_view {
 
     partition_region _type;
     int _bound_weight = 0;
-    const clustering_key_prefix* _ck; // nullptr for partition_start and static row
+    const clustering_key_prefix* _ck; // nullptr when _type != clustered
 private:
     position_in_partition_view(partition_region type, int bound_weight, const clustering_key_prefix* ck)
         : _type(type)
@@ -85,12 +86,14 @@ private:
     }
 public:
     struct partition_start_tag_t { };
+    struct end_of_partition_tag_t { };
     struct static_row_tag_t { };
     struct clustering_row_tag_t { };
     struct range_tag_t { };
     using range_tombstone_tag_t = range_tag_t;
 
     explicit position_in_partition_view(partition_start_tag_t) : _type(partition_region::partition_start), _ck(nullptr) { }
+    explicit position_in_partition_view(end_of_partition_tag_t) : _type(partition_region::partition_end), _ck(nullptr) { }
     explicit position_in_partition_view(static_row_tag_t) : _type(partition_region::static_row), _ck(nullptr) { }
     position_in_partition_view(clustering_row_tag_t, const clustering_key_prefix& ck)
         : _type(partition_region::clustered), _ck(&ck) { }
@@ -128,6 +131,7 @@ public:
     }
 
     bool is_partition_start() const { return _type == partition_region::partition_start; }
+    bool is_partition_end() const { return _type == partition_region::partition_end; }
     bool is_static_row() const { return _type == partition_region::static_row; }
     bool is_clustering_row() const { return has_clustering_key() && !_bound_weight; }
     bool has_clustering_key() const { return _type == partition_region::clustered; }
@@ -140,7 +144,7 @@ public:
     }
 
     bool is_after_all_clustered_rows(const schema& s) const {
-        return _ck && _ck->is_empty(s) && _bound_weight > 0;
+        return is_partition_end() || (_ck && _ck->is_empty(s) && _bound_weight > 0);
     }
 
     // Valid when >= before_all_clustered_rows()
@@ -164,6 +168,7 @@ class position_in_partition {
     stdx::optional<clustering_key_prefix> _ck;
 public:
     struct partition_start_tag_t { };
+    struct end_of_partition_tag_t { };
     struct static_row_tag_t { };
     struct after_static_row_tag_t { };
     struct clustering_row_tag_t { };
@@ -172,6 +177,7 @@ public:
     using range_tombstone_tag_t = range_tag_t;
 
     explicit position_in_partition(partition_start_tag_t) : _type(partition_region::partition_start) { }
+    explicit position_in_partition(end_of_partition_tag_t) : _type(partition_region::partition_end) { }
     explicit position_in_partition(static_row_tag_t) : _type(partition_region::static_row) { }
     position_in_partition(clustering_row_tag_t, clustering_key_prefix ck)
         : _type(partition_region::clustered), _ck(std::move(ck)) { }
@@ -210,12 +216,13 @@ public:
     static position_in_partition for_range_end(const query::clustering_range&);
 
     bool is_partition_start() const { return _type == partition_region::partition_start; }
+    bool is_partition_end() const { return _type == partition_region::partition_end; }
     bool is_static_row() const { return _type == partition_region::static_row; }
     bool is_clustering_row() const { return has_clustering_key() && !_bound_weight; }
     bool has_clustering_key() const { return _type == partition_region::clustered; }
 
     bool is_after_all_clustered_rows(const schema& s) const {
-        return _ck && _ck->is_empty(s) && _bound_weight > 0;
+        return is_partition_end() || (_ck && _ck->is_empty(s) && _bound_weight > 0);
     }
 
     template<typename Hasher>
