@@ -1600,7 +1600,7 @@ public:
         counter_type months, days, nanoseconds;
         std::tie(months, days, nanoseconds) = deserialize_counters(v);
 
-        static constexpr auto check_counter_range = [](counter_type value, auto counter_value_type_instance, stdx::string_view counter_name) {
+        auto check_counter_range = [] (counter_type value, auto counter_value_type_instance, stdx::string_view counter_name) {
             using counter_value_type = decltype(counter_value_type_instance);
 
             if (static_cast<counter_value_type>(value) != value) {
