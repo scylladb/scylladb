@@ -582,8 +582,7 @@ SEASTAR_TEST_CASE(datafile_generation_08) {
 
         const column_definition& r1_col = *s->get_column_definition("r1");
 
-        // Create 150 partitions so that summary file store 2 entries, assuming min index
-        // interval is 128.
+        // TODO: generate sstable which will have 2 samples with size-based sampling.
         for (int32_t i = 0; i < 150; i++) {
             auto key = partition_key::from_exploded(*s, {int32_type->decompose(i)});
             auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
@@ -605,23 +604,19 @@ SEASTAR_TEST_CASE(datafile_generation_08) {
                     auto buf = bufptr.get();
                     size_t offset = 0;
 
-                    std::vector<uint8_t> header = { /* min_index_interval */ 0, 0, 0, 0x80, /* size */ 0, 0, 0, 2,
-                        /* memory_size */ 0, 0, 0, 0, 0, 0, 0, 0x20, /* sampling_level */ 0, 0, 0, 0x80,
-                        /* size_at_full_sampling */  0, 0, 0, 2 };
+                    std::vector<uint8_t> header = { /* min_index_interval */ 0, 0, 0, 0x80, /* size */ 0, 0, 0, 1,
+                        /* memory_size */ 0, 0, 0, 0, 0, 0, 0, 0x10, /* sampling_level */ 0, 0, 0, 0x80,
+                        /* size_at_full_sampling */  0, 0, 0, 1 };
                     BOOST_REQUIRE(::memcmp(header.data(), &buf[offset], header.size()) == 0);
                     offset += header.size();
 
-                    std::vector<uint8_t> positions = { 0x8, 0, 0, 0, 0x14, 0, 0, 0 };
+                    std::vector<uint8_t> positions = { 0x4, 0, 0, 0 };
                     BOOST_REQUIRE(::memcmp(positions.data(), &buf[offset], positions.size()) == 0);
                     offset += positions.size();
 
                     std::vector<uint8_t> first_entry = { /* key */ 0, 0, 0, 0x17, /* position */ 0, 0, 0, 0, 0, 0, 0, 0 };
                     BOOST_REQUIRE(::memcmp(first_entry.data(), &buf[offset], first_entry.size()) == 0);
                     offset += first_entry.size();
-
-                    std::vector<uint8_t> second_entry = { /* key */ 0, 0, 0, 0x65, /* position */ 0, 0x9, 0, 0, 0, 0, 0, 0 };
-                    BOOST_REQUIRE(::memcmp(second_entry.data(), &buf[offset], second_entry.size()) == 0);
-                    offset += second_entry.size();
 
                     std::vector<uint8_t> first_key = { 0, 0, 0, 0x4, 0, 0, 0, 0x17 };
                     BOOST_REQUIRE(::memcmp(first_key.data(), &buf[offset], first_key.size()) == 0);
@@ -4055,5 +4050,45 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
             auto descriptor = cs.get_sstables_for_compaction(*cf, { sst });
             BOOST_REQUIRE(descriptor.sstables.size() == 0);
         }
+    });
+}
+
+SEASTAR_TEST_CASE(test_summary_entry_spanning_more_keys_than_min_interval) {
+    return seastar::async([] {
+        auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+            {{"p1", int32_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
+
+        const column_definition& r1_col = *s->get_column_definition("r1");
+        std::vector<mutation> mutations;
+        auto keys_written = 0;
+        for (auto i = 0; i < s->min_index_interval()*1.5; i++) {
+            auto key = partition_key::from_exploded(*s, {int32_type->decompose(i)});
+            auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
+            mutation m(key, s);
+            m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
+            mutations.push_back(std::move(m));
+            keys_written++;
+        }
+
+        auto tmp = make_lw_shared<tmpdir>();
+        auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            return make_lw_shared<sstable>(s, tmp->path, (*gen)++, la, big);
+        };
+        auto sst = make_sstable_containing(sst_gen, mutations);
+        sst = reusable_sst(s, tmp->path, sst->generation()).get0();
+
+        summary& sum = sstables::test(sst).get_summary();
+        BOOST_REQUIRE(sum.entries.size() == 1);
+
+        std::set<mutation, mutation_decorated_key_less_comparator> merged;
+        merged.insert(mutations.begin(), mutations.end());
+        auto rd = assert_that(sst->as_mutation_source()(s));
+        auto keys_read = 0;
+        for (auto&& m : merged) {
+            keys_read++;
+            rd.produces(m);
+        }
+        rd.produces_end_of_stream();
+        BOOST_REQUIRE(keys_read == keys_written);
     });
 }

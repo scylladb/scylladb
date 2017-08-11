@@ -68,6 +68,8 @@ namespace sstables {
 
 logging::logger sstlog("sstable");
 
+static const db::config& get_config();
+
 seastar::shared_ptr<write_monitor> default_write_monitor() {
     static thread_local seastar::shared_ptr<write_monitor> monitor = seastar::make_shared<noop_write_monitor>();
     return monitor;
@@ -1764,7 +1766,6 @@ static void prepare_summary(summary& s, uint64_t expected_partition_count, uint3
         throw malformed_sstable_exception("Current sampling level (" + to_sstring(downsampling::BASE_SAMPLING_LEVEL) + ") not enough to generate summary.");
     }
 
-    s.keys_written = 0;
     s.header.memory_size = 0;
 }
 
@@ -1800,13 +1801,6 @@ static void prepare_compression(compression& c, const schema& schema) {
     // defaults to 1.0.
     c.options.elements.push_back({"crc_check_chance", "1.0"});
     c.init_full_checksum();
-}
-
-static void maybe_add_summary_entry(summary& s, const dht::token& token,  bytes_view key, uint64_t offset) {
-    // Maybe add summary entry into in-memory representation of summary file.
-    if ((s.keys_written++ % s.header.min_index_interval) == 0) {
-        s.entries.push_back({ token, bytes(key.data(), key.size()), offset });
-    }
 }
 
 static
@@ -1873,8 +1867,30 @@ static void seal_statistics(statistics& s, metadata_collector& collector,
     populate_statistics_offsets(s);
 }
 
+void components_writer::maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key, uint64_t data_offset,
+        uint64_t index_offset, uint64_t& next_data_offset_to_write_summary, size_t summary_byte_cost) {
+    static constexpr size_t target_index_interval_size = 65536;
+
+    auto index_size_for_current_entry = index_offset - (s.entries.size() ? s.entries.back().position : 0);
+
+    // generates a summary entry after 64 KB of index data *iff* we're writing 2000 (default value) to data
+    // for every 1 byte written to summary. 64 KB condition will prevent useless generation of summary entry
+    // for small key with lots of data. Both conditions will prevent summary from growing large for large
+    // keys with little data.
+    if (!next_data_offset_to_write_summary || (data_offset >= next_data_offset_to_write_summary &&
+            index_size_for_current_entry >= target_index_interval_size)) {
+        next_data_offset_to_write_summary += summary_byte_cost * key.size();
+        s.entries.push_back({ token, bytes(key.data(), key.size()), index_offset });
+    }
+}
+
+void components_writer::maybe_add_summary_entry(const dht::token& token,  bytes_view key) {
+    return maybe_add_summary_entry(_sst._components->summary, token, key, get_offset(),
+        _index.offset(), _next_data_offset_to_write_summary, _summary_byte_cost);
+}
+
 // Returns offset into data component.
-size_t components_writer::get_offset() {
+uint64_t components_writer::get_offset() const {
     if (_sst.has_component(sstable::component_type::CompressionInfo)) {
         // Variable returned by compressed_file_length() is constantly updated by compressed output stream.
         return _sst._components->compression.compressed_file_length();
@@ -1903,6 +1919,13 @@ static const db::config& get_config() {
     }
 }
 
+// Returns the cost for writing a byte to summary such that the ratio of summary
+// to data will be 1 to cost by the time sstable is sealed.
+static size_t summary_byte_cost() {
+    auto summary_ratio = get_config().sstable_summary_ratio();
+    return summary_ratio ? (1 / summary_ratio) : components_writer::default_summary_byte_cost;
+}
+
 components_writer::components_writer(sstable& sst, const schema& s, file_writer& out,
                                      uint64_t estimated_partitions,
                                      const sstable_writer_config& cfg,
@@ -1914,6 +1937,7 @@ components_writer::components_writer(sstable& sst, const schema& s, file_writer&
     , _index_needs_close(true)
     , _max_sstable_size(cfg.max_sstable_size)
     , _tombstone_written(false)
+    , _summary_byte_cost(summary_byte_cost())
 {
     _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance());
     _sst._pi_write.desired_block_size = cfg.promoted_index_block_size.value_or(get_config().column_index_size_in_kb() * 1024);
@@ -1929,7 +1953,7 @@ void components_writer::consume_new_partition(const dht::decorated_key& dk) {
 
     _partition_key = key::from_partition_key(_schema, dk.key());
 
-    maybe_add_summary_entry(_sst._components->summary, dk.token(), bytes_view(*_partition_key), _index.offset());
+    maybe_add_summary_entry(dk.token(), bytes_view(*_partition_key));
     _sst._components->filter->add(bytes_view(*_partition_key));
     _sst._collector.add_key(bytes_view(*_partition_key));
 
@@ -2210,16 +2234,20 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
     sstlog.info("Summary file {} not found. Generating Summary...", filename(sstable::component_type::Summary));
     class summary_generator {
         summary& _summary;
+        uint64_t _data_size;
+        size_t _summary_byte_cost;
+        uint64_t _next_data_offset_to_write_summary = 0;
     public:
         std::experimental::optional<key> first_key, last_key;
 
-        summary_generator(summary& s) : _summary(s) {}
+        summary_generator(summary& s, uint64_t data_size) : _summary(s), _data_size(data_size), _summary_byte_cost(summary_byte_cost()) {}
         bool should_continue() {
             return true;
         }
-        void consume_entry(index_entry&& ie, uint64_t offset) {
+        void consume_entry(index_entry&& ie, uint64_t index_offset) {
             auto token = dht::global_partitioner().get_token(ie.get_key());
-            maybe_add_summary_entry(_summary, token, ie.get_key_bytes(), offset);
+            components_writer::maybe_add_summary_entry(_summary, token, ie.get_key_bytes(), _data_size, index_offset,
+                _next_data_offset_to_write_summary, _summary_byte_cost);
             if (!first_key) {
                 first_key = key(to_bytes(ie.get_key_bytes()));
             } else {
@@ -2230,17 +2258,20 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
 
     return open_checked_file_dma(_read_error_handler, filename(component_type::Index), open_flags::ro).then([this, &pc] (file index_file) {
         return do_with(std::move(index_file), [this, &pc] (file index_file) {
-            return index_file.size().then([this, &pc, index_file] (auto size) {
+            return seastar::when_all_succeed(
+                    io_check([&] { return engine().file_size(this->filename(sstable::component_type::Data)); }),
+                    index_file.size()).then([this, &pc, index_file] (auto data_size, auto index_size) {
                 // an upper bound. Surely to be less than this.
-                auto estimated_partitions = size / sizeof(uint64_t);
+                auto estimated_partitions = index_size / sizeof(uint64_t);
                 prepare_summary(_components->summary, estimated_partitions, _schema->min_index_interval());
 
                 file_input_stream_options options;
                 options.buffer_size = sstable_buffer_size;
                 options.io_priority_class = pc;
-                auto stream = make_file_input_stream(index_file, 0, size, std::move(options));
-                return do_with(summary_generator(_components->summary), [this, &pc, stream = std::move(stream), size] (summary_generator& s) mutable {
-                    auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(s, std::move(stream), 0, size);
+                auto stream = make_file_input_stream(index_file, 0, index_size, std::move(options));
+                return do_with(summary_generator(_components->summary, data_size),
+                        [this, &pc, stream = std::move(stream), index_size] (summary_generator& s) mutable {
+                    auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(s, std::move(stream), 0, index_size);
                     return ctx->consume_input(*ctx).finally([ctx] {
                         return ctx->close();
                     }).then([this, ctx, &s] {

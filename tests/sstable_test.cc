@@ -196,9 +196,13 @@ SEASTAR_TEST_CASE(missing_summary_query_negative_fail) {
     return summary_query_fail<-uint64_t(2), 0, 5>(uncompressed_schema(), "tests/sstables/uncompressed", 2);
 }
 
+// TODO: only one interval is generated with size-based sampling. Test it with a sstable that will actually result
+// in two intervals.
+#if 0
 SEASTAR_TEST_CASE(missing_summary_interval_1_query_ok) {
     return summary_query<1, 19, 6>(uncompressed_schema(1), "tests/sstables/uncompressed", 2);
 }
+#endif
 
 SEASTAR_TEST_CASE(missing_summary_first_last_sane) {
     return reusable_sst(uncompressed_schema(), "tests/sstables/uncompressed", 2).then([] (sstable_ptr ptr) {

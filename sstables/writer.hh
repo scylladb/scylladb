@@ -31,7 +31,7 @@ namespace sstables {
 
 class file_writer {
     output_stream<char> _out;
-    size_t _offset = 0;
+    uint64_t _offset = 0;
 public:
     file_writer(file f, file_output_stream_options options)
         : _out(make_file_output_stream(std::move(f), std::move(options))) {}
@@ -56,7 +56,7 @@ public:
     future<> close() {
         return _out.close();
     }
-    size_t offset() {
+    uint64_t offset() const {
         return _offset;
     }
 };
