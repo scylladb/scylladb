@@ -48,7 +48,6 @@ class result::partition_writer {
     const clustering_row_ranges& _ranges;
     ser::query_result__partitions<bytes_ostream>& _pw;
     ser::vector_position _pos;
-    bool _static_row_added = false;
     md5_hasher& _digest;
     md5_hasher _digest_pos;
     uint32_t& _row_count;
