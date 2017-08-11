@@ -116,6 +116,12 @@ static bool validate_primary_key(
         throw exceptions::invalid_request_exception(sprint(
                 "Cannot use MultiCell column '%s' in PRIMARY KEY of materialized view", def->name_as_text()));
     }
+
+    if (def->type->references_duration()) {
+        throw exceptions::invalid_request_exception(sprint(
+                "Cannot use Duration column '%s' in PRIMARY KEY of materialized view", def->name_as_text()));
+    }
+
     if (def->is_static()) {
         throw exceptions::invalid_request_exception(sprint(
                 "Cannot use Static column '%s' in PRIMARY KEY of materialized view", def->name_as_text()));

@@ -195,6 +195,13 @@ BOOST_AUTO_TEST_CASE(test_time_type_string_conversions) {
     test_parsing_fails(time_type, "00:00:00.-0000000001");
 }
 
+
+BOOST_AUTO_TEST_CASE(test_duration_type_string_conversions) {
+    // See `duration_test.cc` for more conversion tests.
+    BOOST_REQUIRE(duration_type->equal(duration_type->from_string("1y3mo5m2s"),
+                                       duration_type->decompose(cql_duration("1y3mo5m2s"))));
+}
+
 BOOST_AUTO_TEST_CASE(test_uuid_type_comparison) {
     auto uuid1 = uuid_type->decompose(utils::UUID(sstring("ad4d3770-7a50-11e6-ac4d-000000000003")));
     auto uuid2 = uuid_type->decompose(utils::UUID(sstring("c512ba10-7a50-11e6-ac4d-000000000003")));
@@ -329,6 +336,10 @@ void test_floating_type_compare(data_type t)
 BOOST_AUTO_TEST_CASE(test_floating_types_compare) {
     test_floating_type_compare<float>(float_type);
     test_floating_type_compare<double>(double_type);
+}
+
+BOOST_AUTO_TEST_CASE(test_duration_type_compare) {
+    duration_type->equal(duration_type->from_string("3d5m"), duration_type->from_string("3d5m"));
 }
 
 BOOST_AUTO_TEST_CASE(test_varint) {
@@ -553,6 +564,36 @@ BOOST_AUTO_TEST_CASE(test_uuid_type_validation) {
     test_validation_fails(uuid_type, from_hex("00"));
 }
 
+BOOST_AUTO_TEST_CASE(test_duration_type_validation) {
+    duration_type->validate(duration_type->from_string("1m23us"));
+
+    BOOST_REQUIRE_EXCEPTION(duration_type->validate(from_hex("ff")), marshal_exception, [](auto&& exn) {
+        BOOST_REQUIRE_EQUAL("marshaling error: Expected at least 3 bytes for a duration, got 1", exn.what());
+        return true;
+    });
+
+    BOOST_REQUIRE_EXCEPTION(duration_type->validate(from_hex("fffffffffffffffffe0202")),
+                            marshal_exception,
+                            [](auto&& exn) {
+                                BOOST_REQUIRE_EQUAL("marshaling error: The duration months (9223372036854775807) must be a 32 bit integer", exn.what());
+                                return true;
+                            });
+
+    BOOST_REQUIRE_EXCEPTION(duration_type->validate(from_hex("010201")), marshal_exception, [](auto&& exn) {
+        BOOST_REQUIRE_EQUAL(
+                "marshaling error: The duration months, days, and nanoseconds must be all of the same sign (-1, 1, -1)",
+                exn.what());
+
+        return true;
+    });
+}
+
+BOOST_AUTO_TEST_CASE(test_duration_deserialization) {
+    BOOST_REQUIRE_EQUAL(
+            value_cast<cql_duration>(duration_type->deserialize(duration_type->from_string("1mo3d2m"))),
+            cql_duration("1mo3d2m"));
+}
+
 BOOST_AUTO_TEST_CASE(test_parse_bad_hex) {
     auto parser = db::marshal::type_parser("636f6c75kd6h:org.apache.cassandra.db.marshal.ListType(org.apache.cassandra.db.marshal.Int32Type)");
     BOOST_REQUIRE_THROW(parser.parse(), exceptions::syntax_exception);
@@ -579,6 +620,12 @@ BOOST_AUTO_TEST_CASE(test_parse_valid_map) {
     auto parser = db::marshal::type_parser("org.apache.cassandra.db.marshal.MapType(org.apache.cassandra.db.marshal.Int32Type,org.apache.cassandra.db.marshal.Int32Type)");
     auto type = parser.parse();
     BOOST_REQUIRE(type->as_cql3_type()->to_string() == "map<int, int>");
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_valid_duration) {
+    auto parser = db::marshal::type_parser("org.apache.cassandra.db.marshal.DurationType");
+    auto type = parser.parse();
+    BOOST_REQUIRE(type->as_cql3_type()->to_string() == "duration");
 }
 
 BOOST_AUTO_TEST_CASE(test_parse_valid_tuple) {

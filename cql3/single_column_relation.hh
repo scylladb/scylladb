@@ -43,6 +43,7 @@
 
 #include <vector>
 #include "cql3/restrictions/single_column_restriction.hh"
+#include "statements/request_validations.hh"
 
 #include "core/shared_ptr.hh"
 #include "to_string.hh"
@@ -157,6 +158,19 @@ protected:
             statements::bound bound,
             bool inclusive) override {
         auto&& column_def = to_column_definition(schema, _entity);
+
+        if (column_def.type->references_duration()) {
+            using statements::request_validations::check_false;
+            const auto& ty = *column_def.type;
+
+            check_false(ty.is_collection(), "Slice restrictions are not supported on collections containing durations");
+            check_false(ty.is_tuple(), "Slice restrictions are not supported on tuples containing durations");
+            check_false(ty.is_user_type(), "Slice restrictions are not supported on UDTs containing durations");
+
+            // We're a duration.
+            throw exceptions::invalid_request_exception("Slice restrictions are not supported on duration columns");
+        }
+
         auto term = to_term(to_receivers(schema, column_def), _value, db, schema->ks_name(), std::move(bound_names));
         return ::make_shared<restrictions::single_column_restriction::slice>(column_def, bound, inclusive, std::move(term));
     }

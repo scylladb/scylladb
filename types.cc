@@ -21,6 +21,7 @@
 
 #include <boost/lexical_cast.hpp>
 #include <algorithm>
+#include <cinttypes>
 #include "cql3/cql3_type.hh"
 #include "cql3/lists.hh"
 #include "cql3/maps.hh"
@@ -30,6 +31,7 @@
 #include "net/ip.hh"
 #include "database.hh"
 #include "utils/serialization.hh"
+#include "vint-serialization.hh"
 #include "combine.hh"
 #include <cmath>
 #include <chrono>
@@ -43,6 +45,7 @@
 #include <boost/date_time/c_local_time_adjustor.hpp>
 #include <boost/locale/encoding_utf.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
 #include "utils/big_decimal.hh"
 #include "utils/date.h"
 #include "mutation_partition.hh"
@@ -75,6 +78,7 @@ static const char* float_type_name     = "org.apache.cassandra.db.marshal.FloatT
 static const char* varint_type_name    = "org.apache.cassandra.db.marshal.IntegerType";
 static const char* decimal_type_name    = "org.apache.cassandra.db.marshal.DecimalType";
 static const char* counter_type_name   = "org.apache.cassandra.db.marshal.CounterColumnType";
+static const char* duration_type_name = "org.apache.cassandra.db.marshal.DurationType";
 static const char* empty_type_name     = "org.apache.cassandra.db.marshal.EmptyType";
 
 template<typename T>
@@ -1542,6 +1546,155 @@ public:
     }
 };
 
+// TODO(jhaberku): Move this to Seastar.
+template <size_t... Ts, class Function>
+auto generate_tuple_from_index(std::index_sequence<Ts...>, Function&& f) {
+    // To ensure that tuple is constructed in the correct order (because the evaluation order of the arguments to
+    // `std::make_tuple` is unspecified), use braced initialization  (which does define the order). However, we still
+    // need to figure out the type.
+    using result_type = decltype(std::make_tuple(f(Ts)...));
+    return result_type{f(Ts)...};
+}
+
+class duration_type_impl : public concrete_type<cql_duration> {
+public:
+    duration_type_impl() : concrete_type(duration_type_name) {
+    }
+    virtual void serialize(const void* value, bytes::iterator& out) const override {
+        if (value == nullptr) {
+            return;
+        }
+
+        auto& m = from_value(value);
+        if (m.empty()) {
+            return;
+        }
+
+        const auto& d = m.get();
+
+        out += signed_vint::serialize(d.months, out);
+        out += signed_vint::serialize(d.days, out);
+        out += signed_vint::serialize(d.nanoseconds, out);
+    }
+    virtual size_t serialized_size(const void* value) const override {
+        if (value == nullptr) {
+            return 0;
+        }
+
+        auto& m = from_value(value);
+        if (m.empty()) {
+            return 0;
+        }
+
+        const auto& d = m.get();
+
+        return signed_vint::serialized_size(d.months) +
+               signed_vint::serialized_size(d.days) +
+               signed_vint::serialized_size(d.nanoseconds);
+    }
+    virtual void validate(bytes_view v) const override {
+        if (v.size() < 3) {
+            throw marshal_exception(sprint("Expected at least 3 bytes for a duration, got %d", v.size()));
+        }
+
+        counter_type months, days, nanoseconds;
+        std::tie(months, days, nanoseconds) = deserialize_counters(v);
+
+        static constexpr auto check_counter_range = [](counter_type value, auto counter_value_type_instance, stdx::string_view counter_name) {
+            using counter_value_type = decltype(counter_value_type_instance);
+
+            if (static_cast<counter_value_type>(value) != value) {
+                throw marshal_exception(sprint("The duration %s (%" PRId64 ") must be a %d bit integer",
+                                               counter_name,
+                                               value,
+                                               std::numeric_limits<counter_value_type>::digits + 1));
+            }
+        };
+
+        check_counter_range(months, months_counter::value_type(), "months");
+        check_counter_range(days, days_counter::value_type(), "days");
+        check_counter_range(nanoseconds, nanoseconds_counter::value_type(), "nanoseconds");
+
+        if (!(((months <= 0) && (days <= 0) && (nanoseconds <= 0))
+              || ((months >= 0) && (days >= 0) && (nanoseconds >= 0)))) {
+            throw marshal_exception(
+                    sprint("The duration months, days, and nanoseconds must be all of the same sign (%" PRId64 ", %" PRId64 ", %" PRId64 ")",
+                           months,
+                           days,
+                           nanoseconds));
+        }
+    }
+    virtual data_value deserialize(bytes_view v) const override {
+        if (v.empty()) {
+            return make_empty();
+        }
+
+        counter_type months, days, nanoseconds;
+        std::tie(months, days, nanoseconds) = deserialize_counters(v);
+
+        return make_value(cql_duration(months_counter(months),
+                                       days_counter(days),
+                                       nanoseconds_counter(nanoseconds)));
+    }
+    virtual bytes from_string(sstring_view s) const override {
+        if (s.empty()) {
+            return bytes();
+        }
+
+        try {
+            native_type nd = cql_duration(s);
+
+            bytes b(bytes::initialized_later(), serialized_size(&nd));
+            auto out = b.begin();
+            serialize(&nd, out);
+
+            return b;
+        } catch (cql_duration_error const& e) {
+            throw marshal_exception(e.what());
+        }
+    }
+    virtual sstring to_string(const bytes& b) const override {
+        auto v = deserialize(b);
+        if (v.is_null()) {
+            return "";
+        }
+
+        return ::to_string(from_value(v).get());
+    }
+    virtual size_t hash(bytes_view v) const override {
+        return std::hash<bytes_view>()(v);
+    }
+    virtual bool is_byte_order_comparable() const override {
+        return true;
+    }
+    virtual bool less(bytes_view v1, bytes_view v2) const override {
+        return less_unsigned(v1, v2);
+    }
+    virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override {
+        return cql3::cql3_type::duration;
+    }
+    virtual bool references_duration() const override {
+        return true;
+    }
+private:
+    using counter_type = cql_duration::common_counter_type;
+
+    static std::tuple<counter_type, counter_type, counter_type> deserialize_counters(bytes_view v) {
+        auto deserialize_and_advance = [&v](auto&& i) {
+            const auto d = signed_vint::deserialize(v);
+            v.remove_prefix(d.size);
+
+            if (v.empty() && (i != 2)) {
+                throw marshal_exception();
+            }
+
+            return static_cast<counter_type>(d.value);
+        };
+
+        return generate_tuple_from_index(std::make_index_sequence<3>(), std::move(deserialize_and_advance));
+    }
+};
+
 struct empty_type_impl : abstract_type {
     empty_type_impl() : abstract_type(empty_type_name) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
@@ -2031,6 +2184,10 @@ map_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) 
         get_instance(k ? *k : _keys, v ? *v : _values, _is_multi_cell)));
 }
 
+bool map_type_impl::references_duration() const {
+    return _keys->references_duration() || _values->references_duration();
+}
+
 auto collection_type_impl::deserialize_mutation_form(collection_mutation_view cm) -> mutation_view {
     auto&& in = cm.data;
     mutation_view ret;
@@ -2500,6 +2657,10 @@ set_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) 
     return std::experimental::nullopt;
 }
 
+bool set_type_impl::references_duration() const {
+    return _elements->references_duration();
+}
+
 list_type
 list_type_impl::get_instance(data_type elements, bool is_multi_cell) {
     return intern::get_instance(elements, is_multi_cell);
@@ -2680,6 +2841,10 @@ list_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated)
             get_instance(std::move(*e), _is_multi_cell)));
     }
     return std::experimental::nullopt;
+}
+
+bool list_type_impl::references_duration() const {
+    return _elements->references_duration();
 }
 
 tuple_type_impl::tuple_type_impl(sstring name, std::vector<data_type> types)
@@ -2948,6 +3113,10 @@ tuple_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated
     return std::experimental::nullopt;
 }
 
+bool tuple_type_impl::references_duration() const {
+    return boost::algorithm::any_of(_types, std::mem_fn(&abstract_type::references_duration));
+}
+
 sstring
 user_type_impl::get_name_as_string() const {
     auto real_utf8_type = static_cast<const utf8_type_impl*>(utf8_type.get());
@@ -3061,6 +3230,7 @@ thread_local const shared_ptr<const abstract_type> double_type(make_shared<doubl
 thread_local const shared_ptr<const abstract_type> varint_type(make_shared<varint_type_impl>());
 thread_local const shared_ptr<const abstract_type> decimal_type(make_shared<decimal_type_impl>());
 thread_local const shared_ptr<const abstract_type> counter_type(make_shared<counter_type_impl>());
+thread_local const shared_ptr<const abstract_type> duration_type(make_shared<duration_type_impl>());
 thread_local const data_type empty_type(make_shared<empty_type_impl>());
 
 data_type abstract_type::parse_type(const sstring& name)
@@ -3086,6 +3256,7 @@ data_type abstract_type::parse_type(const sstring& name)
         { varint_type_name,    varint_type    },
         { decimal_type_name,   decimal_type   },
         { counter_type_name,   counter_type   },
+        { duration_type_name,  duration_type  },
         { empty_type_name,     empty_type     },
     };
     auto it = types.find(name);
@@ -3158,6 +3329,9 @@ data_value::data_value(boost::multiprecision::cpp_int v) : data_value(make_new(v
 }
 
 data_value::data_value(big_decimal v) : data_value(make_new(decimal_type, v)) {
+}
+
+data_value::data_value(cql_duration d) : data_value(make_new(duration_type, d)) {
 }
 
 data_value

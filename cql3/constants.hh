@@ -60,7 +60,7 @@ public:
 #endif
 public:
     enum class type {
-        STRING, INTEGER, UUID, FLOAT, BOOLEAN, HEX
+        STRING, INTEGER, UUID, FLOAT, BOOLEAN, HEX, DURATION
     };
 
     /**
@@ -147,6 +147,10 @@ public:
 
         static ::shared_ptr<literal> hex(sstring text) {
             return ::make_shared<literal>(type::HEX, text);
+        }
+
+        static ::shared_ptr<literal> duration(sstring text) {
+            return ::make_shared<literal>(type::DURATION, text);
         }
 
         virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver);

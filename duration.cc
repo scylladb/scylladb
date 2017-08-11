@@ -23,6 +23,7 @@
 
 #include "stdx.hh"
 
+#include <boost/lexical_cast.hpp>
 #include <seastar/core/print.hh>
 
 #include <cctype>
@@ -39,20 +40,20 @@ namespace {
 // Helper for retrieving the counter based on knowing its type.
 //
 template<class Counter>
-constexpr typename Counter::value_type& counter_ref(duration &) noexcept;
+constexpr typename Counter::value_type& counter_ref(cql_duration &) noexcept;
 
 template<>
-constexpr months_counter::value_type& counter_ref<months_counter>(duration &d) noexcept {
+constexpr months_counter::value_type& counter_ref<months_counter>(cql_duration &d) noexcept {
     return d.months;
 }
 
 template<>
-constexpr days_counter::value_type& counter_ref<days_counter>(duration &d) noexcept {
+constexpr days_counter::value_type& counter_ref<days_counter>(cql_duration &d) noexcept {
     return d.days;
 }
 
 template<>
-constexpr nanoseconds_counter::value_type& counter_ref<nanoseconds_counter>(duration &d) noexcept {
+constexpr nanoseconds_counter::value_type& counter_ref<nanoseconds_counter>(cql_duration &d) noexcept {
     return d.nanoseconds;
 }
 
@@ -60,28 +61,28 @@ constexpr nanoseconds_counter::value_type& counter_ref<nanoseconds_counter>(dura
 class duration_unit {
 public:
     using index_type = uint8_t;
-    using common_counter_type = duration::common_counter_type;
+    using common_counter_type = cql_duration::common_counter_type;
 
     virtual ~duration_unit() = default;
 
     // Units with larger indicies are greater. For example, "months" have a greater index than "days".
     virtual index_type index() const noexcept = 0;
 
-    virtual char const* const short_name() const noexcept = 0;
+    virtual const char* short_name() const noexcept = 0;
 
-    virtual char const* const long_name() const noexcept = 0;
+    virtual const char* long_name() const noexcept = 0;
 
     // Increment the appropriate counter in the duration instance based on a count of this unit.
-    virtual void increment_count(duration &, common_counter_type) const noexcept = 0;
+    virtual void increment_count(cql_duration&, common_counter_type) const noexcept = 0;
 
     // The remaining capacity (in terms of this unit) of the appropriate counter in the duration instance.
-    virtual common_counter_type available_count(duration const&) const noexcept = 0;
+    virtual common_counter_type available_count(const cql_duration&) const noexcept = 0;
 };
 
 // `_index` is the assigned index of this unit.
-// `Counter` is the counter type in the `duration` instance that is used to store this unit.
+// `Counter` is the counter type in the `cql_duration` instance that is used to store this unit.
 // `_factor` is the conversion factor of one count of this unit to the corresponding count in `Counter`.
-template <uint8_t _index, class Counter, duration::common_counter_type _factor>
+template <uint8_t _index, class Counter, cql_duration::common_counter_type _factor>
 class duration_unit_impl : public duration_unit {
 public:
     static constexpr auto factor = _factor;
@@ -92,67 +93,67 @@ public:
         return _index;
     }
 
-    void increment_count(duration &d, common_counter_type c) const noexcept override {
+    void increment_count(cql_duration &d, common_counter_type c) const noexcept override {
         counter_ref<Counter>(d) += (c * factor);
     }
 
-    common_counter_type available_count(duration const& d) const noexcept override {
-        auto const limit = std::numeric_limits<typename Counter::value_type>::max();
-        return {(limit - counter_ref<Counter>(const_cast<duration&>(d))) / factor};
+    common_counter_type available_count(const cql_duration& d) const noexcept override {
+        const auto limit = std::numeric_limits<typename Counter::value_type>::max();
+        return {(limit - counter_ref<Counter>(const_cast<cql_duration&>(d))) / factor};
     }
 };
 
 struct nanosecond_unit final : public duration_unit_impl<0, nanoseconds_counter , 1> {
-    char const* const short_name() const noexcept override { return "ns"; }
-    char const* const long_name() const noexcept override { return "nanoseconds"; }
+    const char* short_name() const noexcept override { return "ns"; }
+    const char* long_name() const noexcept override { return "nanoseconds"; }
 } const nanosecond{};
 
 struct microsecond_unit final : public duration_unit_impl<1, nanoseconds_counter, 1000> {
-    char const* const short_name() const noexcept override { return "us"; }
-    char const* const long_name() const noexcept override { return "microseconds"; }
+    const char* short_name() const noexcept override { return "us"; }
+    const char* long_name() const noexcept override { return "microseconds"; }
 } const microsecond{};
 
 struct millisecond_unit final : public duration_unit_impl<2, nanoseconds_counter, microsecond_unit::factor * 1000> {
-    char const* const short_name() const noexcept override { return "ms"; }
-    char const* const long_name() const noexcept override { return "milliseconds"; }
+    const char* short_name() const noexcept override { return "ms"; }
+    const char* long_name() const noexcept override { return "milliseconds"; }
 } const millisecond{};
 
 struct second_unit final : public duration_unit_impl<3, nanoseconds_counter, millisecond_unit::factor * 1000> {
-    char const* const short_name() const noexcept override { return "s"; }
-    char const* const long_name() const noexcept override { return "seconds"; }
+    const char* short_name() const noexcept override { return "s"; }
+    const char* long_name() const noexcept override { return "seconds"; }
 } const second{};
 
 struct minute_unit final : public duration_unit_impl<4, nanoseconds_counter, second_unit::factor * 60> {
-    char const* const short_name() const noexcept override { return "m"; }
-    char const* const long_name() const noexcept override { return "minutes"; }
+    const char* short_name() const noexcept override { return "m"; }
+    const char* long_name() const noexcept override { return "minutes"; }
 } const minute{};
 
 struct hour_unit final : public duration_unit_impl<5, nanoseconds_counter, minute_unit::factor * 60> {
-    char const* const short_name() const noexcept override { return "h"; }
-    char const* const long_name() const noexcept override { return "hours"; }
+    const char* short_name() const noexcept override { return "h"; }
+    const char* long_name() const noexcept override { return "hours"; }
 } const hour{};
 
 struct day_unit final : public duration_unit_impl<6, days_counter, 1> {
-    char const* const short_name() const noexcept override { return "d"; }
-    char const* const long_name() const noexcept override { return "days"; }
+    const char* short_name() const noexcept override { return "d"; }
+    const char* long_name() const noexcept override { return "days"; }
 } const day{};
 
 struct week_unit final : public duration_unit_impl<7, days_counter, 7> {
-    char const* const short_name() const noexcept override { return "w"; }
-    char const* const long_name() const noexcept override { return "weeks"; }
+    const char* short_name() const noexcept override { return "w"; }
+    const char* long_name() const noexcept override { return "weeks"; }
 } const week{};
 
 struct month_unit final : public duration_unit_impl<8, months_counter, 1> {
-    char const* const short_name() const noexcept override { return "mo"; }
-    char const* const long_name() const noexcept override { return "months"; }
+    const char* short_name() const noexcept override { return "mo"; }
+    const char* long_name() const noexcept override { return "months"; }
 } const month{};
 
 struct year_unit final : public duration_unit_impl<9, months_counter, 12> {
-    char const* const short_name() const noexcept override { return "y"; }
-    char const* const long_name() const noexcept override { return "years"; }
+    const char* short_name() const noexcept override { return "y"; }
+    const char* long_name() const noexcept override { return "years"; }
 } const year{};
 
-auto const unit_table = std::unordered_map<stdx::string_view, std::reference_wrapper<duration_unit const>>{
+const auto unit_table = std::unordered_map<stdx::string_view, std::reference_wrapper<const duration_unit>>{
         {year.short_name(), year},
         {month.short_name(), month},
         {week.short_name(), week},
@@ -171,9 +172,12 @@ auto const unit_table = std::unordered_map<stdx::string_view, std::reference_wra
 // Throws `std::out_of_range` if a counter is out of range.
 //
 template <class Match, class Index = typename Match::size_type>
-duration::common_counter_type parse_count(Match const& m, Index group_index) {
-    static_assert(sizeof(duration::common_counter_type) <= sizeof(long long), "must be same");
-    return std::stoll(m[group_index].str());
+cql_duration::common_counter_type parse_count(const Match& m, Index group_index) {
+    try {
+        return boost::lexical_cast<cql_duration::common_counter_type>(m[group_index].str());
+    } catch (const boost::bad_lexical_cast&) {
+        throw std::out_of_range("duration counter");
+    }
 }
 
 //
@@ -181,12 +185,12 @@ duration::common_counter_type parse_count(Match const& m, Index group_index) {
 //
 // We support overflow detection on construction for convenience and compatibility with Cassandra.
 //
-// We maintain some additional state over a `duration` in order to track the order in which components are added when
+// We maintain some additional state over a `cql_duration` in order to track the order in which components are added when
 // parsing the standard format.
 //
 class duration_builder final {
 public:
-    duration_builder& add(duration::common_counter_type count, duration_unit const& unit) {
+    duration_builder& add(cql_duration::common_counter_type count, const duration_unit& unit) {
         validate_addition(count, unit);
         validate_and_update_order(unit);
 
@@ -195,36 +199,36 @@ public:
     }
 
     template <class Match, class Index = typename Match::size_type>
-    duration_builder& add_parsed_count(Match const& m, Index group_index, duration_unit const& unit) {
-        duration::common_counter_type count;
+    duration_builder& add_parsed_count(const Match& m, Index group_index, const duration_unit& unit) {
+        cql_duration::common_counter_type count;
 
         try {
             count = parse_count(m, group_index);
-        } catch (std::out_of_range const&) {
-            throw duration_error(sprint("Invalid duration. The count for the %s is out of range", unit.long_name()));
+        } catch (const std::out_of_range&) {
+            throw cql_duration_error(sprint("Invalid duration. The count for the %s is out of range", unit.long_name()));
         }
 
         return add(count, unit);
     }
 
-    duration build() const noexcept {
+    cql_duration build() const noexcept {
         return _duration;
     }
 
 private:
-    duration_unit const* _current_unit{nullptr};
+    const duration_unit* _current_unit{nullptr};
 
-    duration _duration{};
+    cql_duration _duration{};
 
     //
-    // Throws `duration_error` if the addition of a quantity of the designated unit would overflow one of the
+    // Throws `cql_duration_error` if the addition of a quantity of the designated unit would overflow one of the
     // counters.
     //
-    void validate_addition(typename duration::common_counter_type count, duration_unit const& unit) const {
-        auto const available = unit.available_count(_duration);
+    void validate_addition(typename cql_duration::common_counter_type count, const duration_unit& unit) const {
+        const auto available = unit.available_count(_duration);
 
         if (count > available) {
-            throw duration_error(
+            throw cql_duration_error(
                     sprint("Invalid duration. The number of %s must be less than or equal to %s",
                            unit.long_name(),
                            available));
@@ -237,16 +241,16 @@ private:
     //
     // This function also updates the last-observed unit for the next invocation.
     //
-    // Throws `duration_error` for order violations.
+    // Throws `cql_duration_error` for order violations.
     //
-    void validate_and_update_order(duration_unit const& unit) {
-        auto const index = unit.index();
+    void validate_and_update_order(const duration_unit& unit) {
+        const auto index = unit.index();
 
         if (_current_unit != nullptr) {
             if (index == _current_unit->index()) {
-                throw duration_error(sprint("Invalid duration. The %s are specified multiple times", unit.long_name()));
+                throw cql_duration_error(sprint("Invalid duration. The %s are specified multiple times", unit.long_name()));
             } else if (index > _current_unit->index()) {
-                throw duration_error(
+                throw cql_duration_error(
                         sprint("Invalid duration. The %s should be after %s",
                                _current_unit->long_name(),
                                unit.long_name()));
@@ -258,10 +262,10 @@ private:
 };
 
 //
-// These functions assume no sign information ('-). That is left to the `duration` constructor.
+// These functions assume no sign information ('-). That is left to the `cql_duration` constructor.
 //
 
-stdx::optional<duration> parse_duration_standard_format(stdx::string_view s) {
+stdx::optional<cql_duration> parse_duration_standard_format(stdx::string_view s) {
 
     //
     // We parse one component (pair of a count and unit) at a time in order to give more precise error messages when
@@ -270,7 +274,7 @@ stdx::optional<duration> parse_duration_standard_format(stdx::string_view s) {
     // The other formats are more strict and complain less helpfully.
     //
 
-    static auto const pattern =
+    static const auto pattern =
             std::regex(u8"(\\d+)(y|Y|mo|MO|mO|Mo|w|W|d|D|h|H|s|S|ms|MS|mS|Ms|us|US|uS|Us|µs|µS|ns|NS|nS|Ns|m|M)");
 
     auto iter = s.cbegin();
@@ -308,8 +312,8 @@ stdx::optional<duration> parse_duration_standard_format(stdx::string_view s) {
     return b.build();
 }
 
-stdx::optional<duration> parse_duration_iso8601_format(stdx::string_view s) {
-    static auto const pattern = std::regex("P((\\d+)Y)?((\\d+)M)?((\\d+)D)?(T((\\d+)H)?((\\d+)M)?((\\d+)S)?)?");
+stdx::optional<cql_duration> parse_duration_iso8601_format(stdx::string_view s) {
+    static const auto pattern = std::regex("P((\\d+)Y)?((\\d+)M)?((\\d+)D)?(T((\\d+)H)?((\\d+)M)?((\\d+)S)?)?");
 
     std::cmatch match;
     if (!std::regex_match(s.data(), match, pattern)) {
@@ -348,8 +352,8 @@ stdx::optional<duration> parse_duration_iso8601_format(stdx::string_view s) {
     return b.build();
 }
 
-stdx::optional<duration> parse_duration_iso8601_alternative_format(stdx::string_view s) {
-    static auto const pattern = std::regex("P(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})");
+stdx::optional<cql_duration> parse_duration_iso8601_alternative_format(stdx::string_view s) {
+    static const auto pattern = std::regex("P(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})");
 
     std::cmatch match;
     if (!std::regex_match(s.data(), match, pattern)) {
@@ -366,8 +370,8 @@ stdx::optional<duration> parse_duration_iso8601_alternative_format(stdx::string_
             .build();
 }
 
-stdx::optional<duration> parse_duration_iso8601_week_format(stdx::string_view s) {
-    static auto const pattern = std::regex("P(\\d+)W");
+stdx::optional<cql_duration> parse_duration_iso8601_week_format(stdx::string_view s) {
+    static const auto pattern = std::regex("P(\\d+)W");
 
     std::cmatch match;
     if (!std::regex_match(s.data(), match, pattern)) {
@@ -380,7 +384,7 @@ stdx::optional<duration> parse_duration_iso8601_week_format(stdx::string_view s)
 }
 
 // Parse a duration string without sign information assuming one of the supported formats.
-stdx::optional<duration> parse_duration(stdx::string_view s) {
+stdx::optional<cql_duration> parse_duration(stdx::string_view s) {
     if (s.length() == 0u) {
         return {};
     }
@@ -402,15 +406,15 @@ stdx::optional<duration> parse_duration(stdx::string_view s) {
 
 }
 
-duration::duration(stdx::string_view s) {
-    bool const is_negative = (s.length() != 0) && (s[0] == '-');
+cql_duration::cql_duration(stdx::string_view s) {
+    const bool is_negative = (s.length() != 0) && (s[0] == '-');
 
     // Without any sign indicator ('-').
-    auto const ps = (is_negative ? s.cbegin() + 1 : s.cbegin());
+    const auto ps = (is_negative ? s.cbegin() + 1 : s.cbegin());
 
-    auto const d = parse_duration(ps);
+    const auto d = parse_duration(ps);
     if (!d) {
-        throw duration_error(sprint("Unable to convert '%s' to a duration", s));
+        throw cql_duration_error(sprint("Unable to convert '%s' to a duration", s));
     }
 
     *this = *d;
@@ -422,7 +426,7 @@ duration::duration(stdx::string_view s) {
     }
 }
 
-std::ostream& operator<<(std::ostream& os, duration const& d) {
+std::ostream& operator<<(std::ostream& os, const cql_duration& d) {
     if ((d.months < 0) || (d.days < 0) || (d.nanoseconds < 0)) {
         os << '-';
     }
@@ -431,8 +435,8 @@ std::ostream& operator<<(std::ostream& os, duration const& d) {
     // unit.
     //
     // Returns the remaining count.
-    auto const append = [&os](duration::common_counter_type count, auto&& unit) {
-        auto const divider = unit.factor;
+    const auto append = [&os](cql_duration::common_counter_type count, auto&& unit) {
+        const auto divider = unit.factor;
 
         if ((count == 0) || (count < divider)) {
             return count;
@@ -442,7 +446,7 @@ std::ostream& operator<<(std::ostream& os, duration const& d) {
         return count % divider;
     };
 
-    auto const month_remainder = append(std::abs(d.months), year);
+    const auto month_remainder = append(std::abs(d.months), year);
     append(month_remainder, month);
 
     append(std::abs(d.days), day);
@@ -457,16 +461,16 @@ std::ostream& operator<<(std::ostream& os, duration const& d) {
     return os;
 }
 
-seastar::sstring to_string(duration const& d) {
+seastar::sstring to_string(const cql_duration& d) {
     std::ostringstream ss;
     ss << d;
     return ss.str();
 }
 
-bool operator==(duration const& d1, duration const& d2) noexcept {
+bool operator==(const cql_duration& d1, const cql_duration& d2) noexcept {
     return (d1.months == d2.months) && (d1.days == d2.days) && (d1.nanoseconds == d2.nanoseconds);
 }
 
-bool operator!=(duration const& d1, duration const& d2) noexcept {
+bool operator!=(const cql_duration& d1, const cql_duration& d2) noexcept {
     return !(d1 == d2);
 }

@@ -219,6 +219,9 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
         if (t->is_counter()) {
             throw exceptions::invalid_request_exception(sprint("counter type is not supported for PRIMARY KEY part %s", alias->text()));
         }
+        if (t->references_duration()) {
+            throw exceptions::invalid_request_exception(sprint("duration type is not supported for PRIMARY KEY part %s", alias->text()));
+        }
         if (_static_columns.count(alias) > 0) {
             throw exceptions::invalid_request_exception(sprint("Static column %s cannot be part of the PRIMARY KEY", alias->text()));
         }
@@ -254,6 +257,9 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
             if (at->is_counter()) {
                 throw exceptions::invalid_request_exception(sprint("counter type is not supported for PRIMARY KEY part %s", stmt->_column_aliases[0]));
             }
+            if (at->references_duration()) {
+                throw exceptions::invalid_request_exception(sprint("duration type is not supported for PRIMARY KEY part %s", stmt->_column_aliases[0]));
+            }
             stmt->_clustering_key_types.emplace_back(at);
         } else {
             std::vector<data_type> types;
@@ -262,6 +268,9 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
                 auto type = get_type_and_remove(stmt->_columns, t);
                 if (type->is_counter()) {
                     throw exceptions::invalid_request_exception(sprint("counter type is not supported for PRIMARY KEY part %s", t->text()));
+                }
+                if (type->references_duration()) {
+                    throw exceptions::invalid_request_exception(sprint("duration type is not supported for PRIMARY KEY part %s", t->text()));
                 }
                 if (_static_columns.count(t) > 0) {
                     throw exceptions::invalid_request_exception(sprint("Static column %s cannot be part of the PRIMARY KEY", t->text()));

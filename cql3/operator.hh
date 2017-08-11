@@ -72,6 +72,9 @@ private:
     {}
 public:
     const operator_type& reverse() const { return _reverse; }
+    bool is_slice() const {
+        return (*this == LT) || (*this == LTE) || (*this == GT) || (*this == GTE);
+    }
     sstring to_string() const { return _text; }
     bool operator==(const operator_type& other) const { return this == &other; }
     bool operator!=(const operator_type& other) const { return this != &other; }

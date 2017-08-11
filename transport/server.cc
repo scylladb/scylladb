@@ -1740,6 +1740,7 @@ private:
         TIME      = 0x0012,
         SMALLINT  = 0x0013,
         TINYINT   = 0x0014,
+        DURATION  = 0x0015,
         LIST      = 0x0020,
         MAP       = 0x0021,
         SET       = 0x0022,
@@ -1826,6 +1827,7 @@ thread_local const type_codec::type_id_to_type_type type_codec::type_id_to_type 
     (type_id::FLOAT     , float_type)
     (type_id::INT       , int32_type)
     (type_id::TINYINT   , byte_type)
+    (type_id::DURATION  , duration_type)
     (type_id::SMALLINT  , short_type)
     (type_id::TIMESTAMP , timestamp_type)
     (type_id::UUID      , uuid_type)
