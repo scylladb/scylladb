@@ -798,6 +798,8 @@ class components_writer {
     stdx::optional<key> _first_key, _last_key;
     stdx::optional<key> _partition_key;
     uint64_t _next_data_offset_to_write_summary = 0;
+    // Enforces ratio of summary to data of 1 to N.
+    size_t _summary_byte_cost = default_summary_byte_cost;
 private:
     void maybe_add_summary_entry(const dht::token& token, bytes_view key);
     uint64_t get_offset() const;
@@ -813,7 +815,7 @@ public:
     components_writer(components_writer&& o) : _sst(o._sst), _schema(o._schema), _out(o._out), _index(std::move(o._index)),
             _index_needs_close(o._index_needs_close), _max_sstable_size(o._max_sstable_size), _tombstone_written(o._tombstone_written),
             _first_key(std::move(o._first_key)), _last_key(std::move(o._last_key)), _partition_key(std::move(o._partition_key)),
-            _next_data_offset_to_write_summary(o._next_data_offset_to_write_summary) {
+            _next_data_offset_to_write_summary(o._next_data_offset_to_write_summary), _summary_byte_cost(o._summary_byte_cost) {
         o._index_needs_close = false;
     }
 
@@ -825,8 +827,9 @@ public:
     stop_iteration consume_end_of_partition();
     void consume_end_of_stream();
 
+    static constexpr size_t default_summary_byte_cost = 2000;
     static void maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key, uint64_t data_offset,
-        uint64_t index_offset, uint64_t& next_data_offset_to_write_summary);
+        uint64_t index_offset, uint64_t& next_data_offset_to_write_summary, size_t summary_byte_cost);
 };
 
 class sstable_writer {

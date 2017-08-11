@@ -68,6 +68,8 @@ namespace sstables {
 
 logging::logger sstlog("sstable");
 
+static const db::config& get_config();
+
 seastar::shared_ptr<write_monitor> default_write_monitor() {
     static thread_local seastar::shared_ptr<write_monitor> monitor = seastar::make_shared<noop_write_monitor>();
     return monitor;
@@ -1866,9 +1868,8 @@ static void seal_statistics(statistics& s, metadata_collector& collector,
 }
 
 void components_writer::maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key, uint64_t data_offset,
-        uint64_t index_offset, uint64_t& next_data_offset_to_write_summary) {
+        uint64_t index_offset, uint64_t& next_data_offset_to_write_summary, size_t summary_byte_cost) {
     static constexpr size_t target_index_interval_size = 65536;
-    static constexpr size_t summary_byte_cost = 2000; // TODO: use configuration file for it.
 
     auto index_size_for_current_entry = index_offset - (s.entries.size() ? s.entries.back().position : 0);
 
@@ -1885,7 +1886,7 @@ void components_writer::maybe_add_summary_entry(summary& s, const dht::token& to
 
 void components_writer::maybe_add_summary_entry(const dht::token& token,  bytes_view key) {
     return maybe_add_summary_entry(_sst._components->summary, token, key, get_offset(),
-        _index.offset(), _next_data_offset_to_write_summary);
+        _index.offset(), _next_data_offset_to_write_summary, _summary_byte_cost);
 }
 
 // Returns offset into data component.
@@ -1918,6 +1919,13 @@ static const db::config& get_config() {
     }
 }
 
+// Returns the cost for writing a byte to summary such that the ratio of summary
+// to data will be 1 to cost by the time sstable is sealed.
+static size_t summary_byte_cost() {
+    auto summary_ratio = get_config().sstable_summary_ratio();
+    return summary_ratio ? (1 / summary_ratio) : components_writer::default_summary_byte_cost;
+}
+
 components_writer::components_writer(sstable& sst, const schema& s, file_writer& out,
                                      uint64_t estimated_partitions,
                                      const sstable_writer_config& cfg,
@@ -1929,6 +1937,7 @@ components_writer::components_writer(sstable& sst, const schema& s, file_writer&
     , _index_needs_close(true)
     , _max_sstable_size(cfg.max_sstable_size)
     , _tombstone_written(false)
+    , _summary_byte_cost(summary_byte_cost())
 {
     _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance());
     _sst._pi_write.desired_block_size = cfg.promoted_index_block_size.value_or(get_config().column_index_size_in_kb() * 1024);
@@ -2226,18 +2235,19 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
     class summary_generator {
         summary& _summary;
         uint64_t _data_size;
+        size_t _summary_byte_cost;
         uint64_t _next_data_offset_to_write_summary = 0;
     public:
         std::experimental::optional<key> first_key, last_key;
 
-        summary_generator(summary& s, uint64_t data_size) : _summary(s), _data_size(data_size) {}
+        summary_generator(summary& s, uint64_t data_size) : _summary(s), _data_size(data_size), _summary_byte_cost(summary_byte_cost()) {}
         bool should_continue() {
             return true;
         }
         void consume_entry(index_entry&& ie, uint64_t index_offset) {
             auto token = dht::global_partitioner().get_token(ie.get_key());
             components_writer::maybe_add_summary_entry(_summary, token, ie.get_key_bytes(), _data_size, index_offset,
-                _next_data_offset_to_write_summary);
+                _next_data_offset_to_write_summary, _summary_byte_cost);
             if (!first_key) {
                 first_key = key(to_bytes(ie.get_key_bytes()));
             } else {
