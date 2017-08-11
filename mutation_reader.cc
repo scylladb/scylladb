@@ -89,10 +89,6 @@ future<> combined_mutation_reader::prepare_next() {
             if (next) {
                 _ptables.emplace_back(mutation_and_reader { std::move(*next), mr });
                 boost::range::push_heap(_ptables, &heap_compare);
-            } else {
-                auto it = std::remove(_all_readers.begin(), _all_readers.end(), mr);
-                _all_readers.erase(it);
-                _readers.remove_if([mr](auto& r) { return &r == mr; });
             }
         });
     }).then([this] {
