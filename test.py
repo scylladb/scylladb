@@ -82,6 +82,7 @@ boost_tests = [
     'counter_test',
     'cell_locker_test',
     'view_schema_test',
+    'combined_mutation_reader_test',
 ]
 
 other_tests = [
