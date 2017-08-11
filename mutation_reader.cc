@@ -46,10 +46,6 @@ public:
     list_reader_selector& operator=(list_reader_selector&&) = default;
 
     virtual std::vector<mutation_reader> create_new_readers(const dht::token* const) override {
-        if (_readers.empty()) {
-            return {};
-        }
-
         _selector_position = dht::maximum_token();
         return std::exchange(_readers, {});
     }
