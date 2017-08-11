@@ -32,6 +32,7 @@
 #include "transport/messages/result_message_base.hh"
 #include "cql3/query_options_fwd.hh"
 #include "cql3/values.hh"
+#include "cql3/prepared_statements_cache.hh"
 #include "bytes.hh"
 #include "schema.hh"
 
@@ -43,7 +44,7 @@ namespace cql3 {
 
 class not_prepared_exception : public std::runtime_error {
 public:
-    not_prepared_exception(const bytes& id) : std::runtime_error(sprint("Not prepared: %s", id)) {}
+    not_prepared_exception(const cql3::prepared_cache_key_type& id) : std::runtime_error(sprint("Not prepared: %s", id)) {}
 };
 
 namespace db {
@@ -59,10 +60,10 @@ public:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(
         const sstring& text, std::unique_ptr<cql3::query_options> qo) = 0;
 
-    virtual future<bytes> prepare(sstring query) = 0;
+    virtual future<cql3::prepared_cache_key_type> prepare(sstring query) = 0;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared(
-        bytes id, std::vector<cql3::raw_value> values) = 0;
+        cql3::prepared_cache_key_type id, std::vector<cql3::raw_value> values) = 0;
 
     virtual future<> create_table(std::function<schema(const sstring&)> schema_maker) = 0;
 
