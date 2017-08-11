@@ -65,7 +65,13 @@ private:
         auto new_mt = make_lw_shared<memtable>(_memtables.back()->schema());
         std::vector<mutation_reader> readers;
         for (auto&& mt : _memtables) {
-            readers.push_back(mt->make_reader(new_mt->schema()));
+            readers.push_back(mt->make_reader(new_mt->schema(),
+                 query::full_partition_range,
+                 query::full_slice,
+                 default_priority_class(),
+                 nullptr,
+                 streamed_mutation::forwarding::no,
+                 mutation_reader::forwarding::yes));
         }
         auto&& rd = make_combined_reader(std::move(readers));
         consume(rd, [&] (mutation&& m) {
