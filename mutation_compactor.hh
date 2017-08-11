@@ -203,16 +203,15 @@ public:
             }
             return stop;
         } else if (!only_live()) {
-            if (is_live) {
-                if (!sstable_compaction() && _rows_in_current_partition == _current_partition_limit) {
-                    return stop_iteration::yes;
-                }
-                _rows_in_current_partition++;
-            }
+            auto stop = stop_iteration::no;
             if (!cr.empty()) {
                 partition_is_not_empty();
-                return _consumer.consume(std::move(cr), t, is_live);
+                stop = _consumer.consume(std::move(cr), t, is_live);
             }
+            if (!sstable_compaction() && is_live && ++_rows_in_current_partition == _current_partition_limit) {
+                return stop_iteration::yes;
+            }
+            return stop;
         }
         return stop_iteration::no;
     }

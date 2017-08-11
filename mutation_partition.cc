@@ -1186,7 +1186,7 @@ void mutation_partition::trim_rows(const schema& s,
 {
     static_assert(std::is_same<stop_iteration, std::result_of_t<Func(rows_entry&)>>::value, "Bad func signature");
 
-    bool stop = false;
+    stop_iteration stop = stop_iteration::no;
     auto last = reversal_traits<reversed>::begin(_rows);
     auto deleter = current_deleter<rows_entry>();
 
@@ -1207,13 +1207,9 @@ void mutation_partition::trim_rows(const schema& s,
             reversal_traits<reversed>::maybe_reverse(_rows, range_begin(row_range)), deleter);
 
         auto end = reversal_traits<reversed>::maybe_reverse(_rows, range_end(row_range));
-        while (last != end) {
+        while (last != end && !stop) {
             rows_entry& e = *last;
-            if (func(e) == stop_iteration::yes) {
-                stop = true;
-                break;
-            }
-
+            stop = func(e);
             if (e.empty()) {
                 last = reversal_traits<reversed>::erase_dispose_and_update_end(_rows, last, deleter, end);
             } else {
@@ -1262,18 +1258,7 @@ uint32_t mutation_partition::do_compact(const schema& s,
             row.remove_tombstone();
         }
 
-        // when row_limit is reached, do not exit immediately,
-        // iterate to the next live_row instead to include trailing
-        // tombstones in the mutation. This is how Origin deals with
-        // https://issues.apache.org/jira/browse/CASSANDRA-8933
-        if (is_live) {
-            if (row_count == row_limit) {
-                return stop_iteration::yes;
-            }
-            ++row_count;
-        }
-
-        return stop_iteration::no;
+        return stop_iteration(is_live && ++row_count == row_limit);
     };
 
     if (reverse) {
