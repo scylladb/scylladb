@@ -73,7 +73,7 @@ private:
                  streamed_mutation::forwarding::no,
                  mutation_reader::forwarding::yes));
         }
-        auto&& rd = make_combined_reader(std::move(readers));
+        auto&& rd = make_combined_reader(std::move(readers), mutation_reader::forwarding::yes);
         consume(rd, [&] (mutation&& m) {
             new_mt->apply(std::move(m));
             return stop_iteration::no;

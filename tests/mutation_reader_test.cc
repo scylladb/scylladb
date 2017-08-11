@@ -114,7 +114,7 @@ SEASTAR_TEST_CASE(test_combining_one_reader_with_many_partitions) {
 
         std::vector<mutation_reader> v;
         v.push_back(make_reader_returning_many({m1, m2, m3}));
-        assert_that(make_combined_reader(std::move(v)))
+        assert_that(make_combined_reader(std::move(v), mutation_reader::forwarding::no))
             .produces(m1)
             .produces(m2)
             .produces(m3)
@@ -222,7 +222,7 @@ SEASTAR_TEST_CASE(test_combining_one_empty_reader) {
     return seastar::async([] {
         std::vector<mutation_reader> v;
         v.push_back(make_empty_reader());
-        assert_that(make_combined_reader(std::move(v)))
+        assert_that(make_combined_reader(std::move(v), mutation_reader::forwarding::no))
             .produces_end_of_stream();
     });
 }
@@ -277,7 +277,7 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combining_reader) {
             boost::range::transform(mutations, std::back_inserter(readers), [&pr] (auto& ms) {
                 return make_reader_returning_many(ms, pr);
             });
-            return make_combined_reader(std::move(readers));
+            return make_combined_reader(std::move(readers), mutation_reader::forwarding::yes);
         };
 
         auto pr = dht::partition_range::make_open_ended_both_sides();

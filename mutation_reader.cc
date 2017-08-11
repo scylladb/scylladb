@@ -87,6 +87,8 @@ future<> combined_mutation_reader::prepare_next() {
             if (next) {
                 _ptables.emplace_back(mutation_and_reader { std::move(*next), mr });
                 boost::range::push_heap(_ptables, &heap_compare);
+            } else if (_fwd_mr == mutation_reader::forwarding::no) {
+                _all_readers.remove_if([mr] (auto& r) { return &r == mr; });
             }
         });
     }).then([this] {
@@ -124,8 +126,9 @@ future<streamed_mutation_opt> combined_mutation_reader::next() {
     return make_ready_future<streamed_mutation_opt>(merge_mutations(std::exchange(_current, {})));
 }
 
-combined_mutation_reader::combined_mutation_reader(std::unique_ptr<reader_selector> selector)
+combined_mutation_reader::combined_mutation_reader(std::unique_ptr<reader_selector> selector, mutation_reader::forwarding fwd_mr)
     : _selector(std::move(selector))
+    , _fwd_mr(fwd_mr)
 {
 }
 
@@ -146,17 +149,17 @@ future<streamed_mutation_opt> combined_mutation_reader::operator()() {
 }
 
 mutation_reader
-make_combined_reader(std::vector<mutation_reader> readers) {
-    return make_mutation_reader<combined_mutation_reader>(std::make_unique<list_reader_selector>(std::move(readers)));
+make_combined_reader(std::vector<mutation_reader> readers, mutation_reader::forwarding fwd_mr) {
+    return make_mutation_reader<combined_mutation_reader>(std::make_unique<list_reader_selector>(std::move(readers)), fwd_mr);
 }
 
 mutation_reader
-make_combined_reader(mutation_reader&& a, mutation_reader&& b) {
+make_combined_reader(mutation_reader&& a, mutation_reader&& b, mutation_reader::forwarding fwd_mr) {
     std::vector<mutation_reader> v;
     v.reserve(2);
     v.push_back(std::move(a));
     v.push_back(std::move(b));
-    return make_combined_reader(std::move(v));
+    return make_combined_reader(std::move(v), fwd_mr);
 }
 
 class reader_returning final : public mutation_reader::impl {
@@ -376,6 +379,6 @@ mutation_source make_combined_mutation_source(std::vector<mutation_source> adden
         for (auto&& ms : addends) {
             rd.emplace_back(ms(s, pr, slice, pc, tr, fwd));
         }
-        return make_combined_reader(std::move(rd));
+        return make_combined_reader(std::move(rd), mutation_reader::forwarding::yes);
     });
 }

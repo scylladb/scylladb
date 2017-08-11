@@ -162,7 +162,7 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
                     ::mutation_reader::forwarding::yes));
         }
 
-        auto list_reader = make_combined_reader(std::move(sstable_mutation_readers));
+        auto list_reader = make_combined_reader(std::move(sstable_mutation_readers), ::mutation_reader::forwarding::yes);
 
         const auto pr = dht::partition_range{dht::ring_position::min(), dht::ring_position::max()};
         const auto qs = query::full_slice;
