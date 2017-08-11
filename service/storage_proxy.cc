@@ -3010,9 +3010,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     return f.then([p, exec = std::move(exec), results = std::move(results), i = std::move(i), ranges = std::move(ranges),
                    cl, cmd, concurrency_factor, timeout, remaining_row_count, remaining_partition_count, trace_state = std::move(trace_state)]
                    (foreign_ptr<lw_shared_ptr<query::result>>&& result) mutable {
-        if (!result->row_count() || !result->partition_count()) {
-            result->calculate_counts(cmd->slice);
-        }
+        result->ensure_counts();
         remaining_row_count -= result->row_count().value();
         remaining_partition_count -= result->partition_count().value();
         results.emplace_back(std::move(result));
@@ -3094,7 +3092,7 @@ storage_proxy::query(schema_ptr s,
         slogger.trace("query {}.{} cmd={}, ranges={}, id={}", s->ks_name(), s->cf_name(), *cmd, partition_ranges, query_id);
         return do_query(s, cmd, std::move(partition_ranges), cl, std::move(trace_state)).then([query_id, cmd, s] (foreign_ptr<lw_shared_ptr<query::result>>&& res) {
             if (res->buf().is_linearized()) {
-                res->calculate_counts(cmd->slice);
+                res->ensure_counts();
                 slogger.trace("query_result id={}, size={}, rows={}, partitions={}", query_id, res->buf().size(), *res->row_count(), *res->partition_count());
             } else {
                 slogger.trace("query_result id={}, size={}", query_id, res->buf().size());

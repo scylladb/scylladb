@@ -390,7 +390,7 @@ public:
         return _partition_count;
     }
 
-    void calculate_counts(const query::partition_slice&);
+    void ensure_counts();
 
     struct printer {
         schema_ptr s;
