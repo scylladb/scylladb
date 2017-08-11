@@ -1874,7 +1874,7 @@ static void seal_statistics(statistics& s, metadata_collector& collector,
 }
 
 // Returns offset into data component.
-size_t components_writer::get_offset() {
+uint64_t components_writer::get_offset() const {
     if (_sst.has_component(sstable::component_type::CompressionInfo)) {
         // Variable returned by compressed_file_length() is constantly updated by compressed output stream.
         return _sst._components->compression.compressed_file_length();

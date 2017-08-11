@@ -798,7 +798,7 @@ class components_writer {
     stdx::optional<key> _first_key, _last_key;
     stdx::optional<key> _partition_key;
 private:
-    size_t get_offset();
+    uint64_t get_offset() const;
     file_writer index_file_writer(sstable& sst, const io_priority_class& pc);
     void ensure_tombstone_is_written() {
         if (!_tombstone_written) {
