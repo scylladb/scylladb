@@ -2860,7 +2860,7 @@ storage_proxy::query_result_local(schema_ptr s, lw_shared_ptr<query::read_comman
             });
         });
     } else {
-        return query_mutations_locally(s, cmd, pr, std::move(trace_state), max_size).then([s, cmd, request] (foreign_ptr<lw_shared_ptr<reconcilable_result>>&& r, cache_temperature&& ht) {
+        return query_nonsingular_mutations_locally(s, cmd, {pr}, std::move(trace_state), max_size).then([s, cmd, request] (foreign_ptr<lw_shared_ptr<reconcilable_result>>&& r, cache_temperature&& ht) {
             return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>(
                     ::make_foreign(::make_lw_shared(to_data_query_result(*r, s, cmd->slice,  cmd->row_limit, cmd->partition_limit, request))), ht);
         });
