@@ -4052,3 +4052,43 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_summary_entry_spanning_more_keys_than_min_interval) {
+    return seastar::async([] {
+        auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+            {{"p1", int32_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
+
+        const column_definition& r1_col = *s->get_column_definition("r1");
+        std::vector<mutation> mutations;
+        auto keys_written = 0;
+        for (auto i = 0; i < s->min_index_interval()*1.5; i++) {
+            auto key = partition_key::from_exploded(*s, {int32_type->decompose(i)});
+            auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
+            mutation m(key, s);
+            m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
+            mutations.push_back(std::move(m));
+            keys_written++;
+        }
+
+        auto tmp = make_lw_shared<tmpdir>();
+        auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            return make_lw_shared<sstable>(s, tmp->path, (*gen)++, la, big);
+        };
+        auto sst = make_sstable_containing(sst_gen, mutations);
+        sst = reusable_sst(s, tmp->path, sst->generation()).get0();
+
+        summary& sum = sstables::test(sst).get_summary();
+        BOOST_REQUIRE(sum.entries.size() == 1);
+
+        std::set<mutation, mutation_decorated_key_less_comparator> merged;
+        merged.insert(mutations.begin(), mutations.end());
+        auto rd = assert_that(sst->as_mutation_source()(s));
+        auto keys_read = 0;
+        for (auto&& m : merged) {
+            keys_read++;
+            rd.produces(m);
+        }
+        rd.produces_end_of_stream();
+        BOOST_REQUIRE(keys_read == keys_written);
+    });
+}
