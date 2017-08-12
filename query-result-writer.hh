@@ -183,7 +183,7 @@ public:
         case result_request::only_digest: {
             bytes_ostream buf;
             ser::writer_of_query_result<bytes_ostream>(buf).start_partitions().end_partitions().end_query_result();
-            return result(std::move(buf), result_digest(_digest.finalize_array()), _last_modified, _short_read);
+            return result(std::move(buf), result_digest(_digest.finalize_array()), _last_modified, _short_read, {}, {});
         }
         case result_request::result_and_digest:
             return result(std::move(_out), result_digest(_digest.finalize_array()),

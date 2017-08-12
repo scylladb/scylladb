@@ -229,6 +229,7 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
                         return;
                     }
                 } else if (rows_to_include > 0) {
+                    ++partition_count;
                     write_partial_partition(partitions.add(), pv, rows_to_include);
                     return;
                 } else {
@@ -247,7 +248,7 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
 
     std::move(partitions).end_partitions().end_query_result();
 
-    return make_foreign(make_lw_shared<query::result>(std::move(w), is_short_read, row_count));
+    return make_foreign(make_lw_shared<query::result>(std::move(w), is_short_read, row_count, partition_count));
 }
 
 }

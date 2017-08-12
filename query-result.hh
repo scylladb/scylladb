@@ -339,7 +339,7 @@ public:
     friend class result_merger;
 
     result();
-    result(bytes_ostream&& w, short_read sr, stdx::optional<uint32_t> c = { }, stdx::optional<uint32_t> pc = { },
+    result(bytes_ostream&& w, short_read sr, stdx::optional<uint32_t> c, stdx::optional<uint32_t> pc,
            result_memory_tracker memory_tracker = { })
         : _w(std::move(w))
         , _row_count(c)
@@ -350,7 +350,7 @@ public:
         w.reduce_chunk_count();
     }
     result(bytes_ostream&& w, stdx::optional<result_digest> d, api::timestamp_type last_modified,
-           short_read sr, stdx::optional<uint32_t> c = { }, stdx::optional<uint32_t> pc = { }, result_memory_tracker memory_tracker = { })
+           short_read sr, stdx::optional<uint32_t> c, stdx::optional<uint32_t> pc, result_memory_tracker memory_tracker = { })
         : _w(std::move(w))
         , _digest(d)
         , _row_count(c)

@@ -30,6 +30,8 @@ class result {
     std::experimental::optional<query::result_digest> digest();
     api::timestamp_type last_modified() [ [version 1.2] ] = api::missing_timestamp;
     query::short_read is_short_read() [[version 1.6]] = query::short_read::no;
+    std::experimental::optional<uint32_t> row_count() [[version 2.1]];
+    std::experimental::optional<uint32_t> partition_count() [[version 2.1]];
 };
 
 }
