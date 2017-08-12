@@ -36,9 +36,6 @@ public:
         indexes.reserve(q);
     }
 
-    bool should_continue() {
-        return indexes.size() < max_quantity;
-    }
     void consume_entry(index_entry&& ie, uint64_t offset) {
         indexes.push_back(std::move(ie));
     }
@@ -85,9 +82,6 @@ public:
         switch (_state) {
         // START comes first, to make the handling of the 0-quantity case simpler
         case state::START:
-            if (!_consumer.should_continue()) {
-                return proceed::no;
-            }
             _state = state::KEY_SIZE;
             break;
         case state::KEY_SIZE:

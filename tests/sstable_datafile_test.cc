@@ -4090,5 +4090,10 @@ SEASTAR_TEST_CASE(test_summary_entry_spanning_more_keys_than_min_interval) {
         }
         rd.produces_end_of_stream();
         BOOST_REQUIRE(keys_read == keys_written);
+
+        auto r = dht::partition_range::make({mutations.back().decorated_key(), true}, {mutations.back().decorated_key(), true});
+        assert_that(sst->as_mutation_source()(s, r))
+            .produces(slice(mutations, r))
+            .produces_end_of_stream();
     });
 }
