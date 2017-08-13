@@ -123,8 +123,7 @@ public:
 // Combines multiple mutation_readers into one.
 class combined_mutation_reader : public mutation_reader::impl {
     std::unique_ptr<reader_selector> _selector;
-    std::list<mutation_reader> _readers;
-    std::vector<mutation_reader*> _all_readers;
+    std::list<mutation_reader> _all_readers;
 
     struct mutation_and_reader {
         streamed_mutation m;

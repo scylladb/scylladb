@@ -65,10 +65,8 @@ void combined_mutation_reader::maybe_add_readers(const dht::token* const t) {
 
 void combined_mutation_reader::add_readers(std::vector<mutation_reader> new_readers) {
     for (auto&& new_reader : new_readers) {
-        _readers.emplace_back(std::move(new_reader));
-
-        auto* r = &_readers.back();
-        _all_readers.emplace_back(r);
+        _all_readers.emplace_back(std::move(new_reader));
+        auto* r = &_all_readers.back();
         _next.emplace_back(r);
     }
 }
@@ -133,7 +131,8 @@ combined_mutation_reader::combined_mutation_reader(std::unique_ptr<reader_select
 
 future<> combined_mutation_reader::fast_forward_to(const dht::partition_range& pr) {
     _ptables.clear();
-    _next.assign(_all_readers.begin(), _all_readers.end());
+    auto rs = _all_readers | boost::adaptors::transformed([] (auto& r) { return &r; });
+    _next.assign(rs.begin(), rs.end());
 
     return parallel_for_each(_next, [this, &pr] (mutation_reader* mr) {
         return mr->fast_forward_to(pr);
