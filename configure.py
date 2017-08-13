@@ -924,19 +924,7 @@ with open(buildfile, 'w') as f:
                     objs += dep.objects('$builddir/' + mode + '/gen')
                 if isinstance(dep, Antlr3Grammar):
                     objs += dep.objects('$builddir/' + mode + '/gen')
-            if binary.endswith('.pc'):
-                vars = modeval.copy()
-                vars.update(globals())
-                pc = textwrap.dedent('''\
-                        Name: Seastar
-                        URL: http://seastar-project.org/
-                        Description: Advanced C++ framework for high-performance server applications on modern hardware.
-                        Version: 1.0
-                        Libs: -L{srcdir}/{builddir} -Wl,--whole-archive -lseastar -Wl,--no-whole-archive {dbgflag} -Wl,--no-as-needed {static} {pie} -fvisibility=hidden -pthread {user_ldflags} {libs} {sanitize_libs}
-                        Cflags: -std=gnu++1y {dbgflag} {fpie} -Wall -Werror -fvisibility=hidden -pthread -I{srcdir} -I{srcdir}/{builddir}/gen {user_cflags} {warnings} {defines} {sanitize} {opt}
-                        ''').format(builddir = 'build/' + mode, srcdir = os.getcwd(), **vars)
-                f.write('build $builddir/{}/{}: gen\n  text = {}\n'.format(mode, binary, repr(pc)))
-            elif binary.endswith('.a'):
+            if binary.endswith('.a'):
                 f.write('build $builddir/{}/{}: ar.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
             else:
                 if binary.startswith('tests/'):
