@@ -641,7 +641,7 @@ class ring_position_exponential_vector_sharder {
     stdx::optional<ring_position_exponential_sharder> _current_sharder;
     unsigned _element = 0;
 public:
-    explicit ring_position_exponential_vector_sharder(const std::vector<nonwrapping_range<ring_position>>& ranges);
+    explicit ring_position_exponential_vector_sharder(const std::vector<nonwrapping_range<ring_position>>&& ranges);
     stdx::optional<ring_position_exponential_vector_sharder_result> next(const schema& s);
 };
 

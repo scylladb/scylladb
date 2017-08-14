@@ -279,7 +279,7 @@ private:
     template<typename Range>
     future<> mutate_internal(Range mutations, db::consistency_level cl, bool counter_write, tracing::trace_state_ptr tr_state, stdx::optional<clock_type::time_point> timeout_opt = { });
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> query_nonsingular_mutations_locally(
-            schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector& pr, tracing::trace_state_ptr trace_state, uint64_t max_size);
+            schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector&& pr, tracing::trace_state_ptr trace_state, uint64_t max_size);
 
     struct frozen_mutation_and_schema {
         frozen_mutation fm;

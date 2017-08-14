@@ -363,8 +363,8 @@ ring_position_exponential_sharder::next(const schema& s) {
 }
 
 
-ring_position_exponential_vector_sharder::ring_position_exponential_vector_sharder(const std::vector<nonwrapping_range<ring_position>>& ranges)
-        : _ranges(std::begin(ranges), std::end(ranges)) {
+ring_position_exponential_vector_sharder::ring_position_exponential_vector_sharder(const std::vector<nonwrapping_range<ring_position>>&& ranges) {
+    std::move(ranges.begin(), ranges.end(), std::back_inserter(_ranges));
     if (!_ranges.empty()) {
         _current_sharder.emplace(_ranges.front());
         _ranges.pop_front();

@@ -4073,18 +4073,19 @@ struct partition_range_and_sort_key {
 };
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>
-storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector& prs,
+storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector&& prs,
                                                    tracing::trace_state_ptr trace_state, uint64_t max_size) {
     // no one permitted us to modify *cmd, so make a copy
     auto shard_cmd = make_lw_shared<query::read_command>(*cmd);
+    auto range_count = static_cast<unsigned>(prs.size());
     return do_with(cmd,
             shard_cmd,
             0u,
             false,
-            static_cast<unsigned>(prs.size()),
+            range_count,
             std::unordered_map<element_and_shard, partition_range_and_sort_key>{},
             mutation_result_merger{s, cmd},
-            dht::ring_position_exponential_vector_sharder{prs},
+            dht::ring_position_exponential_vector_sharder{std::move(prs)},
             global_schema_ptr(s),
             tracing::global_trace_state_ptr(std::move(trace_state)),
             cache_temperature(0.0f),
