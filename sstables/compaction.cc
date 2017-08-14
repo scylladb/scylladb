@@ -252,7 +252,7 @@ private:
         _info->cf = schema->cf_name();
         report_start(formatted_msg);
 
-        return ::make_combined_reader(std::move(readers));
+        return ::make_combined_reader(std::move(readers), ::mutation_reader::forwarding::no);
     }
 
     void finish(std::chrono::time_point<db_clock> started_at, std::chrono::time_point<db_clock> ended_at) {

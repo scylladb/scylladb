@@ -563,7 +563,7 @@ column_family::make_sstable_reader(schema_ptr s,
                             pc,
                             std::move(trace_state),
                             fwd,
-                            fwd_mr)));
+                            fwd_mr), fwd_mr));
     }
 }
 
@@ -650,7 +650,7 @@ column_family::make_reader(schema_ptr s,
         readers.emplace_back(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
     }
 
-    return make_combined_reader(std::move(readers));
+    return make_combined_reader(std::move(readers), fwd_mr);
 }
 
 mutation_reader
@@ -668,7 +668,7 @@ column_family::make_streaming_reader(schema_ptr s,
 
     readers.emplace_back(make_sstable_reader(s, _sstables, range, slice, pc, nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
 
-    return make_combined_reader(std::move(readers));
+    return make_combined_reader(std::move(readers), mutation_reader::forwarding::no);
 }
 
 mutation_reader
@@ -685,7 +685,7 @@ column_family::make_streaming_reader(schema_ptr s,
             readers.emplace_back(mt->make_reader(s, range, slice, pc, trace_state, fwd, fwd_mr));
         }
         readers.emplace_back(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
-        return make_combined_reader(std::move(readers));
+        return make_combined_reader(std::move(readers), fwd_mr);
     });
 
     return make_multi_range_reader(s, std::move(source), ranges, slice, pc, nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
@@ -4166,7 +4166,7 @@ mutation_reader make_range_sstable_reader(schema_ptr s,
                 pc,
                 std::move(trace_state),
                 fwd,
-                fwd_mr));
+                fwd_mr), fwd_mr);
 }
 
 future<>

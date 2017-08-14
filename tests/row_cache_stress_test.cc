@@ -137,7 +137,7 @@ struct table {
         }
         rd.push_back(mt->make_reader(s.schema(), r->pr, r->slice));
         rd.push_back(cache.make_reader(s.schema(), r->pr, r->slice));
-        r->rd = make_combined_reader(std::move(rd));
+        r->rd = make_combined_reader(std::move(rd), mutation_reader::forwarding::no);
         return r;
     }
 

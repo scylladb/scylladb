@@ -193,7 +193,7 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
                 for (int i = 0; i < n; ++i) {
                     readers.push_back(memtables[i]->make_reader(s, range, slice, pc, trace_state, fwd, fwd_mr));
                 }
-                return make_combined_reader(std::move(readers));
+                return make_combined_reader(std::move(readers), fwd_mr);
             });
         });
     });

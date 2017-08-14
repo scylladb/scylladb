@@ -123,8 +123,7 @@ public:
 // Combines multiple mutation_readers into one.
 class combined_mutation_reader : public mutation_reader::impl {
     std::unique_ptr<reader_selector> _selector;
-    std::list<mutation_reader> _readers;
-    std::vector<mutation_reader*> _all_readers;
+    std::list<mutation_reader> _all_readers;
 
     struct mutation_and_reader {
         streamed_mutation m;
@@ -155,6 +154,7 @@ class combined_mutation_reader : public mutation_reader::impl {
     }
     std::vector<streamed_mutation> _current;
     std::vector<mutation_reader*> _next;
+    mutation_reader::forwarding _fwd_mr;
 private:
     const dht::token* current_position() const;
     void maybe_add_readers(const dht::token* const t);
@@ -163,7 +163,8 @@ private:
     // Produces next mutation or disengaged optional if there are no more.
     future<streamed_mutation_opt> next();
 public:
-    combined_mutation_reader(std::unique_ptr<reader_selector> selector);
+    // The specified mutation_reader::forwarding tag must be the same for all included readers.
+    combined_mutation_reader(std::unique_ptr<reader_selector> selector, mutation_reader::forwarding fwd_mr);
     virtual future<streamed_mutation_opt> operator()() override;
     virtual future<> fast_forward_to(const dht::partition_range& pr) override;
 };
@@ -171,8 +172,8 @@ public:
 // Creates a mutation reader which combines data return by supplied readers.
 // Returns mutation of the same schema only when all readers return mutations
 // of the same schema.
-mutation_reader make_combined_reader(std::vector<mutation_reader>);
-mutation_reader make_combined_reader(mutation_reader&& a, mutation_reader&& b);
+mutation_reader make_combined_reader(std::vector<mutation_reader>, mutation_reader::forwarding);
+mutation_reader make_combined_reader(mutation_reader&& a, mutation_reader&& b, mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 // reads from the input readers, in order
 mutation_reader make_reader_returning(mutation, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 mutation_reader make_reader_returning(streamed_mutation);
