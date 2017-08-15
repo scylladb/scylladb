@@ -395,12 +395,11 @@ public:
         , _fwd(fwd)
         , _fwd_mr(fwd_mr)
         , _selector(_sstables->make_incremental_selector()) {
-        _selector_position = _pr->start()->value().token();
+        _selector_position = _pr->start() ? _pr->start()->value().token() : dht::minimum_token();
 
-        dblog.trace("incremental_reader_selector {}: created for range: ({},{}) with {} sstables",
+        dblog.trace("incremental_reader_selector {}: created for range: {} with {} sstables",
                 this,
-                _pr->start()->value().token(),
-                _pr->end()->value().token(),
+                *_pr,
                 _sstables->all()->size());
     }
 
