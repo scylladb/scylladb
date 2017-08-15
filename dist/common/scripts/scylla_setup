@@ -149,14 +149,17 @@ fi
 while [ $# -gt 0 ]; do
     case "$1" in
         "--disks")
+            verify_args $@
             DISKS="$2"
             shift 2
             ;;
         "--nic")
+            verify_args $@
             NIC="$2"
             shift 2
             ;;
         "--ntp-domain")
+            verify_args $@
             NTP_DOMAIN="$2"
             shift 2
             ;;

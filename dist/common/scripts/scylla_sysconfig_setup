@@ -24,30 +24,37 @@ fi
 while [ $# -gt 0 ]; do
     case "$1" in
         "--nic")
+            verify_args $@
             NIC="$2"
             shift 2
             ;;
         "--mode")
+            verify_args $@
             NETWORK_MODE="$2"
             shift 2
             ;;
         "--nr-hugepages")
+            verify_args $@
             NR_HUGEPAGES="$2"
             shift 2
             ;;
         "--user")
+            verify_args $@
             USER="$2"
             shift 2
             ;;
         "--group")
+            verify_args $@
             GROUP="$2"
             shift 2
             ;;
         "--homedir")
+            verify_args $@
             SCYLLA_HOME="$2"
             shift 2
             ;;
         "--confdir")
+            verify_args $@
             SCYLLA_CONF="$2"
             shift 2
             ;;

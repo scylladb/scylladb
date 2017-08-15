@@ -38,6 +38,14 @@ ec2_is_supported_instance_type() {
     esac
 }
 
+verify_args() {
+     if [ -z "$2" ] || [[ "$2" =~ ^--+ ]]; then
+        echo "Requires more parameter for $1."
+        print_usage
+        exit 1
+    fi
+}
+
 . /etc/os-release
 if is_debian_variant || is_gentoo_variant; then
     SYSCONFIG=/etc/default

@@ -22,11 +22,13 @@ ROLE="all"
 while [ $# -gt 0 ]; do
     case "$1" in
         "--disks")
+            verify_args $@
             DISKS=`echo "$2"|tr -s ',' ' '`
             NR_DISK=`echo "$DISKS"|wc -w`
             shift 2
             ;;
         "--raiddev")
+            verify_args $@
             RAID="$2"
             shift 2
             ;;
@@ -35,10 +37,12 @@ while [ $# -gt 0 ]; do
             shift 1
             ;;
         "--root")
+            verify_args $@
             ROOT="$2"
             shift 2
             ;;
         "--volume-role")
+            verify_args $@
             ROLE="$2"
             shift 2
             ;;
