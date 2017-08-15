@@ -221,13 +221,13 @@ public:
     }
 private:
     ::mutation_reader setup() {
-        std::vector<::mutation_reader> readers;
+        auto ssts = make_lw_shared<sstables::sstable_set>(_cf.get_compaction_strategy().make_sstable_set(_cf.schema()));
         auto schema = _cf.schema();
         sstring formatted_msg = "[";
 
         for (auto& sst : _sstables) {
             // We also capture the sstable, so we keep it alive while the read isn't done
-            readers.emplace_back(make_mutation_reader<sstable_reader>(sst, schema));
+            ssts->insert(sst);
             // FIXME: If the sstables have cardinality estimation bitmaps, use that
             // for a better estimate for the number of partitions in the merged
             // sstable than just adding up the lengths of individual sstables.
@@ -252,7 +252,14 @@ private:
         _info->cf = schema->cf_name();
         report_start(formatted_msg);
 
-        return ::make_combined_reader(std::move(readers), ::mutation_reader::forwarding::no);
+        return ::make_range_sstable_reader(_cf.schema(),
+                ssts,
+                query::full_partition_range,
+                query::full_slice,
+                service::get_local_compaction_priority(),
+                nullptr,
+                ::streamed_mutation::forwarding::no,
+                ::mutation_reader::forwarding::no);
     }
 
     void finish(std::chrono::time_point<db_clock> started_at, std::chrono::time_point<db_clock> ended_at) {
