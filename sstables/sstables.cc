@@ -2901,7 +2901,8 @@ atomic_deletion_cancelled::what() const noexcept {
 thread_local shared_index_lists::stats shared_index_lists::_shard_stats;
 static thread_local seastar::metrics::metric_groups metrics;
 
-void init_metrics() {
+future<> init_metrics() {
+  return seastar::smp::invoke_on_all([] {
     namespace sm = seastar::metrics;
     metrics.add_group("sstables", {
         sm::make_derive("index_page_hits", [] { return shared_index_lists::shard_stats().hits; },
@@ -2911,6 +2912,7 @@ void init_metrics() {
         sm::make_derive("index_page_blocks", [] { return shared_index_lists::shard_stats().blocks; },
             sm::description("Index page requests which needed to wait due to page not being loaded yet")),
     });
+  });
 }
 
 struct range_reader_adaptor final : public ::mutation_reader::impl {
