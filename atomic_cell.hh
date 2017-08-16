@@ -269,7 +269,7 @@ public:
     }
     // Can be called on live and dead cells
     bool has_expired(gc_clock::time_point now) const {
-        return is_live_and_has_ttl() && expiry() < now;
+        return is_live_and_has_ttl() && expiry() <= now;
     }
     bytes_view serialize() const {
         return _data;

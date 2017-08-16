@@ -1230,9 +1230,9 @@ SEASTAR_TEST_CASE(test_querying_expired_cells) {
 
         auto ttl = std::chrono::seconds(1);
         auto t1 = gc_clock::now();
+        auto t0 = t1 - std::chrono::seconds(1);
         auto t2 = t1 + std::chrono::seconds(1);
         auto t3 = t2 + std::chrono::seconds(1);
-        auto t4 = t3 + std::chrono::seconds(1);
 
         auto v1 = data_value(bytes("1"));
         auto v2 = data_value(bytes("2"));
@@ -1261,7 +1261,7 @@ SEASTAR_TEST_CASE(test_querying_expired_cells) {
             m.set_static_cell(*s->get_column_definition("s2"), atomic_cell::make_live(api::new_timestamp(), v2.serialize(), t2, ttl));
             m.set_static_cell(*s->get_column_definition("s3"), atomic_cell::make_live(api::new_timestamp(), v3.serialize(), t3, ttl));
 
-            assert_that(results_at_time(m, t1))
+            assert_that(results_at_time(m, t0))
                     .has_only(a_row()
                          .with_column("s1", v1)
                          .with_column("s2", v2)
@@ -1271,7 +1271,7 @@ SEASTAR_TEST_CASE(test_querying_expired_cells) {
                          .with_column("v3", v3)
                          .and_only_that());
 
-            assert_that(results_at_time(m, t2))
+            assert_that(results_at_time(m, t1))
                     .has_only(a_row()
                          .with_column("s2", v2)
                          .with_column("s3", v3)
@@ -1279,13 +1279,13 @@ SEASTAR_TEST_CASE(test_querying_expired_cells) {
                          .with_column("v3", v3)
                          .and_only_that());
 
-            assert_that(results_at_time(m, t3))
+            assert_that(results_at_time(m, t2))
                     .has_only(a_row()
                          .with_column("s3", v3)
                          .with_column("v3", v3)
                          .and_only_that());
 
-            assert_that(results_at_time(m, t4)).is_empty();
+            assert_that(results_at_time(m, t3)).is_empty();
         }
 
         {
@@ -1296,7 +1296,7 @@ SEASTAR_TEST_CASE(test_querying_expired_cells) {
             assert_that(results_at_time(m, t2))
                     .has_only(a_row().with_column("s1", v1).and_only_that());
 
-            assert_that(results_at_time(m, t4)).is_empty();
+            assert_that(results_at_time(m, t3)).is_empty();
         }
     });
 }
