@@ -155,7 +155,7 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
             sstable_mutation_readers.emplace_back(make_mutation_reader<sstable_range_wrapping_reader>(
                     table,
                     s.schema(),
-                    dht::partition_range{dht::ring_position::min(), dht::ring_position::max()},
+                    query::full_partition_range,
                     query::full_slice,
                     seastar::default_priority_class(),
                     streamed_mutation::forwarding::no,
@@ -164,16 +164,12 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
 
         auto list_reader = make_combined_reader(std::move(sstable_mutation_readers), ::mutation_reader::forwarding::yes);
 
-        const auto pr = dht::partition_range{dht::ring_position::min(), dht::ring_position::max()};
-        const auto qs = query::full_slice;
-        const auto pc = seastar::default_priority_class();
-
         auto incremental_reader = make_range_sstable_reader(
                 s.schema(),
                 sstables,
-                pr,
-                qs,
-                pc,
+                query::full_partition_range,
+                query::full_slice,
+                seastar::default_priority_class(),
                 nullptr,
                 streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::yes);
