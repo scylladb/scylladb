@@ -853,6 +853,6 @@ struct sstable_open_info {
     file index;
 };
 
-void init_metrics();
+future<> init_metrics();
 
 }

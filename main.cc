@@ -534,7 +534,7 @@ int main(int ac, char** av) {
             db::get_batchlog_manager().start(std::ref(qp)).get();
             // #293 - do not stop anything
             // engine().at_exit([] { return db::get_batchlog_manager().stop(); });
-            sstables::init_metrics();
+            sstables::init_metrics().get();
 
             db::system_keyspace::minimal_setup(db, qp);
 
