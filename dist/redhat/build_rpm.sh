@@ -74,7 +74,7 @@ if [ "$ID" = "centos" ] || [ "$ID" = "rhel" ]; then
         ./dist/redhat/centos_dep/build_dependency.sh
     else
         if [ "$ID" = "centos" ]; then
-            sudo curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/unstable/centos/master/latest/scylla.repo -o /etc/yum.repos.d/scylla.repo
+            sudo curl http://downloads.scylladb.com.s3.amazonaws.com/rpm/centos/scylla-1.7.repo -o /etc/yum.repos.d/scylla.repo
         else
             echo "RHEL requires --rebuild-deps option."
             exit 1
