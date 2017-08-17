@@ -74,7 +74,7 @@ verify_package() {
     if is_debian_variant; then
         dpkg -s $1 > /dev/null 2>&1 &&:
     elif is_gentoo_variant; then
-        find /var/db/pkg/dev-db -type d -name "${1}-*" | egrep -q ".*"
+        find /var/db/pkg/app-admin -type d -name "${1}-*" | egrep -q ".*"
     else
         rpm -q $1 > /dev/null 2>&1 &&:
     fi
