@@ -314,6 +314,42 @@ future<> compaction_manager::submit_major_compaction(column_family* cf) {
     return task->compaction_done.get_future().then([task] {});
 }
 
+future<> compaction_manager::submit_resharding_job(column_family* cf, std::function<future<>()> job) {
+    if (_stopped) {
+        return make_ready_future<>();
+    }
+    auto task = make_lw_shared<compaction_manager::task>();
+    task->compacting_cf = cf;
+    _tasks.push_back(task);
+
+    task->compaction_done = with_semaphore(_resharding_sem, 1, [this, task, cf, job = std::move(job)] {
+        // take read lock for cf, so major compaction and resharding can't proceed in parallel.
+        return with_lock(_compaction_locks[cf].for_read(), [this, task, cf, job = std::move(job)] {
+            _stats.active_tasks++;
+            if (!can_proceed(task)) {
+                return make_ready_future<>();
+            }
+
+            // NOTE:
+            // no need to register shared sstables because they're excluded from non-resharding
+            // compaction and some of them may not even belong to current shard.
+
+            return job();
+        });
+    }).then_wrapped([this, task] (future<> f) {
+        _stats.active_tasks--;
+        _tasks.remove(task);
+        try {
+            f.get();
+        } catch (sstables::compaction_stop_exception& e) {
+            cmlog.info("resharding was abruptly stopped, reason: {}", e.what());
+        } catch (...) {
+            cmlog.error("resharding failed: {}", std::current_exception());
+        }
+    });
+    return task->compaction_done.get_future().then([task] {});
+}
+
 future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> task) {
     task->stopping = true;
     auto f = task->compaction_done.get_future();

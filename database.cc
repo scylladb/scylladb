@@ -1667,12 +1667,12 @@ template <typename Func>
 static future<> invoke_all_resharding_jobs(global_column_family_ptr cf, std::vector<sstables::resharding_descriptor> jobs, Func&& func) {
     return parallel_for_each(std::move(jobs), [cf, func] (sstables::resharding_descriptor& job) mutable {
         return forward_sstables_to(job.reshard_at, std::move(job.sstables), cf,
-                [func, level = job.level, max_sstable_bytes = job.max_sstable_bytes] (auto sstables) {
-            // used to ensure that only one reshard operation will run per shard.
-            static thread_local semaphore sem(1);
-            return with_semaphore(sem, 1, [func, sstables = std::move(sstables), level, max_sstable_bytes] () mutable {
+                [cf, func, level = job.level, max_sstable_bytes = job.max_sstable_bytes] (auto sstables) {
+            // compaction manager ensures that only one reshard operation will run per shard.
+            auto job = [func, sstables = std::move(sstables), level, max_sstable_bytes] () mutable {
                 return func(std::move(sstables), level, max_sstable_bytes);
-            });
+            };
+            return cf->get_compaction_manager().submit_resharding_job(&*cf, std::move(job));
         });
     });
 }
@@ -1770,14 +1770,6 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                             });
                         }
                     });
-                }).then_wrapped([] (future<> f) {
-                    try {
-                        f.get();
-                    } catch (sstables::compaction_stop_exception& e) {
-                        dblog.info("resharding was abruptly stopped, reason: {}", e.what());
-                    } catch (...) {
-                        dblog.error("resharding failed: {}", std::current_exception());
-                    }
                 });
             }).get();
         });
