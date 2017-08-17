@@ -410,8 +410,7 @@ public:
     incremental_reader_selector& operator=(incremental_reader_selector&&) = delete;
 
     virtual std::vector<mutation_reader> create_new_readers(const dht::token* const t) override {
-        //TODO: fix after lazy_deref() is available
-        dblog.trace("incremental_reader_selector {}: {}({})", this, __FUNCTION__, t ? sprint("{}", *t) : "null");
+        dblog.trace("incremental_reader_selector {}: {}({})", this, __FUNCTION__, seastar::lazy_deref(t));
 
         const auto& position = (t ? *t : _selector_position);
         auto selection = _selector.select(position);
