@@ -41,6 +41,7 @@
 
 #include "index/secondary_index_manager.hh"
 
+#include "cql3/statements/index_target.hh"
 #include "database.hh"
 
 #include <boost/range/adaptor/map.hpp>
@@ -67,6 +68,27 @@ const index_metadata& index::metadata() const {
 secondary_index_manager::secondary_index_manager(column_family& cf)
     : _cf{cf}
 {}
+
+void secondary_index_manager::reload() {
+    const auto& table_indices = _cf.schema()->all_indices();
+    auto it = _indices.begin();
+    while (it != _indices.end()) {
+        auto index_name = it->first;
+        if (table_indices.count(index_name) == 0) {
+            it = _indices.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (const auto& index : _cf.schema()->all_indices()) {
+        add_index(index.second);
+    }
+}
+
+void secondary_index_manager::add_index(const index_metadata& im) {
+    sstring index_target_name = im.options().at(cql3::statements::index_target::target_option_name);
+    _indices.emplace(im.name(), index{index_target_name, im});
+}
 
 std::set<index_metadata> secondary_index_manager::get_dependent_indices(const column_definition& cdef) const {
     // FIXME
