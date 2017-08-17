@@ -167,31 +167,12 @@ std::ostream& operator<<(std::ostream& os, const query::result::printer& p) {
     return os;
 }
 
-void result::calculate_counts(const query::partition_slice& slice) {
-    struct {
-        uint32_t total_count = 0;
-        uint32_t current_partition_count = 0;
-        uint32_t live_partitions = 0;
-        void accept_new_partition(const partition_key& key, uint32_t row_count) {
-            accept_new_partition(row_count);
-        }
-        void accept_new_partition(uint32_t row_count) {
-            total_count += row_count;
-            current_partition_count = row_count;
-            live_partitions += 1;
-        }
-        void accept_new_row(const clustering_key& key, const result_row_view& static_row, const result_row_view& row) {}
-        void accept_new_row(const result_row_view& static_row, const result_row_view& row) {}
-        void accept_partition_end(const query::result_row_view& static_row) {
-            if (current_partition_count == 0) {
-                total_count++;
-            }
-        }
-    } counter;
-
-    result_view::consume(*this, slice, counter);
-    _row_count = counter.total_count;
-    _partition_count = counter.live_partitions;
+void result::ensure_counts() {
+    if (!_partition_count || !_row_count) {
+        std::tie(_partition_count, _row_count) = result_view::do_with(*this, [this] (auto&& view) {
+            return view.count_partitions_and_rows();
+        });
+    }
 }
 
 result::result()
@@ -248,6 +229,7 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
                         return;
                     }
                 } else if (rows_to_include > 0) {
+                    ++partition_count;
                     write_partial_partition(partitions.add(), pv, rows_to_include);
                     return;
                 } else {
@@ -266,7 +248,7 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
 
     std::move(partitions).end_partitions().end_query_result();
 
-    return make_foreign(make_lw_shared<query::result>(std::move(w), is_short_read, row_count));
+    return make_foreign(make_lw_shared<query::result>(std::move(w), is_short_read, row_count, partition_count));
 }
 
 }

@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <boost/range/adaptor/transformed.hpp>
+
 #include "query-request.hh"
 #include "query-result.hh"
 #include "utils/data_input.hh"
@@ -187,6 +189,14 @@ public:
 
             visitor.accept_partition_end(static_row);
         }
+    }
+
+    std::tuple<uint32_t, uint32_t> count_partitions_and_rows() {
+        auto&& ps = _v.partitions();
+        auto rows = boost::accumulate(ps | boost::adaptors::transformed([] (auto& p) {
+            return std::max(p.rows().size(), size_t(1));
+        }), uint32_t(0));
+        return std::make_tuple(ps.size(), rows);
     }
 };
 
