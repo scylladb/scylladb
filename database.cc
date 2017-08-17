@@ -419,7 +419,8 @@ public:
             // For the lower bound of the token range the _selector
             // might not return any sstables, in this case try again
             // with next_token unless it's maximum token.
-            if (position == _pr->start()->value().token() && !selection.next_token.is_maximum()) {
+            if (!selection.next_token.is_maximum()
+                    && position == (_pr->start() ? _pr->start()->value().token() : dht::minimum_token())) {
                 dblog.trace("incremental_reader_selector {}: no sstables intersect with the lower bound, retrying", this);
                 _selector_position = std::move(selection.next_token);
                 return create_new_readers(nullptr);
