@@ -711,6 +711,38 @@ static void test_clustering_slices(populate_fn populate) {
     }
 }
 
+static void test_query_only_static_row(populate_fn populate) {
+    simple_schema s;
+
+    auto pkeys = s.make_pkeys(1);
+
+    mutation m1(pkeys[0], s.schema());
+    s.add_static_row(m1, "s1");
+    s.add_row(m1, s.make_ckey(0), "v1");
+    s.add_row(m1, s.make_ckey(1), "v2");
+
+    mutation_source ms = populate(s.schema(), {m1});
+
+    // fully populate cache
+    {
+        auto prange = dht::partition_range::make_ending_with(dht::ring_position(m1.decorated_key()));
+        assert_that(ms(s.schema(), prange, query::full_slice))
+            .produces(m1)
+            .produces_end_of_stream();
+    }
+
+    // query just a static row
+    {
+        auto slice = partition_slice_builder(*s.schema())
+            .with_ranges({})
+            .build();
+        auto prange = dht::partition_range::make_ending_with(dht::ring_position(m1.decorated_key()));
+        assert_that(ms(s.schema(), prange, slice))
+            .produces(m1, slice.row_ranges(*s.schema(), m1.key()))
+            .produces_end_of_stream();
+    }
+}
+
 void run_mutation_source_tests(populate_fn populate) {
     test_clustering_slices(populate);
     test_streamed_mutation_fragments_have_monotonic_positions(populate);
@@ -719,6 +751,7 @@ void run_mutation_source_tests(populate_fn populate) {
     test_streamed_mutation_slicing_returns_only_relevant_tombstones(populate);
     test_streamed_mutation_forwarding_is_consistent_with_slicing(populate);
     test_range_queries(populate);
+    test_query_only_static_row(populate);
 }
 
 struct mutation_sets {
