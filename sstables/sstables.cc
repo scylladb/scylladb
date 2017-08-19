@@ -1871,7 +1871,8 @@ void components_writer::maybe_add_summary_entry(summary& s, const dht::token& to
         uint64_t index_offset, uint64_t& next_data_offset_to_write_summary, size_t summary_byte_cost) {
     // generates a summary entry when possible (= keep summary / data size ratio within reasonable limits)
     if (data_offset >= next_data_offset_to_write_summary) {
-        next_data_offset_to_write_summary += summary_byte_cost * key.size();
+        auto entry_size = 8 + 2 + key.size();  // offset + key_size.size + key.size
+        next_data_offset_to_write_summary += summary_byte_cost * entry_size;
         s.entries.push_back({ token, bytes(key.data(), key.size()), index_offset });
     }
 }
