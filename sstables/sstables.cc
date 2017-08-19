@@ -1869,16 +1869,8 @@ static void seal_statistics(statistics& s, metadata_collector& collector,
 
 void components_writer::maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key, uint64_t data_offset,
         uint64_t index_offset, uint64_t& next_data_offset_to_write_summary, size_t summary_byte_cost) {
-    static constexpr size_t target_index_interval_size = 65536;
-
-    auto index_size_for_current_entry = index_offset - (s.entries.size() ? s.entries.back().position : 0);
-
-    // generates a summary entry after 64 KB of index data *iff* we're writing 2000 (default value) to data
-    // for every 1 byte written to summary. 64 KB condition will prevent useless generation of summary entry
-    // for small key with lots of data. Both conditions will prevent summary from growing large for large
-    // keys with little data.
-    if (!next_data_offset_to_write_summary || (data_offset >= next_data_offset_to_write_summary &&
-            index_size_for_current_entry >= target_index_interval_size)) {
+    // generates a summary entry when possible (= keep summary / data size ratio within reasonable limits)
+    if (data_offset >= next_data_offset_to_write_summary) {
         next_data_offset_to_write_summary += summary_byte_cost * key.size();
         s.entries.push_back({ token, bytes(key.data(), key.size()), index_offset });
     }
