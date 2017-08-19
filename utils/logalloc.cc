@@ -381,6 +381,7 @@ std::unique_ptr<segment_zone> segment_zone::try_creating_zone()
             continue;
         }
         memory::disable_abort_on_alloc_failure_temporarily no_abort_guard;
+        seastar::memory::scoped_large_allocation_warning_disable slawd;
         auto ptr = aligned_alloc(segment::size, size << segment::size_shift);
         if (!ptr) {
             continue;

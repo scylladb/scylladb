@@ -53,6 +53,7 @@
 #include "core/prometheus.hh"
 #include "message/messaging_service.hh"
 #include <seastar/net/dns.hh>
+#include <seastar/core/memory.hh>
 #include "service/cache_hitrate_calculator.hh"
 
 thread_local disk_error_signal_type commit_error;
@@ -269,6 +270,13 @@ verify_adequate_memory_per_shard(bool developer_mode) {
         throw std::runtime_error("configuration (memory per shard too low)");
     }
 }
+
+class memory_threshold_guard {
+    seastar::memory::scoped_large_allocation_warning_threshold _slawt;
+public:
+    explicit memory_threshold_guard(size_t threshold) : _slawt(threshold)  {}
+    future<> stop() { return make_ready_future<>(); }
+};
 
 int main(int ac, char** av) {
   int return_value = 0;
@@ -597,6 +605,8 @@ int main(int ac, char** av) {
             api::set_server_snitch(ctx).get();
             api::set_server_storage_proxy(ctx).get();
             api::set_server_load_sstable(ctx).get();
+            static seastar::sharded<memory_threshold_guard> mtg;
+            mtg.start(cfg->large_memory_allocation_warning_threshold());
             supervisor::notify("initializing migration manager RPC verbs");
             service::get_migration_manager().invoke_on_all([] (auto& mm) {
                 mm.init_messaging_service();

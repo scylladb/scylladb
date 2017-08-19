@@ -777,6 +777,7 @@ public:
     val(virtual_dirty_soft_limit, double, 0.6, Used, "Soft limit of virtual dirty memory expressed as a portion of the hard limit") \
     val(sstable_summary_ratio, double, 0.0005, Used, "Enforces that 1 byte of summary is written for every N (2000 by default) " \
         "bytes written to data file. Value must be between 0 and 1.") \
+    val(large_memory_allocation_warning_threshold, size_t, size_t(1) << 20, Used, "Warn about memory allocations above this size; set to zero to disable") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \
