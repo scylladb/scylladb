@@ -115,7 +115,7 @@ struct convert<seastar::program_options::string_map>{
 
 template<>
 struct convert<db::config::seed_provider_type> {
-    static Node encode(const db::config::seed_provider_type& rhs) {
+    static Node encode(const db::config::seed_provider_type&) {
         throw std::runtime_error("should not reach");
     }
     static bool decode(const Node& node, db::config::seed_provider_type& rhs) {
@@ -184,11 +184,11 @@ struct do_value_opt<db::config::seed_provider_type, db::config::value_status::Us
 
 template<typename T>
 struct do_value_opt<T, db::config::value_status::Unused> {
-    template<typename... Args> void operator()(Args&&... args) const {}
+    template<typename... Args> void operator()(Args&&...) const {}
 };
 template<typename T>
 struct do_value_opt<T, db::config::value_status::Invalid> {
-    template<typename... Args> void operator()(Args&&... args) const {}
+    template<typename... Args> void operator()(Args&&...) const {}
 };
 
 /*
@@ -204,7 +204,7 @@ public:
     typed_value_ex(T* store_to)
         : _Super(store_to)
     {}
-    bool apply_default(boost::any& value_store) const override {
+    bool apply_default(boost::any&) const override {
         return false;
     }
 };
@@ -286,7 +286,7 @@ bpo::options_description_easy_init db::config::add_options(bpo::options_descript
     auto alias_add =
             [&init](const char* name, auto& dst, const char* desc) mutable {
                 init(name,
-                        value_ex(&dst._value)->notifier([&dst](auto& v) mutable {
+                        value_ex(&dst._value)->notifier([&dst](auto&) mutable {
                                     dst._source = config_source::CommandLine;
                                 })
                         , desc);
