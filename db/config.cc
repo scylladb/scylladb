@@ -286,10 +286,10 @@ bpo::options_description_easy_init db::config::add_options(bpo::options_descript
     auto alias_add =
             [&init](const char* name, auto& dst, const char* desc) {
                 init(name,
-                        value_ex(&dst._value)->notifier([&dst](auto&) {
-                                    dst._source = config_source::CommandLine;
-                                })
-                        , desc);
+                     value_ex(&dst._value)->notifier([&dst](auto&) {
+                         dst._source = config_source::CommandLine;
+                     }),
+                     desc);
             };
 
 
@@ -325,7 +325,7 @@ void db::config::apply_seastar_options(boost::program_options::variables_map& va
 
 // Virtual dispatch to convert yaml->data type.
 struct handle_yaml {
-    virtual ~handle_yaml() {};
+    virtual ~handle_yaml() = default;
     virtual void operator()(const YAML::Node&) = 0;
     virtual db::config::value_status status() const = 0;
     virtual db::config::config_source source() const = 0;
