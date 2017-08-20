@@ -232,13 +232,13 @@ bpo::options_description_easy_init db::config::add_options(bpo::options_descript
     bpo::options_description_easy_init init = opts.add_options();
 
     auto opt_add =
-            [&init, &opts](const char* name, const value_status& status, const auto& dflt, auto* dst, auto& src, const char* desc) mutable {
+            [&init, &opts](const char* name, const value_status& status, const auto& dflt, auto* dst, auto& src, const char* desc) {
                 const auto hyphenated_name = replace_underscores_with_hyphens(name);
 
                 switch (status) {
                 case value_status::Used: {
                     init(hyphenated_name.c_str(),
-                         value_ex(dst)->default_value(dflt)->notifier([&src](auto) mutable {
+                         value_ex(dst)->default_value(dflt)->notifier([&src](auto) {
                              src = config_source::CommandLine;
                          }),
                          desc);
@@ -284,9 +284,9 @@ bpo::options_description_easy_init db::config::add_options(bpo::options_descript
     _make_config_values(_add_boost_opt)
 
     auto alias_add =
-            [&init](const char* name, auto& dst, const char* desc) mutable {
+            [&init](const char* name, auto& dst, const char* desc) {
                 init(name,
-                        value_ex(&dst._value)->notifier([&dst](auto&) mutable {
+                        value_ex(&dst._value)->notifier([&dst](auto&) {
                                     dst._source = config_source::CommandLine;
                                 })
                         , desc);
