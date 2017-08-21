@@ -25,7 +25,8 @@ elif [ "$NETWORK_MODE" = "dpdk" ]; then
     fi
 else # NETWORK_MODE = posix
     if [ "$SET_NIC" = "yes" ]; then
-        /usr/lib/scylla/posix_net_conf.sh $IFNAME
+        create_perftune_conf "$IFNAME"
+        /usr/lib/scylla/posix_net_conf.sh $IFNAME --options-file /etc/scylla.d/perftune.yaml
     fi
 fi
 
