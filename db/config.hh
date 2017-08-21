@@ -779,6 +779,7 @@ public:
         "bytes written to data file. Value must be between 0 and 1.") \
     val(large_memory_allocation_warning_threshold, size_t, size_t(1) << 20, Used, "Warn about memory allocations above this size; set to zero to disable") \
     val(enable_deprecated_partitioners, bool, false, Used, "Enable the byteordered and murmurs partitioners. These partitioners are deprecated and will be removed in a future version.") \
+    val(enable_keyspace_column_family_metrics, bool, false, Used, "Enable per keyspace and per column family metrics reporting") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \

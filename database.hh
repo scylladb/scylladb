@@ -295,6 +295,7 @@ public:
         ::cf_stats* cf_stats = nullptr;
         seastar::thread_scheduling_group* background_writer_scheduling_group = nullptr;
         seastar::thread_scheduling_group* memtable_scheduling_group = nullptr;
+        bool enable_metrics_reporting = false;
     };
     struct no_commitlog {};
     struct stats {
@@ -923,6 +924,7 @@ public:
         ::cf_stats* cf_stats = nullptr;
         seastar::thread_scheduling_group* background_writer_scheduling_group = nullptr;
         seastar::thread_scheduling_group* memtable_scheduling_group = nullptr;
+        bool enable_metrics_reporting = false;
     };
 private:
     std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;
