@@ -193,8 +193,9 @@ struct do_value_opt<T, db::config::value_status::Invalid> {
 
 /*
  * Our own bpo::typed_valye.
- * Only difference is that we _don't_ apply defaults (they are already applied)
- * Needed to make aliases work properly.
+ * Only difference is that we _don't_ apply defaults (they are already applied) and therefore, the notifier doesn't
+ * execute for default values (only for explicitly provided ones).
+ * Needed to make aliases and usage-checking work properly.
  */
 template<class T, class charT = char>
 class typed_value_ex : public bpo::typed_value<T, charT> {
