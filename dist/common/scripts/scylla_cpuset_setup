@@ -42,5 +42,6 @@ fi
 if [ "$SMP" != "" ]; then
     OUT="$OUT--smp $SMP "
 fi
+rm -f /etc/scylla.d/perftune.yaml
 OUT="$OUT\""
 echo $OUT > /etc/scylla.d/cpuset.conf
