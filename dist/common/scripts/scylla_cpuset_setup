@@ -2,6 +2,8 @@
 #
 #  Copyright (C) 2016 ScyllaDB
 
+. /usr/lib/scylla/scylla_lib.sh
+
 print_usage() {
     echo "scylla_cpuset_setup --cpuset 1-7 --smp 7"
     echo "  --cpuset   CPUs to use (in cpuset(7) format; default: all))"
