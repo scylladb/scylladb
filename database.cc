@@ -1186,20 +1186,22 @@ void column_family::set_metrics() {
     auto cf = column_family_label(_schema->cf_name());
     auto ks = keyspace_label(_schema->ks_name());
     namespace ms = seastar::metrics;
-    _metrics.add_group("column_family", {
-            ms::make_derive("memtable_switch", ms::description("Number of times flush has resulted in the memtable being switched out"), _stats.memtable_switch_count)(cf)(ks),
-            ms::make_gauge("pending_tasks", ms::description("Estimated number of tasks pending for this column family"), _stats.pending_flushes)(cf)(ks),
-            ms::make_gauge("live_disk_space", ms::description("Live disk space used"), _stats.live_disk_space_used)(cf)(ks),
-            ms::make_gauge("total_disk_space", ms::description("Total disk space used"), _stats.total_disk_space_used)(cf)(ks),
-            ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks),
-            ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks)
-    });
-    if (_schema->ks_name() != db::system_keyspace::NAME && _schema->ks_name() != db::schema_tables::v3::NAME && _schema->ks_name() != "system_traces") {
+    if (_config.enable_metrics_reporting) {
         _metrics.add_group("column_family", {
-                ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return _stats.estimated_read.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
-                ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return _stats.estimated_write.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
-                ms::make_gauge("cache_hit_rate", ms::description("Cache hit rate"), [this] {return float(_global_cache_hit_rate);})(cf)(ks)
+                ms::make_derive("memtable_switch", ms::description("Number of times flush has resulted in the memtable being switched out"), _stats.memtable_switch_count)(cf)(ks),
+                ms::make_gauge("pending_tasks", ms::description("Estimated number of tasks pending for this column family"), _stats.pending_flushes)(cf)(ks),
+                ms::make_gauge("live_disk_space", ms::description("Live disk space used"), _stats.live_disk_space_used)(cf)(ks),
+                ms::make_gauge("total_disk_space", ms::description("Total disk space used"), _stats.total_disk_space_used)(cf)(ks),
+                ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks),
+                ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks)
         });
+        if (_schema->ks_name() != db::system_keyspace::NAME && _schema->ks_name() != db::schema_tables::v3::NAME && _schema->ks_name() != "system_traces") {
+            _metrics.add_group("column_family", {
+                    ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return _stats.estimated_read.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
+                    ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return _stats.estimated_write.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
+                    ms::make_gauge("cache_hit_rate", ms::description("Cache hit rate"), [this] {return float(_global_cache_hit_rate);})(cf)(ks)
+            });
+        }
     }
 }
 
@@ -2625,6 +2627,7 @@ keyspace::make_column_family_config(const schema& s, const db::config& db_config
     cfg.enable_incremental_backups = _config.enable_incremental_backups;
     cfg.background_writer_scheduling_group = _config.background_writer_scheduling_group;
     cfg.memtable_scheduling_group = _config.memtable_scheduling_group;
+    cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
 
     return cfg;
 }
@@ -3346,7 +3349,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
         cfg.background_writer_scheduling_group = &_background_writer_scheduling_group;
         cfg.memtable_scheduling_group = _memtable_cpu_controller.scheduling_group();
     }
-
+    cfg.enable_metrics_reporting = _cfg->enable_keyspace_column_family_metrics();
     return cfg;
 }
 

@@ -773,6 +773,7 @@ public:
     val(abort_on_lsa_bad_alloc, bool, false, Used, "Abort when allocation in LSA region fails") \
     val(murmur3_partitioner_ignore_msb_bits, unsigned, 0, Used, "Number of most siginificant token bits to ignore in murmur3 partitioner; increase for very large clusters") \
     val(virtual_dirty_soft_limit, double, 0.6, Used, "Soft limit of virtual dirty memory expressed as a portion of the hard limit") \
+    val(enable_keyspace_column_family_metrics, bool, false, Used, "Enable per keyspace and per column family metrics reporting") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \
