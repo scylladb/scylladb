@@ -112,9 +112,6 @@ public:
     // Throws exception if experimental feature is disabled.
     void check_experimental(const sstring& what) const;
 
-    boost::program_options::options_description
-    get_options_description();
-
     boost::program_options::options_description_easy_init&
     add_options(boost::program_options::options_description_easy_init&);
 

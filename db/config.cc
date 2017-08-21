@@ -240,13 +240,6 @@ struct do_value_opt<T, db::config::value_status::Invalid> {
     template<typename... Args> void operator()(Args&&... args) const {}
 };
 
-bpo::options_description db::config::get_options_description() {
-    bpo::options_description opts("Urchin options");
-    auto init = opts.add_options();
-    add_options(init);
-    return std::move(opts);
-}
-
 /*
  * Our own bpo::typed_valye.
  * Only difference is that we _don't_ apply defaults (they are already applied)
