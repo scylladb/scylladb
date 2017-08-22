@@ -48,6 +48,7 @@
 
 #include <vector>
 #include <cstdint>
+#include <iterator>
 #include <zlib.h>
 
 #include "core/file.hh"
@@ -105,14 +106,204 @@ inline uint32_t checksum_adler32_combine(uint32_t adler1, uint32_t adler2, size_
 namespace sstables {
 
 struct compression {
+    // To reduce the memory footpring of compression-info, n offsets are grouped
+    // together into segments, where each segment stores a base absolute offset
+    // into the file, the other offsets in the segments being relative offsets
+    // (and thus of reduced size). Also offsets are allocated only just enough
+    // bits to store their maximum value. The offsets are thus packed in a
+    // buffer like so:
+    //      arrrarrrarrr...
+    // where n is 4, a is an absolute offset and r are offsets relative to a.
+    // Segments are stored in buckets, where each bucket has its own base offset.
+    // Segments in a buckets are optimized to address as large of a chunk of the
+    // data as possible for a given chunk size and bucket size.
+    //
+    // This is not a general purpose container. There are limitations:
+    // * Can't be used before init() is called.
+    // * at() is best called incrementally, altough random lookups are
+    // perfectly valid as well.
+    // * The iterator and at() can't provide references to the elements.
+    // * No point insert is available.
+    class segmented_offsets {
+        struct bucket {
+            uint64_t base_offset;
+            std::unique_ptr<char[]> storage;
+        };
+
+        uint32_t _chunk_size{0};
+        uint8_t _segment_base_offset_size_bits{0};
+        uint8_t _segmented_offset_size_bits{0};
+        uint16_t _segment_size_bits{0};
+        uint32_t _segments_per_bucket{0};
+        uint8_t _grouped_offsets{0};
+
+        mutable std::size_t _current_index{0};
+        mutable std::size_t _current_bucket_index{0};
+        mutable uint64_t _current_bucket_segment_index{0};
+        mutable uint64_t _current_segment_relative_index{0};
+        mutable uint64_t _current_segment_offset_bits{0};
+
+        uint64_t _last_written_offset{0};
+
+        std::size_t _size{0};
+        std::deque<bucket> _storage;
+
+        uint64_t read(uint64_t bucket_index, uint64_t offset_bits, uint64_t size_bits) const;
+        void write(uint64_t bucket_index, uint64_t offset_bits, uint64_t size_bits, uint64_t value);
+
+        void update_position_trackers(std::size_t index) const;
+
+    public:
+        class const_iterator : public std::iterator<std::random_access_iterator_tag, const uint64_t> {
+            friend class segmented_offsets;
+            struct end_tag {};
+
+            const segmented_offsets& _offsets;
+            std::size_t _index;
+
+            const_iterator(const segmented_offsets& offsets)
+                : _offsets(offsets)
+                , _index(0) {
+            }
+
+            const_iterator(const segmented_offsets& offsets, end_tag)
+                : _offsets(offsets)
+                , _index(_offsets.size()) {
+            }
+
+        public:
+            const_iterator(const const_iterator& other) = default;
+
+            const_iterator& operator=(const const_iterator& other) {
+                assert(&_offsets == &other._offsets);
+                _index = other._index;
+            }
+
+            const_iterator operator++(int) {
+                const_iterator it{*this};
+                return ++it;
+            }
+
+            const_iterator& operator++() {
+                *this += 1;
+                return *this;
+            }
+
+            const_iterator operator+(ssize_t i) const {
+                const_iterator it{*this};
+                it += i;
+                return it;
+            }
+
+            const_iterator& operator+=(ssize_t i) {
+                _index += i;
+
+                return *this;
+            }
+
+            const_iterator operator--(int) {
+                const_iterator it{*this};
+                return --it;
+            }
+
+            const_iterator& operator--() {
+                *this -= 1;
+                return *this;
+            }
+
+            const_iterator operator-(ssize_t i) const {
+                const_iterator it{*this};
+                it -= i;
+                return it;
+            }
+
+            const_iterator& operator-=(ssize_t i) {
+                _index -= i;
+                return *this;
+            }
+
+            value_type operator*() const {
+                return _offsets.at(_index);
+            }
+
+            value_type operator[](ssize_t i) const {
+                return _offsets.at(_index + i);
+            }
+
+            bool operator==(const const_iterator& other) const {
+                return _index == other._index;
+            }
+
+            bool operator!=(const const_iterator& other) const {
+                return !(*this == other);
+            }
+
+            bool operator<(const const_iterator& other) const {
+                return _index < other._index;
+            }
+
+            bool operator<=(const const_iterator& other) const {
+
+                return _index <= other._index;
+            }
+
+            bool operator>(const const_iterator& other) const {
+                return _index > other._index;
+            }
+
+            bool operator>=(const const_iterator& other) const {
+                return _index >= other._index;
+            }
+        };
+
+        segmented_offsets() = default;
+
+        segmented_offsets(const segmented_offsets&) = delete;
+        segmented_offsets& operator=(const segmented_offsets&) = delete;
+
+        segmented_offsets(segmented_offsets&&) = default;
+        segmented_offsets& operator=(segmented_offsets&&) = default;
+
+        // Has to be called before using the class. Doing otherwise
+        // results in undefined behaviour! Don't call more than once!
+        // TODO: fold into constructor, once the parse() et. al. code
+        // allows it.
+        void init(uint32_t chunk_size);
+
+        uint32_t chunk_size() const noexcept {
+            return _chunk_size;
+        }
+
+        std::size_t size() const noexcept {
+            return _size;
+        }
+
+        uint64_t at(std::size_t i) const;
+
+        void push_back(uint64_t offset);
+
+        const_iterator begin() const {
+            return const_iterator(*this);
+        }
+
+        const_iterator end() const {
+            return const_iterator(*this, const_iterator::end_tag{});
+        }
+
+        const_iterator cbegin() const {
+            return const_iterator(*this);
+        }
+
+        const_iterator cend() const {
+            return const_iterator(*this, const_iterator::end_tag{});
+        }
+    };
+
     disk_string<uint16_t> name;
     disk_array<uint32_t, option> options;
     uint32_t chunk_len;
     uint64_t data_len;
-    disk_array<uint32_t, uint64_t> offsets;
-
-    template <typename Describer>
-    auto describe_type(Describer f) { return f(name, options, chunk_len, data_len, offsets); }
+    segmented_offsets offsets;
 
 private:
     // Variables determined from the above deserialized values, held for convenience:
@@ -150,8 +341,19 @@ public:
     unsigned uncompressed_chunk_length() const noexcept {
         return chunk_len;
     }
-    uint64_t uncompressed_file_length() const {
+
+    void set_uncompressed_chunk_length(uint32_t cl) {
+        chunk_len = cl;
+
+        offsets.init(chunk_len);
+    }
+
+    uint64_t uncompressed_file_length() const noexcept {
         return data_len;
+    }
+
+    void set_uncompressed_file_length(uint64_t fl) {
+        data_len = fl;
     }
 
     uint64_t compressed_file_length() const {
