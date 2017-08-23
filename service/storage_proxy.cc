@@ -45,6 +45,7 @@
 #include "storage_proxy.hh"
 #include "unimplemented.hh"
 #include "frozen_mutation.hh"
+#include "supervisor.hh"
 #include "query_result_merger.hh"
 #include "core/do_with.hh"
 #include "message/messaging_service.hh"
@@ -55,6 +56,7 @@
 #include "db/read_repair_decision.hh"
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
+#include "db/hints/manager.hh"
 #include "exceptions/exceptions.hh"
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/iterator/counting_iterator.hpp>
@@ -421,7 +423,7 @@ storage_proxy::response_id_type storage_proxy::register_response_handler(shared_
             // we are here because either cl was achieved, but targets left in the handler are not
             // responding, so a hint should be written for them, or cl == any in which case
             // hints are counted towards consistency, so we need to write hints and count how much was written
-            auto hints = hint_to_dead_endpoints(e.handler->_mutation_holder, e.handler->get_targets());
+            auto hints = hint_to_dead_endpoints(e.handler->_mutation_holder, e.handler->get_targets(), e.handler->get_trace_state());
             e.handler->signal(hints);
             if (e.handler->_cl == db::consistency_level::ANY && hints) {
                 slogger.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
@@ -539,7 +541,7 @@ inline uint64_t& storage_proxy::split_stats::get_ep_stat(gms::inet_address ep) {
 }
 
 storage_proxy::~storage_proxy() {}
-storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
+storage_proxy::storage_proxy(distributed<database>& db, stdx::optional<std::vector<sstring>> hinted_handoff_enabled) : _db(db) {
     namespace sm = seastar::metrics;
     _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
         sm::make_histogram("read_latency", sm::description("The general read latency histogram"), [this]{ return _stats.estimated_read.get_histogram(16, 20);}),
@@ -628,6 +630,16 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
                        sm::description("number of remote digest read requests this Node received"), {storage_proxy::split_stats::op_type_label("digest")}),
 
     });
+
+    if (hinted_handoff_enabled) {
+        supervisor::notify("creating hints manager");
+        slogger.trace("hinted DCs: {}", *hinted_handoff_enabled);
+
+        const db::config& cfg = _db.local().get_config();
+        // Give each hints manager 10% of the available disk space. Give each shard an equal share of the available space.
+        db::hints::manager::max_shard_disk_space_size = boost::filesystem::space(cfg.hints_directory().c_str()).capacity / (10 * smp::count);
+        _hints_manager.emplace(cfg.hints_directory(), *hinted_handoff_enabled, cfg.max_hint_window_in_ms(), _db);
+    }
 }
 
 storage_proxy::rh_entry::rh_entry(shared_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb) : handler(std::move(h)), expire_timer(std::move(cb)) {}
@@ -1118,7 +1130,7 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
         // The idea is that if we have over maxHintsInProgress hints in flight, this is probably due to
         // a small number of nodes causing problems, so we should avoid shutting down writes completely to
         // healthy nodes.  Any node with no hintsInProgress is considered healthy.
-        throw overloaded_exception(_total_hints_in_progress);
+        throw overloaded_exception(_hints_manager->size_of_hints_in_progress());
     }
 
     // filter live endpoints from dead ones
@@ -1156,7 +1168,7 @@ void
 storage_proxy::hint_to_dead_endpoints(response_id_type id, db::consistency_level cl) {
     auto& h = *get_write_response_handler(id);
 
-    size_t hints = hint_to_dead_endpoints(h._mutation_holder, h.get_dead_endpoints());
+    size_t hints = hint_to_dead_endpoints(h._mutation_holder, h.get_dead_endpoints(), h.get_trace_state());
 
     if (cl == db::consistency_level::ANY) {
         // for cl==ANY hints are counted towards consistency
@@ -1513,8 +1525,8 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
 }
 
 bool storage_proxy::cannot_hint(gms::inet_address target) {
-    return _total_hints_in_progress > _max_hints_in_progress
-            && (get_hints_in_progress_for(target) > 0 && should_hint(target));
+    // if hints are disabled we "can always hint" since there's going to be no hint generated in this case
+    return hints_enabled() && _hints_manager->too_many_in_flight_hints_for(target);
 }
 
 future<> storage_proxy::send_to_endpoint(mutation m, gms::inet_address target, db::write_type type) {
@@ -1647,72 +1659,18 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
 
 // returns number of hints stored
 template<typename Range>
-size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets) noexcept
+size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets, tracing::trace_state_ptr tr_state) noexcept
 {
-    return boost::count_if(targets | boost::adaptors::filtered(std::bind1st(std::mem_fn(&storage_proxy::should_hint), this)),
-            std::bind(std::mem_fn(&storage_proxy::submit_hint), this, std::ref(mh), std::placeholders::_1));
-}
-
-size_t storage_proxy::get_hints_in_progress_for(gms::inet_address target) {
-    auto it = _hints_in_progress.find(target);
-
-    if (it == _hints_in_progress.end()) {
+    if (hints_enabled()) {
+        return boost::count_if(targets, [this, &mh, tr_state = std::move(tr_state)] (gms::inet_address target) mutable -> bool {
+            return _hints_manager->store_hint(target, mh->schema(), mh->get_mutation_for(target), tr_state);
+        });
+    } else {
         return 0;
     }
-
-    return it->second;
-}
-
-bool storage_proxy::submit_hint(std::unique_ptr<mutation_holder>& mh, gms::inet_address target)
-{
-    warn(unimplemented::cause::HINT);
-    // local write that time out should be handled by LocalMutationRunnable
-    assert(fbu::is_me(target));
-    return false;
-#if 0
-    HintRunnable runnable = new HintRunnable(target)
-    {
-        public void runMayThrow()
-        {
-            int ttl = HintedHandOffManager.calculateHintTTL(mutation);
-            if (ttl > 0)
-            {
-                slogger.debug("Adding hint for {}", target);
-                writeHintForMutation(mutation, System.currentTimeMillis(), ttl, target);
-                // Notify the handler only for CL == ANY
-                if (responseHandler != null && responseHandler.consistencyLevel == ConsistencyLevel.ANY)
-                    responseHandler.response(null);
-            } else
-            {
-                slogger.debug("Skipped writing hint for {} (ttl {})", target, ttl);
-            }
-        }
-    };
-
-    return submitHint(runnable);
-#endif
 }
 
 #if 0
-    private static Future<Void> submitHint(HintRunnable runnable)
-    {
-        StorageMetrics.totalHintsInProgress.inc();
-        getHintsInProgressFor(runnable.target).incrementAndGet();
-        return (Future<Void>) StageManager.getStage(Stage.MUTATION).submit(runnable);
-    }
-
-    /**
-     * @param now current time in milliseconds - relevant for hint replay handling of truncated CFs
-     */
-    public static void writeHintForMutation(Mutation mutation, long now, int ttl, InetAddress target)
-    {
-        assert ttl > 0;
-        UUID hostId = StorageService.instance.getTokenMetadata().getHostId(target);
-        assert hostId != null : "Missing host ID for " + target.getHostAddress();
-        HintedHandOffManager.instance.hintFor(mutation, now, ttl, hostId).apply();
-        StorageMetrics.totalHints.inc();
-    }
-
     /**
      * Handle counter mutation on the coordinator host.
      *
@@ -3488,37 +3446,8 @@ get_restricted_ranges(locator::token_metadata& tm, const schema& s, dht::partiti
     return ranges;
 }
 
-bool storage_proxy::should_hint(gms::inet_address ep) noexcept {
-    if (fbu::is_me(ep)) { // do not hint to local address
-        return false;
-    }
-
-    return false;
-#if 0
-    if (DatabaseDescriptor.shouldHintByDC())
-    {
-        final String dc = DatabaseDescriptor.getEndpointSnitch().getDatacenter(ep);
-        //Disable DC specific hints
-        if(!DatabaseDescriptor.hintedHandoffEnabled(dc))
-        {
-            HintedHandOffManager.instance.metrics.incrPastWindow(ep);
-            return false;
-        }
-    }
-    else if (!DatabaseDescriptor.hintedHandoffEnabled())
-    {
-        HintedHandOffManager.instance.metrics.incrPastWindow(ep);
-        return false;
-    }
-
-    boolean hintWindowExpired = Gossiper.instance.getEndpointDowntime(ep) > DatabaseDescriptor.getMaxHintWindow();
-    if (hintWindowExpired)
-    {
-        HintedHandOffManager.instance.metrics.incrPastWindow(ep);
-        Tracing.trace("Not hinting {} which has been down {}ms", ep, Gossiper.instance.getEndpointDowntime(ep));
-    }
-    return !hintWindowExpired;
-#endif
+bool storage_proxy::hints_enabled() noexcept {
+    return bool(_hints_manager);
 }
 
 future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
@@ -4305,8 +4234,23 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s, lw_shared_ptr<q
     });
 }
 
+future<> storage_proxy::start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr) {
+    if (_hints_manager) {
+        return _hints_manager->start(shared_from_this(), std::move(gossiper_ptr));
+    }
+    return make_ready_future<>();
+}
+
+future<> storage_proxy::stop_hints_manager() {
+    if (_hints_manager) {
+        return _hints_manager->stop();
+    }
+    return make_ready_future<>();
+}
+
 future<>
 storage_proxy::stop() {
+    // FIXME: hints manager should be stopped here but it seems like this function is never called
     uninit_messaging_service();
     return make_ready_future<>();
 }

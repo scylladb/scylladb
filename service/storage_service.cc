@@ -65,6 +65,7 @@
 #include <seastar/core/rwlock.hh>
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
+#include "db/hints/manager.hh"
 #include <seastar/net/tls.hh>
 #include <seastar/net/dns.hh>
 #include "utils/exceptions.hh"
@@ -1228,6 +1229,11 @@ future<> storage_service::drain_on_shutdown() {
 
             tracing::tracing::tracing_instance().stop().get();
             slogger.info("Drain on shutdown: tracing is stopped");
+
+            get_storage_proxy().invoke_on_all([] (storage_proxy& local_proxy) {
+                return local_proxy.stop_hints_manager();
+            }).get();
+            slogger.info("Drain on shutdown: hints manager is stopped");
 
             ss.flush_column_families();
             slogger.info("Drain on shutdown: flush column_families done");

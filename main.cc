@@ -36,6 +36,7 @@
 #include "db/system_keyspace.hh"
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
+#include "db/hints/manager.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "utils/runtime.hh"
 #include "utils/file_lock.hh"
@@ -261,6 +262,29 @@ public:
     future<> stop() { return make_ready_future<>(); }
 };
 
+static stdx::optional<std::vector<sstring>> parse_hinted_handoff_enabled(sstring opt) {
+    using namespace boost::algorithm;
+
+    if (boost::iequals(opt, "false") || opt == "0") {
+        return stdx::nullopt;
+    } else if (boost::iequals(opt, "true") || opt == "1") {
+        return std::vector<sstring>{};
+    }
+
+    std::vector<sstring> dcs;
+    split(dcs, opt, is_any_of(","));
+
+    std::for_each(dcs.begin(), dcs.end(), [] (sstring& dc) {
+        trim(dc);
+        if (dc.empty()) {
+            startlog.error("hinted_handoff_enabled: DC name may not be an empty string");
+            throw bad_configuration_error();
+        }
+    });
+
+    return dcs;
+}
+
 int main(int ac, char** av) {
   int return_value = 0;
   try {
@@ -354,6 +378,7 @@ int main(int ac, char** av) {
             sstring api_address = cfg->api_address() != "" ? cfg->api_address() : rpc_address;
             sstring broadcast_address = cfg->broadcast_address();
             sstring broadcast_rpc_address = cfg->broadcast_rpc_address();
+            stdx::optional<std::vector<sstring>> hinted_handoff_enabled = cfg->experimental() ? parse_hinted_handoff_enabled(cfg->hinted_handoff_enabled()) : stdx::nullopt;
             auto prom_addr = seastar::net::dns::get_host_by_name(cfg->prometheus_address()).get0();
             supervisor::notify("starting prometheus API server");
             uint16_t pport = cfg->prometheus_port();
@@ -463,11 +488,26 @@ int main(int ac, char** av) {
             dirs.touch_and_lock(db.local().get_config().data_file_directories()).get();
             supervisor::notify("creating commitlog directory");
             dirs.touch_and_lock(db.local().get_config().commitlog_directory()).get();
-            supervisor::notify("verifying data and commitlog directories");
             std::unordered_set<sstring> directories;
             directories.insert(db.local().get_config().data_file_directories().cbegin(),
                     db.local().get_config().data_file_directories().cend());
             directories.insert(db.local().get_config().commitlog_directory());
+
+            if (hinted_handoff_enabled) {
+                supervisor::notify("creating hints directories");
+                using namespace boost::filesystem;
+
+                path hints_base_dir(db.local().get_config().hints_directory());
+                dirs.touch_and_lock(db.local().get_config().hints_directory()).get();
+                directories.insert(db.local().get_config().hints_directory());
+                for (unsigned i = 0; i < smp::count; ++i) {
+                    sstring shard_dir((hints_base_dir / seastar::to_sstring(i).c_str()).native());
+                    dirs.touch_and_lock(shard_dir).get();
+                    directories.insert(std::move(shard_dir));
+                }
+            }
+
+            supervisor::notify("verifying directories");
             parallel_for_each(directories, [&db] (sstring pathname) {
                 return disk_sanity(pathname, db.local().get_config().developer_mode());
             }).get();
@@ -518,7 +558,7 @@ int main(int ac, char** av) {
                     , phi
                     , cfg->listen_on_broadcast_address());
             supervisor::notify("starting storage proxy");
-            proxy.start(std::ref(db)).get();
+            proxy.start(std::ref(db), hinted_handoff_enabled).get();
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
@@ -637,6 +677,13 @@ int main(int ac, char** av) {
             cf_cache_hitrate_calculator.local().run_on(engine().cpu_id());
             gms::get_local_gossiper().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx).get();
+
+            if (hinted_handoff_enabled) {
+                supervisor::notify("starting hinted handoff manager");
+                db::hints::manager::rebalance().get();
+                proxy.invoke_on_all([] (service::storage_proxy& local_proxy) { local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this()); }).get();
+            }
+
             supervisor::notify("starting native transport");
             service::get_local_storage_service().start_native_transport().get();
             if (start_thrift) {
