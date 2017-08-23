@@ -1051,6 +1051,10 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     logger.info("starting user-requested repair for keyspace {}, repair id {}, options {}", keyspace, id, options_map);
     repair_tracker.start(id);
 
+    if (!gms::get_local_gossiper().is_normal(utils::fb_utilities::get_broadcast_address())) {
+        throw std::runtime_error("Node is not in NORMAL status yet!");
+    }
+
     // If the "ranges" option is not explicitly specified, we repair all the
     // local ranges (the token ranges for which this node holds a replica of).
     // Each of these ranges may have a different set of replicas, so the

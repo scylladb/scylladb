@@ -1289,6 +1289,10 @@ bool gossiper::is_shutdown(const inet_address& endpoint) const {
     return get_gossip_status(endpoint) == sstring(versioned_value::SHUTDOWN);
 }
 
+bool gossiper::is_normal(const inet_address& endpoint) const {
+    return get_gossip_status(endpoint) == sstring(versioned_value::STATUS_NORMAL);
+}
+
 bool gossiper::is_silent_shutdown_state(const endpoint_state& ep_state) const{
     sstring state = get_gossip_status(ep_state);
     for (auto& deadstate : SILENT_SHUTDOWN_STATES) {
