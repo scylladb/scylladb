@@ -422,9 +422,8 @@ public:
     protected:
         template<typename... Args>
         void push_mutation_fragment(Args&&... args) {
-            auto mf = mutation_fragment(std::forward<Args>(args)...);
-            _buffer_size += mf.memory_usage();
-            _buffer.emplace_back(std::move(mf));
+            _buffer.emplace_back(std::forward<Args>(args)...);
+            _buffer_size += _buffer.back().memory_usage();
         }
     public:
         explicit impl(schema_ptr s, dht::decorated_key dk, tombstone pt)
