@@ -860,14 +860,13 @@ future<> parse(random_access_reader& in, compression& c) {
         auto len = make_lw_shared<uint32_t>();
         return parse(in, *len).then([&in, &c, len] {
             auto eoarr = [&c, len] { return c.offsets.size() == *len; };
-            auto element = make_lw_shared<uint64_t>(0);
 
-            return do_until(eoarr, [element, &in, &c, len] {
+            return do_until(eoarr, [&in, &c, len] {
                 auto now = std::min(*len - c.offsets.size(), 100000 / sizeof(uint64_t));
                 return in.read_exactly(now * sizeof(uint64_t)).then([&c, len, now] (auto buf) {
                     uint64_t value;
                     for (size_t i = 0; i < now; ++i) {
-                        std::copy_n(buf.get() + i * sizeof(uint64_t), sizeof(uint64_t), &value);
+                        std::copy_n(buf.get() + i * sizeof(uint64_t), sizeof(uint64_t), reinterpret_cast<char*>(&value));
                         c.offsets.push_back(net::ntoh(value));
                     }
                 });
