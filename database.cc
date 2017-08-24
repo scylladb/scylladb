@@ -2489,11 +2489,9 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     auto cf = _column_families.at(uuid);
     remove(*cf);
     auto& ks = find_keyspace(ks_name);
-    return truncate(ks, *cf, std::move(tsf), snapshot).then([this, cf] {
+    return truncate(ks, *cf, std::move(tsf), snapshot).finally([this, cf] {
         return cf->stop();
-    }).then([this, cf] {
-        return make_ready_future<>();
-    });
+    }).finally([cf] {});
 }
 
 const utils::UUID& database::find_uuid(const sstring& ks, const sstring& cf) const {
