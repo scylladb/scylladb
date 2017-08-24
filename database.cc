@@ -2049,7 +2049,7 @@ make_flush_cpu_controller(db::config& cfg, seastar::thread_scheduling_group* bac
     if (cfg.auto_adjust_flush_quota()) {
         return flush_cpu_controller(250ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
     }
-    return flush_cpu_controller(flush_cpu_controller::disabled{backup});
+    return flush_cpu_controller(backlog_cpu_controller::disabled{backup});
 }
 
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
@@ -2066,7 +2066,7 @@ database::database(const db::config& cfg)
     , _dirty_memory_manager(*this, memory::stats().total_memory() * 0.45, cfg.virtual_dirty_soft_limit())
     , _streaming_dirty_memory_manager(*this, memory::stats().total_memory() * 0.10, cfg.virtual_dirty_soft_limit())
     , _background_writer_scheduling_group(1ms, _cfg->background_writer_scheduling_quota())
-    , _memtable_cpu_controller(make_flush_cpu_controller(*_cfg, &_background_writer_scheduling_group, [this, limit = 2.0f * _dirty_memory_manager.throttle_threshold()] {
+    , _memtable_cpu_controller(make_flush_cpu_controller(*_cfg, &_background_writer_scheduling_group, [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
         return (_dirty_memory_manager.virtual_dirty_memory()) / limit;
     }))
     , _version(empty_version)
@@ -2079,31 +2079,25 @@ database::database(const db::config& cfg)
     dblog.info("Row: max_vector_size: {}, internal_count: {}", size_t(row::max_vector_size), size_t(row::internal_count));
 }
 
-void flush_cpu_controller::adjust() {
-    auto mid = _goal + (hard_dirty_limit - _goal) / 2;
+void backlog_controller::adjust() {
+    auto backlog = _current_backlog();
 
-    auto dirty = _current_dirty();
-    if (dirty < _goal) {
-        _current_quota = dirty * q1 / _goal;
-    } else if ((dirty >= _goal) && (dirty < mid)) {
-        _current_quota = q1 + (dirty - _goal) * (q2 - q1)/(mid - _goal);
-    } else {
-        _current_quota = q2 + (dirty - mid) * (qmax - q2) / (hard_dirty_limit - mid);
+    // interpolate to find out which region we are. This run infrequently and there are a fixed
+    // number of points so a simple loop will do.
+    size_t idx = 1;
+    while ((idx < _control_points.size()) && (_control_points[idx].input < backlog)) {
+        idx++;
     }
 
-    dblog.trace("dirty {}, goal {}, mid {} quota {}", dirty, _goal, mid, _current_quota);
-    _scheduling_group.update_usage(_current_quota);
+    control_point& cp = _control_points[idx];
+    control_point& last = _control_points[idx - 1];
+    float result = last.output + (backlog - last.input) * (cp.output - last.output)/(cp.input - last.input);
+    update_controller(result);
 }
 
-flush_cpu_controller::flush_cpu_controller(std::chrono::milliseconds interval, float soft_limit, std::function<float()> current_dirty)
-    : _goal(soft_limit / 2)
-    , _current_dirty(std::move(current_dirty))
-    , _interval(interval)
-    , _update_timer([this] { adjust(); })
-    , _scheduling_group(1ms, 0.0f)
-    , _current_scheduling_group(&_scheduling_group)
-{
-    _update_timer.arm_periodic(_interval);
+void backlog_cpu_controller::update_controller(float quota) {
+    _current_quota = quota;
+    _scheduling_group.update_usage(_current_quota);
 }
 
 void
