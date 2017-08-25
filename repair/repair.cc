@@ -140,7 +140,7 @@ public:
         const std::vector<gms::inet_address>& neighbors_in,
         const std::vector<gms::inet_address>& neighbors_out) {
         rlogger.debug("Add cf {}, range {}, current_sub_ranges_nr_in {}, current_sub_ranges_nr_out {}", cf, range, current_sub_ranges_nr_in, current_sub_ranges_nr_out);
-        return sp_parallelism_semaphore.wait(1).then([this, cf, range, neighbors_in, neighbors_out] {
+        return seastar::with_semaphore(sp_parallelism_semaphore, 1, [this, cf, range, neighbors_in, neighbors_out] {
             for (const auto& peer : neighbors_in) {
                 ranges_need_repair_in[peer][cf].emplace_back(range);
                 current_sub_ranges_nr_in++;
@@ -153,8 +153,6 @@ public:
                 return do_streaming();
             }
             return make_ready_future<>();
-        }).finally([this] {
-            sp_parallelism_semaphore.signal(1);
         });
     }
 };
