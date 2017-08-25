@@ -249,7 +249,7 @@ std::ostream& operator<<(std::ostream& out, const ring_position& pos) {
 }
 
 std::ostream& operator<<(std::ostream& out, ring_position_view pos) {
-    out << "{" << pos._token;
+    out << "{" << *pos._token;
     if (pos._key) {
         out << ", " << *pos._key;
     }
