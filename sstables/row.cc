@@ -422,6 +422,9 @@ public:
         _ctx->reset(el);
         return _ctx->skip_to(begin);
     }
+    bool eof() const {
+        return _ctx->eof();
+    }
 };
 
 data_consume_context::~data_consume_context() = default;
@@ -441,6 +444,9 @@ future<> data_consume_context::fast_forward_to(uint64_t begin, uint64_t end) {
 }
 future<> data_consume_context::skip_to(indexable_element el, uint64_t begin) {
     return _pimpl->skip_to(el, begin);
+}
+bool data_consume_context::eof() const {
+    return _pimpl->eof();
 }
 
 data_consume_context sstable::data_consume_rows(
