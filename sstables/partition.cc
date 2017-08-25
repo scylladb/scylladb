@@ -1173,7 +1173,7 @@ future<streamed_mutation_opt> sstable_data_source::read_partition() {
     // need to use the index anyway soon.
     //
     if (_index_in_current_partition) {
-        if (_lh_index->eof()) {
+        if (_context.eof()) {
             sstlog.trace("reader {}: eof", this);
             return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
         }
