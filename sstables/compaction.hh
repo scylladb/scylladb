@@ -22,7 +22,9 @@
 
 #pragma once
 
+#include "database_fwd.hh"
 #include "sstables.hh"
+#include <seastar/core/thread.hh>
 #include <functional>
 
 namespace sstables {
