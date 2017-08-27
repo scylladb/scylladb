@@ -41,7 +41,6 @@
 #include "utils/UUID.hh"
 #include "streaming/stream_task.hh"
 #include "streaming/stream_detail.hh"
-#include "sstables/sstables.hh"
 #include <map>
 #include <seastar/core/semaphore.hh>
 
