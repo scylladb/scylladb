@@ -20,10 +20,9 @@
  */
 
 #include "big_decimal.hh"
+#include "marshal_exception.hh"
 
 #include <regex>
-
-#include "types.hh"
 
 big_decimal::big_decimal(sstring_view text)
 {
