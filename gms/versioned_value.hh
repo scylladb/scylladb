@@ -38,7 +38,6 @@
 
 #pragma once
 
-#include "types.hh"
 #include "core/sstring.hh"
 #include "utils/serialization.hh"
 #include "utils/UUID.hh"
