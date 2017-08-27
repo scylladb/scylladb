@@ -68,6 +68,7 @@
 #include "utils/histogram.hh"
 #include "utils/estimated_histogram.hh"
 #include "sstables/sstable_set.hh"
+#include "sstables/version.hh"
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/metrics_registration.hh>
@@ -449,7 +450,7 @@ private:
     void add_sstable(lw_shared_ptr<sstables::sstable> sstable, std::vector<unsigned>&& shards_for_the_sstable);
     // returns an empty pointer if sstable doesn't belong to current shard.
     future<lw_shared_ptr<sstables::sstable>> open_sstable(sstables::foreign_sstable_open_info info, sstring dir,
-        int64_t generation, sstables::sstable::version_types v, sstables::sstable::format_types f);
+        int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f);
     void load_sstable(lw_shared_ptr<sstables::sstable>& sstable, bool reset_level = false);
     lw_shared_ptr<memtable> new_memtable();
     lw_shared_ptr<memtable> new_streaming_memtable();

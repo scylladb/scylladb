@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include "version.hh"
 #include "core/file.hh"
 #include "core/fstream.hh"
 #include "core/future.hh"
@@ -171,8 +172,8 @@ public:
         Scylla,
         Unknown,
     };
-    enum class version_types { ka, la };
-    enum class format_types { big };
+    using version_types = sstable_version_types;
+    using format_types = sstable_format_types;
     static const size_t default_buffer_size = 128*1024;
 public:
     sstable(schema_ptr schema, sstring dir, int64_t generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now(),
