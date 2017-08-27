@@ -71,6 +71,7 @@
 #include "message/messaging_service.hh"
 #include "mutation_query.hh"
 #include "db/size_estimates_virtual_reader.hh"
+#include "sstables/sstables.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
