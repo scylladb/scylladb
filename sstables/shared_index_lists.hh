@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "types.hh"
 #include <unordered_map>
 #include <vector>
 #include <seastar/core/shared_future.hh>
