@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include "sstables/shared_sstable.hh"
+
 class column_family;
 class schema;
 using schema_ptr = lw_shared_ptr<const schema>;
@@ -41,8 +43,6 @@ class sstable;
 class sstable_set;
 struct compaction_descriptor;
 struct resharding_descriptor;
-
-using shared_sstable = lw_shared_ptr<sstable>;
 
 class compaction_strategy {
     ::shared_ptr<compaction_strategy_impl> _compaction_strategy_impl;
