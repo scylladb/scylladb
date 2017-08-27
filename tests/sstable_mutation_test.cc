@@ -26,6 +26,7 @@
 #include "sstables/key.hh"
 #include "core/do_with.hh"
 #include "core/thread.hh"
+#include "sstables/sstables.hh"
 #include "database.hh"
 #include "timestamp.hh"
 #include "schema_builder.hh"
