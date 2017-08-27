@@ -2005,9 +2005,10 @@ database::database(const db::config& cfg)
         return (_dirty_memory_manager.virtual_dirty_memory()) / limit;
     }))
     , _version(empty_version)
+    , _compaction_manager(std::make_unique<compaction_manager>())
     , _enable_incremental_backups(cfg.incremental_backups())
 {
-    _compaction_manager.start();
+    _compaction_manager->start();
     setup_metrics();
 
     dblog.info("Row: max_vector_size: {}, internal_count: {}", size_t(row::max_vector_size), size_t(row::internal_count));
@@ -2423,9 +2424,9 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
 
     lw_shared_ptr<column_family> cf;
     if (cfg.enable_commitlog && _commitlog) {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog, _compaction_manager, *_cl_stats);
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog, *_compaction_manager, *_cl_stats);
     } else {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog(), _compaction_manager, *_cl_stats);
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog(), *_compaction_manager, *_cl_stats);
     }
 
     auto uuid = schema->id();
@@ -3458,7 +3459,7 @@ schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& i
 
 future<>
 database::stop() {
-    return _compaction_manager.stop().then([this] {
+    return _compaction_manager->stop().then([this] {
         // try to ensure that CL has done disk flushing
         if (_commitlog != nullptr) {
             return _commitlog->shutdown();

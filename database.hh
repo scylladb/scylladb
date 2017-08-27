@@ -1057,7 +1057,7 @@ private:
     std::unique_ptr<db::commitlog> _commitlog;
     utils::UUID _version;
     // compaction_manager object is referenced by all column families of a database.
-    compaction_manager _compaction_manager;
+    std::unique_ptr<compaction_manager> _compaction_manager;
     seastar::metrics::metric_groups _metrics;
     bool _enable_incremental_backups = false;
 
@@ -1108,10 +1108,10 @@ public:
     }
 
     compaction_manager& get_compaction_manager() {
-        return _compaction_manager;
+        return *_compaction_manager;
     }
     const compaction_manager& get_compaction_manager() const {
-        return _compaction_manager;
+        return *_compaction_manager;
     }
 
     void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);
