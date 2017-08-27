@@ -155,6 +155,13 @@ struct sstable_writer_config {
     seastar::shared_ptr<write_monitor> monitor = default_write_monitor();
 };
 
+static constexpr inline size_t default_sstable_buffer_size() {
+    return 128 * 1024;
+}
+
+lw_shared_ptr<sstable> make_sstable(schema_ptr schema, sstring dir, int64_t generation, sstable_version_types v, sstable_format_types f, gc_clock::time_point now = gc_clock::now(),
+            io_error_handler_gen error_handler_gen = default_io_error_handler_gen(), size_t buffer_size = default_sstable_buffer_size());
+
 class sstable : public enable_lw_shared_from_this<sstable> {
 public:
     enum class component_type {
@@ -174,7 +181,7 @@ public:
     };
     using version_types = sstable_version_types;
     using format_types = sstable_format_types;
-    static const size_t default_buffer_size = 128*1024;
+    static const size_t default_buffer_size = default_sstable_buffer_size();
 public:
     sstable(schema_ptr schema, sstring dir, int64_t generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now(),
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(), size_t buffer_size = default_buffer_size)
