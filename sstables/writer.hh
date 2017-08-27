@@ -210,12 +210,12 @@ public:
             throw std::runtime_error("possible overflow during compression");
         }
 
-        _compression_metadata->offsets.push_back(_pos);
+        _compression_metadata->offsets.elements.push_back(_pos);
         // account compressed data + 32-bit checksum.
         _pos += len + 4;
         _compression_metadata->set_compressed_file_length(_pos);
         // total length of the uncompressed data.
-        _compression_metadata->set_uncompressed_file_length(_compression_metadata->uncompressed_file_length() + buf.size());
+        _compression_metadata->data_len += buf.size();
 
         // compute 32-bit checksum for compressed data.
         uint32_t per_chunk_checksum = checksum_adler32(compressed.get(), len);
@@ -229,7 +229,7 @@ public:
         auto f = _out.write(compressed.get(), compressed.size());
         return f.then([compressed = std::move(compressed)] {});
     }
-    virtual future<> close() override {
+    virtual future<> close() {
         return _out.close();
     }
 };

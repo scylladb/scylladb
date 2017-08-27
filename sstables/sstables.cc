@@ -849,55 +849,6 @@ inline void write(file_writer& out, const utils::streaming_histogram& sh) {
     write(out, max_bin_size, a);
 }
 
-future<> parse(random_access_reader& in, compression& c) {
-    auto data_len_ptr = make_lw_shared<uint64_t>(0);
-    auto chunk_len_ptr = make_lw_shared<uint32_t>(0);
-
-    return parse(in, c.name, c.options, *chunk_len_ptr, *data_len_ptr).then([&in, &c, chunk_len_ptr, data_len_ptr] {
-        c.set_uncompressed_chunk_length(*chunk_len_ptr);
-        c.set_uncompressed_file_length(*data_len_ptr);
-
-        auto len = make_lw_shared<uint32_t>();
-        return parse(in, *len).then([&in, &c, len] {
-            auto eoarr = [&c, len] { return c.offsets.size() == *len; };
-
-            return do_until(eoarr, [&in, &c, len] {
-                auto now = std::min(*len - c.offsets.size(), 100000 / sizeof(uint64_t));
-                return in.read_exactly(now * sizeof(uint64_t)).then([&c, len, now] (auto buf) {
-                    uint64_t value;
-                    for (size_t i = 0; i < now; ++i) {
-                        std::copy_n(buf.get() + i * sizeof(uint64_t), sizeof(uint64_t), reinterpret_cast<char*>(&value));
-                        c.offsets.push_back(net::ntoh(value));
-                    }
-                });
-            });
-        });
-    });
-}
-
-void write(file_writer& out, const compression& c) {
-    write(out, c.name, c.options, c.uncompressed_chunk_length(), c.uncompressed_file_length());
-
-    write(out, static_cast<uint32_t>(c.offsets.size()));
-
-    std::vector<uint64_t> tmp;
-    const size_t per_loop = 100000 / sizeof(uint64_t);
-    tmp.resize(per_loop);
-    size_t idx = 0;
-    while (idx != c.offsets.size()) {
-        auto now = std::min(c.offsets.size() - idx, per_loop);
-        // copy offsets into tmp converting each entry into big-endian representation.
-        auto nr = c.offsets.begin() + idx;
-        for (size_t i = 0; i < now; i++) {
-            tmp[i] = net::hton(nr[i]);
-        }
-        auto p = reinterpret_cast<const char*>(tmp.data());
-        auto bytes = now * sizeof(uint64_t);
-        out.write(p, bytes).get();
-        idx += now;
-    }
-}
-
 // This is small enough, and well-defined. Easier to just read it all
 // at once
 future<> sstable::read_toc() {
@@ -1843,7 +1794,8 @@ static void seal_summary(summary& s,
 static void prepare_compression(compression& c, const schema& schema) {
     const auto& cp = schema.get_compressor_params();
     c.set_compressor(cp.get_compressor());
-    c.set_uncompressed_chunk_length(cp.chunk_length());
+    c.chunk_len = cp.chunk_length();
+    c.data_len = 0;
     // FIXME: crc_check_chance can be configured by the user.
     // probability to verify the checksum of a compressed chunk we read.
     // defaults to 1.0.
@@ -2331,7 +2283,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
 
 uint64_t sstable::data_size() const {
     if (has_component(sstable::component_type::CompressionInfo)) {
-        return _components->compression.uncompressed_file_length();
+        return _components->compression.data_len;
     }
     return _data_file_size;
 }
