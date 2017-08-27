@@ -72,6 +72,7 @@
 #include "message/messaging_service.hh"
 #include "supervisor.hh"
 #include "sstables/compaction_manager.hh"
+#include "sstables/sstables.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
