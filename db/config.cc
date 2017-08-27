@@ -47,29 +47,6 @@ db::config::config()
 
 namespace bpo = boost::program_options;
 
-namespace db {
-// Special "validator" for boost::program_options to allow reading options
-// into an unordered_map<string, string> (we have in config.hh a bunch of
-// those). This validator allows the parameter of each option to look like
-// 'key=value'. It also allows multiple occurrences of this option to add
-// multiple entries into the map. "String" can be any time which can be
-// converted from std::string, e.g., sstring.
-static void validate(boost::any& out, const std::vector<std::string>& in,
-        db::string_map*, int) {
-    if (out.empty()) {
-        out = boost::any(db::string_map());
-    }
-    auto* p = boost::any_cast<db::string_map>(&out);
-    for (const auto& s : in) {
-        auto i = s.find_first_of('=');
-        if (i == std::string::npos) {
-            throw boost::program_options::invalid_option_value(s);
-        }
-        (*p)[sstring(s.substr(0, i))] = sstring(s.substr(i+1));
-    }
-}
-}
-
 namespace YAML {
 /*
  * Add converters as needed here...
@@ -116,15 +93,15 @@ struct convert<db::config::string_list> {
 };
 
 template<>
-struct convert<db::string_map> {
-    static Node encode(const db::string_map& rhs) {
+struct convert<seastar::program_options::string_map>{
+    static Node encode(const seastar::program_options::string_map& rhs) {
         Node node(NodeType::Map);
         for (auto& p : rhs) {
             node.force_insert(p.first, p.second);
         }
         return node;
     }
-    static bool decode(const Node& node, db::string_map& rhs) {
+    static bool decode(const Node& node, seastar::program_options::string_map& rhs) {
         if (!node.IsMap()) {
             return false;
         }
@@ -169,40 +146,6 @@ struct convert<db::config::seed_provider_type> {
 
 }
 
-namespace db {
-template<typename... Args>
-std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os, const db::config::string_map & map) {
-    int n = 0;
-    for (auto& e : map) {
-        if (n > 0) {
-            os << ":";
-        }
-        os << e.first << "=" << e.second;
-    }
-    return os;
-}
-
-template<typename... Args>
-std::basic_istream<Args...> & operator>>(std::basic_istream<Args...> & is, db::config::string_map & map) {
-    std::string str;
-    is >> str;
-
-    std::regex colon(":");
-
-    std::sregex_token_iterator s(str.begin(), str.end(), colon, -1);
-    std::sregex_token_iterator e;
-    while (s != e) {
-        sstring p = std::string(*s++);
-        auto i = p.find('=');
-        auto k = p.substr(0, i);
-        auto v = i == sstring::npos ? sstring() : p.substr(i + 1, p.size());
-        map.emplace(std::make_pair(k, v));
-    };
-
-    return is;
-}
-}
-
 /*
  * Helper type to do compile time exclusion of Unused/invalid options from
  * command line.
@@ -217,7 +160,15 @@ template<typename T>
 struct do_value_opt<T, db::config::value_status::Used> {
     template<typename Func>
     void operator()(Func&& func, const char* name, const T& dflt, T * dst, db::config::config_source & src, const char* desc) const {
-        func(name, dflt, dst, src, desc);
+        func(name, db::config::value_status::Used, dflt, dst, src, desc);
+    }
+};
+
+template <typename T>
+struct do_value_opt<T, db::config::value_status::UsedFromSeastar> {
+    template <typename Func>
+    void operator()(Func&& func, const char* name, const T& dflt, T* dst, db::config::config_source& src, const char* desc) const {
+        func(name, db::config::value_status::UsedFromSeastar, dflt, dst, src, desc);
     }
 };
 
@@ -226,8 +177,8 @@ struct do_value_opt<db::config::seed_provider_type, db::config::value_status::Us
     using seed_provider_type = db::config::seed_provider_type;
     template<typename Func>
     void operator()(Func&& func, const char* name, const seed_provider_type& dflt, seed_provider_type * dst, db::config::config_source & src, const char* desc) const {
-        func((sstring(name) + "_class_name").c_str(), dflt.class_name, &dst->class_name, src, desc);
-        func((sstring(name) + "_parameters").c_str(), dflt.parameters, &dst->parameters, src, desc);
+        func((sstring(name) + "_class_name").c_str(), db::config::value_status::Used, dflt.class_name, &dst->class_name, src, desc);
+        func((sstring(name) + "_parameters").c_str(), db::config::value_status::Used, dflt.parameters, &dst->parameters, src, desc);
     }
 };
 
@@ -271,16 +222,60 @@ inline typed_value_ex<std::vector<T>>* value_ex(std::vector<T>* v) {
     return r;
 }
 
-bpo::options_description_easy_init& db::config::add_options(bpo::options_description_easy_init& init) {
+static sstring replace_underscores_with_hyphens(const char* v) {
+    sstring result(v);
+    std::replace(result.begin(), result.end(), '_', '-');
+    return result;
+}
+
+bpo::options_description_easy_init db::config::add_options(bpo::options_description& opts) {
+    bpo::options_description_easy_init init = opts.add_options();
+
     auto opt_add =
-            [&init](const char* name, const auto& dflt, auto* dst, auto& src, const char* desc) mutable {
-                sstring tmp(name);
-                std::replace(tmp.begin(), tmp.end(), '_', '-');
-                init(tmp.c_str(),
-                        value_ex(dst)->default_value(dflt)->notifier([&src](auto) mutable {
-                                    src = config_source::CommandLine;
-                                })
-                        , desc);
+            [&init, &opts](const char* name, const value_status& status, const auto& dflt, auto* dst, auto& src, const char* desc) mutable {
+                const auto hyphenated_name = replace_underscores_with_hyphens(name);
+
+                switch (status) {
+                case value_status::Used: {
+                    init(hyphenated_name.c_str(),
+                         value_ex(dst)->default_value(dflt)->notifier([&src](auto) mutable {
+                             src = config_source::CommandLine;
+                         }),
+                         desc);
+
+                    break;
+                }
+
+                case value_status::UsedFromSeastar: {
+                    auto* seastar_opt = opts.find_nothrow(hyphenated_name, false);
+                    if (!seastar_opt) {
+                        throw std::runtime_error(seastar::sprint("Expected Seastar to define a command-line option '%s'",
+                                                                 hyphenated_name));
+                    }
+
+                    //
+                    // Just a type-check.
+                    //
+
+                    using value_type = typename std::remove_pointer<decltype(dst)>::type;
+
+                    auto value = boost::dynamic_pointer_cast<const bpo::typed_value<value_type>>(seastar_opt->semantic());
+                    if (value == nullptr) {
+                        throw std::runtime_error(
+                                    sprint(
+                                        "The type of the Seastar-defined option '%s' does not match its declared type "
+                                        "in Scylla's configuration",
+                                        hyphenated_name));
+                    }
+
+                    break;
+                }
+
+                case value_status::Invalid:
+                case value_status::Unused:
+                    // Nothing.
+                    break;
+                }
             };
 
     // Add all used opts as command line opts
@@ -303,7 +298,29 @@ bpo::options_description_easy_init& db::config::add_options(bpo::options_descrip
     alias_add("thrift-port", rpc_port, "alias for 'rpc-port'");
     alias_add("cql-port", native_transport_port, "alias for 'native-transport-port'");
 
-    return init;
+    return opts.add_options();
+}
+
+void db::config::apply_seastar_options(boost::program_options::variables_map& vars) {
+    const auto do_apply = [&vars](const char* name, const db::config::value_status& status, auto* dst, auto& src) {
+        // This could be done at compile-time, but this is more clear and it's not a bottleneck.
+        if (status == db::config::value_status::UsedFromSeastar) {
+            const auto hyphenated_name = replace_underscores_with_hyphens(name);
+
+            using value_type = typename std::remove_pointer<decltype(dst)>::type;
+            const auto& variable_value = vars[hyphenated_name];
+            *dst = variable_value.as<value_type>();
+
+            if (!variable_value.defaulted()) {
+                src = db::config::config_source::CommandLine;
+            }
+        }
+    };
+
+#define _add_seastar_opt(name, type, deflt, status, desc, ...) \
+    do_apply(#name, db::config::value_status::status, &(name._value), name._source);
+
+    _make_config_values(_add_seastar_opt)
 }
 
 // Virtual dispatch to convert yaml->data type.
