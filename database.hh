@@ -99,6 +99,7 @@ namespace sstables {
 class sstable;
 class entry_descriptor;
 class compaction_descriptor;
+class foreign_sstable_open_info;
 
 }
 
