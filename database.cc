@@ -2489,11 +2489,9 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     auto cf = _column_families.at(uuid);
     remove(*cf);
     auto& ks = find_keyspace(ks_name);
-    return truncate(ks, *cf, std::move(tsf), snapshot).then([this, cf] {
+    return truncate(ks, *cf, std::move(tsf), snapshot).finally([this, cf] {
         return cf->stop();
-    }).then([this, cf] {
-        return make_ready_future<>();
-    });
+    }).finally([cf] {});
 }
 
 const utils::UUID& database::find_uuid(const sstring& ks, const sstring& cf) const {
@@ -3497,48 +3495,49 @@ future<> database::truncate(sstring ksname, sstring cfname, timestamp_func tsf) 
     return truncate(ks, cf, std::move(tsf));
 }
 
-future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf, bool with_snapshot)
-{
-    const auto durable = ks.metadata()->durable_writes();
-    const auto auto_snapshot = with_snapshot && get_config().auto_snapshot();
+future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf, bool with_snapshot) {
+    return cf.run_async([this, &ks, &cf, tsf = std::move(tsf), with_snapshot] {
+        const auto durable = ks.metadata()->durable_writes();
+        const auto auto_snapshot = with_snapshot && get_config().auto_snapshot();
 
-    // Force mutations coming in to re-acquire higher rp:s
-    // This creates a "soft" ordering, in that we will guarantee that
-    // any sstable written _after_ we issue the flush below will
-    // only have higher rp:s than we will get from the discard_sstable
-    // call.
-    auto low_mark = cf.set_low_replay_position_mark();
+        // Force mutations coming in to re-acquire higher rp:s
+        // This creates a "soft" ordering, in that we will guarantee that
+        // any sstable written _after_ we issue the flush below will
+        // only have higher rp:s than we will get from the discard_sstable
+        // call.
+        auto low_mark = cf.set_low_replay_position_mark();
 
-    future<> f = make_ready_future<>();
-    if (durable || auto_snapshot) {
-        // TODO:
-        // this is not really a guarantee at all that we've actually
-        // gotten all things to disk. Again, need queue-ish or something.
-        f = cf.flush();
-    } else {
-        f = cf.clear();
-    }
+        future<> f = make_ready_future<>();
+        if (durable || auto_snapshot) {
+            // TODO:
+            // this is not really a guarantee at all that we've actually
+            // gotten all things to disk. Again, need queue-ish or something.
+            f = cf.flush();
+        } else {
+            f = cf.clear();
+        }
 
-    return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
-        return f.then([&cf, auto_snapshot, tsf = std::move(tsf), low_mark] {
-            dblog.debug("Discarding sstable data for truncated CF + indexes");
-            // TODO: notify truncation
+        return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
+            return f.then([&cf, auto_snapshot, tsf = std::move(tsf), low_mark] {
+                dblog.debug("Discarding sstable data for truncated CF + indexes");
+                // TODO: notify truncation
 
-            return tsf().then([&cf, auto_snapshot, low_mark](db_clock::time_point truncated_at) {
-                future<> f = make_ready_future<>();
-                if (auto_snapshot) {
-                    auto name = sprint("%d-%s", truncated_at.time_since_epoch().count(), cf.schema()->cf_name());
-                    f = cf.snapshot(name);
-                }
-                return f.then([&cf, truncated_at, low_mark] {
-                    return cf.discard_sstables(truncated_at).then([&cf, truncated_at, low_mark](db::replay_position rp) {
-                        // TODO: verify that rp == db::replay_position is because we have no sstables (and no data flushed)
-                        if (rp == db::replay_position()) {
-                            return make_ready_future();
-                        }
-                        // TODO: indexes.
-                        assert(low_mark <= rp);
-                        return db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
+                return tsf().then([&cf, auto_snapshot, low_mark](db_clock::time_point truncated_at) {
+                    future<> f = make_ready_future<>();
+                    if (auto_snapshot) {
+                        auto name = sprint("%d-%s", truncated_at.time_since_epoch().count(), cf.schema()->cf_name());
+                        f = cf.snapshot(name);
+                    }
+                    return f.then([&cf, truncated_at, low_mark] {
+                        return cf.discard_sstables(truncated_at).then([&cf, truncated_at, low_mark](db::replay_position rp) {
+                            // TODO: verify that rp == db::replay_position is because we have no sstables (and no data flushed)
+                            if (rp == db::replay_position()) {
+                                return make_ready_future();
+                            }
+                            // TODO: indexes.
+                            assert(low_mark <= rp);
+                            return db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
+                        });
                     });
                 });
             });
