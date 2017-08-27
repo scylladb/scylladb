@@ -64,11 +64,9 @@
 #include "mutation_reader.hh"
 #include "row_cache.hh"
 #include "compaction_strategy.hh"
-#include "sstables/compaction_manager.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/histogram.hh"
 #include "utils/estimated_histogram.hh"
-#include "sstables/compaction.hh"
 #include "sstables/sstable_set.hh"
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/shared_future.hh>
@@ -99,7 +97,11 @@ namespace sstables {
 
 class sstable;
 class entry_descriptor;
+class compaction_descriptor;
+
 }
+
+class compaction_manager;
 
 namespace ser {
 template<typename T>

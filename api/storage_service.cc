@@ -34,6 +34,7 @@
 #include "column_family.hh"
 #include "log.hh"
 #include "release.hh"
+#include "sstables/compaction_manager.hh"
 
 namespace api {
 

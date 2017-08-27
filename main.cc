@@ -56,6 +56,7 @@
 #include <seastar/core/memory.hh>
 #include <seastar/util/log-cli.hh>
 #include "service/cache_hitrate_calculator.hh"
+#include "sstables/compaction_manager.hh"
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;

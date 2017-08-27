@@ -28,6 +28,7 @@
 #include "core/do_with.hh"
 #include "core/sleep.hh"
 #include "sstables/sstables.hh"
+#include "sstables/compaction_manager.hh"
 #include "sstables/key.hh"
 #include "tests/test-utils.hh"
 #include "schema.hh"

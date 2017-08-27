@@ -39,6 +39,7 @@
 #include "query-result-reader.hh"
 #include "partition_slice_builder.hh"
 #include "tmpdir.hh"
+#include "sstables/compaction_manager.hh"
 
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"

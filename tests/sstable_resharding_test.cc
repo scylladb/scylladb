@@ -10,6 +10,7 @@
 #include "tests/test-utils.hh"
 #include "schema.hh"
 #include "database.hh"
+#include "sstables/compaction_manager.hh"
 #include "mutation_reader.hh"
 #include "sstable_test.hh"
 #include "tmpdir.hh"
