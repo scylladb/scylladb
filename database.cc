@@ -3506,17 +3506,17 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
         // call.
         auto low_mark = cf.set_low_replay_position_mark();
 
-        future<> f = make_ready_future<>();
-        if (durable || auto_snapshot) {
-            // TODO:
-            // this is not really a guarantee at all that we've actually
-            // gotten all things to disk. Again, need queue-ish or something.
-            f = cf.flush();
-        } else {
-            f = cf.clear();
-        }
 
-        return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
+        return cf.run_with_compaction_disabled([&cf, durable, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
+            future<> f = make_ready_future<>();
+            if (durable || auto_snapshot) {
+                // TODO:
+                // this is not really a guarantee at all that we've actually
+                // gotten all things to disk. Again, need queue-ish or something.
+                f = cf.flush();
+            } else {
+                f = cf.clear();
+            }
             return f.then([&cf, auto_snapshot, tsf = std::move(tsf), low_mark] {
                 dblog.debug("Discarding sstable data for truncated CF + indexes");
                 // TODO: notify truncation
