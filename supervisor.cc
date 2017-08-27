@@ -20,7 +20,7 @@
  */
 
 #include "supervisor.hh"
-#include "init.hh"
+#include "log.hh"
 #include <seastar/core/print.hh>
 #include <csignal>
 #include <cstdlib>
@@ -28,6 +28,8 @@
 #ifdef HAVE_LIBSYSTEMD
 #include <systemd/sd-daemon.h>
 #endif
+
+extern logger startlog;
 
 const sstring supervisor::scylla_upstart_job_str("scylla-server");
 const sstring supervisor::upstart_job_env("UPSTART_JOB");
