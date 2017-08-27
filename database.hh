@@ -642,19 +642,7 @@ public:
     // The other shards will keep writing tables at will. Therefore, you very likely need
     // to call this separately in all shards first, to guarantee that none of them are writing
     // new data before you can safely assume that the whole node is disabled.
-    future<int64_t> disable_sstable_write() {
-        _sstable_writes_disabled_at = std::chrono::steady_clock::now();
-        return _sstables_lock.write_lock().then([this] {
-            if (_sstables->all()->empty()) {
-                return make_ready_future<int64_t>(0);
-            }
-            int64_t max = 0;
-            for (auto&& s : *_sstables->all()) {
-                max = std::max(max, s->generation());
-            }
-            return make_ready_future<int64_t>(max);
-        });
-    }
+    future<int64_t> disable_sstable_write();
 
     // SSTable writes are now allowed again, and generation is updated to new_generation if != -1
     // returns the amount of microseconds elapsed since we disabled writes.

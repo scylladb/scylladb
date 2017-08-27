@@ -3964,6 +3964,20 @@ future<db::replay_position> column_family::discard_sstables(db_clock::time_point
     });
 }
 
+future<int64_t>
+column_family::disable_sstable_write() {
+    _sstable_writes_disabled_at = std::chrono::steady_clock::now();
+    return _sstables_lock.write_lock().then([this] {
+        if (_sstables->all()->empty()) {
+            return make_ready_future<int64_t>(0);
+        }
+        int64_t max = 0;
+        for (auto&& s : *_sstables->all()) {
+            max = std::max(max, s->generation());
+        }
+        return make_ready_future<int64_t>(max);
+    });
+}
 
 std::ostream& operator<<(std::ostream& os, const user_types_metadata& m) {
     os << "org.apache.cassandra.config.UTMetaData@" << &m;
