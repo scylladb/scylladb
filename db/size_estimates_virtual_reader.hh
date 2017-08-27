@@ -36,6 +36,7 @@
 #include "service/storage_service.hh"
 #include "stdx.hh"
 #include "streamed_mutation.hh"
+#include "sstables/sstables.hh"
 
 namespace db {
 
