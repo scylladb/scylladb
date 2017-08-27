@@ -23,7 +23,7 @@
 #pragma once
 
 #include "database_fwd.hh"
-#include "sstables.hh"
+#include "shared_sstable.hh"
 #include <seastar/core/thread.hh>
 #include <functional>
 
