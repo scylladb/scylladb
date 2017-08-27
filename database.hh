@@ -448,11 +448,11 @@ private:
     // Cache must be synchronized atomically with this, otherwise write atomicity may not be respected.
     // Doesn't trigger compaction.
     // Strong exception guarantees.
-    void add_sstable(lw_shared_ptr<sstables::sstable> sstable, std::vector<unsigned>&& shards_for_the_sstable);
+    void add_sstable(sstables::shared_sstable sstable, std::vector<unsigned>&& shards_for_the_sstable);
     // returns an empty pointer if sstable doesn't belong to current shard.
-    future<lw_shared_ptr<sstables::sstable>> open_sstable(sstables::foreign_sstable_open_info info, sstring dir,
+    future<sstables::shared_sstable> open_sstable(sstables::foreign_sstable_open_info info, sstring dir,
         int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f);
-    void load_sstable(lw_shared_ptr<sstables::sstable>& sstable, bool reset_level = false);
+    void load_sstable(sstables::shared_sstable& sstable, bool reset_level = false);
     lw_shared_ptr<memtable> new_memtable();
     lw_shared_ptr<memtable> new_streaming_memtable();
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);

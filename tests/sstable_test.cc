@@ -218,7 +218,7 @@ SEASTAR_TEST_CASE(missing_summary_first_last_sane) {
 }
 
 static future<sstable_ptr> do_write_sst(schema_ptr schema, sstring load_dir, sstring write_dir, unsigned long generation) {
-    auto sst = make_lw_shared<sstable>(std::move(schema), load_dir, generation, la, big);
+    auto sst = sstables::make_sstable(std::move(schema), load_dir, generation, la, big);
     return sst->load().then([sst, write_dir, generation] {
         sstables::test(sst).change_generation_number(generation + 1);
         sstables::test(sst).change_dir(write_dir);
@@ -289,7 +289,7 @@ SEASTAR_TEST_CASE(check_summary_func) {
     auto tmp = make_lw_shared<tmpdir>();
     auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
     return do_write_sst(s, "tests/sstables/compressed", tmp->path, 1).then([tmp, s] (auto sst1) {
-        auto sst2 = make_lw_shared<sstable>(s, tmp->path, 2, la, big);
+        auto sst2 = make_sstable(s, tmp->path, 2, la, big);
         return sstables::test(sst2).read_summary().then([sst1, sst2] {
             summary& sst1_s = sstables::test(sst1).get_summary();
             summary& sst2_s = sstables::test(sst2).get_summary();
@@ -311,7 +311,7 @@ SEASTAR_TEST_CASE(check_statistics_func) {
     auto tmp = make_lw_shared<tmpdir>();
     auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
     return do_write_sst(s, "tests/sstables/compressed", tmp->path, 1).then([tmp, s] (auto sst1) {
-        auto sst2 = make_lw_shared<sstable>(s, tmp->path, 2, la, big);
+        auto sst2 = make_sstable(s, tmp->path, 2, la, big);
         return sstables::test(sst2).read_statistics().then([sst1, sst2] {
             statistics& sst1_s = sstables::test(sst1).get_statistics();
             statistics& sst2_s = sstables::test(sst2).get_statistics();
@@ -333,7 +333,7 @@ SEASTAR_TEST_CASE(check_toc_func) {
     auto tmp = make_lw_shared<tmpdir>();
     auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
     return do_write_sst(s, "tests/sstables/compressed", tmp->path, 1).then([tmp, s] (auto sst1) {
-        auto sst2 = make_lw_shared<sstable>(s, tmp->path, 2, la, big);
+        auto sst2 = sstables::make_sstable(s, tmp->path, 2, la, big);
         return sstables::test(sst2).read_toc().then([sst1, sst2] {
             auto& sst1_c = sstables::test(sst1).get_components();
             auto& sst2_c = sstables::test(sst2).get_components();
@@ -1020,8 +1020,8 @@ static schema_ptr large_partition_schema() {
     return s;
 }
 
-static future<lw_shared_ptr<sstable>> load_large_partition_sst() {
-    auto sst = make_lw_shared<sstable>(large_partition_schema(), "tests/sstables/large_partition", 3,
+static future<shared_sstable> load_large_partition_sst() {
+    auto sst = make_sstable(large_partition_schema(), "tests/sstables/large_partition", 3,
             sstables::sstable::version_types::ka, big);
     auto fut = sst->load();
     return std::move(fut).then([sst = std::move(sst)] {
@@ -1249,7 +1249,7 @@ SEASTAR_TEST_CASE(promoted_index_write) {
             }
         }
         mtp->apply(std::move(m));
-        auto sst = make_lw_shared<sstable>(s,
+        auto sst = make_sstable(s,
                 "tests/sstables/tests-temporary", 100,
                 sstables::sstable::version_types::ka, big);
         return write_memtable_to_sstable(*mtp, sst).then([s] {

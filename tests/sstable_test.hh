@@ -38,7 +38,7 @@ class column_family_test {
 public:
     column_family_test(lw_shared_ptr<column_family> cf) : _cf(cf) {}
 
-    void add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
+    void add_sstable(sstables::shared_sstable sstable) {
         _cf->_sstables->insert(std::move(sstable));
     }
 
@@ -57,7 +57,7 @@ public:
 
 namespace sstables {
 
-using sstable_ptr = lw_shared_ptr<sstable>;
+using sstable_ptr = shared_sstable;
 
 class test {
     sstable_ptr _sst;
@@ -140,7 +140,7 @@ public:
 
     static sstable_ptr make_test_sstable(size_t buffer_size, schema_ptr schema, sstring dir, unsigned long generation, sstable::version_types v,
             sstable::format_types f, gc_clock::time_point now = gc_clock::now()) {
-        return make_lw_shared<sstable>(std::move(schema), dir, generation, v, f, now, default_io_error_handler_gen(), buffer_size);
+        return sstables::make_sstable(std::move(schema), dir, generation, v, f, now, default_io_error_handler_gen(), buffer_size);
     }
 
     // Used to create synthetic sstables for testing leveled compaction strategy.
@@ -167,7 +167,7 @@ public:
 };
 
 inline future<sstable_ptr> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation) {
-    auto sst = make_lw_shared<sstable>(std::move(schema), dir, generation, la, big);
+    auto sst = sstables::make_sstable(std::move(schema), dir, generation, la, big);
     auto fut = sst->load();
     return std::move(fut).then([sst = std::move(sst)] {
         return make_ready_future<sstable_ptr>(std::move(sst));
@@ -613,6 +613,6 @@ public:
 }
 
 inline
-::mutation_source as_mutation_source(lw_shared_ptr<sstables::sstable> sst) {
+::mutation_source as_mutation_source(sstables::shared_sstable sst) {
     return sst->as_mutation_source();
 }

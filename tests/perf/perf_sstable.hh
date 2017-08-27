@@ -67,7 +67,7 @@ private:
     std::default_random_engine _generator;
     std::uniform_int_distribution<char> _distribution;
     lw_shared_ptr<memtable> _mt;
-    std::vector<lw_shared_ptr<sstable>> _sst;
+    std::vector<shared_sstable> _sst;
 
     schema_ptr create_schema() {
         std::vector<schema::column> columns;
@@ -116,7 +116,7 @@ public:
     }
 
     future<> load_sstables(unsigned iterations) {
-        _sst.push_back(make_lw_shared<sstable>(s, this->dir(), 0, sstable::version_types::ka, sstable::format_types::big));
+        _sst.push_back(make_sstable(s, this->dir(), 0, sstable::version_types::ka, sstable::format_types::big));
         return _sst.back()->load();
     }
 

@@ -89,10 +89,10 @@ void run_sstable_resharding_test() {
             muts.emplace(i, m);
             mt->apply(std::move(m));
         }
-        auto sst = make_lw_shared<sstable>(s, tmp->path, 0, sstables::sstable::version_types::ka, sstables::sstable::format_types::big);
+        auto sst = sstables::make_sstable(s, tmp->path, 0, sstables::sstable::version_types::ka, sstables::sstable::format_types::big);
         write_memtable_to_sstable(*mt, sst).get();
     }
-    auto sst = make_lw_shared<sstables::sstable>(s, tmp->path, 0, sstables::sstable::version_types::ka, sstables::sstable::format_types::big);
+    auto sst = sstables::make_sstable(s, tmp->path, 0, sstables::sstable::version_types::ka, sstables::sstable::format_types::big);
     sst->load().get();
 
     auto creator = [&cf, tmp] (shard_id shard) mutable {
@@ -102,7 +102,7 @@ void run_sstable_resharding_test() {
             return column_family_test::calculate_generation_for_new_table(*cf);
         }).get0();
 
-        auto sst = make_lw_shared<sstables::sstable>(cf->schema(), tmp->path, gen,
+        auto sst = sstables::make_sstable(cf->schema(), tmp->path, gen,
             sstables::sstable::version_types::ka, sstables::sstable::format_types::big,
             gc_clock::now(), default_io_error_handler_gen());
         return sst;
@@ -111,7 +111,7 @@ void run_sstable_resharding_test() {
     BOOST_REQUIRE(new_sstables.size() == smp::count);
 
     for (auto& sstable : new_sstables) {
-        auto new_sst = make_lw_shared<sstables::sstable>(s, tmp->path, sstable->generation(),
+        auto new_sst = sstables::make_sstable(s, tmp->path, sstable->generation(),
             sstables::sstable::version_types::ka, sstables::sstable::format_types::big);
         new_sst->load().get();
         auto shards = new_sst->get_shards_for_this_sstable();

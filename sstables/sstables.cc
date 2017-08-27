@@ -1380,7 +1380,7 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) {
 
 future<sstable_open_info> sstable::load_shared_components(const schema_ptr& s, sstring dir, int generation, version_types v, format_types f,
         const io_priority_class& pc) {
-    auto sst = make_lw_shared<sstables::sstable>(s, dir, generation, v, f);
+    auto sst = sstables::make_sstable(s, dir, generation, v, f);
     return sst->load(pc).then([sst] () mutable {
         auto shards = sst->get_shards_for_this_sstable();
         auto info = sstable_open_info{make_lw_shared<shareable_components>(std::move(*sst->_components)),

@@ -364,7 +364,7 @@ void test_mutation_source(sstable_writer_config cfg, sstables::sstable::version_
     std::vector<tmpdir> dirs;
     run_mutation_source_tests([&dirs, &cfg, version] (schema_ptr s, const std::vector<mutation>& partitions) -> mutation_source {
         tmpdir sstable_dir;
-        auto sst = make_lw_shared<sstables::sstable>(s,
+        auto sst = sstables::make_sstable(s,
             sstable_dir.path,
             1 /* generation */,
             version,
@@ -414,7 +414,7 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
         auto mt = make_lw_shared<memtable>(s);
         mt->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstables::sstable>(s,
+        auto sst = sstables::make_sstable(s,
                 dir->path,
                 1 /* generation */,
                 sstables::sstable::version_types::la,
@@ -553,7 +553,7 @@ static schema_ptr tombstone_overlap_schema() {
 
 
 static future<sstable_ptr> ka_sst(schema_ptr schema, sstring dir, unsigned long generation) {
-    auto sst = make_lw_shared<sstable>(std::move(schema), dir, generation, sstables::sstable::version_types::ka, big);
+    auto sst = make_sstable(std::move(schema), dir, generation, sstables::sstable::version_types::ka, big);
     auto fut = sst->load();
     return std::move(fut).then([sst = std::move(sst)] {
         return make_ready_future<sstable_ptr>(std::move(sst));
@@ -790,7 +790,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
         auto mt = make_lw_shared<memtable>(s);
         mt->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstables::sstable>(s,
+        auto sst = sstables::make_sstable(s,
                                 dir->path,
                                 1 /* generation */,
                                 sstables::sstable::version_types::ka,
@@ -840,7 +840,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
         auto mt = make_lw_shared<memtable>(s);
         mt->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstables::sstable>(s,
+        auto sst = sstables::make_sstable(s,
                                 dir->path,
                                 1 /* generation */,
                                 sstables::sstable::version_types::ka,

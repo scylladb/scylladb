@@ -419,7 +419,7 @@ std::vector<resharding_descriptor> compaction_strategy::get_resharding_jobs(colu
     return _compaction_strategy_impl->get_resharding_jobs(cf, std::move(candidates));
 }
 
-void compaction_strategy::notify_completion(const std::vector<lw_shared_ptr<sstable>>& removed, const std::vector<lw_shared_ptr<sstable>>& added) {
+void compaction_strategy::notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
     _compaction_strategy_impl->notify_completion(removed, added);
 }
 

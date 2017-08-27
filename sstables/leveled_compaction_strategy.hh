@@ -54,7 +54,7 @@ public:
 
     virtual std::vector<resharding_descriptor> get_resharding_jobs(column_family& cf, std::vector<shared_sstable> candidates) override;
 
-    virtual void notify_completion(const std::vector<lw_shared_ptr<sstable>>& removed, const std::vector<lw_shared_ptr<sstable>>& added) override;
+    virtual void notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) override;
 
     // for each level > 0, get newest sstable and use its last key as last
     // compacted key for the previous level.
@@ -145,7 +145,7 @@ std::vector<resharding_descriptor> leveled_compaction_strategy::get_resharding_j
     return descriptors;
 }
 
-void leveled_compaction_strategy::notify_completion(const std::vector<lw_shared_ptr<sstable>>& removed, const std::vector<lw_shared_ptr<sstable>>& added) {
+void leveled_compaction_strategy::notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
     if (removed.empty() || added.empty()) {
         return;
     }

@@ -503,7 +503,7 @@ public:
         }
         auto candidates = filter_sstable_for_reader(_sstables->select(_pr), *_cf, _schema, _key, _slice);
         return parallel_for_each(std::move(candidates),
-            [this](const lw_shared_ptr<sstables::sstable>& sstable) {
+            [this](const sstables::shared_sstable& sstable) {
                 tracing::trace(_trace_state, "Reading key {} from sstable {}", _pr, seastar::value_of([&sstable] { return sstable->get_filename(); }));
                 return sstable->read_row(_schema, _pr.start()->value(), _slice, _pc, _fwd).then([this](auto smo) {
                     if (smo) {
@@ -751,7 +751,7 @@ static bool belongs_to_other_shard(const std::vector<shard_id>& shards) {
 future<sstables::shared_sstable>
 column_family::open_sstable(sstables::foreign_sstable_open_info info, sstring dir, int64_t generation,
         sstables::sstable::version_types v, sstables::sstable::format_types f) {
-    auto sst = make_lw_shared<sstables::sstable>(_schema, dir, generation, v, f);
+    auto sst = sstables::make_sstable(_schema, dir, generation, v, f);
     if (!belongs_to_current_shard(info.owners)) {
         dblog.debug("sstable {} not relevant for this shard, ignoring", sst->get_filename());
         sst->mark_for_deletion();
@@ -798,7 +798,7 @@ void column_family::update_stats_for_new_sstable(uint64_t disk_space_used_by_sst
     }
 }
 
-void column_family::add_sstable(lw_shared_ptr<sstables::sstable> sstable, std::vector<unsigned>&& shards_for_the_sstable) {
+void column_family::add_sstable(sstables::shared_sstable sstable, std::vector<unsigned>&& shards_for_the_sstable) {
     // allow in-progress reads to continue using old list
     auto new_sstables = make_lw_shared(*_sstables);
     new_sstables->insert(sstable);
@@ -866,7 +866,7 @@ column_family::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
         auto f = current_waiters.get_shared_future(); // for this seal
 
         with_lock(_sstables_lock.for_read(), [this, old, permit = std::move(permit)] () mutable {
-            auto newtab = make_lw_shared<sstables::sstable>(_schema,
+            auto newtab = sstables::make_sstable(_schema,
                 _config.datadir, calculate_generation_for_new_table(),
                 sstables::sstable::version_types::ka,
                 sstables::sstable::format_types::big);
@@ -924,7 +924,7 @@ future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_bi
     return with_gate(_streaming_flush_gate, [this, old, &smb, permit = std::move(permit)] () mutable {
         return with_gate(smb.flush_in_progress, [this, old, &smb, permit = std::move(permit)] () mutable {
             return with_lock(_sstables_lock.for_read(), [this, old, &smb, permit = std::move(permit)] () mutable {
-                auto newtab = make_lw_shared<sstables::sstable>(_schema,
+                auto newtab = sstables::make_sstable(_schema,
                                                                 _config.datadir, calculate_generation_for_new_table(),
                                                                 sstables::sstable::version_types::ka,
                                                                 sstables::sstable::format_types::big);
@@ -999,7 +999,7 @@ future<stop_iteration>
 column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_permit&& permit) {
     auto gen = calculate_generation_for_new_table();
 
-    auto newtab = make_lw_shared<sstables::sstable>(_schema,
+    auto newtab = sstables::make_sstable(_schema,
         _config.datadir, gen,
         sstables::sstable::version_types::ka,
         sstables::sstable::format_types::big);
@@ -1098,7 +1098,7 @@ distributed_loader::flush_upload_dir(distributed<database>& db, sstring ks_name,
                         [ks_name, cf_name, comps = pair.second] (database& db) {
                     auto& cf = db.find_column_family(ks_name, cf_name);
 
-                    auto sst = make_lw_shared<sstables::sstable>(cf.schema(), cf._config.datadir + "/upload", comps.generation,
+                    auto sst = sstables::make_sstable(cf.schema(), cf._config.datadir + "/upload", comps.generation,
                         comps.version, comps.format, gc_clock::now(),
                         [] (disk_error_signal_type&) { return error_handler_for_upload_dir(); });
                     auto gen = cf.calculate_generation_for_new_table();
@@ -1151,7 +1151,7 @@ column_family::reshuffle_sstables(std::set<int64_t> all_generations, int64_t sta
             if (work.all_generations.count(comps.generation) != 0) {
                 return make_ready_future<>();
             }
-            auto sst = make_lw_shared<sstables::sstable>(_schema,
+            auto sst = sstables::make_sstable(_schema,
                                                          _config.datadir, comps.generation,
                                                          comps.version, comps.format);
             work.sstables.emplace(comps.generation, std::move(sst));
@@ -1348,7 +1348,7 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
 
         auto create_sstable = [this] {
                 auto gen = this->calculate_generation_for_new_table();
-                auto sst = make_lw_shared<sstables::sstable>(_schema, _config.datadir, gen,
+                auto sst = sstables::make_sstable(_schema, _config.datadir, gen,
                         sstables::sstable::version_types::ka,
                         sstables::sstable::format_types::big);
                 sst->set_unshared();
@@ -1362,7 +1362,7 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
     });
 }
 
-static bool needs_cleanup(const lw_shared_ptr<sstables::sstable>& sst,
+static bool needs_cleanup(const sstables::shared_sstable& sst,
                    const dht::token_range_vector& owned_ranges,
                    schema_ptr s) {
     auto first = sst->get_first_partition_key();
@@ -1592,7 +1592,7 @@ load_sstables_with_open_info(std::vector<sstables::foreign_sstable_open_info> ss
             if (!pred(info)) {
                 return make_ready_future<>();
             }
-            auto sst = make_lw_shared<sstables::sstable>(s, dir, info.generation, info.version, info.format);
+            auto sst = sstables::make_sstable(s, dir, info.generation, info.version, info.format);
             return sst->load(std::move(info)).then([&ssts, sst] {
                 ssts.push_back(std::move(sst));
                 return make_ready_future<>();
@@ -1724,7 +1724,7 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                         return cf->calculate_generation_for_new_table();
                     }).get0();
 
-                    auto sst = make_lw_shared<sstables::sstable>(cf->schema(), cf->dir(), gen,
+                    auto sst = sstables::make_sstable(cf->schema(), cf->dir(), gen,
                         sstables::sstable::version_types::ka, sstables::sstable::format_types::big,
                         gc_clock::now(), default_io_error_handler_gen());
                     return sst;
