@@ -760,17 +760,7 @@ public:
     cache_hit_rate get_hit_rate(gms::inet_address addr);
     void drop_hit_rate(gms::inet_address addr);
 
-    template<typename Func, typename Result = futurize_t<std::result_of_t<Func()>>>
-    Result run_with_compaction_disabled(Func && func) {
-        ++_compaction_disabled;
-        return _compaction_manager.remove(this).then(std::forward<Func>(func)).finally([this] {
-            if (--_compaction_disabled == 0) {
-                // we're turning if on again, use function that does not increment
-                // the counter further.
-                do_trigger_compaction();
-            }
-        });
-    }
+    future<> run_with_compaction_disabled(std::function<future<> ()> func);
 
     void add_or_update_view(view_ptr v);
     void remove_view(view_ptr v);

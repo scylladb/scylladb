@@ -3494,6 +3494,18 @@ future<> database::truncate(sstring ksname, sstring cfname, timestamp_func tsf) 
     return truncate(ks, cf, std::move(tsf));
 }
 
+future<>
+column_family::run_with_compaction_disabled(std::function<future<> ()> func) {
+    ++_compaction_disabled;
+    return _compaction_manager.remove(this).then(std::move(func)).finally([this] {
+        if (--_compaction_disabled == 0) {
+            // we're turning if on again, use function that does not increment
+            // the counter further.
+            do_trigger_compaction();
+        }
+    });
+}
+
 future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf, bool with_snapshot) {
     return cf.run_async([this, &ks, &cf, tsf = std::move(tsf), with_snapshot] {
         const auto durable = ks.metadata()->durable_writes();
