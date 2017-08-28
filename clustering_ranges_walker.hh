@@ -151,7 +151,7 @@ public:
         }
 
         do {
-            if (less(end, _current_start)) {
+            if (!less(_current_start, end)) {
                 break;
             }
             if (less(start, _current_end)) {
