@@ -57,6 +57,7 @@ enum class cause {
     SCHEMA_CHANGE,
     MIXED_CF,
     VIEWS,
+    ROLES,
 };
 
 void fail(cause what) __attribute__((noreturn));

@@ -62,6 +62,7 @@ std::ostream& operator<<(std::ostream& out, cause c) {
         case cause::SCHEMA_CHANGE: return out << "SCHEMA_CHANGE";
         case cause::MIXED_CF: return out << "MIXED_CF";
         case cause::VIEWS: return out << "MATERIALIZED_VIEWS";
+        case cause::ROLES: return out << "ROLES";
     }
     abort();
 }
