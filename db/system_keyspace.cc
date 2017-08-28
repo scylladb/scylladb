@@ -1016,9 +1016,13 @@ static future<> build_bootstrap_info() {
 
 future<> init_local_cache() {
     return _local_cache.start().then([] {
+
+        // Do not stop _local_cache here. See #2721.
+        /*
         engine().at_exit([] {
             return _local_cache.stop();
         });
+        */
     });
 }
 
