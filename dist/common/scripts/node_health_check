@@ -190,6 +190,7 @@ ls -ltrh /var/lib/scylla/coredump/ > $OUTPUT_PATH2/coredump-folder.txt
 
 
 #Scylla Logs#
+echo "--------------------------------------------------"
 echo "Collecting Logs"
 echo "--------------------------------------------------"
 
