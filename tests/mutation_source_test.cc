@@ -227,6 +227,101 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn populate) {
     }
 }
 
+// Reproduces https://github.com/scylladb/scylla/issues/2733
+static void test_fast_forwarding_across_partitions_to_empty_range(populate_fn populate) {
+    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+
+    simple_schema table;
+    schema_ptr s = table.schema();
+
+    std::vector<mutation> partitions;
+
+    const unsigned ckeys_per_part = 100;
+    auto keys = table.make_pkeys(10);
+
+    auto missing_key = keys[3];
+    keys.erase(keys.begin() + 3);
+
+    auto key_after_all = keys.back();
+    keys.erase(keys.begin() + (keys.size() - 1));
+
+    unsigned next_ckey = 0;
+
+    for (auto&& key : keys) {
+        mutation m(key, s);
+        sstring val(sstring::initialized_later(), 1024);
+        for (auto i : boost::irange(0u, ckeys_per_part)) {
+            table.add_row(m, table.make_ckey(next_ckey + i), val);
+        }
+        next_ckey += ckeys_per_part;
+        partitions.push_back(m);
+    }
+
+    mutation_source ms = populate(s, partitions);
+
+    mutation_reader rd = ms(s,
+        dht::partition_range::make({keys[0]}, {keys[1]}),
+        query::full_slice,
+        default_priority_class(),
+        nullptr,
+        streamed_mutation::forwarding::no,
+        mutation_reader::forwarding::yes);
+
+    {
+        streamed_mutation_opt smo = rd().get0();
+        BOOST_REQUIRE(smo);
+        //smo->fast_forward_to(position_range::all_clustered_rows()).get();
+        smo->fill_buffer().get();
+        BOOST_REQUIRE(smo->is_buffer_full()); // if not, increase n_ckeys
+        BOOST_REQUIRE(smo->decorated_key().equal(*s, keys[0]));
+        assert_that_stream(std::move(*smo))
+            .produces_row_with_key(table.make_ckey(0))
+            .produces_row_with_key(table.make_ckey(1));
+            // ...don't finish consumption to leave the reader in the middle of partition
+    }
+
+    rd.fast_forward_to(dht::partition_range::make({missing_key}, {missing_key})).get();
+
+    {
+        streamed_mutation_opt smo = rd().get0();
+        BOOST_REQUIRE(!smo);
+    }
+
+    rd.fast_forward_to(dht::partition_range::make({keys[3]}, {keys[3]})).get();
+
+    {
+        streamed_mutation_opt smo = rd().get0();
+        BOOST_REQUIRE(smo);
+        BOOST_REQUIRE(smo->decorated_key().equal(*s, keys[3]));
+        assert_that_stream(std::move(*smo))
+            .produces_row_with_key(table.make_ckey(ckeys_per_part * 3))
+            .produces_row_with_key(table.make_ckey(ckeys_per_part * 3 + 1));
+    }
+
+    {
+        streamed_mutation_opt smo = rd().get0();
+        BOOST_REQUIRE(!smo);
+    }
+
+    rd.fast_forward_to(dht::partition_range::make_starting_with({keys[keys.size() - 1]})).get();
+
+    {
+        streamed_mutation_opt smo = rd().get0();
+        BOOST_REQUIRE(smo);
+        BOOST_REQUIRE(smo->decorated_key().equal(*s, keys.back()));
+        assert_that_stream(std::move(*smo))
+            .produces_row_with_key(table.make_ckey(ckeys_per_part * (keys.size() - 1)));
+        // ...don't finish consumption to leave the reader in the middle of partition
+    }
+
+    rd.fast_forward_to(dht::partition_range::make({key_after_all}, {key_after_all})).get();
+
+    {
+        streamed_mutation_opt smo = rd().get0();
+        BOOST_REQUIRE(!smo);
+    }
+}
+
 static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(populate_fn populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
 
@@ -744,6 +839,7 @@ static void test_query_only_static_row(populate_fn populate) {
 }
 
 void run_mutation_source_tests(populate_fn populate) {
+    test_fast_forwarding_across_partitions_to_empty_range(populate);
     test_clustering_slices(populate);
     test_streamed_mutation_fragments_have_monotonic_positions(populate);
     test_streamed_mutation_forwarding_across_range_tombstones(populate);
