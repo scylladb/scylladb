@@ -170,9 +170,10 @@ void compression::segmented_offsets::write(uint64_t bucket_index, uint64_t offse
 void compression::segmented_offsets::update_position_trackers(std::size_t index) const {
     if (_current_index != index - 1) {
         _current_index = index;
-        _current_bucket_segment_index = _current_index / _grouped_offsets;
+        const uint64_t current_segment_index = _current_index / _grouped_offsets;
+        _current_bucket_segment_index = current_segment_index % _segments_per_bucket;
         _current_segment_relative_index = _current_index % _grouped_offsets;
-        _current_bucket_index = _current_bucket_segment_index / _segments_per_bucket;
+        _current_bucket_index = current_segment_index / _segments_per_bucket;
         _current_segment_offset_bits = (_current_bucket_segment_index % _segments_per_bucket) * _segment_size_bits;
     } else {
         ++_current_index;

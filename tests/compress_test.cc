@@ -129,3 +129,19 @@ BOOST_AUTO_TEST_CASE(segmented_offsets_overflow_detection) {
     const uint64_t good_segment_offset{0x00000000000f0001};
     BOOST_REQUIRE_NO_THROW(offsets.push_back(good_segment_offset));
 }
+
+BOOST_AUTO_TEST_CASE(segmented_offsets_corner_cases) {
+    sstables::compression::segmented_offsets offsets;
+    offsets.init(1 << 12);
+
+    const std::size_t size = 0x0000000000100000;
+
+    for (std::size_t i = 0; i < size; ++i) {
+        offsets.push_back(i);
+    }
+
+    // Random at() to a position just before a bucket boundary, then do an
+    // incremental at() to read the next offset.
+    BOOST_REQUIRE(offsets.at(4079) == 4079);
+    BOOST_REQUIRE(offsets.at(4080) == 4080);
+}
