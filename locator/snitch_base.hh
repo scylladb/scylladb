@@ -46,6 +46,7 @@
 #include "core/thread.hh"
 #include "core/distributed.hh"
 #include "utils/class_registrator.hh"
+#include "log.hh"
 
 namespace locator {
 

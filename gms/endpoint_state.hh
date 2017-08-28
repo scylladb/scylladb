@@ -38,7 +38,6 @@
 
 #pragma once
 
-#include "types.hh"
 #include "utils/serialization.hh"
 #include "gms/heart_beat_state.hh"
 #include "gms/application_state.hh"
