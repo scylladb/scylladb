@@ -1149,6 +1149,10 @@ future<> sstable_data_source::advance_to_next_partition() {
 
 future<streamed_mutation_opt> sstable_data_source::read_next_partition() {
     sstlog.trace("reader {}: read next partition", this);
+    if (!_read_enabled) {
+        sstlog.trace("reader {}: eof", this);
+        return make_ready_future<streamed_mutation_opt>();
+    }
     return advance_to_next_partition().then([this] {
         return read_partition();
     });
@@ -1173,7 +1177,7 @@ future<streamed_mutation_opt> sstable_data_source::read_partition() {
     // need to use the index anyway soon.
     //
     if (_index_in_current_partition) {
-        if (_lh_index->eof()) {
+        if (_context.eof()) {
             sstlog.trace("reader {}: eof", this);
             return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
         }

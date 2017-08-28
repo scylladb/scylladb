@@ -316,6 +316,10 @@ public:
         return _stream_position;
     }
 
+    bool eof() const {
+        return _remain == 0;
+    }
+
     future<> close() {
         return _input.close();
     }
