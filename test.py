@@ -30,6 +30,7 @@ import threading
 boost_tests = [
     'bytes_ostream_test',
     'chunked_vector_test',
+    'compress_test',
     'types_test',
     'keys_test',
     'mutation_test',
