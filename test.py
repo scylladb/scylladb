@@ -86,6 +86,8 @@ boost_tests = [
     'view_schema_test',
     'combined_mutation_reader_test',
     'clustering_ranges_walker_test',
+    'vint_serialization_test',
+    'duration_test',
 ]
 
 other_tests = [
