@@ -1665,7 +1665,7 @@ bool gossiper::is_in_shadow_round() {
 
 void gossiper::add_expire_time_for_endpoint(inet_address endpoint, clk::time_point expire_time) {
     char expire_time_buf[100];
-    auto expire_time_tm = std::chrono::system_clock::to_time_t(expire_time);
+    auto expire_time_tm = clk::to_time_t(expire_time);
     auto now_ = now();
     strftime(expire_time_buf, sizeof(expire_time_buf), "%Y-%m-%d %T", std::localtime(&expire_time_tm));
     auto diff = std::chrono::duration_cast<std::chrono::seconds>(expire_time - now_).count();
