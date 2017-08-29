@@ -994,13 +994,8 @@ private:
 // same nodes as replicas.
 static future<> repair_ranges(repair_info ri) {
     return do_with(std::move(ri), [] (auto& ri) {
-    #if 0
-        // repair all the ranges in parallel
-        return parallel_for_each(ri.ranges, [&ri] (auto&& range) {
-    #else
         // repair all the ranges in sequence
         return do_for_each(ri.ranges, [&ri] (auto&& range) {
-    #endif
             ri.ranges_index++;
             rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}",
                 ri.ranges_index, ri.ranges.size(), ri.id, ri.shard, ri.keyspace, ri.cfs, range);
