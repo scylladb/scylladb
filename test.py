@@ -83,6 +83,7 @@ boost_tests = [
     'cell_locker_test',
     'view_schema_test',
     'combined_mutation_reader_test',
+    'clustering_ranges_walker_test',
 ]
 
 other_tests = [
