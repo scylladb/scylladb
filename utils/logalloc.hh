@@ -566,7 +566,7 @@ public:
 
     // Merges another region into this region. The other region is left empty.
     // Doesn't invalidate references to allocated objects.
-    void merge(region& other);
+    void merge(region& other) noexcept;
 
     // Compacts everything. Mainly for testing.
     // Invalidates references to allocated objects.

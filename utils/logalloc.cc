@@ -1373,7 +1373,7 @@ public:
     // Merges another region into this region. The other region is made
     // to refer to this region.
     // Doesn't invalidate references to allocated objects.
-    void merge(region_impl& other) {
+    void merge(region_impl& other) noexcept {
         compaction_lock dct1(*this);
         compaction_lock dct2(other);
         degroup_temporarily dgt1(this);
@@ -1614,7 +1614,7 @@ region_group* region::group() {
     return _impl->group();
 }
 
-void region::merge(region& other) {
+void region::merge(region& other) noexcept {
     if (_impl != other._impl) {
         _impl->merge(*other._impl);
         other._impl = _impl;
