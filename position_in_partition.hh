@@ -36,6 +36,7 @@ lexicographical_relation relation_for_lower_bound(composite_view v) {
             return lexicographical_relation::after_all_prefixed;
         default:
             assert(0);
+            throw std::invalid_argument("invalid composite_view");
     }
 }
 

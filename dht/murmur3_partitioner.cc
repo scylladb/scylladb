@@ -255,6 +255,7 @@ murmur3_partitioner::shard_of(const token& t) const {
             return zero_based_shard_of(adjusted, _shard_count, _sharding_ignore_msb_bits);
     }
     assert(0);
+    throw std::invalid_argument("invalid token");
 }
 
 token

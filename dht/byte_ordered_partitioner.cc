@@ -160,6 +160,7 @@ byte_ordered_partitioner::shard_of(const token& t) const {
             return (uint8_t(t._data[0]) * _shard_count) >> 8;
     }
     assert(0);
+    throw std::invalid_argument("invalid token");
 }
 
 token
@@ -177,6 +178,7 @@ byte_ordered_partitioner::token_for_next_shard(const token& t, shard_id shard, u
         return token(token::kind::key, managed_bytes({int8_t(e)}));
     }
     assert(0);
+    throw std::invalid_argument("invalid token");
 }
 
 

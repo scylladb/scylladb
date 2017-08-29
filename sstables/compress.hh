@@ -177,6 +177,7 @@ struct compression {
             const_iterator& operator=(const const_iterator& other) {
                 assert(&_offsets == &other._offsets);
                 _index = other._index;
+                return *this;
             }
 
             const_iterator operator++(int) {

@@ -64,6 +64,7 @@ std::ostream& operator<<(std::ostream& out, cause c) {
         case cause::VIEWS: return out << "MATERIALIZED_VIEWS";
     }
     assert(0);
+    return out << "UNKNOWN_CAUSE";
 }
 
 void warn(cause c) {
