@@ -56,7 +56,7 @@ class index {
 public:
     index(const sstring& target_column, const index_metadata& im);
     bool depends_on(const column_definition& cdef) const;
-    bool supports_expression(const column_definition& cdef, const cql3::operator_type op) const;
+    bool supports_expression(const column_definition& cdef, const cql3::operator_type& op) const;
     const index_metadata& metadata() const;
 };
 

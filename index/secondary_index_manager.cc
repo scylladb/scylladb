@@ -60,7 +60,7 @@ bool index::depends_on(const column_definition& cdef) const {
     return cdef.name_as_text() == _target_column;
 }
 
-bool index::supports_expression(const column_definition& cdef, const cql3::operator_type op) const {
+bool index::supports_expression(const column_definition& cdef, const cql3::operator_type& op) const {
     return false;
 }
 
