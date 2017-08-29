@@ -740,8 +740,11 @@ template <typename Updater>
 future<> row_cache::do_update(memtable& m, Updater updater) {
     m.on_detach_from_region_group();
     _tracker.region().merge(m); // Now all data in memtable belongs to cache
+    auto attr = seastar::thread_attributes();
+    attr.scheduling_group = &_update_thread_scheduling_group;
     STAP_PROBE(scylla, row_cache_update_start);
-    auto cleanup = defer([&m, this] {
+    auto t = seastar::thread(attr, [this, &m, updater = std::move(updater)] () mutable {
+        auto cleanup = defer([&] {
             with_allocator(_tracker.allocator(), [&m, this] () {
                 logalloc::reclaim_lock _(_tracker.region());
                 bool blow_cache = false;
@@ -763,10 +766,7 @@ future<> row_cache::do_update(memtable& m, Updater updater) {
                     clear_now();
                 }
             });
-    });
-    auto attr = seastar::thread_attributes();
-    attr.scheduling_group = &_update_thread_scheduling_group;
-    auto t = seastar::thread(attr, [this, &m, updater = std::move(updater)] () mutable {
+        });
         auto permit = get_units(_update_sem, 1).get0();
         ++_underlying_phase;
         _prev_snapshot = std::exchange(_underlying, _snapshot_source());
@@ -822,7 +822,7 @@ future<> row_cache::do_update(memtable& m, Updater updater) {
     STAP_PROBE(scylla, row_cache_update_end);
     return do_with(std::move(t), [] (seastar::thread& t) {
         return t.join();
-    }).then([cleanup = std::move(cleanup)] {});
+    });
 }
 
 future<> row_cache::update(memtable& m, partition_presence_checker is_present) {
