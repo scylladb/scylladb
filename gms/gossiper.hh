@@ -82,7 +82,7 @@ class i_failure_detector;
  */
 class gossiper : public i_failure_detection_event_listener, public seastar::async_sharded_service<gossiper> {
 public:
-    using clk = std::chrono::system_clock;
+    using clk = seastar::lowres_system_clock;
 private:
     using messaging_verb = netw::messaging_verb;
     using messaging_service = netw::messaging_service;

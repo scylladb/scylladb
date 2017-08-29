@@ -58,7 +58,7 @@ class endpoint_state;
 
 class arrival_window {
 public:
-    using clk = std::chrono::system_clock;
+    using clk = seastar::lowres_system_clock;
 private:
     clk::time_point _tlast{clk::time_point::min()};
     utils::bounded_stats_deque _arrival_intervals;
