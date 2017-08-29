@@ -22,6 +22,7 @@
 #pragma once
 
 #include "bytes.hh"
+#include "utils/chunked_vector.hh"
 #include <seastar/core/enum.hh>
 #include <boost/variant/variant.hpp>
 #include <boost/variant/get.hpp>
@@ -56,7 +57,7 @@ struct disk_string_view {
 template <typename Size, typename Members>
 struct disk_array {
     static_assert(std::is_integral<Size>::value, "Length type must be convertible to integer");
-    std::deque<Members> elements;
+    utils::chunked_vector<Members> elements;
 };
 
 template <typename Size, typename Key, typename Value>

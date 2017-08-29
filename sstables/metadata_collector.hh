@@ -310,10 +310,10 @@ public:
 
     void construct_compaction(compaction_metadata& m) {
         if (!_ancestors.empty()) {
-            m.ancestors.elements = std::deque<uint32_t>(_ancestors.begin(), _ancestors.end());
+            m.ancestors.elements = utils::chunked_vector<uint32_t>(_ancestors.begin(), _ancestors.end());
         }
         auto cardinality = _cardinality.get_bytes();
-        m.cardinality.elements = std::deque<uint8_t>(cardinality.get(), cardinality.get() + cardinality.size());
+        m.cardinality.elements = utils::chunked_vector<uint8_t>(cardinality.get(), cardinality.get() + cardinality.size());
     }
 
     void construct_stats(stats_metadata& m) {

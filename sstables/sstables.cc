@@ -398,7 +398,7 @@ inline void write(file_writer& out, const disk_string_view<Size>& s) {
 // We'll offer a specialization for that case below.
 template <typename Size, typename Members>
 typename std::enable_if_t<!std::is_integral<Members>::value, future<>>
-parse(random_access_reader& in, Size& len, std::deque<Members>& arr) {
+parse(random_access_reader& in, Size& len, utils::chunked_vector<Members>& arr) {
 
     auto count = make_lw_shared<size_t>(0);
     auto eoarr = [count, len] { return *count == len; };
@@ -410,7 +410,7 @@ parse(random_access_reader& in, Size& len, std::deque<Members>& arr) {
 
 template <typename Size, typename Members>
 typename std::enable_if_t<std::is_integral<Members>::value, future<>>
-parse(random_access_reader& in, Size& len, std::deque<Members>& arr) {
+parse(random_access_reader& in, Size& len, utils::chunked_vector<Members>& arr) {
     auto done = make_lw_shared<size_t>(0);
     return repeat([&in, &len, &arr, done]  {
         auto now = std::min(len - *done, 100000 / sizeof(Members));
@@ -441,7 +441,7 @@ future<> parse(random_access_reader& in, disk_array<Size, Members>& arr) {
 
 template <typename Members>
 inline typename std::enable_if_t<!std::is_integral<Members>::value, void>
-write(file_writer& out, const std::deque<Members>& arr) {
+write(file_writer& out, const utils::chunked_vector<Members>& arr) {
     for (auto& a : arr) {
         write(out, a);
     }
@@ -449,7 +449,7 @@ write(file_writer& out, const std::deque<Members>& arr) {
 
 template <typename Members>
 inline typename std::enable_if_t<std::is_integral<Members>::value, void>
-write(file_writer& out, const std::deque<Members>& arr) {
+write(file_writer& out, const utils::chunked_vector<Members>& arr) {
     std::vector<Members> tmp;
     size_t per_loop = 100000 / sizeof(Members);
     tmp.resize(per_loop);
@@ -624,7 +624,7 @@ future<> parse(random_access_reader& in, summary& s) {
             s.entries.resize(s.header.size);
 
             auto *nr = reinterpret_cast<const pos_type *>(buf.get());
-            s.positions = std::deque<pos_type>(nr, nr + s.header.size);
+            s.positions = utils::chunked_vector<pos_type>(nr, nr + s.header.size);
 
             // Since the keys in the index are not sized, we need to calculate
             // the start position of the index i+1 to determine the boundaries
@@ -843,7 +843,7 @@ inline void write(file_writer& out, const utils::streaming_histogram& sh) {
     check_truncate_and_assign(max_bin_size, sh.max_bin_size);
 
     disk_array<uint32_t, streaming_histogram_element> a;
-    a.elements = boost::copy_range<std::deque<streaming_histogram_element>>(sh.bin
+    a.elements = boost::copy_range<utils::chunked_vector<streaming_histogram_element>>(sh.bin
         | boost::adaptors::transformed([&] (auto& kv) { return streaming_histogram_element{kv.first, kv.second}; }));
 
     write(out, max_bin_size, a);
