@@ -34,7 +34,7 @@ for line in open('/etc/os-release'):
         os_ids += value.split(' ')
 
 # distribution "internationalization", converting package names.
-# Fedora name is key, values is distro -> package name dict. 
+# Fedora name is key, values is distro -> package name dict.
 i18n_xlat = {
     'boost-devel': {
         'debian': 'libboost-dev',
@@ -48,7 +48,7 @@ def pkgname(name):
         for id in os_ids:
             if id in dict:
                 return dict[id]
-    return name 
+    return name
 
 def get_flags():
     with open('/proc/cpuinfo') as f:
@@ -175,6 +175,7 @@ scylla_tests = [
     'tests/keys_test',
     'tests/partitioner_test',
     'tests/frozen_mutation_test',
+    'tests/clustering_ranges_walker_test',
     'tests/perf/perf_mutation',
     'tests/lsa_async_eviction_test',
     'tests/lsa_sync_eviction_test',
@@ -640,7 +641,7 @@ for t in tests_not_using_seastar_test_framework:
 for t in scylla_tests:
     deps[t] = [t + '.cc']
     if t not in tests_not_using_seastar_test_framework:
-        deps[t] += scylla_tests_dependencies 
+        deps[t] += scylla_tests_dependencies
         deps[t] += scylla_tests_seastar_deps
     else:
         deps[t] += scylla_core + api + idls + ['tests/cql_test_env.cc']
@@ -918,7 +919,7 @@ with open(buildfile, 'w') as f:
                 if binary.startswith('tests/'):
                     local_libs = '$libs'
                     if binary not in tests_not_using_seastar_test_framework or binary in pure_boost_tests:
-                        local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework') 
+                        local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
                     if has_thrift:
                         local_libs += ' ' + thrift_libs + ' ' + maybe_static(args.staticboost, '-lboost_system')
                     # Our code's debugging information is huge, and multiplied

@@ -43,10 +43,14 @@ private:
     bool advance_to_next_range() {
         _in_current = false;
         if (!_current_start.is_static_row()) {
+            if (_current == _end) {
+                return false;
+            }
             ++_current;
         }
         ++_change_counter;
         if (_current == _end) {
+            _current_end = _current_start = position_in_partition_view::after_all_clustered_rows();
             return false;
         }
         _current_start = position_in_partition_view::for_range_start(*_current);
@@ -61,11 +65,18 @@ public:
         , _end(ranges.end())
         , _in_current(with_static_row)
         , _with_static_row(with_static_row)
-        , _current_start(with_static_row ? position_in_partition_view::for_static_row()
-                                         : position_in_partition_view::for_range_start(*_current))
-        , _current_end(with_static_row ? position_in_partition_view::before_all_clustered_rows()
-                                       : position_in_partition_view::for_range_end(*_current))
-    { }
+        , _current_start(position_in_partition_view::for_static_row())
+        , _current_end(position_in_partition_view::before_all_clustered_rows())
+    {
+        if (!with_static_row) {
+            if (_current == _end) {
+                _current_start = _current_end = position_in_partition_view::after_all_clustered_rows();
+            } else {
+                _current_start = position_in_partition_view::for_range_start(*_current);
+                _current_end = position_in_partition_view::for_range_end(*_current);
+            }
+        }
+    }
     clustering_ranges_walker(clustering_ranges_walker&& o) noexcept
         : _schema(o._schema)
         , _ranges(o._ranges)
@@ -94,10 +105,6 @@ public:
     void trim_front(position_in_partition pos) {
         position_in_partition::less_compare less(_schema);
 
-        if (_current == _end) {
-            return;
-        }
-
         do {
             if (!less(_current_start, pos)) {
                 break;
@@ -117,10 +124,6 @@ public:
     // Idempotent.
     bool advance_to(position_in_partition_view pos) {
         position_in_partition::less_compare less(_schema);
-
-        if (_current == _end) {
-            return false;
-        }
 
         do {
             if (!_in_current && less(pos, _current_start)) {
@@ -146,12 +149,8 @@ public:
     bool advance_to(position_in_partition_view start, position_in_partition_view end) {
         position_in_partition::less_compare less(_schema);
 
-        if (_current == _end) {
-            return false;
-        }
-
         do {
-            if (less(end, _current_start)) {
+            if (!less(_current_start, end)) {
                 break;
             }
             if (less(start, _current_end)) {
@@ -192,7 +191,7 @@ public:
 
     // Returns true if advanced past all contained positions. Any later advance_to() until reset() will return false.
     bool out_of_range() const {
-        return _current == _end;
+        return !_in_current && _current == _end;
     }
 
     // Resets the state of the walker so that advance_to() can be now called for new sequence of positions.

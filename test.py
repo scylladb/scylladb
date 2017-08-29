@@ -80,6 +80,7 @@ boost_tests = [
     'virtual_reader_test',
     'counter_test',
     'cell_locker_test',
+    'clustering_ranges_walker_test',
 ]
 
 other_tests = [

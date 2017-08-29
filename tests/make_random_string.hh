@@ -24,6 +24,7 @@
 #pragma once
 
 #include <seastar/core/sstring.hh>
+#include "seastarx.hh"
 #include <random>
 
 inline
