@@ -96,7 +96,7 @@ int main(int argc, char** argv) {
                 }
 
                 if (update_cache) {
-                    cache.update(*mt).get();
+                    cache.update([] {}, *mt).get();
                 }
             }, 5, 1);
         });

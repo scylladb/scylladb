@@ -415,7 +415,6 @@ private:
     utils::phased_barrier _flush_barrier;
     seastar::gate _streaming_flush_gate;
     std::vector<view_ptr> _views;
-    semaphore _cache_update_sem{1};
 
     std::unique_ptr<cell_locker> _counter_cell_locks;
     void set_metrics();
@@ -453,7 +452,8 @@ private:
     lw_shared_ptr<memtable> new_memtable();
     lw_shared_ptr<memtable> new_streaming_memtable();
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
-    future<> update_cache(memtable&);
+    // Caller must keep m alive.
+    future<> update_cache(lw_shared_ptr<memtable> m, sstables::shared_sstable sst);
     struct merge_comparator;
 
     // update the sstable generation, making sure that new new sstables don't overwrite this one.
