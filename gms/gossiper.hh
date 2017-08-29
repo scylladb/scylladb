@@ -192,7 +192,7 @@ private:
     std::unordered_set<inet_address> _pending_mark_alive_endpoints;
 
     /* unreachable member set */
-    std::map<inet_address, clk::time_point> _unreachable_endpoints;
+    std::unordered_map<inet_address, clk::time_point> _unreachable_endpoints;
 
     /* initial seeds for joining the cluster */
     std::set<inet_address> _seeds;
@@ -209,7 +209,7 @@ private:
 
     clk::time_point _last_processed_message_at = now();
 
-    std::map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
+    std::unordered_map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
     std::vector<inet_address> _shadow_live_endpoints;
 
     void run();
