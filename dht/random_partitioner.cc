@@ -219,8 +219,7 @@ unsigned random_partitioner::shard_of(const token& t) const {
             }
             return smp;
     }
-    assert(0);
-    throw std::invalid_argument("invalid token");
+    abort();
 }
 
 token

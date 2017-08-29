@@ -159,8 +159,7 @@ byte_ordered_partitioner::shard_of(const token& t) const {
             // treat first byte as a fraction in the range [0, 1) and divide it evenly:
             return (uint8_t(t._data[0]) * _shard_count) >> 8;
     }
-    assert(0);
-    throw std::invalid_argument("invalid token");
+    abort();
 }
 
 token

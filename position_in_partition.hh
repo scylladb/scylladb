@@ -34,10 +34,8 @@ lexicographical_relation relation_for_lower_bound(composite_view v) {
             return lexicographical_relation::before_all_prefixed;
         case composite::eoc::end:
             return lexicographical_relation::after_all_prefixed;
-        default:
-            assert(0);
-            throw std::invalid_argument("invalid composite_view");
     }
+    abort();
 }
 
 inline
@@ -49,9 +47,8 @@ lexicographical_relation relation_for_upper_bound(composite_view v) {
             return lexicographical_relation::before_all_strictly_prefixed;
         case composite::eoc::end:
             return lexicographical_relation::after_all_prefixed;
-        default:
-            assert(0);
     }
+    abort();
 }
 
 class position_in_partition_view {

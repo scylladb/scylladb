@@ -619,7 +619,6 @@ future<mutation> query_partition_mutation(service::storage_proxy& proxy,
                     } else if (partitions.size() == 1) {
                         return partitions[0].mut().unfreeze(s);
                     } else {
-                        assert(false && "Results must have at most one partition");
                         throw std::invalid_argument("Results must have at most one partition");
                     }
                 });

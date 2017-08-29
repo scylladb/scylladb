@@ -59,9 +59,8 @@ operator<<(std::ostream&out, constants::type t)
         case constants::type::BOOLEAN:  return out << "BOOLEAN";
         case constants::type::HEX:      return out << "HEX";
         case constants::type::DURATION: return out << "DURATION";
-    };
-    assert(0);
-    return out << "UNKOWN";
+    }
+    abort();
 }
 
 bytes

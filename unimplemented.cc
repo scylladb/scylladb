@@ -63,8 +63,7 @@ std::ostream& operator<<(std::ostream& out, cause c) {
         case cause::MIXED_CF: return out << "MIXED_CF";
         case cause::VIEWS: return out << "MATERIALIZED_VIEWS";
     }
-    assert(0);
-    return out << "UNKNOWN_CAUSE";
+    abort();
 }
 
 void warn(cause c) {
