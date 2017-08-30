@@ -1058,12 +1058,14 @@ column_family::start() {
 
 future<>
 column_family::stop() {
-    return when_all(_memtables->request_flush(), _streaming_memtables->request_flush()).discard_result().finally([this] {
-        return _compaction_manager.remove(this).then([this] {
-            // Nest, instead of using when_all, so we don't lose any exceptions.
-            return _streaming_flush_gate.close();
-        }).then([this] {
-            return _sstable_deletion_gate.close();
+    return _async_gate.close().then([this] {
+        return when_all(_memtables->request_flush(), _streaming_memtables->request_flush()).discard_result().finally([this] {
+            return _compaction_manager.remove(this).then([this] {
+                // Nest, instead of using when_all, so we don't lose any exceptions.
+                return _streaming_flush_gate.close();
+            }).then([this] {
+                return _sstable_deletion_gate.close();
+            });
         });
     });
 }
