@@ -1837,8 +1837,10 @@ future<sstables::entry_descriptor> distributed_loader::probe_file(distributed<da
         }
         return cf.open_sstable(std::move(info), sstdir, comps.generation, comps.version, comps.format).then([&cf] (sstables::shared_sstable sst) mutable {
             if (sst) {
-                cf.load_sstable(sst);
-                return cf.get_row_cache().invalidate();
+                return with_semaphore(cf._cache_update_sem, 1, [&cf, sst] {
+                    cf.load_sstable(sst);
+                    return cf.get_row_cache().invalidate();
+                });
             }
             return make_ready_future<>();
         });
@@ -3914,6 +3916,7 @@ future<db::replay_position> column_family::discard_sstables(db_clock::time_point
     assert(_compaction_disabled > 0);
 
     return with_lock(_sstables_lock.for_read(), [this, truncated_at] {
+      return with_semaphore(_cache_update_sem, 1, [this] () mutable {
         db::replay_position rp;
         auto gc_trunc = to_gc_clock(truncated_at);
 
@@ -3938,6 +3941,7 @@ future<db::replay_position> column_family::discard_sstables(db_clock::time_point
                 return make_ready_future<db::replay_position>(rp);
             }).finally([remove] {}); // keep the objects alive until here.
         });
+      });
     });
 }
 
