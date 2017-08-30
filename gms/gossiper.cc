@@ -508,26 +508,12 @@ void gossiper::do_status_check() {
 
         // check if this is a fat client. fat clients are removed automatically from
         // gossip after FatClientTimeout.  Do not remove dead states here.
-        if (is_gossip_only_member(endpoint) && !_just_removed_endpoints.count(endpoint)) {
-            auto diff = now - ep_state.get_update_timestamp();
-            auto timeout = fat_client_timeout;
-            auto status = get_gossip_status(ep_state);
-            if (status == sstring(versioned_value::STATUS_BOOTSTRAPPING)) {
-                // The bootstrapping node will be a gossip only member, until
-                // the streaming finishes and the node becomes NORMAL state.
-                // If during this time, the bootstrapping node is overwhelmed
-                // with streaming, it is possible the node will delay the
-                // update the gossip heartbeat. Be forgiving for the
-                // bootstrapping node and do not remove it from gossip too
-                // fast. Otherwise, streaming rpc verbs will not be resent
-                // becasue the node is not in gossip membership anymore.
-                timeout = 10 * fat_client_timeout;
-            }
-            if (diff > timeout) {
-                logger.info("FatClient {} has been silent for {}ms, removing from gossip, status = {}", endpoint, timeout.count(), status);
-                remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
-                evict_from_membership(endpoint); // can get rid of the state immediately
-            }
+        if (is_gossip_only_member(endpoint)
+            && !_just_removed_endpoints.count(endpoint)
+            && ((now - ep_state.get_update_timestamp()) > fat_client_timeout)) {
+            logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
+            remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
+            evict_from_membership(endpoint); // can get rid of the state immediately
         }
 
         // check for dead state removal
