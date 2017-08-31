@@ -276,6 +276,19 @@ future<> consume(mutation_reader& reader, Consumer consumer) {
     });
 }
 
+/// A partition_presence_checker quickly returns whether a key is known not to exist
+/// in a data source (it may return false positives, but not false negatives).
+enum class partition_presence_checker_result {
+    definitely_doesnt_exist,
+    maybe_exists
+};
+using partition_presence_checker = std::function<partition_presence_checker_result (const dht::decorated_key& key)>;
+
+inline
+partition_presence_checker make_default_partition_presence_checker() {
+    return [] (const dht::decorated_key&) { return partition_presence_checker_result::maybe_exists; };
+}
+
 // mutation_source represents source of data in mutation form. The data source
 // can be queried multiple times and in parallel. For each query it returns
 // independent mutation_reader.
@@ -375,20 +388,6 @@ struct move_constructor_disengages<mutation_source> {
     enum { value = true };
 };
 using mutation_source_opt = optimized_optional<mutation_source>;
-
-
-/// A partition_presence_checker quickly returns whether a key is known not to exist
-/// in a data source (it may return false positives, but not false negatives).
-enum class partition_presence_checker_result {
-    definitely_doesnt_exist,
-    maybe_exists
-};
-using partition_presence_checker = std::function<partition_presence_checker_result (const dht::decorated_key& key)>;
-
-inline
-partition_presence_checker make_default_partition_presence_checker() {
-    return [] (const dht::decorated_key&) { return partition_presence_checker_result::maybe_exists; };
-}
 
 template<typename Consumer>
 future<stop_iteration> do_consume_streamed_mutation_flattened(streamed_mutation& sm, Consumer& c)
