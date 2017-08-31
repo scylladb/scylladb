@@ -702,6 +702,7 @@ void row_cache::populate(const mutation& m, const previous_entry_pointer* previo
                 m.schema(), m.decorated_key(), m.partition());
         upgrade_entry(*entry);
         _tracker.insert(*entry);
+        entry->set_continuous(i->continuous());
         return _partitions.insert(i, *entry);
     }, [&] (auto i) {
         throw std::runtime_error(sprint("cache already contains entry for {}", m.key()));
