@@ -406,7 +406,7 @@ private:
     future<> do_update(memtable& m, Updater func);
 public:
     ~row_cache();
-    row_cache(schema_ptr, snapshot_source, cache_tracker&);
+    row_cache(schema_ptr, snapshot_source, cache_tracker&, is_continuous = is_continuous::no);
     row_cache(row_cache&&) = default;
     row_cache(const row_cache&) = delete;
     row_cache& operator=(row_cache&&) = default;

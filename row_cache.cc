@@ -931,16 +931,17 @@ void row_cache::invalidate_unwrapped(const dht::partition_range& range) {
     });
 }
 
-row_cache::row_cache(schema_ptr s, snapshot_source src, cache_tracker& tracker)
+row_cache::row_cache(schema_ptr s, snapshot_source src, cache_tracker& tracker, is_continuous cont)
     : _tracker(tracker)
     , _schema(std::move(s))
     , _partitions(cache_entry::compare(_schema))
     , _underlying(src())
     , _snapshot_source(std::move(src))
 {
-    with_allocator(_tracker.allocator(), [this] {
+    with_allocator(_tracker.allocator(), [this, cont] {
         cache_entry* entry = current_allocator().construct<cache_entry>(cache_entry::dummy_entry_tag());
         _partitions.insert(*entry);
+        entry->set_continuous(bool(cont));
     });
 }
 
