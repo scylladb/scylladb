@@ -181,7 +181,7 @@ snapshot_source
 column_family::sstables_as_snapshot_source() {
     return snapshot_source([this] () {
         auto sst_set = _sstables;
-        return mutation_source([this, sst_set = std::move(sst_set)] (schema_ptr s,
+        return mutation_source([this, sst_set] (schema_ptr s,
                 const dht::partition_range& r,
                 const query::partition_slice& slice,
                 const io_priority_class& pc,
@@ -189,6 +189,8 @@ column_family::sstables_as_snapshot_source() {
                 streamed_mutation::forwarding fwd,
                 mutation_reader::forwarding fwd_mr) {
             return make_sstable_reader(std::move(s), sst_set, r, slice, pc, std::move(trace_state), fwd, fwd_mr);
+        }, [this, sst_set] {
+            return make_partition_presence_checker(sst_set);
         });
     });
 }
