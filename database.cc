@@ -1420,6 +1420,14 @@ void column_family::trigger_compaction() {
     do_trigger_compaction(); // see below
 }
 
+void column_family::try_trigger_compaction() noexcept {
+    try {
+        trigger_compaction();
+    } catch (...) {
+        dblog.error("Failed to trigger compaction: {}", std::current_exception());
+    }
+}
+
 void column_family::do_trigger_compaction() {
     // But only submit if we're not locked out
     if (!_compaction_disabled) {
