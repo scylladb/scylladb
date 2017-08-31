@@ -309,12 +309,16 @@ class mutation_source {
     // move constructible and save some indirection and allocation.
     // Probably not worth the effort though.
     lw_shared_ptr<func_type> _fn;
+    lw_shared_ptr<std::function<partition_presence_checker()>> _presence_checker_factory;
 private:
     mutation_source() = default;
     explicit operator bool() const { return bool(_fn); }
     friend class optimized_optional<mutation_source>;
 public:
-    mutation_source(func_type fn) : _fn(make_lw_shared<func_type>(std::move(fn))) {}
+    mutation_source(func_type fn, std::function<partition_presence_checker()> pcf = [] { return make_default_partition_presence_checker(); })
+        : _fn(make_lw_shared<func_type>(std::move(fn)))
+        , _presence_checker_factory(make_lw_shared(std::move(pcf)))
+    { }
     // For sources which don't care about the mutation_reader::forwarding flag (always fast forwardable)
     mutation_source(std::function<mutation_reader(schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr, streamed_mutation::forwarding)> fn)
         : mutation_source([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr tr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
@@ -354,6 +358,10 @@ public:
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const
     {
         return (*_fn)(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+    }
+
+    partition_presence_checker make_partition_presence_checker() {
+        return (*_presence_checker_factory)();
     }
 };
 
