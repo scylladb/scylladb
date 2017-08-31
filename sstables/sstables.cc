@@ -59,6 +59,7 @@
 #include "binary_search.hh"
 
 #include "checked-file-impl.hh"
+#include "integrity_checked_file_impl.hh"
 #include "service/storage_service.hh"
 
 thread_local disk_error_signal_type sstable_read_error;
@@ -75,16 +76,19 @@ seastar::shared_ptr<write_monitor> default_write_monitor() {
     return monitor;
 }
 
-future<file> new_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags) {
-    return open_checked_file_dma(error_handler, name, flags).handle_exception([name] (auto ep) {
-        sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
-        return make_exception_future<file>(ep);
-    });
+static future<file> open_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags,
+        file_open_options options) {
+    if (get_config().enable_sstable_data_integrity_check()) {
+        return open_integrity_checked_file_dma(name, flags, options).then([&error_handler] (auto f) {
+            return make_checked_file(error_handler, std::move(f));
+        });
+    }
+    return open_checked_file_dma(error_handler, name, flags, options);
 }
 
 future<file> new_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags,
-        file_open_options options) {
-    return open_checked_file_dma(error_handler, name, flags, options).handle_exception([name] (auto ep) {
+        file_open_options options = {}) {
+    return open_sstable_component_file(error_handler, name, flags, options).handle_exception([name] (auto ep) {
         sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
         return make_exception_future<file>(ep);
     });

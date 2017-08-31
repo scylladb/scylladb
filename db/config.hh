@@ -776,6 +776,8 @@ public:
     val(large_memory_allocation_warning_threshold, size_t, size_t(1) << 20, Used, "Warn about memory allocations above this size; set to zero to disable") \
     val(enable_deprecated_partitioners, bool, false, Used, "Enable the byteordered and murmurs partitioners. These partitioners are deprecated and will be removed in a future version.") \
     val(enable_keyspace_column_family_metrics, bool, false, Used, "Enable per keyspace and per column family metrics reporting") \
+    val(enable_sstable_data_integrity_check, bool, false, Used, "Enable interposer which checks for integrity of every sstable write." \
+        " Performance is affected to some extent as a result. Useful to help debugging problems that may arise at another layers.") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \
