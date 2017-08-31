@@ -97,9 +97,7 @@ struct table {
         prev_mt->mark_flushed(flushed->as_data_source());
         underlying.apply(flushed);
         test_log.trace("updating cache");
-        cache.update(*prev_mt, [] (const dht::decorated_key& dk) {
-            return partition_presence_checker_result::maybe_exists;
-        }).get();
+        cache.update(*prev_mt).get();
         test_log.trace("flush done");
         prev_mt = {};
     }

@@ -776,8 +776,9 @@ future<> row_cache::do_update(memtable& m, Updater updater) {
             _prev_snapshot_pos = {};
             _prev_snapshot = {};
         });
+        partition_presence_checker is_present = _prev_snapshot->make_partition_presence_checker();
         while (!m.partitions.empty()) {
-            with_allocator(_tracker.allocator(), [this, &m, &updater] () {
+            with_allocator(_tracker.allocator(), [&] () {
                 unsigned quota = 30;
                 auto cmp = cache_entry::compare(_schema);
                 {
@@ -795,7 +796,7 @@ future<> row_cache::do_update(memtable& m, Updater updater) {
                             memtable_entry& mem_e = *i;
                             // FIXME: Optimize knowing we lookup in-order.
                             auto cache_i = _partitions.lower_bound(mem_e.key(), cmp);
-                            updater(cache_i, mem_e);
+                            updater(cache_i, mem_e, is_present);
                             i = m.partitions.erase(i);
                             current_allocator().destroy(&mem_e);
                             --quota;
@@ -826,8 +827,9 @@ future<> row_cache::do_update(memtable& m, Updater updater) {
     });
 }
 
-future<> row_cache::update(memtable& m, partition_presence_checker is_present) {
-    return do_update(m, [this, is_present = std::move(is_present)] (row_cache::partitions_type::iterator cache_i, memtable_entry& mem_e) mutable {
+future<> row_cache::update(memtable& m) {
+    return do_update(m, [this] (row_cache::partitions_type::iterator cache_i, memtable_entry& mem_e,
+            partition_presence_checker& is_present) mutable {
         // If cache doesn't contain the entry we cannot insert it because the mutation may be incomplete.
         // FIXME: keep a bitmap indicating which sstables we do cover, so we don't have to
         //        search it.
@@ -848,7 +850,8 @@ future<> row_cache::update(memtable& m, partition_presence_checker is_present) {
 }
 
 future<> row_cache::update_invalidating(memtable& m) {
-    return do_update(m, [this] (row_cache::partitions_type::iterator cache_i, memtable_entry& mem_e) {
+    return do_update(m, [this] (row_cache::partitions_type::iterator cache_i, memtable_entry& mem_e,
+            partition_presence_checker& is_present) {
         if (cache_i != partitions_end() && cache_i->key().equal(*_schema, mem_e.key())) {
             // FIXME: Invalidate only affected row ranges.
             // This invalidates all row ranges and the static row, leaving only the partition tombstone continuous,

@@ -802,12 +802,9 @@ void column_family::add_sstable(lw_shared_ptr<sstables::sstable> sstable, std::v
 }
 
 future<>
-column_family::update_cache(memtable& m, lw_shared_ptr<sstables::sstable_set> old_sstables) {
+column_family::update_cache(memtable& m) {
     if (_config.enable_cache) {
-       // be careful to use the old sstable list, since the new one will hit every
-       // mutation in m.
-       return _cache.update(m, make_partition_presence_checker(std::move(old_sstables)));
-
+       return _cache.update(m);
     } else {
        return m.clear_gently();
     }
@@ -1016,19 +1013,12 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstabl
         try {
             ret.get();
 
-            // Cache updates are serialized because partition_presence_checker
-            // is using data source snapshot created before the update starts, so that
-            // we can use incremental_selector. If updates were done concurrently we
-            // could mispopulate due to stale presence information.
             return with_semaphore(_cache_update_sem, 1, [this, old, newtab] {
-                // We must add sstable before we call update_cache(), because
-                // memtable's data after moving to cache can be evicted at any time.
-                auto old_sstables = _sstables;
                 add_sstable(newtab, {engine().cpu_id()});
                 old->mark_flushed(newtab->as_mutation_source());
 
                 trigger_compaction();
-                return update_cache(*old, std::move(old_sstables));
+                return update_cache(*old);
             }).then_wrapped([this, newtab, old] (future<> f) {
                 try {
                     f.get();

@@ -452,7 +452,7 @@ private:
     lw_shared_ptr<memtable> new_memtable();
     lw_shared_ptr<memtable> new_streaming_memtable();
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
-    future<> update_cache(memtable&, lw_shared_ptr<sstables::sstable_set> old_sstables);
+    future<> update_cache(memtable&);
     struct merge_comparator;
 
     // update the sstable generation, making sure that new new sstables don't overwrite this one.

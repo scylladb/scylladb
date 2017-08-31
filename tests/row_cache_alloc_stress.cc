@@ -124,10 +124,6 @@ int main(int argc, char** argv) {
             // When this assertion fails, increase amount of memory
             assert(mt->occupancy().used_space() < reclaimable_memory());
 
-            auto checker = [](auto) {
-                return partition_presence_checker_result::maybe_exists;
-            };
-
             std::deque<dht::decorated_key> cache_stuffing;
             auto fill_cache_to_the_top = [&] {
                 std::cout << "Filling up memory with evictable data\n";
@@ -185,7 +181,7 @@ int main(int argc, char** argv) {
 
             fragment_free_space();
 
-            cache.update(*mt, checker).get();
+            cache.update(*mt).get();
 
             stuffing.clear();
             cache_stuffing.clear();

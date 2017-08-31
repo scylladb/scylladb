@@ -434,7 +434,7 @@ public:
     // has just been flushed to the underlying data source.
     // The memtable can be queried during the process, but must not be written.
     // After the update is complete, memtable is empty.
-    future<> update(memtable&, partition_presence_checker underlying_negative);
+    future<> update(memtable&);
 
     // Like update(), synchronizes cache with an incremental change to the underlying
     // mutation source, but instead of inserting and merging data, invalidates affected ranges.

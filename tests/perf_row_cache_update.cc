@@ -95,12 +95,8 @@ int main(int argc, char** argv) {
                     mt->apply(m);
                 }
 
-                auto checker = [](auto) {
-                    return partition_presence_checker_result::maybe_exists;
-                };
-
                 if (update_cache) {
-                    cache.update(*mt, checker).get();
+                    cache.update(*mt).get();
                 }
             }, 5, 1);
         });
