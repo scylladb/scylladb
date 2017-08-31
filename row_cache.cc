@@ -729,6 +729,30 @@ row_cache::snapshot_and_phase row_cache::snapshot_of(dht::ring_position_view pos
     return {*_prev_snapshot, _underlying_phase - 1};
 }
 
+void row_cache::invalidate_sync(memtable& m) noexcept {
+    with_allocator(_tracker.allocator(), [&m, this] () {
+        logalloc::reclaim_lock _(_tracker.region());
+        bool blow_cache = false;
+        // Note: clear_and_dispose() ought not to look up any keys, so it doesn't require
+        // with_linearized_managed_bytes(), but invalidate() does.
+        m.partitions.clear_and_dispose([this, deleter = current_deleter<memtable_entry>(), &blow_cache] (memtable_entry* entry) {
+            with_linearized_managed_bytes([&] {
+                try {
+                    invalidate_locked(entry->key());
+                } catch (...) {
+                    blow_cache = true;
+                }
+                deleter(entry);
+            });
+        });
+        if (blow_cache) {
+            // We failed to invalidate the key, presumably due to with_linearized_managed_bytes()
+            // running out of memory.  Recover using clear_now(), which doesn't throw.
+            clear_now();
+        }
+    });
+}
+
 row_cache::phase_type row_cache::phase_of(dht::ring_position_view pos) {
     dht::ring_position_less_comparator less(*_schema);
     if (!_prev_snapshot_pos || less(pos, *_prev_snapshot_pos)) {
@@ -745,29 +769,7 @@ future<> row_cache::do_update(memtable& m, Updater updater) {
     attr.scheduling_group = &_update_thread_scheduling_group;
     STAP_PROBE(scylla, row_cache_update_start);
     auto t = seastar::thread(attr, [this, &m, updater = std::move(updater)] () mutable {
-        auto cleanup = defer([&] {
-            with_allocator(_tracker.allocator(), [&m, this] () {
-                logalloc::reclaim_lock _(_tracker.region());
-                bool blow_cache = false;
-                // Note: clear_and_dispose() ought not to look up any keys, so it doesn't require
-                // with_linearized_managed_bytes(), but invalidate() does.
-                m.partitions.clear_and_dispose([this, deleter = current_deleter<memtable_entry>(), &blow_cache] (memtable_entry* entry) {
-                  with_linearized_managed_bytes([&] {
-                   try {
-                    invalidate_locked(entry->key());
-                   } catch (...) {
-                    blow_cache = true;
-                   }
-                   deleter(entry);
-                  });
-                });
-                if (blow_cache) {
-                    // We failed to invalidate the key, presumably due to with_linearized_managed_bytes()
-                    // running out of memory.  Recover using clear_now(), which doesn't throw.
-                    clear_now();
-                }
-            });
-        });
+        auto cleanup = defer([&] { invalidate_sync(m); });
         auto permit = get_units(_update_sem, 1).get0();
         ++_underlying_phase;
         _prev_snapshot = std::exchange(_underlying, _snapshot_source());

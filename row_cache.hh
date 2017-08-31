@@ -404,6 +404,9 @@ private:
     // All memtable entries will be removed.
     template <typename Updater>
     future<> do_update(memtable& m, Updater func);
+
+    // Clears given memtable invalidating any affected cache elements.
+    void invalidate_sync(memtable&) noexcept;
 public:
     ~row_cache();
     row_cache(schema_ptr, snapshot_source, cache_tracker&, is_continuous = is_continuous::no);
