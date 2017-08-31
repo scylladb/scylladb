@@ -75,15 +75,8 @@ seastar::shared_ptr<write_monitor> default_write_monitor() {
     return monitor;
 }
 
-future<file> new_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags) {
-    return open_checked_file_dma(error_handler, name, flags).handle_exception([name] (auto ep) {
-        sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
-        return make_exception_future<file>(ep);
-    });
-}
-
 future<file> new_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags,
-        file_open_options options) {
+        file_open_options options = {}) {
     return open_checked_file_dma(error_handler, name, flags, options).handle_exception([name] (auto ep) {
         sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
         return make_exception_future<file>(ep);
