@@ -191,7 +191,7 @@ public:
     mutation_source as_data_source();
 
     bool empty() const { return partitions.empty(); }
-    void mark_flushed(mutation_source);
+    void mark_flushed(mutation_source) noexcept;
     bool is_flushed() const;
     void on_detach_from_region_group() noexcept;
     void revert_flushed_memory() noexcept;

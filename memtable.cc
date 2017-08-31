@@ -528,7 +528,7 @@ memtable_entry::memtable_entry(memtable_entry&& o) noexcept
     container_type::node_algorithms::init(o._link.this_ptr());
 }
 
-void memtable::mark_flushed(mutation_source underlying) {
+void memtable::mark_flushed(mutation_source underlying) noexcept {
     _underlying = std::move(underlying);
 }
 
