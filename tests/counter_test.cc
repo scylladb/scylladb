@@ -521,3 +521,39 @@ SEASTAR_TEST_CASE(test_sanitize_corrupted_cells) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_counter_id_order_1_7_4) {
+    return seastar::async([] {
+        const char* ids[] = {
+            "e41baa44-b178-48fc-ab75-11e9664409be",
+            "f2ad405d-1658-484f-9418-6314ae2cedcf",
+            "ffeeddcc-aa99-8877-6655-443322110000",
+            "ffeeddcc-aa99-8877-6655-443322110001",
+            "ffeeddcc-aa99-8878-6655-443322110000",
+            "00000000-0000-0000-0000-000000000000",
+            "00000000-0000-0000-0000-000000000001",
+            "0290003c-977e-397c-ac3e-fdfdc01d626b",
+            "0290003c-987e-397c-ac3e-fdfdc01d626b",
+            "0eeeddcc-aa99-8877-6655-443322110000",
+            "0feeddcc-aa99-8877-8655-443322110000",
+            "0feeddcc-aa99-8877-6655-443322110000",
+            "3bf296f0-6e46-4481-87dc-ca53e61a8f08",
+        };
+
+        auto counter_ids = boost::copy_range<std::vector<counter_id>>(
+            ids | boost::adaptors::transformed([] (auto id) {
+                return counter_id(utils::UUID(id));
+            })
+        );
+
+        counter_id::less_compare_1_7_4 cmp;
+        for (auto it = counter_ids.begin(); it != counter_ids.end(); ++it) {
+            for (auto it2 = counter_ids.begin(); it2 != it; ++it2) {
+                BOOST_REQUIRE_MESSAGE(cmp(*it2, *it), *it2 << " expected to be less than " << *it);
+            }
+            for (auto it2 = std::next(it); it2 != counter_ids.end(); ++it2) {
+                BOOST_REQUIRE_MESSAGE(cmp(*it, *it2), *it << " expected to be less than " << *it2);
+            }
+        }
+    });
+}
