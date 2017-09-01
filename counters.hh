@@ -59,6 +59,11 @@ public:
         return !(*this == other);
     }
 public:
+    // (Wrong) Counter ID ordering used by Scylla 1.7.4 and earlier.
+    struct less_compare_1_7_4 {
+        bool operator()(const counter_id& a, const counter_id& b) const;
+    };
+public:
     static counter_id local();
 
     // For tests.

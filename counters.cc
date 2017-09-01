@@ -29,6 +29,15 @@ counter_id counter_id::local()
     return counter_id(service::get_local_storage_service().get_local_id());
 }
 
+bool counter_id::less_compare_1_7_4::operator()(const counter_id& a, const counter_id& b) const
+{
+    if (a._most_significant != b._most_significant) {
+        return a._most_significant < b._most_significant;
+    } else {
+        return a._least_significant < b._least_significant;
+    }
+}
+
 std::ostream& operator<<(std::ostream& os, const counter_id& id) {
     return os << id.to_uuid();
 }
