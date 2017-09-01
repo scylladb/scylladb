@@ -242,6 +242,7 @@ private:
                 query::full_partition_range,
                 query::full_slice,
                 service::get_local_compaction_priority(),
+                no_resource_tracking(),
                 nullptr,
                 ::streamed_mutation::forwarding::no,
                 ::mutation_reader::forwarding::no);

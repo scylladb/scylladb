@@ -28,6 +28,8 @@
 #include "consumer.hh"
 #include "sstables/types.hh"
 
+class reader_resource_tracker;
+
 // sstables::data_consume_row feeds the contents of a single row into a
 // row_consumer object:
 //
@@ -93,6 +95,9 @@ public:
 
     // Under which priority class to place I/O coming from this consumer
     virtual const io_priority_class& io_priority() = 0;
+
+    // The restriction that applies to this consumer
+    virtual reader_resource_tracker resource_tracker() = 0;
 
     virtual ~row_consumer() { }
 };
