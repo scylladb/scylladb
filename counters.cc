@@ -42,6 +42,23 @@ std::ostream& operator<<(std::ostream& os, counter_cell_view ccv) {
     return os << "{counter_cell timestamp: " << ccv.timestamp() << " shards: {" << ::join(", ", ccv.shards()) << "}}";
 }
 
+void counter_cell_builder::do_sort_and_remove_duplicates()
+{
+    boost::range::sort(_shards, [] (auto& a, auto& b) { return a.id() < b.id(); });
+
+    std::vector<counter_shard> new_shards;
+    new_shards.reserve(_shards.size());
+    for (auto& cs : _shards) {
+        if (new_shards.empty() || new_shards.back().id() != cs.id()) {
+            new_shards.emplace_back(cs);
+        } else {
+            new_shards.back().apply(cs);
+        }
+    }
+    _shards = std::move(new_shards);
+    _sorted = true;
+}
+
 static bool apply_in_place(atomic_cell_or_collection& dst, atomic_cell_or_collection& src)
 {
     auto dst_ccmv = counter_cell_mutable_view(dst.as_mutable_atomic_cell());
