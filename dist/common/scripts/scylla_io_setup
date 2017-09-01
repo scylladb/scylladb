@@ -19,7 +19,6 @@
 
 import os
 import re
-from string import atoi
 import scylla_util
 import subprocess
 import argparse
@@ -42,7 +41,7 @@ if __name__ == "__main__":
             if idata.instance_class() == "i3":
                 sysfs_file = "/sys/block/%s/queue/nr_requests"
                 max_seastar_shard_req = 128
-                max_sysfs_shard_req = sum([ atoi(file(sysfs_file % x).readline().strip()) for x in idata.ephemeral_disks() ])
+                max_sysfs_shard_req = sum([ int(file(sysfs_file % x).readline().strip()) for x in idata.ephemeral_disks() ])
                 # obtained running iotune multiple times against a single i3 disk.
                 max_iotune_disk = 192 * len(idata.ephemeral_disks())
                 nr_reqs = min(max_seastar_shard_req * cpudata.nr_shards(), max_sysfs_shard_req, max_iotune_disk)

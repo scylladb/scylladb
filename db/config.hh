@@ -27,16 +27,12 @@
 #include <unordered_map>
 #include "core/sstring.hh"
 #include "core/future.hh"
+#include "util/program-options.hh"
 #include "seastarx.hh"
 
 namespace seastar { class file; }
 
 namespace db {
-
-class string_map : public std::unordered_map<sstring, sstring> {
-public:
-    using std::unordered_map<sstring, sstring>::unordered_map;
-};
 
 /*
  * This type is not use, and probably never will be.
@@ -46,17 +42,18 @@ public:
 struct seed_provider_type {
     seed_provider_type() = default;
     seed_provider_type(sstring n,
-            std::initializer_list<string_map::value_type> opts =
+            std::initializer_list<program_options::string_map::value_type> opts =
                     { })
             : class_name(std::move(n)), parameters(std::move(opts)) {
     }
     sstring class_name;
-    string_map parameters;
+    program_options::string_map parameters;
 };
 
 class config {
 public:
     enum class value_status {
+        UsedFromSeastar,
         Used,
         Unused,
         Invalid,
@@ -112,11 +109,11 @@ public:
     // Throws exception if experimental feature is disabled.
     void check_experimental(const sstring& what) const;
 
-    boost::program_options::options_description
-    get_options_description();
+    boost::program_options::options_description_easy_init
+    add_options(boost::program_options::options_description&);
 
-    boost::program_options::options_description_easy_init&
-    add_options(boost::program_options::options_description_easy_init&);
+    /* Apply the value of Seastar options to the configuration. These are marked `UsedFromSeastar`. */
+    void apply_seastar_options(boost::program_options::variables_map& vars);
 
     void read_from_yaml(const sstring&);
     void read_from_yaml(const char *);
@@ -132,7 +129,7 @@ public:
      *         according the environment variables definitions.
      */
     static boost::filesystem::path get_conf_dir();
-    using string_map = db::string_map;
+    using string_map = program_options::string_map;
     typedef std::vector<sstring> string_list;
     using seed_provider_type = db::seed_provider_type;
 
@@ -151,6 +148,8 @@ public:
      *  member: is the property name -> config member name
      *  type:   is the value type (bool, uint32_t etc)
      *  status: is the current _usage_ of the opt. I.e. if you actually use the value, set it to "Used".
+     *          A value marked "UsedFromSeastar" is a configuration value that is assigned based on a Seastar-defined
+     *          command-line interface option.
      *          Most values are set to "Unused", as in "will probably have an effect eventually".
      *          Values set to "Invalid" have no meaning/usage in scylla, and should (and will currently)
      *          be signaled to a user providing a config with them, that these settings are pointless.
@@ -736,13 +735,10 @@ public:
     val(ssl_storage_port, uint32_t, 7001, Used,     \
             "The SSL port for encrypted communication. Unused unless enabled in encryption_options."  \
     )                                                   \
-    val(default_log_level, sstring, "info", Used, \
-            "Default log level for log messages.  Valid values are trace, debug, info, warn, error.") \
-    val(logger_log_level, string_map, /* none */, Used,\
-            "map of logger name to log level.  Valid values are trace, debug, info, warn, error.  " \
-            "Use --help-loggers for a list of logger names") \
-    val(log_to_stdout, bool, true, Used, "Send log output to stdout") \
-    val(log_to_syslog, bool, false, Used, "Send log output to syslog") \
+    val(default_log_level, sstring, /* none */, UsedFromSeastar, "") \
+    val(logger_log_level, string_map, /* none */, UsedFromSeastar, "") \
+    val(log_to_stdout, bool, /* none */, UsedFromSeastar, "") \
+    val(log_to_syslog, bool, /* none */, UsedFromSeastar, "") \
     val(enable_in_memory_data_store, bool, false, Used, "Enable in memory mode (system tables are always persisted)") \
     val(enable_cache, bool, true, Used, "Enable cache") \
     val(enable_commitlog, bool, true, Used, "Enable commitlog") \
@@ -777,6 +773,11 @@ public:
     val(virtual_dirty_soft_limit, double, 0.6, Used, "Soft limit of virtual dirty memory expressed as a portion of the hard limit") \
     val(sstable_summary_ratio, double, 0.0005, Used, "Enforces that 1 byte of summary is written for every N (2000 by default) " \
         "bytes written to data file. Value must be between 0 and 1.") \
+    val(large_memory_allocation_warning_threshold, size_t, size_t(1) << 20, Used, "Warn about memory allocations above this size; set to zero to disable") \
+    val(enable_deprecated_partitioners, bool, false, Used, "Enable the byteordered and murmurs partitioners. These partitioners are deprecated and will be removed in a future version.") \
+    val(enable_keyspace_column_family_metrics, bool, false, Used, "Enable per keyspace and per column family metrics reporting") \
+    val(enable_sstable_data_integrity_check, bool, false, Used, "Enable interposer which checks for integrity of every sstable write." \
+        " Performance is affected to some extent as a result. Useful to help debugging problems that may arise at another layers.") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \

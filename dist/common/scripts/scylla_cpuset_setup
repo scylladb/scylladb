@@ -2,6 +2,8 @@
 #
 #  Copyright (C) 2016 ScyllaDB
 
+. /usr/lib/scylla/scylla_lib.sh
+
 print_usage() {
     echo "scylla_cpuset_setup --cpuset 1-7 --smp 7"
     echo "  --cpuset   CPUs to use (in cpuset(7) format; default: all))"
@@ -40,5 +42,8 @@ fi
 if [ "$SMP" != "" ]; then
     OUT="$OUT--smp $SMP "
 fi
+# /etc/scylla.d/perftune.yaml is generated based on the contents of /etc/scylla.d/cpuset.conf therefore we
+# should reset /etc/scylla.d/perftune.yaml when we are going to overwrite /etc/scylla.d/cpuset.conf
+rm -f /etc/scylla.d/perftune.yaml
 OUT="$OUT\""
 echo $OUT > /etc/scylla.d/cpuset.conf

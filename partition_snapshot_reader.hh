@@ -41,9 +41,17 @@ inline void maybe_merge_versions(lw_shared_ptr<partition_snapshot>& snp,
     with_allocator(lsa_region.allocator(), [&snp, &lsa_region, &read_section] {
         return with_linearized_managed_bytes([&snp, &lsa_region, &read_section] {
             try {
-                read_section(lsa_region, [&snp] {
-                    snp->merge_partition_versions();
-                });
+                // Allocating sections require the region to be reclaimable
+                // which means that they cannot be nested.
+                // It is, however, possible, that if the snapshot is taken
+                // inside an allocating section and then an exception is thrown
+                // this function will be called to clean up even though we
+                // still will be in the context of the allocating section.
+                if (lsa_region.reclaiming_enabled()) {
+                    read_section(lsa_region, [&snp] {
+                        snp->merge_partition_versions();
+                    });
+                }
             } catch (...) { }
             snp = {};
         });

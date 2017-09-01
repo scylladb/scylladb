@@ -46,6 +46,51 @@ verify_args() {
     fi
 }
 
+#
+# check_cpuset_conf <NIC name>
+#
+get_tune_mode() {
+    local nic=$1
+
+    # if cpuset.conf doesn't exist use the default mode
+    [[ ! -e '/etc/scylla.d/cpuset.conf' ]] && return
+
+    local cur_cpuset=`cat /etc/scylla.d/cpuset.conf | cut -d "\"" -f2- | cut -d" " -f2`
+    local mq_cpuset=`/usr/lib/scylla/perftune.py --tune net --nic "$nic" --mode mq --get-cpu-mask | /usr/lib/scylla/hex2list.py`
+    local sq_cpuset=`/usr/lib/scylla/perftune.py --tune net --nic "$nic" --mode sq --get-cpu-mask | /usr/lib/scylla/hex2list.py`
+    local sq_split_cpuset=`/usr/lib/scylla/perftune.py --tune net --nic "$nic" --mode sq_split --get-cpu-mask | /usr/lib/scylla/hex2list.py`
+    local tune_mode=""
+
+    case "$cur_cpuset" in
+        "$mq_cpuset")
+            tune_mode="--mode mq"
+            ;;
+        "$sq_cpuset")
+            tune_mode="--mode sq"
+            ;;
+        "$sq_split_cpuset")
+            tune_mode="--mode sq_split"
+            ;;
+    esac
+
+    # if cpuset is something different from what we expect - use the default mode
+    echo "$tune_mode"
+}
+
+#
+# create_perftune_conf [<NIC name>]
+#
+create_perftune_conf() {
+    local nic=$1
+    [[ -z "$nic" ]] && nic='eth0'
+
+    # if exists - do nothing
+    [[ -e '/etc/scylla.d/perftune.yaml' ]] && return
+
+    local mode=`get_tune_mode "$nic"`
+    /usr/lib/scylla/perftune.py --tune net --nic "$nic" $mode --dump-options-file > /etc/scylla.d/perftune.yaml
+}
+
 . /etc/os-release
 if is_debian_variant || is_gentoo_variant; then
     SYSCONFIG=/etc/default

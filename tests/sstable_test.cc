@@ -1270,14 +1270,13 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
 
         sstables::compression c;
         c.set_compressor(compressor::lz4);
-        c.chunk_len = opts.buffer_size;
-        c.data_len = 0;
+        c.set_uncompressed_chunk_length(opts.buffer_size);
         c.init_full_checksum();
 
         // Make sure that amount of written data is a multiple of chunk_len so that we hit #2143.
-        temporary_buffer<char> buf1(c.chunk_len);
+        temporary_buffer<char> buf1(c.uncompressed_chunk_length());
         strcpy(buf1.get_write(), "buf1");
-        temporary_buffer<char> buf2(c.chunk_len);
+        temporary_buffer<char> buf2(c.uncompressed_chunk_length());
         strcpy(buf2.get_write(), "buf2");
 
         size_t uncompressed_size = 0;

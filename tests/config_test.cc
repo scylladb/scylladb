@@ -823,23 +823,6 @@ inline std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os
 }
 }
 
-namespace db {
-
-template<typename... Args>
-inline std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os, const string_map& v) {
-    os << "{";
-    int n = 0;
-    for (auto& p : v) {
-        if (++n != 0) {
-            os << ", ";
-        }
-        os << "{" << p.first << ", " << p.second << "}";
-    }
-    return os << "}";
-}
-
-}
-
 SEASTAR_TEST_CASE(test_parse_yaml) {
     config cfg;
 
@@ -872,7 +855,7 @@ SEASTAR_TEST_CASE(test_parse_yaml) {
     BOOST_CHECK_EQUAL(cfg.seed_provider.source(), config::config_source::SettingsFile);
     BOOST_CHECK_EQUAL(cfg.seed_provider().class_name, "org.apache.cassandra.locator.SimpleSeedProvider");
     BOOST_CHECK_EQUAL(cfg.seed_provider().parameters,
-            db::config::string_map({{"seeds", "127.0.0.1"}})
+            seastar::program_options::string_map({{"seeds", "127.0.0.1"}})
     );
 
     return make_ready_future<>();

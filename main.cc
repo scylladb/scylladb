@@ -53,6 +53,8 @@
 #include "core/prometheus.hh"
 #include "message/messaging_service.hh"
 #include <seastar/net/dns.hh>
+#include <seastar/core/memory.hh>
+#include <seastar/util/log-cli.hh>
 #include "service/cache_hitrate_calculator.hh"
 
 thread_local disk_error_signal_type commit_error;
@@ -68,22 +70,12 @@ static boost::filesystem::path relative_conf_dir(boost::filesystem::path path) {
     return conf_dir / path;
 }
 
-// Note: would be neat if something like this was in config::string_map directly
-// but that cruds up the YAML/boost integration so until I want to spend hairpulling
-// time with that, this is an acceptable helper
-template<typename K, typename V, typename KK, typename VV = V>
-static V get_or_default(const std::unordered_map<K, V>& src, const KK& key, const VV& def = V()) {
-    auto i = src.find(key);
-    if (i != src.end()) {
-        return i->second;
-    }
-    return def;
-}
-
 static future<>
 read_config(bpo::variables_map& opts, db::config& cfg) {
     using namespace boost::filesystem;
     sstring file;
+
+    cfg.apply_seastar_options(opts);
 
     if (opts.count("options-file") > 0) {
         file = opts["options-file"].as<sstring>();
@@ -97,22 +89,6 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
         return make_exception_future<>(ep);
     });
 }
-
-static void do_help_loggers() {
-    print("Available loggers:\n");
-    for (auto&& name : logging::logger_registry().get_all_logger_names()) {
-        print("    %s\n", name);
-    }
-}
-
-static logging::log_level to_loglevel(sstring level) {
-    try {
-        return boost::lexical_cast<logging::log_level>(std::string(level));
-    } catch(boost::bad_lexical_cast& e) {
-        throw std::runtime_error("Unknown log level '" + level + "'");
-    }
-}
-
 static future<> disk_sanity(sstring path, bool developer_mode) {
     return check_direct_io_support(path).then([] {
         return make_ready_future<>();
@@ -121,22 +97,6 @@ static future<> disk_sanity(sstring path, bool developer_mode) {
         return make_exception_future<>(ep);
     });
 };
-
-static void apply_logger_settings(sstring default_level, db::config::string_map levels,
-        bool log_to_stdout, bool log_to_syslog) {
-    logging::logger_registry().set_all_loggers_level(to_loglevel(default_level));
-    for (auto&& kv: levels) {
-        auto&& k = kv.first;
-        auto&& v = kv.second;
-        try {
-            logging::logger_registry().set_logger_level(k, to_loglevel(v));
-        } catch(std::out_of_range& e) {
-            throw std::runtime_error("Unknown logger '" + k + "'. Use --help-loggers to list available loggers.");
-        }
-    }
-    logging::logger::set_stdout_enabled(log_to_stdout);
-    logging::logger::set_syslog_enabled(log_to_syslog);
-}
 
 class directories {
 public:
@@ -270,6 +230,13 @@ verify_adequate_memory_per_shard(bool developer_mode) {
     }
 }
 
+class memory_threshold_guard {
+    seastar::memory::scoped_large_allocation_warning_threshold _slawt;
+public:
+    explicit memory_threshold_guard(size_t threshold) : _slawt(threshold)  {}
+    future<> stop() { return make_ready_future<>(); }
+};
+
 int main(int ac, char** av) {
   int return_value = 0;
   try {
@@ -283,15 +250,12 @@ int main(int ac, char** av) {
     app_cfg.name = "Scylla";
     app_cfg.default_task_quota = 500us;
     app_template app(std::move(app_cfg));
-    auto opt_add = app.add_options();
 
     auto cfg = make_lw_shared<db::config>();
-    bool help_loggers = false;
     bool help_version = false;
-    cfg->add_options(opt_add)
+    cfg->add_options(app.get_options_description())
         // TODO : default, always read?
         ("options-file", bpo::value<sstring>(), "configuration file (i.e. <SCYLLA_HOME>/conf/scylla.yaml)")
-        ("help-loggers", bpo::bool_switch(&help_loggers), "print a list of logger names and exit")
         ("version", bpo::bool_switch(&help_version), "print version number and exit")
         ;
 
@@ -312,11 +276,6 @@ int main(int ac, char** av) {
             engine().exit(0);
             return make_ready_future<>();
         }
-        if (help_loggers) {
-            do_help_loggers();
-            engine().exit(1);
-            return make_ready_future<>();
-        }
         print("Scylla version %s starting ...\n", scylla_version());
         auto&& opts = app.configuration();
 
@@ -324,11 +283,6 @@ int main(int ac, char** av) {
         app_metrics.add_group("scylladb", {
             sm::make_gauge("current_version", sm::description("Current ScyllaDB version."), { sm::label_instance("version", scylla_version()), sm::shard_label("") }, [] { return 0; })
         });
-
-        // Do this first once set log applied from command line so for example config
-        // parse can get right log level.
-        apply_logger_settings(cfg->default_log_level(), cfg->logger_log_level(),
-                cfg->log_to_stdout(), cfg->log_to_syslog());
 
         // Check developer mode before even reading the config file, because we may not be
         // able to read it if we need to disable strict dma mode.
@@ -341,13 +295,30 @@ int main(int ac, char** av) {
 
         return seastar::async([cfg, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs, &pctx, &prometheus_server, &return_value, &cf_cache_hitrate_calculator] {
             read_config(opts, *cfg).get();
-            apply_logger_settings(cfg->default_log_level(), cfg->logger_log_level(),
-                    cfg->log_to_stdout(), cfg->log_to_syslog());
+
+            {
+                std::unordered_map<sstring, logging::log_level> logger_levels;
+                log_cli::parse_logger_levels(cfg->logger_log_level(), std::inserter(logger_levels, logger_levels.end()));
+
+                logging::apply_settings(logging::settings{
+                                                    std::move(logger_levels),
+                                                    log_cli::parse_log_level(cfg->default_log_level()),
+                                                    cfg->log_to_stdout(),
+                                                    cfg->log_to_syslog()});
+            }
+
             verify_rlimit(cfg->developer_mode());
             verify_adequate_memory_per_shard(cfg->developer_mode());
             if (cfg->partitioner() != "org.apache.cassandra.dht.Murmur3Partitioner") {
-                startlog.warn("The partitioner {} is deprecated and will be removed in a future version."
-                        "  Contact scylladb-users@googlegroups.com if you are using it in production", cfg->partitioner());
+                if (cfg->enable_deprecated_partitioners()) {
+                    startlog.warn("The partitioner {} is deprecated and will be removed in a future version."
+                            "  Contact scylladb-users@googlegroups.com if you are using it in production", cfg->partitioner());
+                } else {
+                    startlog.error("The partitioner {} is deprecated and will be removed in a future version."
+                            "  To enable it, add \"enable_deprecated_partitioners: true\" to scylla.yaml"
+                            "  Contact scylladb-users@googlegroups.com if you are using it in production", cfg->partitioner());
+                    throw bad_configuration_error();
+                }
             }
             dht::set_global_partitioner(cfg->partitioner(), cfg->murmur3_partitioner_ignore_msb_bits());
             auto start_thrift = cfg->start_rpc();
@@ -597,6 +568,8 @@ int main(int ac, char** av) {
             api::set_server_snitch(ctx).get();
             api::set_server_storage_proxy(ctx).get();
             api::set_server_load_sstable(ctx).get();
+            static seastar::sharded<memory_threshold_guard> mtg;
+            mtg.start(cfg->large_memory_allocation_warning_threshold());
             supervisor::notify("initializing migration manager RPC verbs");
             service::get_migration_manager().invoke_on_all([] (auto& mm) {
                 mm.init_messaging_service();

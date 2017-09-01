@@ -75,13 +75,16 @@ while getopts ":hdncap:q:" opt; do
 done
 
 
-##Check if server is Fedora/Debian release##
-cat /etc/os-release | grep fedora &> /dev/null
+##Check server release (Fedora/Oracle/Debian)##
+cat /etc/os-release | grep -i fedora &> /dev/null
 if [ $? -ne 0 ]; then
-    IS_FEDORA="1"
+    cat /etc/os-release | grep -i oracle &> /dev/null
+    if [ $? -ne 0 ]; then
+        IS_FEDORA="1"
+    fi
 fi
 
-cat /etc/os-release | grep debian &> /dev/null
+cat /etc/os-release | grep -i debian &> /dev/null
 if [ $? -ne 0 ]; then
     IS_DEBIAN="1"
 fi
@@ -91,25 +94,24 @@ if [ "$IS_FEDORA" == "1" ] && [ "$IS_DEBIAN" == "1" ]; then
     exit 222
 fi
 
-##Pass criteria for script execution##
-#Check scylla service#
+##Scylla-server service status##
 echo "--------------------------------------------------"
-echo "Checking Scylla Service"
+echo "Checking Scylla-server Service"
 echo "--------------------------------------------------"
 
 ps -C scylla --no-headers &> /dev/null
 if [ $? -ne 0 ]; then
     SCYLLA_SERVICE="1"
-    echo "ERROR: Scylla is NOT Running"
+    echo "ERROR: Scylla-server is NOT Running"
     echo "Cannot Collect Data Model Info"
     echo "--------------------------------------------------"
 else
-    echo "Scylla Service: OK"
+    echo "Scylla-server Service: OK"
     echo "--------------------------------------------------"
 fi 
 
 
-#Check Scylla-JMX service#
+##Scylla-JMX service status##
 echo "Checking Scylla-JMX Service on Port $JMX_PORT"
 echo "--------------------------------------------------"
 
@@ -121,7 +123,7 @@ if [ $? -ne 0 ]; then
     echo "Use the '-p' Option to Provide the Scylla-JMX Port"
     echo "--------------------------------------------------"
 else
-    echo "JMX Service (nodetool): OK"
+    echo "Scylla-JMX Service (nodetool): OK"
     echo "--------------------------------------------------"
 fi 
 
@@ -152,12 +154,12 @@ mkdir -p $OUTPUT_PATH1 $OUTPUT_PATH2 $OUTPUT_PATH3 $OUTPUT_PATH4 $OUTPUT_PATH5
 #System Checks#
 echo "Collecting System Info"
 echo "--------------------------------------------------"
-cat /etc/os-release > $OUTPUT_PATH1/os-release.txt
+cp -p /etc/os-release $OUTPUT_PATH1
 uname -r > $OUTPUT_PATH1/kernel-release.txt
 lscpu > $OUTPUT_PATH1/cpu-info.txt
 vmstat -s -S M | awk '{$1=$1};1' > $OUTPUT_PATH1/vmstat.txt
 df -Th > $OUTPUT_PATH1/capacity-info.txt && echo "" >> $OUTPUT_PATH1/capacity-info.txt && sudo du -sh /var/lib/scylla/* >> $OUTPUT_PATH1/capacity-info.txt
-cat /proc/mdstat > $OUTPUT_PATH1/raid-conf.txt
+cp -p /proc/mdstat $OUTPUT_PATH1
 for f in `sudo find /sys -name scheduler`; do echo -n "$f: "; cat  $f; done > $OUTPUT_PATH1/io-sched-conf.txt && echo "" >> $OUTPUT_PATH1/io-sched-conf.txt
 for f in `sudo find /sys -name nomerges`; do echo -n "$f: "; cat  $f; done >> $OUTPUT_PATH1/io-sched-conf.txt
 
@@ -166,30 +168,23 @@ for f in `sudo find /sys -name nomerges`; do echo -n "$f: "; cat  $f; done >> $O
 echo "Collecting Scylla Info"
 echo "--------------------------------------------------"
 
+scylla --version > $OUTPUT_PATH2/scylla-version.txt
+cp -p /etc/scylla/* $OUTPUT_PATH2
+ls -ltrh /var/lib/scylla/coredump/ > $OUTPUT_PATH2/coredump-folder.txt
+
 if [ "$IS_FEDORA" == "0" ]; then
     rpm -qa | grep -i scylla > $OUTPUT_PATH2/scylla-pkgs.txt
+    cp -p /etc/sysconfig/scylla-server $OUTPUT_PATH2
 fi
 
 if [ "$IS_DEBIAN" == "0" ]; then
     dpkg -l | grep -i scylla > $OUTPUT_PATH2/scylla-pkgs.txt
+    cp -p /etc/default/scylla-server $OUTPUT_PATH2
 fi
-
-curl -s -X GET "http://localhost:10000/storage_service/scylla_release_version" > $OUTPUT_PATH2/scylla-version.txt && echo "" >> $OUTPUT_PATH2/scylla-version.txt
-cat /etc/scylla/scylla.yaml | grep -v "#" | grep -v "^[[:space:]]*$" > $OUTPUT_PATH2/scylla-yaml.txt
-
-if [ "$IS_FEDORA" == "0" ]; then
-    cat /etc/sysconfig/scylla-server | grep -v "^[[:space:]]*$" > $OUTPUT_PATH2/scylla-server.txt
-fi
-
-if [ "$IS_DEBIAN" == "0" ]; then
-    cat /etc/default/scylla-server | grep -v "^[[:space:]]*$" > $OUTPUT_PATH2/scylla-server.txt
-fi
-
-cat /etc/scylla/cassandra-rackdc.properties | grep -v "#" |grep -v "^[[:space:]]*$" > $OUTPUT_PATH2/multi-DC.txt
-ls -ltrh /var/lib/scylla/coredump/ > $OUTPUT_PATH2/coredump-folder.txt
 
 
 #Scylla Logs#
+echo "--------------------------------------------------"
 echo "Collecting Logs"
 echo "--------------------------------------------------"
 
@@ -256,7 +251,7 @@ for i in `ls -I lo /sys/class/net/`; do echo "--$i"; cat /sys/class/net/$i/queue
 for i in `ls -I lo /sys/class/net/`; do echo "--$i"; cat /sys/class/net/$i/queues/rx-*/rps_flow_cnt; echo ""; done > $OUTPUT_PATH5/rfs-conf.txt
 ps -elf | grep irqbalance > $OUTPUT_PATH5/irqbalance-conf.txt
 sudo sysctl -a > $OUTPUT_PATH5/sysctl.txt 2>&1
-sudo iptables -L > $OUTPUT_PATH5/iptables.txt
+sudo iptables -L -v > $OUTPUT_PATH5/iptables.txt
 netstat -an | grep tcp > $OUTPUT_PATH5/netstat-tcp.txt
 
 
@@ -297,7 +292,7 @@ echo "" >> $REPORT
 
 echo "Host Operating System" >> $REPORT
 echo "---------------------" >> $REPORT
-cat $OUTPUT_PATH1/os-release.txt >> $REPORT
+cat $OUTPUT_PATH1/os-release >> $REPORT
 echo "" >> $REPORT
 echo "" >> $REPORT
 
@@ -327,7 +322,7 @@ echo "" >> $REPORT
 
 echo "RAID Configuration" >> $REPORT
 echo "------------------" >> $REPORT
-cat $OUTPUT_PATH1/raid-conf.txt >> $REPORT
+cat $OUTPUT_PATH1/mdstat >> $REPORT
 echo "" >> $REPORT
 echo "" >> $REPORT
 
@@ -354,7 +349,7 @@ echo "" >> $REPORT
 echo "Configuration files" >> $REPORT
 echo "-------------------" >> $REPORT
 echo "## /etc/scylla/scylla.yaml ##" >> $REPORT
-cat $OUTPUT_PATH2/scylla-yaml.txt >> $REPORT
+cat $OUTPUT_PATH2/scylla.yaml | grep -v "#" | grep -v "^[[:space:]]*$" >> $REPORT
 echo "" >> $REPORT
 echo "" >> $REPORT
 
@@ -366,11 +361,11 @@ if [ "$IS_DEBIAN" == "0" ]; then
     echo "## /etc/default/scylla-server ##" >> $REPORT
 fi
 
-cat $OUTPUT_PATH2/scylla-server.txt >> $REPORT
+cat $OUTPUT_PATH2/scylla-server | grep -v "^[[:space:]]*$" >> $REPORT
 echo "" >> $REPORT
 echo "" >> $REPORT
 echo "## /etc/scylla/cassandra-rackdc.properties ##" >> $REPORT
-cat $OUTPUT_PATH2/multi-DC.txt >> $REPORT
+cat $OUTPUT_PATH2/cassandra-rackdc.properties | grep -v "#" |grep -v "^[[:space:]]*$" >> $REPORT
 echo "" >> $REPORT
 echo "" >> $REPORT
 

@@ -2527,8 +2527,9 @@ protected:
     virtual future<> make_requests(digest_resolver_ptr resolver, clock_type::time_point timeout) {
         resolver->add_wait_targets(_targets.size());
         auto want_digest = _targets.size() > 1;
-        return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 1, timeout, want_digest),
-                        make_digest_requests(resolver, _targets.begin() + 1, _targets.end(), timeout)).discard_result();
+        auto f_data = futurize_apply([&] { return make_data_requests(resolver, _targets.begin(), _targets.begin() + 1, timeout, want_digest); });
+        auto f_digest = futurize_apply([&] { return make_digest_requests(resolver, _targets.begin() + 1, _targets.end(), timeout); });
+        return when_all_succeed(std::move(f_data), std::move(f_digest)).handle_exception([] (auto&&) { });
     }
     virtual void got_cl() {}
     uint32_t original_row_limit() const {

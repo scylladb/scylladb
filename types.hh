@@ -38,6 +38,7 @@
 #include "tombstone.hh"
 #include "to_string.hh"
 #include "duration.hh"
+#include "marshal_exception.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/for_each.hpp>
 #include <boost/range/numeric.hpp>
@@ -208,14 +209,6 @@ bool is_prefixed_by(TypesIterator types, InputIt1 first1, InputIt1 last1,
     }
     return first2 == last2;
 }
-
-class marshal_exception : public std::exception {
-    sstring _why;
-public:
-    marshal_exception() : _why("marshalling error") {}
-    marshal_exception(sstring why) : _why(sstring("marshaling error: ") + why) {}
-    virtual const char* what() const noexcept override { return _why.c_str(); }
-};
 
 struct runtime_exception : public std::exception {
     sstring _why;

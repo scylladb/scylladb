@@ -235,6 +235,7 @@ future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
         }
         default:
             assert(0);
+            throw std::logic_error("invalid _sync_state");
     }
 }
 

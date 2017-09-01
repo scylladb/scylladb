@@ -1058,12 +1058,14 @@ column_family::start() {
 
 future<>
 column_family::stop() {
-    return when_all(_memtables->request_flush(), _streaming_memtables->request_flush()).discard_result().finally([this] {
-        return _compaction_manager.remove(this).then([this] {
-            // Nest, instead of using when_all, so we don't lose any exceptions.
-            return _streaming_flush_gate.close();
-        }).then([this] {
-            return _sstable_deletion_gate.close();
+    return _async_gate.close().then([this] {
+        return when_all(_memtables->request_flush(), _streaming_memtables->request_flush()).discard_result().finally([this] {
+            return _compaction_manager.remove(this).then([this] {
+                // Nest, instead of using when_all, so we don't lose any exceptions.
+                return _streaming_flush_gate.close();
+            }).then([this] {
+                return _sstable_deletion_gate.close();
+            });
         });
     });
 }
@@ -1200,20 +1202,22 @@ void column_family::set_metrics() {
     auto cf = column_family_label(_schema->cf_name());
     auto ks = keyspace_label(_schema->ks_name());
     namespace ms = seastar::metrics;
-    _metrics.add_group("column_family", {
-            ms::make_derive("memtable_switch", ms::description("Number of times flush has resulted in the memtable being switched out"), _stats.memtable_switch_count)(cf)(ks),
-            ms::make_gauge("pending_tasks", ms::description("Estimated number of tasks pending for this column family"), _stats.pending_flushes)(cf)(ks),
-            ms::make_gauge("live_disk_space", ms::description("Live disk space used"), _stats.live_disk_space_used)(cf)(ks),
-            ms::make_gauge("total_disk_space", ms::description("Total disk space used"), _stats.total_disk_space_used)(cf)(ks),
-            ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks),
-            ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks)
-    });
-    if (_schema->ks_name() != db::system_keyspace::NAME && _schema->ks_name() != db::schema_tables::v3::NAME && _schema->ks_name() != "system_traces") {
+    if (_config.enable_metrics_reporting) {
         _metrics.add_group("column_family", {
-                ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return _stats.estimated_read.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
-                ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return _stats.estimated_write.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
-                ms::make_gauge("cache_hit_rate", ms::description("Cache hit rate"), [this] {return float(_global_cache_hit_rate);})(cf)(ks)
+                ms::make_derive("memtable_switch", ms::description("Number of times flush has resulted in the memtable being switched out"), _stats.memtable_switch_count)(cf)(ks),
+                ms::make_gauge("pending_tasks", ms::description("Estimated number of tasks pending for this column family"), _stats.pending_flushes)(cf)(ks),
+                ms::make_gauge("live_disk_space", ms::description("Live disk space used"), _stats.live_disk_space_used)(cf)(ks),
+                ms::make_gauge("total_disk_space", ms::description("Total disk space used"), _stats.total_disk_space_used)(cf)(ks),
+                ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks),
+                ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks)
         });
+        if (_schema->ks_name() != db::system_keyspace::NAME && _schema->ks_name() != db::schema_tables::v3::NAME && _schema->ks_name() != "system_traces") {
+            _metrics.add_group("column_family", {
+                    ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return _stats.estimated_read.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
+                    ms::make_histogram("write_latency", ms::description("Write latency histogram"), [this] {return _stats.estimated_write.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
+                    ms::make_gauge("cache_hit_rate", ms::description("Cache hit rate"), [this] {return float(_global_cache_hit_rate);})(cf)(ks)
+            });
+        }
     }
 }
 
@@ -2114,7 +2118,7 @@ database::setup_metrics() {
                                        "A sum of this value plus total_writes represents a total amount of writes attempted on this shard.")),
 
         sm::make_derive("total_writes_timedout", _stats->total_writes_timedout,
-                       sm::description("Counts write operations failed due to a timeout. None zero value is a sign of storage being overloaded.")),
+                       sm::description("Counts write operations failed due to a timeout. A positive value is a sign of storage being overloaded.")),
 
         sm::make_derive("total_reads", _stats->total_reads,
                        sm::description("Counts the total number of successful reads on this shard.")),
@@ -2129,7 +2133,7 @@ database::setup_metrics() {
 
         sm::make_gauge("active_reads", [this] { return max_concurrent_reads() - _read_concurrency_sem.current(); },
                        sm::description(seastar::format("Holds the number of currently active read operations. "
-                                                       "If this vlaue gets close to {} we are likely to start dropping new read requests. "
+                                                       "If this value gets close to {} we are likely to start dropping new read requests. "
                                                        "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_concurrent_reads()))),
 
         sm::make_gauge("queued_reads", [this] { return _read_concurrency_sem.waiters(); },
@@ -2145,7 +2149,7 @@ database::setup_metrics() {
 
         sm::make_gauge("active_reads_system_keyspace", [this] { return max_system_concurrent_reads() - _system_read_concurrency_sem.current(); },
                        sm::description(seastar::format("Holds the number of currently active read operations from \"system\" keyspace tables. "
-                                                       "If this vlaue gets close to {} we are likely to start dropping new read requests. "
+                                                       "If this value gets close to {} we are likely to start dropping new read requests. "
                                                        "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_system_concurrent_reads()))),
 
         sm::make_gauge("queued_reads_system_keyspace", [this] { return _system_read_concurrency_sem.waiters(); },
@@ -2487,11 +2491,9 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     auto cf = _column_families.at(uuid);
     remove(*cf);
     auto& ks = find_keyspace(ks_name);
-    return truncate(ks, *cf, std::move(tsf), snapshot).then([this, cf] {
+    return truncate(ks, *cf, std::move(tsf), snapshot).finally([this, cf] {
         return cf->stop();
-    }).then([this, cf] {
-        return make_ready_future<>();
-    });
+    }).finally([cf] {});
 }
 
 const utils::UUID& database::find_uuid(const sstring& ks, const sstring& cf) const {
@@ -2629,6 +2631,7 @@ keyspace::make_column_family_config(const schema& s, const db::config& db_config
     cfg.enable_incremental_backups = _config.enable_incremental_backups;
     cfg.background_writer_scheduling_group = _config.background_writer_scheduling_group;
     cfg.memtable_scheduling_group = _config.memtable_scheduling_group;
+    cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
 
     return cfg;
 }
@@ -3370,7 +3373,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
         cfg.background_writer_scheduling_group = &_background_writer_scheduling_group;
         cfg.memtable_scheduling_group = _memtable_cpu_controller.scheduling_group();
     }
-
+    cfg.enable_metrics_reporting = _cfg->enable_keyspace_column_family_metrics();
     return cfg;
 }
 
@@ -3494,48 +3497,49 @@ future<> database::truncate(sstring ksname, sstring cfname, timestamp_func tsf) 
     return truncate(ks, cf, std::move(tsf));
 }
 
-future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf, bool with_snapshot)
-{
-    const auto durable = ks.metadata()->durable_writes();
-    const auto auto_snapshot = with_snapshot && get_config().auto_snapshot();
+future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf, bool with_snapshot) {
+    return cf.run_async([this, &ks, &cf, tsf = std::move(tsf), with_snapshot] {
+        const auto durable = ks.metadata()->durable_writes();
+        const auto auto_snapshot = with_snapshot && get_config().auto_snapshot();
 
-    // Force mutations coming in to re-acquire higher rp:s
-    // This creates a "soft" ordering, in that we will guarantee that
-    // any sstable written _after_ we issue the flush below will
-    // only have higher rp:s than we will get from the discard_sstable
-    // call.
-    auto low_mark = cf.set_low_replay_position_mark();
+        // Force mutations coming in to re-acquire higher rp:s
+        // This creates a "soft" ordering, in that we will guarantee that
+        // any sstable written _after_ we issue the flush below will
+        // only have higher rp:s than we will get from the discard_sstable
+        // call.
+        auto low_mark = cf.set_low_replay_position_mark();
 
-    future<> f = make_ready_future<>();
-    if (durable || auto_snapshot) {
-        // TODO:
-        // this is not really a guarantee at all that we've actually
-        // gotten all things to disk. Again, need queue-ish or something.
-        f = cf.flush();
-    } else {
-        f = cf.clear();
-    }
+        future<> f = make_ready_future<>();
+        if (durable || auto_snapshot) {
+            // TODO:
+            // this is not really a guarantee at all that we've actually
+            // gotten all things to disk. Again, need queue-ish or something.
+            f = cf.flush();
+        } else {
+            f = cf.clear();
+        }
 
-    return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
-        return f.then([&cf, auto_snapshot, tsf = std::move(tsf), low_mark] {
-            dblog.debug("Discarding sstable data for truncated CF + indexes");
-            // TODO: notify truncation
+        return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
+            return f.then([&cf, auto_snapshot, tsf = std::move(tsf), low_mark] {
+                dblog.debug("Discarding sstable data for truncated CF + indexes");
+                // TODO: notify truncation
 
-            return tsf().then([&cf, auto_snapshot, low_mark](db_clock::time_point truncated_at) {
-                future<> f = make_ready_future<>();
-                if (auto_snapshot) {
-                    auto name = sprint("%d-%s", truncated_at.time_since_epoch().count(), cf.schema()->cf_name());
-                    f = cf.snapshot(name);
-                }
-                return f.then([&cf, truncated_at, low_mark] {
-                    return cf.discard_sstables(truncated_at).then([&cf, truncated_at, low_mark](db::replay_position rp) {
-                        // TODO: verify that rp == db::replay_position is because we have no sstables (and no data flushed)
-                        if (rp == db::replay_position()) {
-                            return make_ready_future();
-                        }
-                        // TODO: indexes.
-                        assert(low_mark <= rp);
-                        return db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
+                return tsf().then([&cf, auto_snapshot, low_mark](db_clock::time_point truncated_at) {
+                    future<> f = make_ready_future<>();
+                    if (auto_snapshot) {
+                        auto name = sprint("%d-%s", truncated_at.time_since_epoch().count(), cf.schema()->cf_name());
+                        f = cf.snapshot(name);
+                    }
+                    return f.then([&cf, truncated_at, low_mark] {
+                        return cf.discard_sstables(truncated_at).then([&cf, truncated_at, low_mark](db::replay_position rp) {
+                            // TODO: verify that rp == db::replay_position is because we have no sstables (and no data flushed)
+                            if (rp == db::replay_position()) {
+                                return make_ready_future();
+                            }
+                            // TODO: indexes.
+                            assert(low_mark <= rp);
+                            return db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
+                        });
                     });
                 });
             });

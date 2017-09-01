@@ -59,6 +59,7 @@
 #include "binary_search.hh"
 
 #include "checked-file-impl.hh"
+#include "integrity_checked_file_impl.hh"
 #include "service/storage_service.hh"
 
 thread_local disk_error_signal_type sstable_read_error;
@@ -75,16 +76,19 @@ seastar::shared_ptr<write_monitor> default_write_monitor() {
     return monitor;
 }
 
-future<file> new_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags) {
-    return open_checked_file_dma(error_handler, name, flags).handle_exception([name] (auto ep) {
-        sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
-        return make_exception_future<file>(ep);
-    });
+static future<file> open_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags,
+        file_open_options options) {
+    if (get_config().enable_sstable_data_integrity_check()) {
+        return open_integrity_checked_file_dma(name, flags, options).then([&error_handler] (auto f) {
+            return make_checked_file(error_handler, std::move(f));
+        });
+    }
+    return open_checked_file_dma(error_handler, name, flags, options);
 }
 
 future<file> new_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags,
-        file_open_options options) {
-    return open_checked_file_dma(error_handler, name, flags, options).handle_exception([name] (auto ep) {
+        file_open_options options = {}) {
+    return open_sstable_component_file(error_handler, name, flags, options).handle_exception([name] (auto ep) {
         sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
         return make_exception_future<file>(ep);
     });
@@ -398,7 +402,7 @@ inline void write(file_writer& out, const disk_string_view<Size>& s) {
 // We'll offer a specialization for that case below.
 template <typename Size, typename Members>
 typename std::enable_if_t<!std::is_integral<Members>::value, future<>>
-parse(random_access_reader& in, Size& len, std::deque<Members>& arr) {
+parse(random_access_reader& in, Size& len, utils::chunked_vector<Members>& arr) {
 
     auto count = make_lw_shared<size_t>(0);
     auto eoarr = [count, len] { return *count == len; };
@@ -410,7 +414,7 @@ parse(random_access_reader& in, Size& len, std::deque<Members>& arr) {
 
 template <typename Size, typename Members>
 typename std::enable_if_t<std::is_integral<Members>::value, future<>>
-parse(random_access_reader& in, Size& len, std::deque<Members>& arr) {
+parse(random_access_reader& in, Size& len, utils::chunked_vector<Members>& arr) {
     auto done = make_lw_shared<size_t>(0);
     return repeat([&in, &len, &arr, done]  {
         auto now = std::min(len - *done, 100000 / sizeof(Members));
@@ -441,7 +445,7 @@ future<> parse(random_access_reader& in, disk_array<Size, Members>& arr) {
 
 template <typename Members>
 inline typename std::enable_if_t<!std::is_integral<Members>::value, void>
-write(file_writer& out, const std::deque<Members>& arr) {
+write(file_writer& out, const utils::chunked_vector<Members>& arr) {
     for (auto& a : arr) {
         write(out, a);
     }
@@ -449,7 +453,7 @@ write(file_writer& out, const std::deque<Members>& arr) {
 
 template <typename Members>
 inline typename std::enable_if_t<std::is_integral<Members>::value, void>
-write(file_writer& out, const std::deque<Members>& arr) {
+write(file_writer& out, const utils::chunked_vector<Members>& arr) {
     std::vector<Members> tmp;
     size_t per_loop = 100000 / sizeof(Members);
     tmp.resize(per_loop);
@@ -624,7 +628,7 @@ future<> parse(random_access_reader& in, summary& s) {
             s.entries.resize(s.header.size);
 
             auto *nr = reinterpret_cast<const pos_type *>(buf.get());
-            s.positions = std::deque<pos_type>(nr, nr + s.header.size);
+            s.positions = utils::chunked_vector<pos_type>(nr, nr + s.header.size);
 
             // Since the keys in the index are not sized, we need to calculate
             // the start position of the index i+1 to determine the boundaries
@@ -843,10 +847,59 @@ inline void write(file_writer& out, const utils::streaming_histogram& sh) {
     check_truncate_and_assign(max_bin_size, sh.max_bin_size);
 
     disk_array<uint32_t, streaming_histogram_element> a;
-    a.elements = boost::copy_range<std::deque<streaming_histogram_element>>(sh.bin
+    a.elements = boost::copy_range<utils::chunked_vector<streaming_histogram_element>>(sh.bin
         | boost::adaptors::transformed([&] (auto& kv) { return streaming_histogram_element{kv.first, kv.second}; }));
 
     write(out, max_bin_size, a);
+}
+
+future<> parse(random_access_reader& in, compression& c) {
+    auto data_len_ptr = make_lw_shared<uint64_t>(0);
+    auto chunk_len_ptr = make_lw_shared<uint32_t>(0);
+
+    return parse(in, c.name, c.options, *chunk_len_ptr, *data_len_ptr).then([&in, &c, chunk_len_ptr, data_len_ptr] {
+        c.set_uncompressed_chunk_length(*chunk_len_ptr);
+        c.set_uncompressed_file_length(*data_len_ptr);
+
+        auto len = make_lw_shared<uint32_t>();
+        return parse(in, *len).then([&in, &c, len] {
+            auto eoarr = [&c, len] { return c.offsets.size() == *len; };
+
+            return do_until(eoarr, [&in, &c, len] {
+                auto now = std::min(*len - c.offsets.size(), 100000 / sizeof(uint64_t));
+                return in.read_exactly(now * sizeof(uint64_t)).then([&c, len, now] (auto buf) {
+                    uint64_t value;
+                    for (size_t i = 0; i < now; ++i) {
+                        std::copy_n(buf.get() + i * sizeof(uint64_t), sizeof(uint64_t), reinterpret_cast<char*>(&value));
+                        c.offsets.push_back(net::ntoh(value));
+                    }
+                });
+            });
+        });
+    });
+}
+
+void write(file_writer& out, const compression& c) {
+    write(out, c.name, c.options, c.uncompressed_chunk_length(), c.uncompressed_file_length());
+
+    write(out, static_cast<uint32_t>(c.offsets.size()));
+
+    std::vector<uint64_t> tmp;
+    const size_t per_loop = 100000 / sizeof(uint64_t);
+    tmp.resize(per_loop);
+    size_t idx = 0;
+    while (idx != c.offsets.size()) {
+        auto now = std::min(c.offsets.size() - idx, per_loop);
+        // copy offsets into tmp converting each entry into big-endian representation.
+        auto nr = c.offsets.begin() + idx;
+        for (size_t i = 0; i < now; i++) {
+            tmp[i] = net::hton(nr[i]);
+        }
+        auto p = reinterpret_cast<const char*>(tmp.data());
+        auto bytes = now * sizeof(uint64_t);
+        out.write(p, bytes).get();
+        idx += now;
+    }
 }
 
 // This is small enough, and well-defined. Easier to just read it all
@@ -1794,8 +1847,7 @@ static void seal_summary(summary& s,
 static void prepare_compression(compression& c, const schema& schema) {
     const auto& cp = schema.get_compressor_params();
     c.set_compressor(cp.get_compressor());
-    c.chunk_len = cp.chunk_length();
-    c.data_len = 0;
+    c.set_uncompressed_chunk_length(cp.chunk_length());
     // FIXME: crc_check_chance can be configured by the user.
     // probability to verify the checksum of a compressed chunk we read.
     // defaults to 1.0.
@@ -1869,17 +1921,10 @@ static void seal_statistics(statistics& s, metadata_collector& collector,
 
 void components_writer::maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key, uint64_t data_offset,
         uint64_t index_offset, uint64_t& next_data_offset_to_write_summary, size_t summary_byte_cost) {
-    static constexpr size_t target_index_interval_size = 65536;
-
-    auto index_size_for_current_entry = index_offset - (s.entries.size() ? s.entries.back().position : 0);
-
-    // generates a summary entry after 64 KB of index data *iff* we're writing 2000 (default value) to data
-    // for every 1 byte written to summary. 64 KB condition will prevent useless generation of summary entry
-    // for small key with lots of data. Both conditions will prevent summary from growing large for large
-    // keys with little data.
-    if (!next_data_offset_to_write_summary || (data_offset >= next_data_offset_to_write_summary &&
-            index_size_for_current_entry >= target_index_interval_size)) {
-        next_data_offset_to_write_summary += summary_byte_cost * key.size();
+    // generates a summary entry when possible (= keep summary / data size ratio within reasonable limits)
+    if (data_offset >= next_data_offset_to_write_summary) {
+        auto entry_size = 8 + 2 + key.size();  // offset + key_size.size + key.size
+        next_data_offset_to_write_summary += summary_byte_cost * entry_size;
         s.entries.push_back({ token, bytes(key.data(), key.size()), index_offset });
     }
 }
@@ -2290,7 +2335,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
 
 uint64_t sstable::data_size() const {
     if (has_component(sstable::component_type::CompressionInfo)) {
-        return _components->compression.data_len;
+        return _components->compression.uncompressed_file_length();
     }
     return _data_file_size;
 }

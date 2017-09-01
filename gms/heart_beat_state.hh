@@ -39,7 +39,6 @@
 #pragma once
 
 #include "gms/version_generator.hh"
-#include "types.hh"
 #include "utils/serialization.hh"
 #include <ostream>
 #include <limits>

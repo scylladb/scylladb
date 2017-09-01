@@ -79,6 +79,7 @@ abstract_marker::raw::raw(int32_t bind_index)
         return ::make_shared<maps::marker>(_bind_index, receiver);
     }
     assert(0);
+    return shared_ptr<term>();
 }
 
 assignment_testable::test_result abstract_marker::raw::test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) {

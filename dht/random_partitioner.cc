@@ -220,6 +220,7 @@ unsigned random_partitioner::shard_of(const token& t) const {
             return smp;
     }
     assert(0);
+    throw std::invalid_argument("invalid token");
 }
 
 token
@@ -240,6 +241,7 @@ random_partitioner::token_for_next_shard(const token& t, shard_id shard, unsigne
             return cppint_to_token(t.convert_to<boost::multiprecision::uint128_t>());
     }
     assert(0);
+    throw std::invalid_argument("invalid token");
 }
 
 

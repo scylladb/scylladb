@@ -28,7 +28,7 @@
 #include <string>
 #include "core/sstring.hh"
 #include "utils/serialization.hh"
-#include "types.hh"
+#include "marshal_exception.hh"
 
 namespace utils {
 

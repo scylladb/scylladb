@@ -96,28 +96,34 @@ public:
     future<list_ptr> get_or_load(key_type key, Loader&& loader) {
         auto i = _lists.find(key);
         lw_shared_ptr<entry> e;
-        if (i != _lists.end()) {
-            e = i->second->shared_from_this();
-        } else {
-            ++_shard_stats.misses;
-            e = make_lw_shared<entry>(*this, key);
-            auto res = _lists.emplace(key, e.get());
-            assert(res.second);
-            loader(key).then_wrapped([e](future<index_list>&& f) mutable {
-                if (f.failed()) {
-                    e->loaded.set_exception(f.get_exception());
-                } else {
-                    e->list = f.get0();
-                    e->loaded.set_value();
-                }
-            });
-        }
-        future<> f = e->loaded.get_shared_future();
+        auto f = [&] {
+            if (i != _lists.end()) {
+                e = i->second->shared_from_this();
+                return e->loaded.get_shared_future();
+            } else {
+                ++_shard_stats.misses;
+                e = make_lw_shared<entry>(*this, key);
+                auto f = e->loaded.get_shared_future();
+                auto res = _lists.emplace(key, e.get());
+                assert(res.second);
+                futurize_apply(loader, key).then_wrapped([e](future<index_list>&& f) mutable {
+                    if (f.failed()) {
+                        e->loaded.set_exception(f.get_exception());
+                    } else {
+                        e->list = f.get0();
+                        e->loaded.set_value();
+                    }
+                });
+                return f;
+            }
+        }();
         if (!f.available()) {
             ++_shard_stats.blocks;
             return f.then([e]() mutable {
                 return list_ptr(std::move(e));
             });
+        } else if (f.failed()) {
+            return make_exception_future<list_ptr>(std::move(f).get_exception());
         } else {
             ++_shard_stats.hits;
             return make_ready_future<list_ptr>(list_ptr(std::move(e)));

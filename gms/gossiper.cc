@@ -128,7 +128,7 @@ gossiper::gossiper() {
                 } else {
                     return 0;
                 }
-            }, sm::description("Heart beat of the current Node.")),
+            }, sm::description("Heartbeat of the current Node.")),
     });
 }
 
@@ -508,26 +508,12 @@ void gossiper::do_status_check() {
 
         // check if this is a fat client. fat clients are removed automatically from
         // gossip after FatClientTimeout.  Do not remove dead states here.
-        if (is_gossip_only_member(endpoint) && !_just_removed_endpoints.count(endpoint)) {
-            auto diff = now - ep_state.get_update_timestamp();
-            auto timeout = fat_client_timeout;
-            auto status = get_gossip_status(ep_state);
-            if (status == sstring(versioned_value::STATUS_BOOTSTRAPPING)) {
-                // The bootstrapping node will be a gossip only member, until
-                // the streaming finishes and the node becomes NORMAL state.
-                // If during this time, the bootstrapping node is overwhelmed
-                // with streaming, it is possible the node will delay the
-                // update the gossip heartbeat. Be forgiving for the
-                // bootstrapping node and do not remove it from gossip too
-                // fast. Otherwise, streaming rpc verbs will not be resent
-                // becasue the node is not in gossip membership anymore.
-                timeout = 10 * fat_client_timeout;
-            }
-            if (diff > timeout) {
-                logger.info("FatClient {} has been silent for {}ms, removing from gossip, status = {}", endpoint, timeout.count(), status);
-                remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
-                evict_from_membership(endpoint); // can get rid of the state immediately
-            }
+        if (is_gossip_only_member(endpoint)
+            && !_just_removed_endpoints.count(endpoint)
+            && ((now - ep_state.get_update_timestamp()) > fat_client_timeout)) {
+            logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
+            remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
+            evict_from_membership(endpoint); // can get rid of the state immediately
         }
 
         // check for dead state removal
@@ -1303,6 +1289,10 @@ bool gossiper::is_shutdown(const inet_address& endpoint) const {
     return get_gossip_status(endpoint) == sstring(versioned_value::SHUTDOWN);
 }
 
+bool gossiper::is_normal(const inet_address& endpoint) const {
+    return get_gossip_status(endpoint) == sstring(versioned_value::STATUS_NORMAL);
+}
+
 bool gossiper::is_silent_shutdown_state(const endpoint_state& ep_state) const{
     sstring state = get_gossip_status(ep_state);
     for (auto& deadstate : SILENT_SHUTDOWN_STATES) {
@@ -1661,7 +1651,7 @@ bool gossiper::is_in_shadow_round() {
 
 void gossiper::add_expire_time_for_endpoint(inet_address endpoint, clk::time_point expire_time) {
     char expire_time_buf[100];
-    auto expire_time_tm = std::chrono::system_clock::to_time_t(expire_time);
+    auto expire_time_tm = clk::to_time_t(expire_time);
     auto now_ = now();
     strftime(expire_time_buf, sizeof(expire_time_buf), "%Y-%m-%d %T", std::localtime(&expire_time_tm));
     auto diff = std::chrono::duration_cast<std::chrono::seconds>(expire_time - now_).count();

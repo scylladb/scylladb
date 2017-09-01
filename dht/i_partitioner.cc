@@ -26,6 +26,7 @@
 #include "types.hh"
 #include "utils/murmur_hash.hh"
 #include "utils/div_ceil.hh"
+#include <deque>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/transformed.hpp>
@@ -248,7 +249,7 @@ std::ostream& operator<<(std::ostream& out, const ring_position& pos) {
 }
 
 std::ostream& operator<<(std::ostream& out, ring_position_view pos) {
-    out << "{" << pos._token;
+    out << "{" << *pos._token;
     if (pos._key) {
         out << ", " << *pos._key;
     }
@@ -418,10 +419,10 @@ ring_position_range_vector_sharder::next(const schema& s) {
 }
 
 
-std::vector<partition_range>
+std::deque<partition_range>
 split_range_to_single_shard(const i_partitioner& partitioner, const schema& s, const partition_range& pr, shard_id shard) {
     auto cmp = ring_position_comparator(s);
-    auto ret = std::vector<partition_range>();
+    auto ret = std::deque<partition_range>();
     auto next_shard = shard + 1 == partitioner.shard_count() ? 0 : shard + 1;
     auto start_token = pr.start() ? pr.start()->value().token() : minimum_token();
     auto start_shard = partitioner.shard_of(start_token);
@@ -440,7 +441,7 @@ split_range_to_single_shard(const i_partitioner& partitioner, const schema& s, c
     return ret;
 }
 
-std::vector<partition_range>
+std::deque<partition_range>
 split_range_to_single_shard(const schema& s, const partition_range& pr, shard_id shard) {
     return split_range_to_single_shard(global_partitioner(), s, pr, shard);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 ScyllaDB
+ * Copyright (C) 2017 ScyllaDB
  */
 
 /*
@@ -21,29 +21,13 @@
 
 #pragma once
 
-#include <seastar/util/log.hh>
+#include <stdexcept>
 
-namespace logging {
+class marshal_exception : public std::exception {
+    sstring _why;
+public:
+    marshal_exception() : _why("marshalling error") {}
+    marshal_exception(sstring why) : _why(sstring("marshaling error: ") + why) {}
+    virtual const char* what() const noexcept override { return _why.c_str(); }
+};
 
-//
-// Seastar changed the names of some of these types. Maintain the old names here to avoid too much churn.
-//
-
-using log_level = seastar::log_level;
-using logger = seastar::logger;
-using registry = seastar::logger_registry;
-
-inline registry& logger_registry() noexcept {
-    return seastar::global_logger_registry();
-}
-
-using settings = seastar::logging_settings;
-
-inline void apply_settings(const settings& s) {
-    seastar::apply_logging_settings(s);
-}
-
-using seastar::pretty_type_name;
-using seastar::level_name;
-
-}

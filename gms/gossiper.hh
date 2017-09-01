@@ -82,7 +82,7 @@ class i_failure_detector;
  */
 class gossiper : public i_failure_detection_event_listener, public seastar::async_sharded_service<gossiper> {
 public:
-    using clk = std::chrono::system_clock;
+    using clk = seastar::lowres_system_clock;
 private:
     using messaging_verb = netw::messaging_verb;
     using messaging_service = netw::messaging_service;
@@ -192,7 +192,7 @@ private:
     std::unordered_set<inet_address> _pending_mark_alive_endpoints;
 
     /* unreachable member set */
-    std::map<inet_address, clk::time_point> _unreachable_endpoints;
+    std::unordered_map<inet_address, clk::time_point> _unreachable_endpoints;
 
     /* initial seeds for joining the cluster */
     std::set<inet_address> _seeds;
@@ -209,7 +209,7 @@ private:
 
     clk::time_point _last_processed_message_at = now();
 
-    std::map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
+    std::unordered_map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
     std::vector<inet_address> _shadow_live_endpoints;
 
     void run();
@@ -505,6 +505,7 @@ public:
     void debug_show();
 public:
     bool is_shutdown(const inet_address& endpoint) const;
+    bool is_normal(const inet_address& endpoint) const;
     bool is_silent_shutdown_state(const endpoint_state& ep_state) const;
     void mark_as_shutdown(const inet_address& endpoint);
     void force_newer_generation();

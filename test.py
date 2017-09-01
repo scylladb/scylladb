@@ -29,6 +29,8 @@ import threading
 
 boost_tests = [
     'bytes_ostream_test',
+    'chunked_vector_test',
+    'compress_test',
     'types_test',
     'keys_test',
     'mutation_test',
@@ -83,6 +85,9 @@ boost_tests = [
     'cell_locker_test',
     'view_schema_test',
     'combined_mutation_reader_test',
+    'clustering_ranges_walker_test',
+    'vint_serialization_test',
+    'duration_test',
 ]
 
 other_tests = [

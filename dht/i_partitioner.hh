@@ -674,8 +674,8 @@ std::map<unsigned, dht::partition_range_vector>
 split_ranges_to_shards(const dht::token_range_vector& ranges, const schema& s);
 
 // Intersect a partition_range with a shard and return the the resulting sub-ranges, in sorted order
-std::vector<partition_range> split_range_to_single_shard(const schema& s, const dht::partition_range& pr, shard_id shard);
-std::vector<partition_range> split_range_to_single_shard(const i_partitioner& partitioner, const schema& s, const dht::partition_range& pr, shard_id shard);
+std::deque<partition_range> split_range_to_single_shard(const schema& s, const dht::partition_range& pr, shard_id shard);
+std::deque<partition_range> split_range_to_single_shard(const i_partitioner& partitioner, const schema& s, const dht::partition_range& pr, shard_id shard);
 
 class selective_token_range_sharder {
     const i_partitioner& _partitioner;

@@ -176,6 +176,7 @@ scylla_tests = [
     'tests/partitioner_test',
     'tests/frozen_mutation_test',
     'tests/serialized_action_test',
+    'tests/clustering_ranges_walker_test',
     'tests/perf/perf_mutation',
     'tests/lsa_async_eviction_test',
     'tests/lsa_sync_eviction_test',
@@ -242,6 +243,8 @@ scylla_tests = [
     'tests/streaming_histogram_test',
     'tests/duration_test',
     'tests/vint_serialization_test',
+    'tests/compress_test',
+    'tests/chunked_vector_test',
 ]
 
 apps = [
@@ -337,6 +340,7 @@ scylla_core = (['database.cc',
                  'sstables/compaction_strategy.cc',
                  'sstables/compaction_manager.cc',
                  'sstables/atomic_deletion.cc',
+                 'sstables/integrity_checked_file_impl.cc',
                  'transport/event.cc',
                  'transport/event_notifier.cc',
                  'transport/server.cc',
@@ -626,6 +630,8 @@ pure_boost_tests = set([
     'tests/streaming_histogram_test',
     'tests/duration_test',
     'tests/vint_serialization_test',
+    'tests/compress_test',
+    'tests/chunked_vector_test',
 ])
 
 tests_not_using_seastar_test_framework = set([

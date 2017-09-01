@@ -21,7 +21,6 @@
 
 #pragma once
 
-#include "types.hh"
 #include "net/ip.hh"
 #include "utils/serialization.hh"
 #include <sstream>

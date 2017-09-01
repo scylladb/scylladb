@@ -140,7 +140,7 @@ public:
         const std::vector<gms::inet_address>& neighbors_in,
         const std::vector<gms::inet_address>& neighbors_out) {
         rlogger.debug("Add cf {}, range {}, current_sub_ranges_nr_in {}, current_sub_ranges_nr_out {}", cf, range, current_sub_ranges_nr_in, current_sub_ranges_nr_out);
-        return sp_parallelism_semaphore.wait(1).then([this, cf, range, neighbors_in, neighbors_out] {
+        return seastar::with_semaphore(sp_parallelism_semaphore, 1, [this, cf, range, neighbors_in, neighbors_out] {
             for (const auto& peer : neighbors_in) {
                 ranges_need_repair_in[peer][cf].emplace_back(range);
                 current_sub_ranges_nr_in++;
@@ -153,8 +153,6 @@ public:
                 return do_streaming();
             }
             return make_ready_future<>();
-        }).finally([this] {
-            sp_parallelism_semaphore.signal(1);
         });
     }
 };
@@ -1052,6 +1050,10 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     rlogger.info("starting user-requested repair for keyspace {}, repair id {}, options {}", keyspace, id, options_map);
     repair_tracker.start(id);
     auto fail = defer([id] { repair_tracker.done(id, false); });
+
+    if (!gms::get_local_gossiper().is_normal(utils::fb_utilities::get_broadcast_address())) {
+        throw std::runtime_error("Node is not in NORMAL status yet!");
+    }
 
     // If the "ranges" option is not explicitly specified, we repair all the
     // local ranges (the token ranges for which this node holds a replica of).

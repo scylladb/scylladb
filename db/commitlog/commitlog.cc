@@ -1114,11 +1114,11 @@ void db::commitlog::segment_manager::create_counters() {
                        sm::description(
                            seastar::format("Counts a number of times a flush limit was exceeded. "
                                            "A non-zero value indicates that there are too many pending flush operations (see pending_flushes) and some of "
-                                           "them will be blocked till the total amount of pending flush operaitions drops below {}.", cfg.max_active_flushes))),
+                                           "them will be blocked till the total amount of pending flush operations drops below {}.", cfg.max_active_flushes))),
 
         sm::make_gauge("disk_total_bytes", totals.total_size,
                        sm::description("Holds a size of disk space in bytes used for data so far. "
-                                       "A too high value indicates that we have some bottleneck in the writting to sstables path.")),
+                                       "A too high value indicates that we have some bottleneck in the writing to sstables path.")),
 
         sm::make_gauge("memory_buffer_bytes", totals.buffer_list_bytes,
                        sm::description("Holds the total number of bytes in internal memory buffers.")),
