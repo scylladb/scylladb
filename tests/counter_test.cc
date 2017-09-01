@@ -38,6 +38,22 @@
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
 
+void verify_shard_order(counter_cell_view ccv) {
+    if (ccv.shards().begin() == ccv.shards().end()) {
+        return;
+    }
+
+    auto it = ccv.shards().begin();
+    auto prev = it;
+    ++it;
+
+    while (it != ccv.shards().end()) {
+        BOOST_REQUIRE_GT(it->id(), prev->id());
+        prev = it;
+        ++it;
+    }
+}
+
 std::vector<counter_id> generate_ids(unsigned count) {
     std::vector<counter_id> id;
     std::generate_n(std::back_inserter(id), count, counter_id::generate_random);
@@ -56,6 +72,7 @@ SEASTAR_TEST_CASE(test_counter_cell) {
 
         auto cv = counter_cell_view(c1.as_atomic_cell());
         BOOST_REQUIRE_EQUAL(cv.total_value(), 1);
+        verify_shard_order(cv);
 
         counter_cell_builder b2;
         b2.add_shard(counter_shard(*cv.get_shard(id[0])).update(2, 1));
@@ -64,10 +81,12 @@ SEASTAR_TEST_CASE(test_counter_cell) {
 
         cv = counter_cell_view(c2.as_atomic_cell());
         BOOST_REQUIRE_EQUAL(cv.total_value(), 8);
+        verify_shard_order(cv);
 
         counter_cell_view::apply_reversibly(c1, c2);
         cv = counter_cell_view(c1.as_atomic_cell());
         BOOST_REQUIRE_EQUAL(cv.total_value(), 4);
+        verify_shard_order(cv);
     });
 }
 
@@ -159,11 +178,13 @@ SEASTAR_TEST_CASE(test_counter_mutations) {
         BOOST_REQUIRE(ac.is_live());
         counter_cell_view ccv { ac };
         BOOST_REQUIRE_EQUAL(ccv.total_value(), -102);
+        verify_shard_order(ccv);
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
         ccv = counter_cell_view(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 20);
+        verify_shard_order(ccv);
 
         m.apply(m3);
         ac = get_counter_cell(m);
@@ -185,22 +206,26 @@ SEASTAR_TEST_CASE(test_counter_mutations) {
         BOOST_REQUIRE(ac.is_live());
         ccv = counter_cell_view(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 2);
+        verify_shard_order(ccv);
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
         ccv = counter_cell_view(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 11);
+        verify_shard_order(ccv);
 
         m = mutation(s, m1.decorated_key(), m2.partition().difference(s, m1.partition()));
         ac = get_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
         ccv = counter_cell_view(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), -105);
+        verify_shard_order(ccv);
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
         ccv = counter_cell_view(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 9);
+        verify_shard_order(ccv);
 
         m = mutation(s, m1.decorated_key(), m1.partition().difference(s, m3.partition()));
         BOOST_REQUIRE_EQUAL(m.partition().clustered_rows().calculate_size(), 0);
@@ -342,11 +367,13 @@ SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
         BOOST_REQUIRE(ac.is_live());
         auto ccv = counter_cell_view(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 5);
+        verify_shard_order(ccv);
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
         ccv = counter_cell_view(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 4);
+        verify_shard_order(ccv);
 
         m = m2;
         transform_counter_updates_to_shards(m, &m0, 0);
@@ -355,11 +382,13 @@ SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
         BOOST_REQUIRE(ac.is_live());
         ccv = counter_cell_view(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 14);
+        verify_shard_order(ccv);
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
         ccv = counter_cell_view(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 12);
+        verify_shard_order(ccv);
 
         m = m3;
         transform_counter_updates_to_shards(m, &m0, 0);
@@ -421,6 +450,8 @@ SEASTAR_TEST_CASE(test_sanitize_corrupted_cells) {
 
             BOOST_REQUIRE_EQUAL(cv1, cv2);
             BOOST_REQUIRE_EQUAL(cv1.total_value(), cv2.total_value());
+            verify_shard_order(cv1);
+            verify_shard_order(cv2);
         }
     });
 }
