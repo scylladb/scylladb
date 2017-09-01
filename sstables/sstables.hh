@@ -292,6 +292,7 @@ public:
         dht::ring_position_view key,
         const query::partition_slice& slice = query::full_slice,
         const io_priority_class& pc = default_priority_class(),
+        reader_resource_tracker resource_tracker = no_resource_tracking(),
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
     future<streamed_mutation_opt> read_row(
@@ -299,6 +300,7 @@ public:
         const sstables::key& key,
         const query::partition_slice& slice = query::full_slice,
         const io_priority_class& pc = default_priority_class(),
+        reader_resource_tracker resource_tracker = no_resource_tracking(),
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
     // Returns a mutation_reader for given range of partitions
@@ -307,6 +309,7 @@ public:
         const dht::partition_range& range,
         const query::partition_slice& slice = query::full_slice,
         const io_priority_class& pc = default_priority_class(),
+        reader_resource_tracker resource_tracker = no_resource_tracking(),
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
         ::mutation_reader::forwarding fwd_mr = ::mutation_reader::forwarding::yes);
 
@@ -594,7 +597,7 @@ private:
     // about the buffer size to read, and where exactly to stop reading
     // (even when a large buffer size is used).
     input_stream<char> data_stream(uint64_t pos, size_t len, const io_priority_class& pc,
-                                   lw_shared_ptr<file_input_stream_history> history);
+                                   reader_resource_tracker resource_tracker, lw_shared_ptr<file_input_stream_history> history);
 
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read

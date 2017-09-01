@@ -380,6 +380,7 @@ class incremental_reader_selector : public reader_selector {
     lw_shared_ptr<sstables::sstable_set> _sstables;
     const io_priority_class& _pc;
     const query::partition_slice& _slice;
+    reader_resource_tracker _resource_tracker;
     tracing::trace_state_ptr _trace_state;
     streamed_mutation::forwarding _fwd;
     mutation_reader::forwarding _fwd_mr;
@@ -390,7 +391,7 @@ class incremental_reader_selector : public reader_selector {
         tracing::trace(_trace_state, "Reading partition range {} from sstable {}", *_pr, seastar::value_of([&sst] { return sst->get_filename(); }));
         // FIXME: make sstable::read_range_rows() return ::mutation_reader so that we can drop this wrapper.
         mutation_reader reader =
-            make_mutation_reader<sstable_range_wrapping_reader>(sst, _s, *_pr, _slice, _pc, _fwd, _fwd_mr);
+            make_mutation_reader<sstable_range_wrapping_reader>(sst, _s, *_pr, _slice, _pc, _resource_tracker, _fwd, _fwd_mr);
         if (sst->is_shared()) {
             reader = make_filtering_reader(std::move(reader), belongs_to_current_shard);
         }
@@ -403,6 +404,7 @@ public:
             const dht::partition_range& pr,
             const query::partition_slice& slice,
             const io_priority_class& pc,
+            reader_resource_tracker resource_tracker,
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr)
@@ -411,6 +413,7 @@ public:
         , _sstables(std::move(sstables))
         , _pc(pc)
         , _slice(slice)
+        , _resource_tracker(std::move(resource_tracker))
         , _trace_state(std::move(trace_state))
         , _fwd(fwd)
         , _fwd_mr(fwd_mr)
@@ -483,6 +486,7 @@ class single_key_sstable_reader final : public mutation_reader::impl {
     // the priority changes.
     const io_priority_class& _pc;
     const query::partition_slice& _slice;
+    reader_resource_tracker _resource_tracker;
     tracing::trace_state_ptr _trace_state;
     streamed_mutation::forwarding _fwd;
 public:
@@ -493,6 +497,7 @@ public:
                               const dht::partition_range& pr, // must be singular
                               const query::partition_slice& slice,
                               const io_priority_class& pc,
+                              reader_resource_tracker resource_tracker,
                               tracing::trace_state_ptr trace_state,
                               streamed_mutation::forwarding fwd)
         : _cf(cf)
@@ -503,6 +508,7 @@ public:
         , _sstable_histogram(sstable_histogram)
         , _pc(pc)
         , _slice(slice)
+        , _resource_tracker(std::move(resource_tracker))
         , _trace_state(std::move(trace_state))
         , _fwd(fwd)
     { }
@@ -515,7 +521,7 @@ public:
         return parallel_for_each(std::move(candidates),
             [this](const sstables::shared_sstable& sstable) {
                 tracing::trace(_trace_state, "Reading key {} from sstable {}", _pr, seastar::value_of([&sstable] { return sstable->get_filename(); }));
-                return sstable->read_row(_schema, _pr.start()->value(), _slice, _pc, _fwd).then([this](auto smo) {
+                return sstable->read_row(_schema, _pr.start()->value(), _slice, _pc, _resource_tracker, _fwd).then([this](auto smo) {
                     if (smo) {
                         _mutations.emplace_back(std::move(*smo));
                     }
@@ -540,20 +546,9 @@ column_family::make_sstable_reader(schema_ptr s,
                                    tracing::trace_state_ptr trace_state,
                                    streamed_mutation::forwarding fwd,
                                    mutation_reader::forwarding fwd_mr) const {
-    // restricts a reader's concurrency if the configuration specifies it
-    auto restrict_reader = [&] (mutation_reader&& in) {
-        auto&& config = [this, &pc] () -> const restricted_mutation_reader_config& {
-            if (service::get_local_streaming_read_priority().id() == pc.id()) {
-                return _config.streaming_read_concurrency_config;
-            }
-            return _config.read_concurrency_config;
-        }();
-        if (config.sem) {
-            return make_restricted_reader(config, 1, std::move(in));
-        } else {
-            return std::move(in);
-        }
-    };
+    auto& config = service::get_local_streaming_read_priority().id() == pc.id()
+        ? _config.streaming_read_concurrency_config
+        : _config.read_concurrency_config;
 
     // CAVEAT: if make_sstable_reader() is called on a single partition
     // we want to optimize and read exactly this partition. As a
@@ -564,18 +559,46 @@ column_family::make_sstable_reader(schema_ptr s,
         if (dht::shard_of(pos.token()) != engine().cpu_id()) {
             return make_empty_reader(); // range doesn't belong to this shard
         }
-        return restrict_reader(make_mutation_reader<single_key_sstable_reader>(const_cast<column_family*>(this), std::move(s), std::move(sstables),
-            _stats.estimated_sstable_per_read, pr, slice, pc, std::move(trace_state), fwd));
+
+        if (config.resources_sem) {
+            auto ms = mutation_source([&config, sstables=std::move(sstables), this] (
+                        schema_ptr s,
+                        const dht::partition_range& pr,
+                        const query::partition_slice& slice,
+                        const io_priority_class& pc,
+                        tracing::trace_state_ptr trace_state,
+                        streamed_mutation::forwarding fwd,
+                        mutation_reader::forwarding fwd_mr) {
+                    return make_mutation_reader<single_key_sstable_reader>(const_cast<column_family*>(this), std::move(s), std::move(sstables),
+                                _stats.estimated_sstable_per_read, pr, slice, pc, reader_resource_tracker(config.resources_sem), std::move(trace_state), fwd);
+                });
+            return make_restricted_reader(config, std::move(ms), std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
+        } else {
+            return make_mutation_reader<single_key_sstable_reader>(const_cast<column_family*>(this), std::move(s), std::move(sstables),
+                        _stats.estimated_sstable_per_read, pr, slice, pc, no_resource_tracking(), std::move(trace_state), fwd);
+        }
     } else {
-        return restrict_reader(make_mutation_reader<combined_mutation_reader>(
-                    std::make_unique<incremental_reader_selector>(std::move(s),
-                            std::move(sstables),
-                            pr,
-                            slice,
-                            pc,
-                            std::move(trace_state),
-                            fwd,
-                            fwd_mr), fwd_mr));
+        if (config.resources_sem) {
+            auto ms = mutation_source([&config, sstables=std::move(sstables)] (
+                        schema_ptr s,
+                        const dht::partition_range& pr,
+                        const query::partition_slice& slice,
+                        const io_priority_class& pc,
+                        tracing::trace_state_ptr trace_state,
+                        streamed_mutation::forwarding fwd,
+                        mutation_reader::forwarding fwd_mr) {
+                    return make_mutation_reader<combined_mutation_reader>(
+                            std::make_unique<incremental_reader_selector>(std::move(s), std::move(sstables), pr, slice, pc,
+                                    reader_resource_tracker(config.resources_sem), std::move(trace_state), fwd, fwd_mr),
+                            fwd_mr);
+                });
+            return make_restricted_reader(config, std::move(ms), std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
+        } else {
+            return make_mutation_reader<combined_mutation_reader>(
+                    std::make_unique<incremental_reader_selector>(std::move(s), std::move(sstables), pr, slice, pc,
+                            no_resource_tracking(), std::move(trace_state), fwd, fwd_mr),
+                    fwd_mr);
+        }
     }
 }
 
@@ -2141,26 +2164,26 @@ database::setup_metrics() {
                        sm::description("Counts the number of times the sstable read queue was overloaded. "
                                        "A non-zero value indicates that we have to drop read requests because they arrive faster than we can serve them.")),
 
-        sm::make_gauge("active_reads", [this] { return max_concurrent_reads() - _read_concurrency_sem.current(); },
+        sm::make_gauge("active_reads", [this] { return max_memory_concurrent_reads() - _read_concurrency_sem.current(); },
                        sm::description(seastar::format("Holds the number of currently active read operations. "
                                                        "If this value gets close to {} we are likely to start dropping new read requests. "
-                                                       "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_concurrent_reads()))),
+                                                       "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_memory_concurrent_reads()))),
 
         sm::make_gauge("queued_reads", [this] { return _read_concurrency_sem.waiters(); },
                        sm::description("Holds the number of currently queued read operations.")),
 
-        sm::make_gauge("active_reads_streaming", [this] { return max_streaming_concurrent_reads() - _streaming_concurrency_sem.current(); },
+        sm::make_gauge("active_reads_streaming", [this] { return max_memory_streaming_concurrent_reads() - _streaming_concurrency_sem.current(); },
                        sm::description(seastar::format("Holds the number of currently active read operations issued on behalf of streaming "
                                                        "If this value gets close to {} we are likely to start dropping new read requests. "
-                                                       "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_streaming_concurrent_reads()))),
+                                                       "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_memory_streaming_concurrent_reads()))),
 
         sm::make_gauge("queued_reads_streaming", [this] { return _streaming_concurrency_sem.waiters(); },
                        sm::description("Holds the number of currently queued read operations on behalf of streaming.")),
 
-        sm::make_gauge("active_reads_system_keyspace", [this] { return max_system_concurrent_reads() - _system_read_concurrency_sem.current(); },
+        sm::make_gauge("active_reads_system_keyspace", [this] { return max_memory_system_concurrent_reads() - _system_read_concurrency_sem.current(); },
                        sm::description(seastar::format("Holds the number of currently active read operations from \"system\" keyspace tables. "
                                                        "If this value gets close to {} we are likely to start dropping new read requests. "
-                                                       "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_system_concurrent_reads()))),
+                                                       "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_memory_system_concurrent_reads()))),
 
         sm::make_gauge("queued_reads_system_keyspace", [this] { return _system_read_concurrency_sem.waiters(); },
                        sm::description("Holds the number of currently queued read operations from \"system\" keyspace tables.")),
@@ -3379,17 +3402,16 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     }
     cfg.dirty_memory_manager = &_dirty_memory_manager;
     cfg.streaming_dirty_memory_manager = &_streaming_dirty_memory_manager;
-    cfg.read_concurrency_config.sem = &_read_concurrency_sem;
+    cfg.read_concurrency_config.resources_sem = &_read_concurrency_sem;
     cfg.read_concurrency_config.timeout = _cfg->read_request_timeout_in_ms() * 1ms;
-    // Assume a queued read takes up 10kB of memory, and allow 2% of memory to be filled up with such reads.
-    cfg.read_concurrency_config.max_queue_length = memory::stats().total_memory() * 0.02 / 10000;
+    cfg.read_concurrency_config.max_queue_length = 100;
     cfg.read_concurrency_config.raise_queue_overloaded_exception = [this] {
         ++_stats->sstable_read_queue_overloaded;
         throw std::runtime_error("sstable inactive read queue overloaded");
     };
     // No timeouts or queue length limits - a failure here can kill an entire repair.
     // Trust the caller to limit concurrency.
-    cfg.streaming_read_concurrency_config.sem = &_streaming_concurrency_sem;
+    cfg.streaming_read_concurrency_config.resources_sem = &_streaming_concurrency_sem;
     cfg.cf_stats = &_cf_stats;
     cfg.enable_incremental_backups = _enable_incremental_backups;
 
@@ -4212,6 +4234,7 @@ mutation_reader make_range_sstable_reader(schema_ptr s,
         const dht::partition_range& pr,
         const query::partition_slice& slice,
         const io_priority_class& pc,
+        reader_resource_tracker resource_tracker,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr)
@@ -4221,6 +4244,7 @@ mutation_reader make_range_sstable_reader(schema_ptr s,
                 pr,
                 slice,
                 pc,
+                std::move(resource_tracker),
                 std::move(trace_state),
                 fwd,
                 fwd_mr), fwd_mr);

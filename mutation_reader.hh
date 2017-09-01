@@ -374,8 +374,33 @@ public:
 mutation_source make_empty_mutation_source();
 snapshot_source make_empty_snapshot_source();
 
+
+class reader_resource_tracker {
+    semaphore* _sem = nullptr;
+public:
+    reader_resource_tracker() = default;
+    explicit reader_resource_tracker(semaphore* sem)
+        : _sem(sem) {
+    }
+
+    bool operator==(const reader_resource_tracker& other) const {
+        return _sem == other._sem;
+    }
+
+    file track(file f) const;
+
+    semaphore* get_semaphore() const {
+        return _sem;
+    }
+};
+
+inline reader_resource_tracker no_resource_tracking() {
+    return reader_resource_tracker(nullptr);
+}
+
+
 struct restricted_mutation_reader_config {
-    semaphore* sem = nullptr;
+    semaphore* resources_sem = nullptr;
     std::chrono::nanoseconds timeout = {};
     size_t max_queue_length = std::numeric_limits<size_t>::max();
     std::function<void ()> raise_queue_overloaded_exception = default_raise_queue_overloaded_exception;
@@ -385,11 +410,25 @@ struct restricted_mutation_reader_config {
     }
 };
 
-// Restricts a given `mutation_reader` to a concurrency limited according to settings in
-// a restricted_mutation_reader_config.  These settings include a semaphore for limiting the number
-// of active concurrent readers, a timeout for inactive readers, and a maximum queue size for
-// inactive readers.
-mutation_reader make_restricted_reader(const restricted_mutation_reader_config& config, unsigned weight, mutation_reader&& base);
+// Creates a restricted reader whose resource usages will be tracked
+// during it's lifetime. If there are not enough resources (dues to
+// existing readers) to create the new reader, it's construction will
+// be deferred until there are sufficient resources.
+// The internal reader once created will not be hindered in it's work
+// anymore. Reusorce limits are determined by the config which contains
+// a semaphore to track and limit the memory usage of readers. It also
+// contains a timeout and a maximum queue size for inactive readers
+// whose construction is blocked.
+mutation_reader make_restricted_reader(const restricted_mutation_reader_config& config,
+        mutation_source ms,
+        schema_ptr s,
+        const dht::partition_range& range = query::full_partition_range,
+        const query::partition_slice& slice = query::full_slice,
+        const io_priority_class& pc = default_priority_class(),
+        tracing::trace_state_ptr trace_state = nullptr,
+        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
+
 
 template<>
 struct move_constructor_disengages<mutation_source> {
