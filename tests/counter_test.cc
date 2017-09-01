@@ -21,6 +21,8 @@
 
 #include "counters.hh"
 
+#include <random>
+
 #include <seastar/core/thread.hh>
 
 #include <boost/range/algorithm/sort.hpp>
@@ -434,3 +436,57 @@ SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
     });
 }
 
+SEASTAR_TEST_CASE(test_sanitize_corrupted_cells) {
+    return seastar::async([] {
+        std::random_device rd;
+        std::default_random_engine gen(rd());
+
+        std::uniform_int_distribution<unsigned> shard_count_dist(2, 64);
+        std::uniform_int_distribution<int64_t> logical_clock_dist(1, 1024 * 1024);
+        std::uniform_int_distribution<int64_t> value_dist(-1024 * 1024, 1024 * 1024);
+
+        for (auto i = 0; i < 100; i++) {
+            auto shard_count = shard_count_dist(gen);
+            auto ids = generate_ids(shard_count);
+
+            // Create a valid counter cell
+            std::vector<counter_shard> shards;
+            for (auto id : ids) {
+                shards.emplace_back(id, value_dist(gen), logical_clock_dist(gen));
+            }
+
+            counter_cell_builder b1;
+            for (auto&& cs : shards) {
+                b1.add_shard(cs);
+            }
+            auto c1 = atomic_cell_or_collection(b1.build(0));
+
+            // Corrupt it by changing shard order and adding duplicates
+            boost::range::random_shuffle(shards);
+
+            std::uniform_int_distribution<unsigned> duplicate_count_dist(1, shard_count / 2);
+            auto duplicate_count = duplicate_count_dist(gen);
+            for (auto i = 0u; i < duplicate_count; i++) {
+                auto cs = shards[i];
+                shards.emplace_back(cs);
+            }
+
+            boost::range::random_shuffle(shards);
+
+            // Sanitize
+            counter_cell_builder b2;
+            for (auto&& cs : shards) {
+                b2.add_maybe_unsorted_shard(cs);
+            }
+            b2.sort_and_remove_duplicates();
+            auto c2 = atomic_cell_or_collection(b2.build(0));
+
+            // Compare
+            auto cv1 = counter_cell_view(c1.as_atomic_cell());
+            auto cv2 = counter_cell_view(c2.as_atomic_cell());
+
+            BOOST_REQUIRE_EQUAL(cv1, cv2);
+            BOOST_REQUIRE_EQUAL(cv1.total_value(), cv2.total_value());
+        }
+    });
+}
