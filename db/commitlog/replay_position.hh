@@ -42,6 +42,7 @@
 
 #include <stdint.h>
 #include "utils/UUID.hh"
+#include "utils/hash.hh"
 
 
 namespace db {
@@ -133,4 +134,13 @@ private:
 
 std::ostream& operator<<(std::ostream& out, const replay_position& s);
 
+}
+
+namespace std {
+template <>
+struct hash<db::replay_position> {
+    size_t operator()(const db::replay_position& v) const {
+        return utils::tuple_hash()(v.id, v.pos);
+    }
+};
 }
