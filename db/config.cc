@@ -115,7 +115,7 @@ struct convert<seastar::program_options::string_map>{
 
 template<>
 struct convert<db::config::seed_provider_type> {
-    static Node encode(const db::config::seed_provider_type& rhs) {
+    static Node encode(const db::config::seed_provider_type&) {
         throw std::runtime_error("should not reach");
     }
     static bool decode(const Node& node, db::config::seed_provider_type& rhs) {
@@ -184,17 +184,18 @@ struct do_value_opt<db::config::seed_provider_type, db::config::value_status::Us
 
 template<typename T>
 struct do_value_opt<T, db::config::value_status::Unused> {
-    template<typename... Args> void operator()(Args&&... args) const {}
+    template<typename... Args> void operator()(Args&&...) const {}
 };
 template<typename T>
 struct do_value_opt<T, db::config::value_status::Invalid> {
-    template<typename... Args> void operator()(Args&&... args) const {}
+    template<typename... Args> void operator()(Args&&...) const {}
 };
 
 /*
  * Our own bpo::typed_valye.
- * Only difference is that we _don't_ apply defaults (they are already applied)
- * Needed to make aliases work properly.
+ * Only difference is that we _don't_ apply defaults (they are already applied) and therefore, the notifier doesn't
+ * execute for default values (only for explicitly provided ones).
+ * Needed to make aliases and usage-checking work properly.
  */
 template<class T, class charT = char>
 class typed_value_ex : public bpo::typed_value<T, charT> {
@@ -204,7 +205,7 @@ public:
     typed_value_ex(T* store_to)
         : _Super(store_to)
     {}
-    bool apply_default(boost::any& value_store) const override {
+    bool apply_default(boost::any&) const override {
         return false;
     }
 };
@@ -232,13 +233,13 @@ bpo::options_description_easy_init db::config::add_options(bpo::options_descript
     bpo::options_description_easy_init init = opts.add_options();
 
     auto opt_add =
-            [&init, &opts](const char* name, const value_status& status, const auto& dflt, auto* dst, auto& src, const char* desc) mutable {
+            [&init, &opts](const char* name, const value_status& status, const auto& dflt, auto* dst, auto& src, const char* desc) {
                 const auto hyphenated_name = replace_underscores_with_hyphens(name);
 
                 switch (status) {
                 case value_status::Used: {
                     init(hyphenated_name.c_str(),
-                         value_ex(dst)->default_value(dflt)->notifier([&src](auto) mutable {
+                         value_ex(dst)->default_value(dflt)->notifier([&src](auto) {
                              src = config_source::CommandLine;
                          }),
                          desc);
@@ -284,12 +285,12 @@ bpo::options_description_easy_init db::config::add_options(bpo::options_descript
     _make_config_values(_add_boost_opt)
 
     auto alias_add =
-            [&init](const char* name, auto& dst, const char* desc) mutable {
+            [&init](const char* name, auto& dst, const char* desc) {
                 init(name,
-                        value_ex(&dst._value)->notifier([&dst](auto& v) mutable {
-                                    dst._source = config_source::CommandLine;
-                                })
-                        , desc);
+                     value_ex(&dst._value)->notifier([&dst](auto&) {
+                         dst._source = config_source::CommandLine;
+                     }),
+                     desc);
             };
 
 
@@ -325,7 +326,7 @@ void db::config::apply_seastar_options(boost::program_options::variables_map& va
 
 // Virtual dispatch to convert yaml->data type.
 struct handle_yaml {
-    virtual ~handle_yaml() {};
+    virtual ~handle_yaml() = default;
     virtual void operator()(const YAML::Node&) = 0;
     virtual db::config::value_status status() const = 0;
     virtual db::config::config_source source() const = 0;
