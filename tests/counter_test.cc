@@ -491,3 +491,28 @@ SEASTAR_TEST_CASE(test_counter_id_order_1_7_4) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_shards_compatible_with_1_7_4) {
+    return seastar::async([] {
+        auto ids = generate_ids(16);
+
+        counter_cell_builder ccb;
+        for (auto&& id : ids) {
+            ccb.add_shard(counter_shard(id, 1, 1));
+        }
+        auto ac = atomic_cell_or_collection(ccb.build(0));
+
+        auto cv = counter_cell_view(ac.as_atomic_cell());
+
+        verify_shard_order(cv);
+
+        stdx::optional<counter_id> previous;
+        counter_id::less_compare_1_7_4 cmp;
+        for (auto&& cs : cv.shards_compatible_with_1_7_4()) {
+            if (previous) {
+                BOOST_REQUIRE_MESSAGE(cmp(*previous, cs.id()), *previous << " expected to be less than " << cs.id());
+            }
+            previous = cs.id();
+        }
+    });
+}
