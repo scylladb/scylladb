@@ -50,6 +50,7 @@
 #include <unistd.h>
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/algorithm/cxx11/is_sorted.hpp>
+#include "test_services.hh"
 
 using namespace sstables;
 
@@ -1646,6 +1647,8 @@ SEASTAR_TEST_CASE(datafile_generation_47) {
 SEASTAR_TEST_CASE(test_counter_write) {
     return test_setup::do_with_test_directory([] {
         return seastar::async([] {
+            storage_service_for_tests ssft;
+
             auto s = schema_builder(some_keyspace, some_column_family)
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("c1", utf8_type, column_kind::clustering_key)
