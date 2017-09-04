@@ -254,9 +254,11 @@ cache_tracker& global_cache_tracker();
 //
 // Cache populates itself automatically during misses.
 //
-// Cache represents a snapshot of the underlying mutation source. When the
-// underlying mutation source changes, cache needs to be explicitly synchronized
-// to the latest snapshot. This is done by calling update() or invalidate().
+// All updates to the underlying mutation source must be performed through one of the synchronizing methods.
+// Those are the methods which accept external_updater, e.g. update(), invalidate().
+// All synchronizers have strong exception guarantees. If they fail, the set of writes represented by
+// cache didn't change.
+// Synchronizers can be invoked concurrently with each other and other operations on cache.
 //
 class row_cache final {
 public:
@@ -273,6 +275,12 @@ public:
     friend class cache::read_context;
     friend class partition_range_cursor;
     friend class cache_tester;
+
+    // A function which adds new writes to the underlying mutation source.
+    // All invocations of external_updater on given cache instance are serialized internally.
+    // Must have strong exception guarantees. If throws, the underlying mutation source
+    // must be left in the state in which it was before the call.
+    using external_updater = std::function<void()>;
 public:
     struct stats {
         utils::timed_rate_moving_average hits;
@@ -403,10 +411,28 @@ private:
     // It is invoked inside allocating section and in the context of cache's allocator.
     // All memtable entries will be removed.
     template <typename Updater>
-    future<> do_update(memtable& m, Updater func);
+    future<> do_update(external_updater, memtable& m, Updater func);
+
+    // Clears given memtable invalidating any affected cache elements.
+    void invalidate_sync(memtable&) noexcept;
+
+    // A function which updates cache to the current snapshot.
+    // It's responsible for advancing _prev_snapshot_pos between deferring points.
+    //
+    // Must have strong failure guarantees. Upon failure, it should still leave the cache
+    // in a state consistent with the update it is performing.
+    using internal_updater = std::function<future<>()>;
+
+    // Atomically updates the underlying mutation source and synchronizes the cache.
+    //
+    // Strong failure guarantees. If returns a failed future, the underlying mutation
+    // source was and cache are not modified.
+    //
+    // internal_updater is only kept alive until its invocation returns.
+    future<> do_update(external_updater eu, internal_updater iu) noexcept;
 public:
     ~row_cache();
-    row_cache(schema_ptr, snapshot_source, cache_tracker&);
+    row_cache(schema_ptr, snapshot_source, cache_tracker&, is_continuous = is_continuous::no);
     row_cache(row_cache&&) = default;
     row_cache(const row_cache&) = delete;
     row_cache& operator=(row_cache&&) = default;
@@ -434,13 +460,13 @@ public:
     // has just been flushed to the underlying data source.
     // The memtable can be queried during the process, but must not be written.
     // After the update is complete, memtable is empty.
-    future<> update(memtable&, partition_presence_checker underlying_negative);
+    future<> update(external_updater, memtable&);
 
     // Like update(), synchronizes cache with an incremental change to the underlying
     // mutation source, but instead of inserting and merging data, invalidates affected ranges.
     // Can be thought of as a more fine-grained version of invalidate(), which invalidates
     // as few elements as possible.
-    future<> update_invalidating(memtable&);
+    future<> update_invalidating(external_updater, memtable&);
 
     // Refreshes snapshot. Must only be used if logical state in the underlying data
     // source hasn't changed.
@@ -462,9 +488,9 @@ public:
     // Guarantees that readers created after invalidate()
     // completes will see all writes from the underlying
     // mutation source made prior to the call to invalidate().
-    future<> invalidate(const dht::decorated_key&);
-    future<> invalidate(const dht::partition_range& = query::full_partition_range);
-    future<> invalidate(dht::partition_range_vector&&);
+    future<> invalidate(external_updater, const dht::decorated_key&);
+    future<> invalidate(external_updater, const dht::partition_range& = query::full_partition_range);
+    future<> invalidate(external_updater, dht::partition_range_vector&&);
 
     // Evicts entries from given range in cache.
     //

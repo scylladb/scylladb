@@ -95,11 +95,10 @@ struct table {
         auto flushed = make_lw_shared<memtable>(s.schema());
         flushed->apply(*prev_mt).get();
         prev_mt->mark_flushed(flushed->as_data_source());
-        underlying.apply(flushed);
         test_log.trace("updating cache");
-        cache.update(*prev_mt, [] (const dht::decorated_key& dk) {
-            return partition_presence_checker_result::maybe_exists;
-        }).get();
+        cache.update([&] {
+            underlying.apply(flushed);
+        }, *prev_mt).get();
         test_log.trace("flush done");
         prev_mt = {};
     }

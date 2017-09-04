@@ -276,6 +276,19 @@ future<> consume(mutation_reader& reader, Consumer consumer) {
     });
 }
 
+/// A partition_presence_checker quickly returns whether a key is known not to exist
+/// in a data source (it may return false positives, but not false negatives).
+enum class partition_presence_checker_result {
+    definitely_doesnt_exist,
+    maybe_exists
+};
+using partition_presence_checker = std::function<partition_presence_checker_result (const dht::decorated_key& key)>;
+
+inline
+partition_presence_checker make_default_partition_presence_checker() {
+    return [] (const dht::decorated_key&) { return partition_presence_checker_result::maybe_exists; };
+}
+
 // mutation_source represents source of data in mutation form. The data source
 // can be queried multiple times and in parallel. For each query it returns
 // independent mutation_reader.
@@ -296,32 +309,36 @@ class mutation_source {
     // move constructible and save some indirection and allocation.
     // Probably not worth the effort though.
     lw_shared_ptr<func_type> _fn;
+    lw_shared_ptr<std::function<partition_presence_checker()>> _presence_checker_factory;
 private:
     mutation_source() = default;
     explicit operator bool() const { return bool(_fn); }
     friend class optimized_optional<mutation_source>;
 public:
-    mutation_source(func_type fn) : _fn(make_lw_shared<func_type>(std::move(fn))) {}
+    mutation_source(func_type fn, std::function<partition_presence_checker()> pcf = [] { return make_default_partition_presence_checker(); })
+        : _fn(make_lw_shared<func_type>(std::move(fn)))
+        , _presence_checker_factory(make_lw_shared(std::move(pcf)))
+    { }
     // For sources which don't care about the mutation_reader::forwarding flag (always fast forwardable)
     mutation_source(std::function<mutation_reader(schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr, streamed_mutation::forwarding)> fn)
-        : _fn(make_lw_shared<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr tr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
+        : mutation_source([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr tr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
             return fn(s, range, slice, pc, std::move(tr), fwd);
-        })) {}
+        }) {}
     mutation_source(std::function<mutation_reader(schema_ptr, partition_range, const query::partition_slice&, io_priority)> fn)
-        : _fn(make_lw_shared<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
+        : mutation_source([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
             assert(!fwd);
             return fn(s, range, slice, pc);
-        })) {}
+        }) {}
     mutation_source(std::function<mutation_reader(schema_ptr, partition_range, const query::partition_slice&)> fn)
-        : _fn(make_lw_shared<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
+        : mutation_source([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
             assert(!fwd);
             return fn(s, range, slice);
-        })) {}
+        }) {}
     mutation_source(std::function<mutation_reader(schema_ptr, partition_range range)> fn)
-        : _fn(make_lw_shared<func_type>([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice&, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
+        : mutation_source([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice&, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
             assert(!fwd);
             return fn(s, range);
-        })) {}
+        }) {}
 
     mutation_source(const mutation_source& other) = default;
     mutation_source& operator=(const mutation_source& other) = default;
@@ -341,6 +358,10 @@ public:
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const
     {
         return (*_fn)(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+    }
+
+    partition_presence_checker make_partition_presence_checker() {
+        return (*_presence_checker_factory)();
     }
 };
 
@@ -375,20 +396,6 @@ struct move_constructor_disengages<mutation_source> {
     enum { value = true };
 };
 using mutation_source_opt = optimized_optional<mutation_source>;
-
-
-/// A partition_presence_checker quickly returns whether a key is known not to exist
-/// in a data source (it may return false positives, but not false negatives).
-enum class partition_presence_checker_result {
-    definitely_doesnt_exist,
-    maybe_exists
-};
-using partition_presence_checker = std::function<partition_presence_checker_result (const dht::decorated_key& key)>;
-
-inline
-partition_presence_checker make_default_partition_presence_checker() {
-    return [] (const dht::decorated_key&) { return partition_presence_checker_result::maybe_exists; };
-}
 
 template<typename Consumer>
 future<stop_iteration> do_consume_streamed_mutation_flattened(streamed_mutation& sm, Consumer& c)

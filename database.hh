@@ -415,7 +415,6 @@ private:
     utils::phased_barrier _flush_barrier;
     seastar::gate _streaming_flush_gate;
     std::vector<view_ptr> _views;
-    semaphore _cache_update_sem{1};
 
     std::unique_ptr<cell_locker> _counter_cell_locks;
     void set_metrics();
@@ -438,12 +437,13 @@ private:
     // have to get.  It will be closed by stop().
     seastar::gate _async_gate;
 private:
-    void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, std::vector<unsigned>&& shards_for_the_sstable);
+    void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, std::vector<unsigned>&& shards_for_the_sstable) noexcept;
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
     // the writes contained in this sstable.
     // Cache must be synchronized atomically with this, otherwise write atomicity may not be respected.
     // Doesn't trigger compaction.
+    // Strong exception guarantees.
     void add_sstable(lw_shared_ptr<sstables::sstable> sstable, std::vector<unsigned>&& shards_for_the_sstable);
     // returns an empty pointer if sstable doesn't belong to current shard.
     future<lw_shared_ptr<sstables::sstable>> open_sstable(sstables::foreign_sstable_open_info info, sstring dir,
@@ -452,7 +452,8 @@ private:
     lw_shared_ptr<memtable> new_memtable();
     lw_shared_ptr<memtable> new_streaming_memtable();
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
-    future<> update_cache(memtable&, lw_shared_ptr<sstables::sstable_set> old_sstables);
+    // Caller must keep m alive.
+    future<> update_cache(lw_shared_ptr<memtable> m, sstables::shared_sstable sst);
     struct merge_comparator;
 
     // update the sstable generation, making sure that new new sstables don't overwrite this one.
@@ -720,6 +721,7 @@ public:
 
     void start_compaction();
     void trigger_compaction();
+    void try_trigger_compaction() noexcept;
     future<> run_compaction(sstables::compaction_descriptor descriptor);
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
     const sstables::compaction_strategy& get_compaction_strategy() const {
