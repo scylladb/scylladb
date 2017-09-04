@@ -49,6 +49,9 @@ public:
     bool operator<(const counter_id& other) const {
         return to_uuid() < other.to_uuid();
     }
+    bool operator>(const counter_id& other) const {
+        return other.to_uuid() < to_uuid();
+    }
     bool operator==(const counter_id& other) const {
         return to_uuid() == other.to_uuid();
     }
