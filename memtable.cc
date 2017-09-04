@@ -59,10 +59,7 @@ void memtable::clear() noexcept {
 
 future<> memtable::clear_gently() noexcept {
     return futurize_apply([this] {
-        static thread_local seastar::thread_scheduling_group scheduling_group(std::chrono::milliseconds(1), 0.2);
-        auto attr = seastar::thread_attributes();
-        attr.scheduling_group = &scheduling_group;
-        auto t = std::make_unique<seastar::thread>(attr, [this] {
+        auto t = std::make_unique<seastar::thread>([this] {
             auto& alloc = allocator();
 
             auto p = std::move(partitions);
