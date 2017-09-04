@@ -2416,9 +2416,7 @@ future<> sstable::write_components(
     if (cfg.replay_position) {
         _collector.set_replay_position(cfg.replay_position.value());
     }
-    seastar::thread_attributes attr;
-    attr.scheduling_group = cfg.thread_scheduling_group;
-    return seastar::async(std::move(attr), [this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), cfg, &pc] () mutable {
+    return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), cfg, &pc] () mutable {
         auto wr = get_writer(*schema, estimated_partitions, cfg, pc);
         mr.consume_in_thread(std::move(wr));
     });

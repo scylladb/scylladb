@@ -20,7 +20,7 @@
  */
 
 #pragma once
-#include <seastar/core/thread.hh>
+#include <seastar/core/scheduling.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/gate.hh>
 #include <chrono>
@@ -82,33 +82,33 @@ protected:
 class backlog_cpu_controller : public backlog_controller {
 public:
     struct disabled {
-        seastar::thread_scheduling_group *backup;
+        seastar::scheduling_group backup;
     };
 
-    seastar::thread_scheduling_group* scheduling_group() {
+    seastar::scheduling_group scheduling_group() {
         return _current_scheduling_group;
     }
 
-    float current_quota() const {
-        return _current_quota;
+    float current_shares() const {
+        return _current_shares;
     }
 protected:
-    float _current_quota = 0.0f;
+    unsigned _current_shares = 1;
 
     void update_controller(float quota) override;
 
-    seastar::thread_scheduling_group _scheduling_group;
-    seastar::thread_scheduling_group *_current_scheduling_group = nullptr;
+    seastar::scheduling_group _scheduling_group;
+    seastar::scheduling_group _current_scheduling_group;
 
-    backlog_cpu_controller(std::chrono::milliseconds interval, std::vector<backlog_controller::control_point> control_points, std::function<float()> backlog)
+    backlog_cpu_controller(seastar::scheduling_group sg, std::chrono::milliseconds interval, std::vector<backlog_controller::control_point> control_points, std::function<float()> backlog)
         : backlog_controller(interval, std::move(control_points), backlog)
-        , _scheduling_group(std::chrono::milliseconds(1), _current_quota)
-        , _current_scheduling_group(&_scheduling_group)
+        , _scheduling_group(sg)
+        , _current_scheduling_group(_scheduling_group)
     {}
 
     backlog_cpu_controller(disabled d)
         : backlog_controller()
-        , _scheduling_group(std::chrono::nanoseconds(0), 0)
+        , _scheduling_group(d.backup)
         , _current_scheduling_group(d.backup) {}
 };
 
@@ -155,9 +155,9 @@ class flush_cpu_controller : public backlog_cpu_controller {
 public:
     flush_cpu_controller(backlog_cpu_controller::disabled d) : backlog_cpu_controller(std::move(d)) {}
     flush_cpu_controller(flush_cpu_controller&&) = default;
-    flush_cpu_controller(std::chrono::milliseconds interval, float soft_limit, std::function<float()> current_dirty)
-        : backlog_cpu_controller(std::move(interval),
-          std::vector<backlog_controller::control_point>({{soft_limit, 0.1}, {soft_limit + (hard_dirty_limit - soft_limit) / 2, 0.2} , {hard_dirty_limit, 1}}),
+    flush_cpu_controller(seastar::scheduling_group sg, std::chrono::milliseconds interval, float soft_limit, std::function<float()> current_dirty)
+        : backlog_cpu_controller(sg, std::move(interval),
+          std::vector<backlog_controller::control_point>({{soft_limit, 100}, {soft_limit + (hard_dirty_limit - soft_limit) / 2, 200} , {hard_dirty_limit, 1000}}),
           std::move(current_dirty)
         )
     {}
