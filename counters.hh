@@ -380,6 +380,9 @@ public:
 struct counter_cell_view : basic_counter_cell_view<bytes_view> {
     using basic_counter_cell_view::basic_counter_cell_view;
 
+    // Returns counter shards in an order that is compatible with Scylla 1.7.4.
+    std::vector<counter_shard> shards_compatible_with_1_7_4() const;
+
     // Reversibly applies two counter cells, at least one of them must be live.
     // Returns true iff dst was modified.
     static bool apply_reversibly(atomic_cell_or_collection& dst, atomic_cell_or_collection& src);

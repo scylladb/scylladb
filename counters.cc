@@ -68,6 +68,16 @@ void counter_cell_builder::do_sort_and_remove_duplicates()
     _sorted = true;
 }
 
+std::vector<counter_shard> counter_cell_view::shards_compatible_with_1_7_4() const
+{
+    auto sorted_shards = boost::copy_range<std::vector<counter_shard>>(shards());
+    counter_id::less_compare_1_7_4 cmp;
+    boost::range::sort(sorted_shards, [&] (auto& a, auto& b) {
+        return cmp(a.id(), b.id());
+    });
+    return sorted_shards;
+}
+
 static bool apply_in_place(atomic_cell_or_collection& dst, atomic_cell_or_collection& src)
 {
     auto dst_ccmv = counter_cell_mutable_view(dst.as_mutable_atomic_cell());
