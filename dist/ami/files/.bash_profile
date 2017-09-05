@@ -33,15 +33,11 @@ echo '	http://www.scylladb.com/doc/'
 echo 'By default, Scylla sends certain information about this node to a data collection server. For information, see http://www.scylladb.com/privacy/'
 echo
 
-. /etc/os-release
-
-SETUP=0
+SETUP=
 if [ "$ID" != "ubuntu" ]; then
-	if [ "`systemctl status scylla-ami-setup|grep Active|grep exited`" = "" ]; then
-		SETUP=1
-	fi
+	SETUP=`systemctl is-active scylla-ami-setup`
 fi
-if [ $SETUP -eq 1 ]; then
+if [ "$SETUP" == "activating" ]; then
 	tput setaf 4
 	tput bold
 	echo "    Constructing RAID volume..."
@@ -54,21 +50,35 @@ if [ $SETUP -eq 1 ]; then
 	echo "To see status of scylla-server, run "
 	echo " 'systemctl status scylla-server'"
 	echo
+elif [ "$SETUP" == "failed" ]; then
+	tput setaf 1
+	tput bold
+	echo "    AMI initial configuration failed!"
+	tput sgr0
+	echo
+	echo "To see status, run "
+	echo " 'systemctl status scylla-ami-setup'"
+	echo
 else
-	if [ "$ID" = "ubuntu" ]; then
-		if [ "`initctl status scylla-server|grep "running, process"`" != "" ]; then
-			STARTED=1
-		else
-			STARTED=0
-		fi
+	if [ "$ID" != "ubuntu" ]; then
+		SCYLLA=`systemctl is-active scylla-server`
 	else
-		if [ "`systemctl is-active scylla-server`" = "active" ]; then
-			STARTED=1
+		if [ "`initctl status scylla-server|grep "running, process"`" != "" ]; then
+			SCYLLA="active"
 		else
-			STARTED=0
+			SCYLLA="failed"
 		fi
 	fi
-	if [ $STARTED -eq 1 ]; then
+	if [ "$SCYLLA" == "activating" ]; then
+		tput setaf 4
+		tput bold
+		echo "    ScyllaDB is starting..."
+		tput sgr0
+		echo
+		echo "Please wait for start. To see status, run "
+		echo " 'systemctl status scylla-server'"
+		echo
+	elif [ "$SCYLLA" == "active" ]; then
 		tput setaf 4
 		tput bold
 		echo "    ScyllaDB is active."
