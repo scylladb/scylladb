@@ -36,6 +36,10 @@ class counter_id {
     int64_t _least_significant;
     int64_t _most_significant;
 public:
+    static_assert(std::is_same<decltype(std::declval<utils::UUID>().get_least_significant_bits()), int64_t>::value
+            &&  std::is_same<decltype(std::declval<utils::UUID>().get_most_significant_bits()), int64_t>::value,
+        "utils::UUID is expected to work with two signed 64-bit integers");
+
     counter_id() = default;
     explicit counter_id(utils::UUID uuid) noexcept
         : _least_significant(uuid.get_least_significant_bits())
