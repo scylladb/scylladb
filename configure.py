@@ -746,6 +746,9 @@ if not try_compile(compiler=args.cxx, source='''\
     print('Installed boost version too old.  Please update {}.'.format(pkgname("boost-devel")))
     sys.exit(1)
 
+
+has_sanitize_address_use_after_scope = try_compile(compiler=args.cxx, flags=['-fsanitize-address-use-after-scope'], source='int f() {}')
+
 defines = ' '.join(['-D' + d for d in defines])
 
 globals().update(vars(args))
@@ -877,7 +880,7 @@ with open(buildfile, 'w') as f:
         f.write(textwrap.dedent('''\
             cxxflags_{mode} = -I. -I $builddir/{mode}/gen -I seastar -I seastar/build/{mode}/gen
             rule cxx.{mode}
-              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} -c -o $out $in
+              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -c -o $out $in
               description = CXX $out
               depfile = $out.d
             rule link.{mode}
@@ -1010,6 +1013,9 @@ with open(buildfile, 'w') as f:
             for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
                 obj = cc.replace('.cpp', '.o')
                 f.write('build {}: cxx.{} {} || {}\n'.format(obj, mode, cc, ' '.join(serializers)))
+                if cc.endswith('Parser.cpp') and has_sanitize_address_use_after_scope:
+                    # Parsers end up using huge amounts of stack space and overflowing their stack 
+                    f.write('  obj_cxxflags = -fno-sanitize-address-use-after-scope\n')
         f.write('build seastar/build/{mode}/libseastar.a seastar/build/{mode}/apps/iotune/iotune seastar/build/{mode}/gen/http/request_parser.hh seastar/build/{mode}/gen/http/http_response_parser.hh: ninja {seastar_deps}\n'
                 .format(**locals()))
         f.write('  pool = seastar_pool\n')
