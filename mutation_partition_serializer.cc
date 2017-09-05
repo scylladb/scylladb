@@ -62,8 +62,14 @@ auto write_counter_cell(Writer&& writer, atomic_cell_view c)
             counter_cell_view ccv(c);
             auto shards = std::move(value).start_value_counter_cell_full()
                                           .start_shards();
-            for (auto csv : ccv.shards()) {
-                shards.add_shards(counter_shard(csv));
+            if (service::get_local_storage_service().cluster_supports_correct_counter_order()) {
+                for (auto csv : ccv.shards()) {
+                    shards.add_shards(counter_shard(csv));
+                }
+            } else {
+                for (auto& cs : ccv.shards_compatible_with_1_7_4()) {
+                    shards.add_shards(cs);
+                }
             }
             return std::move(shards).end_shards().end_counter_cell_full();
         }
